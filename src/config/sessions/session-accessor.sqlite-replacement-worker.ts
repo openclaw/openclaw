@@ -1,6 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Result } from "@openclaw/normalization-core/result";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-coordinator.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
+  retainSqliteWorkerErrorCode,
   SqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
@@ -9,6 +13,7 @@ import {
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { getChildLogger } from "../../logging/logger.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type {
@@ -32,6 +37,14 @@ import type { SessionEntryReplacementCommitted } from "./session-accessor.sqlite
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 
 type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
+
+type SessionEntryWorkerPreparation = (
+  execution: OpenClawAgentDatabaseExecution,
+  source: AgentDatabaseRequestExecutionSource,
+) => {
+  prepare: () => Promise<void>;
+  release: () => Promise<void>;
+};
 
 function rejectUnknownSessionEntryOutcome(message: string, cause: unknown): never {
   if (hasSqliteWorkerOutcomeUnknown(cause)) {
@@ -58,6 +71,7 @@ export async function withSessionEntryWorker<T>(
   ) => void,
   retainedExecution?: OpenClawAgentDatabaseExecution,
   signal?: AbortSignal,
+  prepare?: SessionEntryWorkerPreparation,
 ): Promise<T> {
   const execution =
     retainedExecution ??
@@ -129,18 +143,68 @@ export async function withSessionEntryWorker<T>(
       };
     },
   };
+  let preparation: ReturnType<SessionEntryWorkerPreparation> | undefined;
+  let outcome: Result<T, unknown>;
   try {
-    return await runOpenClawAgentWorkerWrite(
+    preparation = prepare?.(execution, source);
+    if (preparation) {
+      // Cold native admission still owns the writer; snapshot planning releases it.
+      const opened = await runOpenClawAgentWorkerWrite(
+        options,
+        () => execution.runExisting(source, async () => true),
+        undefined,
+        signal,
+      );
+      if (!opened) {
+        throw new Error("Session database disappeared before preparation");
+      }
+      await preparation.prepare();
+    }
+    const value = await runOpenClawAgentWorkerWrite(
       options,
       () => run(execution, source, context),
       undefined,
       signal,
     );
-  } finally {
-    if (!retainedExecution) {
-      await execution.release();
+    outcome = { ok: true, value };
+  } catch (error) {
+    outcome = { ok: false, error };
+  }
+  const cleanupErrors: unknown[] = [];
+  for (const cleanup of [
+    () => preparation?.release(),
+    () => (retainedExecution ? undefined : execution.release()),
+  ]) {
+    try {
+      await cleanup();
+    } catch (error) {
+      cleanupErrors.push(error);
     }
   }
+  if (cleanupErrors.length) {
+    if (!outcome.ok) {
+      throw retainSqliteWorkerErrorCode(
+        createSqliteLifecycleAggregateError(
+          [outcome.error, ...cleanupErrors],
+          "Session mutation and executor cleanup failed",
+          outcome.error,
+        ),
+        outcome.error,
+      );
+    }
+    try {
+      getChildLogger({ subsystem: "session-sqlite" }).warn(
+        "Session mutation completed before executor cleanup failed",
+        { errors: cleanupErrors.map((error) => formatErrorMessage(error)) },
+      );
+    } catch {
+      // Diagnostics cannot make an acknowledged mutation appear replayable.
+    }
+  }
+  if (!outcome.ok) {
+    throw outcome.error;
+  }
+  return outcome.value;
 }
 
 export function prepareSessionEntryReplacementDatabase(
@@ -262,6 +326,7 @@ export async function runSessionEntryWorkerMutation<T>(
   executionOptions: {
     retainedExecution?: OpenClawAgentDatabaseExecution;
     signal?: AbortSignal;
+    prepare?: SessionEntryWorkerPreparation;
   } = {},
 ): Promise<T> {
   const publication = retainSessionEntryWorkerPublication({
@@ -370,6 +435,7 @@ export async function runSessionEntryWorkerMutation<T>(
     },
     executionOptions.retainedExecution,
     executionOptions.signal,
+    executionOptions.prepare,
   );
 }
 

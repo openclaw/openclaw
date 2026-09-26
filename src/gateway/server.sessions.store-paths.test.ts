@@ -395,6 +395,11 @@ test("automatic list and search projection reuse conventional state-directory pr
           metadata,
           async () => {
             const observations = [];
+            const stateDirectoryProbes: Array<{
+              search: string;
+              runtime: string;
+              stack: string | undefined;
+            }> = [];
             for (const search of [undefined, "unmatched-runtime-search", "openclaw"]) {
               const request = { configuredAgentsOnly: true, includeGlobal: false, search };
               const counts = [];
@@ -414,7 +419,21 @@ test("automatic list and search projection reuse conventional state-directory pr
                 }
                 const warm = await directSessionReq("sessions.list", request);
                 expect(warm.ok).toBe(true);
-                const exists = vi.spyOn(fsSync, "existsSync");
+                const existsSync = fsSync.existsSync;
+                const exists = vi.spyOn(fsSync, "existsSync").mockImplementation((pathname) => {
+                  // Retain bounded provenance for probes that only reproduce in shared CI shards.
+                  if (
+                    stateDirectoryProbes.length < 3 &&
+                    (pathname === stateDir || pathname === legacyStateDir)
+                  ) {
+                    stateDirectoryProbes.push({
+                      search: search ?? "list",
+                      runtime: agentRuntimeOverride ?? "auto",
+                      stack: new Error("Unexpected state-directory probe").stack,
+                    });
+                  }
+                  return existsSync(pathname);
+                });
                 const lstat = vi.spyOn(fsSync, "lstatSync");
                 const readlink = vi.spyOn(fsSync, "readlinkSync");
                 const realpath = vi.spyOn(fsSync.realpathSync, "native");
@@ -454,7 +473,7 @@ test("automatic list and search projection reuse conventional state-directory pr
                 auto: counts[1],
               });
             }
-            expect(observations).toEqual(
+            expect(observations, JSON.stringify(stateDirectoryProbes, null, 2)).toEqual(
               observations.map(({ surface, pinned }) => ({ surface, pinned, auto: pinned })),
             );
           },

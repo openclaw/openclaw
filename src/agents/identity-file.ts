@@ -5,13 +5,14 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { readRegularFile, readRegularFileSync } from "@openclaw/fs-safe/advanced";
+import { openRootFileSync, readFileDescriptorBoundedSync } from "@openclaw/fs-safe/advanced";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { IdentityConfig } from "../config/types.base.js";
-import { DEFAULT_IDENTITY_FILENAME } from "./workspace.js";
+import { DEFAULT_IDENTITY_FILENAME } from "./workspace-bootstrap-policy.js";
 
 // IDENTITY.md may contain the supported 2 MiB avatar encoded as a roughly
 // 2.7 MiB data URL. Keep bounded headroom for the remaining identity fields.
@@ -243,16 +244,50 @@ export async function buildIdentityMarkdownForWrite(params: {
   return mergeIdentityMarkdownContent(undefined, params.identity);
 }
 
-function loadIdentityFromFile(identityPath: string): AgentIdentityFile | null {
+export type IdentityFileRead = { identityPath: string; knownRevision?: string };
+export type IdentityFileSnapshot =
+  | { kind: "unchanged" }
+  | { kind: "loaded"; revision: string; size: number; identity: AgentIdentityFile | null }
+  | { kind: "missing" | "too-large" };
+
+/** Shared admission kernel for the worker and the shipped synchronous SDK reader. */
+export function readIdentityFileSnapshot(input: IdentityFileRead): IdentityFileSnapshot {
   try {
-    const resolvedPath = fs.realpathSync(identityPath);
-    const { buffer } = readRegularFileSync({
-      filePath: resolvedPath,
-      maxBytes: MAX_IDENTITY_FILE_BYTES,
+    const resolvedPath = fs.realpathSync(input.identityPath);
+    const opened = openRootFileSync({
+      absolutePath: resolvedPath,
+      rootPath: path.dirname(resolvedPath),
+      rootRealPath: path.dirname(resolvedPath),
+      boundaryLabel: "identity file directory",
+      rejectHardlinks: false,
     });
-    return parseIdentityMarkdown(buffer.toString("utf-8"));
-  } catch {
-    return null;
+    if (!opened.ok) {
+      return { kind: "missing" };
+    }
+    try {
+      const { dev, ino, size, mtimeMs, ctimeMs } = opened.stat;
+      if (size > MAX_IDENTITY_FILE_BYTES) {
+        return { kind: "too-large" };
+      }
+      const revision = JSON.stringify([opened.path, dev, ino, size, mtimeMs, ctimeMs]);
+      if (revision === input.knownRevision) {
+        return { kind: "unchanged" };
+      }
+      const buffer = readFileDescriptorBoundedSync(opened.fd, MAX_IDENTITY_FILE_BYTES);
+      const identity = parseIdentityMarkdown(buffer.toString("utf-8"));
+      return {
+        kind: "loaded",
+        revision,
+        size: buffer.byteLength,
+        identity,
+      };
+    } finally {
+      fs.closeSync(opened.fd);
+    }
+  } catch (error) {
+    return {
+      kind: error instanceof FsSafeError && error.code === "too-large" ? "too-large" : "missing",
+    };
   }
 }
 
@@ -260,33 +295,39 @@ function loadIdentityFromFile(identityPath: string): AgentIdentityFile | null {
 export async function loadAgentIdentityFromFile(
   identityPath: string,
 ): Promise<AgentIdentityFile | null> {
-  let resolvedPath: string | undefined;
-  try {
-    resolvedPath = await fs.promises.realpath(identityPath);
-    const { buffer } = await readRegularFile({
-      filePath: resolvedPath,
-      maxBytes: MAX_IDENTITY_FILE_BYTES,
-    });
-    return parseIdentityMarkdown(buffer.toString("utf-8"));
-  } catch (error) {
-    // fs-safe currently exposes this legacy overflow as a plain Error, so use
-    // its complete message contract; path substrings must not change diagnosis.
-    if (
-      resolvedPath &&
-      error instanceof Error &&
-      error.message === `File exceeds ${MAX_IDENTITY_FILE_BYTES} bytes: ${resolvedPath}`
-    ) {
-      throw new Error(
-        `Identity file ${identityPath} exceeds the maximum size of ${MAX_IDENTITY_FILE_BYTES} bytes`,
-        { cause: error },
-      );
-    }
-    return null;
+  const { prepareIdentityFile } = await import("./identity-file-runtime.js");
+  const result = await prepareIdentityFile(identityPath);
+  if (result.kind === "too-large") {
+    throw new Error(
+      `Identity file ${identityPath} exceeds the maximum size of ${MAX_IDENTITY_FILE_BYTES} bytes`,
+      {
+        cause: new FsSafeError(
+          "too-large",
+          `File exceeds ${MAX_IDENTITY_FILE_BYTES} bytes: ${identityPath}`,
+        ),
+      },
+    );
   }
+  return result.kind === "loaded" ? result.identity : null;
 }
 
-/** Load the workspace identity file when it exists and contains real values. */
+/** Retained synchronous contract for the shipped agent-avatar Plugin SDK facade. */
 export function loadAgentIdentityFromWorkspace(workspace: string): AgentIdentityFile | null {
-  const identityPath = path.join(workspace, DEFAULT_IDENTITY_FILENAME);
-  return loadIdentityFromFile(identityPath);
+  const result = readIdentityFileSnapshot({
+    identityPath: path.join(workspace, DEFAULT_IDENTITY_FILENAME),
+  });
+  return result.kind === "loaded" ? result.identity : null;
+}
+
+/** Workspace presentation treats unavailable or unreadable identity files as absent. */
+export async function loadAgentIdentityFromWorkspaceAsync(
+  workspace: string,
+): Promise<AgentIdentityFile | null> {
+  try {
+    const { prepareIdentityFile } = await import("./identity-file-runtime.js");
+    const result = await prepareIdentityFile(path.join(workspace, DEFAULT_IDENTITY_FILENAME));
+    return result.kind === "loaded" ? result.identity : null;
+  } catch {
+    return null;
+  }
 }

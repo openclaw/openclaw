@@ -486,6 +486,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
             options.retainOwnership?.({
               canLaunch: () => true,
               canAcceptLaunch: () => true,
+              canAbortAcceptedRun: () => true,
               canCleanupSession: () => true,
               canRetireReservation: () => true,
               waitForClaim: () => undefined,

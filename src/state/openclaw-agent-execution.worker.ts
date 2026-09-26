@@ -14,6 +14,8 @@ import {
 } from "../infra/sqlite-wal-checkpoint.js";
 import {
   SQLITE_WORKER_CLOSE_RECEIPT,
+  SQLITE_WORKER_OPERATION_CLEANUP,
+  SQLITE_WORKER_PREPARE_ADMITTED,
   type SqliteWorkerCloseReceipt,
   type SqliteWorkerCommand,
   type SqliteWorkerPreparedBackend,
@@ -158,7 +160,35 @@ function openAgentDatabaseBackend(
   let releaseBorrow: (() => void) | undefined;
   let identity: AgentDatabaseExecutionIdentity | undefined;
   let openingFailure: { error: unknown } | undefined;
+  const maintenancePreparations = new Map<
+    string,
+    {
+      plan: AgentDatabaseOperations["session.maintenance.prepare"]["input"];
+      prepared: ReturnType<
+        typeof import("../config/sessions/session-accessor.sqlite-maintenance-transaction.js").prepareSessionMaintenanceInWorker
+      >;
+    }
+  >();
+  const releaseMaintenancePreparation = (id: string) => {
+    const preparation = maintenancePreparations.get(id);
+    if (preparation) {
+      preparation.prepared.release();
+      maintenancePreparations.delete(id);
+    }
+  };
   let startupJournalRequested = false;
+  let publicationStartupJournal: boolean | undefined;
+  const readRequestPreparation = () => {
+    const attachment = takeSqliteWorkerOperationAdmissionAttachment();
+    if (
+      !isRecord(attachment) ||
+      attachment.kind !== "agent-execution" ||
+      typeof attachment.startupJournal !== "boolean"
+    ) {
+      throw new Error("Agent execution requires its request-local preparation facts");
+    }
+    return attachment.startupJournal;
+  };
   // This request-local flag is installed only for the synchronous native command below.
   const readDeletionJournal = () =>
     readAgentDeletionJournalStatusInDatabase(
@@ -331,6 +361,18 @@ function openAgentDatabaseBackend(
       assertFileIdentity();
       return current.db;
     },
+    assertCleanupCurrent() {
+      if (
+        !database ||
+        !identity ||
+        !database.db.isOpen ||
+        database.db.location() !== identity.nativeLocation ||
+        getOpenClawAgentDatabaseIfOpen(options) !== database
+      ) {
+        throw new Error("Agent cleanup lost its retained native database");
+      }
+      assertFileIdentity();
+    },
     admit,
   });
   let closed = false;
@@ -343,6 +385,7 @@ function openAgentDatabaseBackend(
   const executeCommand = (command: SqliteWorkerCommand<AgentDatabaseOperations>) => {
     if (
       command.type === "database.domain.bind" ||
+      command.type === "database.domain.publish" ||
       command.type === "database.domain.execute" ||
       command.type === "database.domain.close"
     ) {
@@ -483,14 +526,45 @@ function openAgentDatabaseBackend(
         { operationLabel: "session.entry-replacements" },
       );
     }
+    if (command.type === "session.maintenance.release") {
+      releaseMaintenancePreparation(command.input.id);
+      return;
+    }
+    if (command.type === "session.maintenance.prepare" && maintenance) {
+      assertFileIdentity();
+      if (maintenancePreparations.has(command.input.id)) {
+        throw new Error("Session maintenance preparation is already retained");
+      }
+      // The coalesced planner may overlap one revoked predecessor awaiting cleanup.
+      if (maintenancePreparations.size >= 2) {
+        throw new Error("Session maintenance preparation capacity is occupied");
+      }
+      const prepared = maintenance.prepareSessionMaintenanceInWorker({
+        kind: "maintenance-plan",
+        input: command.input.input,
+        databaseOptions: options,
+      });
+      maintenancePreparations.set(command.input.id, { plan: command.input, prepared });
+      return;
+    }
     if (command.type === "session.maintenance.metadata" && maintenance && replacements) {
       const opened = openWriter();
       const previous = new Map<string, SessionEntry>();
       const current = new Map<string, SessionEntry>();
       const preparePublication = replacements.prepareSessionEntryReplacementPublication;
       let publication: ReturnType<typeof preparePublication> | undefined;
+      const preparation =
+        command.input.kind === "maintenance-plan"
+          ? expectDefined(
+              maintenancePreparations.get(command.input.preparationId),
+              "Session maintenance preparation",
+            )
+          : undefined;
+      const plan = preparation
+        ? { kind: "maintenance-plan" as const, input: preparation.plan.input }
+        : { kind: "maintenance-statistics" as const };
       const value = maintenance.runSessionMaintenanceMetadataInTransaction(
-        { ...command.input, databaseOptions: options },
+        { ...plan, databaseOptions: options },
         {
           beforeMutation(database) {
             if (database.db !== opened.db) {
@@ -514,8 +588,10 @@ function openAgentDatabaseBackend(
             admit("commit", publication);
           },
         },
+        preparation?.prepared,
       );
-      return value.kind === "maintenance-preservation-required"
+      return value.kind === "maintenance-preservation-required" ||
+        value.kind === "maintenance-plan-stale"
         ? { kind: "not-committed", workerThreadId: threadId, value }
         : {
             kind: "committed",
@@ -615,7 +691,10 @@ function openAgentDatabaseBackend(
           },
         );
       }
-      if (command.type === "session.maintenance.metadata") {
+      if (
+        command.type === "session.maintenance.metadata" ||
+        command.type === "session.maintenance.prepare"
+      ) {
         return Promise.all([
           import("../config/sessions/session-accessor.sqlite-maintenance-transaction.js"),
           import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
@@ -631,12 +710,42 @@ function openAgentDatabaseBackend(
       }
       if (
         command.type === "database.domain.bind" ||
+        command.type === "database.domain.publish" ||
         command.type === "database.domain.execute" ||
         command.type === "database.domain.close"
       ) {
         return domain.prepare(command);
       }
       return undefined;
+    },
+    [SQLITE_WORKER_PREPARE_ADMITTED](command) {
+      if (command.type !== "database.domain.publish") {
+        return undefined;
+      }
+      publicationStartupJournal = readRequestPreparation();
+      startupJournalRequested = publicationStartupJournal;
+      try {
+        return domain.preparePublication(command.input);
+      } finally {
+        startupJournalRequested = false;
+      }
+    },
+    [SQLITE_WORKER_OPERATION_CLEANUP](command) {
+      if (
+        command.type === "session.maintenance.metadata" &&
+        command.input.kind === "maintenance-plan"
+      ) {
+        releaseMaintenancePreparation(command.input.preparationId);
+      }
+      if (command.type === "database.domain.publish") {
+        startupJournalRequested = publicationStartupJournal ?? false;
+        try {
+          domain.cleanupPublication(command.input.id);
+        } finally {
+          startupJournalRequested = false;
+          publicationStartupJournal = undefined;
+        }
+      }
     },
     assertSettled() {
       if (openingFailure) {
@@ -653,15 +762,14 @@ function openAgentDatabaseBackend(
     },
     execute(command) {
       assertOpen();
-      const attachment = takeSqliteWorkerOperationAdmissionAttachment();
-      if (
-        !isRecord(attachment) ||
-        attachment.kind !== "agent-execution" ||
-        typeof attachment.startupJournal !== "boolean"
-      ) {
-        throw new Error("Agent execution requires its request-local preparation facts");
+      if (command.type === "database.domain.publish") {
+        if (publicationStartupJournal === undefined) {
+          throw new Error("Agent publication lost its request-local preparation facts");
+        }
+        startupJournalRequested = publicationStartupJournal;
+      } else {
+        startupJournalRequested = readRequestPreparation();
       }
-      startupJournalRequested = attachment.startupJournal;
       try {
         return executeCommand(command);
       } finally {
@@ -677,6 +785,7 @@ function openAgentDatabaseBackend(
       let checkpoint: SqliteWalCheckpointSnapshot | undefined;
       const errors: unknown[] = [];
       for (const cleanup of [
+        ...[...maintenancePreparations.keys()].map((id) => () => releaseMaintenancePreparation(id)),
         () => domain.close(),
         () => {
           if (!database) {

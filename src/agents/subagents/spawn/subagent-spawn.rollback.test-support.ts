@@ -41,12 +41,19 @@ export function registerOperatorSpawnRollbackCases(options: {
   throwBoundFailures: (failures: unknown[]) => void;
   runEmbeddedAgent: Mock<typeof import("../../embedded-agent.js").runEmbeddedAgent>;
 }) {
-  it.each(["preparation", "accepted registration", "required task rollback"] as const)(
+  it.each([
+    "preparation",
+    "accepted registration",
+    "required task rollback",
+    "uncertain registration",
+  ] as const)(
     "rolls back an ordinary operator spawn after revoked-source %s failure",
     async (phase) => {
       const source = createSpawnOperatorSource();
       const bound = await options.createBoundParent(source.authority);
       const { context, runtime } = await options.createBoundGateway(bound);
+      const preserveSession =
+        phase === "required task rollback" || phase === "uncertain registration";
       let childSessionKey: string | undefined;
       let childRunId: string | undefined;
       let embeddedSignal: AbortSignal | undefined;
@@ -54,11 +61,11 @@ export function registerOperatorSpawnRollbackCases(options: {
       const embeddedStarted = createDeferred();
       let invocation: Promise<unknown> | undefined;
       let rollbackRefused = false;
+      let registrationUncertain = false;
       let retainedChildIdentity: { sessionId: string; lifecycleRevision?: string } | undefined;
-      const cleanupDispatch =
-        phase === "required task rollback"
-          ? vi.spyOn(runtime.recovery, "dispatchSessionMethod")
-          : undefined;
+      const cleanupDispatch = preserveSession
+        ? vi.spyOn(runtime.recovery, "dispatchSessionMethod")
+        : undefined;
       const failures: unknown[] = [];
       if (phase === "preparation") {
         spawnTesting.setDepsForTest({
@@ -165,9 +172,32 @@ export function registerOperatorSpawnRollbackCases(options: {
               "accepted child execution owner",
             );
             expect(acceptedRun.sessionKey).toBe(record.childSessionKey);
+            if (phase === "uncertain registration") {
+              await embeddedStarted.promise;
+              expect(expectDefined(embeddedSignal, "running child abort signal").aborted).toBe(
+                false,
+              );
+              expect(context.chatAbortControllers.get(record.runId)).toBe(acceptedRun);
+              const childEntry = expectDefined(
+                loadSessionEntry({
+                  storePath: bound.storePath,
+                  sessionKey: record.childSessionKey,
+                }),
+                "uncertain registration child session",
+              );
+              retainedChildIdentity = {
+                sessionId: childEntry.sessionId,
+                lifecycleRevision: childEntry.lifecycleRevision,
+              };
+              expect(acceptedRun).toMatchObject({
+                sessionKey: record.childSessionKey,
+                sessionId: childEntry.sessionId,
+              });
+              registrationUncertain = true;
+            }
             source.revoke();
             throw new SubagentRegistryWriteError(
-              "not-committed",
+              phase === "uncertain registration" ? "unknown" : "not-committed",
               new Error("ordinary child registry write failed"),
             );
           });
@@ -178,31 +208,31 @@ export function registerOperatorSpawnRollbackCases(options: {
           context: phase === "preparation" ? "fork" : "isolated",
         })();
         invocation = pending;
-        const completion =
-          phase === "required task rollback"
-            ? pending.then(async (result) => {
-                const childKey = expectDefined(childSessionKey, "registered child session");
-                const runId = expectDefined(childRunId, "registered child run");
-                const dispatch = expectDefined(cleanupDispatch, "bound cleanup dispatch observer");
-                expect(dispatch).toHaveBeenCalledWith(
-                  "chat.abort",
-                  { sessionKey: childKey, runId },
-                  expect.objectContaining({ assertCurrent: expect.any(Function) }),
-                );
-                expect(expectDefined(embeddedSignal, "accepted child abort signal").aborted).toBe(
-                  true,
-                );
-                await bound.execution.drain();
-                return result;
-              })
-            : pending;
+        const completion = preserveSession
+          ? pending.then(async (result) => {
+              const childKey = expectDefined(childSessionKey, "registered child session");
+              const runId = expectDefined(childRunId, "registered child run");
+              const dispatch = expectDefined(cleanupDispatch, "bound cleanup dispatch observer");
+              expect(dispatch).toHaveBeenCalledWith(
+                "chat.abort",
+                { sessionKey: childKey, runId },
+                expect.objectContaining({ assertCurrent: expect.any(Function) }),
+              );
+              expect(expectDefined(embeddedSignal, "accepted child abort signal").aborted).toBe(
+                true,
+              );
+              await bound.execution.drain();
+              return result;
+            })
+          : pending;
         const result = await withTimeout(completion, 60_000, {
           message: "ordinary source-revoked spawn cleanup did not settle",
         });
         const childKey = expectDefined(childSessionKey, "created child session");
         expect(result.details).toMatchObject({ status: "error", childSessionKey: childKey });
-        if (phase === "required task rollback") {
-          expect(rollbackRefused).toBe(true);
+        if (preserveSession) {
+          expect(rollbackRefused).toBe(phase === "required task rollback");
+          expect(registrationUncertain).toBe(phase === "uncertain registration");
           const dispatch = expectDefined(cleanupDispatch, "bound cleanup dispatch observer");
           expect(dispatch.mock.calls.some(([method]) => method === "sessions.delete")).toBe(false);
           expect(
@@ -210,6 +240,9 @@ export function registerOperatorSpawnRollbackCases(options: {
           ).toMatchObject(expectDefined(retainedChildIdentity, "original retained child identity"));
           expect(options.runEmbeddedAgent).toHaveBeenCalledOnce();
           expect(embeddedSignal).toBeDefined();
+          if (phase === "uncertain registration") {
+            expect(persistSubagentRunsToDiskAsyncOrThrow).toHaveBeenCalledOnce();
+          }
         } else {
           expect(
             loadSessionEntry({ storePath: bound.storePath, sessionKey: childKey }),
@@ -247,11 +280,11 @@ export function registerOperatorSpawnRollbackCases(options: {
             entry.controller.abort(new Error("spawn rollback fixture cleanup"));
           }
         }
-        if (phase === "required task rollback") {
+        if (preserveSession) {
           await invocation?.catch(() => {});
         }
         failures.push(...(await options.closeBoundGateway(bound, runtime, childRunId)));
-        if (phase === "required task rollback") {
+        if (preserveSession) {
           try {
             await settleSubagentRegistryPersistenceWork();
           } catch (error) {

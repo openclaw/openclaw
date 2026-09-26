@@ -31,6 +31,7 @@ import * as maintenance from "./session-accessor.sqlite-maintenance.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
+import type { SessionEntry } from "./types.js";
 
 const archiveMaterializationHook = vi.hoisted(() => ({
   beforeMaterialize: undefined as (() => Promise<void> | void) | undefined,
@@ -171,6 +172,71 @@ it.each([false, true])(
     }
   },
 );
+
+it("caps only the oldest eligible activity ties without decoding unrelated payloads", () => {
+  const { database, storePath } = createPlannerStore(0);
+  const now = Date.now();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const old = now - 10 * 24 * 60 * 60 * 1_000;
+  const key = (name: string) => `agent:main:bounded-${name}`;
+  const untouchedPayload = "unselected-maintenance-payload".repeat(1_000);
+  const fixtures: Array<[string, Partial<SessionEntry>]> = [
+    ["oldest", { updatedAt: old + 1 }],
+    ["tie-\uE000", { updatedAt: old + 2, lastInteractionAt: old + 10 }],
+    ["tie-\u{10000}", { updatedAt: old + 3, lastActivityAt: old + 10 }],
+    ["started", { sessionStartedAt: now }],
+    ["pinned", { pinnedAt: old }],
+    ["locked", { modelSelectionLocked: true }],
+    ["running", { status: "running" }],
+    ["group", { chatType: "group" }],
+    ["recent", { lastActivityAt: now }],
+    ["live", {}],
+    ["fresh", { updatedAt: now }],
+  ];
+  const victims = ["oldest", "tie-\u{10000}"].map(key);
+  for (const [index, [name, entry]] of fixtures.entries()) {
+    replaceSessionEntrySync(
+      { sessionKey: key(name), storePath },
+      {
+        sessionId: `bounded-${index}`,
+        updatedAt: old,
+        label: victims.includes(key(name)) ? name : untouchedPayload,
+        ...entry,
+      },
+    );
+  }
+  const unregister = registerSessionMaintenancePreserveKeysProvider(() => [key("live")]);
+  const parse = vi.spyOn(JSON, "parse");
+  try {
+    const plan = runOpenClawAgentWriteTransaction(
+      (owner) =>
+        maintenance.applySessionEntryMaintenance(owner, {
+          archiveDirectory: path.join(path.dirname(database.path), "archives"),
+          maintenanceConfig: {
+            ...resolveMaintenanceConfigFromInput(),
+            archiveDashboardAfterMs: null,
+            preserveRecentMs: 1_000,
+            maxEntries: fixtures.length - victims.length,
+          },
+          storePath,
+        }),
+      { agentId: "main", path: database.path },
+    );
+    expect(plan.archivedSessionKeys.toSorted()).toEqual(victims.toSorted());
+    expect(plan).toMatchObject({ archived: 2, capArchived: 2, capped: 2 });
+    expect(parse.mock.calls.some(([serialized]) => serialized.includes(untouchedPayload))).toBe(
+      false,
+    );
+  } finally {
+    parse.mockRestore();
+    unregister();
+  }
+  for (const [name] of fixtures) {
+    expect(loadSessionEntry({ sessionKey: key(name), storePath })?.archivedAt !== undefined).toBe(
+      victims.includes(key(name)),
+    );
+  }
+});
 
 it.each(["session-key", "session-id"] as const)(
   "preserves aged sessions during a lifecycle mutation and resumes retention afterward (%s)",

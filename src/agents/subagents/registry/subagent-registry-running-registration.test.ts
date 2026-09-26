@@ -170,6 +170,8 @@ it.each(["not-committed", "unknown"] as const)(
     expect(await pending).toBe(failure);
     expect(f.runs.has(f.registration.runId)).toBe(false);
     expect(f.scope.canCleanupSession()).toBe(outcome === "not-committed");
+    expect(f.scope.canAcceptLaunch()).toBe(false);
+    expect(f.scope.canAbortAcceptedRun()).toBe(true);
     expect(mocks.prepare).not.toHaveBeenCalled();
     expect(f.writes).toHaveLength(1);
   },
@@ -219,6 +221,7 @@ it("keeps an acknowledged old run tracked when a different run owns the child be
   );
   expect(mocks.prepare).not.toHaveBeenCalled();
   expect(f.scope.canCleanupSession()).toBe(false);
+  expect(f.scope.canAbortAcceptedRun()).toBe(false);
   expect(f.writes).toHaveLength(1);
 });
 
@@ -268,6 +271,7 @@ it.each(["same run", "different run"] as const)(
     expect(await settleUnstarted.mock.results[0]!.value).toBe(replacement === "different run");
     expect(f.writes).toHaveLength(1);
     expect(f.scope.canCleanupSession()).toBe(false);
+    expect(f.scope.canAbortAcceptedRun()).toBe(false);
     expect(release).toHaveBeenCalledOnce();
     expect(f.options.ensureListener).toHaveBeenCalledTimes(replacement === "different run" ? 1 : 0);
   },

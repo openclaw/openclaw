@@ -156,6 +156,7 @@ export async function registerRunningSubagent(params: {
     waitForRetirementPublication: () => waitForSubagentRetirementPublication(entry),
     canLaunch: () => activated && registryCurrent() && exactEntry() && ownsSession(),
     canAcceptLaunch: () => acknowledged && registryCurrent() && exactEntry() && ownsSession(),
+    canAbortAcceptedRun: () => registryCurrent() && ownsSession(),
     canCleanupSession: () => !uncertain && registryCurrent() && ownsSession() && !exactEntry(),
     canRetireReservation: () => ownsSwarmRunReservation(entry.schedulerSlotId ?? runId, entry),
     settleFailedLaunch: async (error) => {

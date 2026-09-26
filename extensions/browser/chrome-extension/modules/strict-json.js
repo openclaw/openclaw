@@ -1,8 +1,6 @@
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-
 /** Reject duplicate object keys before JSON.parse can silently keep the last value. */
-function hasDuplicateJsonObjectKeys(text: string): boolean {
-  const stack: Array<Set<string> | null> = [];
+function hasDuplicateJsonObjectKeys(text) {
+  const stack = [];
   let expectingKey = false;
   let index = 0;
   const skipWhitespace = () => {
@@ -28,7 +26,7 @@ function hasDuplicateJsonObjectKeys(text: string): boolean {
       }
       const keys = stack.at(-1);
       if (expectingKey && keys) {
-        let key: unknown;
+        let key;
         try {
           key = JSON.parse(text.slice(start, index));
         } catch {
@@ -65,12 +63,13 @@ function hasDuplicateJsonObjectKeys(text: string): boolean {
   return false;
 }
 
-export function parseStrictJsonObject(text: string): Record<string, unknown> | null {
+export function parseStrictJsonObject(text) {
   if (hasDuplicateJsonObjectKeys(text)) {
     return null;
   }
   try {
-    return asNullableRecord(JSON.parse(text));
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
   } catch {
     return null;
   }

@@ -29,7 +29,10 @@ import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import * as ageFacts from "./session-accessor.sqlite-maintenance-age.js";
 import * as maintenanceKick from "./session-accessor.sqlite-maintenance-kick.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
-import { observeSessionMaintenancePlanningWorker } from "./session-accessor.sqlite-maintenance.test-support.js";
+import {
+  observeSessionMaintenancePlanningWorker,
+  registerSessionMaintenancePreparationTests,
+} from "./session-accessor.sqlite-maintenance.test-support.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
@@ -929,3 +932,5 @@ it("reuses parent cadence facts until their bounded foreign-write recheck", asyn
     expect(loadSessionEntry(victim)?.archivedAt).toEqual(expect.any(Number));
   });
 });
+
+registerSessionMaintenancePreparationTests();

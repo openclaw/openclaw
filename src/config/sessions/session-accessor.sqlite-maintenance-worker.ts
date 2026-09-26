@@ -1,9 +1,12 @@
+import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
+import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { getChildLogger } from "../../logging/logger.js";
 import type { OpenClawAgentDatabaseClaim } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import type {
   ReclamationDatabaseOptions,
@@ -32,8 +35,9 @@ export function runSessionMaintenanceMetadataInWorker(params: {
   if (typeof identity !== "string") {
     throw new Error("Session maintenance requires its captured file database");
   }
-  const input: SessionMaintenanceMetadataCommand =
-    plan.kind === "maintenance-plan" ? { kind: plan.kind, input: plan.input } : { kind: plan.kind };
+  const preparationId = randomUUID();
+  const input =
+    plan.kind === "maintenance-plan" ? { kind: plan.kind, preparationId } : { kind: plan.kind };
   const startedAt = performance.now();
   let workerThreadId: number | undefined;
   const observeCompletion = (outcome: "resolved" | "rejected", failure?: unknown) =>
@@ -88,7 +92,66 @@ export function runSessionMaintenanceMetadataInWorker(params: {
         }
       },
     },
-    { signal: params.signal },
+    {
+      signal: params.signal,
+      prepare:
+        plan.kind === "maintenance-plan"
+          ? (execution, source) => {
+              let attempted = false;
+              const cleanupSource: AgentDatabaseRequestExecutionSource = {
+                assertCurrent: execution.assertCurrent,
+                createAdmission(binding) {
+                  return () => ({
+                    nativeLocations: binding.nativeLocations,
+                    admission: createSqliteWorkerOperationAdmission((request, grant) => {
+                      if (request.stage !== "prepare") {
+                        throw new Error(
+                          "Maintenance preparation cleanup cannot open or write storage",
+                        );
+                      }
+                      binding.authorize(request);
+                      if (!grant()) {
+                        throw new Error("Maintenance preparation cleanup authority expired");
+                      }
+                    }, binding.attachment),
+                  });
+                },
+              };
+              return {
+                async prepare() {
+                  attempted = true;
+                  const prepared = await execution.runExisting(source, async (worker) => {
+                    await worker.execute(
+                      {
+                        type: "session.maintenance.prepare",
+                        input: { id: preparationId, input: plan.input },
+                      },
+                      { signal: params.signal },
+                    );
+                    return true;
+                  });
+                  if (!prepared) {
+                    throw new Error("Session database disappeared during maintenance preparation");
+                  }
+                },
+                async release() {
+                  if (!attempted) {
+                    return;
+                  }
+                  await execution.runExisting(
+                    cleanupSource,
+                    (worker) =>
+                      worker.execute({
+                        type: "session.maintenance.release",
+                        input: { id: preparationId },
+                      }),
+                    { retireNativeOnFailure: true },
+                  );
+                },
+              };
+            }
+          : undefined,
+    },
   ).then(
     (result) => {
       observeCompletion("resolved");

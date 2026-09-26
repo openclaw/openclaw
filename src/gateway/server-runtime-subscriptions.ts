@@ -148,6 +148,7 @@ export function startGatewayEventSubscriptions(params: {
   reconcileAuditPolicy(getRuntimeConfig());
   const sessionActivitySummaries = createSessionActivitySummaries({
     getConfig: getRuntimeConfig,
+    getSessionRowProjection: params.getSessionRowProjection,
     onChanged: (target) => {
       const publication = broadcastSessionActivitySummary(target, params).catch((error: unknown) =>
         params.log.warn("Activity summary publication failed", { error }),

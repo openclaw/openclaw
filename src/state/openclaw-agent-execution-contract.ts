@@ -8,7 +8,7 @@ import type {
   SessionTranscriptInitializationPublication,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type {
-  SessionMaintenanceMetadataCommand,
+  SessionEntryMaintenanceInput,
   SessionMaintenanceMetadataResult,
 } from "../config/sessions/session-accessor.sqlite-lifecycle-types.js";
 import type {
@@ -86,15 +86,20 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
     };
     output: SessionEntryReplacementCommitted;
   };
+  "session.maintenance.prepare": {
+    input: { id: string; input: SessionEntryMaintenanceInput };
+    output: void;
+  };
+  "session.maintenance.release": { input: { id: string }; output: void };
   "session.maintenance.metadata": {
-    input: SessionMaintenanceMetadataCommand;
+    input: { kind: "maintenance-statistics" } | { kind: "maintenance-plan"; preparationId: string };
     output:
       | {
           kind: "committed";
           workerThreadId: number;
           value: Exclude<
             SessionMaintenanceMetadataResult,
-            { kind: "maintenance-preservation-required" }
+            { kind: "maintenance-preservation-required" | "maintenance-plan-stale" }
           >;
           publication: SessionEntryReplacementPublication;
         }
@@ -103,7 +108,7 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
           workerThreadId: number;
           value: Extract<
             SessionMaintenanceMetadataResult,
-            { kind: "maintenance-preservation-required" }
+            { kind: "maintenance-preservation-required" | "maintenance-plan-stale" }
           >;
         };
   };

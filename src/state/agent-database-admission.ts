@@ -217,12 +217,23 @@ export function readAgentDatabaseAdmissionRefusal(
   agentId: string,
   options: AdmissionOptions = {},
 ): AgentDatabaseAdmissionRefusal | undefined {
-  const key = stateKey(options);
-  const refusal = refusalsByState.get(key)?.refusals.get(normalizeAgentId(agentId));
+  return readSelectedAgentDatabaseAdmissionRefusal(
+    stateKey(options),
+    normalizeAgentId(agentId),
+    agentId,
+  );
+}
+
+function readSelectedAgentDatabaseAdmissionRefusal(
+  key: string,
+  agentId: string,
+  requestedAgentId: string,
+): AgentDatabaseAdmissionRefusal | undefined {
+  const refusal = refusalsByState.get(key)?.refusals.get(agentId);
   const scope = preparation.getStore();
-  if (scope && scope.key === key && scope.refusal.agentId === normalizeAgentId(agentId)) {
+  if (scope && scope.key === key && scope.refusal.agentId === agentId) {
     if (!scope.active) {
-      throw new Error(`Agent database preparation has ended: ${agentId}`);
+      throw new Error(`Agent database preparation has ended: ${requestedAgentId}`);
     }
     scope.assertCurrent();
     if (scope.refusal === refusal) {
@@ -327,6 +338,21 @@ export function assertAgentDatabaseAdmitted(agentId: string, options: AdmissionO
   if (refusal) {
     throw new AgentDatabaseAdmissionError(refusal);
   }
+}
+
+/** Capture only the selector; refusal decisions and the caller's preparation remain live. */
+export function captureAgentDatabaseAdmission(
+  agentId: string,
+  options: AdmissionOptions = {},
+): () => void {
+  const key = stateKey(options);
+  const normalizedAgentId = normalizeAgentId(agentId);
+  return () => {
+    const refusal = readSelectedAgentDatabaseAdmissionRefusal(key, normalizedAgentId, agentId);
+    if (refusal) {
+      throw new AgentDatabaseAdmissionError(refusal);
+    }
+  };
 }
 
 /** Standalone diagnostics derive the same facts without borrowing another process's decision. */

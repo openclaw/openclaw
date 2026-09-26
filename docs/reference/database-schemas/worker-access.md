@@ -77,6 +77,19 @@ internal resource bounds, not configuration settings. These scheduling and budge
 changes preserve database ownership, transaction authority, schemas, and update
 behavior.
 
+Agent publication adapters use `openOpenClawAgentSqliteWorkerStore().execute`
+for a single command. It captures the command before waiting and keeps binding,
+preparation, execution, and cleanup in one broker request. The factory receives
+synchronous admission; asynchronous preparation does not retain that authority.
+Transaction and commit grants still check the live source. A settled result
+survives cleanup failure while the failed native owner retires. Use `run` when
+dependent commands share a binding or host publication must stay inside the
+same FIFO interval.
+
+The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
+contract for existing adapters. The factory's inferred return type additionally
+provides the typed single-command `execute` method.
+
 ## Carry facts, publish after commit
 
 Placement turn claims and releases execute through the shared-state writer,
@@ -148,9 +161,15 @@ access, then rechecks current entries and retains admission through commit publi
 
 Maintenance planning and planner-statistics updates use the existing agent database
 executor. These metadata commands carry no transcript buffers and do not reserve
-the archive queue while waiting for their database's writer. Planning preserves
-age facts and the preservation-required rollback before retrying with current
-protection facts. Commit receipts publish archived-entry facts before releasing
+the archive queue while waiting for their database's writer. After cold native
+admission, planning releases that writer and retains its read snapshot in the
+worker. Commit takes the writer again and checks current authority and the
+snapshot revision; a changed snapshot returns for fresh planning without applying
+its selections. Each actor retains at most two preparations, allowing a revoked
+predecessor to finish cleanup alongside the coalesced planner. Exact-operation
+cleanup and native close release those readers. Planning preserves age facts and
+the preservation-required rollback before retrying with current protection facts.
+Commit receipts publish archived-entry facts before releasing
 the writer, including when the ordinary result is lost. Archive materialization,
 finalization, and cold restoration keep their global memory bound and foreground
 progress during preparation. Incognito and explicit native maintenance scopes

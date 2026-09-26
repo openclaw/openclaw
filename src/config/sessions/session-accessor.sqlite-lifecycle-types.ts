@@ -102,6 +102,7 @@ export type SessionMaintenanceMetadataCommand =
 export type SessionMaintenanceMetadataResult =
   | { kind: "maintenance-statistics"; value: true }
   | { kind: "maintenance-preservation-required" }
+  | { kind: "maintenance-plan-stale" }
   | {
       kind: "maintenance-plan";
       value: SessionEntryMaintenancePlan;
