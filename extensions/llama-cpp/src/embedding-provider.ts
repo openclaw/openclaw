@@ -67,9 +67,9 @@ function resolveModelIdentity(local: EmbeddingProviderCreateOptions["local"], di
   return {
     model,
     cacheKeyData: createCacheKeyData(model, dimensions),
-    aliases: [...aliases].map((model) => ({
-      model,
-      cacheKeyData: createCacheKeyData(model, dimensions),
+    aliases: [...aliases].map((alias) => ({
+      model: alias,
+      cacheKeyData: createCacheKeyData(alias, dimensions),
     })),
   };
 }

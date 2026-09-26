@@ -119,12 +119,13 @@ function createClaudeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] 
         await (await loadClaudeSessionNodeCommands()).startClaudeSession(paramsJSON, io),
     },
   ];
-  return commands.map((command) => ({
-    ...command,
-    cap: CLAUDE_SESSIONS_CAPABILITY,
-    dangerous: false,
-    hasActiveWork: () => false,
-  }));
+  return commands.map((command) =>
+    Object.assign(command, {
+      cap: CLAUDE_SESSIONS_CAPABILITY,
+      dangerous: false,
+      hasActiveWork: () => false,
+    }),
+  );
 }
 
 export function createClaudeSessionNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
