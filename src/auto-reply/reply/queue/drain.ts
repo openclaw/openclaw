@@ -16,7 +16,7 @@ import {
 import {
   getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
-  runWithGatewayIndependentRootWorkContinuation,
+  runWithGatewayDetachedWorkContinuation,
   waitForGatewayRestartFenceSettlement,
 } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
@@ -1343,8 +1343,10 @@ export function scheduleFollowupDrain(
   // Give the detached chain its own root so inherited request admission cannot go stale.
   // Queued turns re-admit on the generation current at drain time: the detached
   // drain runs outside any ambient prepared-generation scope, so a parked turn
-  // never inherits the predecessor run's replaced generation.
-  void runWithGatewayIndependentRootWorkContinuation(
+  // never inherits the predecessor run's replaced generation. The drain also owns
+  // a fresh async work scope: drained turns run tracked agent work that must keep
+  // working after the triggering request's scope has closed.
+  void runWithGatewayDetachedWorkContinuation(
     () => runOutsidePreparedModelRuntimePluginGenerationScope(drainQueuedFollowups),
     "session:followup-drain",
   ).catch((err: unknown) => {
