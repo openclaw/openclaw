@@ -21,12 +21,18 @@ import {
 import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
 import { ChatPaneSharingActions } from "./chat-pane-sharing-actions.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { clearTypingActorForSessionMessage } from "./chat-typing-presence.ts";
+import {
+  clearTypingActorForSessionMessage,
+  type ChatTypingActorState,
+  type ChatTypingActorView,
+} from "./chat-typing-presence.ts";
 import { canManageChatSessionSharing } from "./components/chat-session-sharing.ts";
 import { lockChatScroll } from "./scroll.ts";
 
 const TYPING_ACTIVE_MS = 2_500;
-const TYPING_DRAFT_IDLE_MS = 120_000;
+const TYPING_DRAFT_ACTIVE_MS = 10_000;
+const TYPING_DRAFT_IDLE_MS = 30_000;
+const TYPING_DRAFT_EXIT_MS = 300;
 const TYPING_PREVIEW_INTERVAL_MS = 250;
 
 export abstract class ChatPaneSharing extends ChatPaneSharingActions {
@@ -445,41 +451,38 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
       // Retire queued and native follow before the new remote draft changes the transcript.
       lockChatScroll(state, "remote-input");
     }
-    const expiresAt = Date.now() + TYPING_ACTIVE_MS;
-    this.typingActors.set(event.actor.id, {
+    const activeMs = event.preview ? TYPING_DRAFT_ACTIVE_MS : TYPING_ACTIVE_MS;
+    const now = Date.now();
+    const idleDeadline = now + TYPING_DRAFT_IDLE_MS;
+    const actor: ChatTypingActorState = {
       label: event.actor.label ?? event.actor.id,
-      expiresAt,
+      expiresAt: now + activeMs,
       ...(event.preview ? { preview: event.preview } : {}),
-    });
-    this.typingTimers.set(
-      event.actor.id,
-      window.setTimeout(() => {
-        const actor = this.typingActors.get(event.actor.id);
-        if (actor?.expiresAt === expiresAt) {
-          // A pause ends typing activity, not the unsent draft. Explicit stop,
-          // submitted messages, and viewer departure own draft retirement.
-          this.typingTimers.delete(event.actor.id);
-          const remaining = expiresAt + TYPING_DRAFT_IDLE_MS - TYPING_ACTIVE_MS - Date.now();
-          if (actor.preview && remaining > 0) {
-            // Presence is profile-scoped: another tab can remain online after
-            // the drafting tab vanishes without sending a stop event.
-            this.typingTimers.set(
-              event.actor.id,
-              window.setTimeout(() => {
-                if (this.typingActors.get(event.actor.id) === actor) {
-                  this.typingActors.delete(event.actor.id);
-                  this.typingTimers.delete(event.actor.id);
-                  this.requestUpdate();
-                }
-              }, remaining),
-            );
-          } else {
-            this.typingActors.delete(event.actor.id);
-          }
-          this.requestUpdate();
+    };
+    this.typingActors.set(event.actor.id, actor);
+    const advance = () => {
+      if (this.typingActors.get(event.actor.id) !== actor) {
+        return;
+      }
+      this.typingTimers.delete(event.actor.id);
+      const remaining = idleDeadline - Date.now();
+      if (!actor.preview || remaining <= 0) {
+        this.typingActors.delete(event.actor.id);
+      } else {
+        // Keep one cancellable timer for active, draft, and exit phases. The
+        // animation finishes inside the idle limit, even after a delayed timer.
+        const untilExit = remaining - TYPING_DRAFT_EXIT_MS;
+        if (untilExit <= 0) {
+          actor.exitDurationMs = remaining;
         }
-      }, TYPING_ACTIVE_MS),
-    );
+        this.typingTimers.set(
+          event.actor.id,
+          window.setTimeout(advance, untilExit > 0 ? untilExit : remaining),
+        );
+      }
+      this.requestUpdate();
+    };
+    this.typingTimers.set(event.actor.id, window.setTimeout(advance, activeMs));
     this.requestUpdate();
   }
 
@@ -499,19 +502,21 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
     }
   }
 
-  protected typingActorViews(): {
-    id: string;
-    label: string;
-    preview?: string;
-    paused?: boolean;
-  }[] {
+  protected typingActorViews(): ChatTypingActorView[] {
     const now = Date.now();
     return [...this.typingActors]
-      .map(([id, { label, preview, expiresAt }]) => {
+      .map(([id, { label, preview, expiresAt, exitDurationMs }]) => {
         if (!preview) {
           return { id, label };
         }
-        return expiresAt <= now ? { id, label, preview, paused: true } : { id, label, preview };
+        const view: ChatTypingActorView = { id, label, preview };
+        if (expiresAt <= now) {
+          view.paused = true;
+        }
+        if (exitDurationMs !== undefined) {
+          view.exitDurationMs = exitDurationMs;
+        }
+        return view;
       })
       .toSorted((left, right) => left.label.localeCompare(right.label));
   }
