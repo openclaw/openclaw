@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ensureAgentProvenanceSchema } from "./agent-provenance.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
@@ -8,6 +9,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import * as stateWorker from "./openclaw-state-worker-store.js";
 import {
   getUserPreferences,
   getUserPreferenceValues,
@@ -56,12 +58,21 @@ describe("user preferences", () => {
     expect(initial.isCurrent()).toBe(false);
     const updated = await getUserPreferenceValues([first], "push", options);
     expect(updated.values).toEqual(new Map([[first, { enabled: false }]]));
+    const reply = createDeferred<undefined>();
+    const broker = vi
+      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+      .mockReturnValueOnce(reply.promise);
     const pending = setCanonicalUserPreferences(first, { push: "worker" }, options);
-    expect(updated.isCurrent()).toBe(false);
-    expect(await pending).toEqual({ ok: true, value: { profileId: first } });
-    expect((await getUserPreferenceValues([first], "push", options)).values).toEqual(
-      new Map([[first, "worker"]]),
-    );
+    try {
+      expect(updated.isCurrent()).toBe(false);
+    } finally {
+      reply.resolve(undefined);
+      await pending;
+      broker.mockRestore();
+    }
+    const settled = await getUserPreferenceValues([first], "push", options);
+    expect(settled.values).toEqual(new Map([[first, { enabled: false }]]));
+    expect(settled.isCurrent()).toBe(true);
     expect((await getUserPreferenceValues([first], "push", stateOptions())).values).toEqual(
       new Map(),
     );
