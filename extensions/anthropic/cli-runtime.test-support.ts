@@ -158,7 +158,9 @@ for await (const line of createInterface({ input: process.stdin })) {
       };
       const replayTask = (id) => {
         if (!process.argv.includes("--replay-user-messages")) return;
-        send({ type: "user", isReplay: true, parent_tool_use_id: null, uuid: "receipt-" + id,
+        // Current Claude Code omits isReplay on an ordinary task notification.
+        send({ type: "user", ...(scenario === "background-bash-success" ? {} : { isReplay: true }),
+          parent_tool_use_id: null, uuid: "receipt-" + id,
           // Inline receipts in Claude Code 2.1.272 omit origin.
           ...(inline ? {} : { origin: { kind: "task-notification" } }),
           message: { role: "user", content: inline ? [{ type: "text", text: notification(id) }] : notification(id) } });

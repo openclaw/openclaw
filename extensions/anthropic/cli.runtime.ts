@@ -24,20 +24,23 @@ const RESULT_HOLDING_TASK_TYPES = new Set(["local_agent", "local_workflow"]);
 // in the foreground and later entered the background list hold their turn.
 const TIMEOUT_BACKGROUNDED_TASK_TYPE = "local_bash";
 
-function readReplayedTaskId(
+function readTaskNotificationId(
   message: Record<string, unknown>,
   inputUuid: string,
 ): string | undefined {
   if (
     message.type !== "user" ||
-    message.isReplay !== true ||
     message.parent_tool_use_id !== null ||
     message.uuid === inputUuid ||
     !isRecord(message.message)
   ) {
     return undefined;
   }
-  // Before Claude Code 2.1.274, inline notification receipts omitted origin.
+  // Older replayed receipts omitted origin. Current task notifications can arrive
+  // without isReplay, so require their explicit origin in that case.
+  if (message.origin === undefined && message.isReplay !== true) {
+    return undefined;
+  }
   if (
     message.origin !== undefined &&
     (!isRecord(message.origin) ||
@@ -285,10 +288,10 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
       }
     }
   }
-  // Completion events precede notification delivery. Its replay receipt means
+  // Completion events precede notification delivery. Its receipt means
   // Claude consumed it, either in the running query or in a later query.
   if (turn.pendingBackgroundTaskIds.size > 0) {
-    const taskId = readReplayedTaskId(message, turn.inputUuid);
+    const taskId = readTaskNotificationId(message, turn.inputUuid);
     if (taskId && turn.pendingBackgroundTaskIds.delete(taskId)) {
       turn.foregroundTaskIds.delete(taskId);
     }
