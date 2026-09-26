@@ -1089,6 +1089,41 @@ scan_logs_for_unexpected_errors
     }
   });
 
+  it("rejects live Kitchen Sink ClawHub scenarios after the listing is retired", () => {
+    const result = runSweepShell(
+      `
+set -euo pipefail
+export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
+source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
+KITCHEN_SINK_SCENARIOS='clawhub-latest|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic'
+run_kitchen_sink_sweep_main
+`,
+      {
+        OPENCLAW_ENTRY: "/bin/false",
+        OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB: "1",
+      },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("The OpenClaw Kitchen Sink package is delisted from ClawHub");
+    expect(result.stdout).not.toContain("Testing clawhub-latest install");
+  });
+
+  it("rejects live Kitchen Sink ClawHub E2E before launching Docker", () => {
+    const result = spawnSync(BASH_BIN, ["scripts/e2e/kitchen-sink-plugin-docker.sh"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB: "1",
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("The OpenClaw Kitchen Sink package is delisted from ClawHub");
+    expect(result.stdout).not.toContain("Running kitchen-sink plugin Docker E2E");
+  });
+
   it("cleans a ClawHub fixture server that times out before readiness", () => {
     const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-clawhub-"));
     const fakeBin = path.join(parent, "bin");
