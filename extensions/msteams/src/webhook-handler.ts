@@ -1,4 +1,5 @@
 import type { RequestListener, ServerResponse } from "node:http";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
 
@@ -17,7 +18,7 @@ export function createMSTeamsWebhookHandler(
         res.end("Service Unavailable");
         return;
       }
-      const response = Promise.withResolvers<void>();
+      const response = createDeferred<void>();
       responses.set(res, response.promise);
       const done = () => {
         res.off("finish", done);

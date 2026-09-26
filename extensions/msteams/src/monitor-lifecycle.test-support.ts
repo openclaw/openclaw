@@ -26,15 +26,21 @@ type ResolveMSTeamsUserAllowlistMock = (params: {
   entries: string[];
 }) => Promise<MSTeamsUserResolution[]>;
 
-const routeState = vi.hoisted(() => ({
-  routes: [] as Array<Parameters<typeof registerPluginHttpRoute>[0]>,
-  ready: Promise.withResolvers<void>(),
-  unregister: vi.fn(),
-  fail: false,
-  requestStarted: Promise.withResolvers<void>(),
-  responseGate: undefined as Promise<void> | undefined,
-  responseWork: undefined as Promise<boolean | void> | undefined,
-}));
+const { createDeferred, routeState } = await vi.hoisted(async () => {
+  const { createDeferred } = await import("openclaw/plugin-sdk/extension-shared");
+  return {
+    createDeferred,
+    routeState: {
+      routes: [] as Array<Parameters<typeof registerPluginHttpRoute>[0]>,
+      ready: createDeferred<void>(),
+      unregister: vi.fn(),
+      fail: false,
+      requestStarted: createDeferred<void>(),
+      responseGate: undefined as Promise<void> | undefined,
+      responseWork: undefined as Promise<boolean | void> | undefined,
+    },
+  };
+});
 vi.mock("openclaw/plugin-sdk/webhook-targets", () => ({
   registerPluginHttpRoute: (route: Parameters<typeof registerPluginHttpRoute>[0]) => {
     if (routeState.fail) {
@@ -171,9 +177,9 @@ export function resetMSTeamsMonitorMocks() {
   vi.clearAllMocks();
   routeState.unregister.mockReset();
   routeState.routes = [];
-  routeState.ready = Promise.withResolvers<void>();
+  routeState.ready = createDeferred<void>();
   routeState.fail = false;
-  routeState.requestStarted = Promise.withResolvers<void>();
+  routeState.requestStarted = createDeferred<void>();
   routeState.responseGate = undefined;
   routeState.responseWork = undefined;
   vi.unstubAllGlobals();

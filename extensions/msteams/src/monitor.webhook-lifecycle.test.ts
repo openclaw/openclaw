@@ -1,6 +1,8 @@
 import { once } from "node:events";
 import { createServer, type Server } from "node:http";
 import { brotliCompressSync, deflateSync, gzipSync } from "node:zlib";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resolvePluginRoutePathContext } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { getMSTeamsIngressMockState } from "./monitor-ingress-mock.test-support.js";
@@ -37,7 +39,12 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
   beforeAll(async () => {
     claim = await acquireTestPortBlock({ offsets: [0] });
     gateway = createServer((req, res) => {
-      const route = routeState.routes[0];
+      const { canonicalPath } = resolvePluginRoutePathContext(
+        new URL(req.url ?? "/", "http://localhost").pathname,
+      );
+      const route = routeState.routes.find(
+        (entry) => resolvePluginRoutePathContext(entry.path ?? "/").canonicalPath === canonicalPath,
+      );
       if (!route) {
         res.writeHead(404).end();
         return;
@@ -242,7 +249,7 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
   });
 
   it("drains active responses before releasing the route and rejects new work during stop", async () => {
-    const gate = Promise.withResolvers<void>();
+    const gate = createDeferred<void>();
     routeState.responseGate = gate.promise;
     routeState.unregister.mockImplementation(() => gateway.closeAllConnections());
     const abort = new AbortController();
@@ -293,7 +300,7 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
   });
 
   it("bounds response drain to the shipped 30-second window", async () => {
-    const gate = Promise.withResolvers<void>();
+    const gate = createDeferred<void>();
     routeState.responseGate = gate.promise;
     const abort = new AbortController();
     const task = monitorMSTeamsProvider({
@@ -387,6 +394,15 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
       });
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toEqual({ url: endpoint });
+      if (endpoint !== "/api/messages") {
+        routeState.routes = routeState.routes.filter((route) => route.path !== "/api/messages");
+        const unregistered = await fetch(resolveServerUrl(server, "/api/messages"), {
+          method: "POST",
+          headers: { authorization: "Bearer valid" },
+        });
+        expect(unregistered.status).toBe(404);
+        await unregistered.text();
+      }
     } finally {
       abort.abort();
       await task;
