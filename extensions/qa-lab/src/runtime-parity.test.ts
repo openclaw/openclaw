@@ -669,6 +669,17 @@ describe("runtime parity", () => {
       tool: "read_file",
       errorClass: "tool-result-missing",
     });
+
+    const result = await runRuntimeParityScenario({
+      scenarioId: "planned-only-tool",
+      runCell: async (runtime) => ({
+        status: "pass",
+        cell: { ...cell, runtime },
+      }),
+    });
+
+    expect(result.drift).toBe("none");
+    expect(isRuntimeParityResultPass(result)).toBe(true);
   });
 
   it("records resolved mock calls as provider-plan evidence", async () => {
@@ -723,23 +734,6 @@ describe("runtime parity", () => {
     expect(
       resolveRuntimeParityUsagePolicy({ expectation: "not-applicable", reason: "   " }),
     ).toEqual({ expectation: "assistant-message-required" });
-  });
-
-  it("does not classify planned-only provider evidence as a runtime failure", async () => {
-    const cell = await captureRuntimeParityWithMockRequests({
-      requests: [{ plannedToolName: "read_file", plannedToolArgs: { path: "README.md" } }],
-    });
-
-    const result = await runRuntimeParityScenario({
-      scenarioId: "planned-only-tool",
-      runCell: async (runtime) => ({
-        status: "pass",
-        cell: { ...cell, runtime },
-      }),
-    });
-
-    expect(result.drift).toBe("none");
-    expect(isRuntimeParityResultPass(result)).toBe(true);
   });
 
   it("treats matching controlled tool errors as equivalent results", async () => {

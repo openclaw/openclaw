@@ -290,53 +290,50 @@ describe("formatQaGatewayProcessBoundaryStartupFailure", () => {
 });
 
 describe("waitForGatewayReady", () => {
-  it.each(["startup", "restart"] as const)(
-    "does not accept a healthy listener as %s readiness",
-    async (phase) => {
-      vi.useFakeTimers();
-      const baseUrl = "http://127.0.0.1:43124";
-      const release = vi.fn(async () => {});
-      let ready = false;
+  it("does not accept a healthy listener as readiness", async () => {
+    vi.useFakeTimers();
+    const baseUrl = "http://127.0.0.1:43124";
+    const release = vi.fn(async () => {});
+    let ready = false;
 
-      fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
-        const status = url.endsWith("/healthz") || ready ? 200 : 503;
-        return { response: { ok: status === 200, status }, release };
+    fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
+      const status = url.endsWith("/healthz") || ready ? 200 : 503;
+      return { response: { ok: status === 200, status }, release };
+    });
+
+    try {
+      const readiness = waitForGatewayReady({
+        baseUrl,
+        logs: () => "readiness logs",
+        child: { exitCode: null, signalCode: null },
+        timeoutMs: 1_000,
       });
 
-      try {
-        const readiness = waitForGatewayReady({
-          baseUrl,
-          logs: () => `${phase} logs`,
-          child: { exitCode: null, signalCode: null },
-          timeoutMs: 1_000,
-        });
+      await vi.advanceTimersByTimeAsync(0);
 
-        await vi.advanceTimersByTimeAsync(0);
+      expect(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url)).toEqual([
+        `${baseUrl}/readyz`,
+      ]);
+      const healthRequest = requireSsrFetchCall();
+      expect(healthRequest.init?.method).toBe("HEAD");
+      expect(healthRequest.init?.headers).toEqual({ connection: "close" });
+      expect(healthRequest.policy).toEqual({ allowPrivateNetwork: true });
+      expect(healthRequest.auditContext).toBe("qa-lab-gateway-child-health");
+      expect(release).toHaveBeenCalledTimes(1);
 
-        expect(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url)).toEqual([
-          `${baseUrl}/readyz`,
-        ]);
-        const healthRequest = requireSsrFetchCall();
-        expect(healthRequest.init?.method).toBe("HEAD");
-        expect(healthRequest.init?.headers).toEqual({ connection: "close" });
-        expect(healthRequest.policy).toEqual({ allowPrivateNetwork: true });
-        expect(healthRequest.auditContext).toBe("qa-lab-gateway-child-health");
-        expect(release).toHaveBeenCalledTimes(1);
+      ready = true;
+      await vi.advanceTimersByTimeAsync(250);
 
-        ready = true;
-        await vi.advanceTimersByTimeAsync(250);
-
-        await expect(readiness).resolves.toBeUndefined();
-        expect(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url)).toEqual([
-          `${baseUrl}/readyz`,
-          `${baseUrl}/readyz`,
-        ]);
-        expect(release).toHaveBeenCalledTimes(2);
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
+      await expect(readiness).resolves.toBeUndefined();
+      expect(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url)).toEqual([
+        `${baseUrl}/readyz`,
+        `${baseUrl}/readyz`,
+      ]);
+      expect(release).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("bounds a stalled readiness probe by the remaining deadline", async () => {
     let probeSignal: AbortSignal | undefined;

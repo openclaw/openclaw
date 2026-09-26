@@ -258,13 +258,12 @@ describe("Code Mode model matrix runtime and output admission", () => {
         "must not already exist",
       );
 
-      const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-outside-test-"));
+      const outside = tempDirs.make("openclaw-code-mode-outside-test-");
       const linked = path.join(repoRoot, "linked");
       await fs.symlink(outside, linked, process.platform === "win32" ? "junction" : "dir");
       await expect(
         reserveCodeModeMatrixOutputDir(repoRoot, path.join(linked, "results")),
       ).rejects.toThrow("must not traverse symlinks");
-      await fs.rm(outside, { force: true, recursive: true });
     } finally {
       await fs.rm(repoRoot, { force: true, recursive: true });
     }

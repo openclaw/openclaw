@@ -277,6 +277,9 @@ describe("qa agentic parity report", () => {
     const mismatchLines = comparison.failures.filter((failure) =>
       failure.includes(`Scenario coverage mismatch for ${missingScenario}:`),
     );
+    expect(comparison.failures).toContain(
+      "Missing required parity scenario coverage for Image understanding from attachment: openai/gpt-5.6-luna=missing, anthropic/claude-opus-4-8=missing.",
+    );
     expect(requiredLines).toHaveLength(1);
     expect(mismatchLines).toHaveLength(0);
   });
@@ -312,22 +315,6 @@ describe("qa agentic parity report", () => {
       failure.includes("completion rate"),
     );
     expect(regressionFailures).toStrictEqual([]);
-  });
-
-  it("fails the parity gate when required parity scenarios are missing on both sides", () => {
-    const comparison = compareQaAgenticParity(
-      {
-        scenarios: [{ name: "Approval turn tool followthrough", status: "pass" }],
-      },
-      {
-        scenarios: [{ name: "Approval turn tool followthrough", status: "pass" }],
-      },
-    );
-
-    expect(comparison.pass).toBe(false);
-    expect(comparison.failures).toContain(
-      "Missing required parity scenario coverage for Image understanding from attachment: openai/gpt-5.6-luna=missing, anthropic/claude-opus-4-8=missing.",
-    );
   });
 
   it("fails the parity gate when required parity scenarios are skipped", () => {

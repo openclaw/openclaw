@@ -926,7 +926,7 @@ describe("qa confidence report", () => {
   });
 
   it("emits confidence self-test canaries for every drift class we need to catch", async () => {
-    const { summary } = await writeQaConfidenceSelfTestArtifacts({
+    const { summary, summaryPath, reportPath } = await writeQaConfidenceSelfTestArtifacts({
       outputDir: tempRoot,
       generatedAt: "2026-05-12T00:00:00.000Z",
     });
@@ -942,17 +942,12 @@ describe("qa confidence report", () => {
       "jsonl-replay-ordering-drift",
     ]);
     expect(summary.canaries.every((canary) => canary.detected)).toBe(true);
-  });
 
-  it("writes confidence self-test artifacts", async () => {
-    const result = await writeQaConfidenceSelfTestArtifacts({
-      outputDir: tempRoot,
-      generatedAt: "2026-05-12T00:00:00.000Z",
-    });
-
-    await expect(fs.stat(result.summaryPath)).resolves.toBeTruthy();
-    await expect(fs.stat(result.reportPath)).resolves.toBeTruthy();
-    const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as { pass: boolean };
-    expect(summary.pass).toBe(true);
+    await expect(fs.stat(summaryPath)).resolves.toBeTruthy();
+    await expect(fs.stat(reportPath)).resolves.toBeTruthy();
+    const persistedSummary = JSON.parse(await fs.readFile(summaryPath, "utf8")) as {
+      pass: boolean;
+    };
+    expect(persistedSummary.pass).toBe(true);
   });
 });

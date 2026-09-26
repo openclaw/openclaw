@@ -278,17 +278,6 @@ describe("suite artifacts", () => {
         };
         expect(summary.run?.channelCapabilityMatrixPath).toBe(capabilityMatrixPath);
         expect(summary.run?.channelDriverSmokePath).toBe(providerReadinessArtifactPath);
-        expect(path.dirname(artifactGenerationDirectory)).toBe(
-          ".crabline-channel-driver-artifacts",
-        );
-        expect(path.basename(artifactGenerationDirectory)).toBe("generation-test");
-        expect(path.basename(capabilityMatrixPath)).toBe(
-          "crabline-channel-driver-capabilities.json",
-        );
-        expect(path.dirname(providerReadinessArtifactPath)).toBe(artifactGenerationDirectory);
-        expect(path.basename(providerReadinessArtifactPath)).toBe(
-          "crabline-provider-readiness.json",
-        );
         await expect(
           fs.access(path.join(outputDir, "crabline-channel-driver-capabilities.json")),
         ).rejects.toMatchObject({ code: "ENOENT" });

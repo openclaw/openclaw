@@ -456,12 +456,23 @@ describe("QA mock OpenAI Responses WebSocket", () => {
 
   it("rejects a response delta whose previous response belongs to another connection", async () => {
     const server = await startServer();
-    const socket = await connectResponsesWebSocket(server.baseUrl);
+    const firstSocket = await connectResponsesWebSocket(server.baseUrl);
+    const prompt = "Read README.md for the source and docs discovery report.";
+    const firstEvents = await collectResponseEvents(firstSocket, {
+      type: "response.create",
+      model: "gpt-5.6-sol",
+      tools: [{ type: "function", name: "read" }],
+      input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
+    });
+    const firstResponse = readCompletedResponse(firstEvents);
+    expect(firstResponse.id).toEqual(expect.any(String));
+    expect(firstResponse.id).not.toBe("");
 
+    const socket = await connectResponsesWebSocket(server.baseUrl);
     const events = await collectResponseEvents(socket, {
       type: "response.create",
       model: "gpt-5.6-sol",
-      previous_response_id: "resp_qa_unknown",
+      previous_response_id: firstResponse.id,
       input: [],
     });
 

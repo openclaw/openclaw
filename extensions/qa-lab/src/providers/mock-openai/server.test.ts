@@ -2359,14 +2359,10 @@ describe("qa mock openai server", () => {
     {
       faultMode: "empty-output-once",
       markerPrefix: "QA-COMPACTION-EMPTY-OUTPUT-ONCE",
-      recoveredMarker: QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER,
-      reasoningOnly: false,
     },
     {
       faultMode: "reasoning-only-output-once",
       markerPrefix: "QA-COMPACTION-REASONING-ONLY-OUTPUT-ONCE",
-      recoveredMarker: QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER,
-      reasoningOnly: true,
     },
   ] as const)(
     "injects one coded overflow for $faultMode scenario markers",
@@ -2442,11 +2438,7 @@ describe("qa mock openai server", () => {
       const recoveredText = outputText(recovered);
       expect(recoveredText).toContain(recoveredMarker);
       expect(recoveredText).toContain(`${markerPrefix}-session-a`);
-      expect(recoveredText).toContain("## Decisions");
-      expect(recoveredText).toContain("## Open TODOs");
-      expect(recoveredText).toContain("## Constraints/Rules");
-      expect(recoveredText).toContain("## Pending user asks");
-      expect(recoveredText).toContain("## Exact identifiers");
+      expectCurrentCompactionSummaryHeadings(recoveredText);
       const independent = await expectOpenAiNonStreamingResponsesJson(
         server,
         requestFor("session-b"),
@@ -2874,11 +2866,9 @@ Update and merge these partial structured summaries.`,
     });
     expect(await writePlan.text()).toContain('"name":"write"');
 
+    // Omitting the task marker makes this request depend on retained scenario state.
     const contextOnlyWritePlan = await expectOpenAiStreamingResponses(server, {
-      input: [
-        makeUserInput(QA_COMPACTION_RETRY_PROMPT),
-        makeUserInput("Continue after compaction."),
-      ],
+      input: [makeUserInput("Continue after compaction.")],
     });
     expect(await contextOnlyWritePlan.text()).toContain('"name":"write"');
 

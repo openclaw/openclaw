@@ -1,5 +1,4 @@
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
@@ -60,30 +59,6 @@ async function runSessionMemoryRankingFlow(params: {
     ...(params.corpus ? { corpus: params.corpus } : {}),
   };
   const toolResultCallId = params.resultCallId ?? searchCallId;
-  const requests = [
-    ...(includeToolCall
-      ? [
-          {
-            cursor: 41,
-            allInputText: "Session memory ranking check",
-            plannedToolName: "memory_search",
-            plannedToolCallId: searchCallId,
-            plannedToolArgs,
-          },
-        ]
-      : []),
-    ...(includeToolResult
-      ? [
-          {
-            cursor: 42,
-            allInputText: "Session memory ranking check",
-            toolOutputCallId: toolResultCallId,
-            toolOutput: JSON.stringify({ results: params.results }),
-            ...(params.resultIsError ? { toolOutputStructuredError: true } : {}),
-          },
-        ]
-      : []),
-  ];
   const historyMessages = [
     ...(includeToolCall
       ? [
@@ -124,14 +99,6 @@ async function runSessionMemoryRankingFlow(params: {
     },
   );
   const fetchJson = vi.fn(async (input: string) => {
-    const url = new URL(input);
-    if (url.pathname === "/debug/request-cursor") {
-      return { cursor: 40 };
-    }
-    if (url.pathname === "/debug/requests") {
-      const after = Number(url.searchParams.get("after") ?? 0);
-      return requests.filter((request) => request.cursor > after);
-    }
     throw new Error(`unexpected QA mock request: ${input}`);
   });
   const forceMemoryIndex = vi.fn(async () => undefined);
@@ -169,7 +136,6 @@ async function runSessionMemoryRankingFlow(params: {
       seedQaSessionTranscript: async () => undefined,
       forceMemoryIndex,
       runAgentPrompt,
-      normalizeLowercaseStringOrEmpty,
       fetchJson,
     },
   });
@@ -179,39 +145,10 @@ async function runSessionMemoryRankingFlow(params: {
 
 describe("session memory ranking scenario evidence", () => {
   it.each(["mock-openai", "live-frontier"] as const)(
-    "accepts current session memory ranked before competing stale durable memory (%s)",
-    async (providerMode) => {
-      const { result } = await runSessionMemoryRankingFlow({
-        providerMode,
-        results: [currentSessionResult, staleDurableResult],
-      });
-
-      expect(result.status).toBe("pass");
-    },
-  );
-
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "compares conflicting facts while ignoring the current question and evergreen USER note (%s)",
-    async (providerMode) => {
-      const { result } = await runSessionMemoryRankingFlow({
-        providerMode,
-        results: [
-          currentQuestionResult,
-          currentSessionResult,
-          evergreenUserResult,
-          staleDurableResult,
-        ],
-      });
-
-      expect(result.status).toBe("pass");
-    },
-  );
-
-  it.each(["mock-openai", "live-frontier"] as const)(
     "seeds the conflicting durable fact in an authentic three-day-old daily note (%s)",
     async (providerMode) => {
       const startedAt = Date.now();
-      const { utimes, writeFile } = await runSessionMemoryRankingFlow({
+      const { result, utimes, writeFile } = await runSessionMemoryRankingFlow({
         providerMode,
         results: [
           currentQuestionResult,
@@ -221,6 +158,7 @@ describe("session memory ranking scenario evidence", () => {
         ],
       });
       const completedAt = Date.now();
+      expect(result.status).toBe("pass");
       const [stalePath, staleContent] = writeFile.mock.calls[0] ?? [];
       const [datedPath, accessedAt, modifiedAt] = utimes.mock.calls[0] ?? [];
 
@@ -238,11 +176,12 @@ describe("session memory ranking scenario evidence", () => {
   it.each(["mock-openai", "live-frontier"] as const)(
     "requires successful provider-independent persisted search evidence (%s)",
     async (providerMode) => {
-      const { fetchJson, gatewayCall, runAgentPrompt } = await runSessionMemoryRankingFlow({
+      const { result, fetchJson, gatewayCall, runAgentPrompt } = await runSessionMemoryRankingFlow({
         providerMode,
         results: [currentSessionResult, staleDurableResult],
       });
 
+      expect(result.status).toBe("pass");
       expect(runAgentPrompt).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({

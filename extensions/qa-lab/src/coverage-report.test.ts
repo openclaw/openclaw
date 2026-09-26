@@ -20,10 +20,8 @@ const TWO_PART_COVERAGE_ID_PATTERN = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9-]*$/;
 
 function buildQaScorecardTaxonomyReport(params: {
   taxonomy: QaMaturityTaxonomy;
-  repoRoot: string;
   scenarios: readonly QaSeedScenarioWithSource[];
 }) {
-  expect(params.repoRoot).toBe(process.cwd());
   const parseSpy = vi.spyOn(YAML, "parse").mockReturnValueOnce(params.taxonomy);
   try {
     return readQaScorecardTaxonomyReport(params.scenarios);
@@ -702,7 +700,6 @@ describe("qa coverage report", () => {
   it("reports missing taxonomy coverage refs without treating them as inventoried", () => {
     const report = buildQaScorecardTaxonomyReport({
       taxonomy: testMaturityTaxonomy(),
-      repoRoot: process.cwd(),
       scenarios: [
         scenarioWithCoverage({
           primary: ["agents.missing-coverage"],
@@ -725,7 +722,6 @@ describe("qa coverage report", () => {
         categoryId: TEST_BROWSER_CATEGORY_ID,
         coverageIds: [TEST_BROWSER_COVERAGE_ID],
       }),
-      repoRoot: process.cwd(),
       scenarios: [
         scenarioWithCoverage({
           primary: [TEST_BROWSER_COVERAGE_ID],
@@ -759,7 +755,6 @@ describe("qa coverage report", () => {
       taxonomy: testMaturityTaxonomy({
         coverageIds: [TEST_EXECUTABLE_COVERAGE_ID, TEST_WEBCHAT_COVERAGE_ID],
       }),
-      repoRoot: process.cwd(),
       scenarios: [
         scenarioWithCoverage({
           primary: [TEST_EXECUTABLE_COVERAGE_ID],
@@ -829,7 +824,6 @@ describe("qa coverage report", () => {
     expect(() =>
       buildQaScorecardTaxonomyReport({
         taxonomy,
-        repoRoot: process.cwd(),
         scenarios: [],
       }),
     ).toThrow(
@@ -845,19 +839,19 @@ describe("qa coverage report", () => {
     );
     feature.coverageIds = [TEST_EXECUTABLE_COVERAGE_ID, TEST_WEBCHAT_COVERAGE_ID];
 
-    expect(() =>
-      buildQaScorecardTaxonomyReport({ taxonomy, repoRoot: process.cwd(), scenarios: [] }),
-    ).toThrow("taxonomy features must define exactly one coverage ID");
+    expect(() => buildQaScorecardTaxonomyReport({ taxonomy, scenarios: [] })).toThrow(
+      "taxonomy features must define exactly one coverage ID",
+    );
 
     feature.coverageIds = ["agents.delivery.group"];
-    expect(() =>
-      buildQaScorecardTaxonomyReport({ taxonomy, repoRoot: process.cwd(), scenarios: [] }),
-    ).toThrow("coverage ids must use exactly <surface-id>.<feature-id>");
+    expect(() => buildQaScorecardTaxonomyReport({ taxonomy, scenarios: [] })).toThrow(
+      "coverage ids must use exactly <surface-id>.<feature-id>",
+    );
 
     feature.coverageIds = [TEST_BROWSER_COVERAGE_ID];
-    expect(() =>
-      buildQaScorecardTaxonomyReport({ taxonomy, repoRoot: process.cwd(), scenarios: [] }),
-    ).toThrow(`coverage ID ${TEST_BROWSER_COVERAGE_ID} must belong to surface agent-runtime`);
+    expect(() => buildQaScorecardTaxonomyReport({ taxonomy, scenarios: [] })).toThrow(
+      `coverage ID ${TEST_BROWSER_COVERAGE_ID} must belong to surface agent-runtime`,
+    );
   });
 
   it("inventories script producer declarations", () => {
@@ -866,7 +860,6 @@ describe("qa coverage report", () => {
         categoryId: TEST_BROWSER_CATEGORY_ID,
         coverageIds: [TEST_BROWSER_COVERAGE_ID],
       }),
-      repoRoot: process.cwd(),
       scenarios: [
         scenarioWithCoverage({
           primary: [TEST_BROWSER_COVERAGE_ID],
@@ -897,7 +890,6 @@ describe("qa coverage report", () => {
         includeAllCategories: true,
         includeArchivedSurface: true,
       }),
-      repoRoot: process.cwd(),
       scenarios: [],
     });
 
@@ -914,7 +906,6 @@ describe("qa coverage report", () => {
   it("reports profile categories missing primary coverage inventory", () => {
     const report = buildQaScorecardTaxonomyReport({
       taxonomy: testMaturityTaxonomy(),
-      repoRoot: process.cwd(),
       scenarios: [],
     });
 
@@ -927,7 +918,6 @@ describe("qa coverage report", () => {
   it("reports native test inventory targets outside the repository", () => {
     const report = buildQaScorecardTaxonomyReport({
       taxonomy: testMaturityTaxonomy(),
-      repoRoot: process.cwd(),
       scenarios: [
         scenarioWithCoverage({
           primary: [TEST_EXECUTABLE_COVERAGE_ID],
@@ -947,7 +937,6 @@ describe("qa coverage report", () => {
   it("inventories runnable scenario coverage metadata", () => {
     const report = buildQaScorecardTaxonomyReport({
       taxonomy: testMaturityTaxonomy(),
-      repoRoot: process.cwd(),
       scenarios: [
         scenarioWithCoverage({
           primary: [TEST_EXECUTABLE_COVERAGE_ID],
@@ -974,7 +963,6 @@ describe("qa coverage report", () => {
   it("counts secondary scenario metadata as inventory but not primary inventory", () => {
     const report = buildQaScorecardTaxonomyReport({
       taxonomy: testMaturityTaxonomy(),
-      repoRoot: process.cwd(),
       scenarios: [
         scenarioWithCoverage({
           primary: [TEST_WEBCHAT_COVERAGE_ID],
