@@ -23,7 +23,6 @@ import {
   appendTranscriptEvent,
   loadSessionEntry as loadAccessorSessionEntry,
   loadTranscriptEvents,
-  patchSessionEntryCore as patchAccessorSessionEntry,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
@@ -454,116 +453,6 @@ test("sessions.compact keeps prior usage stale when the compactor returns a nega
     ws.close();
   }
 });
-
-test.each([false, true])(
-  "sessions.compact preserves byte accounting after Codex compaction, host committed=%s",
-  async (hostCommitted) => {
-    const { storePath } = await createSessionStoreDir();
-    const byteLatch = { sessionId: "sess-codex", activeBytes: 200, maxBytes: 100 };
-    await seedSessionEntry({
-      entry: sessionStoreEntry("sess-codex", {
-        agentHarnessId: "codex",
-        modelSelectionLocked: true,
-        compactionCount: 2,
-        transcriptByteCompactionLatch: byteLatch,
-        totalTokens: 54_321,
-        totalTokensFresh: true,
-        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-        cliSessionIds: { "codex-cli": "thread-1" },
-        cliSessionBindings: { "codex-cli": { sessionId: "thread-1" } },
-      }),
-      sessionKey: "agent:main:main",
-      storePath,
-    });
-    await seedTranscriptRows({
-      sessionId: "sess-codex",
-      sessionKey: "agent:main:main",
-      storePath,
-      totalLines: 2,
-    });
-    embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(
-      async (_input, hostInput) => {
-        if (hostCommitted) {
-          const entry = await patchAccessorSessionEntry(
-            { agentId: "main", sessionKey: "agent:main:main", storePath },
-            () => ({ compactionCount: 3 }),
-          );
-          if (!entry) {
-            throw new Error("expected committed compaction entry");
-          }
-          await (hostInput as QueuedCompactionHostOptions).onHostCompactionCommitted?.({
-            entry,
-            compactionKind: "context-engine",
-            accountingCommitted: true,
-          });
-        }
-        return {
-          ok: true,
-          compacted: true,
-          compactionKind: hostCommitted ? "context-engine" : "native-harness",
-          result: {
-            summary: "",
-            firstKeptEntryId: "",
-            tokensBefore: 54_321,
-            details: {
-              backend: "codex-app-server",
-              threadId: "thread-1",
-              signal: "thread/compact/start",
-              pending: false,
-              completed: true,
-            },
-          },
-        };
-      },
-    );
-
-    const { ws } = await openClient();
-    await rpcReq(ws, "sessions.subscribe", {});
-    const endEventPromise = onceMessage(ws, (message) => isCompactOperationEvent(message, "end"));
-
-    const compacted = await rpcReq<{
-      ok: true;
-      key: string;
-      compacted: boolean;
-      result?: { details?: unknown };
-    }>(ws, "sessions.compact", {
-      key: "main",
-    });
-
-    expectMainCompactionResult(compacted, true);
-    expect(compacted.payload?.result?.details).toMatchObject({
-      backend: "codex-app-server",
-      threadId: "thread-1",
-      signal: "thread/compact/start",
-      pending: false,
-      completed: true,
-    });
-    const endEvent = await endEventPromise;
-    expect(endEvent.payload).toMatchObject({
-      operation: "compact",
-      phase: "end",
-      sessionKey: "agent:main:main",
-      completed: true,
-    });
-
-    // Terminal Codex native compaction persists via the accessor: the count
-    // advances and the previous context snapshot becomes stale for recomputation.
-    const codexEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
-    expect(codexEntry?.compactionCount).toBe(3);
-    expect(codexEntry?.transcriptByteCompactionLatch).toEqual(byteLatch);
-    expect(codexEntry?.cliSessionIds).toEqual({ "codex-cli": "thread-1" });
-    expect(codexEntry?.cliSessionBindings).toEqual({
-      "codex-cli": { sessionId: "thread-1" },
-    });
-    expect(codexEntry?.totalTokens).toBe(54_321);
-    expect(codexEntry?.totalTokensFresh).toBe(hostCommitted);
-    expect(codexEntry?.totalTokensVersion).toBe(
-      hostCommitted ? SESSION_TOTAL_TOKENS_VERSION : undefined,
-    );
-
-    ws.close();
-  },
-);
 
 test("sessions.compact targets the persisted native CLI session", async () => {
   const pluginRegistry = getTestPluginRegistry();

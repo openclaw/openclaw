@@ -399,7 +399,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             emitCompactionEnd(false, formatErrorMessage(err));
             throw err;
           }
-          if (result.ok && result.compacted) {
+          if ((result.ok && result.compacted) || hostAccountingCommitted) {
             let persisted: boolean;
             try {
               // Skip terminal persistence when session ownership rotated during compaction.
@@ -470,12 +470,13 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             },
             undefined,
           );
-          if (result.ok) {
+          if (result.ok || hostAccountingCommitted) {
             emitSessionsChanged(context, {
               sessionKey: target.canonicalKey,
+              sessionId: expectedEntry.sessionId,
               agentId: target.agentId,
               reason: "compact",
-              compacted: result.compacted,
+              compacted: hostAccountingCommitted || result.compacted,
             });
           }
         },

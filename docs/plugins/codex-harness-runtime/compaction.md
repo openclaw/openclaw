@@ -32,7 +32,9 @@ ordinary turn. When the mirror exceeds its configured limit and has no valid
 byte-compaction progress latch, OpenClaw compacts the mirror before starting
 native Codex compaction with `thread/compact/start`. A completed host compaction
 keeps its accounting even if the native operation fails; the manual request
-reports that native failure. Native-only compaction preserves the host byte
+reports that native failure. The Gateway still notifies clients about the committed
+host compaction after confirming the session has not been replaced.
+Native-only compaction preserves the host byte
 progress latch because it does not rewrite the mirror.
 OpenClaw keeps the request and shared-client lease open until Codex emits the
 matching `contextCompaction` completion item and then reports the compaction
