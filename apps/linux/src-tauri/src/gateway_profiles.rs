@@ -2,6 +2,7 @@ use crate::remote_gateway::{self, RemoteGatewayRequest};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use zeroize::Zeroizing;
 
@@ -128,6 +129,9 @@ impl RegistryCredential for SystemCredential {
 pub(crate) struct GatewayProfiles {
     credential: Box<dyn RegistryCredential>,
     registry: Mutex<Option<Registry>>,
+    // Scopes browser data like the credential record, so named app profiles and
+    // debug builds never share a saved Gateway's WebKit storage.
+    browser_scope: String,
 }
 
 impl GatewayProfiles {
@@ -138,12 +142,62 @@ impl GatewayProfiles {
         } else {
             "ai.openclaw.tauri.gateway-profiles"
         };
+        let service = format!("{base}.{}", digest(namespace));
         Self {
-            credential: Box::new(SystemCredential {
-                service: format!("{base}.{}", digest(namespace)),
-            }),
+            browser_scope: digest(&service),
+            credential: Box::new(SystemCredential { service }),
             registry: Mutex::new(None),
         }
+    }
+
+    /// Browser storage for one saved Gateway. The id is derived from the
+    /// canonical endpoint, so renames and credential edits keep the dashboard's
+    /// device identity while a different endpoint starts clean.
+    pub fn browser_data_dir(&self, root: &Path, id: &str) -> PathBuf {
+        root.join(&self.browser_scope).join(digest(id))
+    }
+
+    /// Deletes browser storage whose Gateway is no longer saved. WebKitGTK keeps
+    /// a data directory in use until the app exits, so a Gateway removed during
+    /// a session is cleaned up at the next launch. Saved profiles are never
+    /// touched, and holding the registry lock keeps a concurrent save from
+    /// losing the directory of the profile it adds.
+    pub fn prune_browser_data(&self, root: &Path) -> Result<(), String> {
+        let scope = root.join(&self.browser_scope);
+        // Without saved-Gateway storage there is nothing to prune; skip the
+        // credential store entirely.
+        if !scope.is_dir() {
+            return Ok(());
+        }
+        let mut cache = self.registry.lock().map_err(|_| CORRUPT)?;
+        // An unreadable registry returns here, so storage is never pruned
+        // against a partial profile list.
+        let kept: HashSet<String> = self
+            .load(&mut cache)?
+            .profiles
+            .iter()
+            .map(|profile| digest(&profile.id))
+            .collect();
+        let entries = std::fs::read_dir(&scope)
+            .map_err(|_| "Could not read saved Gateway browser storage.")?;
+        for entry in entries.flatten() {
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| kept.contains(name))
+            {
+                continue;
+            }
+            let path = entry.path();
+            let removed = match entry.file_type() {
+                Ok(kind) if kind.is_dir() => std::fs::remove_dir_all(&path),
+                _ => std::fs::remove_file(&path),
+            };
+            if removed.is_err() {
+                eprintln!("Browser storage for a removed Gateway could not be deleted.");
+            }
+        }
+        Ok(())
     }
 
     pub fn list(&self) -> Result<Vec<GatewayProfileSummary>, String> {
@@ -423,6 +477,7 @@ mod tests {
         GatewayProfiles {
             credential: Box::new(credential.clone()),
             registry: Mutex::new(None),
+            browser_scope: "fixture-scope".into(),
         }
     }
 
@@ -798,5 +853,75 @@ mod tests {
                 .is_err());
             assert_eq!(vault.0.lock().unwrap().value.as_ref(), Some(&original));
         }
+    }
+
+    fn browser_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "openclaw-linux-gateway-browser-{label}-test-{}",
+            uuid::Uuid::new_v4()
+        ))
+    }
+
+    #[test]
+    fn browser_storage_follows_the_endpoint_and_prunes_only_removed_gateways() {
+        let root = browser_root("prune");
+        let outside = browser_root("outside");
+        let profiles = store(&MemoryCredential::default());
+        let studio = profiles
+            .save("Studio", None, request("https://studio.example", Some("a")))
+            .unwrap();
+        let desk = profiles
+            .save("Desk", None, request("https://desk.example", None))
+            .unwrap();
+        let studio_dir = profiles.browser_data_dir(&root, &studio.id);
+        let desk_dir = profiles.browser_data_dir(&root, &desk.id);
+        assert_ne!(studio_dir, desk_dir);
+        let renamed = profiles
+            .save(
+                "Studio desk",
+                Some(&studio.id),
+                request("wss://studio.example/", Some("rotated")),
+            )
+            .unwrap();
+        assert_eq!(profiles.browser_data_dir(&root, &renamed.id), studio_dir);
+
+        let other_app_profile = root.join("other-scope").join("kept");
+        for dir in [&studio_dir, &desk_dir, &other_app_profile, &outside] {
+            std::fs::create_dir_all(dir.join("storage")).unwrap();
+        }
+        let scope = studio_dir.parent().unwrap();
+        let stray = scope.join("stray");
+        std::fs::write(&stray, b"fixture").unwrap();
+        let link = scope.join("linked");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        profiles.remove(&desk.id).unwrap();
+        profiles.prune_browser_data(&root).unwrap();
+        assert!(studio_dir.join("storage").is_dir());
+        assert!(!desk_dir.exists());
+        assert!(!stray.exists());
+        assert!(std::fs::symlink_metadata(&link).is_err());
+        assert!(outside.join("storage").is_dir(), "links are never followed");
+        assert!(
+            other_app_profile.is_dir(),
+            "other app profiles keep storage"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
+    }
+
+    #[test]
+    fn unreadable_registries_never_prune_browser_storage() {
+        let root = browser_root("unreadable");
+        let vault = MemoryCredential::default();
+        vault.0.lock().unwrap().value = Some(b"not-json".to_vec());
+        let profiles = store(&vault);
+        // Without storage on disk the credential store is never read.
+        assert!(profiles.prune_browser_data(&root).is_ok());
+        let dir = profiles.browser_data_dir(&root, "manual-fixture");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(profiles.prune_browser_data(&root).is_err());
+        assert!(dir.is_dir());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

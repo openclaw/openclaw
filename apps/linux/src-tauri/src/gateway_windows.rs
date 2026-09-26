@@ -5,10 +5,12 @@ use crate::native_browser_platform::NavigationEvent;
 use crate::remote_gateway::{self, RemoteGatewayRequest, SshTunnel};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
 #[cfg(any(target_os = "windows", test))]
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     time::{Duration, Instant},
 };
 use tauri::ipc::CapabilityBuilder;
@@ -897,6 +899,8 @@ pub(crate) struct DocumentRegistration {
     pub lifetime: String,
     #[cfg(target_os = "windows")]
     browser_data: Option<Arc<TemporaryBrowserData>>,
+    #[cfg(target_os = "linux")]
+    profile_data: Option<PathBuf>,
 }
 
 type DocumentReady = Arc<dyn Fn(&Webview) + Send + Sync>;
@@ -921,6 +925,13 @@ impl DocumentRegistration {
         #[cfg(target_os = "windows")]
         if let Some(data) = &self.browser_data {
             return builder.data_directory(data.path.clone());
+        }
+        // A saved Gateway keeps its dashboard storage, and with it the Control
+        // UI's paired device identity, across switches and restarts. Native
+        // macOS keeps one persistent website data store per saved profile.
+        #[cfg(target_os = "linux")]
+        if let Some(path) = &self.profile_data {
+            return builder.incognito(false).data_directory(path.clone());
         }
         builder
     }
@@ -1080,6 +1091,25 @@ impl Drop for TemporaryBrowserData {
             cleanup.idle.notify_all();
         });
     }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn profile_browser_root(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_local_data_dir()
+        .map(|dir| dir.join("gateway-profiles"))
+        .map_err(|_| "Could not locate saved Gateway browser storage.".to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn private_profile_dir(path: PathBuf) -> Result<PathBuf, String> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&path)
+        .map_err(|_| "Could not create saved Gateway browser storage.")?;
+    Ok(path)
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -1291,6 +1321,14 @@ impl GatewayWindows {
         } else {
             Some(self.profiles.get(target_id)?.revision)
         };
+        #[cfg(target_os = "linux")]
+        let profile_data = match profile_revision {
+            Some(_) => Some(private_profile_dir(
+                self.profiles
+                    .browser_data_dir(&profile_browser_root(app)?, target_id),
+            )?),
+            None => None,
+        };
         #[cfg(target_os = "windows")]
         let browser_data = if isolated_browser_document(label, target_id) {
             let parent = app
@@ -1353,6 +1391,8 @@ impl GatewayWindows {
             lifetime,
             #[cfg(target_os = "windows")]
             browser_data,
+            #[cfg(target_os = "linux")]
+            profile_data,
         })
     }
 
@@ -2270,8 +2310,7 @@ fn replace_auxiliary(
     let browser_app = app.clone();
     let page_registration = registration.clone();
     let builder = registration
-        .configure(WebviewBuilder::new(label, registration.initial_url()))
-        .incognito(true)
+        .configure(WebviewBuilder::new(label, registration.initial_url()).incognito(true))
         .initialization_script(script)
         .auto_resize()
         .on_new_window(move |url, _| {
