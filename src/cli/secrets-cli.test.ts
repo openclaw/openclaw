@@ -378,6 +378,62 @@ describe("secrets CLI", () => {
     expect(mockFirstObjectArg(runSecretsAudit).allowExec).toBe(true);
   });
 
+  it("marks the audit header UNMEASURED when exec refs are skipped (#147341)", async () => {
+    runSecretsAudit.mockResolvedValue({
+      version: 1,
+      status: "findings",
+      filesScanned: [],
+      summary: {
+        plaintextCount: 7,
+        unresolvedRefCount: 0,
+        shadowedRefCount: 4,
+        storeResidueCount: 0,
+        legacyResidueCount: 0,
+      },
+      resolution: {
+        refsChecked: 2,
+        skippedExecRefs: 11,
+        resolvabilityComplete: false,
+      },
+      findings: [],
+    });
+    resolveSecretsAuditExitCode.mockReturnValue(0);
+
+    await createProgram().parseAsync(["secrets", "audit"], { from: "user" });
+    expect(runtimeLogs[0]).toContain("UNMEASURED");
+    expect(runtimeLogs[0]).toContain("11 exec resolvability check(s) skipped");
+    expect(runtimeLogs[0]).toContain("--allow-exec");
+    expect(runtimeLogs[0]).toContain("unresolved=0");
+    expect(runtimeLogs.some((line) => line.startsWith("Audit note: skipped 11"))).toBe(true);
+  });
+
+  it("keeps the complete-audit header unchanged when nothing is skipped", async () => {
+    runSecretsAudit.mockResolvedValue({
+      version: 1,
+      status: "findings",
+      filesScanned: [],
+      summary: {
+        plaintextCount: 7,
+        unresolvedRefCount: 0,
+        shadowedRefCount: 4,
+        storeResidueCount: 0,
+        legacyResidueCount: 0,
+      },
+      resolution: {
+        refsChecked: 13,
+        skippedExecRefs: 0,
+        resolvabilityComplete: true,
+      },
+      findings: [],
+    });
+    resolveSecretsAuditExitCode.mockReturnValue(0);
+
+    await createProgram().parseAsync(["secrets", "audit", "--allow-exec"], { from: "user" });
+    expect(runtimeLogs[0]).toBe(
+      "Secrets audit: findings. plaintext=7, unresolved=0, shadowed=4, storeResidue=0, legacy=0.",
+    );
+  });
+
   it("runs secrets configure then apply when confirmed", async () => {
     runSecretsConfigureInteractive.mockResolvedValue(
       createConfigureInteractiveResult({
