@@ -519,4 +519,73 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     expect(bindCalls).toHaveLength(0);
     expect(hoisted.registerSubagentRunMock.mock.calls).toHaveLength(0);
   });
+
+  it("does not bind a CLI-runtime thread spawn into a conversation the channel rejects for the caller", async () => {
+    // The generic loopback path lets a caller supply x-openclaw-current-channel-id.
+    // Conversation authority is owned by the channel: its
+    // resolveInboundConversation is the final arbiter of whether the caller may
+    // bind in that conversation. When it rejects the target (a conversation the
+    // caller cannot access), prepareSpawnThreadBinding must fail resolution and
+    // never reach the binding service, even though thread spawning is enabled.
+    const allowedRooms = new Set(["parent"]);
+    setActivePluginRegistryForTest(
+      createTestRegistryForTest([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBaseForTest({ id: "matrix", label: "Matrix" }),
+            messaging: {
+              resolveInboundConversation: ({ to }: { to?: string }) => {
+                const roomId = to?.trim().replace(/^(?:matrix:)?(?:channel:|room:)/iu, "");
+                return roomId && allowedRooms.has(roomId) ? { conversationId: roomId } : null;
+              },
+              resolveDeliveryTarget: ({ conversationId }: { conversationId: string }) => ({
+                to: `room:${conversationId}`,
+              }),
+            },
+          },
+        },
+      ]),
+    );
+    const bindCalls: Array<Record<string, unknown>> = [];
+    currentSessionBindingService = {
+      getCapabilities: () => ({
+        adapterAvailable: true,
+        bindSupported: true,
+        placements: ["child"],
+      }),
+      bind: async (request) => {
+        bindCalls.push(request as unknown as Record<string, unknown>);
+        throw new Error("bind must not be reached when the channel rejects the conversation");
+      },
+      listBySession: () => [],
+    };
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "reply with a marker",
+        thread: true,
+        mode: "session",
+        context: "isolated",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "matrix",
+        agentAccountId: "default",
+        agentTo: undefined,
+        agentThreadId: undefined,
+        currentMessagingTarget: undefined,
+        currentChannelId: "room:not-a-conversation-for-this-caller",
+        currentThreadTs: undefined,
+      },
+    );
+
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.error).toContain("Could not resolve a matrix conversation");
+    }
+    expect(bindCalls).toHaveLength(0);
+    expect(hoisted.registerSubagentRunMock.mock.calls).toHaveLength(0);
+  });
 });
