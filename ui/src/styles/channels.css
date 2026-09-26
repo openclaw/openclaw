@@ -146,10 +146,6 @@
   font-size: var(--control-ui-text-xs);
 }
 
-.channels-pairing-filters select {
-  width: 100%;
-}
-
 .channels-pairing-feedback {
   min-height: 0;
 }

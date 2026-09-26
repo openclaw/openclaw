@@ -857,9 +857,6 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     if (payload) {
       job.payload = payload;
     }
-    if (!job.name) {
-      throw new Error(t("cron.errors.nameRequiredShort"));
-    }
     if (editingJob) {
       const editedJobId = editingJob.id;
       // History navigation can replace the editor while its accepted save is pending.
