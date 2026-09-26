@@ -72,6 +72,11 @@ legacy workspace files it left untouched; it does not retire their files or
 proposal history. After the candidate is installed, the real Doctor runs the
 normal import, archival, and relocation against the operator's state.
 
+Plugin migrations with declared files outside the copied state are deferred as
+one plugin operation. Doctor leaves their files and pending markers intact and
+reports the deferral; configuration repair still runs. Reef's legacy directory
+follows this rule, including its archived files.
+
 Completed agent deletions that intentionally kept their files are held back during
 update and migration discovery. Doctor records a recoverable warning naming the
 agent, database path, and `openclaw doctor --fix` guidance. These stores do not

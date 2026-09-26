@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveUserPath } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const REEF_DURABLE_LEGACY_FILENAMES = [
@@ -40,6 +41,13 @@ export function resolveLegacyReefStateDir(params: {
 function resolveDefaultLegacyReefStateDir(homeDir = os.homedir()): string {
   return path.join(homeDir, ".openclaw", "data", "reef");
 }
+
+export const collectLegacyReefStateBackupResources: NonNullable<
+  PluginDoctorStateMigration["collectBackupResources"]
+> = (params) => [
+  // Archival writes beside the imported files, so the directory is the complete footprint.
+  { path: resolveLegacyReefStateDir(params), kind: "directory" },
+];
 
 export async function legacyReefFileExists(filePath: string): Promise<boolean> {
   try {

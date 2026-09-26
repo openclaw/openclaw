@@ -14,6 +14,7 @@ import {
 } from "./src/config-schema.js";
 import { reefAuditStateMigration, reefRuntimeStateMigration } from "./src/doctor-durable-state.js";
 import {
+  collectLegacyReefStateBackupResources,
   legacyReefFileExists,
   listLegacyReefFiles,
   REEF_DURABLE_LEGACY_FILENAMES,
@@ -139,6 +140,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "reef-keys-json-to-plugin-state",
     label: "Reef identity keys",
+    collectBackupResources: collectLegacyReefStateBackupResources,
     async detectLegacyState(params) {
       const stateDir = resolveLegacyReefStateDir(params);
       const filePath = path.join(stateDir, "keys.json");
@@ -282,6 +284,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "reef-registration-json-to-plugin-state",
     label: "Reef registration state",
+    collectBackupResources: collectLegacyReefStateBackupResources,
     async detectLegacyState(params) {
       const stateDir = resolveLegacyReefStateDir(params);
       const migrationStore = params.context.openPluginStateKeyedStore<ReefIdentityMigrationRecord>({
@@ -462,6 +465,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "reef-config-trust-to-plugin-state",
     label: "Reef peer trust",
+    collectBackupResources: () => [],
     async detectLegacyState({ config, context }) {
       const legacy = inspectLegacyReefFriends(config);
       const markerStore = context.openPluginStateKeyedStore<ReefConfigImportMarker>({

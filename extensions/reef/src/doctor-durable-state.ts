@@ -13,6 +13,7 @@ import { parseVerdict } from "../protocol/guard.js";
 import type { ReviewRequest } from "../protocol/pipeline.js";
 import type { SignedReceipt } from "../protocol/receipts.js";
 import {
+  collectLegacyReefStateBackupResources,
   legacyReefFileExists,
   listLegacyReefFiles,
   REEF_DURABLE_LEGACY_FILENAMES,
@@ -294,6 +295,7 @@ async function readLegacyReefDelivered(filePath: string): Promise<string[]> {
 export const reefAuditStateMigration: PluginDoctorStateMigration = {
   id: "reef-audit-jsonl-to-plugin-state",
   label: "Reef audit trail",
+  collectBackupResources: collectLegacyReefStateBackupResources,
   async detectLegacyState(params) {
     const filePath = path.join(resolveLegacyReefStateDir(params), "audit.jsonl");
     const migrationStore = params.context.openPluginStateKeyedStore<ReefAuditMigrationRecord>({
@@ -465,6 +467,7 @@ export const reefAuditStateMigration: PluginDoctorStateMigration = {
 export const reefRuntimeStateMigration: PluginDoctorStateMigration = {
   id: "reef-runtime-files-to-plugin-state",
   label: "Reef durable runtime state",
+  collectBackupResources: collectLegacyReefStateBackupResources,
   async detectLegacyState(params) {
     const stateDir = resolveLegacyReefStateDir(params);
     const files = await listLegacyReefFiles(stateDir, REEF_RUNTIME_LEGACY_FILENAMES);
