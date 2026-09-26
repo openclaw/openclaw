@@ -1,15 +1,23 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { sendSubagentAnnounceDirectly } from "../agents/subagents/announce/subagent-announce-direct-delivery.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createAgentHarnessTaskRuntimeScope } from "../tasks/agent-harness-task-runtime-scope.js";
 import {
   getTaskById,
   listTaskRecords,
   resetTaskRegistryForTests,
 } from "../tasks/task-registry-query.js";
+import * as taskReadRuntime from "../tasks/task-registry-read.js";
+import { captureTaskRetentionSelection } from "../tasks/task-registry-retention.operation.js";
+import { reloadTaskRegistryFromStoreAsync } from "../tasks/task-registry-state.js";
 import { configureTaskRegistryRuntime } from "../tasks/task-registry.store.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
+import { resolveEffectiveTaskCleanupAfter } from "../tasks/task-retention.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 import {
+  captureAgentHarnessTaskAssignment,
   createAgentHarnessTaskRuntime,
   deliverAgentHarnessTaskCompletion,
 } from "./agent-harness-task-runtime.js";
@@ -19,12 +27,14 @@ vi.mock("../agents/subagents/announce/subagent-announce-delivery.js", async (imp
     typeof import("../agents/subagents/announce/subagent-announce-delivery.js")
   >()),
   isInternalAnnounceRequesterSession: () => true,
-  deliverSubagentAnnouncement: () => {
-    throw new Error("Unexpected completion delivery");
-  },
+}));
+
+vi.mock("../agents/subagents/announce/subagent-announce-direct-delivery.js", () => ({
+  sendSubagentAnnounceDirectly: vi.fn(async () => ({ delivered: true, path: "direct" })),
 }));
 
 afterEach(() => {
+  vi.clearAllMocks();
   vi.restoreAllMocks();
   resetTaskRegistryForTests();
 });
@@ -51,15 +61,18 @@ function record(taskId: string, patch: Partial<TaskRecord> = {}): TaskRecord {
   };
 }
 
-function configure(records: TaskRecord[]) {
+function configure(records: TaskRecord[], warm = true) {
   resetTaskRegistryForTests();
   const store = createInMemoryTaskRegistryStore({
     tasks: new Map(records.map((task) => [task.taskId, task])),
     deliveryStates: new Map(),
   });
   configureTaskRegistryRuntime({ store });
-  getTaskById(records[0]?.taskId ?? "missing");
+  if (warm) {
+    getTaskById(records[0]?.taskId ?? "missing");
+  }
   return {
+    store,
     read: vi.spyOn(store, "loadSnapshot"),
     write: vi.spyOn(store, "upsertTaskWithDeliveryState"),
   };
@@ -78,6 +91,115 @@ function createRuntime(
 }
 
 describe("harness task selection with the real registry", () => {
+  it.each([
+    "unchanged",
+    "replacement",
+    "removed",
+    "inserted",
+    "metadata",
+    "unrelated",
+    "cold",
+    "empty",
+    "cold-empty",
+    "explicit-replacement",
+    "cold-replacement",
+    "cold-removed",
+    "cold-inserted",
+    "cold-metadata",
+    "cold-unrelated",
+  ] as const)("retains implicit assignment across read preparation: %s", async (change) => {
+    const mutation = change.replace(/^cold-/, "");
+    const original = record("original", { runId: "example:completion" });
+    const startsEmpty = mutation === "inserted" || mutation === "empty";
+    const { store } = configure(startsEmpty ? [] : [original], !change.startsWith("cold"));
+    const context = captureOpenClawStateWorkerContext();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const prepare = taskReadRuntime.prepareTaskRegistryRead;
+    vi.spyOn(taskReadRuntime, "prepareTaskRegistryRead").mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return prepare(...args);
+    });
+    const pending = deliverAgentHarnessTaskCompletion({
+      scope: createAgentHarnessTaskRuntimeScope({ requesterSessionKey: ownerKey }),
+      ...(mutation === "explicit-replacement"
+        ? { expectedTask: captureAgentHarnessTaskAssignment(original) }
+        : {}),
+      childSessionKey: expectDefined(original.runId, "completion run"),
+      childSessionId: "child",
+      announceId: "implicit-assignment-completion",
+      status: "succeeded",
+      result: "Original task result",
+    });
+    const settled = Promise.allSettled([pending]);
+    try {
+      await Promise.race([
+        entered.promise,
+        pending.then(() => {
+          throw new Error("Delivery settled before read preparation");
+        }),
+      ]);
+      const replaces = mutation === "replacement" || mutation === "explicit-replacement";
+      if (replaces || mutation === "removed") {
+        const source = expectDefined(
+          await store.prepareRetentionSourceAsync(context, original.taskId),
+          "original task retention source",
+        );
+        const result = await store.runInitialMutationAsync(
+          context,
+          {
+            type: "tasks.applyRetention",
+            input: {
+              taskId: original.taskId,
+              selection: captureTaskRetentionSelection(source.task),
+              sourceVersion: source.version,
+              now: resolveEffectiveTaskCleanupAfter(source.task),
+              cronHistoryOverflow: false,
+            },
+          },
+          () => context.admission.assertCurrent(),
+        );
+        expect(result).toMatchObject({ kind: "task-retention-commit", outcome: "pruned" });
+      }
+      if (replaces || mutation === "inserted") {
+        store.upsertTaskWithDeliveryState({
+          task: record("replacement", { runId: original.runId }),
+        });
+      } else if (mutation === "metadata") {
+        store.upsertTaskWithDeliveryState({ task: { ...original, progressSummary: "updated" } });
+      } else if (mutation === "unrelated") {
+        store.upsertTaskWithDeliveryState({ task: record("unrelated") });
+      }
+      if (replaces || ["removed", "inserted", "metadata", "unrelated"].includes(mutation)) {
+        await reloadTaskRegistryFromStoreAsync(context);
+      }
+      release.resolve();
+      const result = await pending;
+      const allowed = !replaces && mutation !== "removed" && mutation !== "inserted";
+      expect(result.delivered).toBe(allowed);
+      expect(sendSubagentAnnounceDirectly).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      if (allowed) {
+        expect(sendSubagentAnnounceDirectly).toHaveBeenCalledWith(
+          expect.objectContaining({
+            requesterSessionKey: ownerKey,
+            internalEvents: [expect.objectContaining({ result: "Original task result" })],
+          }),
+        );
+      } else {
+        expect(result).toMatchObject({ recoveryBlocked: true });
+      }
+      if (replaces || mutation === "inserted") {
+        expect(getTaskById("replacement")).toEqual(
+          record("replacement", { runId: original.runId }),
+        );
+      }
+    } finally {
+      release.resolve();
+      await settled;
+    }
+  });
+
   it("copies only scoped details while retaining order, exact selectors and detached results", () => {
     const selected = [record("first", { runtime: "cli" }), record("second", { runtime: "cli" })];
     const excluded = [
@@ -129,36 +251,41 @@ describe("harness task selection with the real registry", () => {
     expect(clone).not.toHaveBeenCalled();
   });
 
-  it("filters completion ownership reads before copying and still rejects duplicate owners", async () => {
-    const owned = [
-      record("first", { runId: "example:duplicate" }),
-      record("second", { runId: "example:duplicate" }),
-    ];
-    const excluded = [
-      record("other-runtime", { runtime: "cli", runId: "example:duplicate" }),
-      record("no-kind", { taskKind: undefined, runId: "example:duplicate" }),
-      record("other-requester", {
-        requesterSessionKey: "agent:other:main",
-        runId: "example:duplicate",
-      }),
-      record("other-run"),
-    ];
-    const { write } = configure([...owned, ...excluded]);
-    const clone = vi.spyOn(globalThis, "structuredClone");
-    const result = await deliverAgentHarnessTaskCompletion({
-      scope: createAgentHarnessTaskRuntimeScope({ requesterSessionKey: ownerKey }),
-      childSessionKey: "example:duplicate",
-      childSessionId: "child",
-      announceId: "fixture-completion",
-      status: "succeeded",
-      result: "Synthetic completion",
-    });
-    expect(result).toMatchObject({
-      delivered: false,
-      recoveryBlocked: true,
-      error: "completion task ownership is ambiguous",
-    });
-    expect(clone.mock.calls.map(([detail]) => detail)).toEqual(owned.map((task) => task.detail));
-    expect(write).not.toHaveBeenCalled();
-  });
+  it.each([1, 2])(
+    "filters completion ownership reads and accepts only one owner (owners: %s)",
+    async (count) => {
+      const owned = [
+        record("first", { runId: "example:duplicate" }),
+        record("second", { runId: "example:duplicate" }),
+      ];
+      const excluded = [
+        record("other-runtime", { runtime: "cli", runId: "example:duplicate" }),
+        record("no-kind", { taskKind: undefined, runId: "example:duplicate" }),
+        record("other-requester", {
+          requesterSessionKey: "agent:other:main",
+          runId: "example:duplicate",
+        }),
+        record("other-run"),
+      ];
+      const { write } = configure([...owned.slice(0, count), ...excluded]);
+      const result = await deliverAgentHarnessTaskCompletion({
+        scope: createAgentHarnessTaskRuntimeScope({ requesterSessionKey: ownerKey }),
+        childSessionKey: "example:duplicate",
+        childSessionId: "child",
+        announceId: "fixture-completion",
+        status: "succeeded",
+        result: "Synthetic completion",
+      });
+      expect(result).toMatchObject(
+        count === 1
+          ? { delivered: true }
+          : {
+              delivered: false,
+              recoveryBlocked: true,
+              error: "completion task ownership is ambiguous",
+            },
+      );
+      expect(write).not.toHaveBeenCalled();
+    },
+  );
 });

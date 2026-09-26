@@ -3,6 +3,7 @@ import type {
   ChatAttachment,
   ChatComposerDraftRetry,
   ChatGoalDraftMode,
+  ChatReplyTarget,
   ChatQueueItem,
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
@@ -34,6 +35,7 @@ export type StoredChatComposerSnapshot = {
   draft: string;
   mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
   queue: ChatQueueItem[];
 };
 
@@ -47,6 +49,7 @@ export type ChatComposerPersistOptions = {
   draft?: string;
   mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode | null;
+  replyTarget?: ChatReplyTarget | null;
   draftRevision?: number;
   expectedDraftRevision?: number;
 };
@@ -56,6 +59,7 @@ export type ChatComposerPersistenceState = ChatComposerScope & {
   chatMessage: string;
   chatMentions?: readonly HumanMention[];
   chatGoalDraftMode?: ChatGoalDraftMode | null;
+  chatReplyTarget?: ChatReplyTarget | null;
   chatAttachments?: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   lastError?: string | null;
@@ -76,6 +80,7 @@ export type ChatComposerDraftSnapshot = {
   chatMessage: string;
   mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
   expectedDraftRevision: number;
   draftRevision: number;
   attachments: ChatAttachment[];

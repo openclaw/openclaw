@@ -398,7 +398,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       await respondManagedArtifactDownload(query, getRuntimeConfig, client, respond);
       return;
     }
-    const found = await runArtifactSessionOperation<
+    let found = await runArtifactSessionOperation<
       ArtifactLookup & { download?: PreparedArtifactDownload }
     >(respond, () =>
       query.transport === "http" && canCreateArtifactDownload(client)
@@ -406,6 +406,12 @@ export const artifactsHandlers: GatewayRequestHandlers = {
         : findArtifact(query, getRuntimeConfig, { downloadArtifactId: query.artifactId }, client),
     );
     assertCurrent();
+    if (found.ok && found.value.download && !canCreateArtifactDownload(client)) {
+      found = await runArtifactSessionOperation(respond, () =>
+        findArtifact(query, getRuntimeConfig, { downloadArtifactId: query.artifactId }, client),
+      );
+      assertCurrent();
+    }
     if (!found.ok) {
       return;
     }

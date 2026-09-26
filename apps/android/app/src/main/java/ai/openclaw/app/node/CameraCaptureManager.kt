@@ -41,6 +41,7 @@ import kotlinx.serialization.json.JsonObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.math.roundToInt
@@ -128,9 +129,19 @@ class CameraCaptureManager(
 
   @Volatile private var lifecycleOwner: LifecycleOwner? = null
 
-  private companion object {
+  companion object {
     // ProcessCameraProvider is process-wide, including during runtime replacement.
-    val captureMutex = Mutex()
+    private val captureMutex = Mutex()
+
+    /** Interactive camera screens share exclusion without inheriting remote-node admission. */
+    internal fun tryAcquireCamera(): AutoCloseable? {
+      val owner = Any()
+      if (!captureMutex.tryLock(owner)) return null
+      val released = AtomicBoolean(false)
+      return AutoCloseable {
+        if (released.compareAndSet(false, true)) captureMutex.unlock(owner)
+      }
+    }
   }
 
   /** Supplies the foreground Activity lifecycle required by CameraX use-case binding. */

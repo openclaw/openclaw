@@ -73,7 +73,7 @@ export function finalizeEmbeddedAttempt(
     : (result.currentAttemptCompletedAssistant ?? result.currentAttemptAssistant);
   const completionOutcome = resolveEmbeddedRunAttemptTerminalOutcome({
     attempt: result,
-    assistant: terminalState.cleanupYieldAborted ? undefined : assistant,
+    assistant,
   });
   const stopReason =
     terminalState.cleanupYieldAborted && completionOutcome.status === "ok"

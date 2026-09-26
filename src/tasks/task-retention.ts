@@ -1,9 +1,13 @@
 // Computes task retention windows and pruning eligibility for registry cleanup.
-import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
+import { isTerminalTaskStatus, type TaskRecord, type TaskStatus } from "./task-registry.types.js";
 
 /** Default retention for terminal task records before maintenance prunes them. */
 const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const LOST_TASK_RETENTION_MS = 24 * 60 * 60_000;
+
+export function shouldStampCleanupAfter(task: TaskRecord): boolean {
+  return isTerminalTaskStatus(task.status) && typeof task.cleanupAfter !== "number";
+}
 
 function resolveTaskRetentionMs(status: TaskStatus): number {
   return status === "lost" ? LOST_TASK_RETENTION_MS : DEFAULT_TASK_RETENTION_MS;

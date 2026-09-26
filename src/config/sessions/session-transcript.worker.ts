@@ -154,6 +154,27 @@ serveOwnedWorkerTasks(
           return { kind: "historical-eviction-candidates" as const, sessionIds: result.value };
         });
       }
+      if (request.kind === "session-pending-archives") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { runSqliteDeferredTransactionSync } =
+          await import("../../infra/sqlite-transaction.js");
+        const { hasPendingSessionTranscriptArchives } =
+          await import("./session-accessor.sqlite-archive-store-kernel.js");
+        return await withHistoryDatabase(request.database, request.kind, () => {
+          const result = withOpenClawAgentDatabaseReadOnly(
+            (database) =>
+              runSqliteDeferredTransactionSync(database.db, () =>
+                hasPendingSessionTranscriptArchives(database),
+              ),
+            { ...request.database, env: cloneEnvWithPlatformSemantics(request.env) },
+          );
+          return {
+            kind: "session-pending-archives" as const,
+            pending: result.found && result.value,
+          };
+        });
+      }
       if (request.kind === "session-archive-pruning") {
         const { readSessionArchivePruningInWorker } =
           await import("./session-history-archive-pruning.worker.js");
@@ -269,6 +290,12 @@ serveOwnedWorkerTasks(
               );
           return { kind: "session-identity-evidence" as const, evidence };
         });
+      }
+      if (request.kind === "session-diagnostic-text") {
+        const { readSessionDiagnosticText } = await import("./session-entry-read.worker.js");
+        return await withHistoryDatabase(request.database, request.kind, () =>
+          readSessionDiagnosticText(request),
+        );
       }
       if (request.kind === "session-entry-read") {
         const { loadSessionEntryReadOnlyResultInScope } =

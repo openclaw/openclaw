@@ -165,7 +165,7 @@ test.each(["none", "restore-failed", "placement-changed"] as const)(
           expect(SQLITE_SESSION_WRITER_QUEUES.get(writerQueuePath)?.pending.length).toBe(1);
         });
         expect(isSessionLifecycleMutationActive(storePath, [key, sessionId])).toBe(true);
-        placements!.startDispatch({ sessionId, sessionKey: key, agentId: "main" });
+        await placements!.startDispatch({ sessionId, sessionKey: key, agentId: "main" });
         // A stopped replacement is eligible, but cannot reuse preparation owned by the prior placement.
         placements!.fail({ sessionId, expectedGeneration: 1, recoveryError: "preparation failed" });
         releaseWriter.resolve();

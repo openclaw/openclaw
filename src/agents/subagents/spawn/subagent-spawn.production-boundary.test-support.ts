@@ -140,7 +140,7 @@ export async function createBoundWorker(
   const database = openOpenClawStateDatabase();
   const store = createWorkerSessionPlacementStore({ database });
   const session = { sessionId: "parent-session", agentId: "main", sessionKey: parentSessionKey };
-  let placement = store.startDispatch({ ...session, executionMode: "worker-turn" });
+  let placement = await store.startDispatch({ ...session, executionMode: "worker-turn" });
   placement = store.transition({
     sessionId: session.sessionId,
     from: "requested",
@@ -180,7 +180,7 @@ export async function createBoundWorker(
   if (placement.state !== "active") {
     throw new Error("expected the active worker placement");
   }
-  const claim = store.claimTurn({
+  const claim = await store.claimTurn({
     ...session,
     owner: placementTurnOwner(placement),
     claimId: "queued-worker-claim",

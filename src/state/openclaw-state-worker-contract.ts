@@ -34,6 +34,8 @@ import type {
   SessionGroupCatalogMutationResult,
 } from "../gateway/session-group-catalog.types.js";
 import type { WorkerInferenceStoreOperations } from "../gateway/worker-environments/inference-store.worker-contract.js";
+import type { WorkerPlacementDispatchStoreOperations } from "../gateway/worker-environments/placement-record.js";
+import type { PlacementTurnClaimWorkerOperations } from "../gateway/worker-environments/placement-turn-claims.worker-contract.js";
 import type { WorkerEnvironmentWorkerOperations } from "../gateway/worker-environments/store-worker-contract.js";
 import type {
   DeferredPluginMigration,
@@ -117,6 +119,8 @@ export type OpenClawStateWorkerOperations = WorktreeRetirementOperations &
   ProjectRegistryWorkerOperations &
   WorkerEnvironmentWorkerOperations &
   WorkerInferenceStoreOperations &
+  PlacementTurnClaimWorkerOperations &
+  WorkerPlacementDispatchStoreOperations &
   SessionDeliveryWorkerOperations &
   DeliveryQueueWorkerOperations &
   TranscriptReadOperations &

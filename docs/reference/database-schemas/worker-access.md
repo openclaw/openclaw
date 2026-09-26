@@ -53,6 +53,16 @@ behavior.
 
 ## Carry facts, publish after commit
 
+Placement turn claims and releases execute through the shared-state writer,
+including their coordinator acquisition. Local turns retain durable claims:
+cloud dispatch closes admission and joins their settlement before preparing the
+workspace. Claim admission rechecks the live caller before mutation and commit;
+conditional release compares the exact claim inside the transaction. Commit
+receipts publish claim authority and release observers before callers continue,
+including when ordinary reply delivery fails. Local forced completion and final
+cleanup join the same pending release. Restart recovery, schemas, persisted
+fields, and update behavior are unchanged.
+
 Memory session preparation retains only export text, provenance, timestamps, and
 classification/reset facts from each decoded SQLite event. Full-message observers
 retain their original snapshot, and callbacks run after its read transaction closes.
@@ -101,6 +111,14 @@ acceptance refuses the commit; an accepted commit drains through its settled
 result or native worker exit before releasing writer admission, publishing facts,
 or releasing request custody. The parent does not open SQLite or synchronously
 wait for the worker's commit. This changes no schema, retention, or update behavior.
+
+Ordinary lifecycle upserts read their selected rows and pending-archive fact in
+one read-worker snapshot. A matching physical database with no pending archives
+skips recovery; archive-producing mutations, native scopes, and Doctor transfers
+retain publication. Later foreign archive commits are visible to the next snapshot.
+Standalone recovery probes reuse the read worker without archive or writer admission.
+Maintenance finalization takes writer admission only when its worker requests native
+access, then rechecks current entries and retains admission through commit publication.
 
 Physical page reclamation releases the session writer permit between vacuum units,
 so queued foreground writers receive their FIFO turn before the next unit. Each

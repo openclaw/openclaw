@@ -7,15 +7,17 @@ import {
   SECRET_PROVIDER_ALIAS_PATTERN,
 } from "../secrets/ref-contract.js";
 
+const SecretRefProviderSchema = z
+  .string()
+  .regex(
+    SECRET_PROVIDER_ALIAS_PATTERN,
+    'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
+  );
+
 const EnvSecretRefSchema = z
   .object({
     source: z.literal("env"),
-    provider: z
-      .string()
-      .regex(
-        SECRET_PROVIDER_ALIAS_PATTERN,
-        'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
-      ),
+    provider: SecretRefProviderSchema,
     id: z
       .string()
       .regex(
@@ -28,12 +30,7 @@ const EnvSecretRefSchema = z
 const FileSecretRefSchema = z
   .object({
     source: z.literal("file"),
-    provider: z
-      .string()
-      .regex(
-        SECRET_PROVIDER_ALIAS_PATTERN,
-        'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
-      ),
+    provider: SecretRefProviderSchema,
     id: z
       .string()
       .refine(
@@ -46,12 +43,7 @@ const FileSecretRefSchema = z
 const ExecSecretRefSchema = z
   .object({
     source: z.literal("exec"),
-    provider: z
-      .string()
-      .regex(
-        SECRET_PROVIDER_ALIAS_PATTERN,
-        'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
-      ),
+    provider: SecretRefProviderSchema,
     id: z.string().refine(isValidExecSecretRefId, formatExecSecretRefIdValidationMessage()),
   })
   .strict();
@@ -59,12 +51,7 @@ const ExecSecretRefSchema = z
 const StoreSecretRefSchema = z
   .object({
     source: z.literal("store"),
-    provider: z
-      .string()
-      .regex(
-        SECRET_PROVIDER_ALIAS_PATTERN,
-        'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
-      ),
+    provider: SecretRefProviderSchema,
     id: z
       .string()
       .regex(

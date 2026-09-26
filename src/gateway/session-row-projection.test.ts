@@ -199,6 +199,7 @@ it("retains current rows across agent scopes without SQLite and refreshes only t
           {
             sessionId: `${agentId}-${name}`,
             updatedAt: Date.now(),
+            lastInteractionAt: name === "parent" ? 2 : 1,
             label: name,
             ...(name === "child" ? { parentSessionKey: `agent:${agentId}:parent` } : {}),
           },
@@ -212,8 +213,22 @@ it("retains current rows across agent scopes without SQLite and refreshes only t
       const untouched = projection.describe({ agentId: "work", key: "agent:work:child" });
       const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
       const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+      const insertionOrder = projection.selectEntries({ agentId: "main", sortBy: null });
+      const insertionKeys = insertionOrder.map((record) => record.key);
       const first = projection.selectEntries({ agentId: "main" });
+      const interactionOrder = projection.selectEntries({
+        agentId: "main",
+        sortBy: "lastInteractionAt",
+      });
+      expect(interactionOrder.map((record) => record.key)).toEqual([
+        "agent:main:parent",
+        "agent:main:child",
+      ]);
       expect(first.map((record) => record.key)).toEqual(["agent:main:child", "agent:main:parent"]);
+      expect(insertionOrder.map((record) => record.key)).toEqual(insertionKeys);
+      expect(
+        projection.selectEntries({ agentId: "main", sortBy: null }).map((record) => record.key),
+      ).toEqual(insertionKeys);
       expect(
         projection.snapshot({ agentId: "main", key: "agent:main:parent" }).row?.childSessions,
       ).toEqual(["agent:main:child"]);
@@ -692,6 +707,9 @@ it("keeps cross-agent inheritance bound to a stored qualified parent", async () 
         model: "work-model",
         modelOverrideSource: "inherited",
       });
+      expect(
+        projection.selectEntries({ agentId: "work", parentSessionKey: "agent:work:main" }),
+      ).toEqual([]);
       expect(
         projection
           .selectEntries({ agentId: "main", parentSessionKey: "agent:work:main" })

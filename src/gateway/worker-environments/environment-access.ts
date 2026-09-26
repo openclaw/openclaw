@@ -199,7 +199,18 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       );
     }
     const provider = providerFor(record.providerId);
-    return await identityResolverFor(record, provider, record.leaseId)(record.sshEndpoint.keyRef);
+    return await identityResolverFor(
+      record,
+      provider,
+      record.leaseId,
+    )(record.sshEndpoint.keyRef, {
+      // Direct lookup has no tunnel; its service and exact lease own the invocation.
+      assertCurrent: () => {
+        if (options.isStopping()) {
+          throw serviceError("invalid_state", "Worker environment service is stopping");
+        }
+      },
+    });
   };
 
   const bindPreparedWorkspace = async (

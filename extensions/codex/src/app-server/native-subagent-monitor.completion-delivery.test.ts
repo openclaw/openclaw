@@ -863,6 +863,11 @@ describe("CodexNativeSubagentMonitor", () => {
     it("delivers a deferred completion if the parent client closes", async () => {
       const client = createClient();
       const runtime = createRuntime();
+      const delivered = createDeferred<void>();
+      runtime.deliverAgentHarnessTaskCompletion.mockImplementation(async () => {
+        delivered.resolve();
+        return { delivered: true, path: "direct" };
+      });
       const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
       const owner = await registerParent(monitor);
       owner.bindTurn("parent-turn");
@@ -870,6 +875,7 @@ describe("CodexNativeSubagentMonitor", () => {
       await client.notify(completedChild());
       expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
       client.close();
+      await delivered.promise;
       expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledOnce();
       await owner.unregister();
     });

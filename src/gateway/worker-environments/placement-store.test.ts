@@ -4,10 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type {
   WorkerPlacementExecutionMode,
   WorkerSessionPlacementIdentity,
@@ -38,11 +38,11 @@ describe("worker session placement store", () => {
   });
 
   afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  function advanceToActive(
+  async function advanceToActive(
     identity: WorkerSessionPlacementIdentity = SESSION,
     executionMode: WorkerPlacementExecutionMode = "worker-turn",
   ) {
@@ -51,7 +51,7 @@ describe("worker session placement store", () => {
       sessionId: identity.sessionId,
       ownerEpoch: 7,
     });
-    let placement = store.startDispatch({ ...identity, executionMode });
+    let placement = await store.startDispatch({ ...identity, executionMode });
     for (const step of [
       { to: "provisioning", patch: { environmentId: `environment-${identity.sessionId}` } },
       { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
@@ -77,8 +77,8 @@ describe("worker session placement store", () => {
     return placement;
   }
 
-  it("persists the placement lifecycle and rejects stale transition generations", () => {
-    const requested = store.startDispatch(SESSION);
+  it("persists the placement lifecycle and rejects stale transition generations", async () => {
+    const requested = await store.startDispatch(SESSION);
     expect(requested).toMatchObject({
       state: "requested",
       generation: 1,
@@ -151,8 +151,8 @@ describe("worker session placement store", () => {
     expect(store.get(SESSION.sessionId)).toMatchObject({ executionMode: "worker-turn" });
   });
 
-  it("requires each placement phase to persist its complete metadata", () => {
-    const requested = store.startDispatch(SESSION);
+  it("requires each placement phase to persist its complete metadata", async () => {
+    const requested = await store.startDispatch(SESSION);
     const provisioning = store.transition({
       sessionId: SESSION.sessionId,
       from: "requested",
@@ -213,8 +213,8 @@ describe("worker session placement store", () => {
     });
   });
 
-  it("drains and reconciles worker ownership before returning local", () => {
-    const active = advanceToActive();
+  it("drains and reconciles worker ownership before returning local", async () => {
+    const active = await advanceToActive();
     const draining = store.transition({
       sessionId: SESSION.sessionId,
       from: "active",
@@ -240,8 +240,8 @@ describe("worker session placement store", () => {
     });
   });
 
-  it("rejects reclaim before worker ownership reaches reconciliation", () => {
-    const requested = store.startDispatch(SESSION);
+  it("rejects reclaim before worker ownership reaches reconciliation", async () => {
+    const requested = await store.startDispatch(SESSION);
     expect(() =>
       store.transition({
         sessionId: SESSION.sessionId,
@@ -260,32 +260,32 @@ describe("worker session placement store", () => {
   });
 
   it("closes local admission before draining the existing local turn", async () => {
-    const localClaim = store.claimTurn({
+    const localClaim = await store.claimTurn({
       ...SESSION,
       owner: { kind: "local" },
       claimId: "local-claim",
       runId: "run-local",
     });
-    const requested = store.startDispatch(SESSION);
+    const requested = await store.startDispatch(SESSION);
     expect(requested).toMatchObject({ state: "requested", generation: 1 });
     expect(requested.turnClaim).toMatchObject({ owner: "local", generation: 0 });
 
-    expect(() =>
+    await expect(
       store.claimTurn({
         ...SESSION,
         owner: { kind: "local" },
         claimId: "new-local-claim",
         runId: "new-local-run",
       }),
-    ).toThrow("already has an active turn claim");
-    expect(() =>
+    ).rejects.toThrow("already has an active turn claim");
+    await expect(
       store.claimTurn({
         ...SESSION,
         owner: localClaim.owner,
         claimId: localClaim.claimId,
         runId: localClaim.runId,
       }),
-    ).toThrow("already has an active turn claim");
+    ).rejects.toThrow("already has an active turn claim");
     expect(() =>
       store.transition({
         sessionId: SESSION.sessionId,
@@ -297,7 +297,7 @@ describe("worker session placement store", () => {
     ).toThrow("during an active turn");
 
     const released = store.waitForTurnClaimRelease(SESSION.sessionId, {});
-    store.releaseTurn(localClaim);
+    await store.releaseTurn(localClaim);
     await released;
     expect(
       store.transition({
@@ -310,14 +310,14 @@ describe("worker session placement store", () => {
     ).toMatchObject({ state: "provisioning", turnClaim: null });
   });
 
-  it("keeps the draining local claim releasable when the dispatch barrier fails", () => {
-    const localClaim = store.claimTurn({
+  it("keeps the draining local claim releasable when the dispatch barrier fails", async () => {
+    const localClaim = await store.claimTurn({
       ...SESSION,
       owner: { kind: "local" },
       claimId: "local-barrier-claim",
       runId: "local-barrier-run",
     });
-    const requested = store.startDispatch(SESSION);
+    const requested = await store.startDispatch(SESSION);
     const failed = store.fail({
       sessionId: SESSION.sessionId,
       expectedGeneration: requested.generation,
@@ -329,33 +329,35 @@ describe("worker session placement store", () => {
       recoveryError: "local drain timed out",
       turnClaim: { owner: "local", claimId: localClaim.claimId },
     });
-    expect(() =>
+    await expect(
       store.claimTurn({
         ...SESSION,
         owner: { kind: "local" },
         claimId: "new-local-claim",
         runId: "new-local-run",
       }),
-    ).toThrow("already has an active turn claim");
-    expect(store.releaseTurn(localClaim)).toMatchObject({ state: "failed", turnClaim: null });
+    ).rejects.toThrow("already has an active turn claim");
+    expect(await store.releaseTurn(localClaim)).toMatchObject({ state: "failed", turnClaim: null });
   });
 
-  it("does not let a stale claim release a later turn that reuses the run id", () => {
-    const firstClaim = store.claimTurn({
+  it("does not let a stale claim release a later turn that reuses the run id", async () => {
+    const firstClaim = await store.claimTurn({
       ...SESSION,
       owner: { kind: "local" },
       claimId: "first-claim-token",
       runId: "reused-run",
     });
-    store.releaseTurn(firstClaim);
-    const secondClaim = store.claimTurn({
+    await store.releaseTurn(firstClaim);
+    const secondClaim = await store.claimTurn({
       ...SESSION,
       owner: { kind: "local" },
       claimId: "second-claim-token",
       runId: firstClaim.runId,
     });
 
-    expect(() => store.releaseTurn(firstClaim)).toThrow("turn claim changed before release");
+    await expect(store.releaseTurn(firstClaim)).rejects.toThrow(
+      "turn claim changed before release",
+    );
     expect(store.validateTurnClaim(secondClaim)).toBe(true);
     expect(store.get(SESSION.sessionId)?.turnClaim).toMatchObject({
       claimId: secondClaim.claimId,
@@ -363,16 +365,16 @@ describe("worker session placement store", () => {
     });
   });
 
-  it("allows a reset session id to reuse its canonical session key", () => {
-    const firstClaim = store.claimTurn({
+  it("allows a reset session id to reuse its canonical session key", async () => {
+    const firstClaim = await store.claimTurn({
       ...SESSION,
       owner: { kind: "local" },
       claimId: "first-session-claim",
       runId: "first-session-run",
     });
-    store.releaseTurn(firstClaim);
+    await store.releaseTurn(firstClaim);
 
-    const rotated = store.claimTurn({
+    const rotated = await store.claimTurn({
       ...SESSION,
       sessionId: "session-placement-rotated",
       owner: { kind: "local" },
@@ -386,17 +388,17 @@ describe("worker session placement store", () => {
     ]);
   });
 
-  it("admits exactly the active placement owner and fences stale worker epochs", () => {
-    const active = advanceToActive();
-    expect(() =>
+  it("admits exactly the active placement owner and fences stale worker epochs", async () => {
+    const active = await advanceToActive();
+    await expect(
       store.claimTurn({
         ...SESSION,
         owner: { kind: "local" },
         claimId: "local-after-dispatch",
         runId: "local-after-dispatch-run",
       }),
-    ).toThrow("Local turn rejected");
-    expect(() =>
+    ).rejects.toThrow("Local turn rejected");
+    await expect(
       store.claimTurn({
         ...SESSION,
         owner: {
@@ -407,9 +409,9 @@ describe("worker session placement store", () => {
         claimId: "stale-worker",
         runId: "stale-worker-run",
       }),
-    ).toThrow("stale owner");
+    ).rejects.toThrow("stale owner");
 
-    const workerClaim = store.claimTurn({
+    const workerClaim = await store.claimTurn({
       ...SESSION,
       owner: {
         kind: "worker",
@@ -430,7 +432,7 @@ describe("worker session placement store", () => {
         },
       }),
     ).toBe(false);
-    expect(() =>
+    await expect(
       store.claimTurn({
         ...SESSION,
         owner: {
@@ -441,15 +443,15 @@ describe("worker session placement store", () => {
         claimId: "competing-worker",
         runId: "competing-worker-run",
       }),
-    ).toThrow("already has an active turn claim");
-    expect(() =>
+    ).rejects.toThrow("already has an active turn claim");
+    await expect(
       store.claimTurn({
         ...SESSION,
         owner: workerClaim.owner,
         claimId: workerClaim.claimId,
         runId: workerClaim.runId,
       }),
-    ).toThrow("already has an active turn claim");
+    ).rejects.toThrow("already has an active turn claim");
     expect(() =>
       store.fail({
         sessionId: SESSION.sessionId,
@@ -479,20 +481,20 @@ describe("worker session placement store", () => {
     expect(store.validateTurnClaim(workerClaim)).toBe(false);
   });
 
-  it("clears dead local claims on restart while adopting active worker ownership", () => {
+  it("clears dead local claims on restart while adopting active worker ownership", async () => {
     const localIdentity = {
       ...SESSION,
       sessionId: "session-local-restart",
       sessionKey: "agent:main:local-restart",
     };
-    store.claimTurn({
+    await store.claimTurn({
       ...localIdentity,
       owner: { kind: "local" },
       claimId: "local-before-restart",
       runId: "local-restart-run",
     });
-    const active = advanceToActive();
-    const workerClaim = store.claimTurn({
+    const active = await advanceToActive();
+    const workerClaim = await store.claimTurn({
       ...SESSION,
       owner: {
         kind: "worker",
@@ -503,7 +505,7 @@ describe("worker session placement store", () => {
       runId: "worker-restart-run",
     });
 
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
 
@@ -525,21 +527,21 @@ describe("worker session placement store", () => {
     ]);
   });
 
-  it("fences remote-exec local claims and clears them after restart", () => {
-    const active = advanceToActive(SESSION, "remote-exec");
+  it("fences remote-exec local claims and clears them after restart", async () => {
+    const active = await advanceToActive(SESSION, "remote-exec");
     const placementOwner = {
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
     };
-    expect(() =>
+    await expect(
       store.claimTurn({
         ...SESSION,
         owner: { kind: "worker", ...placementOwner },
         claimId: "remote-worker-claim",
         runId: "remote-worker-run",
       }),
-    ).toThrow("stale owner");
-    const claim = store.claimTurn({
+    ).rejects.toThrow("stale owner");
+    const claim = await store.claimTurn({
       ...SESSION,
       owner: { kind: "local", ...placementOwner },
       claimId: "remote-local-claim",
@@ -547,7 +549,7 @@ describe("worker session placement store", () => {
     });
     expect(store.validateTurnClaim(claim)).toBe(true);
 
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
 
@@ -557,8 +559,8 @@ describe("worker session placement store", () => {
   });
 
   it("closes worker admission before draining the active turn", async () => {
-    const active = advanceToActive();
-    const workerClaim = store.claimTurn({
+    const active = await advanceToActive();
+    const workerClaim = await store.claimTurn({
       ...SESSION,
       owner: {
         kind: "worker",
@@ -583,16 +585,19 @@ describe("worker session placement store", () => {
     expect(store.validateTurnClaim(workerClaim)).toBe(true);
 
     const released = store.waitForTurnClaimRelease(SESSION.sessionId, { timeoutMs: 1_000 });
-    expect(store.releaseTurn(workerClaim)).toMatchObject({ state: "draining", turnClaim: null });
+    expect(await store.releaseTurn(workerClaim)).toMatchObject({
+      state: "draining",
+      turnClaim: null,
+    });
     await released;
-    expect(() =>
+    await expect(
       store.claimTurn({
         ...SESSION,
         owner: workerClaim.owner,
         claimId: "worker-after-drain",
         runId: "worker-after-drain-run",
       }),
-    ).toThrow("stale owner");
+    ).rejects.toThrow("stale owner");
     expect(
       store.startReconcile({
         sessionId: SESSION.sessionId,
@@ -604,8 +609,8 @@ describe("worker session placement store", () => {
   });
 
   it("atomically fences a drained claim before its worker is reclaimed", async () => {
-    const active = advanceToActive();
-    const workerClaim = store.claimTurn({
+    const active = await advanceToActive();
+    const workerClaim = await store.claimTurn({
       ...SESSION,
       owner: {
         kind: "worker",
@@ -669,7 +674,7 @@ describe("worker session placement store", () => {
     expect(reclaimed).toMatchObject({ state: "reclaimed", turnClaim: null });
     await released;
     expect(store.validateTurnClaim(workerClaim)).toBe(false);
-    expect(store.startDispatch(SESSION)).toMatchObject({
+    expect(await store.startDispatch(SESSION)).toMatchObject({
       state: "requested",
       generation: reclaimed.generation + 1,
       environmentId: null,
@@ -680,9 +685,9 @@ describe("worker session placement store", () => {
     });
   });
 
-  it("binds acknowledged cursors to the exact normalized worker claim", () => {
-    const active = advanceToActive();
-    const firstClaim = store.claimTurn({
+  it("binds acknowledged cursors to the exact normalized worker claim", async () => {
+    const active = await advanceToActive();
+    const firstClaim = await store.claimTurn({
       ...SESSION,
       owner: {
         kind: "worker",
@@ -697,8 +702,8 @@ describe("worker session placement store", () => {
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
     });
-    store.releaseTurn(firstClaim);
-    const currentClaim = store.claimTurn({
+    await store.releaseTurn(firstClaim);
+    const currentClaim = await store.claimTurn({
       ...SESSION,
       owner: firstClaim.owner,
       claimId: "worker-ack-current",
@@ -728,9 +733,9 @@ describe("worker session placement store", () => {
     ]);
   });
 
-  it("advances the workspace manifest only under the exact worker turn claim", () => {
-    const active = advanceToActive();
-    const claim = store.claimTurn({
+  it("advances the workspace manifest only under the exact worker turn claim", async () => {
+    const active = await advanceToActive();
+    const claim = await store.claimTurn({
       ...SESSION,
       owner: {
         kind: "worker",
@@ -746,15 +751,15 @@ describe("worker session placement store", () => {
       state: "active",
       workspaceBaseManifestRef: manifestRef,
     });
-    store.releaseTurn(claim);
+    await store.releaseTurn(claim);
     expect(() => store.updateWorkspaceBaseManifest({ claim, manifestRef })).toThrow(
       "Cannot advance stale worker workspace",
     );
   });
 
-  it("fences a completed worker result until manifest acceptance clears it", () => {
-    const active = advanceToActive();
-    const claim = store.claimTurn({
+  it("fences a completed worker result until manifest acceptance clears it", async () => {
+    const active = await advanceToActive();
+    const claim = await store.claimTurn({
       ...SESSION,
       owner: {
         kind: "worker",
@@ -780,7 +785,7 @@ describe("worker session placement store", () => {
         stagedResultRef: null,
       },
     ]);
-    expect(() => store.releaseTurn(claim)).toThrow("pending cloud workspace result");
+    await expect(store.releaseTurn(claim)).rejects.toThrow("pending cloud workspace result");
 
     const manifestRef = `sha256:${"f".repeat(64)}`;
     const stagedResultRef = `refs/openclaw/worker-results/${claim.claimId}`;
@@ -814,7 +819,7 @@ describe("worker session placement store", () => {
       stagedResultRef,
       totalCount: 2,
     });
-    const laterClaim = store.claimTurn({
+    const laterClaim = await store.claimTurn({
       ...SESSION,
       owner: claim.owner,
       claimId: "later-clean-claim",
@@ -834,16 +839,16 @@ describe("worker session placement store", () => {
     expect(store.get(SESSION.sessionId)?.workspaceResultConflict?.paths).toHaveLength(256);
     store.recordWorkspaceResultConflict(laterClaim, undefined);
     expect(store.get(SESSION.sessionId)).not.toHaveProperty("workspaceResultConflict");
-    store.releaseTurn(laterClaim);
+    await store.releaseTurn(laterClaim);
     expect(
       createWorkerSessionPlacementStore({ database, now: () => nowMs }).get(SESSION.sessionId),
     ).not.toHaveProperty("workspaceResultConflict");
     expect(store.listPendingWorkspaceResults()).toEqual([]);
   });
 
-  it("preserves an admitted worker result while its placement is draining", () => {
-    const active = advanceToActive();
-    const claim = store.claimTurn({
+  it("preserves an admitted worker result while its placement is draining", async () => {
+    const active = await advanceToActive();
+    const claim = await store.claimTurn({
       ...SESSION,
       owner: {
         kind: "worker",
@@ -907,9 +912,9 @@ describe("worker session placement store", () => {
     expect(store.listPendingWorkspaceResults()).toEqual([]);
   });
 
-  it("does not begin draining after a completed result owns recovery", () => {
-    const active = advanceToActive();
-    const claim = store.claimTurn({
+  it("does not begin draining after a completed result owns recovery", async () => {
+    const active = await advanceToActive();
+    const claim = await store.claimTurn({
       ...SESSION,
       owner: {
         kind: "worker",
@@ -931,8 +936,8 @@ describe("worker session placement store", () => {
     ).toThrow("pending cloud workspace result");
   });
 
-  it("persists a workspace rollback journal and clears it with manifest acceptance", () => {
-    const active = advanceToActive();
+  it("persists a workspace rollback journal and clears it with manifest acceptance", async () => {
+    const active = await advanceToActive();
     const owner = {
       sessionId: active.sessionId,
       environmentId: active.environmentId,
@@ -968,7 +973,7 @@ describe("worker session placement store", () => {
       basePack,
     });
 
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
     expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
@@ -979,7 +984,7 @@ describe("worker session placement store", () => {
     });
     expect(Buffer.from(loaded?.basePack ?? [])).toEqual(basePack);
 
-    const claim = store.claimTurn({
+    const claim = await store.claimTurn({
       ...SESSION,
       owner: {
         kind: "worker",

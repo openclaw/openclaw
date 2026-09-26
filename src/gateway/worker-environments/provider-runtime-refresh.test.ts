@@ -80,7 +80,7 @@ describe("worker environment runtime upgrades", () => {
     });
     const placement =
       state === "attached"
-        ? seedActivePlacement(placements, {
+        ? await seedActivePlacement(placements, {
             environmentId,
             ownerEpoch: environment.ownerEpoch,
             executionMode: transport === "node" ? "worker-turn" : "remote-exec",
@@ -294,7 +294,7 @@ describe("worker environment runtime upgrades", () => {
           target: { kind: "gateway" },
         });
       } else {
-        h.placements.claimTurn({
+        await h.placements.claimTurn({
           ...REQUEST,
           claimId: "new-live-claim",
           runId: "new-live-run",

@@ -27,6 +27,7 @@ import { enqueueGitRefMutation } from "../infra/git-exec.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import {
@@ -254,7 +255,7 @@ async function createRecoveryFixture(workspacePath: string, options: { archived?
     ownerEpoch: 1,
     sessionId: REQUEST.sessionId,
   });
-  const active = seedActivePlacement(placements, {
+  const active = await seedActivePlacement(placements, {
     environmentId,
     ownerEpoch: attached.ownerEpoch,
     executionMode: "remote-exec",
@@ -262,7 +263,7 @@ async function createRecoveryFixture(workspacePath: string, options: { archived?
   if (active.state !== "active") {
     throw new Error("Recovery fixture did not activate");
   }
-  const claim = placements.claimTurn({
+  const claim = await placements.claimTurn({
     ...REQUEST,
     claimId: "recovery-binding-claim",
     runId: "recovery-binding-run",
@@ -302,6 +303,7 @@ async function createRecoveryFixture(workspacePath: string, options: { archived?
   };
   vi.spyOn(tunnelManager, "start").mockResolvedValue(handle);
   const runtime = createGatewayWorkerPlacementRuntime({
+    scheduler: createTestGatewayScheduler(),
     placements,
     environments,
     getCommittedRuntimeConfig: getRuntimeConfig,

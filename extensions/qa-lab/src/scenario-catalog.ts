@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { walkDirectorySync } from "@openclaw/fs-safe/walk";
 import YAML from "yaml";
 import { z } from "zod";
 import { qaCoverageIdSchema } from "./coverage-id.js";
@@ -555,34 +556,22 @@ export function listQaScenarioYamlPaths(): string[] {
   if (!resolved) {
     return [];
   }
-  qaScenarioYamlPathsCache = listQaScenarioYamlPathsInDirectory(
-    resolved,
-    QA_SCENARIO_DIR_PATH,
-  ).toSorted();
-  return qaScenarioYamlPathsCache;
-}
-
-function listQaScenarioYamlPathsInDirectory(absoluteDir: string, relativeDir: string): string[] {
-  const paths: string[] = [];
-  const entries = fs
-    .readdirSync(absoluteDir, { withFileTypes: true })
-    .toSorted((left, right) => left.name.localeCompare(right.name));
-  for (const entry of entries) {
-    if (entry.name.startsWith(".")) {
-      continue;
-    }
-    const relativePath = `${relativeDir}/${entry.name}`;
-    if (entry.isDirectory()) {
-      paths.push(
-        ...listQaScenarioYamlPathsInDirectory(path.join(absoluteDir, entry.name), relativePath),
-      );
-      continue;
-    }
-    if (entry.isFile() && entry.name.endsWith(".yaml") && entry.name !== "index.yaml") {
-      paths.push(relativePath);
-    }
+  const scan = walkDirectorySync(resolved, {
+    symlinks: "skip",
+    descend: (entry) => !entry.name.startsWith("."),
+    include: (entry) =>
+      entry.kind === "file" &&
+      !entry.name.startsWith(".") &&
+      entry.name.endsWith(".yaml") &&
+      entry.name !== "index.yaml",
+  });
+  if (scan.failedDirs.length > 0) {
+    throw scan.failedDirs[0]!.error;
   }
-  return paths;
+  qaScenarioYamlPathsCache = scan.entries
+    .map((entry) => `${QA_SCENARIO_DIR_PATH}/${entry.relativePath.split(path.sep).join("/")}`)
+    .toSorted();
+  return qaScenarioYamlPathsCache;
 }
 
 export function readQaScenarioOverviewMarkdown(): string {

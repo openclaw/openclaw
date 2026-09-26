@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 describe("openclaw-ip-location", () => {
-  it("renders the city with its attribution link", async () => {
+  it("renders the city with its attribution link and clears a removed address", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -49,6 +49,12 @@ describe("openclaw-ip-location", () => {
     expect(element.querySelector("a")?.getAttribute("href")).toBe("https://db-ip.com");
     expect(element.querySelector("a")?.getAttribute("aria-label")).toBe("IP Geolocation by DB-IP");
     expect(element.querySelector("a svg")).not.toBeNull();
+
+    element.ip = undefined;
+    await element.updateComplete;
+
+    expect(element.textContent?.trim()).toBe("");
+    expect(element.querySelector("a")).toBeNull();
   });
 
   it("renders nothing when the address cannot be placed", async () => {

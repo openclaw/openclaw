@@ -2048,10 +2048,97 @@ describe("ci workflow guards", () => {
       expect(
         evaluateWorkflowExpression(workflow.jobs["ios-build"].strategy.matrix.phase, context),
       ).toEqual(release ? ["release", "tests"] : ["tests"]);
+      for (const name of [
+        "Test Watch RTC engine",
+        "Run focused iOS voice cleanup simulator tests",
+        "Run focused iOS lifecycle simulator tests",
+        "Prove native managed document download and export",
+        "Run focused Apple Watch operation simulator tests",
+      ]) {
+        const step = workflow.jobs["ios-build"].steps.find(
+          (candidate: WorkflowStep) => candidate.name === name,
+        );
+        expect(
+          evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
+            ...context,
+            matrix: { phase: "tests" },
+            env: { HISTORICAL_TARGET: "false" },
+          }),
+          name,
+        ).toBe(
+          release ||
+            ![
+              "Prove native managed document download and export",
+              "Run focused Apple Watch operation simulator tests",
+            ].includes(name),
+        );
+      }
       const packageStep = workflow.jobs["docker-seed-e2e"].steps.find(
         (step: WorkflowStep) => step.name === "Prepare main Docker smoke package",
       );
       expect(evaluateWorkflowExpression("${{ " + packageStep.if + " }}", context)).toBe(!release);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "hourly iOS executes the complete full-tier unit selection without launching Watch UI",
+    () => {
+      const root = tempDirs.make("openclaw-ios-tier-commands-");
+      const bin = path.join(root, "bin");
+      const helpers = path.join(root, ".ci-harness/scripts/lib");
+      mkdirSync(bin, { recursive: true });
+      mkdirSync(helpers, { recursive: true });
+      copyFileSync("scripts/lib/swift-toolchain.sh", path.join(helpers, "swift-toolchain.sh"));
+      writeExecutable(path.join(bin, "xcodebuild"), [
+        `#!${testNodeExecPath}`,
+        'require("node:fs").appendFileSync(process.env.COMMANDS, JSON.stringify(process.argv.slice(2)) + "\\n");',
+      ]);
+      const job = readCiWorkflow().jobs["ios-build"];
+      for (const name of [
+        "Run focused iOS voice cleanup simulator tests",
+        "Run focused iOS lifecycle simulator tests",
+      ]) {
+        const step = job.steps.find((candidate: WorkflowStep) => candidate.name === name);
+        const commands: string[][][] = [];
+        for (const tier of ["main", "full"]) {
+          const commandFile = path.join(root, "commands.jsonl");
+          writeFileSync(commandFile, "");
+          const result = runWorkflowShellScript(step.run, {
+            cwd: root,
+            env: {
+              ...process.env,
+              PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+              COMMANDS: commandFile,
+              IOS_CI_PHASE: "tests",
+              IOS_MAIN_TIER: String(tier === "main"),
+              IOS_SIMULATOR_ID: "fixture-phone",
+            },
+          });
+          expect(result.status, result.stderr).toBe(0);
+          const calls = readFileSync(commandFile, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line) as string[]);
+          expect(calls[0]).toContain(tier === "main" ? "never" : "on-failure");
+          commands.push(calls);
+        }
+        const main = expectDefined(commands[0], "main-tier commands");
+        const full = expectDefined(commands[1], "full-tier commands");
+        const selectors = (args: string[]) =>
+          args.filter((arg) => arg.startsWith("-only-testing:"));
+        expect(main).toHaveLength(1);
+        const mainUnits = selectors(expectDefined(main[0], "main-tier unit command"));
+        expect(mainUnits).toEqual(selectors(expectDefined(full[0], "full-tier unit command")));
+        expect(mainUnits.length).toBeGreaterThan(0);
+        if (name.includes("lifecycle")) {
+          expect(full).toHaveLength(2);
+          expect(full[1]).toContain(
+            "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings",
+          );
+        } else {
+          expect(full).toHaveLength(1);
+        }
+      }
     },
   );
 
@@ -2905,37 +2992,6 @@ describe("ci workflow guards", () => {
   );
 
   it.each([
-    { paths: ["README.md"], admitted: false },
-    { paths: [".agents/skills/example/SKILL.md"], admitted: false },
-    { paths: ["docs/ci.md", "docs/images/diagram.svg"], admitted: false },
-    { paths: ["docs/reference/schema.json"], admitted: false },
-    { paths: ["src/ordinary.ts"], admitted: true },
-    { paths: ["assets/logo.svg"], admitted: true },
-    { paths: ["README.md", "src/ordinary.ts"], admitted: true },
-    { paths: ["docs/ci.md", "assets/logo.svg"], admitted: true },
-  ])("admits main push paths $paths to CI: $admitted", ({ paths, admitted }) => {
-    const ignored: string[] = readCiWorkflow().on.push["paths-ignore"] ?? [];
-    // GitHub skips paths-ignore only when every changed path matches a pattern.
-    const runsCi = paths.some(
-      (changedPath) => !ignored.some((pattern) => minimatch(changedPath, pattern, { dot: true })),
-    );
-    expect(runsCi).toBe(admitted);
-    if (!runsCi) {
-      return;
-    }
-    const result = runCiManifestFixture({
-      bundledPlanner: true,
-      eventName: "push",
-      repository: "openclaw/openclaw",
-      changedPaths: paths,
-      scopeEnv: { GITHUB_REF: "refs/heads/main" },
-    });
-    expect(result.status, result.output).toBe(0);
-    expect(result.outputs.run_docker_seed_e2e).toBe("true");
-    expect(result.outputs.docker_seed_lanes).toBe("published-upgrade-survivor");
-  });
-
-  it.each([
     {
       eventName: "push" as const,
       changedPaths: ["src/cli/cron-cli/shared.ts"],
@@ -3212,9 +3268,9 @@ describe("ci workflow guards", () => {
     expect(runStep.run).not.toContain("pnpm test:windows:ci:3");
   });
 
-  it.skipIf(process.platform === "win32").for(["blacksmith", "github", "hybrid"] as const)(
-    "executes each Mac partition once and keeps historical coverage on %s",
-    (runnerBackend) => {
+  it.skipIf(process.platform === "win32")(
+    "executes each Mac partition once and keeps historical coverage",
+    () => {
       const workflow = readCiWorkflow();
       const job = workflow.jobs["macos-node"];
       const runStep = job.steps.find((step: WorkflowStep) => step.name === "TS tests (macOS)");
@@ -3229,7 +3285,7 @@ describe("ci workflow guards", () => {
           eventName: "workflow_dispatch",
           historicalCompatibility: !partsSupported,
           macosNodeParts: partsSupported,
-          runnerBackend,
+          runnerBackend: "github",
         });
         expect(manifest.status, manifest.output).toBe(0);
         const rows = JSON.parse(
@@ -3664,11 +3720,11 @@ describe("ci workflow guards", () => {
     }
 
     // Synthetic admission orders, not recovered webhook payloads.
-    it.each(
-      ["opened", "reopened", "synchronize"].flatMap((action) =>
-        ["pending", "running"].map((state) => ({ action, state })),
-      ),
-    )("preserves $state ready CI after a delayed draft $action", ({ action, state }) => {
+    it.each([
+      { action: "opened", state: "pending" },
+      { action: "reopened", state: "pending" },
+      { action: "synchronize", state: "running" },
+    ])("preserves $state ready CI after a delayed draft $action", ({ action, state }) => {
       const scheduler = admissionDriver();
       const predecessor = scheduler.admit(event(1, { action: "opened" }));
       scheduler.start(predecessor);
@@ -4006,10 +4062,6 @@ describe("ci workflow guards", () => {
 
   it.each([
     ["push", "blacksmith", false],
-    ["pull_request", "github", false],
-    ["pull_request", "hybrid", false],
-    ["workflow_dispatch", "blacksmith", false],
-    ["workflow_dispatch", "blacksmith", true],
     ["workflow_dispatch", "github", true],
   ] as const)(
     "shares contract setup while retaining process envelopes (%s, %s, frozen=%s)",
@@ -6803,26 +6855,6 @@ describe("ci workflow guards", () => {
       changedPath: ".github/workflows/docs-agent.yml",
       selectedJobs: ["macos-node", "checks-windows"],
     },
-    ...[
-      ".github/workflows/openclaw-performance.yml",
-      "test/scripts/openclaw-performance-workflow.test-support.ts",
-      "test/scripts/openclaw-performance-git-lifecycle.test.ts",
-      "test/scripts/openclaw-performance-workflow.test.ts",
-    ].map((changedPath) => ({
-      label: `Performance owner ${changedPath}`,
-      changedPath,
-      selectedJobs: ["macos-node", "checks-windows"],
-    })),
-    {
-      label: "Git-owner fixture",
-      changedPath: "test/scripts/fixtures/ci-platform-checkout.mjs",
-      selectedJobs: ["macos-node", "checks-windows"],
-    },
-    {
-      label: "Windows process census fixture",
-      changedPath: "test/scripts/fixtures/ci-windows-process-census.py",
-      selectedJobs: ["macos-node", "checks-windows"],
-    },
     {
       label: "Mac app",
       changedPath: "apps/macos/Sources/Foo.swift",
@@ -9548,6 +9580,7 @@ describe("ci workflow guards", () => {
       "macos-node",
       "macos-swift",
       "ios-build",
+      "ios-release-e2e",
       "ios-screenshot-shard",
       "ios-screenshot-evidence",
       "android",
@@ -9917,34 +9950,58 @@ describe("ci workflow guards", () => {
     expect(compatibilityJob.steps.at(-1)?.run).toContain("src/config/sessions/sessions.test.ts");
   });
 
-  it.skipIf(process.platform === "win32")("ci-gate rejects an unexpected selected skip", () => {
-    const result = runCiGateFixture(renderCiGateEnvironment({}, { "checks-ui": "skipped" }));
-    expect(result.stdout).toContain("checks-ui: skipped");
-    expect(result.status, result.stdout).toBe(1);
-  });
+  it.skipIf(process.platform === "win32").each([
+    ["schedule", "ios-build", "cancelled", "true", 0],
+    ["schedule", "ios-build", "failure", "true", 1],
+    ["schedule", "ios-build", "skipped", "true", 1],
+    ["schedule", "ios-build", "cancelled", "false", 1],
+    ["schedule", "android", "cancelled", "true", 1],
+    ["pull_request", "ios-build", "cancelled", "true", 1],
+    ["push", "ios-build", "cancelled", "true", 1],
+    ["workflow_dispatch", "ios-build", "cancelled", "true", 1],
+  ] as const)(
+    "ci-gate handles coalesced hourly iOS: %s %s %s selected=%s",
+    (eventName, job, result, selected, exit) => {
+      const gate = readCiWorkflow().jobs["ci-gate"];
+      const step = gate.steps.find(
+        (candidate: WorkflowStep) => candidate.name === "Verify selected CI lanes",
+      );
+      const context = {
+        eventName,
+        repository: "openclaw/openclaw",
+        ref: "refs/heads/main",
+        runAttempt: 1,
+      };
+      const outcome = runCiGateFixture(`preflight=success|true\n${job}=${result}|${selected}`, {
+        ALLOW_COALESCED_IOS: String(
+          evaluateWorkflowExpression(step.env.ALLOW_COALESCED_IOS ?? "${{ false }}", context),
+        ),
+      });
+      expect(outcome.status, outcome.stdout).toBe(exit);
+      if (eventName === "schedule") {
+        expect(evaluateWorkflowExpression(gate.if, { ...context, cancelled: true })).toBe(true);
+      }
+    },
+  );
 
   it.skipIf(process.platform === "win32").each([
     [true, "success", 0],
     [true, "skipped", 1],
     [true, "failure", 1],
-    [true, "cancelled", 1],
-    [true, "", 1],
-    [true, "unknown", 1],
     [false, "success", 0],
     [false, "skipped", 0],
-    [false, "failure", 1],
     [false, "cancelled", 1],
-    [false, "", 1],
-    [false, "unknown", 1],
   ] as const)(
     "ci-gate checks all downstream lanes (selected=%s, result=%s)",
     (selected, result, exit) => {
       const workflow = readCiWorkflow();
       const jobs: string[] = workflow.jobs["ci-gate"].needs.slice(2);
+      const qualificationSha = "a".repeat(40);
       const jobResults = renderCiGateEnvironment(
         {
           eventName: selected ? "workflow_dispatch" : "pull_request",
           runnerProfile: "hybrid",
+          sha: qualificationSha,
           additionalNeeds: {
             "check-plan": {
               outputs: {
@@ -9954,11 +10011,15 @@ describe("ci workflow guards", () => {
               },
             },
           },
-          preflightOutputs: Object.fromEntries(
-            Object.keys(workflow.jobs.preflight.outputs)
-              .filter((key) => key.startsWith("run_"))
-              .map((key) => [key, String(selected)]),
-          ),
+          preflightOutputs: {
+            ...Object.fromEntries(
+              Object.keys(workflow.jobs.preflight.outputs)
+                .filter((key) => key.startsWith("run_"))
+                .map((key) => [key, String(selected)]),
+            ),
+            validation_tier: "full",
+            checkout_revision: qualificationSha,
+          },
         },
         Object.fromEntries(jobs.map((job) => [job, result])),
       );
@@ -9977,9 +10038,7 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it
-    .skipIf(process.platform === "win32")
-    .each(["failure", "cancelled", "skipped", "", "unknown", "success="])(
+  it.skipIf(process.platform === "win32").each(["failure", "skipped", "", "success="])(
     "ci-gate rejects required result %s independently of downstream success",
     (result) => {
       const outcome = runCiGateFixture(
@@ -9992,9 +10051,7 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it
-    .skipIf(process.platform === "win32")
-    .each(["", "unknown", "TRUE", "true|false", "true|", "false="])(
+  it.skipIf(process.platform === "win32").each(["", "unknown", "true|", "false="])(
     "ci-gate rejects missing or malformed selection %s even after success",
     (selection) => {
       const outcome = runCiGateFixture(

@@ -1,4 +1,8 @@
 import { beforeEach, vi } from "vitest";
+import type {
+  countActiveDescendantRuns,
+  hasDescendantRunAwaitingSettle,
+} from "../registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import type { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
 import {
@@ -19,13 +23,11 @@ const { registryRuntimeMock, findTranscriptEventMock } = vi.hoisted(() => ({
   >(async () => undefined),
   registryRuntimeMock: {
     getLatestLiveSubagentRunByChildSessionKey: vi.fn(() => undefined),
-    countActiveDescendantRuns: vi.fn((_rootSessionKey: string) => 0),
+    countActiveDescendantRuns: vi.fn<typeof countActiveDescendantRuns>(() => 0),
     countPendingDescendantRuns: vi.fn((_rootSessionKey: string) => 0),
     isSubagentSessionRunActive: vi.fn((_childSessionKey: string) => true),
     shouldIgnorePostCompletionAnnounceForSession: vi.fn((_childSessionKey: string) => false),
-    hasDescendantRunAwaitingSettle: vi.fn(
-      (_rootSessionKey: string, _excludeRunId?: string) => false,
-    ),
+    hasDescendantRunAwaitingSettle: vi.fn<typeof hasDescendantRunAwaitingSettle>(() => false),
     listSubagentRunsForRequester: vi.fn((_requesterSessionKey: string): unknown[] => []),
     getLatestSubagentRunByChildSessionKey: vi.fn(
       (

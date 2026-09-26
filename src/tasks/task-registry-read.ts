@@ -18,6 +18,7 @@ import {
 import {
   assertTaskRegistryOwnerCurrent,
   ensureTaskRegistryReadyAsync,
+  isTaskRegistryResidentReady,
   prepareTaskRegistryProjectionAsync,
   tasks,
   taskIdsByOwnerKey,
@@ -25,6 +26,7 @@ import {
 } from "./task-registry-state.js";
 import {
   getTaskRegistryProcessState,
+  getTasksByRunId,
   matchesScope,
   taskIdsInScope,
   type PendingTaskRegistryMutation,
@@ -64,6 +66,7 @@ function isTaskRegistryReadScopeCurrent(
       tasks.get(scope.taskId),
       ...(pending?.published.values() ?? []),
       ...(pending?.publication?.records.values() ?? []),
+      ...(pending?.publication?.deletions.values() ?? []),
       pending?.readEventTarget?.(),
     ];
     return (
@@ -109,7 +112,11 @@ function isTaskRegistryReadCurrent(taskId: string, mode: "identity" | "settled")
       : pending.scope.taskId === taskId ||
         pending.published.has(taskId) ||
         (task && matchesScope(task, pending.scope));
-    if (changesIdentity || pending.publication?.records.has(taskId)) {
+    if (
+      changesIdentity ||
+      pending.publication?.records.has(taskId) ||
+      pending.publication?.deletions.has(taskId)
+    ) {
       return false;
     }
     if (creation) {
@@ -132,6 +139,49 @@ function isTaskRegistryReadCurrent(taskId: string, mode: "identity" | "settled")
 /** Inspect resident settlement inside an already admitted synchronous read batch. */
 export function isTaskRegistryTaskSettled(taskId: string): boolean {
   return !hasPendingTaskRegistryEvents(taskId) && isTaskRegistryReadCurrent(taskId, "settled");
+}
+
+/** Pin known identity before yielding; cold or uncertain projections use normal preparation. */
+function captureResidentTaskRegistryRunCandidates(runId: string): TaskRecord[] | undefined {
+  const normalized = runId.trim();
+  if (
+    !isTaskRegistryResidentReady() ||
+    getTaskRegistryProcessState().projection.dirty ||
+    !isTaskRegistryReadScopeCurrent("runId", normalized)
+  ) {
+    return undefined;
+  }
+  const candidates = getTasksByRunId(normalized);
+  return candidates.every((task) => isTaskRegistryReadCurrent(task.taskId, "identity"))
+    ? candidates.map(cloneTaskRecord)
+    : undefined;
+}
+
+/**
+ * Retain the first usable run selection before joining the external read fence.
+ * Cold state linearizes at its first SQL snapshot. A receipt-free call cannot
+ * identify an assignment replaced before that read; producer receipts can.
+ */
+export async function captureTaskRegistryRunSelection(
+  runId: string,
+  matches: (task: Readonly<TaskRecord>) => boolean,
+): Promise<TaskRecord[]> {
+  const normalized = runId.trim();
+  const resident = captureResidentTaskRegistryRunCandidates(normalized);
+  if (resident) {
+    return resident.filter(matches);
+  }
+  const context = captureOpenClawStateWorkerContext();
+  const store = getTaskRegistryStore();
+  const snapshot = await store.loadMutationSnapshotAsync(
+    context,
+    { taskId: "", runId: normalized },
+    { missingDatabase: "empty" },
+  );
+  assertTaskRegistryOwnerCurrent(context, store);
+  return [...snapshot.tasks.values()]
+    .filter((task) => task.runId?.trim() === normalized && matches(task))
+    .map(cloneTaskRecord);
 }
 
 type TaskRegistryReadOwner = {
@@ -277,6 +327,7 @@ export async function prepareTaskRegistryRead(
           ...records,
           ...[...(pending?.published.values() ?? [])].flatMap((task) => (task ? [task] : [])),
           ...(pending?.publication?.records.values() ?? []),
+          ...(pending?.publication?.deletions.values() ?? []),
         ];
         if (scope.flowId === flowId || facts.some((task) => task.parentFlowId?.trim() === flowId)) {
           return true;
@@ -302,6 +353,7 @@ export async function prepareTaskRegistryRead(
           ...[...projection.pending].flatMap((pending) => [
             pending.published.get(taskId),
             pending.publication?.records.get(taskId),
+            pending.publication?.deletions.get(taskId),
           ]),
         ].filter((task) => task !== undefined);
         if (facts.length === 0 || facts.some((task) => task.parentFlowId?.trim() === flowId)) {

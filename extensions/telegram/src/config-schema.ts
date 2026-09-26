@@ -1,4 +1,3 @@
-// Telegram helper module supports config schema behavior.
 import {
   buildChannelConfigSchema,
   buildChannelExecApprovalsSchema,
@@ -275,13 +274,8 @@ const TelegramAccountSchemaBase = z
   })
   .strict();
 
-const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((value, ctx) => {
-  // Account-level schemas skip allowFrom validation because accounts inherit
-  // allowFrom from the parent channel config at runtime (resolveTelegramAccount
-  // shallow-merges top-level and account values in src/telegram/accounts.ts).
-  // Validation is enforced at the top-level TelegramConfigSchema instead.
-  validateTelegramCustomCommands(value, ctx);
-});
+// DM policy validation below uses each account's effective inherited allowFrom.
+const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine(validateTelegramCustomCommands);
 
 export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
   ...rootPolicyShape,

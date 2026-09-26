@@ -4,6 +4,7 @@ import { tryBeginGatewayIndependentRootWorkAdmission } from "../../process/gatew
 import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { captureTaskDeliveryWork } from "../../tasks/task-registry-delivery.test-support.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import * as cronStore from "../store.js";
 import { loadCronStore } from "../store.js";
@@ -17,7 +18,6 @@ import {
   inspectActiveCronRunReceipt,
   makeCronRecoveryJob,
 } from "../store/run-receipt-store.test-support.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { observeCronTimerAdmissions } from "./run-recovery.test-support.js";
 import { createCronServiceState } from "./state.js";
@@ -64,7 +64,7 @@ async function seedInterruptedBatch() {
   }
   await writeCronStoreSnapshot({ storePath, jobs });
   const history = (jobId: string) =>
-    readCronTaskRunHistoryPage({ storeKey: cronStoreKey(storePath), jobId }).entries;
+    readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId }).entries;
   return { storePath, jobs, state, onEvent, runner, history };
 }
 

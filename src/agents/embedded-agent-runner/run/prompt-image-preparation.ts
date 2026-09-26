@@ -1,5 +1,6 @@
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
+import { isImageMediaFact, readPersistedMediaFacts } from "../../../media/media-facts.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import { detectAndLoadPromptImages } from "./images.js";
@@ -68,9 +69,14 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
       `failed to hydrate ${result.failedMediaCount} structured image attachment(s) for plugin harness input`,
     );
   }
+  const message = await attempt.userTurnTranscriptRecorder?.resolveMessage();
+  const media = ((message ? readPersistedMediaFacts(message) : undefined) ?? attempt.media)?.filter(
+    (fact) => !isImageMediaFact(fact),
+  );
   return {
     ...result,
     imageOrder: result.images.length ? result.images.map(() => "inline" as const) : undefined,
-    media: undefined,
+    // Images are already inline; native harnesses still need admitted file sources.
+    media: media?.length ? media : undefined,
   };
 }

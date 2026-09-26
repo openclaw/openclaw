@@ -21,10 +21,20 @@ export function readWorkerSessionPlacementProjectionInDatabase(
   conflictBindings: readonly WorkerPlacementConflictBinding[],
 ): WorkerSessionPlacementReadResult {
   return runSqliteDeferredTransactionSync(db, () => {
-    const { placements, reconcilingSessionIds } = readWorkerWorkspaceReconciliationFacts(
-      db,
-      sessionIds,
-    );
+    const { placements, reconcilingSessionIds, pendingResultSessionIds } =
+      readWorkerWorkspaceReconciliationFacts(db, sessionIds);
+    const workspaceRecoveryPendingSessionIds = new Set(pendingResultSessionIds);
+    for (let offset = 0; offset < sessionIds.length; offset += 250) {
+      for (const row of executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<Pick<StateDatabase, "worker_workspace_reconciliations">>(db)
+          .selectFrom("worker_workspace_reconciliations")
+          .select("session_id")
+          .where("session_id", "in", sessionIds.slice(offset, offset + 250)),
+      ).rows) {
+        workspaceRecoveryPendingSessionIds.add(row.session_id);
+      }
+    }
     const environments = new Map<string, WorkerEnvironmentPlacementFacts>();
     const environmentIds = [
       ...new Set(
@@ -59,6 +69,7 @@ export function readWorkerSessionPlacementProjectionInDatabase(
       placements,
       moves: readWorkerPlacementMovesReadOnly(db, sessionIds),
       workspaceResultReconcilingSessionIds: reconcilingSessionIds,
+      workspaceRecoveryPendingSessionIds,
       environments,
     };
     const conflictSessionIds = new Set<string>();

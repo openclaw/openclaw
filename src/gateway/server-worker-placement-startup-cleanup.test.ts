@@ -2,6 +2,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { collectSessionMaintenancePreserveKeys } from "../config/sessions/store-maintenance-preserve.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 
 const runtimeFactoryMocks = vi.hoisted(() => ({
   createDiskSpace: vi.fn(),
@@ -40,7 +41,7 @@ describe("worker placement startup cleanup ownership", () => {
       now: () => workerEnvironmentSupport.testState.nowMs,
     });
     for (let index = 0; index < 50; index += 1) {
-      const requested = placements.startDispatch({
+      const requested = await placements.startDispatch({
         sessionId: `session-debris-${index}`,
         sessionKey: `agent:main:debris-${index}`,
         agentId: "main",
@@ -152,13 +153,16 @@ describe("worker placement startup cleanup ownership", () => {
           sessionKey: "agent:main:startup-fenced",
           agentId: "main",
         };
-        placements.claimTurn({
+        await placements.claimTurn({
           ...identity,
           owner: { kind: "local" },
           claimId: "startup-fenced-local-claim",
           runId: "startup-fenced-local-run",
         });
-        const requested = placements.startDispatch({ ...identity, executionMode: "remote-exec" });
+        const requested = await placements.startDispatch({
+          ...identity,
+          executionMode: "remote-exec",
+        });
         failed = placements.fail({
           sessionId: requested.sessionId,
           expectedGeneration: requested.generation,
@@ -171,7 +175,7 @@ describe("worker placement startup cleanup ownership", () => {
           .run(environmentId, failed.sessionId);
         failed = placements.get(failed.sessionId);
       } else {
-        const starting = seedStartingPlacement(placements, environmentId, "remote-exec");
+        const starting = await seedStartingPlacement(placements, environmentId, "remote-exec");
         failed = placements.fail({
           sessionId: starting.sessionId,
           expectedGeneration: starting.generation,
@@ -202,6 +206,7 @@ describe("worker placement startup cleanup ownership", () => {
         sweep: vi.fn().mockResolvedValue(undefined),
       });
       const runtime = createGatewayWorkerPlacementRuntime({
+        scheduler: createTestGatewayScheduler(),
         getCommittedRuntimeConfig: getRuntimeConfig,
         cancelSessionWork: vi.fn(async () => {}),
         placements,
@@ -275,7 +280,7 @@ describe("worker placement startup cleanup ownership", () => {
       database: workerEnvironmentSupport.testState.stateDb,
       now: () => workerEnvironmentSupport.testState.nowMs,
     });
-    const requested = placements.startDispatch({
+    const requested = await placements.startDispatch({
       sessionId: "session-startup-indeterminate",
       sessionKey: "agent:main:startup-indeterminate",
       agentId: "main",
@@ -306,6 +311,7 @@ describe("worker placement startup cleanup ownership", () => {
       sweep: vi.fn().mockResolvedValue(undefined),
     });
     const runtime = createGatewayWorkerPlacementRuntime({
+      scheduler: createTestGatewayScheduler(),
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements,

@@ -100,7 +100,7 @@ it.each(["end", "error"] as const)(
       sessionId,
       ownerEpoch: 1,
     });
-    let placement = placementStore.startDispatch(placementIdentity);
+    let placement = await placementStore.startDispatch(placementIdentity);
     for (const transition of [
       { from: "requested", to: "provisioning", patch: { environmentId: "timeout-worker" } },
       { from: "provisioning", to: "syncing", patch: { workerBundleHash: "b".repeat(64) } },
@@ -120,7 +120,7 @@ it.each(["end", "error"] as const)(
         ...transition,
       });
     }
-    const turnClaim = placementStore.claimTurn({
+    const turnClaim = await placementStore.claimTurn({
       ...placementIdentity,
       claimId: "fixture-turn-claim",
       runId: previous.runId,

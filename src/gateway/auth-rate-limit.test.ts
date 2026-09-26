@@ -7,12 +7,12 @@ import {
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   buildRateLimitIdentityKey,
-  createAuthRateLimiter,
+  createGatewayAuthRateLimiter,
   isAuthRateLimitClientExempt,
 } from "./auth-rate-limit.js";
 
 describe("auth rate limiter", () => {
-  let limiter: ReturnType<typeof createAuthRateLimiter>;
+  let limiter: ReturnType<typeof createGatewayAuthRateLimiter>;
   const baseConfig = { maxAttempts: 2, windowMs: 60_000, lockoutMs: 60_000 };
 
   function createLimiter(
@@ -25,7 +25,7 @@ describe("auth rate limiter", () => {
       maxEntries: number;
     }>,
   ) {
-    limiter = createAuthRateLimiter({
+    limiter = createGatewayAuthRateLimiter({
       ...baseConfig,
       ...overrides,
     });
@@ -39,7 +39,11 @@ describe("auth rate limiter", () => {
   // ---------- basic sliding window ----------
 
   it("allows requests when no failures have been recorded", () => {
-    limiter = createAuthRateLimiter({ maxAttempts: 5, windowMs: 60_000, lockoutMs: 300_000 });
+    limiter = createGatewayAuthRateLimiter({
+      maxAttempts: 5,
+      windowMs: 60_000,
+      lockoutMs: 300_000,
+    });
     const result = limiter.check("192.168.1.1");
     expect(result.allowed).toBe(true);
     expect(result.remaining).toBe(5);
@@ -47,7 +51,11 @@ describe("auth rate limiter", () => {
   });
 
   it("decrements remaining count after each failure", () => {
-    limiter = createAuthRateLimiter({ maxAttempts: 3, windowMs: 60_000, lockoutMs: 300_000 });
+    limiter = createGatewayAuthRateLimiter({
+      maxAttempts: 3,
+      windowMs: 60_000,
+      lockoutMs: 300_000,
+    });
     limiter.recordFailure("10.0.0.1");
     expect(limiter.check("10.0.0.1").remaining).toBe(2);
     limiter.recordFailure("10.0.0.1");
@@ -115,7 +123,7 @@ describe("auth rate limiter", () => {
   it("clamps oversized lockout durations", () => {
     vi.useFakeTimers();
     try {
-      limiter = createAuthRateLimiter({
+      limiter = createGatewayAuthRateLimiter({
         maxAttempts: 1,
         windowMs: 60_000,
         lockoutMs: Number.MAX_SAFE_INTEGER,
@@ -134,7 +142,11 @@ describe("auth rate limiter", () => {
   it("expires old failures outside the window", () => {
     vi.useFakeTimers();
     try {
-      limiter = createAuthRateLimiter({ maxAttempts: 3, windowMs: 10_000, lockoutMs: 60_000 });
+      limiter = createGatewayAuthRateLimiter({
+        maxAttempts: 3,
+        windowMs: 10_000,
+        lockoutMs: 60_000,
+      });
       limiter.recordFailure("10.0.0.4");
       limiter.recordFailure("10.0.0.4");
       expect(limiter.check("10.0.0.4").remaining).toBe(1);
@@ -263,7 +275,7 @@ describe("auth rate limiter", () => {
   it("preserves overflow and tracked lockouts when policy changes while the table is full", () => {
     vi.useFakeTimers();
     try {
-      limiter = createAuthRateLimiter({
+      limiter = createGatewayAuthRateLimiter({
         maxAttempts: 1,
         windowMs: 60_000,
         lockoutMs: 60_000,
@@ -308,7 +320,7 @@ describe("auth rate limiter", () => {
     { value: Number.NaN, expectedSize: 2 },
     { value: Number.POSITIVE_INFINITY, expectedSize: 2 },
   ])("normalizes maxEntries value $value", ({ value, expectedSize }) => {
-    limiter = createAuthRateLimiter({
+    limiter = createGatewayAuthRateLimiter({
       maxAttempts: 2,
       windowMs: 60_000,
       lockoutMs: 60_000,
@@ -323,7 +335,7 @@ describe("auth rate limiter", () => {
   });
 
   it("treats ipv4 and ipv4-mapped ipv6 forms as the same client", () => {
-    limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
+    limiter = createGatewayAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
     limiter.recordFailure("1.2.3.4");
     expect(limiter.check("::ffff:1.2.3.4").allowed).toBe(false);
   });
@@ -331,7 +343,11 @@ describe("auth rate limiter", () => {
   it.each([AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH])(
     "tracks %s independently from shared-secret for the same IP",
     (otherScope) => {
-      limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
+      limiter = createGatewayAuthRateLimiter({
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+      });
       limiter.recordFailure("10.0.0.12", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
       expect(limiter.check("10.0.0.12", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET).allowed).toBe(false);
       expect(limiter.check("10.0.0.12", otherScope).allowed).toBe(true);
@@ -339,7 +355,7 @@ describe("auth rate limiter", () => {
   );
 
   it("tracks synthetic browser-origin limiter keys independently", () => {
-    limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
+    limiter = createGatewayAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
     limiter.recordFailure("browser-origin:http://127.0.0.1:18789");
     expect(limiter.check("browser-origin:http://127.0.0.1:18789").allowed).toBe(false);
     expect(limiter.check("browser-origin:http://localhost:5173").allowed).toBe(true);
@@ -348,7 +364,7 @@ describe("auth rate limiter", () => {
   // ---------- loopback exemption ----------
 
   it.each(["127.0.0.1", "::1"])("exempts loopback address %s by default", (ip) => {
-    limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
+    limiter = createGatewayAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
     for (let attempt = 0; attempt < 20; attempt += 1) {
       limiter.recordFailure(ip);
     }
@@ -360,7 +376,7 @@ describe("auth rate limiter", () => {
     async (locked) => {
       vi.useFakeTimers();
       try {
-        limiter = createAuthRateLimiter({
+        limiter = createGatewayAuthRateLimiter({
           maxAttempts: 1,
           windowMs: 60_000,
           lockoutMs: 60_000,
@@ -448,7 +464,7 @@ describe("auth rate limiter", () => {
   it("reset clears the loopback penalty history", async () => {
     vi.useFakeTimers();
     try {
-      limiter = createAuthRateLimiter({ pruneIntervalMs: 0 });
+      limiter = createGatewayAuthRateLimiter({ pruneIntervalMs: 0 });
       limiter.recordFailure("127.0.0.1");
       limiter.recordFailure("127.0.0.1");
       limiter.reset("127.0.0.1");
@@ -474,7 +490,7 @@ describe("auth rate limiter", () => {
   it("still delays loopback failures when many are already pending", async () => {
     vi.useFakeTimers();
     try {
-      limiter = createAuthRateLimiter({ pruneIntervalMs: 0 });
+      limiter = createGatewayAuthRateLimiter({ pruneIntervalMs: 0 });
       const pending = Array.from({ length: 64 }, (_, index) =>
         limiter.recordFailureAndDelay("127.0.0.1", `scope-${index}`),
       );
@@ -502,7 +518,7 @@ describe("auth rate limiter", () => {
   it("preserves a shared earned delay across history reset and policy changes", async () => {
     vi.useFakeTimers();
     try {
-      limiter = createAuthRateLimiter({ maxAttempts: 2, pruneIntervalMs: 0 });
+      limiter = createGatewayAuthRateLimiter({ maxAttempts: 2, pruneIntervalMs: 0 });
       const settled: string[] = [];
       const first = limiter.recordFailureAndDelay("127.0.0.1", "shared").then(() => {
         settled.push("first");
@@ -528,7 +544,7 @@ describe("auth rate limiter", () => {
   });
 
   it("rate-limits loopback when exemptLoopback is false", () => {
-    limiter = createAuthRateLimiter({
+    limiter = createGatewayAuthRateLimiter({
       maxAttempts: 1,
       windowMs: 60_000,
       lockoutMs: 60_000,
@@ -539,7 +555,7 @@ describe("auth rate limiter", () => {
   });
 
   it("reports the authoritative exemption policy for fallback serialization", () => {
-    limiter = createAuthRateLimiter({ maxAttempts: 1 });
+    limiter = createGatewayAuthRateLimiter({ maxAttempts: 1 });
     expect(isAuthRateLimitClientExempt(limiter, "127.0.0.1")).toBe(true);
     expect(isAuthRateLimitClientExempt(limiter, buildRateLimitIdentityKey("node", "node-1"))).toBe(
       false,
@@ -556,7 +572,7 @@ describe("auth rate limiter", () => {
   });
 
   it("does not exempt opaque identity keys", () => {
-    limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
+    limiter = createGatewayAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
     const key = buildRateLimitIdentityKey("node", "node-1");
     limiter.recordFailure(key);
     expect(limiter.check(key).allowed).toBe(false);
@@ -576,7 +592,7 @@ describe("auth rate limiter", () => {
   });
 
   it("reset only clears the requested scope for an IP", () => {
-    limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
+    limiter = createGatewayAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
     limiter.recordFailure("10.0.0.21", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
     limiter.recordFailure("10.0.0.21", AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
     expect(limiter.check("10.0.0.21", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET).allowed).toBe(false);
@@ -592,7 +608,7 @@ describe("auth rate limiter", () => {
   it("prune removes stale entries", () => {
     vi.useFakeTimers();
     try {
-      limiter = createAuthRateLimiter({ maxAttempts: 5, windowMs: 5_000, lockoutMs: 5_000 });
+      limiter = createGatewayAuthRateLimiter({ maxAttempts: 5, windowMs: 5_000, lockoutMs: 5_000 });
       limiter.recordFailure("10.0.0.30");
       expect(limiter.size()).toBe(1);
 
@@ -609,7 +625,7 @@ describe("auth rate limiter", () => {
     (windowMs) => {
       vi.useFakeTimers();
       try {
-        limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs, lockoutMs: 30_000 });
+        limiter = createGatewayAuthRateLimiter({ maxAttempts: 1, windowMs, lockoutMs: 30_000 });
         limiter.recordFailure("10.0.0.31");
         expect(limiter.check("10.0.0.31").allowed).toBe(false);
 
@@ -630,7 +646,7 @@ describe("auth rate limiter", () => {
     try {
       const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
 
-      limiter = createAuthRateLimiter({ pruneIntervalMs: Number.MAX_SAFE_INTEGER });
+      limiter = createGatewayAuthRateLimiter({ pruneIntervalMs: Number.MAX_SAFE_INTEGER });
 
       expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     } finally {
@@ -658,7 +674,7 @@ describe("auth rate limiter", () => {
   // ---------- dispose ----------
 
   it("dispose clears all entries", () => {
-    limiter = createAuthRateLimiter();
+    limiter = createGatewayAuthRateLimiter();
     limiter.recordFailure("10.0.0.40");
     expect(limiter.size()).toBe(1);
     limiter.dispose();
@@ -668,7 +684,7 @@ describe("auth rate limiter", () => {
   it("dispose settles pending loopback failure delays immediately", async () => {
     vi.useFakeTimers();
     try {
-      limiter = createAuthRateLimiter({ pruneIntervalMs: 0 });
+      limiter = createGatewayAuthRateLimiter({ pruneIntervalMs: 0 });
       const pending = limiter.recordFailureAndDelay("127.0.0.1");
 
       limiter.dispose();

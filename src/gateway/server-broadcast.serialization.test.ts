@@ -2,10 +2,8 @@
 // not consume per-client seqs (which would fire every client's gap detector and
 // cause a synchronized reconnect storm) and must leave a server-side record.
 import { once } from "node:events";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
@@ -19,14 +17,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setVerbose } from "../global-state.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
 
 const warnSpy = vi.hoisted(() => vi.fn());
 
@@ -575,6 +574,7 @@ describe("broadcast serialization failures", () => {
     broadcast("skills.changed", {});
     expect(peer.socket.frames).toEqual([{ event: "skills.changed", seq: 1 }]);
   });
+
   it.each([
     { state: "closing", readyState: WebSocket.CLOSING },
     { state: "closed", readyState: WebSocket.CLOSED },
@@ -825,10 +825,18 @@ describe("presence recipient projection", () => {
       const admin = makeClient("admin");
       admin.client.connect.scopes = ["operator.admin"];
       const connection = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
         bootId: "presence-projection",
         cfg,
         getRuntimeConfig: () => cfg,
       });
+      const projection = await createSessionRowProjection({
+        cfg,
+        modelCatalog: [],
+        getPolicyConfig: () => cfg,
+      });
+      onTestFinished(() => projection.dispose());
+      connection.attachSessionRowProjection(projection);
       onTestFinished(() => connection.mentionInbox.dispose());
       const person = {
         text: "watcher",
@@ -953,7 +961,14 @@ describe("presence recipient projection", () => {
       worker.connect.role = "worker";
       worker.connect.scopes = [];
       worker.connectionKind = "worker";
-      const project = createPresenceRecipientProjection({ cfg: {}, presence });
+      let policy: OpenClawConfig = {};
+      const projection = await createSessionRowProjection({
+        cfg: policy,
+        modelCatalog: [],
+        getPolicyConfig: () => policy,
+      });
+      onTestFinished(() => projection.dispose());
+      const project = createPresenceRecipientProjection({ cfg: policy, presence, projection });
       expect(project(solo)).toEqual(presence);
       solo.connect.scopes = [];
       expect(project(solo)).toEqual([]);
@@ -966,7 +981,8 @@ describe("presence recipient projection", () => {
       pending.connect.scopes = ["operator.admin"];
       expect(project(pending)).toEqual(presence);
       const cfg: OpenClawConfig = { gateway: { roles: { definitions: {} } } };
-      const restrictedProject = createPresenceRecipientProjection({ cfg, presence });
+      policy = cfg;
+      const restrictedProject = createPresenceRecipientProjection({ cfg, presence, projection });
       expect(restrictedProject(solo)).toEqual([person, idle]);
       solo.internal = { operatorRoleActor: { kind: "system" } };
       expect(restrictedProject(solo)).toEqual(presence);
@@ -998,12 +1014,6 @@ describe("presence recipient projection", () => {
       admin.connect.scopes = ["operator.admin"];
       expect(project(admin)).toEqual([person, person, person]);
       expect(existsSync(state.agentDir("uncreated"))).toBe(false);
-
-      const sqlitePath = resolveOpenClawAgentSqlitePath({ agentId: "uncreated", env: state.env });
-      mkdirSync(path.dirname(sqlitePath), { recursive: true });
-      new DatabaseSync(sqlitePath).close();
-      const unreadable = createPresenceRecipientProjection(params);
-      expect(() => unreadable(admin)).toThrow(/schema-missing/);
     });
   });
 });
