@@ -253,6 +253,30 @@ describe("terminal PTY invocation", () => {
   );
 
   it.runIf(process.platform === "win32")(
+    "uses a supported versioned current Node for an npm shim",
+    async () => {
+      const { entrypoint, shimPath } = createWindowsNpmShim("codex");
+      const versionedNode = "C:\\Program Files\\Node.js\\node24.exe";
+      vi.spyOn(process, "execPath", "get").mockReturnValue(versionedNode);
+      mocks.spawn.mockReturnValueOnce(fakePty());
+
+      await spawnDirectTerminalPty({
+        file: shimPath,
+        args: ["--", "literal"],
+        env: { PATH: path.dirname(shimPath), PATHEXT: ".EXE;.CMD" },
+        cols: 80,
+        rows: 24,
+      });
+
+      expect(mocks.spawn).toHaveBeenCalledWith(
+        versionedNode,
+        [entrypoint, "--", "literal"],
+        expect.objectContaining({ cols: 80, rows: 24 }),
+      );
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
     "uses PATH node.exe instead of a packaged non-Node host for an npm shim",
     async () => {
       const { entrypoint, shimPath } = createWindowsNpmShim("codex");
