@@ -409,7 +409,7 @@ suite.define(() => {
       await expect.poll(() => localEnvironment.isVisible()).toBe(true);
       expect(await localEnvironment.getAttribute("aria-pressed")).toBe("true");
       await captureProjectUiProof(suite, page, "new-session-environment-search.png", {
-        surface: whereSelect.locator('wa-popup [part="popup"]'),
+        surface: whereSelect.locator('wa-popup.popover > [part="popup"]'),
         content: [environmentSearch],
       });
       await page.keyboard.press("Escape");
@@ -432,7 +432,7 @@ suite.define(() => {
         "Projects",
       );
       await captureProjectUiProof(suite, page, "new-session-project-menu-label.png", {
-        surface: projectSelect.locator('wa-popup [part="popup"]'),
+        surface: projectSelect.locator('wa-popup.popover > [part="popup"]'),
         content: [projectSelect.getByRole("button", { name: "Browse folders" })],
       });
       await projectSelect.getByRole("button", { name: "Browse folders" }).click();
@@ -462,7 +462,7 @@ suite.define(() => {
         "Checkout",
       );
       await captureProjectUiProof(suite, page, "new-session-checkout-menu-label.png", {
-        surface: checkoutSelect.locator('wa-popup [part="popup"]'),
+        surface: checkoutSelect.locator('wa-popup.popover > [part="popup"]'),
         content: [checkoutSelect.locator(".new-session-page__menu-title").first()],
       });
       const currentCheckout = checkoutSelect.locator('[data-value="checkout"]');
