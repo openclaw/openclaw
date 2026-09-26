@@ -42,7 +42,7 @@ const getGlobalHookRunner = vi.hoisted(() => vi.fn());
 const createMessageSentEmitter = vi.hoisted(() =>
   vi.fn(() => ({ emitMessageSent, hasMessageSentHooks: true })),
 );
-const readRecentUserAssistantTextForSession = vi.hoisted(() => vi.fn());
+const readCurrentSessionUserAssistantText = vi.hoisted(() => vi.fn());
 const subsystemWarn = vi.hoisted(() => vi.fn());
 
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
@@ -114,7 +114,7 @@ vi.mock("../../plugins/hook-runner-global.js", async (importOriginal) => {
 });
 
 vi.mock("../../config/sessions/transcript.js", () => ({
-  readRecentUserAssistantTextForSession,
+  readCurrentSessionUserAssistantText,
 }));
 
 const cfg = {} as OpenClawConfig;
@@ -233,7 +233,7 @@ describe("channel turn pipeline", () => {
       hasMessageSentHooks: true,
     }));
     getGlobalHookRunner.mockReturnValue(null);
-    readRecentUserAssistantTextForSession.mockResolvedValue([]);
+    readCurrentSessionUserAssistantText.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -724,7 +724,7 @@ describe("channel turn pipeline", () => {
     expect(recordInboundSession).toHaveBeenCalledWith(
       expect.objectContaining({ sessionKey: targetSessionKey }),
     );
-    expect(readRecentUserAssistantTextForSession).toHaveBeenCalledWith(
+    expect(readCurrentSessionUserAssistantText).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "main",
         sessionKey: targetSessionKey,

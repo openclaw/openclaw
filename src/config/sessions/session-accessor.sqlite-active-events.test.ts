@@ -481,6 +481,17 @@ describe("SQLite active transcript event projection", () => {
     ]);
     expect(page.events.map((entry) => entry.seq)).toEqual([2, 4, 5]);
     expect(page.totalMessages).toBe(3);
+
+    const postBoundaryPage = readSessionTranscriptMessageEventPage(scope, {
+      excludeResetCarryover: true,
+      maxMessages: 10,
+      offset: 0,
+    });
+    expect(postBoundaryPage.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
+      "post-reset",
+    ]);
+    expect(postBoundaryPage.totalMessages).toBe(1);
+
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(3);
     expect(readSessionTranscriptMessageEventById(scope, "old")).toMatchObject({
       event: { id: "old" },
@@ -522,6 +533,15 @@ describe("SQLite active transcript event projection", () => {
     expect(readSessionTranscriptMessageEventById(scope, "old")).toMatchObject({
       event: { id: "old" },
     });
+
+    // A later compaction does not reopen the reset: its kept tail is still skipped.
+    expect(
+      readSessionTranscriptMessageEventPage(scope, {
+        excludeResetCarryover: true,
+        maxMessages: 10,
+        offset: 0,
+      }).events.map((entry) => (entry.event as { id?: unknown }).id),
+    ).toEqual(["post-reset"]);
   });
 
   it("fails closed when the latest indexed reset payload is malformed", async () => {

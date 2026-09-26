@@ -34,7 +34,7 @@ vi.mock("../../config/sessions/transcript.js", async (importOriginal) => {
   return {
     ...actual,
     appendAssistantMessageToSessionTranscript,
-    readRecentUserAssistantTextForSession: vi.fn(async () => []),
+    readCurrentSessionUserAssistantText: vi.fn(async () => []),
   };
 });
 

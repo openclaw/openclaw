@@ -12,10 +12,6 @@ import {
 } from "../../routing/session-key.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
 import {
-  extractAssistantPhaseText,
-  extractFirstTextBlock,
-} from "../../shared/chat-message-content.js";
-import {
   CRON_DIRECT_DELIVERY_CONTEXT_KIND,
   OPENCLAW_DELIVERY_MIRROR_MODEL,
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
@@ -43,7 +39,6 @@ import {
   type SessionTranscriptTurnWriteContext,
   type SessionTranscriptTurnExpectedState,
   type TranscriptEntryAnchor,
-  type TranscriptEvent,
 } from "./session-accessor.js";
 import type { LatestTranscriptAssistantText } from "./session-accessor.types.js";
 import type {
@@ -60,10 +55,11 @@ import {
 } from "./transcript-assistant-message.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import {
+  extractRecentConversationText,
   isWithinTranscriptWindow,
   normalizeRecentTranscriptLimit,
-  normalizeTranscriptTimestamp,
-  readPreferredUpstreamUserText,
+  type ReadRecentSessionConversationTextOptions,
+  type SessionRecentConversationText,
 } from "./transcript-recent-window.js";
 import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -117,22 +113,7 @@ export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appen
   [ASSISTANT_DISPLAY_CONTENT_FIELD]?: Array<Record<string, unknown>>;
 };
 
-export type SessionRecentConversationText = {
-  id?: string;
-  role: "user" | "assistant";
-  text: string;
-  timestamp?: number;
-  sourceChannel?: string;
-};
-
-type ReadRecentSessionConversationTextOptions = {
-  beforeTimestampMs?: number;
-  includeCronDirectDeliveryContext?: boolean;
-  limit?: number;
-  minTimestampMs?: number;
-  role?: "user" | "assistant";
-  preferUpstreamUserText?: boolean;
-};
+export type { SessionRecentConversationText } from "./transcript-recent-window.js";
 
 type ReadRecentSessionConversationTextParams = ReadRecentSessionConversationTextOptions & {
   agentId: string;
@@ -183,81 +164,9 @@ type SessionConversationTranscriptTarget = {
   sqliteScope?: SqliteSessionFileMarker;
 };
 
-function extractRecentConversationText(
-  event: TranscriptEvent,
-  options: ReadRecentSessionConversationTextOptions = {},
-): SessionRecentConversationText | undefined {
-  const parsed = event as {
-    id?: unknown;
-    message?: unknown;
-  };
-  const message = parsed.message as
-    | {
-        role?: unknown;
-        timestamp?: unknown;
-        provenance?: unknown;
-        provider?: unknown;
-        model?: unknown;
-        openclawDeliveryMirror?: unknown;
-        __openclaw?: unknown;
-      }
-    | undefined;
-  if (
-    !message ||
-    (message.role !== "user" && message.role !== "assistant") ||
-    (options.role && message.role !== options.role)
-  ) {
-    return undefined;
-  }
-  const deliveryMirror = message.openclawDeliveryMirror;
-  const includeCronDirectDeliveryContext =
-    options.includeCronDirectDeliveryContext === true &&
-    deliveryMirror !== null &&
-    typeof deliveryMirror === "object" &&
-    !Array.isArray(deliveryMirror) &&
-    "kind" in deliveryMirror &&
-    deliveryMirror.kind === CRON_DIRECT_DELIVERY_CONTEXT_KIND;
-  if (
-    message.role === "assistant" &&
-    isTranscriptOnlyOpenClawAssistantMessage(message) &&
-    !includeCronDirectDeliveryContext
-  ) {
-    return undefined;
-  }
-  const upstreamUserText =
-    options.preferUpstreamUserText && message.role === "user"
-      ? readPreferredUpstreamUserText(message)
-      : undefined;
-  if (upstreamUserText === null) {
-    return undefined;
-  }
-  const text =
-    message.role === "assistant"
-      ? extractAssistantPhaseText(message)
-      : (upstreamUserText ?? extractFirstTextBlock(message)?.trim());
-  if (!text) {
-    return undefined;
-  }
-  const provenance =
-    message.provenance && typeof message.provenance === "object"
-      ? (message.provenance as { sourceChannel?: unknown })
-      : undefined;
-  return {
-    ...(typeof parsed.id === "string" && parsed.id ? { id: parsed.id } : {}),
-    role: message.role,
-    text,
-    ...(normalizeTranscriptTimestamp(message.timestamp) !== undefined
-      ? { timestamp: normalizeTranscriptTimestamp(message.timestamp) }
-      : {}),
-    ...(typeof provenance?.sourceChannel === "string" && provenance.sourceChannel.trim()
-      ? { sourceChannel: provenance.sourceChannel.trim() }
-      : {}),
-  };
-}
-
 async function readRecentUserAssistantTextFromSqliteTranscript(
   scope: SqliteSessionFileMarker,
-  options: ReadRecentSessionConversationTextOptions = {},
+  options: ReadRecentSessionConversationTextOptions & { excludeResetCarryover?: boolean } = {},
 ): Promise<SessionRecentConversationText[]> {
   const limit = normalizeRecentTranscriptLimit(options.limit);
   const pageSize = 250;
@@ -272,6 +181,7 @@ async function readRecentUserAssistantTextFromSqliteTranscript(
       const recent: SessionRecentConversationText[] = [];
       for (let offset = 0; recent.length < limit; offset += pageSize) {
         const page = readSessionTranscriptMessageEventPage(readScope, {
+          ...(options.excludeResetCarryover ? { excludeResetCarryover: true } : {}),
           maxMessages: pageSize,
           offset,
         });
@@ -338,6 +248,24 @@ export async function readRecentUserAssistantTextForSession(
   const target = resolveSessionConversationTranscriptTarget(params);
   if (target.sqliteScope) {
     return await readRecentUserAssistantTextFromSqliteTranscript(target.sqliteScope, params);
+  }
+  return [];
+}
+
+/**
+ * Like `readRecentUserAssistantTextForSession`, but only what the latest reset
+ * admitted: a reset keeps `sessionId` and retains a replay tail for the runner,
+ * which prompt context must not re-surface. Core-only; not a plugin SDK reader.
+ */
+export async function readCurrentSessionUserAssistantText(
+  params: ReadRecentSessionConversationTextParams,
+): Promise<SessionRecentConversationText[]> {
+  const target = resolveSessionConversationTranscriptTarget(params);
+  if (target.sqliteScope) {
+    return await readRecentUserAssistantTextFromSqliteTranscript(target.sqliteScope, {
+      ...params,
+      excludeResetCarryover: true,
+    });
   }
   return [];
 }
@@ -770,4 +698,3 @@ async function findLatestEquivalentAssistantMessageId(
 
   return undefined;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

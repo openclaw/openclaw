@@ -30,7 +30,7 @@ vi.mock("../../plugins/hook-runner-global.js", async (importOriginal) => {
 });
 
 vi.mock("../../config/sessions/transcript.js", () => ({
-  readRecentUserAssistantTextForSession: vi.fn(async () => []),
+  readCurrentSessionUserAssistantText: vi.fn(async () => []),
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {

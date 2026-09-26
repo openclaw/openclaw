@@ -38,7 +38,7 @@ const getGlobalHookRunner = vi.hoisted(() => vi.fn());
 const createMessageSentEmitter = vi.hoisted(() =>
   vi.fn(() => ({ emitMessageSent, hasMessageSentHooks: true })),
 );
-const readRecentUserAssistantTextForSession = vi.hoisted(() => vi.fn());
+const readCurrentSessionUserAssistantText = vi.hoisted(() => vi.fn());
 
 vi.mock("../../auto-reply/reply/provider-dispatcher.js", async (importOriginal) => {
   const actual =
@@ -89,7 +89,7 @@ vi.mock("../../plugins/hook-runner-global.js", async (importOriginal) => {
 });
 
 vi.mock("../../config/sessions/transcript.js", () => ({
-  readRecentUserAssistantTextForSession,
+  readCurrentSessionUserAssistantText,
 }));
 
 const cfg = {} as OpenClawConfig;
@@ -219,7 +219,7 @@ describe("channel turn finalize", () => {
       hasMessageSentHooks: true,
     }));
     getGlobalHookRunner.mockReturnValue(null);
-    readRecentUserAssistantTextForSession.mockResolvedValue([]);
+    readCurrentSessionUserAssistantText.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -478,7 +478,7 @@ describe("channel turn finalize", () => {
     const { history, historyMap } = createPendingGroupHistory();
     const transcriptError = new Error("transcript read failed");
     const recordInboundSession = createRecordInboundSession();
-    readRecentUserAssistantTextForSession.mockRejectedValueOnce(transcriptError);
+    readCurrentSessionUserAssistantText.mockRejectedValueOnce(transcriptError);
 
     await expect(
       runPreparedChannelTurn({

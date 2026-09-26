@@ -1,7 +1,7 @@
 import { isSessionBoundaryCommandText } from "../../auto-reply/command-detection.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
-import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
+import { readCurrentSessionUserAssistantText } from "../../config/sessions/transcript.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 
@@ -122,7 +122,7 @@ export async function mergeSessionTranscriptContext(params: {
     throw new Error("Session transcript context requires an agent owner.");
   }
   const windows = mergeableChatWindowEntries(params.ctx);
-  const turns = await readRecentUserAssistantTextForSession({
+  const turns = await readCurrentSessionUserAssistantText({
     agentId,
     sessionKey: params.sessionKey,
     storePath: params.storePath,

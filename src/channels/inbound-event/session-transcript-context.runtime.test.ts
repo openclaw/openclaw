@@ -4,15 +4,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
-import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
+import {
+  readCurrentSessionUserAssistantText,
+  readRecentUserAssistantTextForSession,
+} from "../../config/sessions/transcript.js";
 import { runPreparedChannelTurn } from "../turn/execution.js";
 import { mergeSessionTranscriptContext } from "./session-transcript-context.runtime.js";
 
 vi.mock("../../config/sessions/transcript.js", () => ({
+  readCurrentSessionUserAssistantText: vi.fn(),
   readRecentUserAssistantTextForSession: vi.fn(),
 }));
 
-const readRecent = vi.mocked(readRecentUserAssistantTextForSession);
+const readRecent = vi.mocked(readCurrentSessionUserAssistantText);
+const readAcrossResets = vi.mocked(readRecentUserAssistantTextForSession);
 
 function context(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
@@ -36,6 +41,7 @@ describe("session transcript inbound context", () => {
 
   beforeEach(() => {
     readRecent.mockReset();
+    readAcrossResets.mockReset();
   });
 
   it("restores Slack assistant context when the live window is empty after restart", async () => {
@@ -302,6 +308,23 @@ describe("session transcript inbound context", () => {
       }),
     ).rejects.toThrow("Session transcript context requires an agent owner.");
     expect(readRecent).not.toHaveBeenCalled();
+  });
+
+  it("reads injected context through the core post-reset reader, not the plugin SDK reader", async () => {
+    readRecent.mockResolvedValue([]);
+    const ctx = context({
+      SessionTranscriptContext: { historyLimit: 3, minTimestampMs: 1_500 },
+    });
+
+    await mergeSessionTranscriptContext({
+      agentId: "main",
+      ctx,
+      sessionKey: ctx.SessionKey!,
+      storePath: "/tmp/sessions.json",
+    });
+
+    expect(readRecent).toHaveBeenCalledWith(expect.objectContaining({ minTimestampMs: 1_500 }));
+    expect(readAcrossResets).not.toHaveBeenCalled();
   });
 
   it("skips canonical history for session-boundary commands", async () => {

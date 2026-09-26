@@ -516,6 +516,8 @@ export function readRecentSessionTranscriptMessageEvents(
 export function readSessionTranscriptMessageEventPage(
   scope: SessionTranscriptReadScope,
   options: {
+    /** Page only what the latest reset admitted, not the replay tail it kept. */
+    excludeResetCarryover?: boolean;
     maxMessages: number;
     offset: number;
     offsetFrom?: "start" | "end";
@@ -526,7 +528,9 @@ export function readSessionTranscriptMessageEventPage(
     scope,
     (projection) => {
       const visible = resolveVisibleMessagePositions(projection);
-      const totalMessages = visible.total;
+      // The kept replay tail sits at the head of the visible window.
+      const skipped = options.excludeResetCarryover ? visible.kept.length : 0;
+      const totalMessages = visible.total - skipped;
       const offset = Math.min(
         Math.max(0, Math.floor(Number.isFinite(options.offset) ? options.offset : 0)),
         totalMessages,
@@ -543,7 +547,7 @@ export function readSessionTranscriptMessageEventPage(
         options.offsetFrom === "start" ? offset : Math.max(0, endExclusive - maxMessages);
       return {
         activeLeafEntryId: projection.state.leafEventId,
-        events: readVisibleMessageRange(projection, start, endExclusive),
+        events: readVisibleMessageRange(projection, skipped + start, skipped + endExclusive),
         totalMessages,
       };
     },
