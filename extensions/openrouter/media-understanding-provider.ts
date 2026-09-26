@@ -1,9 +1,11 @@
 // Openrouter provider module implements model/runtime integration.
 import path from "node:path";
-import type {
-  AudioTranscriptionRequest,
-  AudioTranscriptionResult,
-  MediaUnderstandingProvider,
+import {
+  describeOpenAiCompatibleVideo,
+  type AudioTranscriptionRequest,
+  type AudioTranscriptionResult,
+  type MediaUnderstandingProvider,
+  type VideoDescriptionRequest,
 } from "openclaw/plugin-sdk/media-understanding";
 import {
   assertOkOrThrowHttpError,
@@ -16,6 +18,8 @@ import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 
 const DEFAULT_OPENROUTER_AUDIO_TRANSCRIPTION_MODEL = "openai/whisper-large-v3-turbo";
+const DEFAULT_OPENROUTER_VIDEO_MODEL = "google/gemini-3.8-flash";
+const DEFAULT_OPENROUTER_VIDEO_PROMPT = "Describe the video.";
 const SUPPORTED_AUDIO_FORMATS = new Set(["wav", "mp3", "flac", "m4a", "ogg", "webm", "aac"]);
 
 function normalizeMimeType(mime?: string): string | undefined {
@@ -164,17 +168,38 @@ async function transcribeOpenRouterAudio(
   }
 }
 
+async function describeOpenRouterVideo(
+  params: VideoDescriptionRequest,
+): ReturnType<typeof describeOpenAiCompatibleVideo> {
+  return describeOpenAiCompatibleVideo({
+    ...params,
+    headers: {
+      "HTTP-Referer": "https://openclaw.ai",
+      "X-OpenRouter-Title": "OpenClaw",
+      ...params.headers,
+    },
+    defaultBaseUrl: OPENROUTER_BASE_URL,
+    defaultModel: DEFAULT_OPENROUTER_VIDEO_MODEL,
+    defaultPrompt: DEFAULT_OPENROUTER_VIDEO_PROMPT,
+    provider: "openrouter",
+    providerLabel: "OpenRouter",
+  });
+}
+
 export const openrouterMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "openrouter",
-  capabilities: ["image", "audio"],
+  capabilities: ["image", "audio", "video"],
   defaultModels: {
     image: "auto",
     audio: DEFAULT_OPENROUTER_AUDIO_TRANSCRIPTION_MODEL,
+    video: DEFAULT_OPENROUTER_VIDEO_MODEL,
   },
   autoPriority: {
     audio: 35,
+    video: 30,
   },
   describeImage: undefined,
   describeImages: undefined,
   transcribeAudio: transcribeOpenRouterAudio,
+  describeVideo: describeOpenRouterVideo,
 };

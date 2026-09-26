@@ -93,13 +93,15 @@
   },
   "mediaUnderstandingProviderMetadata": {
     "openrouter": {
-      "capabilities": ["image", "audio"],
+      "capabilities": ["image", "audio", "video"],
       "defaultModels": {
         "image": "auto",
-        "audio": "openai/whisper-large-v3-turbo"
+        "audio": "openai/whisper-large-v3-turbo",
+        "video": "google/gemini-3.8-flash"
       },
       "autoPriority": {
-        "audio": 35
+        "audio": 35,
+        "video": 30
       }
     }
   },

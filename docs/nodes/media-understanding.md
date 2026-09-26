@@ -175,7 +175,7 @@ When `tools.media.<capability>.enabled` is not `false` and no models are configu
 
     Bundled provider priority order (ties break alphabetically by provider id):
     - Image: Anthropic/OpenAI &rarr; Google &rarr; MiniMax &rarr; Deepinfra &rarr; MiniMax Portal &rarr; Z.AI
-    - Video: Google &rarr; Qwen &rarr; Moonshot
+    - Video: Google &rarr; Qwen &rarr; Moonshot &rarr; OpenRouter
 
   </Step>
 </Steps>
@@ -211,7 +211,7 @@ Set `capabilities` on a `models[]` entry to restrict it to specific media types.
 | `openai`, `anthropic`, `minimax`                                         | image                 |
 | `minimax-portal`                                                         | image                 |
 | `moonshot`                                                               | image + video         |
-| `openrouter`                                                             | image + audio         |
+| `openrouter`                                                             | image + audio + video |
 | `google` (Gemini API)                                                    | image + audio + video |
 | `qwen`                                                                   | image + video         |
 | `deepinfra`                                                              | image + audio         |
@@ -228,7 +228,7 @@ CLI entries require explicit `capabilities`; entries without valid capability ta
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Image      | Anthropic, Codex app-server, Deepinfra, Google, MiniMax, MiniMax Portal, Moonshot, OpenAI, OpenAI Codex OAuth, OpenRouter, Qwen, Z.AI, config providers | Vendor plugins register image support; `openai/*` can use API-key or Codex OAuth routing; `codex/*` uses a bounded Codex app-server turn; image-capable config providers auto-register. |
 | Audio      | Deepgram, Deepinfra, ElevenLabs, Google, Groq, Mistral, OpenAI, OpenRouter, SenseAudio, xAI                                                             | Provider transcription (Whisper/Groq/xAI/Deepgram/OpenRouter STT/Gemini/SenseAudio/Scribe/Voxtral).                                                                                     |
-| Video      | Google, Moonshot, Qwen                                                                                                                                  | Provider video understanding via vendor plugins; Qwen video understanding uses the standard DashScope endpoints.                                                                        |
+| Video      | Google, Moonshot, OpenRouter, Qwen                                                                                                                      | Provider video understanding via vendor plugins; Qwen video understanding uses the standard DashScope endpoints; OpenRouter sends the video as an OpenAI-compatible `video_url`.        |
 
 <Note>
 **MiniMax note**: `minimax`, `minimax-cn`, `minimax-portal`, and `minimax-portal-cn` image understanding always comes from the plugin-owned `MiniMax-VL-01` media provider, even if legacy MiniMax M2.x chat metadata claims image input.
