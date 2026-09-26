@@ -1,8 +1,3 @@
-/**
- * Channel metadata normalizer.
- *
- * Recomputes required metadata fields while preserving optional manifest/registry fields.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelMeta } from "./types.public.js";
 

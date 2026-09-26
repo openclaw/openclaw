@@ -13,7 +13,10 @@ import {
   registryContainsRuntimePluginIds,
   resolveCompatibleRuntimePluginRegistry,
 } from "./active-runtime-registry.js";
-import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
+import type {
+  PluginCapabilityCatalogContext,
+  PluginCapabilityCatalogHostContext,
+} from "./capability-catalog-context.types.js";
 import { isPluginRegistryLoadInFlight, resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import { loadOpenClawPluginsWithInternalOverrides } from "./loader-runtime-load.js";
@@ -48,7 +51,7 @@ const families = [
 ] as const;
 const contextSymbol = Symbol.for("fixture.capability-context");
 
-function createContext(): PluginCapabilityCatalogContext {
+function createContext(): PluginCapabilityCatalogHostContext {
   const unavailable = () => {
     throw new Error("registration invoked a host operation");
   };
@@ -61,6 +64,7 @@ function createContext(): PluginCapabilityCatalogContext {
     resolveProviderAuthProfileApiKey: unavailable,
     resolveApiKeyForProvider: unavailable,
     captureWsEvent: unavailable,
+    captureWsEventAsync: unavailable,
     createDebugProxyWebSocketAgent: unavailable,
     resolveDebugProxySettings: unavailable,
     fetchWithSsrFGuard: unavailable,

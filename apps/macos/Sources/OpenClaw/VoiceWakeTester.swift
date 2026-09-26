@@ -94,13 +94,11 @@ final class VoiceWakeTester {
         let engine = AVAudioEngine()
         self.audioEngine = engine
 
-        self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        let request = self.recognitionRequest
-        if let request {
-            try SpeechRecognitionRequestPolicy.configurePassiveVoiceWake(
-                request,
-                supportsOnDeviceRecognition: recognizer.supportsOnDeviceRecognition)
-        }
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        self.recognitionRequest = request
+        try SpeechRecognitionRequestPolicy.configurePassiveVoiceWake(
+            request,
+            supportsOnDeviceRecognition: recognizer.supportsOnDeviceRecognition)
 
         let inputNode = engine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
@@ -122,9 +120,9 @@ final class VoiceWakeTester {
             onUpdate(.listening)
         }
 
-        guard let request = recognitionRequest else { return }
+        guard let activeRequest = recognitionRequest else { return }
 
-        self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+        self.recognitionTask = recognizer.recognitionTask(with: activeRequest) { [weak self] result, error in
             guard let self, !self.isStopping else { return }
             let text = result?.bestTranscription.formattedString ?? ""
             let segments = result.map { WakeWordSpeechSegments.from(
@@ -292,20 +290,20 @@ final class VoiceWakeTester {
     private static func debugCandidateGaps(triggers: [String], segments: [WakeWordSegment]) -> String {
         let tokens = self.normalizeSegments(segments)
         guard !tokens.isEmpty else { return "" }
-        let triggerTokens = self.normalizeTriggers(triggers)
+        let triggerTokens = triggers.map(VoiceWakeTextUtils.normalizedTokens)
         var gaps: [String] = []
 
         for trigger in triggerTokens {
-            let count = trigger.tokens.count
+            let count = trigger.count
             guard count > 0, tokens.count > count else { continue }
             for i in 0...(tokens.count - count - 1) {
-                let matched = (0..<count).allSatisfy { tokens[i + $0].normalized == trigger.tokens[$0] }
+                let matched = (0..<count).allSatisfy { tokens[i + $0].normalized == trigger[$0] }
                 if !matched { continue }
                 let triggerEnd = tokens[i + count - 1].end
                 let nextToken = tokens[i + count]
                 let gap = nextToken.start - triggerEnd
                 let formatted = String(format: "%.2f", gap)
-                gaps.append("\(trigger.tokens.joined(separator: " ")):\(formatted)s")
+                gaps.append("\(trigger.joined(separator: " ")):\(formatted)s")
             }
         }
         return gaps.joined(separator: ", ")
@@ -315,23 +313,6 @@ final class VoiceWakeTester {
         let normalized: String
         let start: TimeInterval
         let end: TimeInterval
-    }
-
-    private struct DebugTriggerTokens {
-        let tokens: [String]
-    }
-
-    private static func normalizeTriggers(_ triggers: [String]) -> [DebugTriggerTokens] {
-        var output: [DebugTriggerTokens] = []
-        for trigger in triggers {
-            let tokens = trigger
-                .split(whereSeparator: { $0.isWhitespace })
-                .map { VoiceWakeTextUtils.normalizeToken(String($0)) }
-                .filter { !$0.isEmpty }
-            if tokens.isEmpty { continue }
-            output.append(DebugTriggerTokens(tokens: tokens))
-        }
-        return output
     }
 
     private static func normalizeSegments(_ segments: [WakeWordSegment]) -> [DebugToken] {

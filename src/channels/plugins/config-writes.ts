@@ -1,8 +1,3 @@
-/**
- * Channel config-write policy facade.
- *
- * Applies shared config write authorization to concrete OpenClaw channel config.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {

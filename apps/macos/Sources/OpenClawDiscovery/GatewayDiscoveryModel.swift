@@ -594,36 +594,17 @@ public final class GatewayDiscoveryModel {
     }
 
     private nonisolated static func buildLocalIdentityFast(displayName: String?) -> LocalIdentity {
-        var hostTokens: Set<String> = []
-        var displayTokens: Set<String> = []
-
-        let hostName = ProcessInfo.processInfo.hostName
-        if let token = normalizeHostToken(hostName) {
-            hostTokens.insert(token)
-        }
-
-        if let token = normalizeDisplayToken(displayName) {
-            displayTokens.insert(token)
-        }
-
-        return LocalIdentity(hostTokens: hostTokens, displayTokens: displayTokens)
+        self.localIdentity(hostName: ProcessInfo.processInfo.hostName, displayName: displayName)
     }
 
     private nonisolated static func buildLocalIdentitySlow() -> LocalIdentity {
-        var hostTokens: Set<String> = []
-        var displayTokens: Set<String> = []
+        self.localIdentity(hostName: Host.current().name, displayName: Host.current().localizedName)
+    }
 
-        if let host = Host.current().name,
-           let token = normalizeHostToken(host)
-        {
-            hostTokens.insert(token)
-        }
-
-        if let token = normalizeDisplayToken(Host.current().localizedName) {
-            displayTokens.insert(token)
-        }
-
-        return LocalIdentity(hostTokens: hostTokens, displayTokens: displayTokens)
+    private nonisolated static func localIdentity(hostName: String?, displayName: String?) -> LocalIdentity {
+        LocalIdentity(
+            hostTokens: Set(self.normalizeHostToken(hostName).map { [$0] } ?? []),
+            displayTokens: Set(self.normalizeDisplayToken(displayName).map { [$0] } ?? []))
     }
 
     private nonisolated static func normalizeHostToken(_ raw: String?) -> String? {
@@ -722,15 +703,7 @@ final class GatewayServiceResolver: NSObject, NetServiceDelegate {
 
     private static func decodeTXT(_ data: Data?) -> [String: String] {
         guard let data else { return [:] }
-        let dict = NetService.dictionary(fromTXTRecord: data)
-        var out: [String: String] = [:]
-        out.reserveCapacity(dict.count)
-        for (key, value) in dict {
-            if let str = String(data: value, encoding: .utf8) {
-                out[key] = str
-            }
-        }
-        return out
+        return NetService.dictionary(fromTXTRecord: data).compactMapValues { String(data: $0, encoding: .utf8) }
     }
 
     private func formatTXT(_ txt: [String: String]) -> String {

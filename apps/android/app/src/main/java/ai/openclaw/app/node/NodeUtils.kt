@@ -12,6 +12,8 @@ import kotlinx.serialization.json.contentOrNull
 
 fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
 
+internal fun escapeSqlLikeLiteral(value: String): String = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
 /** Parses invoke params into a JSON object, returning null for absent/malformed input. */
 fun parseJsonParamsObject(paramsJson: String?): JsonObject? {
   if (paramsJson.isNullOrBlank()) return null
@@ -28,19 +30,16 @@ fun readJsonPrimitive(
   key: String,
 ): JsonPrimitive? = params?.get(key) as? JsonPrimitive
 
-/** Parses an optional integer invoke param. */
 fun parseJsonInt(
   params: JsonObject?,
   key: String,
 ): Int? = readJsonPrimitive(params, key)?.contentOrNull?.toIntOrNull()
 
-/** Parses an optional decimal invoke param. */
 fun parseJsonDouble(
   params: JsonObject?,
   key: String,
 ): Double? = readJsonPrimitive(params, key)?.contentOrNull?.toDoubleOrNull()
 
-/** Parses an optional string invoke param. */
 fun parseJsonString(
   params: JsonObject?,
   key: String,

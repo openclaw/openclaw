@@ -43,9 +43,6 @@ internal fun isGatewayVisibleNotification(
   return appPackage.isNotEmpty() && notificationPackage.isNotEmpty() && notificationPackage != appPackage
 }
 
-/**
- * Stable notification snapshot entry exposed through the Android notifications command.
- */
 data class DeviceNotificationEntry(
   val key: String,
   val packageName: String,
@@ -73,18 +70,12 @@ internal fun DeviceNotificationEntry.toJsonObject(): JsonObject =
     channelId?.let { put("channelId", JsonPrimitive(it)) }
   }
 
-/**
- * Listener state exposed to the gateway, including whether Android has connected the service.
- */
 data class DeviceNotificationSnapshot(
   val enabled: Boolean,
   val connected: Boolean,
   val notifications: List<DeviceNotificationEntry>,
 )
 
-/**
- * Gateway-supported notification actions mapped to Android listener operations.
- */
 enum class NotificationActionKind {
   Open,
   Dismiss,
@@ -100,9 +91,6 @@ data class NotificationActionRequest(
   val replyText: String? = null,
 )
 
-/**
- * Normalized notification action result returned through node.invoke.
- */
 data class NotificationActionResult(
   val ok: Boolean,
   val code: String? = null,
@@ -169,9 +157,6 @@ private object DeviceNotificationStore {
   }
 }
 
-/**
- * Android notification listener that mirrors notification state and executes gateway actions.
- */
 class DeviceNotificationListenerService : NotificationListenerService() {
   private val securePrefs by lazy { SecurePrefs(applicationContext) }
   private val forwardingLimiter = NotificationBurstLimiter()
@@ -336,7 +321,6 @@ class DeviceNotificationListenerService : NotificationListenerService() {
 
     private fun serviceComponent(context: Context): ComponentName = ComponentName(context, DeviceNotificationListenerService::class.java)
 
-    /** Installs the node event sink used to emit filtered notification change events. */
     fun setNodeEventSink(sink: ((event: String, payloadJson: String?) -> Unit)?) {
       nodeEventSink = sink
     }
@@ -370,7 +354,6 @@ class DeviceNotificationListenerService : NotificationListenerService() {
         .distinct()
     }
 
-    /** Checks whether Android has granted listener access to this service component. */
     fun isAccessEnabled(context: Context): Boolean {
       val manager = context.getSystemService(NotificationManager::class.java) ?: return false
       return manager.isNotificationListenerAccessGranted(serviceComponent(context))
@@ -393,7 +376,6 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       }
     }
 
-    /** Executes an open, dismiss, or reply action through the active listener instance. */
     fun executeAction(
       context: Context,
       request: NotificationActionRequest,

@@ -256,22 +256,23 @@ class CronPage extends OpenClawLightDomElement {
       this.highlightedRunId = null;
       this.pendingRunScroll = false;
     }
-  }
-
-  override updated() {
-    // Switching between list and detail (or between two jobs) keeps the same
-    // page scroller alive, so reset scroll and the detail tab per target.
+    // The panel owns its transcript and detail tab. Retire the previous run
+    // before rendering another target; close also invalidates pending history.
     const editingJobId = this.cron.cronEditingJob?.id ?? null;
     const mode = editingJobId ? "job" : this.cron.cronCreateOpen ? "create" : "overview";
     const panelKey = `${mode}:${editingJobId ?? ""}`;
     if (panelKey !== this.lastPanelKey) {
       this.lastPanelKey = panelKey;
+      this.runTranscript.close();
       this.detailTab = editingJobId && this.highlightedRunId ? "history" : "settings";
       const scroller = this.closest(".content");
       if (scroller instanceof HTMLElement && typeof scroller.scrollTo === "function") {
         scroller.scrollTo({ top: 0 });
       }
     }
+  }
+
+  override updated() {
     const routeData = this.pendingRouteData;
     const client = this.cron.client;
     if (routeData?.session && this.cron.cronJobsSnapshotRevision && !this.cron.cronLoading) {

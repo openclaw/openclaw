@@ -406,17 +406,11 @@ export function collectChannelDmPolicyMetadata(
     };
     const dmAllowFromMode = doctorCapabilities?.dmAllowFromMode;
     const openDmRequiresAllowFromWildcard = doctorCapabilities?.openDmRequiresAllowFromWildcard;
-    for (const channelId of record.channels) {
-      put(
-        channelId,
-        originRank,
-        record.id,
-        channelId === packageChannelId ? dmAllowFromMode : undefined,
-        channelId === packageChannelId ? openDmRequiresAllowFromWildcard : undefined,
-      );
-    }
-    put(packageChannelId, originRank, record.id, dmAllowFromMode, openDmRequiresAllowFromWildcard);
-    for (const channelId of Object.keys(record.channelConfigs ?? {})) {
+    for (const channelId of [
+      ...record.channels,
+      packageChannelId,
+      ...Object.keys(record.channelConfigs ?? {}),
+    ]) {
       put(
         channelId,
         originRank,

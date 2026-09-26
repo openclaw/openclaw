@@ -72,9 +72,9 @@ async function fixture({
       },
     },
   };
-  // Finite ledger I/O: execute the real reporting callback against its admitted row.
-  const ledger = { runId: run.runId, status: "running", origin: {}, verification: {}, steps: [] };
   const opts = { json: true, yes: true, run };
+  // One admitted row owns both the real reporting mutation and its publication assertions.
+  const reportingRow = { status: "running", origin: {} };
   const assertCurrent = () => run.executorFence.assertCurrent();
   const restartContext = {
     refreshGatewayServiceEnv: false,
@@ -158,18 +158,18 @@ async function fixture({
     GatewayServiceUpdateOwnershipError: class extends Error {},
     DEFINITION_DENIAL: /fixture-definition-denial/,
     resolveGatewayService: () => service,
+    getUpdateRun: () => undefined,
     isContainerEnvironment: () => false,
     resolveStateDir: (env) => {
       assert.equal(env, run.env);
       return "/fixture/state";
     },
     mutateRun: (runId, update, options) => {
-      assert.equal(runId, ledger.runId);
+      assert.equal(runId, run.runId);
       assert.equal(options.env, run.env);
-      update(ledger);
-      return ledger;
+      update(reportingRow);
+      return reportingRow;
     },
-    getUpdateRun: () => undefined,
     recordUpdateRunPhase: (_id, phase) => phases.push(phase),
     recordUpdateRunVerification: (_id, record) => records.push(record),
     recordUpdateRunDiagnostics: (_id, readResult) => {
@@ -226,7 +226,7 @@ async function fixture({
     completeUpdateCommandRun: (value) => value,
     printResult: (value, _opts, report) => {
       assert.equal(report.nextAction, nextAction);
-      assert.equal(ledger.origin.nextAction, nextAction);
+      assert.equal(reportingRow.origin.nextAction, nextAction);
       printed.push(value);
     },
     writeControlPlaneUpdateRestartSentinel: async () => {},
@@ -382,7 +382,7 @@ async function fixture({
     records,
     unexpected,
     run,
-    ledger,
+    reportingRow,
     counts: () => ({ verifyCalls, commandCalls, assertions, verifiedCalls }),
   };
 }
@@ -453,7 +453,7 @@ for (const [name, makeError] of thrownCases) {
     assert.equal(f.counts().commandCalls, 1);
     assert.deepEqual(f.completion, [false]);
     assert.equal(f.printed.at(-1).status, "error");
-    assert.equal(f.ledger.origin.nextAction, nextAction);
+    assert.equal(f.reportingRow.origin.nextAction, nextAction);
     assert.ok(f.events.includes("rollback-unverified"));
     assert.ok(f.events.indexOf("complete:false") < f.events.indexOf("recovery-verification"));
     assert.deepEqual(f.unexpected, []);
@@ -470,7 +470,7 @@ void test("production finishUpdate authorizes backup retirement only after verif
   const f = await fixture();
   assert.equal((await f.finish()).status, "ok");
   assert.deepEqual(f.completion, [true]);
-  assert.equal(f.ledger.origin.nextAction, nextAction);
+  assert.equal(f.reportingRow.origin.nextAction, nextAction);
   assert.ok(f.events.indexOf("verification") < f.events.indexOf("complete:true"));
   assert.equal(f.counts().verifyCalls, 1);
   assert.ok(!f.events.includes("rollback-unverified"));

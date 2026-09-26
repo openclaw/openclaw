@@ -120,6 +120,8 @@ it("suppresses rich-post transport twins and retained legacy records without blo
           expect(await queue.listPending()).toEqual([]);
           expect(await queue.listClaims()).toEqual([]);
         });
+        // Ingress adoption clears the queue before reply delivery settles.
+        await Promise.all(mocks.withReplyDispatcherMock.mock.results.map((result) => result.value));
       };
       await send("om-first");
       expect(mocks.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);

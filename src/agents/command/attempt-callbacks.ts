@@ -20,6 +20,17 @@ type AgentAttemptLifecycleEvent = {
   sessionKey?: string;
 };
 
+export function emitAgentAttemptRuntimeStart(
+  info: { phase: string },
+  onAgentEvent: (evt: AgentAttemptLifecycleEvent) => void | Promise<void>,
+): void {
+  // CLI preparation and child launch do not prove a native turn. Parsed
+  // assistant/tool activity does, even when the backend omits lifecycle events.
+  if (info.phase === "assistant_output_started" || info.phase === "tool_execution_started") {
+    void onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
+  }
+}
+
 /** Creates callbacks that update lifecycle flags for persistence decisions. */
 export function createAgentAttemptLifecycleCallbacks(
   state: AgentAttemptLifecycleState,

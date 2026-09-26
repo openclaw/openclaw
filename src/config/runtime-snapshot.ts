@@ -1,4 +1,3 @@
-// Produces redacted runtime config snapshots for diagnostics and UI surfaces.
 import { isDeepStrictEqual } from "node:util";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
