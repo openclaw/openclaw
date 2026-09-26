@@ -498,18 +498,8 @@ final class AppState {
         self.voiceWakeSendChime = Self.loadChime(
             key: voiceWakeSendChimeKey,
             fallback: .system(name: "Glass"))
-        if let storedIconAnimations = AppDefaults.standard.object(forKey: iconAnimationsEnabledKey) as? Bool {
-            self.iconAnimationsEnabled = storedIconAnimations
-        } else {
-            self.iconAnimationsEnabled = true
-            AppDefaults.standard.set(true, forKey: iconAnimationsEnabledKey)
-        }
-        if let storedShowDockIcon = AppDefaults.standard.object(forKey: showDockIconKey) as? Bool {
-            self.showDockIcon = storedShowDockIcon
-        } else {
-            self.showDockIcon = true
-            AppDefaults.standard.set(true, forKey: showDockIconKey)
-        }
+        self.iconAnimationsEnabled = Self.loadEnabledPreference(key: iconAnimationsEnabledKey)
+        self.showDockIcon = Self.loadEnabledPreference(key: showDockIconKey)
         self.voiceWakeMicID = AppDefaults.standard.string(forKey: voiceWakeMicKey) ?? ""
         self.voiceWakeMicName = AppDefaults.standard.string(forKey: voiceWakeMicNameKey) ?? ""
         self.voiceWakeLocaleID = AppDefaults.standard.string(forKey: voiceWakeLocaleKey) ?? Locale.current.identifier
@@ -520,26 +510,11 @@ final class AppState {
         self.voiceWakeTriggersTalkMode = AppDefaults.standard
             .object(forKey: voiceWakeTriggersTalkModeKey) as? Bool ?? false
         self.talkEnabled = AppDefaults.standard.bool(forKey: talkEnabledKey)
-        if let storedPhaseSounds = AppDefaults.standard.object(forKey: talkPhaseSoundsEnabledKey) as? Bool {
-            self.talkPhaseSoundsEnabled = storedPhaseSounds
-        } else {
-            self.talkPhaseSoundsEnabled = true
-            AppDefaults.standard.set(true, forKey: talkPhaseSoundsEnabledKey)
-        }
-        if let storedShiftToStop = AppDefaults.standard.object(forKey: talkShiftToStopEnabledKey) as? Bool {
-            self.talkShiftToStopEnabled = storedShiftToStop
-        } else {
-            self.talkShiftToStopEnabled = true
-            AppDefaults.standard.set(true, forKey: talkShiftToStopEnabledKey)
-        }
+        self.talkPhaseSoundsEnabled = Self.loadEnabledPreference(key: talkPhaseSoundsEnabledKey)
+        self.talkShiftToStopEnabled = Self.loadEnabledPreference(key: talkShiftToStopEnabledKey)
         self.seamColorHex = nil
         self.profileAccentHex = nil
-        if let storedHeartbeats = AppDefaults.standard.object(forKey: heartbeatsEnabledKey) as? Bool {
-            self.heartbeatsEnabled = storedHeartbeats
-        } else {
-            self.heartbeatsEnabled = true
-            AppDefaults.standard.set(true, forKey: heartbeatsEnabledKey)
-        }
+        self.heartbeatsEnabled = Self.loadEnabledPreference(key: heartbeatsEnabledKey)
         if let storedOverride = AppDefaults.standard.string(forKey: iconOverrideKey),
            let selection = IconOverrideSelection(rawValue: storedOverride)
         {
@@ -654,15 +629,6 @@ final class AppState {
         return host
     }
 
-    private static func sanitizeSSHTarget(_ value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("ssh ") {
-            return trimmed.replacingOccurrences(of: "ssh ", with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return trimmed
-    }
-
     private static func sshTunnelGatewayUrl(existingUrl: String?, expectedRemoteHost: String?) -> String {
         let fallback = "ws://127.0.0.1:18789"
         let trimmed = existingUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -752,8 +718,8 @@ extension AppState {
                     value: RemoteTransport.ssh.rawValue) || changed
             }
 
-            let existingTarget = Self.sanitizeSSHTarget(remote["sshTarget"] as? String ?? "")
-            let sanitizedTarget = Self.sanitizeSSHTarget(draft.remoteTarget)
+            let existingTarget = CommandResolver.normalizeSSHTargetInput(remote["sshTarget"] as? String ?? "")
+            let sanitizedTarget = CommandResolver.normalizeSSHTargetInput(draft.remoteTarget)
             let expectedRemoteHost = CommandResolver.parseSSHTarget(sanitizedTarget)?.host ?? draft.remoteHost
             if draft.dirtyFields.contains(.remoteUrl) {
                 let existingUrl = (remote["url"] as? String)?
@@ -947,8 +913,8 @@ extension AppState {
 
         let targetMode = desiredMode ?? self.connectionMode
         if forcedFields.contains(.remoteTarget) {
-            let configuredTarget = Self.sanitizeSSHTarget(remote?["sshTarget"] as? String ?? "")
-            if configuredTarget != Self.sanitizeSSHTarget(self.remoteTarget) {
+            let configuredTarget = CommandResolver.normalizeSSHTargetInput(remote?["sshTarget"] as? String ?? "")
+            if configuredTarget != CommandResolver.normalizeSSHTargetInput(self.remoteTarget) {
                 self.remoteTarget = configuredTarget
             }
         } else if !self.dirtyGatewayConfigFields.contains(.remoteTarget),
@@ -956,8 +922,8 @@ extension AppState {
                   remoteTransport != .direct
         {
             let hasConfiguredTarget = remote?.keys.contains("sshTarget") == true
-            let configuredTarget = Self.sanitizeSSHTarget(remote?["sshTarget"] as? String ?? "")
-            if hasConfiguredTarget, configuredTarget != Self.sanitizeSSHTarget(self.remoteTarget) {
+            let configuredTarget = CommandResolver.normalizeSSHTargetInput(remote?["sshTarget"] as? String ?? "")
+            if hasConfiguredTarget, configuredTarget != CommandResolver.normalizeSSHTargetInput(self.remoteTarget) {
                 self.remoteTarget = configuredTarget
             } else if !hasConfiguredTarget,
                       let host = AppState.remoteHost(from: remoteUrl),
@@ -966,14 +932,9 @@ extension AppState {
                 self.updateRemoteTarget(host: host)
             }
         }
-        if forcedFields.contains(.remoteIdentity) {
-            let configuredIdentity = (remote?["sshIdentity"] as? String)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if configuredIdentity != self.remoteIdentity {
-                self.remoteIdentity = configuredIdentity
-            }
-        } else if !self.dirtyGatewayConfigFields.contains(.remoteIdentity),
-                  remote?.keys.contains("sshIdentity") == true
+        if forcedFields.contains(.remoteIdentity) ||
+            (!self.dirtyGatewayConfigFields.contains(.remoteIdentity) &&
+                remote?.keys.contains("sshIdentity") == true)
         {
             let configuredIdentity = (remote?["sshIdentity"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1033,7 +994,7 @@ extension AppState {
             connectionMode: self.connectionMode,
             remoteTransport: self.remoteTransport,
             remoteUrl: remoteUrl,
-            remoteTarget: Self.sanitizeSSHTarget(self.remoteTarget))
+            remoteTarget: CommandResolver.normalizeSSHTargetInput(self.remoteTarget))
     }
 
     @discardableResult
@@ -1047,12 +1008,9 @@ extension AppState {
     }
 
     private func updateRemoteTarget(host: String) {
-        let trimmed = self.remoteTarget.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let parsed = CommandResolver.parseSSHTarget(trimmed) else { return }
-        let trimmedUser = parsed.user?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let user = (trimmedUser?.isEmpty ?? true) ? nil : trimmedUser
+        guard let parsed = CommandResolver.parseSSHTarget(self.remoteTarget) else { return }
         let port = parsed.port
-        let assembled: String = if let user {
+        let assembled: String = if let user = parsed.user {
             port == 22 ? "\(user)@\(host)" : "\(user)@\(host):\(port)"
         } else {
             port == 22 ? host : "\(host):\(port)"
@@ -1303,7 +1261,7 @@ extension AppState {
         case .direct:
             return GatewayRemoteConfig.normalizeGatewayUrl(draft.remoteUrl) != nil
         case .ssh:
-            let target = Self.sanitizeSSHTarget(draft.remoteTarget)
+            let target = CommandResolver.normalizeSSHTargetInput(draft.remoteTarget)
             return !target.isEmpty &&
                 CommandResolver.sshTargetValidationMessage(target) == nil &&
                 CommandResolver.parseSSHTarget(target) != nil
@@ -1573,6 +1531,12 @@ extension AppState {
 }
 
 extension AppState {
+    private static func loadEnabledPreference(key: String) -> Bool {
+        if let stored = AppDefaults.standard.object(forKey: key) as? Bool { return stored }
+        AppDefaults.standard.set(true, forKey: key)
+        return true
+    }
+
     private static func loadCookieSyncDefaults() -> (Bool, String, [String]) {
         let defaults = AppDefaults.standard
         return (

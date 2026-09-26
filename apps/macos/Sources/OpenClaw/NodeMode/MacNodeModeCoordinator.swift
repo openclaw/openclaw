@@ -607,9 +607,9 @@ final class MacNodeModeCoordinator: NSObject {
         }
         let caps = Self.mergingUnique(nativeCaps, workerManifest?.caps ?? [])
         let commands = Self.mergingUnique(
-            self.currentCommands(caps: nativeCaps, computerControlProvider: provider),
+            Self.resolvedCommands(caps: nativeCaps, computerControlProvider: provider),
             workerManifest?.commands ?? [])
-        let permissions = await self.currentPermissions()
+        let permissions = await Self.advertisedPermissions(PermissionManager.authorizationStatus())
         // TCC queries suspend. An endpoint loss/replacement during that
         // hop must not let this stale continuation install old credentials.
         guard Self.endpointAttemptIsCurrent(
@@ -979,18 +979,6 @@ extension MacNodeModeCoordinator {
             connectionMode: AppStateStore.shared.connectionMode,
             codexThreadCatalogEnabled: codexThreadCatalogEnabled,
             claudeSessionCatalogEnabled: claudeSessionCatalogEnabled)
-    }
-
-    private func currentPermissions() async -> [String: Bool] {
-        let statuses = await PermissionManager.authorizationStatus()
-        return Self.advertisedPermissions(statuses)
-    }
-
-    private func currentCommands(
-        caps: [String],
-        computerControlProvider: ComputerControlProvider) -> [String]
-    {
-        Self.resolvedCommands(caps: caps, computerControlProvider: computerControlProvider)
     }
 
     /// The node-host worker is a capability superset, not a connect

@@ -419,9 +419,7 @@ public final class GatewayDiscoveryModel {
         var seen = Set<String>()
         let deduped = gateways.filter { gateway in
             let key = Self.dedupeKey(for: gateway)
-            if seen.contains(key) { return false }
-            seen.insert(key)
-            return true
+            return seen.insert(key).inserted
         }
         return deduped.sorted {
             $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
@@ -699,7 +697,7 @@ final class GatewayServiceResolver: NSObject, NetServiceDelegate {
 
     func netServiceDidResolveAddress(_ sender: NetService) {
         let txt = Self.decodeTXT(sender.txtRecordData())
-        let host = Self.normalizeHost(sender.hostName)
+        let host = BonjourServiceResolverSupport.normalizeHost(sender.hostName)
         let port = sender.port > 0 ? sender.port : nil
         if !txt.isEmpty {
             let payload = self.formatTXT(txt)
@@ -733,10 +731,6 @@ final class GatewayServiceResolver: NSObject, NetServiceDelegate {
             }
         }
         return out
-    }
-
-    private static func normalizeHost(_ raw: String?) -> String? {
-        BonjourServiceResolverSupport.normalizeHost(raw)
     }
 
     private func formatTXT(_ txt: [String: String]) -> String {
