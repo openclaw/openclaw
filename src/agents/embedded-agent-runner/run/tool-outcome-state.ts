@@ -1,7 +1,12 @@
-import { getRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
+import {
+  createRuntimeConfigReader,
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotMetadata,
+} from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ToolOutcomeObservation } from "../../agent-tools.before-tool-call.js";
 import { isDecisionAssistanceEligible } from "../../decision-assistance.js";
+import { resolveDecisionModelSetting } from "../../decision-model-setting.js";
 import { createSemanticNoProgressObserver } from "../../semantic-no-progress.js";
 import { resolveToolLoopDetectionConfig } from "../../tool-loop-detection-config.js";
 import {
@@ -39,9 +44,27 @@ export function createRunToolOutcomeState({
   const postCompactionGuard = createPostCompactionLoopGuard({
     enabled: resolvedLoopDetectionConfig?.enabled !== false,
   });
+  const preparedDecisionModel = config ? resolveDecisionModelSetting(config, agentId) : undefined;
+  const readConfig = createRuntimeConfigReader(config ?? {});
+  // Any publication may have briefly revoked consent between observer reads.
+  // A scoped config is not owned by the global runtime snapshot.
+  const preparedRuntimeRevision =
+    readConfig() === getRuntimeConfigSnapshot()
+      ? getRuntimeConfigSnapshotMetadata()?.revision
+      : undefined;
   const isEligible = () => {
-    const currentConfig = getRuntimeConfigSnapshot() ?? config;
-    return Boolean(currentConfig && isDecisionAssistanceEligible(currentConfig, agentId));
+    const currentConfig = readConfig();
+    const currentLoopConfig = resolveToolLoopDetectionConfig({ cfg: currentConfig, agentId });
+    const currentDecisionModel = resolveDecisionModelSetting(currentConfig, agentId);
+    return (
+      (preparedRuntimeRevision === undefined ||
+        getRuntimeConfigSnapshotMetadata()?.revision === preparedRuntimeRevision) &&
+      currentLoopConfig?.enabled === true &&
+      currentLoopConfig.semanticNoProgress === "shadow" &&
+      isDecisionAssistanceEligible(currentConfig, agentId) &&
+      currentDecisionModel?.provider === preparedDecisionModel?.provider &&
+      currentDecisionModel?.model === preparedDecisionModel?.model
+    );
   };
   const semanticNoProgressObserver =
     resolvedLoopDetectionConfig?.enabled === true &&

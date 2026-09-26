@@ -130,34 +130,67 @@ describe("semantic no-progress shadow observer", () => {
     expect(observer.snapshot().metrics.candidateFollowOnCalls).toBe(13);
   });
 
-  it("discards an in-flight classification after automatic consent is removed", async () => {
-    const started = createDeferred();
-    const release = createDeferred();
+  it("does not revive a retained classification after consent is withdrawn and restored", async () => {
     let eligible = true;
-    const answer = outcome("stalled");
-    const runtime: TestDecisionRuntime = {
-      evaluate: vi.fn(async (...args) => {
-        started.resolve();
-        await release.promise;
-        return answer.evaluate(...args);
-      }),
-    };
+    const runtime = outcome("stalled");
     const observer = createSemanticNoProgressObserver({
       signal: new AbortController().signal,
       assertActive: vi.fn(),
       isEligible: () => eligible,
       runtime,
     });
-    const pending = observer.observeOutcome({ ...trajectoryEntry(0), evidence });
-    await started.promise;
-    eligible = false;
-    release.resolve();
-    await pending;
     await observer.observeOutcome({ ...trajectoryEntry(1), evidence });
+    expect(observer.snapshot().latestJudgment?.verdict).toBe("stalled");
+    eligible = false;
     expect(observer.snapshot().latestJudgment).toBeUndefined();
-    expect(runtime.evaluate).toHaveBeenCalledTimes(1);
+    eligible = true;
+    expect(observer.snapshot().latestJudgment).toBeUndefined();
+    await observer.observeOutcome({ ...trajectoryEntry(2), evidence });
+    expect(observer.snapshot().latestJudgment).toMatchObject({
+      verdict: "stalled",
+      trajectorySize: 1,
+    });
     await observer.close();
+    expect(observer.snapshot().latestJudgment).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "discards an in-flight classification after consent removal (restored=%s)",
+    async (restoreConsent) => {
+      const started = createDeferred();
+      const release = createDeferred();
+      let eligible = true;
+      const answer = outcome("stalled");
+      const runtime: TestDecisionRuntime = {
+        evaluate: vi.fn(async (batch, options) => {
+          started.resolve();
+          await release.promise;
+          return answer.evaluate(batch, options);
+        }),
+      };
+      const observer = createSemanticNoProgressObserver({
+        signal: new AbortController().signal,
+        assertActive: vi.fn(),
+        isEligible: () => eligible,
+        runtime,
+      });
+      const pending = observer.observeOutcome({ ...trajectoryEntry(0), evidence });
+      await started.promise;
+      eligible = false;
+      expect(observer.snapshot().latestJudgment).toBeUndefined();
+      if (restoreConsent) {
+        eligible = true;
+      }
+      release.resolve();
+      await pending;
+      if (!restoreConsent) {
+        await observer.observeOutcome({ ...trajectoryEntry(1), evidence });
+      }
+      expect(observer.snapshot().latestJudgment).toBeUndefined();
+      expect(runtime.evaluate).toHaveBeenCalledTimes(1);
+      await observer.close();
+    },
+  );
 
   it("allows one in-flight Decision and joins it on close", async () => {
     let resolveDecision: (() => void) | undefined;

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -14,7 +14,7 @@ import type { HookContext } from "../../agent-tools.before-tool-call.types.js";
 import { admitToolCallBatch } from "../../tool-loop-admission.js";
 import { createRunToolOutcomeState } from "./tool-outcome-state.js";
 
-let evaluateDecisionSpy: ReturnType<typeof vi.spyOn<typeof decisionRuntime, "evaluateDecision">>;
+let evaluateDecisionSpy: MockInstance<typeof decisionRuntime.evaluateDecision>;
 
 const repeatedArgs = { path: "/synthetic/repeated" };
 const repeatedResult = {
@@ -159,7 +159,7 @@ describe("run-owned semantic no-progress observation", () => {
         expect.objectContaining({ toolName: "read", resultHash: expect.any(String) }),
       ]),
     );
-    expect(new Set(result.history?.slice(0, 20).map((entry) => entry.resultHash))).toHaveLength(1);
+    expect(new Set(result.history?.slice(0, 20).map((entry) => entry.resultHash)).size).toBe(1);
     expect(result.history?.at(-1)).toMatchObject({ outcomeKind: "tool-loop-veto" });
     expect(result.critical.intervention).toMatchObject({
       kind: "critical-tool-loop",
@@ -169,16 +169,65 @@ describe("run-owned semantic no-progress observation", () => {
     expect(evaluateDecisionSpy).not.toHaveBeenCalled();
   });
 
-  it("stops a prepared observer after published Labs opt-out", async () => {
+  it.each(["labs", "mode", "disabled", "model"] as const)(
+    "stops a prepared observer after published %s opt-out",
+    async (control) => {
+      const config = configWithDecisionModel("fixture/judge");
+      setRuntimeConfigSnapshot(config);
+      const state = createState(config);
+      expect(state.semanticNoProgressObserver).toBeDefined();
+      const disabled = configWithDecisionModel(
+        control === "model" ? "fixture/next" : "fixture/judge",
+        control !== "labs",
+      );
+      if (control !== "labs") {
+        disabled.tools = {
+          loopDetection: {
+            enabled: control !== "disabled",
+            semanticNoProgress: control === "mode" ? "off" : "shadow",
+          },
+        };
+      }
+      setRuntimeConfigSnapshot(disabled);
+      const result = await driveRepeatedResults({ config, state });
+      expect(result.warningCounts).toEqual([10]);
+      expect(result.critical.intervention).toMatchObject({ kind: "critical-tool-loop" });
+      expect(evaluateDecisionSpy).not.toHaveBeenCalled();
+      expect(state.semanticNoProgressObserver?.snapshot().trajectoryVersion).toBe(0);
+      await state.semanticNoProgressObserver?.close();
+    },
+  );
+
+  it("retires a verdict after a brief published opt-out between observer reads", async () => {
+    evaluateDecisionSpy.mockResolvedValue({
+      status: "ok",
+      provenance: {
+        providerId: "fixture",
+        rubricVersion: "semantic-no-progress-shadow-v1",
+        runtimeGeneration: "fixture",
+      },
+      result: {
+        model: "fixture/judge",
+        answers: {
+          verdict: { type: "choice", choice: "stalled", probabilities: { stalled: 1 } },
+        },
+      },
+    });
     const config = configWithDecisionModel("fixture/judge");
+    setRuntimeConfigSnapshot(config);
     const state = createState(config);
-    expect(state.semanticNoProgressObserver).toBeDefined();
+    await state.semanticNoProgressObserver?.observeOutcome({
+      toolName: "read",
+      toolParams: repeatedArgs,
+      result: repeatedResult,
+      evidence: { detector: "generic_repeat", level: "warning", count: 10 },
+    });
+    expect(state.semanticNoProgressObserver?.snapshot().latestJudgment?.verdict).toBe("stalled");
+
     setRuntimeConfigSnapshot(configWithDecisionModel("fixture/judge", false));
-    const result = await driveRepeatedResults({ config, state });
-    expect(result.warningCounts).toEqual([10]);
-    expect(result.critical.intervention).toMatchObject({ kind: "critical-tool-loop" });
-    expect(evaluateDecisionSpy).not.toHaveBeenCalled();
-    expect(state.semanticNoProgressObserver?.snapshot().trajectoryVersion).toBe(0);
+    setRuntimeConfigSnapshot(config);
+    expect(state.semanticNoProgressObserver?.snapshot().latestJudgment).toBeUndefined();
+    expect(state.semanticNoProgressObserver?.snapshot().trajectoryVersion).toBeGreaterThan(0);
     await state.semanticNoProgressObserver?.close();
   });
 

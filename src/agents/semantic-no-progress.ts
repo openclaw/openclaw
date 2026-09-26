@@ -184,7 +184,24 @@ export function createSemanticNoProgressObserver(
   let pending: Promise<void> | undefined;
   let closed = false;
   let trajectoryVersion = 0;
+  let consentEpoch = 0;
   let lastJudgmentOrdinal: number | undefined;
+
+  const isEligible = (): boolean => {
+    if (!closed && options.isEligible?.() !== false) {
+      return true;
+    }
+    // Consent loss retires both retained evidence and any outstanding result.
+    // Re-enabling observation starts a new trajectory, not the old judgment.
+    if (trajectory.length > 0 || latestJudgment || lastJudgmentOrdinal !== undefined) {
+      latestJudgment = undefined;
+      lastJudgmentOrdinal = undefined;
+      trajectory.length = 0;
+      trajectoryVersion += 1;
+      consentEpoch += 1;
+    }
+    return false;
+  };
 
   const assertOwnerActive = () => {
     if (options.signal.aborted) {
@@ -227,13 +244,18 @@ export function createSemanticNoProgressObserver(
     decisionTrajectoryVersion: number,
   ): Promise<void> => {
     const evidence = outcome.evidence;
-    if (!evidence || closed || options.isEligible?.() === false) {
+    if (!evidence || !isEligible()) {
       return;
     }
     assertOwnerActive();
     metrics.decisionCalls += 1;
+    const evaluationConsentEpoch = consentEpoch;
     const runtime = await resolveRuntime(options.runtime);
-    if (closed || options.isEligible?.() === false) {
+    if (!isEligible()) {
+      return;
+    }
+    if (consentEpoch !== evaluationConsentEpoch) {
+      metrics.staleDecisions += 1;
       return;
     }
     // Runtime resolution can yield. Recheck the owner before starting provider work.
@@ -264,12 +286,13 @@ export function createSemanticNoProgressObserver(
         rubricVersion: "semantic-no-progress-shadow-v1",
         timeoutMs: options.timeoutMs ?? DEFAULT_DECISION_TIMEOUT_MS,
         signal,
+        isEligible: () => isEligible() && consentEpoch === evaluationConsentEpoch,
       },
     );
     if (options.signal.aborted) {
       options.signal.throwIfAborted();
     }
-    if (closed || options.isEligible?.() === false) {
+    if (!isEligible()) {
       return;
     }
     options.assertActive();
@@ -325,7 +348,7 @@ export function createSemanticNoProgressObserver(
   };
 
   const observeOutcome = async (outcome: SemanticNoProgressOutcome): Promise<void> => {
-    if (closed || options.isEligible?.() === false) {
+    if (!isEligible()) {
       return;
     }
     assertOwnerActive();
@@ -347,7 +370,7 @@ export function createSemanticNoProgressObserver(
       if (options.signal.aborted) {
         options.signal.throwIfAborted();
       }
-      if (closed || options.isEligible?.() === false) {
+      if (!isEligible()) {
         return;
       }
       options.assertActive();
@@ -397,7 +420,7 @@ export function createSemanticNoProgressObserver(
     observeOutcome,
     close,
     snapshot: () => ({
-      ...(latestJudgment ? { latestJudgment: { ...latestJudgment } } : {}),
+      ...(isEligible() && latestJudgment ? { latestJudgment: { ...latestJudgment } } : {}),
       trajectoryVersion,
       metrics: copyMetrics(metrics),
     }),
