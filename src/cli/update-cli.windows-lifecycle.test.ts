@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -291,6 +292,7 @@ describe("update-cli", () => {
           OPENCLAW_CONFIG_PATH: target.configPath,
           OPENCLAW_WORKSPACE_DIR: target.defaultWorkspaceDir,
         },
+        path.join(target.stateDir, "gateway.cmd"),
       );
       await useNativeScheduledTaskControl();
       const configuredRunCommand = vi.mocked(runCommandWithTimeout).getMockImplementation();
@@ -518,10 +520,11 @@ describe("update-cli", () => {
     await useFileBackedConfig();
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const root = await mockPackageInstallAtCaseDir("openclaw-update-recovery-failure");
-    primeServiceCommand(["node", path.join(root, "dist", "index.js"), "gateway", "run"], {
-      OPENCLAW_SERVICE_MARKER: "openclaw",
-      OPENCLAW_SERVICE_KIND: "gateway",
-    });
+    primeServiceCommand(
+      ["node", path.join(root, "dist", "index.js"), "gateway", "run"],
+      { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "gateway" },
+      resolveGatewayTaskScriptPath(process.env),
+    );
     serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
     suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
     const runFixtureCommand = requireValue(
@@ -562,10 +565,11 @@ describe("update-cli", () => {
       return undefined as never;
     });
     const root = await mockPackageInstallAtCaseDir("openclaw-update-lifecycle-signal");
-    primeServiceCommand(["node", path.join(root, "dist", "index.js"), "gateway", "run"], {
-      OPENCLAW_SERVICE_MARKER: "openclaw",
-      OPENCLAW_SERVICE_KIND: "gateway",
-    });
+    primeServiceCommand(
+      ["node", path.join(root, "dist", "index.js"), "gateway", "run"],
+      { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "gateway" },
+      resolveGatewayTaskScriptPath(process.env),
+    );
     serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
     suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
     const runFixtureCommand = requireValue(

@@ -918,6 +918,7 @@ describe("verified package rollback", () => {
         suspended: Promise.resolve(true),
         handoff: () => {},
         beginMutation: () => {},
+        assertRecoveryCurrent: () => {},
         restore: vi.fn(async () => {}),
         complete,
         interrupted: () => false,

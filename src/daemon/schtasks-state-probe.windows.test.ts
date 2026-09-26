@@ -10,8 +10,7 @@ it.skipIf(process.platform !== "win32")(
   "reads real Windows PowerShell task presence without an unknown result",
   () => {
     const taskName = `OpenClaw probe test ${randomUUID()}`;
-    // Prove native task-state semantics; the unit matrix covers the production 5s budget.
-    const missing = probeScheduledTaskState(taskName, WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS);
+    const missing = probeScheduledTaskState(taskName);
     console.log("Unregistered task probe:", missing);
     expect(missing).toEqual({ status: "missing" });
 
@@ -26,7 +25,7 @@ it.skipIf(process.platform !== "win32")(
       return;
     }
     try {
-      const found = probeScheduledTaskState(taskName, WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS);
+      const found = probeScheduledTaskState(taskName);
       console.log("Registered task probe:", found);
       expect(found).toMatchObject({ status: "found", state: 3, enabled: true });
     } finally {

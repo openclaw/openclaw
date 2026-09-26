@@ -107,6 +107,11 @@ export function resolveGatewayWindowsTaskName(profile?: string): string {
   return `OpenClaw Gateway (${normalized})`;
 }
 
+export function normalizeWindowsTaskIdentity(value: string): string {
+  // Root prefixes and casing do not change task identity; nested folders do.
+  return value.replace(/^\\+/, "").toLowerCase();
+}
+
 type GatewayNativeServiceIdentityConflict = {
   envKey: "OPENCLAW_LAUNCHD_LABEL" | "OPENCLAW_SYSTEMD_UNIT" | "OPENCLAW_WINDOWS_TASK_NAME";
   expected: string;
@@ -138,7 +143,9 @@ export function resolveGatewayNativeServiceIdentityConflict(
     const envKey = "OPENCLAW_WINDOWS_TASK_NAME";
     const actual = env[envKey]?.trim();
     const expected = resolveGatewayWindowsTaskName(profile);
-    return actual && actual !== expected ? { envKey, expected } : null;
+    return actual && normalizeWindowsTaskIdentity(actual) !== normalizeWindowsTaskIdentity(expected)
+      ? { envKey, expected }
+      : null;
   }
   return null;
 }

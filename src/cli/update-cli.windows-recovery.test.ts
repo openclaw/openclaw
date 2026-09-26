@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import {
   expectNoSideEffects,
@@ -207,7 +208,11 @@ describe("update-cli", () => {
       nativeTaskControl.resumeScheduledTaskAutoStartAfterUpdate,
     );
     serviceStop.mockImplementationOnce(async () => {
-      primeServiceCommand(["node", "/another-install/openclaw.mjs", "gateway", "run"]);
+      primeServiceCommand(
+        ["node", "/another-install/openclaw.mjs", "gateway", "run"],
+        undefined,
+        resolveGatewayTaskScriptPath(process.env),
+      );
       throw new Error("stop failed after task replacement");
     });
     try {
@@ -274,10 +279,11 @@ describe("update-cli", () => {
         });
       } else {
         const root = await mockPackageInstallAtCaseDir("openclaw-update-suspension-signal");
-        primeServiceCommand(["node", path.join(root, "dist", "index.js"), "gateway", "run"], {
-          OPENCLAW_SERVICE_MARKER: "openclaw",
-          OPENCLAW_SERVICE_KIND: "gateway",
-        });
+        primeServiceCommand(
+          ["node", path.join(root, "dist", "index.js"), "gateway", "run"],
+          { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "gateway" },
+          resolveGatewayTaskScriptPath(process.env),
+        );
       }
       resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
       serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
@@ -345,10 +351,11 @@ describe("update-cli", () => {
           await writeNpmPackageInstall(argv, pkgRoot, "2026.4.22");
         }
       });
-      primeServiceCommand(["node", entryPath, "gateway", "run"], {
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-      });
+      primeServiceCommand(
+        ["node", entryPath, "gateway", "run"],
+        { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "gateway" },
+        resolveGatewayTaskScriptPath(process.env),
+      );
       serviceReadRuntime.mockResolvedValue(
         runtimeStatus === "running"
           ? { status: "running", state: "running", pid: gatewayFixturePid }
@@ -404,7 +411,11 @@ describe("update-cli", () => {
           fs.mkdir(path.join(foreignRoot, directory)),
         ),
       );
-      primeServiceCommand(["node", foreignEntrypoint, "gateway", "run"]);
+      primeServiceCommand(
+        ["node", foreignEntrypoint, "gateway", "run"],
+        undefined,
+        resolveGatewayTaskScriptPath(process.env),
+      );
       serviceLoaded.mockResolvedValue(true);
       serviceReadRuntime.mockResolvedValue({
         status: runtimeStatus,

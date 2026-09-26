@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { buildTaskScript } from "../../daemon/schtasks-layout.js";
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
+import * as processAncestry from "../../infra/restart-stale-pids.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
@@ -21,6 +24,7 @@ const mocks = vi.hoisted(() => ({
     ) => await stop(),
   ),
   taskState: 3 as number | string,
+  taskScriptPath: "C:\\Fixture\\gateway.cmd",
 }));
 
 export { mocks };
@@ -126,7 +130,12 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawnSync: vi.fn(() => ({
     pid: 0,
     output: [null, JSON.stringify({ state: mocks.taskState, lastRunResult: 0 }), ""],
-    stdout: JSON.stringify({ state: mocks.taskState, lastRunResult: 0 }),
+    stdout: JSON.stringify({
+      taskPath: "\\OpenClaw Gateway",
+      state: mocks.taskState,
+      lastRunResult: 0,
+      actions: [{ type: 0, path: mocks.taskScriptPath, arguments: "", workingDirectory: "" }],
+    }),
     stderr: "",
     status: 0,
     signal: null,
@@ -135,10 +144,29 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 beforeEach(() => {
   mockSystemAccountHome();
+  // Simulated service platforms must not read the host's native ancestry.
+  vi.spyOn(processAncestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+    pids: new Set([process.pid, process.ppid, 1]),
+    complete: true,
+  });
   mocks.prepareStop.mockReset().mockResolvedValue(false);
   mocks.drain.mockReset().mockImplementation(async (_params, stop) => await stop());
 });
 afterEach(() => vi.restoreAllMocks());
+
+export function mockRegisteredWindowsLauncher(home: string): GatewayServiceCommandConfig {
+  const command = {
+    programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
+    environment: { HOME: home },
+    sourcePath: mocks.taskScriptPath,
+  };
+  const script = Buffer.from(buildTaskScript(command));
+  const readFile = fs.readFile;
+  vi.spyOn(fs, "readFile").mockImplementation(async (pathname, options) =>
+    pathname === mocks.taskScriptPath ? script : readFile(pathname, options),
+  );
+  return command;
+}
 
 export async function withServiceHome(run: (home: string) => Promise<void>): Promise<void> {
   const home = await fs.realpath(await makeTempWorkspace("openclaw-update-service-"));

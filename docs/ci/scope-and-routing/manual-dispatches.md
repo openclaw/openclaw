@@ -60,7 +60,8 @@ for commands and recovery.
 The manual `windows-testbox-probe.yml` workflow keeps Windows/WSL probing and
 headless Windows CI on the selected `runner_label`. The `run_windows_ci` input
 (default `false`) requests both headless CI and a separate native Scheduled Task
-proof job on GitHub-hosted `windows-2025`. Neither job depends on the other, so
+proof job on GitHub-hosted `windows-2025` when no installed package binding is
+supplied. Neither job depends on the other, so
 their results remain independently visible; either requested proof failing fails
 the workflow.
 
@@ -72,6 +73,41 @@ skipping proof. Selecting `windows-2025` does not establish native qualification
 the unchanged lifecycle assertions and cleanup must pass on the actual runner.
 Cleanup and diagnostic upload still run after failure, and retained evidence is
 removed only after cleanup and upload succeed.
+
+#### Installed Scheduled Task upgrades
+
+Set `run_windows_ci=true` with one `installed_startup_package` binding from a
+successful Package Acceptance run, `runner_label=windows-2025`, and
+`keepalive_minutes=0`. Dispatch the reviewed workflow revision and use its exact
+SHA as `target_ref`; the binding independently pins the product package. Leave
+the other proof modes off. With an empty package binding, the independent
+source-only CI and native jobs above retain their behavior.
+
+The existing package resolver authenticates the candidate, then passes a verified
+artifact within the same workflow run to the native job. That job retains
+`contents: read` permissions. It runs a fresh installed candidate and the unchanged
+published 2026.9.3 and 2026.9.4 CLI updaters against the candidate. Each upgrade
+also preserves a separate running profile under its canonical Task name. Live
+status handshakes must match the verified package version and build ID; the
+updated Gateway must have a new PID, while the peer retains its PID and baseline
+identity. Candidate update preview and deep Doctor discovery inspect actual
+registered Task actions, including a disabled custom-named Gateway CMD task
+reported as an extra and an owned disabled task with a missing launcher. The fresh cell also inspects a disabled
+direct executable action and verifies that packaged update preview leaves its
+unsupported automatic service management unavailable. This proves read-only
+inspection and preservation, not direct-action execution or update mutation.
+
+Cells prepare their own normal npm installations in sequence. Actual Task and
+descendant cleanup and immutable proof upload must succeed before disposable
+prefixes and caches are retired or the next cell starts. A failed cell retains
+its evidence and stops the sequence; forced command cleanup cannot establish a
+passing natural-exit result. The final artifact requires all three cells.
+
+The fixture checks actual free space after tooling setup against provisional
+13 GiB fresh-install and 29 GiB published-pair allowances. These are planning
+allowances, not measured package bounds or runner capacity. It records space and
+owned allocations at lifecycle boundaries; transient peaks between observations
+remain unknown. Existing command, test, step, and job deadlines remain unchanged.
 
 #### Exact Windows test replay
 

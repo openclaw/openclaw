@@ -63,6 +63,12 @@ vi.mock("node:fs", async (importOriginal) => {
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const script = path.join(repoRoot, ".agents/skills/openclaw-live-updater/scripts/update-main.mjs");
+// update-main.mjs statically imports scripts/run-node.mts, whose profile graph
+// requires the TypeScript loader (the documented invocation passes --import tsx).
+const updaterLoaderArgs = [
+  "--import",
+  pathToFileURL(path.join(repoRoot, "scripts", "tsx.mjs")).href,
+];
 const fixtureOrigins = new Map<string, string>();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let fixtureTemplate: ReturnType<typeof initializeFixture> | undefined;
@@ -1611,9 +1617,13 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     const { mirror, origin } = makeFixture();
     git(mirror, "config", `url.${origin}.insteadOf`, "https://github.com/openclaw/openclaw.git");
 
-    const result = spawnSync(process.execPath, [script, "--checkout", mirror], {
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      [...updaterLoaderArgs, script, "--checkout", mirror],
+      {
+        encoding: "utf8",
+      },
+    );
     expect(result.status).toBe(1);
     expect(JSON.parse(result.stdout)).toMatchObject({
       ok: false,
@@ -1627,9 +1637,13 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     renameSync(path.join(mirror, ".git"), externalGitDir);
     symlinkSync(externalGitDir, path.join(mirror, ".git"), "dir");
 
-    const result = spawnSync(process.execPath, [script, "--checkout", mirror], {
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      [...updaterLoaderArgs, script, "--checkout", mirror],
+      {
+        encoding: "utf8",
+      },
+    );
     expect(result.status).toBe(1);
     expect(JSON.parse(result.stdout)).toMatchObject({
       ok: false,
@@ -3489,7 +3503,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     writeFileSync(pnpm, "#!/bin/sh\necho child-output\n");
     chmodSync(pnpm, 0o755);
 
-    const result = spawnSync(process.execPath, [script], {
+    const result = spawnSync(process.execPath, [...updaterLoaderArgs, script], {
       cwd: mirror,
       encoding: "utf8",
       env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
@@ -3515,9 +3529,13 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
   });
 
   test("keeps failed CLI stdout as one additive machine-readable JSON object", () => {
-    const result = spawnSync(process.execPath, [script, "--definitely-invalid"], {
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      [...updaterLoaderArgs, script, "--definitely-invalid"],
+      {
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(1);
     expect(result.stdout.trim().split("\n")).toHaveLength(1);
@@ -3758,10 +3776,14 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     const beforeTracking = git(mirror, "rev-parse", "refs/remotes/origin/main");
     const binDir = writeFixtureGitBin(root, origin);
 
-    const result = spawnSync(process.execPath, [script, "--checkout", mirror], {
-      encoding: "utf8",
-      env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
-    });
+    const result = spawnSync(
+      process.execPath,
+      [...updaterLoaderArgs, script, "--checkout", mirror],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+      },
+    );
     expect(result.status).toBe(1);
     expect(git(mirror, "rev-parse", "HEAD")).toBe(before);
     expect(git(mirror, "rev-parse", "refs/remotes/origin/main")).toBe(beforeTracking);
@@ -3786,9 +3808,13 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     const before = git(mirror, "rev-parse", "HEAD");
     writeFileSync(path.join(mirror, "local.txt"), "do not destroy\n");
 
-    const result = spawnSync(process.execPath, [script, "--checkout", mirror], {
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      [...updaterLoaderArgs, script, "--checkout", mirror],
+      {
+        encoding: "utf8",
+      },
+    );
     expect(result.status).toBe(1);
     expect(JSON.parse(result.stdout.trim())).toMatchObject({
       ok: false,

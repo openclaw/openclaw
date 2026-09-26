@@ -6,7 +6,11 @@ import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { isBunRuntime, isNodeRuntime } from "../daemon/runtime-binary.js";
+import {
+  isBunRuntime,
+  isNodeRuntime,
+  resolveRuntimeScriptPosition,
+} from "../daemon/runtime-binary.js";
 import { isLegacyPluginSourceCaptureName } from "../plugins/plugin-source-capture-path.js";
 import { getRootOptionAwareCommandPath } from "./cli-root-options.js";
 import type { GatewayOwnerLeaseIdentity } from "./gateway-owner-lease.js";
@@ -70,86 +74,6 @@ function readProcessWorkingDirectory(pid: number): string | undefined {
   return undefined;
 }
 
-const RUNTIME_VALUE_OPTIONS = new Set([
-  "-r",
-  "-C",
-  "--env-file",
-  "--env-file-if-exists",
-  "--tsconfig",
-  "--cwd",
-  "--preload",
-  "--require",
-  "--import",
-  "--loader",
-  "--experimental-loader",
-  "--conditions",
-  "--icu-data-dir",
-  "--openssl-config",
-  "--title",
-  "--disable-warning",
-  "--disable-proto",
-  "--cpu-prof-name",
-  "--max-old-space-size",
-]);
-const RUNTIME_BOOLEAN_OPTIONS = new Set([
-  "--inspect",
-  "--inspect-brk",
-  "--inspect-wait",
-  "--expose-gc",
-  "--jitless",
-  "--no-opt",
-  "--experimental-strip-types",
-  "--bun",
-]);
-
-function runtimeScript(args: string[]): number | OpenClawArgvClassification {
-  const executable = args[0] ?? "";
-  const basename = normalizeProcArg(executable).split("/").at(-1);
-  const bun = isBunRuntime(executable);
-  const tsx = basename === "tsx" || basename === "tsx.cmd";
-  let consumedSubcommand = false;
-  if (!isNodeRuntime(executable) && !bun && !tsx) {
-    return { kind: "other" };
-  }
-  for (let index = 1; index < args.length; index++) {
-    const arg = args[index]!;
-    if (arg === "--") {
-      return args[index + 1] ? index + 1 : { kind: "other" };
-    }
-    if (
-      arg === "-e" ||
-      arg === "--eval" ||
-      arg === "-p" ||
-      arg === "--print" ||
-      arg === "--run" ||
-      /^(?:--eval|--print|--run)=/.test(arg)
-    ) {
-      return { kind: "other" };
-    }
-    if (RUNTIME_VALUE_OPTIONS.has(arg)) {
-      index++;
-    } else if (arg.startsWith("-")) {
-      // A negated spelling proves a boolean; its absence never proves a value option.
-      const negated = `--no-${arg.replace(/^--(?:no-)?/, "")}`;
-      if (
-        RUNTIME_BOOLEAN_OPTIONS.has(arg) ||
-        /^--[^=]+=/.test(arg) ||
-        (process.allowedNodeEnvironmentFlags.has(arg) &&
-          process.allowedNodeEnvironmentFlags.has(negated))
-      ) {
-        continue;
-      }
-      return { kind: "unclassified", reason: `unsupported runtime option ${arg}` };
-    } else if (!consumedSubcommand && ((bun && arg === "run") || (tsx && arg === "watch"))) {
-      consumedSubcommand = true;
-      continue;
-    } else {
-      return index;
-    }
-  }
-  return { kind: "other" };
-}
-
 /** Generic script names identify OpenClaw only inside a verified package root. */
 function classifyEntrypoint(
   args: string[],
@@ -159,9 +83,9 @@ function classifyEntrypoint(
   if (exe.endsWith("/openclaw") || exe === "openclaw") {
     return { kind: "openclaw", entryIndex: 0 };
   }
-  const entryIndex = /(?:^|\/)openclaw\.mjs$/.test(exe) ? 0 : runtimeScript(args);
+  const entryIndex = /(?:^|\/)openclaw\.mjs$/.test(exe) ? 0 : resolveRuntimeScriptPosition(args);
   if (typeof entryIndex !== "number") {
-    return entryIndex;
+    return entryIndex.kind === "not-runtime" ? { kind: "other" } : entryIndex;
   }
   const script = args[entryIndex]!;
   const normalized = normalizeProcArg(script);

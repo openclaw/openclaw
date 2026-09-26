@@ -23,7 +23,7 @@ async function runTransaction(
   restart: string,
   fixture: {
     root: string;
-    build: () => Promise<{ exitCode: number }>;
+    build: () => Promise<{ exitCode: number; admissionRefused?: true }>;
     lifecycle: (command: string) => Promise<number>;
   },
 ) {
@@ -360,6 +360,31 @@ describe("source update build output transaction", () => {
     expect(events).toEqual(["stop"]);
     expect(fs.readFileSync(path.join(outside, "marker"), "utf8")).toBe("outside");
     expect(backups()).toHaveLength(1);
+  });
+
+  it("does not rm or restore output roots when the live-dist fence refuses before mutation", async () => {
+    writeOutput("dist", "old");
+    const events: string[] = [];
+    const inode = fs.statSync(path.join(workdir, "dist", "marker")).ino;
+    const code = await runTransaction("stop", "restart", {
+      root: workdir,
+      lifecycle: async (command) => {
+        events.push(command);
+        return 0;
+      },
+      build: async () => {
+        events.push("build");
+        writeOutput("dist", "old");
+        fs.writeFileSync(path.join(workdir, "dist", "canary"), "after-backup");
+        return { exitCode: 1, admissionRefused: true };
+      },
+    });
+    expect(code).toBe(1);
+    expect(events).toEqual(["stop", "build", "restart"]);
+    expect(readOutput("dist")).toBe("old");
+    expect(fs.readFileSync(path.join(workdir, "dist", "canary"), "utf8")).toBe("after-backup");
+    expect(fs.statSync(path.join(workdir, "dist", "marker")).ino).toBe(inode);
+    expect(backups()).toEqual([]);
   });
 
   it("restores prior output after a thrown build error and reports recovery restart failure", async () => {

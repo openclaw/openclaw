@@ -185,6 +185,16 @@ describe("native service command inspection", () => {
   });
 
   describe("Windows aggregate Scheduler timeout transport", () => {
+    const registeredTask = (scriptPath: string, state: number) => ({
+      status: 0,
+      stdout: JSON.stringify({
+        taskPath: "\\OpenClaw Gateway",
+        state,
+        enabled: true,
+        actions: [{ type: 0, path: scriptPath, arguments: "", workingDirectory: "" }],
+      }),
+      stderr: "",
+    });
     it.each(
       ["parallel", "delegated serial"].flatMap((placement) =>
         ["absent", "ready", "running"].flatMap((condition) =>
@@ -195,22 +205,29 @@ describe("native service command inspection", () => {
       "preserves $condition with fractional elapsed time ($placement, explicit=$explicit)",
       async ({ placement, condition, explicit }) => {
         mockProcessPlatform("win32");
-        const windowsEnv = { ...env, APPDATA: path.join(root, "AppData") };
+        const windowsEnv = {
+          ...env,
+          APPDATA: `C:\\openclaw-test\\${path.basename(root)}\\AppData`,
+          OPENCLAW_TASK_SCRIPT: `C:\\openclaw-test\\${path.basename(root)}\\gateway.cmd`,
+        };
         const scriptPath = resolveTaskScriptPath(windowsEnv);
+        const backingScriptPath = path.join(root, "gateway.cmd");
         if (condition !== "absent") {
           // No port is recorded: retain Scheduler state without unrelated listener attribution.
-          await writeFile(scriptPath, buildTaskScript({ programArguments }));
+          await writeFile(backingScriptPath, buildTaskScript({ programArguments }));
         }
         let now = 0;
         let firstRead = true;
+        const inspectedPath =
+          condition === "absent" ? resolveStartupEntryPaths(windowsEnv)[0] : scriptPath;
         vi.spyOn(performance, "now").mockImplementation(() => now);
         const readFile = fs.readFile;
         vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
-          if (args[0] === scriptPath && firstRead) {
+          if (args[0] === inspectedPath && firstRead) {
             firstRead = false;
             now += 100.25;
           }
-          return readFile(...args);
+          return readFile(args[0] === scriptPath ? backingScriptPath : args[0], args[1]);
         });
         const schedulerAllowances: Array<{ timeout: number | undefined; remaining: number }> = [];
         native.scheduler.mockImplementation(
@@ -227,40 +244,12 @@ describe("native service command inspection", () => {
             now += 100.25;
             return condition === "absent"
               ? { status: 1, stdout: "-2147024894", stderr: "" }
-              : {
-                  status: 0,
-                  stdout: JSON.stringify({ state: condition === "running" ? 4 : 3, enabled: true }),
-                  stderr: "",
-                };
+              : registeredTask(scriptPath, condition === "running" ? 4 : 3);
           },
         );
-        const queryAllowances: Array<{
-          timeoutMs: number | undefined;
-          noOutputTimeoutMs: number | undefined;
-          remaining: number;
-        }> = [];
         const run = vi
           .spyOn(await import("../process/exec.js"), "runCommandWithTimeout")
-          .mockImplementation(async (argv, options) => {
-            expect(argv).toEqual(["schtasks", "/Query", "/TN", "OpenClaw Gateway"]);
-            if (typeof options === "number") {
-              throw new Error("Expected the Scheduler command transport options");
-            }
-            queryAllowances.push({
-              timeoutMs: options.timeoutMs,
-              noOutputTimeoutMs: options.noOutputTimeoutMs,
-              remaining: 1_000 - now,
-            });
-            now += 100.25;
-            return {
-              stdout: "",
-              stderr: condition === "absent" ? "missing task" : "",
-              code: condition === "absent" ? 1 : 0,
-              signal: null,
-              killed: false,
-              termination: "exit",
-            };
-          });
+          .mockRejectedValue(new Error("Unexpected legacy Scheduler registration query"));
         const observe = () =>
           readGatewayServiceState(resolveGatewayService(), {
             env: windowsEnv,
@@ -301,21 +290,15 @@ describe("native service command inspection", () => {
           expect(state.runtime?.missingUnit).not.toBe(true);
           expect(state.runtime?.inspectionFailure).toBeUndefined();
         }
-        expect(native.scheduler).toHaveBeenCalledTimes(condition === "absent" ? 2 : 1);
-        expect(run).toHaveBeenCalledOnce();
-        expect(now).toBe(condition === "absent" ? 401 : 300.75);
+        expect(native.scheduler).toHaveBeenCalledTimes(condition === "absent" ? 4 : 6);
+        expect(run).not.toHaveBeenCalled();
+        expect(now).toBe(condition === "absent" ? 501.25 : 701.75);
         for (const allowance of schedulerAllowances) {
-          expect(allowance.timeout).toBe(explicit ? Math.floor(allowance.remaining) : 5_000);
+          expect(allowance.timeout).toBe(explicit ? Math.floor(allowance.remaining) : 60_000);
           expect(allowance.timeout).toBeGreaterThan(0);
           if (explicit) {
             expect(allowance.timeout).toBeLessThanOrEqual(allowance.remaining);
           }
-        }
-        for (const allowance of queryAllowances) {
-          expect(allowance.timeoutMs).toBe(explicit ? Math.floor(allowance.remaining) : 15_000);
-          expect(allowance.noOutputTimeoutMs).toBe(
-            explicit ? Math.floor(allowance.remaining) : 30_000,
-          );
         }
       },
     );
@@ -325,61 +308,50 @@ describe("native service command inspection", () => {
         [999.25, 1_000].map((elapsed) => ({ condition, elapsed })),
       ),
     )(
-      "does not launch native work with $condition and $elapsed ms already consumed",
+      "does not launch further native work after reading $condition consumes $elapsed ms",
       async ({ condition, elapsed }) => {
         mockProcessPlatform("win32");
-        const windowsEnv = { ...env, APPDATA: path.join(root, "AppData") };
+        const windowsEnv = {
+          ...env,
+          APPDATA: `C:\\openclaw-test\\${path.basename(root)}\\AppData`,
+          OPENCLAW_TASK_SCRIPT: `C:\\openclaw-test\\${path.basename(root)}\\gateway.cmd`,
+        };
         const scriptPath = resolveTaskScriptPath(windowsEnv);
+        const backingScriptPath = path.join(root, "gateway.cmd");
         if (condition === "installed") {
-          await writeFile(scriptPath, buildTaskScript({ programArguments }));
+          await writeFile(backingScriptPath, buildTaskScript({ programArguments }));
         }
         let now = 0;
         vi.spyOn(performance, "now").mockImplementation(() => now);
+        const inspectedPath =
+          condition === "absent" ? resolveStartupEntryPaths(windowsEnv)[0] : scriptPath;
         const readFile = fs.readFile;
         vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
-          if (args[0] === scriptPath) {
+          if (args[0] === inspectedPath) {
             now = elapsed;
           }
-          return readFile(...args);
+          return readFile(args[0] === scriptPath ? backingScriptPath : args[0], args[1]);
         });
-        // A too-lenient adapter would consume this missing result and manufacture absence.
-        native.scheduler.mockReturnValue({ status: 1, stdout: "-2147024894", stderr: "" });
+        // Registration is inspected first; the later launcher read consumes its remaining budget.
+        native.scheduler.mockReturnValue(
+          condition === "absent"
+            ? { status: 1, stdout: "-2147024894", stderr: "" }
+            : registeredTask(scriptPath, 3),
+        );
         const run = vi
           .spyOn(await import("../process/exec.js"), "runCommandWithTimeout")
-          .mockResolvedValue({
-            stdout: "",
-            stderr: "missing task",
-            code: 1,
-            signal: null,
-            killed: false,
-            termination: "exit",
-          });
+          .mockRejectedValue(new Error("Unexpected legacy Scheduler registration query"));
         const result = readGatewayServiceState(resolveGatewayService(), {
           env: windowsEnv,
           requireEffective: true,
           requireLoadedCommand: true,
           timeoutMs: 1_000,
         });
-        if (condition === "absent") {
-          await expect(result).rejects.toThrow(
-            "Effective Scheduled Task service command could not be inspected.",
-          );
-        } else if (elapsed === 1_000) {
-          await expect(result).rejects.toThrow("Service inspection deadline expired.");
-        } else {
-          const state = await result;
-          expect(state).toMatchObject({
-            command: { programArguments },
-            installed: true,
-            running: false,
-            runtime: {
-              status: "unknown",
-              missingUnit: false,
-              inspectionFailure: { detail: "Scheduled Task inspection deadline expired." },
-            },
-          });
-        }
-        expect(native.scheduler).not.toHaveBeenCalled();
+        await expect(result).rejects.toMatchObject({
+          reason: "windows-task-inspection-failed",
+          cause: { kind: "timeout", timeoutMs: 0 },
+        });
+        expect(native.scheduler).toHaveBeenCalledOnce();
         expect(run).not.toHaveBeenCalled();
       },
     );
@@ -422,6 +394,15 @@ describe("native service command inspection", () => {
       reported: "errno -13",
     },
     {
+      failure: "spawn without a resolvable Startup home",
+      missingStartupHome: true,
+      response: {
+        error: Object.assign(new Error("native-secret-canary"), { code: "EACCES", errno: -13 }),
+      },
+      diagnostic: { kind: "spawn", errno: -13 },
+      reported: "errno -13",
+    },
+    {
       failure: "lookup access denied",
       response: { status: 1, stdout: "-2147024891", stderr: "native-secret-canary" },
       diagnostic: { kind: "native", exitCode: 1, hresult: -2147024891 },
@@ -447,10 +428,13 @@ describe("native service command inspection", () => {
     },
   ])(
     "preserves safe Windows $failure diagnostics through strict inspection",
-    async ({ response, diagnostic, reported }) => {
+    async ({ response, diagnostic, reported, missingStartupHome = false }) => {
       vi.spyOn(performance, "now").mockReturnValue(0);
       native.scheduler.mockReturnValue(response);
-      const error = await readScheduledTaskCommand(env, {
+      const inspectionEnv = missingStartupHome
+        ? { OPENCLAW_TASK_SCRIPT: resolveTaskScriptPath(env) }
+        : env;
+      const error = await readScheduledTaskCommand(inspectionEnv, {
         requireEffective: true,
         timeoutMs: 731,
       }).catch((caughtError: unknown) => caughtError);

@@ -27,6 +27,8 @@ type WorkflowStep = {
 type WorkflowJob = {
   if?: string;
   needs?: string | string[];
+  permissions?: Record<string, string>;
+  env?: Record<string, string>;
   "runs-on": string;
   "continue-on-error"?: boolean | string;
   steps: WorkflowStep[];
@@ -391,7 +393,8 @@ describe("check-workflows", () => {
   it("requests independent headless CI and native qualification without allowing either to fail", () => {
     const { workflow, probe, native } = readWindowsProbe();
     expect(workflow.on.workflow_dispatch.inputs.run_windows_ci).toMatchObject({
-      description: "Run the focused Windows CI shard and native Scheduled Task proof",
+      description:
+        "Run Windows CI and native Tasks, or installed native proof with a package binding",
       default: false,
       type: "boolean",
     });
@@ -400,7 +403,7 @@ describe("check-workflows", () => {
     );
     expect(native).not.toBe(probe);
     expect(native.if).toBe(
-      "${{ inputs.run_windows_ci && !inputs.run_private_node_provisioning && !inputs.installed_repair_worker && inputs.windows_ci_replay == '' }}",
+      "${{ inputs.run_windows_ci && inputs.installed_startup_package == '' && !inputs.run_private_node_provisioning && !inputs.installed_repair_worker && inputs.windows_ci_replay == '' }}",
     );
     expect(native["runs-on"]).toBe("windows-2025");
     expect(probe.if).toBeUndefined();
@@ -412,11 +415,11 @@ describe("check-workflows", () => {
       }
     }
     const ci = probe.steps.find((step) => step.name === "Run Windows CI tests")!;
-    expect(ci.if).toBe("${{ inputs.run_windows_ci }}");
+    expect(ci.if).toBe("${{ inputs.run_windows_ci && inputs.installed_startup_package == '' }}");
     expect(ci.run).toContain("pnpm test:windows:ci");
     expect(ci.env).toMatchObject({ OPENCLAW_VITEST_MAX_WORKERS: 1 });
     expect(native.steps).not.toContainEqual(ci);
-    expect(probe.steps.some((step) => step.id?.startsWith("native_"))).toBe(false);
+    expect(probe.steps.some((step) => step.id?.startsWith("native_schtasks"))).toBe(false);
     expect(
       probe.steps.find((step) => step.name === "Keep runner alive for SSH inspection")?.if,
     ).toBe(
@@ -496,7 +499,7 @@ describe("check-workflows", () => {
     });
     expect(validation.run).toContain("$producer.run_attempt");
     expect(validation.run).toContain("$artifact.digest");
-    const install = probe.steps.find((step) => step.name === "Install and bind startup candidate")!;
+    const install = probe.steps.find((step) => step.id === "installed_package")!;
     expect(install.run).toContain(
       "scripts/resolve-openclaw-package-candidate.mts --source artifact",
     );
@@ -508,7 +511,7 @@ describe("check-workflows", () => {
     expect(install.run).toContain("dist/openclaw-install-guard");
     const measure = probe.steps.find((step) => step.name === "Measure installed startup cohort")!;
     expect(measure.if).toBe(
-      "${{ inputs.installed_startup_package != '' && !inputs.installed_repair_worker }}",
+      "${{ inputs.installed_startup_package != '' && !inputs.installed_repair_worker && !inputs.run_windows_ci }}",
     );
     expect(measure.run).toContain("scripts/bench-gateway-startup.ts --installed-cohort");
     expect(measure.env).toMatchObject({
@@ -532,6 +535,59 @@ describe("check-workflows", () => {
     expect(upload.with?.["if-no-files-found"]).toBe("error");
   });
 
+  it("keeps installed native proof on the same owner with a current-run read-only handoff", () => {
+    const { workflow, native } = readWindowsProbe();
+    const installed = workflow.jobs["native-schtasks-package"]!;
+    expect(installed.needs).toBe("probe");
+    expect(installed.permissions).toEqual({ contents: "read" });
+    expect(installed["runs-on"]).toBe("windows-2025");
+    expect(installed.steps).toBe(native.steps);
+    expect(installed.if).toContain("inputs.installed_startup_package != ''");
+    expect(native.if).toContain("inputs.installed_startup_package == ''");
+    expect(installed.env).toMatchObject({
+      NATIVE_PACKAGE_ID: "${{ needs.probe.outputs.native_package_id }}",
+      NATIVE_PACKAGE_DIGEST: "${{ needs.probe.outputs.native_package_digest }}",
+      NATIVE_MANIFEST_SHA256: "${{ needs.probe.outputs.native_manifest_sha256 }}",
+    });
+    const download = installed.steps.find(
+      (step) => step.name === "Download this run's verified native package",
+    )!;
+    expect(download.with).toMatchObject({
+      "artifact-ids": "${{ env.NATIVE_PACKAGE_ID }}",
+      "skip-decompress": true,
+      "digest-mismatch": "error",
+    });
+    for (const field of ["github-token", "repository", "run-id"]) {
+      expect(download.with?.[field]).toBeUndefined();
+    }
+    for (const entry of [installed, ...installed.steps]) {
+      expect(entry["continue-on-error"]).toBeUndefined();
+    }
+    let previousRetirement: string | undefined;
+    for (const suffix of ["fresh", "9_3", "9_4"]) {
+      const ids = ["prepare", "schtasks", "cleanup", "cell_proof", "retire"].map(
+        (phase) => `native_${phase}_${suffix}`,
+      );
+      const positions = ids.map((id) => installed.steps.findIndex((step) => step.id === id));
+      expect(positions.every((index) => index >= 0)).toBe(true);
+      expect(positions).toEqual(positions.toSorted((left, right) => left - right));
+      for (const index of positions) {
+        expect(installed.steps[index]?.if).toContain("inputs.installed_startup_package != ''");
+      }
+      const prepare = installed.steps[positions[0]!]!;
+      if (previousRetirement) {
+        expect(prepare.if).toContain(`steps.${previousRetirement}.outcome == 'success'`);
+      }
+      const retire = installed.steps[positions[4]!]!;
+      expect(retire.if).toContain(`steps.native_schtasks_${suffix}.outcome == 'success'`);
+      expect(retire.if).toContain(
+        `steps.native_cleanup_${suffix}.outputs.owned_package_cleanup == 'true'`,
+      );
+      expect(retire.if).toContain(`steps.native_cell_proof_${suffix}.outcome == 'success'`);
+      previousRetirement = retire.id;
+    }
+  });
+
   it("admits repair workers through the existing native and installed-package owners", () => {
     const { workflow, probe, native } = readWindowsProbe();
     expect(workflow.on.workflow_dispatch.inputs.installed_repair_worker).toMatchObject({
@@ -540,7 +596,7 @@ describe("check-workflows", () => {
     });
     const isolation = probe.steps.find((step) => step.id === "repair_isolation")!;
     const validation = probe.steps.find((step) => step.id === "startup_input")!;
-    const install = probe.steps.find((step) => step.name === "Install and bind startup candidate")!;
+    const install = probe.steps.find((step) => step.id === "installed_package")!;
     const published = probe.steps.find(
       (step) => step.name === "Install authenticated published repair controllers",
     )!;
@@ -581,7 +637,7 @@ describe("check-workflows", () => {
       (step) => step.name === "Remove retained native Scheduled Task evidence",
     )!;
     expect(proof["timeout-minutes"]).toBe(5);
-    expect(proof.if).toBe("${{ inputs.run_windows_ci }}");
+    expect(proof.if).toBe("${{ inputs.run_windows_ci && inputs.installed_startup_package == '' }}");
     expect(proof.env).toMatchObject({
       EXPECTED_HEAD: "${{ inputs.target_ref }}",
       CI_WINDOWS_SCHTASKS_ROOT:
@@ -595,15 +651,31 @@ describe("check-workflows", () => {
     expect(proof.run).toContain('if [[ "$CI_WINDOWS_SCHTASKS_HEAD" != "$EXPECTED_HEAD" ]]; then');
     expect(proof.run).toContain("export CI_WINDOWS_SCHTASKS_HEAD");
     expect(proof.run).toContain("pnpm test:windows:schtasks:integration");
+    const enteredNativeStep = [
+      "native_schtasks",
+      "native_schtasks_fresh",
+      "native_schtasks_9_3",
+      "native_schtasks_9_4",
+    ]
+      .map(
+        (name) => `contains(fromJSON('["success","failure","cancelled"]'), steps.${name}.outcome)`,
+      )
+      .join(" || ");
     expect(cleanup.if).toBe(
-      '${{ always() && inputs.run_windows_ci && steps.native_isolation.outcome == \'success\' && contains(fromJSON(\'["success","failure","cancelled"]\'), steps.native_schtasks.outcome) }}',
+      "${{ always() && inputs.run_windows_ci && steps.native_isolation.outcome == 'success' && (" +
+        enteredNativeStep +
+        ") }}",
     );
     expect(upload.if).toBe("${{ always() && inputs.run_windows_ci }}");
     expect(cleanup.env).toEqual({
       TEST_ID: proof.env?.CI_WINDOWS_SCHTASKS_TEST_ID,
       TEST_ROOT: proof.env?.CI_WINDOWS_SCHTASKS_ROOT,
+      INSTALLED_PACKAGE_MODE: "${{ inputs.installed_startup_package != '' }}",
     });
-    expect(remove.env).toEqual(cleanup.env);
+    expect(remove.env).toEqual({
+      TEST_ID: proof.env?.CI_WINDOWS_SCHTASKS_TEST_ID,
+      TEST_ROOT: proof.env?.CI_WINDOWS_SCHTASKS_ROOT,
+    });
     expect(cleanup.run).toContain('"proof_outcome=${{ steps.native_schtasks.outcome }}"');
     expect(cleanup.run).toContain("schtasks.exe /Delete /F /TN $taskName");
     expect(cleanup.run).toContain('$service = New-Object -ComObject "Schedule.Service"');
@@ -616,14 +688,12 @@ describe("check-workflows", () => {
     expect(upload.with?.path).not.toContain("task-before-cleanup.xml");
     expect(cleanup.run).not.toContain("Copy-Item -LiteralPath $stateDir");
     expect(remove.if).toBe(
-      "${{ always() && inputs.run_windows_ci && steps.native_cleanup.outcome == 'success' && steps.native_proof_upload.outcome == 'success' }}",
+      "${{ always() && inputs.run_windows_ci && inputs.installed_startup_package == '' && steps.native_cleanup.outcome == 'success' && steps.native_proof_upload.outcome == 'success' }}",
     );
-    expect(native.steps.slice(native.steps.indexOf(proof))).toEqual([
-      proof,
-      cleanup,
-      upload,
-      remove,
-    ]);
+    const sourceStepOrder = [proof, cleanup, upload, remove].map((step) =>
+      native.steps.indexOf(step),
+    );
+    expect(sourceStepOrder).toEqual(sourceStepOrder.toSorted((left, right) => left - right));
   });
 
   it("identifies the producer's exact native probe before emergency process-tree cleanup", () => {

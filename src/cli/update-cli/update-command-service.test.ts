@@ -485,6 +485,7 @@ describe("maybeRestartService", () => {
               path.join(commandRoot, "dist/index.js"),
               "gateway",
             ],
+            sourcePath: path.join(home, "gateway.cmd"),
           }),
         }),
       );

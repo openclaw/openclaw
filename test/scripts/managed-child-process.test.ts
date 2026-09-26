@@ -1468,6 +1468,35 @@ setInterval(() => {}, 1_000);
     expect(runTaskkill).not.toHaveBeenCalled();
   });
 
+  it("revalidates command authority after loading the Windows spawner", async () => {
+    const root = createTempDir("managed-command-admission-");
+    const marker = path.join(root, "spawned");
+    const owner = createVitestResourceOwner(root);
+    let current = true;
+    const onReady = vi.fn();
+    const failure = new Error("command authority changed while loading platform support");
+    const command = runManagedCommand({
+      bin: process.execPath,
+      args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'spawned')`],
+      platform: "win32",
+      shell: false,
+      stdio: "ignore",
+      env: { ...process.env, TMPDIR: root, TMP: root, TEMP: root },
+      onReady,
+      assertCurrent: () => {
+        if (!current) {
+          throw failure;
+        }
+      },
+    });
+    // Windows always awaits its platform loader, even when the module is cached.
+    current = false;
+    await expect(command).rejects.toBe(failure);
+    expect(onReady).not.toHaveBeenCalled();
+    expect(fs.existsSync(marker)).toBe(false);
+    owner.assertReleased();
+  });
+
   it("fails closed when Windows taskkill cannot verify timeout cleanup", async () => {
     const root = createTempDir("managed-command-owner-");
     const owner = createVitestResourceOwner(root);

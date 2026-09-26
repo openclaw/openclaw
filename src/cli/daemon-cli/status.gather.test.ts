@@ -13,7 +13,6 @@ import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-f
 import { REDACTED_SENTINEL } from "../../config/redact-sentinel.js";
 import type { ExtraGatewayService } from "../../daemon/inspect.js";
 import type { ForeignLaunchdJob } from "../../daemon/launchd-foreign-jobs.js";
-import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
@@ -44,16 +43,22 @@ import { gatherDaemonStatus, renderPortDiagnosticsForCli } from "./status.gather
 import {
   callGatewayStatusProbe,
   capturePrintedDaemonStatus,
+  findExtraGatewayServices,
+  findForeignLaunchdJobs,
+  findStaleOpenClawUpdateLaunchdJobs,
   formatPortDiagnostics,
+  inspectGatewayTlsCertificate,
   inspectPortConnections,
   inspectPortUsage,
   inspectPortUsages,
+  readLastGatewayErrorLine,
   type GatewayStatusProbeOptions,
   type PortUsageInspectionOptions,
   type PortUsageTestSummary,
 } from "./status.gather.probes.test-support.js";
 import { registerProxyAuthStatusTests } from "./status.gather.proxy-auth.test-support.js";
 import { registerServiceInspectionStatusTests } from "./status.gather.service-inspection.test-support.js";
+import { registerStatusTimeoutTests } from "./status.gather.timeout.test-support.js";
 import { printDaemonStatus } from "./status.print.js";
 
 const readFile = fs.readFile.bind(fs);
@@ -68,22 +73,6 @@ const preflightOpenClawDatabaseSchemas = vi.fn<
 const isDefaultInstallIdentity = vi.fn((_env?: NodeJS.ProcessEnv) => true);
 const isGatewayExternallySupervised = vi.fn((_env?: NodeJS.ProcessEnv) => false);
 const resolveGatewayProbeAuthSafeWithSecretInputsCalls = vi.fn<(opts?: unknown) => void>();
-const inspectGatewayTlsCertificate = vi.fn(async (_cfg?: unknown) => ({
-  ok: true as const,
-  value: { cert: "public-certificate", fingerprintSha256: "sha256:11:22:33:44" },
-}));
-const findExtraGatewayServices = vi.fn<
-  (_env?: unknown, _opts?: unknown) => Promise<ExtraGatewayService[]>
->(async () => []);
-const findStaleOpenClawUpdateLaunchdJobs = vi.fn<
-  (env?: NodeJS.ProcessEnv) => Promise<StaleOpenClawUpdateLaunchdJob[]>
->(async () => []);
-const findForeignLaunchdJobs = vi.fn<(env?: NodeJS.ProcessEnv) => Promise<ForeignLaunchdJob[]>>(
-  async () => [],
-);
-const readLastGatewayErrorLine = vi.fn<
-  (_env?: NodeJS.ProcessEnv, _options?: { requirePatternMatch?: boolean }) => Promise<string | null>
->(async (_env?: NodeJS.ProcessEnv, _options?: { requirePatternMatch?: boolean }) => null);
 const loadInstalledPluginIndexInstallRecords = vi.fn<
   (params?: {
     env?: NodeJS.ProcessEnv;
@@ -181,6 +170,11 @@ let cliLoadedConfig: Record<string, unknown> = {
     bind: "loopback",
   },
 };
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+});
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => cliLoadedConfig,
@@ -459,6 +453,7 @@ describe("gatherDaemonStatus", () => {
     );
     resolveGatewayProbeAuthSafeWithSecretInputsCalls.mockClear();
     createConfigIOCalls.mockClear();
+    findExtraGatewayServices.mockReset().mockResolvedValue({ services: [], errors: [] });
     findStaleOpenClawUpdateLaunchdJobs.mockReset();
     findStaleOpenClawUpdateLaunchdJobs.mockResolvedValue([]);
     findForeignLaunchdJobs.mockReset().mockResolvedValue([]);
@@ -581,7 +576,15 @@ describe("gatherDaemonStatus", () => {
         label: "openclaw-rescue.service",
         detail: "unit: /etc/systemd/system/openclaw-rescue.service",
       };
-      findExtraGatewayServices.mockResolvedValueOnce([userService, systemService, otherService]);
+      findExtraGatewayServices.mockResolvedValueOnce({
+        services: [userService, systemService, otherService],
+        errors: [
+          {
+            source: "/etc/systemd/system/openclaw-unreadable.service",
+            message: "Service path could not be inspected.",
+          },
+        ],
+      });
       serviceReadRuntime.mockResolvedValueOnce({
         status: scope ? "running" : "unknown",
         systemd: { unit: "openclaw.service", ...(scope ? { scope } : {}) },
@@ -1308,18 +1311,14 @@ describe("gatherDaemonStatus", () => {
     ]);
   });
 
-  it.each(["bogus", "0", "-1", "1.5"])(
-    "rejects invalid status timeout %s before reading service state",
-    async (timeout) => {
-      await expect(gatherStatus({ rpc: { timeout } })).rejects.toThrow(
-        `Invalid --timeout. Use a positive millisecond value, e.g. --timeout 30000. Received: "${timeout}".`,
-      );
-
-      expect(serviceReadCommand).not.toHaveBeenCalled();
-      expect(serviceIsLoaded).not.toHaveBeenCalled();
-      expect(serviceReadRuntime).not.toHaveBeenCalled();
-    },
-  );
+  registerStatusTimeoutTests({
+    gatherStatus,
+    serviceIsLoaded,
+    serviceReadRuntime,
+    serviceReadCommand,
+    auditGatewayServiceConfig,
+    makeTempDir: () => tempDirs.make("status-native-timeout-"),
+  });
 
   registerServiceInspectionStatusTests({
     serviceFixture,

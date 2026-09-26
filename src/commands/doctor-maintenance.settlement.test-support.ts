@@ -201,6 +201,7 @@ beforeEach(() => {
     windowsTaskAutoStartRecovery: {
       suspended: Promise.resolve(true),
       beginMutation: () => {},
+      assertRecoveryCurrent: () => {},
       restore: async () => {},
       handoff: () => {},
       complete: boundary.complete,

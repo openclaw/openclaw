@@ -28,7 +28,6 @@ import {
   resolveTaskLauncherScriptPath,
   resolveTaskName,
   resolveTaskScriptPath,
-  resolveTaskUser,
   shouldFallbackToStartupEntry,
   shouldUseHiddenWindowsTaskLauncher,
   writeTaskXmlTempFile,
@@ -49,6 +48,7 @@ import {
 } from "./schtasks-runtime.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import { preserveServicePolicyXml } from "./service-policy-xml.js";
+import { resolveTaskUser } from "./service-process-env.js";
 import { publishServiceFile } from "./service-stage.js";
 import type {
   GatewayServiceEnv,

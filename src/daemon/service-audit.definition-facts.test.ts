@@ -666,6 +666,11 @@ it.each([
   });
   if (kind === "canonical" || kind === "missing-launcher" || kind === "custom-script") {
     expect(result.definitionDrift).toBeUndefined();
+  } else if (kind === "script") {
+    expect(result.definitionDrift).toBeUndefined();
+    expect(result.definitionDriftError).toBe(
+      "Service definition inspection could not be completed.",
+    );
   } else if (kind === "native-defaults") {
     expect(result.definitionDrift).toEqual(
       expect.arrayContaining([
@@ -695,18 +700,18 @@ it.each([
       expect.objectContaining({
         kind: "unknown-edit",
         key:
-          kind === "script"
-            ? "TaskScript"
-            : kind === "launcher" || kind === "planned-launcher"
-              ? "TaskLauncher"
-              : kind === "path"
-                ? "Environment.PATH"
-                : "RegistrationInfo.Description",
+          kind === "launcher" || kind === "planned-launcher"
+            ? "TaskLauncher"
+            : kind === "path"
+              ? "Environment.PATH"
+              : "RegistrationInfo.Description",
       }),
     );
     expect(JSON.stringify(result.definitionDrift)).not.toContain("operator-private");
   }
-  expect(result.definitionDriftError).toBeUndefined();
+  if (kind !== "script") {
+    expect(result.definitionDriftError).toBeUndefined();
+  }
   expect(await fs.readFile(scriptPath, "utf8")).toBe(script);
   if (kind === "missing-launcher") {
     await expect(fs.stat(hiddenPath)).rejects.toMatchObject({ code: "ENOENT" });
