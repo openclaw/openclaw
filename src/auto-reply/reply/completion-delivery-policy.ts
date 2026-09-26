@@ -69,13 +69,6 @@ export function resolveDurableCompletionDeliveryMode(
   return sourceReplyDeliveryMode === "message_tool_only" ? "host_owned" : "automatic";
 }
 
-export function shouldRouteCompletionThroughRequesterSession(
-  sessionKey: string | undefined | null,
-): boolean {
-  const chatType = deriveSessionChatTypeFromKey(sessionKey);
-  return chatType === "group" || chatType === "channel";
-}
-
 function inferCompletionChatTypeFromTarget(to: string | undefined): CompletionChatType {
   const normalized = to?.trim().toLowerCase();
   if (!normalized) {

@@ -85,21 +85,6 @@ function resolveEventWebPushNotification(
       tag: `openclaw-agent-finished-${runId}`,
     };
   }
-  if (event === "task" && value.action === "upserted") {
-    const task = isRecord(value.task) ? value.task : null;
-    if ((task?.status !== "failed" && task?.status !== "timed_out") || task.runtime === "cron") {
-      return null;
-    }
-    const taskId = normalizeWebPushDisplayLabel(task.id) ?? "failed";
-    const taskTitle = normalizeWebPushDisplayLabel(task.title);
-    return {
-      category: "background-task-failed",
-      title: "OpenClaw background task failed",
-      body: "A background task needs attention.",
-      ...(taskTitle ? { identifiedBody: `${taskTitle} needs attention.` } : {}),
-      tag: `openclaw-task-failed-${taskId}`,
-    };
-  }
   if (event === "cron" && value.action === "finished" && value.status === "error") {
     const job = isRecord(value.job) ? value.job : null;
     const jobId = normalizeOptionalString(value.jobId);
@@ -177,10 +162,7 @@ export function createEventWebPushDelivery(params: {
           if (mention && !sessionPath) {
             return undefined;
           }
-          const path =
-            notification.path ??
-            sessionPath?.slice(1) ??
-            (notification.category === "background-task-failed" ? "tasks" : "sessions");
+          const path = notification.path ?? sessionPath?.slice(1) ?? "sessions";
           const url = resolveControlUiWebPushUrl(cfg, path);
           const targets = listCurrentWebPushTargets({
             ...authority,

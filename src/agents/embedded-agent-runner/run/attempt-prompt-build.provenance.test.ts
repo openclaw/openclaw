@@ -42,12 +42,6 @@ vi.mock("../../subagents/registry/subagent-registry-lifecycle-cleanup.js", () =>
   completeTerminalEffects: vi.fn(async () => {}),
 }));
 
-vi.mock("../../../tasks/detached-task-runtime.async.js", () => ({
-  completeTaskRunByRunIdAsync: vi.fn(async () => []),
-  failTaskRunByRunIdAsync: vi.fn(async () => []),
-  setDetachedTaskDeliveryStatusByRunIdAsync: vi.fn(async () => []),
-}));
-
 registerAgentSessionLoopTestLifecycle();
 
 beforeEach(() => {
@@ -244,8 +238,6 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
     countPendingDescendantRuns: () => 0,
     getLatestRunForChildSession: () => null,
     suppressAnnounceForSteerRestart: () => false,
-    resolveSubagentTask: () => ({ lookup: "available" }),
-    resolveSubagentTaskAsync: async () => ({ lookup: "available" }),
     shouldEmitEndedHookForRun: () => false,
     emitSubagentEndedHookForRun: vi.fn(async () => {}),
     emitSubagentProgressEndedForRun: vi.fn(async () => {}),

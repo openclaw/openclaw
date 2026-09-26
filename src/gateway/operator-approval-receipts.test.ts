@@ -262,10 +262,17 @@ describe("operator approval decision receipts", () => {
       expect(encoded).not.toContain(secret);
     }
 
-    const displays = presentExecutionDecisionReceiptsInDatabase(
-      openOpenClawStateDatabase(database).db,
-      { context: identityContext, decisionCursor: "a:0:0", decisionLimit: 20, now: 3_000 },
-    ).decisionDisplays;
+    const db = openOpenClawStateDatabase(database).db;
+    const displays = presentExecutionDecisionReceiptsInDatabase(db, {
+      schema: {
+        cronRunReceipts: tableExists(db, "cron_run_receipts"),
+        executionOwnerLifecycleBindings: tableExists(db, "execution_owner_lifecycle_bindings"),
+      },
+      context: identityContext,
+      decisionCursor: "a:0:0",
+      decisionLimit: 20,
+      now: 3_000,
+    }).decisionDisplays;
     expect(displays?.[0]).toMatchObject({
       action: {
         family: "exec",
@@ -367,10 +374,16 @@ describe("operator approval decision receipts", () => {
     );
     expect(first.entries[0]?.receipt.receiptId).toContain("approval:");
     expect(first.nextCursor).toEqual({ occurredAt: 2_000, rowId: expect.any(Number) });
-    const firstDisplay = presentExecutionDecisionReceiptsInDatabase(
-      openOpenClawStateDatabase(database).db,
-      { context: identityContext, decisionCursor: "a:0:0", decisionLimit: 1, now: 3_000 },
-    ).decisionDisplays[0];
+    const firstDisplay = presentExecutionDecisionReceiptsInDatabase(db, {
+      schema: {
+        cronRunReceipts: tableExists(db, "cron_run_receipts"),
+        executionOwnerLifecycleBindings: tableExists(db, "execution_owner_lifecycle_bindings"),
+      },
+      context: identityContext,
+      decisionCursor: "a:0:0",
+      decisionLimit: 1,
+      now: 3_000,
+    }).decisionDisplays[0];
     expect(firstDisplay?.selectorId).toBe(`approval-decision:${first.nextCursor?.rowId}`);
     expect(first.entries[0]?.selectorId).toBe(firstDisplay?.selectorId);
     expect(firstDisplay?.selectorId).not.toBe(first.entries[0]?.receipt.receiptId);

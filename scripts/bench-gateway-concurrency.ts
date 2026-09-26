@@ -639,7 +639,7 @@ Options:
   --gateway-cpus <list> Linux Gateway-only CPU affinity (comma-separated CPU numbers)
   --agent-warmup-turns <n> Verified turns per active session in the same Gateway before load (default: 0, max: ${MAX_WARMUP})
   --turns-per-session <n> Serial turns per session (default: 1, max: ${MAX_TURNS_PER_SESSION})
-  --control-plane   Also probe tasks.list, cron.list, and cron.status during load
+  --control-plane   Also probe cron.list and cron.status during load
   --history-messages <n> Inject up to 500 synthetic messages per seeded session
   --history-message-chars <n> Synthetic message size (default: 1024, max: 65536)
   --cpu-prof-dir <p> Write Gateway V8 CPU profiles to this directory
@@ -2559,7 +2559,7 @@ async function runGatewaySample(options: {
               : Promise.resolve(undefined),
             options.controlPlane
               ? Promise.all(
-                  ["tasks.list", "cron.list", "cron.status"].map(async (method) =>
+                  ["cron.list", "cron.status"].map(async (method) =>
                     Object.assign(
                       await timeRpcProbe(
                         rpc,
@@ -3003,7 +3003,7 @@ function liveRunPassed(run: BenchmarkRun, options: CliOptions): boolean {
     probesMatch(run.messageSubscriptions, options.subscribers) &&
     probesMatch(run.messageSubscriptionsDuringLoad, options.subscribers === 0 ? 0 : rounds) &&
     (options.controlPlane
-      ? ["tasks.list", "cron.list", "cron.status"].every((method) =>
+      ? ["cron.list", "cron.status"].every((method) =>
           probesMatch(
             run.controlPlane.filter((sample) => sample.method === method),
             rounds,
@@ -3028,7 +3028,7 @@ function summarizeRuns(
   const sessionUpdates = runs.flatMap((run) => run.sessionUpdates);
   const mockRequests = runs.flatMap((run) => (run.mockRequests ? [run.mockRequests] : []));
   // Setup subscriptions and warmup probes are not load-phase measurements.
-  const controlMethods = ["tasks.list", "cron.list", "cron.status"];
+  const controlMethods = ["cron.list", "cron.status"];
   const controlMethodProbes = controlMethods.map((method) => ({
     method,
     samples: controlPlane.filter((sample) => sample.method === method),

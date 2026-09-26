@@ -13,14 +13,7 @@ export default definePluginEntry({
         if (ctx.sandboxed) {
           return null;
         }
-        const taskFlow =
-          api.runtime && ctx.sessionKey
-            ? {
-                ...api.runtime.tasks.async.managedFlows.fromToolContext(ctx),
-                cancel: api.runtime.tasks.managedFlows.fromToolContext(ctx).cancel,
-              }
-            : undefined;
-        return createLobsterTool(api, { taskFlow }) as AnyAgentTool;
+        return createLobsterTool(api) as AnyAgentTool;
       }) as OpenClawPluginToolFactory,
       { optional: true },
     );

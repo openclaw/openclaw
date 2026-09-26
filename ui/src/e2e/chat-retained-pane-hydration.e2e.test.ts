@@ -12,7 +12,7 @@ const suite = createControlUiE2eSuite({
 });
 
 const sessionKeys = ["agent:main:perf-a", "agent:main:perf-b", "agent:main:perf-c"] as const;
-const hydrationMethods = new Set(["tasks.list", "artifacts.list"]);
+const hydrationMethods = new Set(["artifacts.list"]);
 
 function countSessionHydrationRequests(requests: MockGatewayRequest[], sessionKey: string): number {
   return requests.filter((request) => {
@@ -49,7 +49,6 @@ suite.define(() => {
           "chat.startup",
           "sessions.diff",
           "sessions.files.list",
-          "tasks.list",
         ],
         methodResponses: {
           "artifacts.list": { artifacts: [] },
@@ -60,7 +59,6 @@ suite.define(() => {
             root: "",
           },
           "sessions.list": sessionsResponse(),
-          "tasks.list": { tasks: [] },
         },
         sessionKey: sessionKeys[0],
       });
@@ -112,21 +110,6 @@ suite.define(() => {
         const sessionListCount = (await gateway.getRequests("sessions.list")).length;
         const branchListCount = (await gateway.getRequests("sessions.branches.list")).length;
         const hiddenSessionKey = sessionKeys[0];
-        await gateway.emitGatewayEvent("task", {
-          action: "upserted",
-          task: {
-            id: "task-hidden",
-            taskId: "task-hidden",
-            kind: "subagent",
-            runtime: "subagent",
-            status: "running",
-            title: "Hidden retained task",
-            agentId: "main",
-            sessionKey: hiddenSessionKey,
-            createdAt: 1,
-            updatedAt: 1,
-          },
-        });
         await gateway.emitGatewayEvent("sessions.changed", {
           sessionKey: hiddenSessionKey,
           agentId: "main",

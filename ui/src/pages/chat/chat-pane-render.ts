@@ -199,16 +199,15 @@ export class ChatPane extends ChatPaneLayoutRender {
           ? t("chat.catalog.remoteViewOnly")
           : t("chat.catalog.unsupportedViewOnly")
         : null;
-    const { backgroundTasks, closePanelSlot, openPanelSlot, sessionWorkspace } =
-      createChatPaneRails({
-        state,
-        sidebarLayout,
-        presentationId: this.presentationId,
-        presented: this.presented,
-        gatewaySnapshot,
-        setObserverVisibility: this.setSessionObserverVisibility,
-        updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
-      });
+    const { closePanelSlot, openPanelSlot, sessionWorkspace } = createChatPaneRails({
+      state,
+      sidebarLayout,
+      presentationId: this.presentationId,
+      presented: this.presented,
+      gatewaySnapshot,
+      setObserverVisibility: this.setSessionObserverVisibility,
+      updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
+    });
     const selfUser = resolveCurrentSelfUser({
       snapshotUser: gatewaySnapshot.selfUser,
       presenceEntries: readPresenceEntries(this.presencePayload),
@@ -546,7 +545,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       },
       composerControls: composerControls?.composerControls ?? nothing,
       permissionPicker: composerControls?.permissionPicker,
-      backgroundTasks: catalogKey ? undefined : backgroundTasks,
       ...this.suggestionChatProps(state.connected, selectedSessionArchived, multiIdentity),
       pullRequests: this.visibleSessionPullRequests,
       // Until catalog success, a lowercase name may be a hidden/ambiguous alias.
@@ -685,7 +683,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       board,
       sidebarLayout,
       sessionWorkspace,
-      backgroundTasks,
       chatProps: props,
       observerDigest,
       observerRunId,

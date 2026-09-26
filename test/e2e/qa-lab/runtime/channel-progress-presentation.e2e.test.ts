@@ -26,6 +26,7 @@ import {
   disconnectGatewayClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { readQaSubagentRuns } from "../../../helpers/qa-subagent-runs.js";
 import { stopChildProcess } from "../../../helpers/stop-child-process.js";
 
 const MODEL = "mock-openai/progress-fixture";
@@ -1052,12 +1053,21 @@ describe("channel progress presentation through an isolated Gateway", () => {
       try {
         await waitForFact(async () => {
           await provider.terminalRequesters.settle(gateway);
-          const listing = asRecord(await gateway.call("tasks.list", { agentId: "qa", limit: 100 }));
-          terminalTask = Array.isArray(listing.tasks)
-            ? listing.tasks.map(asRecord).find((task) => task.title === `qa-terminal-${caseName}`)
+          const run = readQaSubagentRuns(gateway.runtimeEnv).find(
+            (entry) => entry.label === `qa-terminal-${caseName}`,
+          );
+          terminalTask = run
+            ? {
+                runId: run.runId,
+                title: run.label,
+                sessionKey: run.requesterSessionKey,
+                status: run.execution.status,
+                deliveryStatus: run.delivery?.status,
+                error: run.delivery?.lastError,
+              }
             : undefined;
           return (
-            terminalTask?.status === "completed" &&
+            terminalTask?.status === "terminal" &&
             ["failed", "delivered"].includes(String(terminalTask.deliveryStatus))
           );
         }, `settled ${caseName} task`);
@@ -1398,40 +1408,19 @@ describe("channel progress presentation through an isolated Gateway", () => {
     if (!stateDir) {
       throw new Error("isolated Gateway state directory missing");
     }
-    const { openOpenClawStateDatabase } =
-      await import("../../../../src/state/openclaw-state-db.js");
-    const { closeOpenClawStateDatabaseByPath } =
-      await import("../../../../src/state/openclaw-state-db-cache.js");
-    const { readSubagentRun } =
-      await import("../../../../src/agents/subagents/registry/subagent-registry.store.sqlite.js");
-    const database = openOpenClawStateDatabase({ env: gateway.runtimeEnv });
-    cleanups.push(async () => {
-      closeOpenClawStateDatabaseByPath(database.path);
-    });
     await waitForFact(async () => {
       await provider.terminalRequesters.settle(gateway);
-      const listing = asRecord(await gateway.call("tasks.list", { agentId: "qa", limit: 100 }));
-      allTaskSummaries = Array.isArray(listing.tasks)
-        ? listing.tasks.map((entry) => {
-            const record = asRecord(entry);
-            return {
-              runId: record.runId,
-              title: record.title,
-              status: record.status,
-              deliveryStatus: record.deliveryStatus,
-            };
-          })
-        : [];
-      const tasks = Array.isArray(listing.tasks)
-        ? listing.tasks.map(asRecord).filter((entry) => entry.runId === taskRunId)
-        : [];
-      taskRuns = tasks.map(({ runId, status, deliveryStatus }) => ({
-        runId,
-        status,
-        deliveryStatus,
+      const runs = readQaSubagentRuns(gateway.runtimeEnv);
+      const summaries = runs.map((run) => ({
+        runId: run.runId,
+        title: run.label,
+        status: run.execution.status,
+        deliveryStatus: run.delivery?.status,
       }));
-      task = tasks.find((entry) => entry.runId === taskRunId);
-      const run = taskRunId ? readSubagentRun(database, taskRunId) : undefined;
+      allTaskSummaries = summaries;
+      taskRuns = summaries.filter((entry) => entry.runId === taskRunId);
+      task = summaries.find((entry) => entry.runId === taskRunId);
+      const run = runs.find((entry) => entry.runId === taskRunId);
       delivery =
         run?.childSessionKey === childSessionKey && run?.delivery
           ? {
@@ -1458,7 +1447,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
         ? { recoveryState: pending.recoveryState, lastError: pending.lastError }
         : undefined;
       return (
-        task?.status === "completed" &&
+        task?.status === "terminal" &&
         delivery?.disposition === "ambiguous" &&
         Boolean(queued) &&
         gateway.logs().includes("automatic completion delivery could not be confirmed")

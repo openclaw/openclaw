@@ -55,7 +55,6 @@ export type GatewayServerMutableState = {
   heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
-  taskUnsub: (() => void) | null;
 };
 
 /** Creates gateway mutable state with inert handles that are safe to stop before startup finishes. */
@@ -86,6 +85,5 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     heartbeatUnsub: null as (() => void) | null,
     transcriptUnsub: null as (() => void) | null,
     lifecycleUnsub: null as (() => void) | null,
-    taskUnsub: null as (() => void) | null,
   };
 }

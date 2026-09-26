@@ -36,7 +36,6 @@ const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
   "stop",
   "restart",
 ]);
-const ALLOWED_INVALID_TASK_SUBCOMMANDS = new Set(["list", "audit"]);
 let didRunStartupConfigPreflight = false;
 let configSnapshotPromise: Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> | null =
   null;
@@ -195,13 +194,9 @@ export async function ensureConfigReady(
     preflightResult?.snapshot ?? (await getConfigSnapshot(configSnapshotOptions, params.measure));
   const isBareGatewayForegroundRun =
     commandName === "gateway" && (subcommandName === undefined || subcommandName.trim() === "");
-  const isReadOnlyTaskStateCommand =
-    commandName === "tasks" &&
-    (subcommandName === undefined || ALLOWED_INVALID_TASK_SUBCOMMANDS.has(subcommandName));
   const allowInvalid = commandName
     ? params.allowInvalid === true ||
       ALLOWED_INVALID_COMMANDS.has(commandName) ||
-      isReadOnlyTaskStateCommand ||
       isBareGatewayForegroundRun ||
       (commandName === "gateway" &&
         subcommandName &&
@@ -287,8 +282,8 @@ export async function ensureConfigReady(
   params.runtime.error(
     muted(
       readFailure
-        ? "Audit, status, health, logs, tasks list/audit, and doctor commands still run when config cannot be read."
-        : "Audit, status, health, logs, tasks list/audit, and doctor commands still run with invalid config.",
+        ? "Audit, status, health, logs, and doctor commands still run when config cannot be read."
+        : "Audit, status, health, logs, and doctor commands still run with invalid config.",
     ),
   );
   if (

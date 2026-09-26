@@ -22,7 +22,6 @@ export async function findTranscriptImageArtifact(
     artifactId: params.artifactId,
     includeData,
     runId: params.runId,
-    taskId: params.taskId,
     messageRole: params.messageRole,
   });
   selected.assertCurrent();

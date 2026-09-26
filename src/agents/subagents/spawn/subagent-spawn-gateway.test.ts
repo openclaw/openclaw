@@ -90,7 +90,6 @@ describe("native subagent Gateway transport ownership", () => {
       }),
     ).resolves.toMatchObject({
       response: { runId: "accepted-child" },
-      taskRowOwnership: "required",
     });
   });
 
@@ -110,7 +109,6 @@ describe("native subagent Gateway transport ownership", () => {
       }),
     ).resolves.toEqual({
       response: { runId: "remote-run", status: "accepted" },
-      taskRowOwnership: "gateway_best_effort",
     });
     expect(callGateway).toHaveBeenCalledOnce();
   });

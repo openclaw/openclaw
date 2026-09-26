@@ -5,10 +5,10 @@
  * source id, duplicate-guard timing, and prompt/status wording.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { listMediaGenerationOperations } from "./media-generation-activity.js";
 import {
   buildActiveMediaGenerationTaskPromptContext,
   createMediaGenerationTaskStatusOwner,
-  prepareMediaGenerationTaskLookup,
 } from "./media-generation-task-status-shared.js";
 
 export const IMAGE_GENERATION_TASK_KIND = "image_generation";
@@ -35,7 +35,6 @@ export const {
  * user-facing status text.
  */
 
-/** Task kind used for music generation task registry records. */
 export const MUSIC_GENERATION_TASK_KIND = "music_generation";
 
 /** Binds music-specific task identity, duplicate guards, and visible status text. */
@@ -91,19 +90,11 @@ export async function buildMediaTaskRuntimeContext(params: {
     return undefined;
   }
   const sessionKey = normalizeOptionalString(params.sessionKey);
-  const lookup = sessionKey
-    ? await prepareMediaGenerationTaskLookup({
-        sessionKey,
-        agentId: params.agentId,
-        taskIdentities: enabled.map(([sourcePrefix, taskKind]) => ({ sourcePrefix, taskKind })),
-      })
-    : undefined;
-  lookup?.assertCurrent();
+  const tasks = sessionKey ? listMediaGenerationOperations(sessionKey, params.agentId) : [];
   const facts = enabled.map(
     ([tool, taskKind]) =>
       buildActiveMediaGenerationTaskPromptContext({
-        tasks: lookup?.tasks ?? [],
-        config: lookup?.config,
+        tasks,
         agentId: params.agentId,
         taskKind,
         sourcePrefix: tool,

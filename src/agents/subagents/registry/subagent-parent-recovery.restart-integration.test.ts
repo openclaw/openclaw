@@ -302,7 +302,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
         // Settle through the lifecycle's exact batch callback, not by deleting a flag.
         const deliverBatch = vi.fn<typeof maybeWakeRequesterAfterAllChildrenSettled>(
           async (params) => {
-            params.completeBatch(
+            await params.completeBatch(
               [params.settledEntry],
               params.settledEntry.requesterSettleWake?.rearmGeneration,
               { delivered: true, requesterVisibleFinalDelivered: true, path: "direct" },
@@ -318,6 +318,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
         initSubagentRegistry();
         await testing.sweepOnceForTests();
         await vi.waitFor(() => expect(deliverBatch).toHaveBeenCalledOnce());
+        await expect(deliverBatch.mock.results[0]?.value).resolves.toBe(true);
         expect(child.requesterSettleWake).toBeUndefined();
       }
     }

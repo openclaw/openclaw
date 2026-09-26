@@ -3,10 +3,6 @@ import { loadSettings } from "../../app/settings.ts";
 import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import {
-  createBackgroundTasksProps,
-  refreshBackgroundTasks,
-} from "./components/chat-background-tasks.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import {
@@ -26,9 +22,6 @@ export function openPreferredSidebarPanel(
   layout: ChatPaneSidebarLayout,
   slot: SidebarSlotId,
 ): ChatPaneSidebarLayout {
-  if (slot === "tasks") {
-    refreshBackgroundTasks(state);
-  }
   if (slot !== "dashboard") {
     return openSlot(layout, slot);
   }
@@ -97,42 +90,7 @@ export function createChatPaneRails(params: {
       ? () => togglePanelSlot("desktop")
       : undefined,
   };
-  // The persisted Tasks panel owns selection. List/detail navigation changes
-  // only that identity while keeping the visible panel's geometry and focus.
-  const showTasks = (taskId?: string) => {
-    const current = state.sidebarLayout;
-    const next = isSidebarSlotVisible(current, "tasks")
-      ? structuredClone(current)
-      : openSlot(current, "tasks");
-    const panel = next.columns
-      .flatMap((column) => column.panels)
-      .find((entry) => entry.slot === "tasks");
-    if (panel) {
-      if (taskId) {
-        panel.taskId = taskId;
-      } else {
-        delete panel.taskId;
-      }
-    }
-    params.updateSidebarLayout(next);
-  };
-  const backgroundTasksBase = createBackgroundTasksProps(state, {
-    narrowLayout: false,
-    selectedTaskId: sidebarLayout.columns
-      .flatMap((column) => column.panels)
-      .find((panel) => panel.slot === "tasks")?.taskId,
-    onOpenTaskDetail: (task) => showTasks(task.id),
-    onOpenTaskList: () => showTasks(),
-    presented: params.presented,
-  });
-  const backgroundTasks = {
-    ...backgroundTasksBase,
-    collapsed: !isPanelVisible("tasks"),
-    narrowLayout: false,
-    onToggleCollapsed: () => togglePanelSlot("tasks"),
-  };
   return {
-    backgroundTasks,
     closePanelSlot,
     openPanelSlot,
     sessionWorkspace,

@@ -1,12 +1,12 @@
 /** Shared ACP manager test harness, mocks, fixtures, and assertion helpers. */
 import type { AcpRuntime, AcpRuntimeCapabilities } from "@openclaw/acp-core/runtime/types";
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import { resetAcpManagerTaskStateForTests } from "../../../test/helpers/acp-manager-task-state.js";
-import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { resetAcpActiveTurnsForTests } from "./active-turns.test-support.js";
+import { resolveAcpSessionTarget } from "./manager.utils.js";
 
 export type { AcpRuntime, OpenClawConfig, SessionAcpMeta };
 
@@ -48,10 +48,20 @@ type TestAcpRunTurnInput = Omit<AcpRunTurnInput, "admittedRunContext"> &
 /** Keeps production ACP admission mandatory while centralizing legacy fixture setup. */
 export class AcpSessionManager extends managerModule.AcpSessionManager {
   override async runTurn(input: TestAcpRunTurnInput): Promise<void> {
-    return await super.runTurn({
-      ...input,
-      admittedRunContext: input.admittedRunContext ?? createTestAdmittedRunContext(input.requestId),
-    });
+    if (input.admittedRunContext) {
+      return await super.runTurn({ ...input, admittedRunContext: input.admittedRunContext });
+    }
+    const admission = prepareSystemAgentRunAdmission(
+      input.cfg,
+      input.requestId,
+      resolveAcpSessionTarget(input).agentId,
+      "acp-manager-test",
+    );
+    try {
+      return await super.runTurn({ ...input, admittedRunContext: await admission.admit("acp") });
+    } finally {
+      admission.close();
+    }
   }
 }
 export const resetAcpSessionManagerForTests = () =>
@@ -344,7 +354,6 @@ export function installAcpSessionManagerTestLifecycle(): void {
     } else {
       setTestEnvValue("OPENCLAW_STATE_DIR", ORIGINAL_STATE_DIR);
     }
-    resetAcpManagerTaskStateForTests();
   });
 }
 

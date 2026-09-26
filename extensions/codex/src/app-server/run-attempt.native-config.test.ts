@@ -16,14 +16,14 @@ import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerClient } from "./client.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
-import { ownCodexInferenceClient } from "./inference-routing.js";
+import { getCodexInferenceThread, ownCodexInferenceClient } from "./inference-routing.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
   createClient,
   directSpawnItem,
   createRuntime,
-  createTaskScope,
+  createCompletionScope,
   threadRead,
   notifyChildStarted,
   turnStartedNotification,
@@ -87,6 +87,15 @@ describe("Codex native configuration", () => {
   ])(
     "binds the actual harness retry model when its permission is $permission",
     async ({ permission, retryModel }) => {
+      // This in-memory managed transport has no custom CA or proxy. Host transport settings
+      // would correctly disqualify a real client from owned inference routing.
+      for (const name of ["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "REQUEST_METHOD"]) {
+        vi.stubEnv(name, undefined);
+      }
+      for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) {
+        vi.stubEnv(name, undefined);
+        vi.stubEnv(name.toLowerCase(), undefined);
+      }
       const catalogModel = "catalog-primary";
       const runtimeModel = "native-primary";
       const allowedModels = new Set([
@@ -231,6 +240,7 @@ describe("Codex native configuration", () => {
       try {
         await Promise.race([primaryStarted.promise, run]);
         expect(turnModels).toEqual([runtimeModel]);
+        expect(getCodexInferenceThread(transport.client, "thread-policy")).toBeDefined();
         const error = { message: "Synthetic provider refusal", codexErrorInfo: "cyberPolicy" };
         transport.send({
           method: "error",
@@ -709,7 +719,7 @@ it.each(["restore", "fresh", "fresh after yield"] as const)(
       parentThreadId: "parent-thread",
       modelSource: source,
       requesterSessionKey: "agent:main:unqualified-native",
-      taskRuntimeScope: createTaskScope("agent:main:unqualified-native"),
+      completionScope: createCompletionScope("agent:main:unqualified-native"),
       configurationQualification: fresh
         ? undefined
         : { assertCurrent: () => {}, hasProvider: () => false },
@@ -801,8 +811,13 @@ it.each(["restore", "fresh", "fresh after yield"] as const)(
           items: [{ type: "agentMessage", id: "late-final", text: "Late success" }],
         }),
       );
-      expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
-        expect.objectContaining({ status: "cancelled" }),
+      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          childSessionId: "child-thread",
+          status: "cancelled",
+          statusLabel: "model_authority_revoked",
+          result: "Native model execution authority was revoked.",
+        }),
       );
     } finally {
       sibling.release();

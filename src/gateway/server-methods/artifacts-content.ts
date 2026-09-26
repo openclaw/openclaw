@@ -49,16 +49,6 @@ export function resolveMessageRunId(message: Record<string, unknown>): string | 
   return asNonEmptyString(meta?.runId) ?? asNonEmptyString(message.runId);
 }
 
-export function resolveMessageTaskId(message: Record<string, unknown>): string | undefined {
-  const meta = asOptionalRecord(message["__openclaw"]);
-  return (
-    asNonEmptyString(meta?.messageTaskId) ??
-    asNonEmptyString(meta?.taskId) ??
-    asNonEmptyString(message.messageTaskId) ??
-    asNonEmptyString(message.taskId)
-  );
-}
-
 export function resolveBlockDownload(
   block: Record<string, unknown>,
   opts: { includeData: boolean },

@@ -31,6 +31,7 @@ import {
   prepareCronRunReceiptClaim,
 } from "./store/run-receipt-store.js";
 import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
+import { prepareCronRunReceiptWriteSchema } from "./store/run-receipt-write-admission.js";
 import type { CronRunReceiptHandle } from "./store/run-receipt.types.js";
 import type { CronJob } from "./types.js";
 
@@ -340,6 +341,7 @@ describe("cron service cross-tick bounded admission", () => {
     const receipt = runOpenClawStateWriteTransaction(({ db }) =>
       claimCronRunReceiptInDatabase({
         database: db,
+        receiptSchema: prepareCronRunReceiptWriteSchema(db),
         prepared,
         resolveAgentId: (job) => job.agentId ?? "main",
       }),
@@ -434,6 +436,7 @@ describe("cron service cross-tick bounded admission", () => {
           foreignReceipt = runOpenClawStateWriteTransaction(({ db }) => {
             const receipt = claimCronRunReceiptInDatabase({
               database: db,
+              receiptSchema: prepareCronRunReceiptWriteSchema(db),
               prepared: preparedForeignReceipt,
               resolveAgentId: (job) => job.agentId ?? "main",
             });

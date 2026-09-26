@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -42,7 +41,6 @@ describe("CronService silent failure alerts", { concurrent: false }, () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-silent-failure-" },
       async (state) => {
-        resetTaskRegistryForTests();
         const sendCronFailureAlert = vi.fn(
           async (_params: SendCronFailureAlertParams) => undefined,
         );
@@ -99,7 +97,6 @@ describe("CronService silent failure alerts", { concurrent: false }, () => {
           );
         } finally {
           cron.stop();
-          resetTaskRegistryForTests({ persist: false });
         }
       },
     );

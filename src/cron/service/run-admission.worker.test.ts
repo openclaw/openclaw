@@ -29,6 +29,7 @@ import {
   prepareCronRunReceiptClaim,
   trackCronRunReceiptSettlement,
 } from "../store/run-receipt-store.js";
+import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import { listForeignReceipts } from "./foreign-receipt-monitor.js";
 import { stop } from "./ops-lifecycle.js";
 import { list } from "./ops-read.js";
@@ -142,6 +143,7 @@ it("fences an activation whose durable receipt was replaced after reservation", 
     const replacement = runOpenClawStateWriteTransaction(({ db }) =>
       claimCronRunReceiptInDatabase({
         database: db,
+        receiptSchema: prepareCronRunReceiptWriteSchema(db),
         prepared,
         resolveAgentId: () => original.agentId,
       }),

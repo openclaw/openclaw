@@ -94,7 +94,7 @@ async function drainSpawnSampleActiveWork(
   waitForActiveWork?: (
     timeoutMs: number,
   ) => Promise<{ drained: boolean; snapshot: { counts: { totalActive: number } } }>,
-): Promise<void> {
+): Promise<number> {
   const wait =
     waitForActiveWork ??
     (await import("../src/infra/gateway-active-work.js")).waitForGatewayActiveWork;
@@ -103,19 +103,16 @@ async function drainSpawnSampleActiveWork(
   if (!result.drained || active !== 0) {
     throw new Error(`spawn sample left ${active} active gateway work items`);
   }
+  return active;
 }
 
 async function resetRuntime(persist: boolean): Promise<void> {
-  const [subagents, tasks, stateDb, agentDb] = await Promise.all([
+  const [subagents, stateDb, agentDb] = await Promise.all([
     import("../src/agents/subagents/registry/subagent-registry.test-helpers.js"),
-    import("../src/tasks/task-runtime.test-helpers.js"),
     import("../src/state/openclaw-state-db.js"),
     import("../src/state/openclaw-agent-db.js"),
   ]);
   subagents.resetSubagentRegistryForTests({ persist });
-  tasks.resetDetachedTaskLifecycleRuntimeForTests();
-  tasks.resetTaskRegistryForTests({ persist });
-  tasks.resetTaskFlowRegistryForTests({ persist });
   stateDb.closeOpenClawStateDatabaseForTest();
   agentDb.closeOpenClawAgentDatabasesForTest();
 }
@@ -181,34 +178,7 @@ function createTerminalWaitBarrier() {
   };
 }
 
-async function configureSpawnRuntime(mode: "memory" | "durable"): Promise<void> {
-  if (mode === "durable") {
-    return;
-  }
-  const [
-    taskStore,
-    flowStore,
-    { createInMemoryTaskRegistryStore, createInMemoryTaskFlowRegistryStore },
-  ] = await Promise.all([
-    import("../src/tasks/task-registry.store.js"),
-    import("../src/tasks/task-flow-registry.store.test-support.js"),
-    import("../src/test-utils/task-registry-store.js"),
-  ]);
-  const inMemoryFlowStore = createInMemoryTaskFlowRegistryStore();
-  taskStore.configureTaskRegistryRuntime({
-    store: {
-      ...createInMemoryTaskRegistryStore(undefined, inMemoryFlowStore),
-      // Memory mode measures runtime projection with empty, no-op task persistence.
-      loadSnapshot: () => ({ tasks: new Map(), deliveryStates: new Map() }),
-      upsertTaskWithDeliveryState: () => {},
-      upsertDeliveryState: () => {},
-      close: () => {},
-    },
-  });
-  flowStore.configureTaskFlowRegistryRuntime({ store: inMemoryFlowStore });
-}
-
-type BenchmarkStateDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs" | "task_runs">;
+type BenchmarkStateDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
 
 async function readDurableRows() {
   const [{ executeSqliteQuerySync, getNodeSqliteKysely }, stateDb] = await Promise.all([
@@ -231,14 +201,6 @@ async function readDurableRows() {
         ])
         .orderBy("run_id"),
     ).rows,
-    taskRows: executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("task_runs")
-        .select(["run_id", "status", "ended_at"])
-        .where("runtime", "=", "subagent")
-        .orderBy("run_id"),
-    ).rows,
   };
 }
 
@@ -248,16 +210,6 @@ function listSqliteFiles(root: string): string[] {
     .map(String)
     .filter((entry) => entry.includes(".sqlite"))
     .toSorted();
-}
-
-async function listBenchmarkTasks() {
-  const tasks = await import("../src/tasks/task-registry.js");
-  return tasks.listTaskRecords().filter((task) => task.runtime === "subagent");
-}
-
-async function listBenchmarkTaskMemory() {
-  const state = await import("../src/tasks/task-registry-state.js");
-  return [...state.tasks.values()].filter((task) => task.runtime === "subagent");
 }
 
 function assertExactRunIds(actual: Array<string | null>, expected: string[], label: string): void {
@@ -286,8 +238,6 @@ async function runSpawnSample(
   await resetRuntime(mode === "durable");
   const barrier = createTerminalWaitBarrier();
   registryRuntime.setCallGateway(barrier.callGateway);
-  await configureSpawnRuntime(mode);
-  const taskRegistry = await import("../src/tasks/task-registry.js");
   let releases = 0;
   const runIds: string[] = [];
   const params = Array.from({ length: fanout }, (_, index) => {
@@ -332,12 +282,7 @@ async function runSpawnSample(
     const successful = pipelineResults.filter((pipelineResult) => pipelineResult.ok);
     const uniqueRuns = new Set(successful.map((pipelineResult) => pipelineResult.runId)).size;
     const registeredRuns = registry.subagentRuns.size;
-    const tasksWhileBlocked = await listBenchmarkTasks();
-    assertExactRunIds(
-      tasksWhileBlocked.map((task) => task.runId ?? null),
-      runIds,
-      `${mode} in-memory task rows`,
-    );
+    assertExactRunIds([...registry.subagentRuns.keys()], runIds, `${mode} native run rows`);
     if (!blocked || barrier.outstanding !== fanout) {
       throw new Error(`spawn ${mode} did not block ${fanout} agent.wait calls`);
     }
@@ -352,7 +297,6 @@ async function runSpawnSample(
       );
     }
     let durableSubagentRows = 0;
-    let durableTaskRows = 0;
     let durableStateFile = listSqliteFiles(stateDir).length > 0;
     if (mode === "durable") {
       const durable = await readDurableRows();
@@ -361,19 +305,10 @@ async function runSpawnSample(
         runIds,
         "durable subagent rows",
       );
-      assertExactRunIds(
-        durable.taskRows.map((row) => row.run_id),
-        runIds,
-        "durable task rows",
-      );
-      if (
-        durable.subagentRows.some((row) => row.ended_at !== null) ||
-        durable.taskRows.some((row) => row.status !== "running" || row.ended_at !== null)
-      ) {
+      if (durable.subagentRows.some((row) => row.ended_at !== null)) {
         throw new Error("durable rows settled before the benchmark barrier released");
       }
       durableSubagentRows = durable.subagentRows.length;
-      durableTaskRows = durable.taskRows.length;
       durableStateFile = fs.existsSync(durable.path);
       if (!durableStateFile) {
         throw new Error(`durable spawn pipeline database is missing at ${durable.path}`);
@@ -385,34 +320,32 @@ async function runSpawnSample(
       barrier.release(runId);
       const runSettled = await waitForCondition(() => {
         const run = registry.subagentRuns.get(runId);
-        const task = taskRegistry.findTaskByRunId(runId);
         return (
           run?.execution.status === "terminal" &&
           typeof run.execution.endedAt === "number" &&
           typeof run.cleanupCompletedAt === "number" &&
-          task?.status === "succeeded"
+          run.execution.outcome?.status === "ok"
         );
       });
       if (!runSettled) {
         throw new Error(`spawn ${mode} did not settle released run ${runId}`);
       }
     }
-    const settledTasks = await listBenchmarkTasks();
     const settledRuns = [...registry.subagentRuns.values()].filter(
       (entry) =>
         entry.execution.status === "terminal" &&
         typeof entry.execution.endedAt === "number" &&
-        typeof entry.cleanupCompletedAt === "number",
+        typeof entry.cleanupCompletedAt === "number" &&
+        entry.execution.outcome?.status === "ok",
     ).length;
-    const succeededTasks = settledTasks.filter((task) => task.status === "succeeded").length;
-    if (settledRuns !== fanout || succeededTasks !== fanout || barrier.outstanding !== 0) {
+    if (settledRuns !== fanout || barrier.outstanding !== 0) {
       throw new Error(
-        `spawn ${mode} settlement invariant failed: ${JSON.stringify({ fanout, settledRuns, succeededTasks, outstandingWaits: barrier.outstanding })}`,
+        `spawn ${mode} settlement invariant failed: ${JSON.stringify({ fanout, settledRuns, outstandingWaits: barrier.outstanding })}`,
       );
     }
     // Terminal rows can settle before detached cleanup and requester-wake roots.
     // Drain before reset so leaked work stays visible and cannot reach the next sample.
-    await drainSpawnSampleActiveWork();
+    const postTeardownActiveRootWork = await drainSpawnSampleActiveWork();
     result = {
       durationMs,
       invariant: {
@@ -421,16 +354,12 @@ async function runSpawnSample(
         reservationsReleased: releases,
         blockedWaits: fanout,
         settledRuns,
-        settledTasks: succeededTasks,
         outstandingWaits: barrier.outstanding,
         durableSubagentRows,
-        durableTaskRows,
         durableStateFile,
         postTeardownRegistryRows: -1,
-        postTeardownTaskRows: -1,
         postTeardownDurableSubagentRows: -1,
-        postTeardownDurableTaskRows: -1,
-        postTeardownActiveRootWork: 0,
+        postTeardownActiveRootWork,
       },
     };
   } catch (error) {
@@ -450,26 +379,20 @@ async function runSpawnSample(
   if (failure) {
     throw toErrorObject(failure, "Agent concurrency benchmark failed");
   }
-  const postTeardownTasks = await listBenchmarkTaskMemory();
   const postTeardownRegistryRows = registry.subagentRuns.size;
-  const postTeardownTaskRows = postTeardownTasks.length;
   let postTeardownDurableSubagentRows = 0;
-  let postTeardownDurableTaskRows = 0;
   if (mode === "durable") {
     const durable = await readDurableRows();
     postTeardownDurableSubagentRows = durable.subagentRows.length;
-    postTeardownDurableTaskRows = durable.taskRows.length;
     await resetRuntime(false);
   }
   if (
     postTeardownRegistryRows !== 0 ||
-    postTeardownTaskRows !== 0 ||
     postTeardownDurableSubagentRows !== 0 ||
-    postTeardownDurableTaskRows !== 0 ||
     barrier.outstanding !== 0
   ) {
     throw new Error(
-      `spawn ${mode} teardown invariant failed: ${JSON.stringify({ postTeardownRegistryRows, postTeardownTaskRows, postTeardownDurableSubagentRows, postTeardownDurableTaskRows, outstandingWaits: barrier.outstanding })}`,
+      `spawn ${mode} teardown invariant failed: ${JSON.stringify({ postTeardownRegistryRows, postTeardownDurableSubagentRows, outstandingWaits: barrier.outstanding })}`,
     );
   }
   if (mode === "memory" && listSqliteFiles(stateDir).length > 0) {
@@ -479,9 +402,7 @@ async function runSpawnSample(
     throw new Error(`spawn ${mode} did not produce a benchmark result`);
   }
   result.invariant.postTeardownRegistryRows = postTeardownRegistryRows;
-  result.invariant.postTeardownTaskRows = postTeardownTaskRows;
   result.invariant.postTeardownDurableSubagentRows = postTeardownDurableSubagentRows;
-  result.invariant.postTeardownDurableTaskRows = postTeardownDurableTaskRows;
   return result;
 }
 

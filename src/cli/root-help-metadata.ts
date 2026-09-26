@@ -7,8 +7,7 @@ export type PrecomputedSubcommandHelpName =
   | "gateway"
   | "models"
   | "plugins"
-  | "sessions"
-  | "tasks";
+  | "sessions";
 
 type PrecomputedHelpTextKey =
   | "rootHelpText"
@@ -86,8 +85,7 @@ function isPrecomputedSubcommandHelpName(
     commandName === "gateway" ||
     commandName === "models" ||
     commandName === "plugins" ||
-    commandName === "sessions" ||
-    commandName === "tasks"
+    commandName === "sessions"
   );
 }
 

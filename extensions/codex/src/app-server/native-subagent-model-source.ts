@@ -488,6 +488,12 @@ function executionOwner(
       execution.bindTurn(request.turnId);
     }
     if (execution.executionOwner.turnId === request.turnId) {
+      if (!child.nativeTurnId && !known.assignment.unanchored) {
+        // Direct spawn already retained this execution before turn/started.
+        // Pin the admitted inference locator on that same initial assignment.
+        child.nativeTurnId = request.turnId;
+        known.assignment.nativeTurnId = request.turnId;
+      }
       return execution.executionOwner;
     }
   }
@@ -522,10 +528,16 @@ function executionOwner(
     return undefined;
   }
   if (
-    child?.nativeTurnId === request.turnId &&
+    child &&
+    (!child.nativeTurnId || child.nativeTurnId === request.turnId) &&
     !child.terminal &&
-    !child.settledWithoutCompletion
+    !child.settledWithoutCompletion &&
+    !known.assignment.unanchored
   ) {
+    // An admitted inference carries the exact initial child turn even when its
+    // turn/started notification was lost. Never recover this locator by history subtraction.
+    child.nativeTurnId = request.turnId;
+    known.assignment.nativeTurnId = request.turnId;
     child.modelExecution = modelSource;
     child.completionCustody ??= completionCustody?.retain();
   } else if (pending) {

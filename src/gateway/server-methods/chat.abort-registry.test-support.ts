@@ -9,9 +9,6 @@ import { testing as schedulerTesting } from "../../agents/subagents/swarm/swarm-
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { LegacyContextEngine } from "../../context-engine/legacy.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
-import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.test-support.js";
-import { captureTaskDeliveryWork } from "../../tasks/task-registry-delivery.test-support.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-registry.test-support.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 
@@ -41,8 +38,7 @@ vi.mock("../../context-engine/registry.js", async (importOriginal) => ({
 export function useChatAbortRegistryFixture() {
   const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
   let stateDir = "";
-  let deliveries: ReturnType<typeof captureTaskDeliveryWork> | undefined;
-  const settle = () => settleSubagentRegistryPersistenceWork(deliveries);
+  const settle = () => settleSubagentRegistryPersistenceWork();
   beforeEach(async () => {
     // A failed drain retains its stores; the next case must not replace their owner.
     if (stateDir) {
@@ -60,7 +56,6 @@ export function useChatAbortRegistryFixture() {
     );
     clearConfigCache();
     clearRuntimeConfigSnapshot();
-    deliveries = captureTaskDeliveryWork();
   });
   afterEach(async () => {
     const failures: unknown[] = [];
@@ -73,8 +68,6 @@ export function useChatAbortRegistryFixture() {
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
         resetSubagentRegistryForTests({ persist: false });
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
         schedulerTesting.reset();
         await cleanupSessionStateForTest({ stateDir: stateDir || undefined });
         clearConfigCache();
@@ -88,8 +81,6 @@ export function useChatAbortRegistryFixture() {
           }
         }
         env.restore();
-        deliveries?.[Symbol.dispose]();
-        deliveries = undefined;
         stateDir = "";
       } catch (error) {
         failures.push(error);

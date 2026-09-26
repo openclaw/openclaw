@@ -12,11 +12,13 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../../tasks/task-registry.store.sqlite.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { cronOwnerHardeningEntrypoints } from "../owner-hardening-runtime.test-support.js";
 import { cronRunRecordStoreKey } from "../run-history-detail.js";
-import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
+import {
+  readCronRunHistoryPageForTests,
+  readCronRunRecordsForTests,
+} from "../run-history.test-support.js";
 import { CronService } from "../service.js";
 import { createCronStoreHarness } from "../service.test-harness.js";
 import { loadCronStore, saveCronJobsStoreChanges, saveCronStore } from "../store.js";
@@ -435,10 +437,7 @@ describe("scheduler-disabled shared-store mutations", () => {
     });
     const storeKey = cronStoreKey(storePath);
     const readTasks = () =>
-      listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
-        runtime: "cron",
-        sourceId: job.id,
-      }).filter((task) => cronRunRecordStoreKey(task) === storeKey);
+      readCronRunRecordsForTests(job.id).filter((task) => cronRunRecordStoreKey(task) === storeKey);
     const { child, closed, stderr, assertCompleted } = spawnSchedulerChild(
       overlappingRunsChildScript,
       { storePath, jobId: job.id, nowMs },
@@ -458,8 +457,7 @@ describe("scheduler-disabled shared-store mutations", () => {
         throw new Error("Expected the first edited run to remain active.");
       }
       expect(before.state.runningAtMs).toBe(nowMs);
-      const firstTasks = readTasks();
-      expect(firstTasks).toHaveLength(1);
+      expect(readTasks()).toHaveLength(0);
 
       // A child owns execution so the passive editor can hold its store lock
       // while both runs advance. Identical clocks cannot identify the new edit.
@@ -487,7 +485,7 @@ describe("scheduler-disabled shared-store mutations", () => {
       expect(after?.state.nextRunAtMs).toBe(acknowledged.state.nextRunAtMs);
       const tasks = readTasks();
       expect(tasks).toHaveLength(2);
-      expect(tasks.filter((task) => task.taskId !== firstTasks[0]?.taskId)).toHaveLength(1);
+      expect(new Set(tasks.map((row) => row.runId)).size).toBe(2);
       const readHistory = () => readCronRunHistoryPageForTests({ storeKey, jobId: job.id }).entries;
       const history = readHistory();
       expect(history).toHaveLength(2);

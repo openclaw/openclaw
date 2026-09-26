@@ -17,7 +17,6 @@ it("keeps source boundary proof when a narrow PR has no dist consumer", () => {
     "src/example/runtime.ts": "export const value = 1;",
     "src/example/runtime.test.ts": 'import "./runtime.js";',
     "src/gateway/client-callsites.guard.test.ts": "export {};",
-    "src/tasks/task-boundaries.test.ts": "export {};",
   })) {
     const absolute = path.join(cwd, file);
     mkdirSync(path.dirname(absolute), { recursive: true });

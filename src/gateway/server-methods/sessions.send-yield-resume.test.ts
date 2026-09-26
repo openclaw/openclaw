@@ -18,7 +18,6 @@ import { testing as registryTesting } from "../../agents/subagents/registry/suba
 import { getRuntimeConfig } from "../../config/config.js";
 import * as transcriptArchive from "../../config/sessions/session-accessor.sqlite-archive.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { findTaskByRunId, getTaskById } from "../../tasks/runtime-internal.js";
 import { sessionMessagingHandlers } from "./sessions-messaging.js";
 import { sessionSharingTestContext, soloClient } from "./sessions-sharing.test-support.js";
 import type { GatewayRequestHandler, RespondFn } from "./types.js";
@@ -117,7 +116,6 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
       gatewayContextResolver: context.resolveGatewayContext,
     });
   }
-  const originalTask = expectDefined(findTaskByRunId(previousRunId), "original child task");
   expect(
     markRequesterTurnYielded({ requesterSessionKey, requesterAgentId: "main", requesterTurnRunId }),
   ).toBe(2);
@@ -186,13 +184,6 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
     undefined,
     undefined,
   );
-  expect(getTaskById(originalTask.taskId)).toMatchObject({
-    runId: previousRunId,
-    requesterSessionKey,
-    childSessionKey,
-    status: "running",
-  });
-  expect(findTaskByRunId(nextRunId)).toBeUndefined();
   expect(subagentRuns.has(previousRunId)).toBe(false);
   const resumed = expectDefined(subagentRuns.get(nextRunId), "resumed child");
   expect(resumed).toMatchObject({ task: followup, taskRunId: previousRunId, requesterSessionKey });
@@ -231,10 +222,6 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
     message: expect.stringContaining("Recovered child consumed its tool results."),
   });
   expect(dispatch.mock.calls[0]?.[1]?.message).toContain("Sibling result is ready.");
-  expect(getTaskById(originalTask.taskId)).toMatchObject({
-    status: "succeeded",
-    deliveryStatus: "delivered",
-  });
   for (const runId of [nextRunId, siblingRunId]) {
     expect(subagentRuns.get(runId)?.requesterSettleWake).toBeUndefined();
   }

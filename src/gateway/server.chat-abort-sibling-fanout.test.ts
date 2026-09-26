@@ -34,8 +34,6 @@ import {
   getActiveSessionWorkAdmissionCount,
   type SessionWorkAdmissionLease,
 } from "../sessions/session-lifecycle-admission.js";
-import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
-import { loadTaskRegistryStateFromSqliteReadOnlyResult } from "../tasks/task-registry.store.sqlite.js";
 import {
   agentCommandMock,
   connectOk,
@@ -179,7 +177,6 @@ for (const { name, fault, replaceParent } of [
             groupId,
             queued: queued.includes(runId),
             expectsCompletionMessage: false,
-            taskRowOwnership: "required",
           });
           if (queued.includes(runId)) {
             activateSwarmRun({ groupId, runId, start, onStartFailure: () => true });
@@ -329,30 +326,19 @@ for (const { name, fault, replaceParent } of [
         const persistedRuns = new Map(
           loadSubagentRunsForControllerFromSqlite(parentKey).map((run) => [run.runId, run]),
         );
-        const persistedTasks = loadTaskRegistryStateFromSqliteReadOnlyResult();
-        expect(persistedTasks.state).toBe("ready");
-        const tasks = [...persistedTasks.snapshot.tasks.values()].filter((task) =>
-          selected.includes(task.runId ?? ""),
-        );
-        expect(tasks).toHaveLength(selected.length);
-        expect(tasks.map((task) => task.runId)).toEqual(expect.arrayContaining(selected));
         expect([...persistedRuns.keys()].toSorted()).toEqual(selected.toSorted());
         for (const runId of selected) {
-          const task = tasks.find((candidate) => candidate.runId === runId)!;
           const run = persistedRuns.get(runId)!;
           if (replaceParent || runId === failedRunId) {
-            expect(task.status).toBe("running");
             expect(run.execution.status).toBe("running");
             expect(run.execution.endedAt).toBeUndefined();
           } else {
-            expect(task).toMatchObject({ status: "cancelled", error: SUBAGENT_KILL_TASK_ERROR });
             expect(run).toMatchObject({
               endedReason: "subagent-killed",
               execution: { status: "terminal" },
             });
           }
           if (replaceParent) {
-            expect(task.error).toBeUndefined();
             expect(run.killIntent).toBeUndefined();
             expect(
               loadExactSessionEntryReadOnly({ storePath, sessionKey: sessionKey(runId) })?.entry

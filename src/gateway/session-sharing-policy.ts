@@ -28,7 +28,6 @@ import type { GatewayClient } from "./server-methods/types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
 import {
   prepareGatewaySessionStoreTargetsReadOnly,
-  resolveGatewaySessionStoreTargetsReadOnly,
   resolveGatewaySessionStoreTargetWithStore,
   type GatewaySessionStoreCache,
   type GatewaySessionStoreDiscoveryCache,
@@ -114,17 +113,6 @@ export function resolveSessionSharingTarget(params: {
     ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });
   return toSessionSharingTarget(target);
-}
-
-/** Fresh metadata for one synchronous batch; no authorization decisions are retained. */
-export function resolveSessionSharingTargets(params: {
-  cfg: OpenClawConfig;
-  targets: readonly { sessionKey: string; agentId?: string }[];
-}): Array<SessionSharingTarget | null> {
-  return resolveGatewaySessionStoreTargetsReadOnly({
-    cfg: params.cfg,
-    targets: params.targets.map(({ sessionKey, agentId }) => ({ key: sessionKey, agentId })),
-  }).map(toSessionSharingTarget);
 }
 
 function toSessionSharingTarget(

@@ -149,7 +149,7 @@ function commitStartupCatchupRows(params: {
     state: params.state,
     jobIds: [...reservationByJobId.keys(), ...deferredByJobId.keys()],
     operationLabel: "cron.startup-catchup-state",
-    mutate: ({ database, jobs }) => {
+    mutate: ({ database, jobs, receiptSchema }) => {
       const committed: CronJob[] = [];
       for (const [jobId, job] of jobs) {
         let changed = false;
@@ -157,6 +157,7 @@ function commitStartupCatchupRows(params: {
         const ownership = params.state.queuedRunReservationsByJobId.get(jobId);
         if (reservation && ownership?.identity === reservation.reservationIdentity) {
           finishCronRunReceiptInDatabase({
+            receiptSchema,
             database,
             handle: ownership.runReceipt,
             status: "skipped",
@@ -321,7 +322,7 @@ async function planStartupCatchup(
     }
 
     const now = state.deps.nowMs();
-    const missed = skipCronJobsWithoutOwners(
+    const missed = await skipCronJobsWithoutOwners(
       state,
       collectStartupCatchupJobs(state, now, { skipJobIds: opts?.skipJobIds }),
       now,

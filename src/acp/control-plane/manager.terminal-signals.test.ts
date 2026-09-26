@@ -1,14 +1,11 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import {
-  requireTaskByRunId,
-  withAcpManagerTaskStateDir,
-} from "../../../test/helpers/acp-manager-task-state.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import * as terminalState from "../../sessions/subagent-terminal-state.js";
 import { holdStateCoordinator } from "../../state/openclaw-state-coordinator.test-support.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import {
   AcpSessionManager,
   baseCfg,
@@ -22,7 +19,7 @@ describe("ACP terminal state signals", () => {
   installAcpSessionManagerTestLifecycle();
 
   it("records parented ACP turns only for human provenance", async () => {
-    await withAcpManagerTaskStateDir(async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
       const runtimeState = createRuntime();
       hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
         id: "acpx",
@@ -78,7 +75,7 @@ describe("ACP terminal state signals", () => {
   });
 
   it("keeps ACP completion joined without blocking the event loop on terminal signal contention", async () => {
-    await withAcpManagerTaskStateDir(async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
       const runtimeState = createRuntime();
       hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
         id: "acpx",
@@ -126,7 +123,6 @@ describe("ACP terminal state signals", () => {
         await pending;
       }
       expect(settled).toBe(true);
-      expect(requireTaskByRunId("contended-terminal").status).toBe("succeeded");
       expect(
         listSessionStateEventsSince(childSessionKey, "main", 0, 200).events.map((event) => ({
           kind: event.kind,

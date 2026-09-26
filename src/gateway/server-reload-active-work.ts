@@ -1,11 +1,5 @@
-import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
-import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/active-run-projections.js";
-import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
+import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart-budget.js";
-import { getTotalQueueSize } from "../process/command-queue.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
-import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
-import { formatActiveTaskRestartBlocker } from "../tasks/task-restart-blocker.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import type { GatewayDeferredChannelReload } from "./config-reload-status.types.js";
 import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
@@ -41,29 +35,7 @@ export function createGatewayActiveWorkTracker(options: {
     const { channels, publicationPending } = deferredChannelReload;
     return channels.map((channel) => ({ channel, publicationPending }));
   };
-  const getActiveCounts = () => {
-    const queueSize = getTotalQueueSize();
-    const pendingReplies = getTotalPendingReplies();
-    const embeddedRuns = getActiveEmbeddedRunCount();
-    const backgroundExecSessions = getActiveBackgroundExecSessionCount();
-    const rootRequests = getActiveGatewayRootWorkCount({ excludeCurrent: true });
-    const activeTasks = getInspectableActiveTaskRestartBlockers().length;
-    return {
-      queueSize,
-      pendingReplies,
-      embeddedRuns,
-      backgroundExecSessions,
-      rootRequests,
-      activeTasks,
-      totalActive:
-        queueSize +
-        pendingReplies +
-        embeddedRuns +
-        backgroundExecSessions +
-        rootRequests +
-        activeTasks,
-    };
-  };
+  const getActiveCounts = () => createGatewayActiveWorkSnapshot().counts;
   const formatActiveDetails = (counts: ReturnType<typeof getActiveCounts>) => {
     const details = [];
     if (counts.queueSize > 0) {
@@ -81,25 +53,24 @@ export function createGatewayActiveWorkTracker(options: {
     if (counts.rootRequests > 0) {
       details.push(`${counts.rootRequests} gateway request(s)`);
     }
-    if (counts.activeTasks > 0) {
-      details.push(`${counts.activeTasks} background task run(s)`);
+    if (counts.agentRuns > 0) {
+      details.push(`${counts.agentRuns} admitted agent run(s)`);
+    }
+    if (counts.acpRuns > 0) {
+      details.push(`${counts.acpRuns} ACP turn(s)`);
+    }
+    if (counts.mediaRuns > 0) {
+      details.push(`${counts.mediaRuns} media generation(s)`);
+    }
+    if (counts.cronRuns > 0) {
+      details.push(`${counts.cronRuns} cron run(s)`);
     }
     return details;
-  };
-  const formatTaskBlockers = () => {
-    const blockers = getInspectableActiveTaskRestartBlockers();
-    if (blockers.length === 0) {
-      return null;
-    }
-    const shown = blockers.slice(0, 8).map(formatActiveTaskRestartBlocker);
-    const omitted = blockers.length - shown.length;
-    return omitted > 0 ? `${shown.join("; ")}; +${omitted} more` : shown.join("; ");
   };
   const formatDeferredWorkStatus = (status: "active" | "still active") => {
     try {
       const details = formatActiveDetails(getActiveCounts()).join(", ");
-      const taskBlockers = formatTaskBlockers();
-      return `${details} ${status}${taskBlockers ? ` (${taskBlockers})` : ""}`;
+      return `${details} ${status}`;
     } catch (err) {
       // Diagnostics must not prevent the existing timeout from forcing a restart.
       return `pending work unknown (${String(err)})`;
@@ -181,7 +152,6 @@ export function createGatewayActiveWorkTracker(options: {
   return {
     formatActiveDetails,
     formatDeferredWorkStatus,
-    formatTaskBlockers,
     getActiveCounts,
     getDeferredChannelReloads,
     waitForActiveWorkBeforeChannelReload,

@@ -15,20 +15,61 @@ import { cronRunLogEntryToDetail } from "../../cron/run-history-detail.js";
 import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
 import { cronStoreKey } from "../../cron/store/key.js";
+import {
+  pruneCronRunHistoryInDatabase,
+  recordCronRunInDatabase,
+} from "../../cron/store/run-history.kernel.js";
+import type { CronRunHistoryWrite } from "../../cron/store/run-history.types.js";
+import { prepareCronRunReceiptWriteSchema } from "../../cron/store/run-receipt-write-admission.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { createTaskFixture } from "../../tasks/task-registry.test-support.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   forbidMainThreadSql,
   observeMainThreadSql,
 } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { seedTaskRegistryRowsForTests } from "../../test-utils/task-registry-sqlite.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
+import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { cronHandlers } from "./cron.js";
-import { withHistoryState } from "./task-history.test-support.js";
-import { identifiedClient, runTaskHandler } from "./tasks.test-helpers.js";
+import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
 import type { GatewayClient, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+
+async function withHistoryState(run: () => Promise<void>) {
+  let registry: ReturnType<typeof captureActivePluginRegistrySnapshot> | undefined;
+  try {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      registry = captureActivePluginRegistrySnapshot();
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      try {
+        await run();
+      } finally {
+        await disposeSessionReadContexts();
+      }
+    });
+  } finally {
+    if (registry) {
+      restoreActivePluginRegistrySnapshot(registry);
+    }
+  }
+}
+
+function persistHistory(records: CronRunHistoryWrite[]) {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    for (const record of records) {
+      recordCronRunInDatabase(db, record);
+    }
+  });
+}
 
 async function withCronTranscript(
   run: (fixture: Awaited<ReturnType<typeof setup>>) => Promise<void>,
@@ -85,6 +126,8 @@ async function setup() {
     "jobs.json",
   );
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     defaultAgentId: "main",
     cronEnabled: false,
@@ -108,16 +151,14 @@ async function setup() {
     { scheduledToolPolicy: { version: 1, mode: "trusted" } },
   );
   const job = "job" in created ? created.job : created;
-  const task = createTaskFixture("cron", {
-    taskKind: "automation_run",
-    sourceId: job.id,
+  const record: CronRunHistoryWrite = {
+    storeKey: cronStoreKey(storePath),
+    jobId: job.id,
     runId: "internal-old-run",
-    requesterSessionKey: "",
-    ownerKey: "",
-    scopeKind: "system",
-    childSessionKey: alias,
+    sessionKey: alias,
     agentId: "main",
-    task: "History job",
+    startedAt: 10,
+    endedAt: 20,
     status: "succeeded",
     detail: cronRunLogEntryToDetail(
       {
@@ -132,7 +173,8 @@ async function setup() {
       },
       { storeKey: cronStoreKey(storePath) },
     ),
-  });
+  };
+  persistHistory([record]);
   const context = await createHistoryReadContext({ cron, cronStorePath: storePath });
   const query = async (
     params: Record<string, unknown>,
@@ -156,7 +198,19 @@ async function setup() {
     });
     return { respond, payload: respond.mock.calls[0]?.[1] as CronHistoryResult | undefined };
   };
-  return { cron, storePath, baseKey, alias, oldScope, latest, job, task, context, query, profile };
+  return {
+    cron,
+    storePath,
+    baseKey,
+    alias,
+    oldScope,
+    latest,
+    job,
+    record,
+    context,
+    query,
+    profile,
+  };
 }
 
 it("pages the exact archived Cron generation for a limited caller without main-thread SQL", async () => {
@@ -176,7 +230,9 @@ it("pages the exact archived Cron generation for a limited caller without main-t
       cronStorePath: storePath,
       getRuntimeConfig: () => cfg,
     });
-    const options = { client: identifiedClient(["operator.read"], profile.id) };
+    const options = {
+      client: sharingPolicyClient({ scopes: ["operator.read"], user: profile.id }),
+    };
     prepareGatewayRecipientProfile(options.client);
     expect(operatorSessionCap(options.client, cfg)).toBe("none");
     const observation = observeMainThreadSql();
@@ -257,30 +313,26 @@ it("pages the exact archived Cron generation for a limited caller without main-t
 });
 
 it("preserves shared custom-session conversation history across recorded runs", async () => {
-  await withCronTranscript(async ({ cron, job, task, oldScope, context, query }) => {
+  await withCronTranscript(async ({ cron, job, record, oldScope, query }) => {
     await cron.update(job.id, { sessionTarget: `session:${oldScope.sessionKey}` });
     await upsertSessionEntryCore(oldScope, { sessionId: oldScope.sessionId, updatedAt: 3 });
     await appendTranscriptMessage(oldScope, {
       message: { role: "assistant", content: "A later run in this same conversation" },
     });
-    const detail = expectDefined(task.detail, "record detail");
+    const detail = expectDefined(record.detail, "record detail");
     if (typeof detail !== "object" || Array.isArray(detail)) {
       throw new Error("Expected detail object");
     }
-    seedTaskRegistryRowsForTests([
-      task,
+    persistHistory([
+      record,
       {
-        ...task,
-        taskId: "later-shared-run",
+        ...record,
         runId: "internal-later-run",
         detail: { ...detail, runId: "public-later-run", runAtMs: 30 },
       },
     ]);
-    const prior = await runTaskHandler("tasks.history", { taskId: task.taskId }, {}, null, context);
     const current = await query({ id: job.id, runId: "public-old-run" });
-    expect(prior.calls[0]?.[0]).toBe(true);
     expect(current.respond.mock.calls[0]?.[0]).toBe(true);
-    expect(current.payload?.messages).toEqual(prior.payload?.messages);
     expect(current.payload?.messages).toMatchObject([
       { content: "Old first" },
       { content: "Old second" },
@@ -291,18 +343,17 @@ it("preserves shared custom-session conversation history across recorded runs", 
 });
 
 it("refuses ambiguous timestamps and cursors moved to another recorded run", async () => {
-  await withCronTranscript(async ({ job, task, query }) => {
+  await withCronTranscript(async ({ job, record, query }) => {
     const first = await query({ id: job.id, runId: "public-old-run", limit: 1 });
     const cursor = expectDefined(first.payload?.nextCursor, "bound cursor");
-    const detail = expectDefined(task.detail, "record detail");
+    const detail = expectDefined(record.detail, "record detail");
     if (typeof detail !== "object" || Array.isArray(detail)) {
       throw new Error("Expected detail object");
     }
-    seedTaskRegistryRowsForTests([
-      task,
+    persistHistory([
+      record,
       {
-        ...task,
-        taskId: "second-record",
+        ...record,
         runId: "internal-second-run",
         detail: { ...detail, runId: "public-second-run" },
       },
@@ -314,71 +365,100 @@ it("refuses ambiguous timestamps and cursors moved to another recorded run", asy
   });
 });
 
-it.each(["sharing", "binding", "client", "grant"] as const)(
+it.each(["sharing", "binding", "client", "grant", "retention", "transcript owner"] as const)(
   "rechecks %s before publishing a retained Cron transcript",
   async (change) => {
-    await withCronTranscript(async ({ cron, storePath, baseKey, latest, job, task, query }) => {
-      let current = true;
-      const instance = createOperationalRunInstanceRef("cron-history-run");
-      const client: GatewayClient =
-        change === "grant"
-          ? {
-              connect: {} as GatewayClient["connect"],
-              internal: {
-                agentRuntimeIdentity: {
-                  kind: "agentRuntime",
-                  agentId: "main",
-                  sessionKey: "agent:main:cron:reader:run:one",
-                  operationalRunInstance: instance,
-                  delegatedAuthority: {
-                    kind: "local",
-                    operationalRunInstance: instance,
-                    lifecycleGeneration: "fixture",
-                    claimId: "fixture",
-                  },
-                  cronSelfManagementContext: { jobId: job.id, expiresAtMs: Date.now() + 60_000 },
-                },
-              },
-            }
-          : identifiedClient(["operator.read"], "retained-viewer");
-      const onRead = vi.fn(async () => {
-        if (change === "sharing") {
-          await patchSessionEntryCore({ agentId: "main", sessionKey: baseKey }, () => ({
-            visibility: "draft",
-          }));
-        } else if (change === "binding") {
-          const detail = expectDefined(task.detail, "record detail");
-          if (typeof detail !== "object" || Array.isArray(detail)) {
-            throw new Error("Expected detail object");
-          }
-          seedTaskRegistryRowsForTests([
-            { ...task, detail: { ...detail, sessionId: latest.sessionId } },
-          ]);
-        } else if (change === "client") {
-          current = false;
-        } else {
-          client.internal!.agentRuntimeIdentity!.cronSelfManagementContext!.expiresAtMs =
-            Date.now() - 1;
+    await withCronTranscript(
+      async ({ cron, storePath, baseKey, oldScope, latest, job, record, query }) => {
+        let current = true;
+        let storageChanged = false;
+        const unrelatedKey = "agent:main:unrelated";
+        if (change === "transcript owner") {
+          await upsertSessionEntryCore(
+            { agentId: oldScope.agentId, sessionKey: unrelatedKey },
+            { sessionId: "unrelated-current", updatedAt: 3, visibility: "shared" },
+          );
         }
-        return undefined;
-      });
-      const context = await createHistoryReadContext({
-        cron,
-        cronStorePath: storePath,
-        readChatStartupProjection: onRead,
-      });
-      const result = await query(
-        { id: job.id, runId: "public-old-run" },
-        {
-          client,
-          hasCurrentClientAuthority: () => current,
-        },
-        context,
-      );
-      expect(onRead).toHaveBeenCalled();
-      expect(result.respond.mock.calls).toHaveLength(1);
-      expect(result.respond.mock.calls[0]?.[0]).toBe(false);
-      expect(result.payload?.messages).toBeUndefined();
-    });
+        const instance = createOperationalRunInstanceRef("cron-history-run");
+        const client: GatewayClient =
+          change === "grant"
+            ? {
+                connect: {} as GatewayClient["connect"],
+                internal: {
+                  agentRuntimeIdentity: {
+                    kind: "agentRuntime",
+                    agentId: "main",
+                    sessionKey: "agent:main:cron:reader:run:one",
+                    operationalRunInstance: instance,
+                    delegatedAuthority: {
+                      kind: "local",
+                      operationalRunInstance: instance,
+                      lifecycleGeneration: "fixture",
+                      claimId: "fixture",
+                    },
+                    cronSelfManagementContext: { jobId: job.id, expiresAtMs: Date.now() + 60_000 },
+                  },
+                },
+              }
+            : sharingPolicyClient({ scopes: ["operator.read"], user: "retained-viewer" });
+        const onRead = vi.fn(async () => {
+          if (change === "sharing") {
+            await patchSessionEntryCore({ agentId: "main", sessionKey: baseKey }, () => ({
+              visibility: "draft",
+            }));
+          } else if (change === "binding") {
+            const detail = expectDefined(record.detail, "record detail");
+            if (typeof detail !== "object" || Array.isArray(detail)) {
+              throw new Error("Expected detail object");
+            }
+            persistHistory([{ ...record, detail: { ...detail, sessionId: latest.sessionId } }]);
+          } else if (change === "client") {
+            current = false;
+          } else if (change === "retention") {
+            storageChanged =
+              runOpenClawStateWriteTransaction(({ db }) =>
+                pruneCronRunHistoryInDatabase(
+                  db,
+                  record.endedAt + 7 * 24 * 60 * 60_000,
+                  prepareCronRunReceiptWriteSchema(db),
+                ),
+              ) === 1;
+          } else if (change === "transcript owner") {
+            storageChanged =
+              runOpenClawAgentWriteTransaction(
+                ({ db }) =>
+                  db
+                    .prepare("UPDATE session_windows SET session_key = ? WHERE session_id = ?")
+                    .run(unrelatedKey, oldScope.sessionId).changes,
+                { agentId: oldScope.agentId },
+              ) === 1;
+          } else {
+            client.internal!.agentRuntimeIdentity!.cronSelfManagementContext!.expiresAtMs =
+              Date.now() - 1;
+          }
+          return undefined;
+        });
+        const context = await createHistoryReadContext({
+          cron,
+          cronStorePath: storePath,
+          readChatStartupProjection: onRead,
+        });
+        const result = await query(
+          { id: job.id, runId: "public-old-run" },
+          {
+            client,
+            hasCurrentClientAuthority: () => current,
+          },
+          context,
+        );
+        expect(onRead).toHaveBeenCalled();
+        if (change === "retention" || change === "transcript owner") {
+          expect(storageChanged).toBe(true);
+        }
+        expect(result.respond.mock.calls).toHaveLength(1);
+        expect(result.respond.mock.calls[0]?.[0]).toBe(false);
+        expect(result.payload?.messages).toBeUndefined();
+      },
+    );
   },
 );

@@ -97,12 +97,6 @@ const publications: Record<string, string | symbol> = {
   "src/system-agent/agent-turn.ts": Symbol.for("openclaw.systemAgentTurnTestApi"),
   "src/talk/client-voice-confirmation.ts": Symbol.for("openclaw.clientVoiceConfirmationTestApi"),
   "src/talk/client-voice-session.ts": Symbol.for("openclaw.clientVoiceSessionTestApi"),
-  "src/tasks/generated-media-task-activity.ts": Symbol.for(
-    "openclaw.generatedMediaTaskActivityTestApi",
-  ),
-  "src/tasks/task-flow-registry.store.ts": Symbol.for("openclaw.taskFlowRegistryStoreTestApi"),
-  "src/tasks/task-flow-registry.ts": Symbol.for("openclaw.taskFlowRegistryTestApi"),
-  "src/tasks/task-registry.ts": Symbol.for("openclaw.taskRegistryTestApi"),
 };
 
 // Vite's EvaluatedModuleNode.file is a normalized, query-free filesystem path.

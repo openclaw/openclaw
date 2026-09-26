@@ -1003,7 +1003,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-      - name: Background Tasks and Flows
+      - name: Background Work
         quality:
           score: 68
           label: Alpha
@@ -4305,7 +4305,7 @@ surfaces:
           supported: false
           reason: none
           human_override: false
-      - name: Task Lifecycle and Delivery
+      - name: Media Operation Lifecycle and Delivery
         quality:
           score: 61
           label: Alpha

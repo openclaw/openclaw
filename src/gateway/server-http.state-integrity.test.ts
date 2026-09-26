@@ -39,8 +39,8 @@ describe("Gateway shared-state integrity readiness", () => {
     paths.add(pathname);
     const read = () =>
       executeOpenClawStateWorker(capture(), {
-        type: "tasks.list",
-        input: { ownerKey: "agent:main:main" },
+        type: "plugins.conversationBindingApprovals.read",
+        input: undefined,
       });
     expect(await read()).toEqual([]);
     await closeOpenClawStateDatabaseAsync();

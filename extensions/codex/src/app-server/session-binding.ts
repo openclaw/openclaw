@@ -26,14 +26,20 @@ import {
 } from "./auth-profile.js";
 import type { CodexManagedThreadStore } from "./managed-thread-store.js";
 import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
+import type { CodexNativeSubagentPendingAssignment } from "./native-subagent-pending-assignments.js";
 import {
   adoptCodexNativeSubagentSubmissions,
-  mutateCodexNativeSubagentSubmissions,
   type CodexNativeSubagentSubmission,
 } from "./native-subagent-submission.js";
 import {
+  mutateNativeSubagentBinding,
+  type CodexNativeSubagentBindingMutation,
+} from "./session-binding-native-mutations.js";
+import {
+  readCurrentNativePendingAssignments,
+  preserveNativePendingAssignments,
+  preserveNativeTaskImport,
   bindingStoreKey,
-  matchesCodexNativeSubagentSubmissionBinding,
   ownsStoredSessionGeneration,
   preserveCodexNativeSubagentSubmissions,
   readCodexAppServerThreadBinding,
@@ -106,16 +112,7 @@ export function createCodexSessionGenerationSupersededError(
 }
 
 type CodexAppServerBindingMutation =
-  | {
-      kind: "record-native-subagent-submission";
-      owner: CodexNativeSubagentHistoryOwner;
-      receipt: CodexNativeSubagentSubmission;
-    }
-  | {
-      kind: "consume-native-subagent-submission";
-      owner: CodexNativeSubagentHistoryOwner;
-      receipt: CodexNativeSubagentSubmission;
-    }
+  | CodexNativeSubagentBindingMutation
   | {
       kind: "set";
       binding: CodexAppServerThreadBinding;
@@ -267,6 +264,10 @@ export type CodexAppServerBindingStore = {
   readMany?: (
     identities: readonly CodexAppServerBindingIdentity[],
   ) => Generator<CodexAppServerThreadBinding | undefined, undefined, void>;
+  readNativeSubagentAssignments?(
+    identity: CodexAppServerBindingIdentity,
+    owner: CodexNativeSubagentHistoryOwner,
+  ): readonly CodexNativeSubagentPendingAssignment[];
   readNativeSubagentSubmissions(
     identity: CodexAppServerBindingIdentity,
     owner: CodexNativeSubagentHistoryOwner,
@@ -372,7 +373,9 @@ export function createCodexAppServerBindingStore(
       renewIntervalMs: BINDING_LEASE_RENEW_INTERVAL_MS,
     },
     releaseTtlMs: (key, current) =>
-      current.state === "active" || (current.retired === true && !key.startsWith("session:"))
+      current.nativeSubagentTaskImport !== undefined ||
+      current.state === "active" ||
+      (current.retired === true && !key.startsWith("session:"))
         ? undefined
         : current.retired === true
           ? PHYSICAL_SESSION_RETIRE_TTL_MS
@@ -418,6 +421,7 @@ export function createCodexAppServerBindingStore(
         version: 1,
         state: "cleared",
         ...preservedSessionGeneration(identity, current),
+        ...preserveNativeTaskImport(current),
         lease,
       };
     },
@@ -458,13 +462,14 @@ export function createCodexAppServerBindingStore(
               state: "cleared",
               ...(mode === "retire" ? { retired: true as const } : {}),
               ...storedSessionGeneration(identity, current),
+              ...preserveNativeTaskImport(current),
               ...(current.lease && current.lease.token === leaseToken
                 ? { lease: current.lease }
                 : {}),
             },
           };
         },
-        ttlMs,
+        (next) => (next.nativeSubagentTaskImport !== undefined ? undefined : ttlMs),
       );
     });
   };
@@ -477,6 +482,8 @@ export function createCodexAppServerBindingStore(
             readCurrentCodexAppServerBindings(state, identities),
         }
       : {}),
+    readNativeSubagentAssignments: (identity, owner) =>
+      readCurrentNativePendingAssignments(state, identity, owner),
     readNativeSubagentSubmissions: (identity, owner) =>
       readCurrentCodexNativeSubagentSubmissions(state, identity, owner),
 
@@ -535,40 +542,12 @@ export function createCodexAppServerBindingStore(
           key,
           (current, leaseToken) => {
             if (
+              mutation.kind === "record-native-subagent-assignment" ||
+              mutation.kind === "consume-native-subagent-assignment" ||
               mutation.kind === "record-native-subagent-submission" ||
               mutation.kind === "consume-native-subagent-submission"
             ) {
-              if (!assertCurrent) {
-                throw new Error(
-                  "Codex native subagent submission mutation requires current authority.",
-                );
-              }
-              assertCurrent();
-              if (
-                current?.state !== "active" ||
-                !ownsStoredSessionGeneration(identity, current) ||
-                (identity.kind === "session" && mutation.owner.sessionId !== identity.sessionId) ||
-                !matchesCodexNativeSubagentSubmissionBinding(current.binding, mutation.owner)
-              ) {
-                return { result: false };
-              }
-              const changed = mutateCodexNativeSubagentSubmissions({
-                current: current.nativeSubagentSubmissions,
-                owner: mutation.owner,
-                receipt: mutation.receipt,
-                consume: mutation.kind === "consume-native-subagent-submission",
-              });
-              if (!changed.applied) {
-                return { result: false };
-              }
-              const { nativeSubagentSubmissions: _previous, ...bindingOwner } = current;
-              return {
-                result: true,
-                next: {
-                  ...bindingOwner,
-                  ...(changed.next ? { nativeSubagentSubmissions: changed.next } : {}),
-                },
-              };
+              return mutateNativeSubagentBinding({ identity, current, mutation, assertCurrent });
             }
             const ownsGeneration = ownsStoredSessionGeneration(identity, current);
             const ownedLease =
@@ -595,6 +574,7 @@ export function createCodexAppServerBindingStore(
                       version: 1,
                       state: "cleared",
                       sessionId: identity.sessionId,
+                      ...preserveNativeTaskImport(current),
                       ...ownedLease,
                     },
                   };
@@ -618,6 +598,7 @@ export function createCodexAppServerBindingStore(
                   version: 1,
                   state: "cleared",
                   sessionId: identity.sessionId,
+                  ...preserveNativeTaskImport(current),
                   ...ownedLease,
                 },
               };
@@ -666,6 +647,7 @@ export function createCodexAppServerBindingStore(
                   version: 1,
                   state: "cleared",
                   ...storedSessionGeneration(identity, current),
+                  ...preserveNativeTaskImport(current),
                   ...ownedLease,
                 },
               };
@@ -699,14 +681,23 @@ export function createCodexAppServerBindingStore(
                   active.nativeSubagentSubmissions,
                 )
               : undefined;
+            const nativeSubagentAssignments = active
+              ? preserveNativePendingAssignments(
+                  active.binding,
+                  binding,
+                  active.nativeSubagentAssignments,
+                )
+              : undefined;
             return {
               result: true,
               next: {
                 version: 1,
                 state: "active",
                 binding,
+                ...(nativeSubagentAssignments !== undefined ? { nativeSubagentAssignments } : {}),
                 ...(nativeSubagentSubmissions !== undefined ? { nativeSubagentSubmissions } : {}),
                 ...storedSessionGeneration(identity, current),
+                ...preserveNativeTaskImport(current),
                 ...ownedLease,
               },
             };
@@ -715,9 +706,13 @@ export function createCodexAppServerBindingStore(
           // the key afterwards is fenced by ownsStoredSessionGeneration on read
           // and displaced via reclaim-generation; durable stable-key fences come
           // from retireSessionGeneration, not runtime clears.
-          mutation.kind === "clear" && !retainLegacyClear && !lifecycle.hasLease(key)
-            ? 1
-            : undefined,
+          (next) =>
+            mutation.kind === "clear" &&
+            next.nativeSubagentTaskImport === undefined &&
+            !retainLegacyClear &&
+            !lifecycle.hasLease(key)
+              ? 1
+              : undefined,
           assertCurrent,
         );
       });
@@ -745,7 +740,11 @@ export function createCodexAppServerBindingStore(
             if (current.sessionId !== expectedSessionId) {
               return { result: "conflict" as const };
             }
-            const { nativeSubagentSubmissions, ...bindingOwner } = current;
+            const {
+              nativeSubagentSubmissions,
+              nativeSubagentAssignments: _assignments,
+              ...bindingOwner
+            } = current;
             const adoptedSubmissions =
               adoptCodexNativeSubagentSubmissions(nativeSubagentSubmissions);
             return {

@@ -4,26 +4,26 @@ import { prepareCliPromptImagePayload } from "../../agents/cli-runner/helpers.js
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/run/images.js";
 import { FailoverError } from "../../agents/failover-error.js";
+import { registerGeneratedMediaTaskActivity } from "../../agents/media-generation-activity.js";
+import { resetGeneratedMediaTaskActivityForTests } from "../../agents/media-generation-activity.test-support.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { registerGeneratedMediaTaskActivity } from "../../tasks/generated-media-task-activity.js";
-import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import type { TemplateContext } from "../templating.js";
+import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 import {
-  setupAgentRunnerExecutionTestState,
-  getExecuteAgentTurnForTest,
   createFollowupRun,
-  createTestUserTurnRecorder,
-  requireRecord,
-  requireMockCall,
-  expectMockCallArgFields,
-  initialFallbackAttemptOptions,
   createMinimalRunAgentTurnParams,
   createRunAgentTurnParams,
+  createTestUserTurnRecorder,
+  expectMockCallArgFields,
+  getExecuteAgentTurnForTest,
+  initialFallbackAttemptOptions,
   makeTestSessionStorePath,
+  requireMockCall,
+  requireRecord,
+  setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
-import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 

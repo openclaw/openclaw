@@ -1,6 +1,6 @@
 // Cron service timer tests cover timer scheduling, cancellation, and wakeups.
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
@@ -9,7 +9,6 @@ import { onTimer } from "../../cron/service/timer.test-support.js";
 import { loadCronStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -42,10 +41,6 @@ function createCronServiceState(
     ...params,
   });
 }
-
-afterEach(() => {
-  resetTaskRegistryForTests();
-});
 
 describe("cron service timer seam coverage", () => {
   it.each(["timer", "startup"] as const)("%s ignores stale event schedule slots", async (entry) => {
@@ -206,18 +201,11 @@ describe("cron service timer seam coverage", () => {
     if (!task) {
       throw new Error("expected cron task ledger record");
     }
-    expect(task.runtime).toBe("cron");
-    expect(task.sourceId).toBe("main-heartbeat-job");
+    expect(task.jobId).toBe("main-heartbeat-job");
     expect(task.agentId).toBe("ops");
-    expect(task.ownerKey).toBe("");
-    expect(task.scopeKind).toBe("system");
-    expect(task.childSessionKey).toBeUndefined();
+    expect(task.sessionKey).toBeUndefined();
     expect(task.runId).toMatch(new RegExp(`^cron:main-heartbeat-job:${now}:`));
-    expect(task.label).toBe("main heartbeat job");
-    expect(task.task).toBe("main heartbeat job");
     expect(task.status).toBe("succeeded");
-    expect(task.deliveryStatus).toBe("not_applicable");
-    expect(task.notifyPolicy).toBe("silent");
     expect(task.startedAt).toBe(now);
     expect(task.lastEventAt).toBe(now);
     expect(task.endedAt).toBe(now);

@@ -33,7 +33,7 @@ export async function readArtifactImagePage(params: {
   cursor?: string;
   limit: number;
   sessionKey: string;
-  filters: Pick<ArtifactsListParams, "runId" | "taskId" | "messageRole">;
+  filters: Pick<ArtifactsListParams, "runId" | "messageRole">;
 }): Promise<{ artifacts: ArtifactSummary[]; nextCursor?: string; omittedOversized?: boolean }> {
   const owner = params.client ?? internalCaller;
   let state = cursors.get(owner);

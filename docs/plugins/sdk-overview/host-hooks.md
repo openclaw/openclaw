@@ -281,10 +281,8 @@ plugin code that calls
 `api.unscheduleSessionTurnsByTag` directly.
 
 `scheduleSessionTurn(...)` is a session-scoped convenience over the Gateway
-Cron scheduler. Cron owns timing and creates the background task record when the
-turn runs; the Plugin SDK only constrains the target session, plugin-owned
-naming, and cleanup. Use `api.runtime.tasks.managedFlows` inside the scheduled
-turn when the work itself needs durable multi-step Task Flow state.
+Cron scheduler. Cron owns timing and run history; the Plugin SDK only constrains
+the target session, plugin-owned naming, and cleanup.
 
 Within session extensions, `openclaw/plugin-sdk/agent-sessions` provides the host's
 model-selection helpers. Exact provider/model IDs take precedence over case-insensitive

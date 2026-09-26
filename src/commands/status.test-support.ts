@@ -116,8 +116,6 @@ export function getStatusOverviewRowValue(
 }
 
 const baseStatusSummary = {
-  tasks: { total: 3, active: 1, failures: 0, byStatus: { queued: 1, running: 1 } },
-  taskAudit: { errors: 1, warnings: 0 },
   heartbeat: {
     defaultAgentId: "main",
     agents: [{ agentId: "main", enabled: true, everyMs: 60_000, every: "1m" }],

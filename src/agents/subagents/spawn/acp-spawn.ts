@@ -1,5 +1,5 @@
-/** Implements ACP subagent/session spawning, binding, limits, and parent-stream setup. */
 import crypto from "node:crypto";
+/** Implements ACP subagent/session spawning, binding, limits, and parent-stream setup. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AcpTurnAttachment } from "../../../acp/control-plane/manager.types.js";
 import { cleanupFailedAcpSpawn } from "../../../acp/control-plane/spawn.js";
@@ -49,8 +49,8 @@ import {
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import {
   runSpawnPipeline,
-  type SpawnBackendAdapter,
   summarizeSpawnError,
+  type SpawnBackendAdapter,
 } from "../../spawn-pipeline.js";
 import {
   mintSpawnSessionKey,
@@ -69,13 +69,13 @@ import {
 } from "./acp-spawn-bootstrap-delivery.js";
 import { launchAcpChildThroughGateway } from "./acp-spawn-gateway.js";
 import {
-  type AcpSpawnParentRelayHandle,
   startAcpSpawnParentStreamRelay,
+  type AcpSpawnParentRelayHandle,
 } from "./acp-spawn-parent-stream.js";
 import {
   resolveAcpSpawnRequesterState,
-  shouldStreamAcpSpawnToParent,
   resolveRequesterInternalSessionKey,
+  shouldStreamAcpSpawnToParent,
   validateAcpResumeSessionOwnership,
 } from "./acp-spawn-requester.js";
 import {
@@ -677,7 +677,6 @@ export async function spawnAcpDirect(
         expectsCompletionMessage,
         spawnMode,
         // ACP's Gateway manager publishes the task; avoid a second registry projection.
-        taskRowOwnership: "gateway_best_effort",
       };
     },
   });

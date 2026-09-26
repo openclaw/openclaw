@@ -2,21 +2,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ContextEngine } from "../../context-engine/types.js";
-import { peekSystemEvents } from "../../infra/system-events.js";
-import { createQueuedTaskRunCore as createQueuedTaskRunOrNull } from "../../tasks/task-executor.js";
-import type { TaskRecord } from "../../tasks/task-registry.types.js";
 
-export function createQueuedTaskRunCore(
-  params: Parameters<typeof createQueuedTaskRunOrNull>[0],
-): TaskRecord {
-  // Task creation can legally return null for invalid inputs; tests here always
-  // need a concrete queued task record.
-  const task = createQueuedTaskRunOrNull(params);
-  if (!task) {
-    throw new Error("expected queued task creation to succeed");
-  }
-  return task;
-}
 export function createBackgroundMaintenanceEngine(
   maintain: NonNullable<ContextEngine["maintain"]>,
   id = "test",
@@ -50,8 +36,4 @@ export function expectRecordFields(
   for (const [key, value] of Object.entries(expected)) {
     expect(record[key]).toBe(value);
   }
-}
-
-export function expectSystemEventContaining(sessionKey: string, text: string) {
-  expect(peekSystemEvents(sessionKey).join("\n")).toContain(text);
 }

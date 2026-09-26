@@ -1,4 +1,4 @@
-// Advertised core method order from 8d94ab0d1e258fd0f148263fc3f75e17b4628adf.
+// Retained core method order from 8d94ab0d1e258fd0f148263fc3f75e17b4628adf.
 // Keep this prefix frozen; new RPCs append without moving existing client indices.
 export const LEGACY_ADVERTISED_GATEWAY_METHODS = `
 health diagnostics.stability doctor.memory.status doctor.memory.dreamDiary
@@ -27,7 +27,7 @@ audit.list audit.activity.list users.list users.self users.linkEmail users.setDi
 users.setAvatar users.setRole users.listAuthLinks users.listModelAccounts users.selectModelAccount
 users.linkAuthProfile users.unlinkAuthProfile users.authConnect.start users.authConnect.answer
 users.authConnect.status users.authConnect.cancel users.authConnect.catalog
-tasks.list tasks.get tasks.cancel taskSuggestions.list
+taskSuggestions.list
 taskSuggestions.create taskSuggestions.accept taskSuggestions.dismiss environments.list
 environments.status worktrees.list worktrees.branches fs.listDir worktrees.create
 worktrees.remove worktrees.restore worktrees.gc agents.list agents.create agents.update
@@ -75,7 +75,7 @@ board.prompt.authorize board.data.read board.action sessions.observer.visibility
 session.visibility.set session.members.list session.members.add session.members.remove
 session.suggestions.add session.suggestions.list session.suggestions.resolve session.typing
 sessions.companion.ask sessions.companion.state sessions.companion.reset memory.search
-skills.proposals.events.list skills.proposals.evaluate hooks.status tasks.retry tasks.dismiss
+skills.proposals.events.list skills.proposals.evaluate hooks.status
 audit.run.inspect sessions.patchMany update.hold sessions.catalog.startTerminal
 worker.desktop.observe projects.list projects.register projects.remove worker.desktop.launch
 secrets.store.list secrets.store.set secrets.store.delete users.prefs.get users.prefs.set

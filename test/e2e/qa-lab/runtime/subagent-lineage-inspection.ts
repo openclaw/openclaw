@@ -18,6 +18,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { readQaSubagentRuns } from "../../../helpers/qa-subagent-runs.js";
 import { MODEL_REF } from "./cloud-worker-midturn-loss-fixture.js";
 import {
   closeWireServer,
@@ -357,30 +358,24 @@ async function requireActivePlacement(gateway: Gateway, session: SessionRef) {
   });
 }
 
-async function waitForSubagentTasks(gateway: Gateway, children: readonly SessionRef[]) {
+async function waitForSubagentRuns(gateway: Gateway, children: readonly SessionRef[]) {
   return await waitUntil(
-    "worker lineage subagent tasks",
+    "worker lineage native subagent runs",
     async () => {
-      const payload = requireRecord(
-        await gateway.call("tasks.list", { agentId: "qa", limit: 100 }),
-        "tasks.list",
-      );
-      const rows = (Array.isArray(payload.tasks) ? payload.tasks : []).map((row, index) =>
-        requireRecord(row, `tasks.list row ${index}`),
-      );
+      const rows = readQaSubagentRuns(gateway.runtimeEnv);
       const matched = children.map((child) =>
         rows.find((row) => row.childSessionKey === child.key),
       );
-      const terminalFailure = matched.find(
-        (row) => row && row.status !== "running" && row.status !== "completed",
+      const failure = matched.find(
+        (row) => row?.execution.status === "terminal" && row.execution.outcome?.status !== "ok",
       );
-      if (terminalFailure) {
+      if (failure) {
         throw new Error(
-          `worker lineage subagent task failed with ${String(terminalFailure.status)}`,
+          `worker lineage child failed: ${JSON.stringify(failure.execution.outcome)}`,
         );
       }
-      return matched.every((row) => row?.status === "completed")
-        ? (matched as Record<string, unknown>[])
+      return matched.every((row) => row?.execution.status === "terminal")
+        ? matched.flatMap((row) => (row ? [row] : []))
         : undefined;
     },
     30_000,
@@ -508,7 +503,7 @@ async function runNestedWorkerTopology(params: {
   } catch (error) {
     throw new Error("nested worker child session was not created", { cause: error });
   }
-  const tasks = await waitForSubagentTasks(params.gateway, [child, grandchild]);
+  const tasks = await waitForSubagentRuns(params.gateway, [child, grandchild]);
   const childRunId = requireString(tasks[0]?.runId, "worker child run id");
   const grandchildRunId = requireString(tasks[1]?.runId, "nested worker child run id");
   const childPlacement = await requireActivePlacement(params.gateway, child);

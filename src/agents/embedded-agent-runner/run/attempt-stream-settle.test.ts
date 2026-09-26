@@ -6,17 +6,16 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../../../config/plugin-auto-enable.test-helpers.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
-import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
-import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import { prepareTaskRegistryRead } from "../../../tasks/task-registry-read.js";
-import { createTaskFixture } from "../../../tasks/task-registry.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { holdStateDatabaseCoordinator } from "../../../test-utils/state-database-contention.js";
+import {
+  createMediaGenerationOperation,
+  findMediaGenerationOperation,
+} from "../../media-generation-activity.js";
+import { resetGeneratedMediaTaskActivityForTests } from "../../media-generation-activity.test-support.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -110,69 +109,43 @@ describe("settleEmbeddedAttemptStream liveness", () => {
     { withMetadata: false, timedOut: false },
     { withMetadata: true, timedOut: true },
   ])(
-    "settles cancellation while task persistence is held, metadata=$withMetadata timeout=$timedOut",
+    "settles cancellation with active media, metadata=$withMetadata timeout=$timedOut",
     async ({ withMetadata, timedOut }) => {
-      await withOpenClawTestState({ layout: "split" }, async (state) => {
-        const sessionKey = "agent:main:cron:settle:run:private-cancel";
-        const task = createTaskFixture("subagent", {
-          runId: "private-stream-cancel",
-          task: "Private stream cancellation proof",
-          ownerKey: sessionKey,
-          requesterSessionKey: sessionKey,
-          taskKind: "image_generation",
-          childSessionKey: "agent:main:subagent:private-stream-cancel",
-          notifyPolicy: "silent",
-          deliveryStatus: "not_applicable",
-        });
-        await prepareTaskRegistryRead();
-        const context = captureOpenClawStateWorkerContext();
-        expect(context.admission.databasePath.startsWith(state.stateDir)).toBe(true);
-        const holder = holdStateDatabaseCoordinator(
-          context.admission.databasePath,
-          context.coordinatorRuntime,
-          300,
-        );
-        const controller = new AbortController();
-        const input = createSettleFixture({
-          runAbortSignal: controller.signal,
-          readLifecycleState: () => ({
-            aborted: controller.signal.aborted,
-            timedOut: timedOut && controller.signal.aborted,
-            timedOutDuringCompaction: false,
-          }),
-        });
-        input.attempt.sessionKey = sessionKey;
-        input.subscription.toolMetas = withMetadata
-          ? [{ toolName: "image_generate", asyncStarted: true, asyncTaskRunId: task.runId }]
-          : [];
-        let settlement: ReturnType<typeof settleEmbeddedAttemptStream> | undefined;
-        try {
-          await holder.ready;
-          emitAgentEvent({
-            runId: task.runId!,
-            stream: "lifecycle",
-            data: { phase: "end", endedAt: task.createdAt + 1 },
-          });
-          settlement = settleEmbeddedAttemptStream(input);
-          await setImmediate();
-          controller.abort();
-          const result = await settlement;
-          expect(result.promptError).toBeNull();
-          expect(result.sessionIdUsed).toBe("sess-settle-1");
-          expect(
-            Atomics.load(holder.released, 0),
-            "full cancellation settlement must finish before coordinator release",
-          ).toBe(0);
-          holder.release();
-          const read = await prepareTaskRegistryRead();
-          expect(read?.getTaskById(task.taskId)).toMatchObject({ status: "succeeded" });
-        } finally {
-          holder.release();
-          await holder.joined;
-          await Promise.allSettled([settlement]);
-          await closeOpenClawStateDatabaseAsync();
-        }
+      resetGeneratedMediaTaskActivityForTests();
+      const sessionKey = "agent:main:cron:settle:run:cancel";
+      const task = createMediaGenerationOperation({
+        taskId: "stream-cancel",
+        runId: "stream-cancel",
+        task: "Stream cancellation proof",
+        requesterSessionKey: sessionKey,
+        taskKind: "image_generation",
+        status: "running",
+        createdAt: Date.now(),
       });
+      const controller = new AbortController();
+      const input = createSettleFixture({
+        runAbortSignal: controller.signal,
+        readLifecycleState: () => ({
+          aborted: controller.signal.aborted,
+          timedOut: timedOut && controller.signal.aborted,
+          timedOutDuringCompaction: false,
+        }),
+      });
+      input.attempt.sessionKey = sessionKey;
+      input.subscription.toolMetas = withMetadata
+        ? [{ toolName: "image_generate", asyncStarted: true, asyncTaskRunId: task.runId }]
+        : [];
+      const settlement = settleEmbeddedAttemptStream(input);
+      try {
+        controller.abort();
+        const result = await settlement;
+        expect(result.promptError).toBeNull();
+        expect(result.sessionIdUsed).toBe("sess-settle-1");
+        expect(findMediaGenerationOperation(task.runId!)).toMatchObject({ status: "running" });
+      } finally {
+        await Promise.allSettled([settlement]);
+        resetGeneratedMediaTaskActivityForTests();
+      }
     },
   );
 

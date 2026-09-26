@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Auto-reply queue modes, shared background capacity, and per-session overrides"
 read_when:
   - Changing auto-reply execution or concurrency
@@ -186,7 +187,7 @@ does not repeat their effects.
 - Applies to auto-reply agent runs across all inbound channels that use the gateway reply pipeline (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, webchat, etc.).
 - Default lane (`main`) is process-wide for inbound turns; set `agents.defaults.maxConcurrent` to allow multiple sessions in parallel.
 - Heartbeat embedded runs use the bounded `cron-nested` lane for global admission so slow background work does not block inbound replies, while their configured heartbeat session lane still serializes work for that session.
-- Additional lanes may exist (e.g. `cron`, `cron-nested`, `nested`) so background jobs can run in parallel without blocking inbound replies. Isolated cron agent turns hold a `cron` slot while their inner agent execution uses `cron-nested`. Shared non-cron `nested` flows keep their own lane behavior. These detached runs are tracked as [background tasks](/automation/tasks).
+- Additional lanes may exist (e.g. `cron`, `cron-nested`, `nested`) so background jobs can run in parallel without blocking inbound replies. Isolated cron agent turns hold a `cron` slot while their inner agent execution uses `cron-nested`. Shared non-cron `nested` flows keep their own lane behavior. These detached runs remain owned by their native runtime.
 - Ordinary sub-agent execution uses `subagent:<immediate session>`. `agents.defaults.subagents.maxConcurrent` defaults to `8` for each session; independent sessions and nested orchestrators do not share those slots. The separate `maxChildrenPerAgent` admission limit still applies. [Codex-native subagents](/plugins/codex-harness) use Codex's own scheduler.
 - [Swarm](/tools/swarm) collector children use `subagent:swarm:<schedulerGroupKey>`, capped by the group's resolved `tools.swarm.maxConcurrent` (default `32`). They do not occupy their parent's ordinary sub-agent lane. An ordinary child spawned by a collector uses that collector's own session lane. Swarm's `maxChildrenPerGroup` and `maxTotalPerGroup` remain separate admission limits. Lane diagnostics identify the swarm lane and its group key.
 - Per-session lanes guarantee that only one agent run touches a given session at a time.

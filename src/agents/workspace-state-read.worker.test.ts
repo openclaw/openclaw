@@ -184,7 +184,7 @@ it("reads committed workspace state while the cached writer has an open transact
 it("preserves source artifacts and does not repair missing indexes on inspection", async () => {
   const expected = await seed();
   const database = openOpenClawStateDatabase();
-  database.db.exec("DROP INDEX idx_flow_runs_owner_key");
+  database.db.exec("DROP INDEX idx_task_runs_status");
   const databasePath = database.path;
   await closeOpenClawStateDatabaseAsync();
   const artifacts = () =>

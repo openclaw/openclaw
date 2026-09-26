@@ -143,7 +143,7 @@ describe("chat pane initial panel layout", () => {
       const left = "agent:main:left";
       const right = "agent:main:right";
       const rightLayout = openSlot({ columns: [] }, "workspace");
-      const leftLayout = setSidebarOpen(openSlot({ columns: [] }, "tasks"), preference === "open");
+      const leftLayout = setSidebarOpen(openSlot({ columns: [] }, "detail"), preference === "open");
       const client = createGatewayBrowserClientFixture();
       const context = createInitializationContext(client);
       const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
@@ -158,7 +158,7 @@ describe("chat pane initial panel layout", () => {
         },
         sidebarSessionActivePanels: {
           [right]: "workspace",
-          ...(preference !== "absent" ? { [left]: "tasks" } : {}),
+          ...(preference !== "absent" ? { [left]: "detail" } : {}),
         },
       });
       const stopAfterAttach = new Error("stop after attach");
@@ -168,8 +168,10 @@ describe("chat pane initial panel layout", () => {
       const expectOwnLayout = () => {
         expect(pane.state.sessionKey).toBe(left);
         expect(isSidebarSlotVisible(pane.state.sidebarLayout, "workspace")).toBe(false);
-        expect(isSidebarSlotVisible(pane.state.sidebarLayout, "tasks")).toBe(preference === "open");
-        expect(pane.state.sidebarFocusPanelId).toBe(preference === "absent" ? "" : "tasks");
+        expect(isSidebarSlotVisible(pane.state.sidebarLayout, "detail")).toBe(
+          preference === "open",
+        );
+        expect(pane.state.sidebarFocusPanelId).toBe(preference === "absent" ? "" : "detail");
       };
       try {
         expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);

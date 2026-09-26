@@ -1975,7 +1975,6 @@ const READ_ONLY_RPC_PROBES = [
   { method: "sessions.list", params: {} },
   { method: "cron.status", params: {} },
   { method: "cron.list", params: { includeDisabled: true } },
-  { method: "tasks.list", params: {} },
   { method: "usage.status", params: {} },
   { method: "usage.cost", params: {} },
   { method: "voicewake.get", params: {} },
@@ -2133,8 +2132,6 @@ export function assertGatewayStatusPayload(payload: unknown) {
     ],
     [Array.isArray(status.channelSummary), "channelSummary array"],
     [Array.isArray(status.queuedSystemEvents), "queuedSystemEvents array"],
-    [isRecord(status.tasks), "tasks summary"],
-    [isRecord(status.taskAudit), "taskAudit summary"],
     [
       isRecord(sessions) &&
         Array.isArray(sessions.paths) &&

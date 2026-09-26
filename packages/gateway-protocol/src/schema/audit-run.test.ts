@@ -116,13 +116,20 @@ describe("audit run inspection protocol", () => {
         provenance: { state: "verified", producer: "receipt-owner" },
       }),
     ).toBe(false);
-    for (const producer of ["cron-lifecycle", "task-lifecycle", "flow-lifecycle"]) {
+    for (const [producer, accepted] of [
+      ["run-admission", true],
+      ["operator-approval", true],
+      ["message-delivery", true],
+      ["cron-lifecycle", true],
+      ["task-lifecycle", false],
+      ["flow-lifecycle", false],
+    ] as const) {
       expect(
         validate.Check({
           ...display,
           provenance: { state: "verified", producer },
         }),
-      ).toBe(true);
+      ).toBe(accepted);
     }
   });
 

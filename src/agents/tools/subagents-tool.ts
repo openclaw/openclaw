@@ -1,70 +1,52 @@
-/**
- * subagents built-in tool.
- *
- * Lists and cancels background work in the caller's session tree.
- */
+/** Lists, waits for, and cancels native subagent executions. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Type } from "typebox";
-import { resolveAcpSessionControlOwner } from "../../acp/runtime/session-control-owner.js";
-import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
-import {
-  listTaskRecordsForOwnerTree,
-  prepareTaskRegistryRead,
-} from "../../tasks/runtime-internal.js";
-import { readTaskBackingInstance } from "../../tasks/task-backing-records.js";
-import {
-  withTaskCancellationContext,
-  type TaskCancellationTarget,
-} from "../../tasks/task-cancellation-context.js";
-import { getTaskExecutionObservation } from "../../tasks/task-execution-observation.js";
-import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
-import { onTaskRegistryChange } from "../../tasks/task-registry.store.js";
-import type { TaskRegistryObserverEvent } from "../../tasks/task-registry.store.types.js";
-import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
-import { resolveTaskSessionAgentId } from "../../tasks/task-session-identity.js";
-import { TASK_STATUS_DETAIL_MAX_CHARS, sanitizeTaskStatusText } from "../../tasks/task-status.js";
+import { sanitizeRunStatusText } from "../run-status-text.js";
 import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
 import {
   ensureSubagentControllerOwnsRun,
-  isSubagentRunVisibleToSession,
+  listControlledSubagentRunFacts,
 } from "../subagents/registry/subagent-control-scope.js";
 import {
   DEFAULT_RECENT_MINUTES,
+  killSubagentRunAdmin,
   buildControlledSubagentRunsReadContext,
   MAX_RECENT_MINUTES,
   resolveSubagentController,
 } from "../subagents/registry/subagent-control.js";
+import { observeSubagentExecution } from "../subagents/registry/subagent-execution-observation.js";
 import {
   buildSubagentList,
   readSubagentListSessionEntries,
 } from "../subagents/registry/subagent-list.js";
-import { buildLatestSubagentSessionListReadIndex } from "../subagents/registry/subagent-registry-read.js";
+import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
+import type { SubagentRunReadRecord } from "../subagents/registry/subagent-registry-read.types.js";
 import {
   getSubagentSessionListReadSnapshotIdentity,
   onSubagentRegistryPersisted,
+  prepareSubagentRunsSnapshotForRunIds,
   prepareSubagentSessionListReadCache,
 } from "../subagents/registry/subagent-registry-state.js";
-import type { AnyAgentTool } from "./common.js";
+import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 import {
   jsonResult,
-  readPositiveIntegerParam,
   readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readToolStringParam,
   ToolInputError,
+  type AnyAgentTool,
 } from "./common.js";
 
 const SUBAGENT_ACTIONS = ["list", "wait", "cancel"] as const;
-type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
-
 const SubagentsToolSchema = Type.Object({
   action: optionalStringEnum(SUBAGENT_ACTIONS),
   recentMinutes: optionalPositiveIntegerSchema(),
-  taskId: Type.Optional(Type.String({ description: "Task id" })),
-  taskIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 32 })),
+  runId: Type.Optional(Type.String()),
+  runIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 32 })),
   timeoutSeconds: Type.Optional(
     Type.Integer({
       minimum: 0,
@@ -73,199 +55,55 @@ const SubagentsToolSchema = Type.Object({
     }),
   ),
 });
-
-const STATUS_MAP: Record<TaskStatus, string> = {
-  queued: "queued",
-  running: "running",
-  succeeded: "completed",
-  failed: "failed",
-  timed_out: "timed_out",
-  cancelled: "cancelled",
-  lost: "failed",
-};
-
 type SubagentsToolOptions = {
   agentSessionKey?: string;
-  /** Policy/sandbox key retained task rows may still carry from pre-change code, when it
-   * differs from the durable {@link agentSessionKey}. Lets split-key callers (e.g. Telegram
-   * DM) keep seeing and cancelling retained media/spawn tasks created before the durable-key
-   * alignment. Undefined and equal-to-agentSessionKey values are no-ops. */
   callerPolicySessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
-  listTasks?: () => TaskRecord[];
-  cancelTask?: typeof cancelDetachedTaskRunById;
 };
-
-function taskUpdatedAt(task: TaskRecord): number {
-  return task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt;
-}
-
-function taskOwnerMatches(
-  task: TaskCancellationTarget,
-  allowedOwnerKeys: ReadonlySet<string>,
-  agentId: string,
-  cfg: OpenClawConfig,
-): boolean {
-  return (
-    allowedOwnerKeys.has(task.ownerKey) &&
-    resolveTaskSessionAgentId(task.ownerKey, task.requesterAgentId, cfg) === agentId
-  );
-}
-
-function readTaskTree(
-  tasks: TaskRecord[],
-  rootSessionKeys: ReadonlySet<string>,
-  rootAgentId: string,
-  cfg: OpenClawConfig,
-  subagentOwnership: "retained" | "visible" | "controlled" = "retained",
-) {
-  const visibleSessions = new Map<
-    string,
-    { controllerSessionKey: string; controllerAgentId: string }
-  >();
-  for (const key of rootSessionKeys) {
-    visibleSessions.set(`${rootAgentId}\0${key}`, {
-      controllerSessionKey: key,
-      controllerAgentId: rootAgentId,
-    });
-  }
-  const visibleTasks = new Set<string>();
-  const subagentReadIndex =
-    subagentOwnership === "retained"
-      ? undefined
-      : buildLatestSubagentSessionListReadIndex(
-          tasks.flatMap((task) =>
-            task.runtime === "subagent" && task.childSessionKey ? [task.childSessionKey] : [],
-          ),
-        );
-  const acpControlOwners = new Map<string, string | undefined>();
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const task of tasks) {
-      if (task.scopeKind !== "session" || visibleTasks.has(task.taskId)) {
-        continue;
-      }
-      const taskRequesterAgentId = resolveTaskSessionAgentId(
-        task.ownerKey,
-        task.requesterAgentId,
-        cfg,
-      );
-      if (!visibleSessions.has(`${taskRequesterAgentId ?? ""}\0${task.ownerKey}`)) {
-        continue;
-      }
-      if (
-        subagentOwnership !== "retained" &&
-        task.runtime === "subagent" &&
-        (subagentOwnership === "controlled" ||
-          readTaskBackingInstance(task.detail)?.runtime === "subagent") &&
-        task.runId &&
-        task.childSessionKey
-      ) {
-        const run = subagentReadIndex?.getLatestSubagentRun(task.childSessionKey);
-        if (
-          !run ||
-          !taskRequesterAgentId ||
-          !isSubagentRunVisibleToSession(run, task.ownerKey, taskRequesterAgentId, cfg) ||
-          (run.taskRunId ?? run.runId) !== task.runId ||
-          (subagentOwnership === "controlled" &&
-            ![...visibleSessions.values()].some(
-              (controller) =>
-                ensureSubagentControllerOwnsRun({ cfg, controller, entry: run }) === undefined,
-            ))
-        ) {
-          continue;
-        }
-      }
-      visibleTasks.add(task.taskId);
-      if (task.childSessionKey) {
-        const childAgentId = task.agentId ?? taskRequesterAgentId ?? "";
-        const childIdentity = `${childAgentId}\0${task.childSessionKey}`;
-        if (!visibleSessions.has(childIdentity)) {
-          // Retained task rows remain readable; ACP control edges follow the current owner.
-          if (subagentOwnership === "controlled" && task.runtime === "acp") {
-            if (!acpControlOwners.has(childIdentity)) {
-              const current = readAcpSessionEntry({
-                cfg,
-                sessionKey: task.childSessionKey,
-                agentId: task.agentId,
-                clone: false,
-              });
-              acpControlOwners.set(
-                childIdentity,
-                current?.acp ? resolveAcpSessionControlOwner(current.entry) : undefined,
-              );
-            }
-            if (acpControlOwners.get(childIdentity) !== task.ownerKey) {
-              continue;
-            }
-          }
-          visibleSessions.set(childIdentity, {
-            controllerSessionKey: task.childSessionKey,
-            controllerAgentId: childAgentId,
-          });
-          changed = true;
-        }
-      }
-    }
-  }
+function mapRun(run: SubagentRunRecord) {
   return {
-    tasks: tasks.filter((task) => visibleTasks.has(task.taskId)),
-    sessions: visibleSessions,
+    runId: run.runId,
+    sessionKey: run.childSessionKey,
+    label: sanitizeRunStatusText(run.label, { maxChars: 80 }) || undefined,
+    status: run.pauseReason === "sessions_yield" ? "waiting" : run.execution.status,
+    outcome: run.execution.outcome
+      ? {
+          status: run.execution.outcome.status,
+          error:
+            sanitizeRunStatusText(run.execution.outcome.error, {
+              errorContext: true,
+              maxChars: 120,
+            }) || undefined,
+        }
+      : undefined,
+    deliveryStatus: run.delivery?.status,
+    startedAt: run.execution.startedAt,
+    endedAt: run.execution.endedAt,
   };
 }
-
-function mapTask(task: TaskRecord) {
-  // Task failures can contain hidden provider/runtime context; reuse the bounded status owner.
-  const error = sanitizeTaskStatusText(task.error, {
-    errorContext: true,
-    maxChars: TASK_STATUS_DETAIL_MAX_CHARS,
-  });
-  const execution = getTaskExecutionObservation(task);
-  return {
-    taskId: task.taskId,
-    runtime: task.runtime,
-    deliveryStatus: task.deliveryStatus,
-    ...(execution ? { execution } : {}),
-    status:
-      task.status === "succeeded" && task.terminalOutcome === "blocked"
-        ? "blocked"
-        : STATUS_MAP[task.status],
-    ...(task.label ? { label: task.label } : {}),
-    ...(task.progressSummary ? { progressSummary: task.progressSummary } : {}),
-    ...(task.terminalSummary ? { terminalSummary: task.terminalSummary } : {}),
-    ...(task.terminalOutcome ? { terminalOutcome: task.terminalOutcome } : {}),
-    ...(error ? { error } : {}),
-  };
-}
-
-function waitForSelectedTasks(params: {
-  taskIds: string[];
-  readTasks: () => TaskRecord[];
-  taskChangeAffectsRead: (event?: TaskRegistryObserverEvent) => boolean;
-  subagentChangeAffectsRead: (sessionKeys?: readonly (string | undefined)[]) => boolean;
+function waitForSelectedRuns(params: {
+  runIds: string[];
+  readRuns: (snapshot: ReadonlyMap<string, SubagentRunRecord>) => SubagentRunRecord[];
   timeoutMs: number;
   signal?: AbortSignal;
 }) {
   // A publisher's temporary scope must not own preparation started by its wake.
   const inWaitContext = AsyncLocalStorage.snapshot();
-  const read = () => {
-    const visible = new Map(params.readTasks().map((task) => [task.taskId, task]));
-    const tasks = params.taskIds.flatMap((taskId) => {
-      const task = visible.get(taskId);
+  const read = (snapshot: ReadonlyMap<string, SubagentRunRecord>) => {
+    const visible = new Map(params.readRuns(snapshot).map((task) => [task.runId, task]));
+    const tasks = params.runIds.flatMap((runId) => {
+      const task = visible.get(runId);
       return task ? [task] : [];
     });
-    const unavailable = params.taskIds.filter((taskId) => !visible.has(taskId));
+    const unavailable = params.runIds.filter((runId) => !visible.has(runId));
     const attention = tasks.filter((task) => {
-      const wait = getTaskExecutionObservation(task).wait;
-      return (
-        task.terminalOutcome === "blocked" ||
-        wait?.kind === "approval" ||
-        wait?.kind === "user_input"
-      );
+      const wait = observeSubagentExecution(task, []).wait;
+      return task.delivery?.status === "suspended" || wait?.kind === "external";
     });
-    const completed = tasks.filter((task) => task.status !== "queued" && task.status !== "running");
+    const completed = tasks.filter(
+      (task) => task.execution.status === "terminal" && task.pauseReason !== "sessions_yield",
+    );
     return {
       reason: unavailable.length
         ? "unavailable"
@@ -274,15 +112,16 @@ function waitForSelectedTasks(params: {
           : completed.length
             ? "completed"
             : undefined,
-      tasks: tasks.map(mapTask),
-      completed: completed.map((task) => task.taskId),
-      attention: attention.map((task) => task.taskId),
+      runs: tasks.map(mapRun),
+      completed: completed.map((task) => task.runId),
+      attention: attention.map((task) => task.runId),
       ...(unavailable.length ? { unavailable } : {}),
     };
   };
   return new Promise<ReturnType<typeof read>>((resolve, reject) => {
     let settled = false;
     let preparation: Promise<void> | undefined;
+    let prepared: Awaited<ReturnType<typeof prepareSubagentRunsSnapshotForRunIds>> | undefined;
     let timedOut = params.timeoutMs === 0;
     let abortError: Error | undefined;
     let unsubscribe = () => {};
@@ -302,12 +141,16 @@ function waitForSelectedTasks(params: {
           return;
         }
         try {
-          if (abortError) {
-            fail(abortError);
-            return;
-          }
-          if (!getSubagentSessionListReadSnapshotIdentity()) {
-            preparation = prepareSubagentSessionListReadCache();
+          const compactReady = getSubagentSessionListReadSnapshotIdentity();
+          // Another reader's accepted recovery also keeps custody through abort.
+          if (!compactReady || !prepared) {
+            preparation = !compactReady
+              ? prepareSubagentSessionListReadCache()
+              : prepareSubagentRunsSnapshotForRunIds(subagentRuns, params.runIds).then(
+                  (snapshot) => {
+                    prepared = snapshot;
+                  },
+                );
             void preparation.then(
               () => {
                 preparation = undefined;
@@ -320,7 +163,17 @@ function waitForSelectedTasks(params: {
             );
             return;
           }
-          const state = read();
+          if (abortError) {
+            fail(abortError);
+            return;
+          }
+          const result = prepared.consume(read);
+          if (!result.ready) {
+            prepared = undefined;
+            finish();
+            return;
+          }
+          const state = result.value;
           if (!timedOut && !state.reason) {
             return;
           }
@@ -348,18 +201,8 @@ function waitForSelectedTasks(params: {
         finish();
       });
     };
-    const unsubscribeTasks = onTaskRegistryChange((event) => {
-      if (params.taskChangeAffectsRead(event)) {
-        wake();
-      }
-    });
-    const unsubscribeSubagents = onSubagentRegistryPersisted((keys) => {
-      if (params.subagentChangeAffectsRead(keys)) {
-        wake();
-      }
-    });
+    const unsubscribeSubagents = onSubagentRegistryPersisted(wake);
     unsubscribe = () => {
-      unsubscribeTasks();
       unsubscribeSubagents();
     };
     params.signal?.addEventListener("abort", onAbort, { once: true });
@@ -376,7 +219,6 @@ function waitForSelectedTasks(params: {
   });
 }
 
-/** Creates the subagents list tool scoped to the caller's controlled session tree. */
 export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTool {
   const readScope = () => {
     const cfg = opts.config ?? getRuntimeConfig();
@@ -385,227 +227,153 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
       agentSessionKey: opts.agentSessionKey,
       agentId: opts.agentId,
     });
-    const controllerAgentId = controller.controllerAgentId;
-    if (!controllerAgentId) {
-      throw new ToolInputError("subagent controller agent required");
+    if (!controller.controllerAgentId) {
+      throw new ToolInputError("Subagent controller agent required");
     }
-    // Retained policy-key rows remain readable for split-key callers.
-    const allowedOwnerKeys = new Set<string>([controller.controllerSessionKey]);
-    const callerPolicySessionKey = opts.callerPolicySessionKey?.trim();
-    if (callerPolicySessionKey) {
-      allowedOwnerKeys.add(callerPolicySessionKey);
-    }
-    return { cfg, controller, controllerAgentId, allowedOwnerKeys };
-  };
-  const assertCancellationControl = (task: TaskCancellationTarget) => {
-    const current = readScope();
-    if (task.scopeKind !== "session") {
-      throw new Error("Task outside session tree.");
-    }
-    if (taskOwnerMatches(task, current.allowedOwnerKeys, current.controllerAgentId, current.cfg)) {
-      return;
-    }
-    if (current.controller.controlScope !== "children") {
-      throw new Error("Leaf subagents cannot cancel other sessions.");
-    }
-    const tree = readTaskTree(
-      opts.listTasks?.() ?? listTaskRecordsForOwnerTree(current.allowedOwnerKeys),
-      current.allowedOwnerKeys,
-      current.controllerAgentId,
-      current.cfg,
-      "controlled",
+    const runs = listControlledSubagentRunFacts(
+      controller.controllerSessionKey,
+      controller.controllerAgentId,
+      cfg,
     );
-    const ownerAgentId = resolveTaskSessionAgentId(
-      task.ownerKey,
-      task.requesterAgentId,
-      current.cfg,
-    );
-    // Runtime owners fence the selected target; this check fences its caller ancestry.
-    if (!tree.sessions.has(`${ownerAgentId ?? ""}\0${task.ownerKey}`)) {
-      throw new Error("Task outside session tree.");
+    const readable = new Map<string, SubagentRunReadRecord>();
+    const controlled = new Set<string>();
+    const pending = [{ owner: controller, entries: runs }];
+    const visited = new Set<string>();
+    while (pending.length) {
+      const current = pending.shift()!;
+      const identity = current.owner.controllerAgentId + "\0" + current.owner.controllerSessionKey;
+      if (visited.has(identity)) {
+        continue;
+      }
+      visited.add(identity);
+      for (const entry of current.entries) {
+        readable.set(entry.runId, entry);
+        if (
+          controller.controlScope !== "children" ||
+          ensureSubagentControllerOwnsRun({ cfg, controller: current.owner, entry })
+        ) {
+          continue;
+        }
+        controlled.add(entry.runId);
+        const childController = resolveSubagentController({
+          cfg,
+          agentSessionKey: entry.childSessionKey,
+        });
+        pending.push({
+          owner: childController,
+          entries: listControlledSubagentRunFacts(
+            childController.controllerSessionKey,
+            childController.controllerAgentId,
+            cfg,
+          ),
+        });
+      }
     }
+    return { cfg, controller, runs, readable: [...readable.values()], controlled };
   };
   return {
     label: "Subagents",
     name: "subagents",
-    description:
-      "Background work: list status, wait for selected taskIds to finish or need attention, or cancel a taskId. wait keeps this turn active; timeout does not cancel work or consume completion delivery.",
     parameters: SubagentsToolSchema,
+    description:
+      "List native subagents, wait for selected runIds, or cancel a runId and its descendants. A wait timeout never cancels execution or consumes completion delivery.",
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
-      const action = (readToolStringParam(params, "action") ?? "list") as SubagentAction;
-      const recentMinutesRaw = readPositiveIntegerParam(params, "recentMinutes");
-      const recentMinutes =
-        recentMinutesRaw === undefined
-          ? DEFAULT_RECENT_MINUTES
-          : Math.min(MAX_RECENT_MINUTES, recentMinutesRaw);
+      const action = readToolStringParam(params, "action") ?? "list";
       while (!getSubagentSessionListReadSnapshotIdentity()) {
         await prepareSubagentSessionListReadCache();
       }
-      const prepared =
-        !opts.listTasks && (action === "list" || action === "wait")
-          ? await prepareTaskRegistryRead()
-          : undefined;
-      if (!opts.listTasks && (action === "list" || action === "wait") && !prepared) {
-        throw new Error("Task activity did not stabilize. Retry the task read.");
-      }
-      const listTasks = (owners: ReadonlySet<string>) =>
-        opts.listTasks
-          ? opts.listTasks()
-          : prepared
-            ? prepared.listTaskRecordsForOwnerTree(owners)
-            : listTaskRecordsForOwnerTree(owners);
-
+      signal?.throwIfAborted();
       if (action === "wait") {
-        const taskIds = [...new Set(readStringArrayParam(params, "taskIds", { required: true }))];
-        if (taskIds.length > 32) {
-          throw new ToolInputError("subagents wait supports at most 32 taskIds.");
+        const runIds = [...new Set(readStringArrayParam(params, "runIds", { required: true }))];
+        if (runIds.length > 32) {
+          throw new ToolInputError("At most 32 runIds may be waited for");
         }
-        const timeoutSeconds = Math.min(
-          60,
-          readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30,
-        );
-        let dependencies = new Set(taskIds);
-        let ancestorSessionKeys = new Set<string>();
-        let subagentSessionKeys = new Set<string>();
-        const readSelectedTasks = () => {
-          const current = readScope();
-          const isRootTask = (task: Readonly<TaskRecord>) =>
-            taskOwnerMatches(
-              task,
-              current.allowedOwnerKeys,
-              current.controllerAgentId,
-              current.cfg,
-            );
-          const candidates = opts.listTasks
-            ? opts.listTasks()
-            : prepared!.listTaskRecordsWithAncestors(taskIds, isRootTask);
-          dependencies = new Set([...taskIds, ...candidates.map((task) => task.taskId)]);
-          ancestorSessionKeys = new Set(
-            candidates.flatMap((task) => (isRootTask(task) ? [] : [task.ownerKey])),
-          );
-          subagentSessionKeys = new Set(
-            candidates.flatMap((task) =>
-              task.runtime === "subagent" && task.childSessionKey ? [task.childSessionKey] : [],
-            ),
-          );
-          return readTaskTree(
-            candidates,
-            current.allowedOwnerKeys,
-            current.controllerAgentId,
-            current.cfg,
-            "visible",
-          ).tasks;
-        };
-        const taskChangeAffectsRead = (event?: TaskRegistryObserverEvent) => {
-          if (!event || event.kind === "restored") {
-            return true;
-          }
-          const taskId = event.kind === "upserted" ? event.task.taskId : event.taskId;
-          return (
-            dependencies.has(taskId) ||
-            [event.previous, event.kind === "upserted" ? event.task : undefined].some(
-              (task) => task?.childSessionKey && ancestorSessionKeys.has(task.childSessionKey),
-            )
-          );
-        };
-        const result = await waitForSelectedTasks({
-          taskIds,
-          readTasks: readSelectedTasks,
-          taskChangeAffectsRead,
-          subagentChangeAffectsRead: (keys) =>
-            !keys?.length || keys.some((key) => key !== undefined && subagentSessionKeys.has(key)),
-          timeoutMs: timeoutSeconds * 1_000,
-          signal,
+        return jsonResult({
+          status: "ok",
+          action,
+          ...(await waitForSelectedRuns({
+            runIds,
+            readRuns: (snapshot) => {
+              const visible = new Set(readScope().readable.map((entry) => entry.runId));
+              return [...snapshot.values()].filter((entry) => visible.has(entry.runId));
+            },
+            timeoutMs:
+              Math.min(60, readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30) * 1000,
+            signal,
+          })),
         });
-        return jsonResult({ status: "ok", action, ...result });
       }
-      const { cfg, controller, controllerAgentId, allowedOwnerKeys } = readScope();
-      const treeTasks = readTaskTree(
-        listTasks(allowedOwnerKeys),
-        allowedOwnerKeys,
-        controllerAgentId,
-        cfg,
-        action === "cancel" ? "controlled" : "retained",
-      ).tasks;
-
+      const { cfg, controller, readable, controlled } = readScope();
       if (action === "list") {
         const readContext = await buildControlledSubagentRunsReadContext(
           controller.controllerSessionKey,
-          controllerAgentId,
+          controller.controllerAgentId,
           cfg,
-          recentMinutes,
+          Math.min(
+            MAX_RECENT_MINUTES,
+            readPositiveIntegerParam(params, "recentMinutes") ?? DEFAULT_RECENT_MINUTES,
+          ),
         );
         const list = buildSubagentList({
           context: readContext.list,
           sessionEntries: await readSubagentListSessionEntries(cfg, readContext.list),
         });
-        const cutoff = Date.now() - recentMinutes * 60_000;
-        const tasks = treeTasks
-          .filter(
-            (task) =>
-              task.status === "queued" ||
-              task.status === "running" ||
-              taskUpdatedAt(task) >= cutoff,
-          )
-          .toSorted((left, right) => taskUpdatedAt(right) - taskUpdatedAt(left))
-          .map(mapTask);
         return jsonResult({
           status: "ok",
-          action: "list",
+          action,
           requesterSessionKey: controller.controllerSessionKey,
           callerSessionKey: controller.callerSessionKey,
           callerIsSubagent: controller.callerIsSubagent,
           total: list.total,
-          taskTotal: tasks.length,
-          tasks,
           active: list.active.map(({ line: _line, ...view }) => view),
           recent: list.recent.map(({ line: _line, ...view }) => view),
           text: list.text,
         });
       }
-
       if (action === "cancel") {
-        const taskId = readToolStringParam(params, "taskId", { required: true });
-        const target = treeTasks.find((task) => task.taskId === taskId);
-        if (!target) {
-          return jsonResult({ status: "forbidden", error: "Task outside session tree." });
-        }
-        // Leaf subagents may cancel only their own tasks, matching the
-        // control-scope gate every other cross-session subagent mutation enforces.
-        if (
-          controller.controlScope !== "children" &&
-          !taskOwnerMatches(target, allowedOwnerKeys, controllerAgentId, cfg)
-        ) {
+        const runId = readToolStringParam(params, "runId", { required: true });
+        const target = readable.find((run) => run.runId === runId);
+        if (!target || !controlled.has(runId)) {
           return jsonResult({
             status: "forbidden",
-            error: "Leaf subagents cannot cancel other sessions.",
+            error: "Run outside the controlled session tree.",
           });
         }
-        const result = await withTaskCancellationContext(
-          assertCancellationControl,
-          () => (opts.cancelTask ?? cancelDetachedTaskRunById)({ cfg, taskId }),
+        const result = await killSubagentRunAdmin(
           {
-            selectedTask: target,
+            cfg,
+            sessionKey: target.childSessionKey,
+            agentId: target.requesterAgentId,
+            expectedRunId: target.runId,
+            expectedTaskRunId: target.taskRunId ?? target.runId,
+            expectedGeneration: target.generation,
+            expectedOwnerKey: target.requesterSessionKey,
+          },
+          {
             prepareRead: () =>
               getSubagentSessionListReadSnapshotIdentity()
                 ? undefined
                 : prepareSubagentSessionListReadCache(),
+            assertCurrent: () => {
+              signal?.throwIfAborted();
+              const current = readScope();
+              if (
+                current.controller.controllerSessionKey !== controller.controllerSessionKey ||
+                current.controller.controllerAgentId !== controller.controllerAgentId ||
+                !current.controlled.has(target.runId) ||
+                !current.readable.some(
+                  (run) => run.runId === target.runId && run.generation === target.generation,
+                )
+              ) {
+                throw new Error("Subagent cancellation owner changed");
+              }
+            },
           },
         );
-        return jsonResult({
-          status: result.cancelled ? "cancelled" : "error",
-          taskId,
-          found: result.found,
-          cancelled: result.cancelled,
-          ...(result.reason ? { reason: result.reason } : {}),
-        });
+        return jsonResult({ ...result, action, runId });
       }
-
-      return jsonResult({
-        status: "error",
-        error: "Unsupported action.",
-      });
+      throw new ToolInputError("Unsupported subagents action");
     },
   };
 }

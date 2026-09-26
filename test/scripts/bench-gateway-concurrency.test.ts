@@ -1521,30 +1521,27 @@ describe("gateway concurrency benchmark script", () => {
     expect(testing.summarizeRuns([run]).budgetViolations).toEqual([]);
   });
 
-  it.each(["tasks.list", "cron.list", "cron.status"])(
-    "enforces the control budget for %s",
-    (method) => {
-      const run = createBenchmarkRun({
-        controlPlane: [
-          {
-            method,
-            atMs: 0,
-            error: null,
-            latencyMs: 2001,
-            ok: true,
-          },
-        ],
-      });
-      const summary = testing.summarizeRuns([run], { maxControlMs: 2000 });
-      expect(summary.budgetViolations).toEqual([
-        `Gateway ${method} probe exceeded 2000ms: ok=true latencyMs=2001.0 error=none`,
-      ]);
-      expect(summary.controlPlane[method]).toMatchObject({
-        failedSamples: 0,
-        latencyMs: { count: 1, max: 2001 },
-      });
-    },
-  );
+  it.each(["cron.list", "cron.status"])("enforces the control budget for %s", (method) => {
+    const run = createBenchmarkRun({
+      controlPlane: [
+        {
+          method,
+          atMs: 0,
+          error: null,
+          latencyMs: 2001,
+          ok: true,
+        },
+      ],
+    });
+    const summary = testing.summarizeRuns([run], { maxControlMs: 2000 });
+    expect(summary.budgetViolations).toEqual([
+      `Gateway ${method} probe exceeded 2000ms: ok=true latencyMs=2001.0 error=none`,
+    ]);
+    expect(summary.controlPlane[method]).toMatchObject({
+      failedSamples: 0,
+      latencyMs: { count: 1, max: 2001 },
+    });
+  });
 
   it("keeps setup probes outside the control budget and handshakes under their own budget", () => {
     const slowProbe = { atMs: 0, error: null, latencyMs: 5_000, ok: true };

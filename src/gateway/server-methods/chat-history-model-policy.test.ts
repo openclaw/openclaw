@@ -7,6 +7,7 @@ import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
+  patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -18,7 +19,6 @@ import {
 } from "../operator-model-presentation.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
-import * as sharingPreparation from "../session-sharing-preparation.js";
 import * as transcriptReaders from "../session-transcript-readers.js";
 import * as historyDelta from "./chat-history-delta.js";
 import { handleChatHistoryRequest } from "./chat-history-handler.js";
@@ -293,6 +293,26 @@ describe("historical model disclosure", () => {
           stopReason: "stop",
         },
       });
+      const currentSessionId = stage === "retained" ? "history-policy-successor" : scope.sessionId;
+      if (stage === "retained") {
+        await patchSessionEntryCore(scope, () => ({
+          sessionId: currentSessionId,
+          contextBudgetStatus: { ...budget, sessionId: currentSessionId },
+        }));
+        await appendTranscriptMessage(
+          { ...scope, sessionId: currentSessionId },
+          {
+            eventId: "history-policy-successor-reply",
+            message: {
+              role: "assistant",
+              provider: "example",
+              model: "allowed",
+              content: "The newer session must not replace retained history.",
+              stopReason: "stop",
+            },
+          },
+        );
+      }
       const savedEntry = loadSessionEntry(scope);
       const savedTranscript = await loadTranscriptEvents(scope);
       const rows = expectDefined(getSessionRowProjection(context), "row owner");
@@ -304,7 +324,7 @@ describe("historical model disclosure", () => {
       };
       const restores: Array<() => void> = [];
       let preparedDelta: Awaited<ReturnType<typeof historyDelta.readChatHistoryDelta>> | undefined;
-      if (stage === "tail") {
+      if (stage === "tail" || stage === "retained") {
         const read = historyPages.readChatHistoryPage;
         const spy = vi
           .spyOn(historyPages, "readChatHistoryPage")
@@ -342,16 +362,6 @@ describe("historical model disclosure", () => {
             });
           restores.push(() => publication.mockRestore());
         }
-      } else if (stage === "retained") {
-        const prepare = sharingPreparation.prepareSessionMutationFacts;
-        const spy = vi
-          .spyOn(sharingPreparation, "prepareSessionMutationFacts")
-          .mockImplementationOnce(async (params) => {
-            const facts = await prepare(params);
-            await hold();
-            return facts;
-          });
-        restores.push(() => spy.mockRestore());
       } else if (stage === "exact message") {
         const read = transcriptReaders.readSessionMessageByIdAsync;
         const spy = vi
@@ -416,10 +426,7 @@ describe("historical model disclosure", () => {
                   },
                   ...(stage === "retained"
                     ? {
-                        retainedTranscript: {
-                          sessionId: scope.sessionId,
-                          requireCurrentSession: true,
-                        },
+                        retainedSessionId: scope.sessionId,
                       }
                     : {}),
                 });
@@ -457,6 +464,9 @@ describe("historical model disclosure", () => {
         release.resolve();
         await pending;
         const payload = response(respond);
+        if (stage === "retained") {
+          expect(payload.sessionId).toBe(scope.sessionId);
+        }
         if (stage === "roster") {
           const row = onlyRecord(payload.sessions);
           expect(row).toMatchObject({ key: scope.sessionKey, sessionId: scope.sessionId });
@@ -467,7 +477,7 @@ describe("historical model disclosure", () => {
           if (stage !== "exact message" && stage !== "recent") {
             expect(payload.sessionInfo).toMatchObject({
               key: scope.sessionKey,
-              sessionId: scope.sessionId,
+              sessionId: currentSessionId,
             });
             expect(payload.sessionInfo).not.toHaveProperty("model");
             expect(payload.sessionInfo).not.toHaveProperty("modelProvider");

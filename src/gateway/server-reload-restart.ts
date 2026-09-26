@@ -26,15 +26,8 @@ import { isCurrentGatewayReloadGeneration } from "./server-reload-generation.js"
 
 const RESTART_EMISSION_RETRY_MS = 1_000;
 
-type GatewayActiveCounts = {
-  queueSize: number;
-  pendingReplies: number;
-  embeddedRuns: number;
-  backgroundExecSessions: number;
-  rootRequests: number;
-  activeTasks: number;
-  totalActive: number;
-};
+type GatewayActiveCounts =
+  import("../infra/gateway-active-work.js").GatewayActiveWorkSnapshot["counts"];
 
 type RestartRequestDetails = {
   plan: GatewayReloadPlan;
@@ -79,7 +72,6 @@ type GatewayRestartCoordinatorOptions = {
   getActiveCounts: () => GatewayActiveCounts;
   formatActiveDetails: (counts: GatewayActiveCounts) => string[];
   formatDeferredWorkStatus: (status: "active" | "still active") => string;
-  formatTaskBlockers: () => string | null;
 };
 
 class GatewayRestartTransaction {
@@ -423,12 +415,6 @@ class GatewayRestartTransaction {
         params.logReload.warn(
           `config change requires gateway restart (${reasons}) — deferring until ${initialDetails.join(", ")} complete`,
         );
-        const taskBlockers = this.options.formatTaskBlockers();
-        if (taskBlockers) {
-          params.logReload.warn(
-            `restart blocked by active background task run(s): ${taskBlockers}`,
-          );
-        }
       } else {
         params.logReload.warn(`config change requires gateway restart (${reasons}) — preparing`);
       }

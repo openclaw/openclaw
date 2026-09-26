@@ -1,7 +1,6 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
@@ -15,47 +14,14 @@ import {
   backfillCronRunLogEntryJson,
   backfillDeliveryQueueEntriesFromEntryJson,
   ensureOperatorApprovalResolutionRefs,
-  repairLegacyTaskAgentAttribution,
-  repairLegacyTaskDeliveryStatuses,
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
   repairLegacySubagentSuspensionReasons,
-  repairLegacySubagentTaskBindings,
 } from "./openclaw-state-db-legacy-backfills.js";
-import {
-  ensureColumn,
-  tableExists,
-  tableHasColumn,
-  tableHasColumns,
-} from "./openclaw-state-db-schema-helpers.js";
-import { repairLegacyTaskIdentifiers } from "./openclaw-state-db-task-identifiers.js";
+import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const repositoryWorkspacePendingSchemas = new WeakSet<DatabaseSync>();
-const taskExecutionOwnerSchemas = new WeakSet<DatabaseSync>();
-
-export function ensureTaskExecutionOwnerSchema(database: DatabaseSync): void {
-  if (taskExecutionOwnerSchemas.has(database)) {
-    return;
-  }
-  const ownerColumns = [
-    "execution_owner_host",
-    "execution_owner_pid",
-    "execution_owner_start_identity",
-  ];
-  if (!tableHasColumns(database, "task_runs", ownerColumns)) {
-    ensureColumn(database, "task_runs", "execution_owner_host TEXT");
-    ensureColumn(database, "task_runs", "execution_owner_pid INTEGER");
-    ensureColumn(database, "task_runs", "execution_owner_start_identity INTEGER");
-  }
-  const rememberSchema = () => taskExecutionOwnerSchemas.add(database);
-  if (database.isTransaction) {
-    // An outer transaction can still roll back its first-use DDL.
-    deferSqlitePostCommitPublication(database, rememberSchema);
-  } else {
-    rememberSchema();
-  }
-}
 
 export function hasRepositoryWorkspacePendingResultSchema(database: DatabaseSync): boolean {
   if (repositoryWorkspacePendingSchemas.has(database)) {
@@ -387,19 +353,12 @@ export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | 
     backfillLegacyManagedImageRoots(db);
   }
   ensureColumns(db, columns.beforeTaskAttribution);
-  const addedTaskRequesterAgentId = ensureColumn(db, ...columns.taskRequester[0]);
-  if (addedTaskRequesterAgentId) {
-    repairLegacyTaskAgentAttribution(db);
-  }
-  if (repairHistoricalRows) {
-    repairLegacyTaskDeliveryStatuses(db);
-  }
+  // Keep the released physical layout without repairing retired Task attribution or bindings.
+  ensureColumns(db, columns.taskRequester);
   ensureColumns(db, columns.taskRunDetails);
   if (repairHistoricalRows) {
     repairLegacySubagentSuspensionReasons(db);
     repairLegacySubagentExecutionPayloads(db);
-    repairLegacyTaskIdentifiers(db);
-    repairLegacySubagentTaskBindings(db);
     repairLegacySubagentRetainedResults(db);
   }
   ensureColumns(db, columns.workerEnvironments);

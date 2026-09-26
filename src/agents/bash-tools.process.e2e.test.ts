@@ -2,7 +2,6 @@ import { Value } from "typebox/value";
 import { afterEach, expect, test } from "vitest";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { findTaskByRunId } from "../tasks/task-registry-query.js";
 import { getFinishedSession, getSession, markBackgrounded } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
@@ -396,9 +395,6 @@ test.skipIf(process.platform === "win32").each([
     await expect
       .poll(() => getFinishedSession(sessionId), { timeout: 5_000, interval: 25 })
       .toBeDefined();
-    expect(findTaskByRunId(`exec:${sessionId}`)?.status).toBe(
-      exitCode === 0 ? "succeeded" : "failed",
-    );
     const events = peekSystemEventEntries(scopeKey);
     expect(events).toHaveLength(expectsNotification ? 1 : 0);
     if (expectsNotification) {

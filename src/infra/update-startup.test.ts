@@ -374,25 +374,7 @@ describe("update-startup", () => {
     const second = getUpdateEffectiveChannel();
     await vi.advanceTimersByTimeAsync(0);
     expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
-    releaseStatus?.({
-      root: "/opt/openclaw",
-      installKind: "git",
-      packageManager: "pnpm",
-      git: {
-        root: "/opt/openclaw",
-        sha: "current-sha",
-        tag: null,
-        branch: "main",
-        upstream: "origin/main",
-        upstreamSource: "tracking",
-        upstreamSha: "upstream-sha",
-        commitAtMs: null,
-        dirty: false,
-        ahead: 0,
-        behind: 0,
-        fetchOk: false,
-      },
-    });
+    releaseStatus?.(createDevGitStatus({ behind: 0, fetchOk: false }));
 
     await expect(Promise.all([first, second])).resolves.toEqual(["dev", "dev"]);
     await expect(getUpdateEffectiveChannel()).resolves.toBe("dev");
@@ -455,8 +437,9 @@ describe("update-startup", () => {
       getEmbeddedRuns: () => 0,
       getBackgroundExecSessions: () => 0,
       getCronRuns: () => 0,
-      getActiveTasks: () => 0,
-      getTaskBlockers: () => [],
+      getAgentRuns: () => 0,
+      getAcpRuns: () => 0,
+      getMediaRuns: () => 0,
       getRootRequests: () => 0,
       getSessionAdmissions: () => 0,
       getSessionMutations: () => 0,

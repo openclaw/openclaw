@@ -1,19 +1,7 @@
 /**
  * Early gateway startup helper tests.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as gatewayWork from "../process/gateway-work-admission.js";
-import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
-import { getDetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime.js";
-import { getTaskById } from "../tasks/task-registry.js";
-import { createTaskFixture } from "../tasks/task-registry.test-support.js";
-import {
-  resetDetachedTaskLifecycleRuntimeForTests,
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-  setDetachedTaskLifecycleRuntime,
-} from "../tasks/task-runtime.test-helpers.js";
-import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 import { runGatewayCloseSteps } from "./server-shutdown.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
@@ -31,12 +19,9 @@ const mocks = vi.hoisted(() => ({
   refreshRemoteBinsForConnectedNodes: vi.fn(),
   registerSkillsChangeListener: vi.fn(),
   closeSkillsWatchers: vi.fn(),
+  startCronMaintenance: vi.fn(),
   skillsChangeUnsub: vi.fn(),
   ensureContextWindowCacheLoaded: vi.fn(),
-  ensureTaskRuntimeStateReady: vi.fn(),
-  configureTaskRegistryMaintenance: vi.fn(),
-  startTaskRegistryMaintenance: vi.fn(),
-  getInspectableActiveTaskRestartBlockers: vi.fn(),
   startGatewayMaintenanceTimers: vi.fn(() => ({
     startMediaCleanup: vi.fn(),
     stopMediaCleanup: vi.fn(async () => "drained" as const),
@@ -68,20 +53,12 @@ vi.mock("../skills/runtime/refresh.js", () => ({
   closeSkillsWatchers: mocks.closeSkillsWatchers,
 }));
 
+vi.mock("../cron/maintenance.js", () => ({
+  startCronMaintenance: mocks.startCronMaintenance,
+}));
+
 vi.mock("../agents/context.js", () => ({
   ensureContextWindowCacheLoaded: mocks.ensureContextWindowCacheLoaded,
-}));
-
-vi.mock("../tasks/runtime-internal.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../tasks/runtime-internal.js")>()),
-  ensureTaskRuntimeStateReady: mocks.ensureTaskRuntimeStateReady,
-}));
-
-vi.mock("../tasks/task-registry.maintenance.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../tasks/task-registry.maintenance.js")>()),
-  configureTaskRegistryMaintenance: mocks.configureTaskRegistryMaintenance,
-  startTaskRegistryMaintenance: mocks.startTaskRegistryMaintenance,
-  getInspectableActiveTaskRestartBlockers: mocks.getInspectableActiveTaskRestartBlockers,
 }));
 
 import { startGatewayEarlyRuntime } from "./server-startup-early.js";
@@ -136,22 +113,29 @@ describe("startGatewayEarlyRuntime", () => {
     mocks.refreshRemoteBinsForConnectedNodes.mockReset();
     mocks.registerSkillsChangeListener.mockReset();
     mocks.closeSkillsWatchers.mockReset();
+    mocks.startCronMaintenance.mockReset();
     mocks.registerSkillsChangeListener.mockReturnValue(mocks.skillsChangeUnsub);
     mocks.skillsChangeUnsub.mockReset();
     mocks.ensureContextWindowCacheLoaded.mockReset();
     mocks.ensureContextWindowCacheLoaded.mockResolvedValue(undefined);
-    mocks.ensureTaskRuntimeStateReady.mockReset();
-    mocks.configureTaskRegistryMaintenance.mockReset();
-    mocks.startTaskRegistryMaintenance.mockReset();
-    mocks.getInspectableActiveTaskRestartBlockers.mockReset();
-    mocks.getInspectableActiveTaskRestartBlockers.mockReturnValue([]);
     mocks.startGatewayMaintenanceTimers.mockClear();
   });
 
-  it("does not eagerly start the MCP loopback server", async () => {
-    const earlyRuntime = await startGatewayEarlyRuntime(earlyRuntimeInput());
+  it.each([
+    { minimalTestGateway: true, updateCanary: false },
+    { minimalTestGateway: false, updateCanary: true },
+  ])("skips side runtimes for $minimalTestGateway minimal / $updateCanary canary", async (mode) => {
+    const earlyRuntime = await startGatewayEarlyRuntime(earlyRuntimeInput(mode));
 
     expect(earlyRuntime).not.toHaveProperty("mcpServer");
+    expect(mocks.startGatewayDiscovery).not.toHaveBeenCalled();
+    expect(mocks.setSkillsRemoteRegistry).not.toHaveBeenCalled();
+    expect(mocks.primeRemoteSkillsCache).not.toHaveBeenCalled();
+    expect(mocks.startCronMaintenance).not.toHaveBeenCalled();
+    expect(mocks.registerSkillsChangeListener).not.toHaveBeenCalled();
+    expect(await earlyRuntime.startMaintenance({})).toBeNull();
+    expect(mocks.startGatewayMaintenanceTimers).not.toHaveBeenCalled();
+    await earlyRuntime.skillsChangeUnsub();
   });
 
   it.each([false, true])(
@@ -182,30 +166,24 @@ describe("startGatewayEarlyRuntime", () => {
 
   it("wires non-minimal skills runtime through lazy startup imports", async () => {
     const nodeRegistry = { node: { id: "node" } };
-    mocks.getInspectableActiveTaskRestartBlockers.mockReturnValueOnce(["active-task"]);
 
-    const earlyRuntime = await startGatewayEarlyRuntime(
-      earlyRuntimeInput({
-        minimalTestGateway: false,
-        nodeRegistry: nodeRegistry as never,
-      }),
-    );
+    const input = earlyRuntimeInput({
+      minimalTestGateway: false,
+      cfgAtStart: { cron: { enabled: false } },
+      nodeRegistry: nodeRegistry as never,
+    });
+    const earlyRuntime = await startGatewayEarlyRuntime(input);
 
     expect(mocks.setSkillsRemoteRegistry).toHaveBeenCalledWith(nodeRegistry);
     await Promise.resolve();
     expect(mocks.ensureContextWindowCacheLoaded).not.toHaveBeenCalled();
     expect(mocks.primeRemoteSkillsCache).toHaveBeenCalledTimes(1);
-    expect(mocks.ensureTaskRuntimeStateReady).toHaveBeenCalledTimes(1);
-    expect(mocks.configureTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
-    expect(mocks.startTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
-    expect(mocks.ensureTaskRuntimeStateReady.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
-      mocks.startGatewayDiscovery.mock.invocationCallOrder[0] ?? Infinity,
-    );
+    expect(mocks.startCronMaintenance).toHaveBeenCalledExactlyOnceWith(input.scheduler);
+    expect(mocks.startGatewayDiscovery).toHaveBeenCalledOnce();
     expect(mocks.startGatewayDiscovery.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
-      mocks.startTaskRegistryMaintenance.mock.invocationCallOrder[0] ?? Infinity,
+      mocks.setSkillsRemoteRegistry.mock.invocationCallOrder[0] ?? -Infinity,
     );
     expect(mocks.registerSkillsChangeListener).toHaveBeenCalledTimes(1);
-    expect(earlyRuntime.getActiveTaskCount()).toBe(1);
 
     await earlyRuntime.skillsChangeUnsub();
     expect(mocks.skillsChangeUnsub).toHaveBeenCalledTimes(1);
@@ -350,30 +328,6 @@ describe("startGatewayEarlyRuntime", () => {
     }
   });
 
-  it("fails before discovery and task maintenance when task state cannot restore", async () => {
-    const stopDiscovery = vi.fn(async () => {});
-    const swapDiscovery = vi.fn(() => null);
-    mocks.startGatewayDiscovery.mockResolvedValue({ update: async () => {}, stop: stopDiscovery });
-    mocks.ensureTaskRuntimeStateReady.mockImplementationOnce(async () => {
-      throw new Error("task-flow registry restore failed");
-    });
-
-    await expect(
-      startGatewayEarlyRuntime(
-        earlyRuntimeInput({
-          minimalTestGateway: false,
-          swapDiscovery,
-        }),
-      ),
-    ).rejects.toThrow("task-flow registry restore failed");
-
-    expect(mocks.startGatewayDiscovery).not.toHaveBeenCalled();
-    expect(swapDiscovery).not.toHaveBeenCalled();
-    expect(stopDiscovery).not.toHaveBeenCalled();
-    expect(mocks.configureTaskRegistryMaintenance).not.toHaveBeenCalled();
-    expect(mocks.startTaskRegistryMaintenance).not.toHaveBeenCalled();
-  });
-
   it("starts discovery with the current plugin registry services", async () => {
     const stop = vi.fn(async () => {});
     const discovery = { update: async () => {}, stop };
@@ -416,117 +370,4 @@ describe("startGatewayEarlyRuntime", () => {
     expect(discoveryParams.gatewayDiscoveryServices).toEqual([service]);
     expect(discoveryParams.pluginRuntimeClaim).toBe(input.pluginRuntimeClaim);
   });
-});
-
-describe("early startup task maintenance", () => {
-  let maintenance: typeof import("../tasks/task-registry.maintenance.js");
-
-  beforeEach(async () => {
-    const tasks = await vi.importActual<typeof import("../tasks/runtime-internal.js")>(
-      "../tasks/runtime-internal.js",
-    );
-    maintenance = await vi.importActual<typeof import("../tasks/task-registry.maintenance.js")>(
-      "../tasks/task-registry.maintenance.js",
-    );
-    mocks.ensureTaskRuntimeStateReady.mockImplementation(tasks.ensureTaskRuntimeStateReady);
-    mocks.configureTaskRegistryMaintenance.mockImplementation(
-      maintenance.configureTaskRegistryMaintenance,
-    );
-    mocks.startTaskRegistryMaintenance.mockImplementation(maintenance.startTaskRegistryMaintenance);
-    mocks.setSkillsRemoteRegistry.mockReset();
-    mocks.registerSkillsChangeListener.mockReturnValue(() => {});
-  });
-
-  afterEach(async () => {
-    await maintenance.stopTaskRegistryMaintenance();
-    vi.useRealTimers();
-    resetDetachedTaskLifecycleRuntimeForTests();
-    maintenance.configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    await drainGlobalSingletonLifecycleState("close");
-  });
-  it.each([false, true])(
-    "preserves copied tasks only in an update canary (updateCanary: %s)",
-    async (updateCanary) => {
-      await withStateDirEnv("openclaw-canary-tasks-", async () => {
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
-        vi.useFakeTimers();
-        const recoverTask = vi.fn(async () => ({ recovered: false }));
-        setDetachedTaskLifecycleRuntime({
-          ...getDetachedTaskLifecycleRuntime(),
-          tryRecoverTaskBeforeMarkLost: recoverTask,
-        });
-        const staleAt = Date.now() - 45 * 60_000;
-        const copiedTask = createTaskFixture("cli", {
-          task: "Synthetic copied task",
-          runId: "canary-copied-run",
-          lastEventAt: staleAt,
-          notifyPolicy: "silent",
-        });
-        const expiredTask = createTaskFixture("cli", {
-          task: "Synthetic expired task",
-          status: "succeeded",
-          lastEventAt: staleAt,
-          cleanupAfter: staleAt,
-          notifyPolicy: "silent",
-        });
-        const recentTask = createTaskFixture("cli", {
-          task: "Synthetic task within recovery grace",
-          runId: "canary-recent-run",
-          lastEventAt: Date.now() - 4 * 60_000,
-          notifyPolicy: "silent",
-        });
-        const earlyRuntime = await startGatewayEarlyRuntime(
-          earlyRuntimeInput({ minimalTestGateway: false, updateCanary }),
-        );
-        const scheduledSweeps: Promise<unknown>[] = [];
-        const runRootWork = gatewayWork.runWithGatewayIndependentRootWorkAdmission;
-        const rootWork = vi
-          .spyOn(gatewayWork, "runWithGatewayIndependentRootWorkAdmission")
-          .mockImplementation((run, origin, signal) => {
-            const pending = runRootWork(run, origin, signal);
-            if (origin === "tasks:maintenance") {
-              scheduledSweeps.push(pending);
-            }
-            return pending;
-          });
-        try {
-          // Exercise both the startup sweep and the recurring maintenance sweep.
-          let expectedSweeps = 0;
-          for (const elapsedMs of [5_000, 60_000]) {
-            await vi.advanceTimersByTimeAsync(elapsedMs);
-            if (!updateCanary) {
-              expectedSweeps += 1;
-            }
-            expect(scheduledSweeps).toHaveLength(expectedSweeps);
-            await Promise.all(scheduledSweeps);
-            if (updateCanary) {
-              expect(getTaskById(copiedTask.taskId)).toEqual(copiedTask);
-              expect(getTaskById(expiredTask.taskId)).toEqual(expiredTask);
-              expect(getTaskById(recentTask.taskId)).toEqual(recentTask);
-              expect(recoverTask).not.toHaveBeenCalled();
-            } else {
-              expect(getTaskById(copiedTask.taskId)?.status).toBe("lost");
-              expect(getTaskById(expiredTask.taskId)).toBeUndefined();
-              expect(getTaskById(recentTask.taskId)?.status).toBe(
-                elapsedMs === 5_000 ? "running" : "lost",
-              );
-              expect(recoverTask).toHaveBeenCalledTimes(elapsedMs === 5_000 ? 1 : 2);
-            }
-          }
-        } finally {
-          await maintenance.stopTaskRegistryMaintenance();
-          try {
-            await Promise.allSettled(scheduledSweeps);
-            await earlyRuntime.skillsChangeUnsub();
-          } finally {
-            rootWork.mockRestore();
-            vi.useRealTimers();
-          }
-        }
-      });
-    },
-  );
 });

@@ -55,6 +55,7 @@ export const INTERNAL_PROVENANCE_SOURCE_CHANNEL = "internal" as const;
 export const INTER_SESSION_PROMPT_PREFIX_BASE = "[Inter-session message]";
 const AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS = [
   "agent_harness_task",
+  "agent_harness_completion",
   "image_generate",
   "music_generate",
   "video_generate",

@@ -184,15 +184,16 @@ export function registerSharedStateWorkerAdmissionTests(
   it("fences explicitly requested worker execution without a host grant factory", async () => {
     const captured = createContext();
     await executeOpenClawStateWorker(captured, {
-      type: "flows.list",
-      input: { ownerKey: "agent:main:main" },
+      type: "plugins.conversationBindingApprovals.read",
+      input: undefined,
     });
     const foreign = await holdForeignLifecycle(captured);
     let checks = 0;
     let completed = false;
     const result = runOpenClawStateWorkerOperation(
       captured,
-      (scope) => scope.execute({ type: "flows.list", input: { ownerKey: "agent:main:main" } }),
+      (scope) =>
+        scope.execute({ type: "plugins.conversationBindingApprovals.read", input: undefined }),
       {
         requireStateLifecycle: true,
         assertCurrent: () => {
@@ -217,8 +218,8 @@ export function registerSharedStateWorkerAdmissionTests(
   it("waits for a bounded foreign lifecycle owner before an admitted write", async () => {
     const captured = createContext();
     await executeOpenClawStateWorker(captured, {
-      type: "flows.list",
-      input: { ownerKey: "agent:main:main" },
+      type: "plugins.conversationBindingApprovals.read",
+      input: undefined,
     });
     const foreign = await holdForeignLifecycle(captured, 250);
     try {
@@ -266,8 +267,8 @@ export function registerSharedStateWorkerAdmissionTests(
       const captured = createContext();
       const posts = vi.spyOn(Worker.prototype, "postMessage");
       await executeOpenClawStateWorker(captured, {
-        type: "flows.list",
-        input: { ownerKey: "agent:main:main" },
+        type: "plugins.conversationBindingApprovals.read",
+        input: undefined,
       });
       const worker = posts.mock.contexts[0];
       if (!(worker instanceof Worker)) {
@@ -493,8 +494,8 @@ export function registerSharedStateWorkerAdmissionTests(
   it("retains FIFO and bounded capacity when canceling a lifecycle waiter", async () => {
     const captured = createContext();
     await executeOpenClawStateWorker(captured, {
-      type: "flows.list",
-      input: { ownerKey: "agent:main:main" },
+      type: "plugins.conversationBindingApprovals.read",
+      input: undefined,
     });
     const foreign = await holdForeignLifecycle(captured);
     const canceled = new AbortController();

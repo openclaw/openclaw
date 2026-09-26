@@ -18,6 +18,10 @@ import { QA_SUBAGENT_TERMINAL_MARKERS } from "./providers/mock-openai/mock-opena
 import { resolveMockSubagentTurn } from "./providers/mock-openai/mock-openai-input.js";
 import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
 import { waitForQaTransportCondition } from "./qa-transport.js";
+import {
+  readPrivateCompletionRows as rows,
+  readPrivateCompletionNativeRuns,
+} from "./subagent-private-completion-package.test-support.js";
 
 const exec = promisify(execFile);
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
@@ -106,15 +110,6 @@ async function holdProviderRequests(baseUrl: string) {
     },
     stop: () => closeQaHttpServer(server),
   };
-}
-
-function rows(databasePath: string, sql: string, ...args: SQLInputValue[]) {
-  const db = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    return db.prepare(sql).all(...args);
-  } finally {
-    db.close();
-  }
 }
 
 function requiredSqlValue(row: Record<string, SQLInputValue>, key: string): SQLInputValue {
@@ -297,12 +292,8 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       };
     }
 
-    async function tasks(sessionKey: string) {
-      const result = record(await gateway.call("tasks.list", { agentId: "qa", limit: 100 }));
-      expect(Array.isArray(result.tasks)).toBe(true);
-      return (result.tasks as Record<string, unknown>[]).filter(
-        (task) => task.sessionKey === sessionKey,
-      );
+    function nativeRuns(sessionKey: string) {
+      return readPrivateCompletionNativeRuns(stateDb, sessionKey);
     }
 
     async function send(sessionKey: string, message: string) {
@@ -395,7 +386,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       const children = await waitForQaTransportCondition(
         async () => {
           await mock.terminalRequesters.settle(gateway);
-          const currentChildren = await tasks(sessionKey);
+          const currentChildren = nativeRuns(sessionKey);
           return currentChildren.length === 2 &&
             currentChildren.every(
               (task) => task.status === "completed" && task.deliveryStatus === "delivered",
@@ -411,9 +402,8 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         "SELECT * FROM session_input_completions WHERE session_key = ? ORDER BY run_id",
         sessionKey,
       );
-      expect(receipts.filter((receipt) => receipt.succeeded === 1).length).toBeGreaterThanOrEqual(
-        2,
-      );
+      const successfulReceipts = receipts.filter((receipt) => receipt.succeeded === 1);
+      expect(successfulReceipts.length).toBeGreaterThanOrEqual(2);
       expect(
         rows(agentDb, "SELECT * FROM session_pending_inputs WHERE session_key = ?", sessionKey),
       ).toEqual([]);
@@ -474,7 +464,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       const child = await waitForQaTransportCondition(
         async () => {
           await mock.terminalRequesters.settle(gateway);
-          const currentChild = (await tasks(sessionKey)).find(
+          const currentChild = nativeRuns(sessionKey).find(
             (task) => task.title === "qa-terminal-silent",
           );
           return currentChild?.status === "completed" && currentChild.deliveryStatus === "delivered"
@@ -606,7 +596,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         originalSessionId,
       );
       expect(originalTranscript.length).toBeGreaterThan(0);
-      async function assertOriginalOrdinaryState() {
+      function assertOriginalOrdinaryState() {
         expect(
           rows(
             agentDb,
@@ -621,14 +611,16 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
             originalSessionId,
           ),
         ).toEqual(originalTranscript);
-        expect((await tasks(ordinarySession)).some((task) => task.taskId === ordinary.taskId)).toBe(
-          true,
-        );
+        expect(
+          nativeRuns(ordinarySession).some(
+            (task) => task.childSessionKey === ordinary.childSessionKey,
+          ),
+        ).toBe(true);
       }
       phases.push({
         phase: "released-created-state",
         ...releasedIdentity,
-        ordinaryTaskId: ordinary.taskId,
+        ordinaryTaskId: ordinary.childSessionKey,
         sessionId: originalSessionId,
       });
 
@@ -666,7 +658,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         await runInstalled(["doctor", "--fix", "--non-interactive"]);
         assertSchema(candidateAgentSchemaVersion, candidateSharedSchemaVersion);
       });
-      await assertOriginalOrdinaryState();
+      assertOriginalOrdinaryState();
       const privateState = await privateChain("agent:qa:package-upgraded-private");
       phases.push({
         phase: "candidate-doctor-upgrade",
@@ -755,7 +747,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         consumed: false,
       });
 
-      const pendingChildKey = (await tasks(pendingSession))[0]?.childSessionKey;
+      const pendingChildKey = nativeRuns(pendingSession)[0]?.childSessionKey;
       if (typeof pendingChildKey !== "string") {
         throw new Error("queued private task has no child session key");
       }
@@ -795,8 +787,8 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       ).cursor;
       await restartState(async () => {}, pendingInput);
       const resumedChildren = await waitForQaTransportCondition(
-        async () => {
-          const children = await tasks(pendingSession);
+        () => {
+          const children = nativeRuns(pendingSession);
           return children.length === 2 &&
             children.every(
               (child) => child.status === "completed" && child.deliveryStatus === "delivered",
@@ -824,8 +816,8 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
           privateState.sessionKey,
         ),
       ).toEqual(privateState.receipts);
-      expect((await tasks(privateState.sessionKey)).map((task) => task.taskId)).toEqual(
-        privateState.children.map((task) => task.taskId),
+      expect(nativeRuns(privateState.sessionKey).map((task) => task.childSessionKey)).toEqual(
+        privateState.children.map((task) => task.childSessionKey),
       );
       const restartRequests = await (
         await fetch(`${mock.baseUrl}/debug/requests?after=${String(restartCursor)}`)
@@ -879,7 +871,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       });
       const rollbackSession = "agent:qa:package-rollback-ordinary";
       const rollbackChild = await ordinaryChild(rollbackSession);
-      await assertOriginalOrdinaryState();
+      assertOriginalOrdinaryState();
       expect(
         rows(agentDb, "SELECT * FROM session_nodes WHERE session_key = ?", privateState.sessionKey),
       ).toEqual([]);
@@ -962,7 +954,6 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       expect(privateChildProjection?.spawnedBy).toBeUndefined();
       expect(privateChildProjection?.controlOwnerSessionKey).toBeUndefined();
       await ordinaryChild("agent:qa:package-reader-ordinary");
-      expect((await tasks(probeParent)).length).toBe(0);
       await assertPrivateHistory(probeParent);
       assertPrivateReplies(capturedReplies(probeParent, probeEventCursor));
       expect(
@@ -1008,7 +999,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         assertSchema(candidateAgentSchemaVersion, candidateSharedSchemaVersion);
       });
       await ordinaryChild("agent:qa:package-reopened-ordinary");
-      await assertOriginalOrdinaryState();
+      assertOriginalOrdinaryState();
       phases.push({
         phase: "candidate-reupgrade-after-rollback",
         ...reopenedIdentity,

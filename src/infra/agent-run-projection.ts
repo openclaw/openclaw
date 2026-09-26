@@ -29,7 +29,7 @@ export function areAgentRunModelsEqual(
 }
 
 /** Admission waits cannot hide an independently running or queued producer. */
-export function mergeProjectedAgentRunStates(
+function mergeProjectedAgentRunStates(
   previous: ProjectedAgentRunState | undefined,
   next: ProjectedAgentRunState | undefined,
 ): ProjectedAgentRunState | undefined {
@@ -132,4 +132,35 @@ export function buildAgentRunProjectionIndex(params: {
     }
   }
   return { modelsBySessionId, sessionKeys, sessionIds, ownerlessSessionKeys, ownerlessSessionIds };
+}
+
+export function resolveAgentRunProjectionProgressState(params: {
+  sessionKeys: readonly string[];
+  sessionId?: string;
+  agentId?: string;
+  defaultAgentId?: string;
+  index: ProjectedAgentRunIndex;
+}): ProjectedAgentRunState | undefined {
+  const { index } = params;
+  const agentId =
+    params.agentId ??
+    params.sessionKeys.flatMap((key) => parseAgentSessionKey(key)?.agentId ?? [])[0] ??
+    params.defaultAgentId;
+  if (!agentId) {
+    return undefined;
+  }
+  const mayAdoptOwnerless =
+    params.defaultAgentId !== undefined &&
+    normalizeAgentId(agentId) === normalizeAgentId(params.defaultAgentId);
+  const statuses = params.sessionKeys.flatMap((sessionKey) => [
+    index.sessionKeys.get(projectedRunIdentity(agentId, sessionKey)),
+    ...(mayAdoptOwnerless ? [index.ownerlessSessionKeys.get(sessionKey)] : []),
+  ]);
+  if (params.sessionId !== undefined) {
+    statuses.push(index.sessionIds.get(projectedRunIdentity(agentId, params.sessionId)));
+    if (mayAdoptOwnerless) {
+      statuses.push(index.ownerlessSessionIds.get(params.sessionId));
+    }
+  }
+  return statuses.reduce(mergeProjectedAgentRunStates, undefined);
 }

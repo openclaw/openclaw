@@ -44,15 +44,12 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
-import type {
-  GatewayCloseParams as GatewayTeardownParams,
-  GatewayClosePrepareParams,
-} from "./server-close.js";
 import {
   createGatewayCloseTestDepsFactory,
+  createGatewayCloseTestHandlerFactory,
+  type GatewayCloseParams,
   createTestChatRunState,
 } from "./server-close.test-support.js";
-import type { GatewayCloseOptions } from "./server-public.js";
 
 type TriggerInternalHookMock = (event: InternalHookEvent) => Promise<void>;
 
@@ -155,11 +152,12 @@ vi.mock("../logging/subsystem.js", () => ({
   })),
 }));
 
-const { prepareGatewayClose, completeGatewayClose } = await import("./server-close.js");
+const createGatewayCloseHandler = createGatewayCloseTestHandlerFactory(
+  await import("./server-close.js"),
+);
 const { createChatRunState, isChatAbortMarkerCurrent } = await import("./server-chat-state.js");
 const { finishGatewayRestartTrace, recordGatewayRestartTraceSpan, startGatewayRestartTrace } =
   await import("./restart-trace.js");
-type GatewayCloseParams = GatewayTeardownParams & GatewayClosePrepareParams;
 type GatewayCloseClient = GatewayCloseParams["clients"] extends Set<infer T> ? T : never;
 type MarkMainSessionsAbortedForRestart = NonNullable<
   GatewayCloseParams["markMainSessionsAbortedForRestart"]
@@ -168,11 +166,6 @@ type DrainActiveSessionsForShutdown = NonNullable<
   GatewayCloseParams["drainActiveSessionsForShutdown"]
 >;
 const originalRestartTraceEnv = process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
-
-function createGatewayCloseHandler(params: GatewayCloseParams) {
-  return async (opts?: GatewayCloseOptions) =>
-    completeGatewayClose(params, await prepareGatewayClose(params, opts));
-}
 
 function firstMockCall<T extends readonly unknown[]>(mock: { mock: { calls: readonly T[] } }) {
   return mock.mock.calls[0];
@@ -767,9 +760,11 @@ describe("createGatewayCloseHandler", () => {
   it("still runs later teardown when cron.stopAndDrain() rejects (no listener strand)", async () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     const stopAndDrain = vi.fn().mockRejectedValue(new Error("stream watcher stop failed"));
+    const stopCronMaintenance = vi.fn(async () => {});
     const httpClose = vi.fn((cb: (err?: Error | null) => void) => cb(null));
     const deps = createGatewayCloseTestDeps({
       cron: { stop: vi.fn(), stopAndDrain } as never,
+      stopCronMaintenance,
       httpServer: { close: httpClose, closeIdleConnections: vi.fn() } as never,
     });
     const close = createGatewayCloseHandler(deps);
@@ -780,6 +775,10 @@ describe("createGatewayCloseHandler", () => {
     // remaining teardown -- otherwise the HTTP/WS listeners and timers strand and the next
     // start hits EADDRINUSE.
     expect(stopAndDrain).toHaveBeenCalledTimes(1);
+    expect(stopCronMaintenance).toHaveBeenCalledOnce();
+    expect(stopCronMaintenance.mock.invocationCallOrder[0]).toBeLessThan(
+      httpClose.mock.invocationCallOrder[0]!,
+    );
     expect(deps.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
     expect(httpClose).toHaveBeenCalled();
     expect(result.warnings.length).toBeGreaterThan(0);
@@ -1394,15 +1393,15 @@ describe("createGatewayCloseHandler", () => {
       }
       return Promise.resolve(undefined);
     });
-    const stopTaskRegistryMaintenance = vi.fn();
-    const close = createGatewayCloseHandler(
-      createGatewayCloseTestDeps({ stopTaskRegistryMaintenance }),
-    );
+    const deps = createGatewayCloseTestDeps();
+    assert(deps.maintenance);
+    const { stopPeriodicTasks } = deps.maintenance;
+    const close = createGatewayCloseHandler(deps);
 
     const closePromise = close({ reason: "test shutdown" });
     try {
       await vi.advanceTimersByTimeAsync(GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS);
-      expect(stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
+      expect(stopPeriodicTasks).toHaveBeenCalledTimes(1);
       expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
     } finally {
       cleanup.resolve();
@@ -1411,7 +1410,7 @@ describe("createGatewayCloseHandler", () => {
     const result = await closePromise;
 
     expect(result.warnings).toContain("gateway:shutdown");
-    expect(stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
+    expect(stopPeriodicTasks).toHaveBeenCalledTimes(1);
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
         String(message).includes("gateway:shutdown hook timed out after 5000ms"),
@@ -2619,32 +2618,28 @@ describe("createGatewayCloseHandler", () => {
       closeOrder.push("tailscale");
     });
     const lifecycleUnsub = vi.fn();
-    const taskUnsub = vi.fn();
     const transcriptUnsub = vi.fn();
-    const stopTaskRegistryMaintenance = vi.fn();
-    const close = createGatewayCloseHandler(
-      createGatewayCloseTestDeps({
-        tailscaleCleanup,
-        stopTaskRegistryMaintenance,
-        lifecycleUnsub,
-        taskUnsub,
-        transcriptUnsub,
-        httpServer: {
-          close: (callback: (err?: Error | null) => void) => {
-            closeOrder.push("http-server");
-            callback(null);
-          },
-          closeIdleConnections: vi.fn(),
-        } as never,
-      }),
-    );
+    const deps = createGatewayCloseTestDeps({
+      tailscaleCleanup,
+      lifecycleUnsub,
+      transcriptUnsub,
+      httpServer: {
+        close: (callback: (err?: Error | null) => void) => {
+          closeOrder.push("http-server");
+          callback(null);
+        },
+        closeIdleConnections: vi.fn(),
+      } as never,
+    });
+    assert(deps.maintenance);
+    const { stopPeriodicTasks } = deps.maintenance;
+    const close = createGatewayCloseHandler(deps);
 
     await close({ reason: "test shutdown" });
 
     expect(lifecycleUnsub).toHaveBeenCalledTimes(1);
-    expect(taskUnsub).toHaveBeenCalledTimes(1);
     expect(transcriptUnsub).toHaveBeenCalledTimes(1);
-    expect(stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
+    expect(stopPeriodicTasks).toHaveBeenCalledTimes(1);
     expect(mocks.disposeAllCodeModeRuns).toHaveBeenCalledTimes(1);
     expect(mocks.disposeAgentHarnesses).toHaveBeenCalledTimes(1);
     expect(mocks.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);

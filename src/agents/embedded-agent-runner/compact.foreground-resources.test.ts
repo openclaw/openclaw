@@ -24,9 +24,6 @@ import {
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND } from "../../tasks/context-engine-maintenance-task-owner.js";
-import { onTaskRegistryChange } from "../../tasks/task-registry.store.js";
-import { isTerminalTaskStatus, type TaskStatus } from "../../tasks/task-registry.types.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -160,6 +157,7 @@ it.for([
       const entryBefore = structuredClone(loadSessionEntryReadOnly(target));
       const transcriptBefore = loadTranscriptEventsSync(target);
       const entered = createDeferredCore();
+      const maintenanceFinished = createDeferredCore();
       const resume = createDeferredCore();
       const disposalEntered = createDeferredCore();
       const cleanupTailEntered = createDeferredCore();
@@ -241,6 +239,8 @@ it.for([
               selectedRegistry = getPluginRuntimeGatewayRequestScope();
               entered.resolve();
               await resume.promise;
+              expect.soft(disposalCalls).toBe(0);
+              maintenanceFinished.resolve();
               return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
             },
             compact(params) {
@@ -313,20 +313,6 @@ it.for([
       const caller = new AbortController();
       const callerReason = new Error("foreground compaction caller cancelled");
       let pending: Promise<unknown> | undefined;
-      const taskSettled = createDeferredCore<TaskStatus>();
-      const stopTaskObserver = deferred
-        ? onTaskRegistryChange((event) => {
-            if (
-              event?.kind === "upserted" &&
-              event.task.ownerKey === target.sessionKey &&
-              event.task.taskKind === CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND &&
-              isTerminalTaskStatus(event.task.status)
-            ) {
-              expect.soft(disposalCalls).toBe(0);
-              taskSettled.resolve(event.task.status);
-            }
-          })
-        : undefined;
       try {
         expect(getAsyncWorkSignal()).toBeUndefined();
         const start = () =>
@@ -402,8 +388,8 @@ it.for([
         }
         resume.resolve();
         if (deferred) {
-          // Worker bookkeeping publishes before engine disposal can start.
-          expect(await racePromiseWithAbortSignal(taskSettled.promise, signal)).toBe("succeeded");
+          // The admitted maintenance operation must finish before resource disposal.
+          await racePromiseWithAbortSignal(maintenanceFinished.promise, signal);
         }
         if (factory === "none") {
           await Promise.allSettled(work.slice(0, 1));
@@ -441,7 +427,6 @@ it.for([
           reopened.close();
         }
       } finally {
-        stopTaskObserver?.();
         resume.resolve();
         finishDisposal.resolve();
         stopFactory.resolve();

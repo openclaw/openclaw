@@ -81,6 +81,46 @@ async function fixture(initialReceipt?: CodexNativeSubagentSubmission) {
 }
 
 describe("native subagent submission receipts in the binding store", () => {
+  it("reopens initial assignment facts across native rotation but not physical adoption", async () => {
+    const { root, store, owner } = await fixture();
+    const assignment = {
+      runId: "codex-thread:initial-child",
+      childThreadId: "initial-child",
+      nativeTurnId: "initial-turn",
+      nativeParentThreadId: binding.threadId,
+      owner,
+    };
+    await expect(
+      store.mutate(
+        identity,
+        {
+          kind: "record-native-subagent-assignment",
+          owner,
+          assignment,
+        },
+        currentAuthority,
+      ),
+    ).resolves.toBe(true);
+    await store.mutate(identity, {
+      kind: "replace-thread",
+      expectedThreadId: binding.threadId,
+      binding: { ...binding, threadId: "rotated-parent" },
+    });
+    resetPluginStateStoreForTests();
+    const reopened = createLazyCodexAppServerBindingStore(openState(root));
+    const rotated = { ...owner, parentThreadId: "rotated-parent" };
+    expect(reopened.readNativeSubagentAssignments?.(identity, rotated)).toEqual([assignment]);
+    expect(reopened.readNativeSubagentSubmissions(identity, rotated)).toEqual([]);
+    const successor = { ...identity, sessionId: "new-physical-session" };
+    await reopened.adoptSessionGeneration(successor, identity.sessionId, currentAuthority);
+    expect(
+      reopened.readNativeSubagentAssignments?.(successor, {
+        ...rotated,
+        sessionId: successor.sessionId,
+      }),
+    ).toEqual([]);
+  });
+
   it("persists concurrent receipts across reopen and consumes only the exact submission", async () => {
     const { root, state, store, owner } = await fixture();
     const logicalIdentity = { ...identity, sessionId: "logical-parent-session" };

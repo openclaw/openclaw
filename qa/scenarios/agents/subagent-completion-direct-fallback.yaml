@@ -31,6 +31,7 @@ scenario:
     - docs/help/testing.md
     - docs/channels/qa-channel.md
   codeRefs:
+    - extensions/qa-lab/src/execution-identity-storage-inspection.ts
     - src/agents/agent-run-terminal-reply.ts
     - src/agents/subagents/announce/subagent-announce-delivery.ts
     - src/agents/subagents/registry/subagent-registry-lifecycle.ts
@@ -39,7 +40,7 @@ scenario:
     kind: flow
     providerMode: mock-openai
     retryCount: 0
-    summary: Exercise terminal-reply dispositions through mock provider, ephemeral Gateway, SQLite task state, and qa-channel capture.
+    summary: Exercise terminal-reply dispositions through mock provider, ephemeral Gateway, native subagent state, and qa-channel capture.
     config:
       requiredProviderMode: mock-openai
       cases:
@@ -128,24 +129,24 @@ flow:
               - set: directFallbackProofs
                 value:
                   expr: "[]"
-              # The task ledger records terminal delivery after the subagent lifecycle
-              # owner settles it. Use that fact instead of guessing with wall-clock sleeps.
-              - set: readSettledTerminalTask
+              # The native subagent owner records terminal execution and delivery.
+              # Read isolated fixture facts; public history and channel captures prove delivery.
+              - set: readSettledTerminalRun
                 value:
                   lambda:
                     params:
                       - caseName
                     async: true
-                    expr: "(await env.gateway.call('tasks.list', { agentId: 'qa', limit: 100 }, { timeoutMs: 10000 })).tasks?.find((task) => task.title === `qa-terminal-${caseName}` && task.deliveryStatus === 'delivered')"
+                    expr: "(await readNativeQaSubagentRuns(env)).find((run) => run.label === `qa-terminal-${caseName}` && run.execution.status === 'terminal' && run.execution.outcome?.status === 'ok' && run.delivery?.status === 'delivered')"
               # The channel payload alone could also come from the completion model.
               # Match the fallback owner's persisted mirror to this exact child run.
               - set: readDirectFallbackReceipts
                 value:
                   lambda:
                     params:
-                      - task
+                      - run
                     async: true
-                    expr: "(await env.gateway.call('chat.history', { agentId: 'qa', sessionKey: task.sessionKey, limit: 100, maxChars: 20000 }, { timeoutMs: 10000 })).messages?.filter((message) => message.role === 'assistant' && message.provider === 'openclaw' && message.model === 'delivery-mirror' && message.__openclaw?.idempotencyKey === `announce:v1:${task.childSessionKey}:${task.runId}:text-direct`) ?? []"
+                    expr: "(await env.gateway.call('chat.history', { agentId: 'qa', sessionKey: run.requesterSessionKey, limit: 100, maxChars: 20000 }, { timeoutMs: 10000 })).messages?.filter((message) => message.role === 'assistant' && message.provider === 'openclaw' && message.model === 'delivery-mirror' && message.__openclaw?.idempotencyKey === `announce:v1:${run.childSessionKey}:${run.runId}:text-direct`) ?? []"
               - forEach:
                   items:
                     expr: config.cases
@@ -179,20 +180,20 @@ flow:
                           expr: "`Subagent terminal reply QA check: ${terminalCase.name}. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP.`"
                     # Child delivery can finish while the parent's acknowledgment is still queued.
                     - call: waitForCondition
-                      saveAs: terminalTask
+                      saveAs: terminalRun
                       args:
                         - lambda:
                             async: true
                             expr: |
                               (async () => {
                                 await env.mock?.terminalRequesters?.settle(env.gateway);
-                                const task = await readSettledTerminalTask(terminalCase.name);
-                                if (!task) return undefined;
-                                if (terminalCase.name !== 'silent' && (await readDirectFallbackReceipts(task)).length === 0) return undefined;
+                                const run = await readSettledTerminalRun(terminalCase.name);
+                                if (!run) return undefined;
+                                if (terminalCase.name !== 'silent' && (await readDirectFallbackReceipts(run)).length === 0) return undefined;
                                 const outbound = state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === conversationId);
                                 if (!outbound.some((candidate) => !candidate.deleted && String(candidate.text ?? '').trim() === config.parentAcknowledgment)) return undefined;
                                 const matchingCount = outbound.filter((candidate) => String(candidate.text ?? '').trim() === terminalCase.marker).length;
-                                return terminalCase.expectedSendCount === 0 || matchingCount >= terminalCase.expectedSendCount ? task : undefined;
+                                return terminalCase.expectedSendCount === 0 || matchingCount >= terminalCase.expectedSendCount ? run : undefined;
                               })().catch(() => undefined)
                         - 60000
                         - 250
@@ -210,7 +211,7 @@ flow:
                         expr: "await publishTerminalDiagnostic({ captureStage: 'public-case-observed', activePhase, requestCursor, requestCount: caseRequests.length, requests: snapshotTerminalRequests(caseRequests.slice(0, 4)), omittedRequestCount: Math.max(0, caseRequests.length - 4) })"
                     - set: directFallbackReceipts
                       value:
-                        expr: "await readDirectFallbackReceipts(terminalTask)"
+                        expr: "await readDirectFallbackReceipts(terminalRun)"
                     - assert:
                         expr: "terminalCase.name === 'silent' || (directFallbackReceipts.length === 1 && directFallbackReceipts[0].content.filter((block) => block.type === 'text').map((block) => block.text).join('') === terminalCase.marker)"
                         message:
@@ -221,7 +222,7 @@ flow:
                           expr: "`terminal ${terminalCase.name}: spawning parent did not acknowledge its completed turn`"
                     - set: appendDirectFallbackProof
                       value:
-                        expr: "directFallbackProofs.push({ case: terminalCase.name, taskId: terminalTask.taskId, receiptKeys: directFallbackReceipts.map((message) => message.__openclaw.idempotencyKey) })"
+                        expr: "directFallbackProofs.push({ case: terminalCase.name, runId: terminalRun.runId, receiptKeys: directFallbackReceipts.map((message) => message.__openclaw.idempotencyKey) })"
                     - assert:
                         expr: "matchingOutbound.length === terminalCase.expectedSendCount"
                         message:
@@ -251,12 +252,12 @@ flow:
                         message:
                           expr: "`terminal ${terminalCase.name}: parent did not end before direct fallback; requests=${JSON.stringify(caseRequests)}`"
                     - assert:
-                        expr: "terminalTask.title === `qa-terminal-${terminalCase.name}` && terminalTask.status === 'completed' && terminalTask.deliveryStatus === 'delivered'"
+                        expr: "terminalRun.label === `qa-terminal-${terminalCase.name}` && terminalRun.execution.status === 'terminal' && terminalRun.execution.outcome?.status === 'ok' && terminalRun.delivery?.status === 'delivered'"
                         message:
-                          expr: "`terminal ${terminalCase.name}: task lifecycle did not settle authoritatively; task=${JSON.stringify(terminalTask)}`"
+                          expr: "`terminal ${terminalCase.name}: native lifecycle did not settle authoritatively; run=${JSON.stringify(terminalRun)}`"
                     - set: appendVerdict
                       value:
-                        expr: "verdicts.push({ case: terminalCase.name, conversationId, taskId: terminalTask.taskId, taskDeliveryStatus: terminalTask.deliveryStatus, inputDisposition: terminalCase.name, representation: terminalCase.name === 'silent' ? 'visible representation of private child silence or missing output' : 'exact terminal text', restart: false, fallback: terminalCase.name === 'fallback', expectedTerminalSendCount: terminalCase.expectedSendCount, actualTerminalSendCount: matchingOutbound.length, capturedTerminalPayloads: matchingOutbound.map((message) => String(message.text ?? '')), auxiliaryChannelEvents: caseOutbound.filter((message) => !matchingOutbound.includes(message)).map((message) => String(message.text ?? '')), silenceTokenLeaked: caseOutbound.some((message) => String(message.text ?? '').trim() === 'NO_REPLY'), internalMetadataLeak: caseOutbound.some((message) => String(message.text ?? '').includes(config.metadataSentinel)), pass: true })"
+                        expr: "verdicts.push({ case: terminalCase.name, conversationId, runId: terminalRun.runId, deliveryStatus: terminalRun.delivery?.status, inputDisposition: terminalCase.name, representation: terminalCase.name === 'silent' ? 'visible representation of private child silence or missing output' : 'exact terminal text', restart: false, fallback: terminalCase.name === 'fallback', expectedTerminalSendCount: terminalCase.expectedSendCount, actualTerminalSendCount: matchingOutbound.length, capturedTerminalPayloads: matchingOutbound.map((message) => String(message.text ?? '')), auxiliaryChannelEvents: caseOutbound.filter((message) => !matchingOutbound.includes(message)).map((message) => String(message.text ?? '')), silenceTokenLeaked: caseOutbound.some((message) => String(message.text ?? '').trim() === 'NO_REPLY'), internalMetadataLeak: caseOutbound.some((message) => String(message.text ?? '').includes(config.metadataSentinel)), pass: true })"
               # Denying outbound messaging must not disable the parent's orchestration tools.
               - set: activePhase
                 value: private-config
@@ -278,7 +279,7 @@ flow:
               # to the private ingress so their intentional message sends stay outside it.
               - set: privateParentSessionKey
                 value:
-                  expr: "(await readSettledTerminalTask(config.cases[config.cases.length - 1].name)).sessionKey"
+                  expr: "(await readSettledTerminalRun(config.cases[config.cases.length - 1].name)).requesterSessionKey"
               - call: readSessionTranscriptSummary
                 saveAs: privateTranscriptBefore
                 args:
@@ -329,11 +330,11 @@ flow:
                   text: "Subagent terminal reply QA check: private. Review the first child internally, use its result to start a second child, and remain silent after each completion."
                 saveAs: privateIngress
               - call: waitForCondition
-                saveAs: privateTasks
+                saveAs: privateRuns
                 args:
                   - lambda:
                       async: true
-                      expr: "(async () => { await env.mock?.terminalRequesters?.settle(env.gateway); const tasks = (await env.gateway.call('tasks.list', { agentId: 'qa', limit: 100 }, { timeoutMs: 10000 })).tasks ?? []; const selected = ['qa-terminal-private-first', 'qa-terminal-private-second'].map((title) => tasks.find((task) => task.title === title)); return selected.every((task) => task?.status === 'completed' && task?.deliveryStatus === 'delivered') ? selected : undefined; })()"
+                      expr: "(async () => { await env.mock?.terminalRequesters?.settle(env.gateway); const runs = await readNativeQaSubagentRuns(env, privateParentSessionKey); const selected = ['qa-terminal-private-first', 'qa-terminal-private-second'].map((label) => runs.find((run) => run.label === label)); return selected.every((run) => run?.execution.status === 'terminal' && run.execution.outcome?.status === 'ok' && run.delivery?.status === 'delivered') ? selected : undefined; })()"
                   - 90000
                   - 250
               - set: privateRequests
@@ -362,18 +363,18 @@ flow:
               - assert:
                   expr: "privateCompletionCarrier.includes('Internal task completion event') && /MEDIA:[^\\n]*qa-private-result\\.png/.test(privateCompletionCarrier)"
                   message:
-                    expr: "`The actual private completion carrier lost the child's media reference: ${JSON.stringify({ carrier: privateCompletionCarrier.slice(0, 8192), childSessionKeys: privateTasks.map((task) => task.childSessionKey) })}`"
+                    expr: "`The actual private completion carrier lost the child's media reference: ${JSON.stringify({ carrier: privateCompletionCarrier.slice(0, 8192), childSessionKeys: privateRuns.map((run) => run.childSessionKey) })}`"
               - set: privateParentIds
                 value:
                   expr: "privateSpawns.map((request) => request.sessionId)"
               - assert:
-                  expr: "privateParentIds[0] && privateParentIds[0] === privateParentIds[1] && privateTasks[0].sessionKey === privateTasks[1].sessionKey && privateTasks[0].sessionKey === privateParentSessionKey"
+                  expr: "privateParentIds[0] && privateParentIds[0] === privateParentIds[1] && privateRuns[0].requesterSessionKey === privateRuns[1].requesterSessionKey && privateRuns[0].requesterSessionKey === privateParentSessionKey"
                   message: Private continuation changed its parent session.
               - call: readEffectiveTools
                 saveAs: privateTools
                 args:
                   - ref: env
-                  - expr: privateTasks[0].sessionKey
+                  - expr: privateRuns[0].requesterSessionKey
               - assert:
                   expr: "!privateTools.has('message') && privateTools.has('sessions_spawn')"
                   message: Private parent tool inventory did not preserve orchestration while denying messaging.
@@ -381,18 +382,18 @@ flow:
                 saveAs: privateTranscript
                 args:
                   - ref: env
-                  - expr: privateTasks[0].sessionKey
+                  - expr: privateRuns[0].requesterSessionKey
                   - expr: "({ afterEventCursor: privateTranscriptBefore.eventCursor })"
               - set: privateSpawnReceipts
                 value:
                   expr: "privateSpawns.map((request) => privateTranscript.successfulToolCallEvents?.find((event) => event.name === (request.plannedWireToolName ?? request.plannedToolName) && event.toolCallId === (env.runtimeId !== 'codex' && request.plannedToolItemId ? `${request.plannedToolCallId}|${request.plannedToolItemId}` : request.plannedToolCallId)))"
               - assert:
-                  expr: "privateSpawnReceipts.length === 2 && privateSpawnReceipts.every(Boolean) && new Set(privateSpawnReceipts.map((event) => event.toolCallId)).size === 2 && [...new Set(privateSpawns.map((request) => request.plannedWireToolName ?? request.plannedToolName))].every((wire) => privateTranscript.successfulToolCallCounts[wire] === privateSpawnReceipts.filter((event) => event.name === wire).length) && privateSpawnReceipts[1].timestamp >= privateTasks[0].endedAt && !(privateTranscript.successfulToolCallCounts.message > 0) && privateRequests.every((request) => request.plannedToolName !== 'message')"
+                  expr: "privateSpawnReceipts.length === 2 && privateSpawnReceipts.every(Boolean) && new Set(privateSpawnReceipts.map((event) => event.toolCallId)).size === 2 && [...new Set(privateSpawns.map((request) => request.plannedWireToolName ?? request.plannedToolName))].every((wire) => privateTranscript.successfulToolCallCounts[wire] === privateSpawnReceipts.filter((event) => event.name === wire).length) && privateSpawnReceipts[1].timestamp >= privateRuns[0].execution.endedAt && !(privateTranscript.successfulToolCallCounts.message > 0) && privateRequests.every((request) => request.plannedToolName !== 'message')"
                   message:
-                    expr: "`private continuation lacks committed tool chronology or tried external messaging: tasks=${JSON.stringify(privateTasks)} transcript=${JSON.stringify(privateTranscript)}`"
+                    expr: "`private continuation lacks committed tool chronology or tried external messaging: runs=${JSON.stringify(privateRuns)} transcript=${JSON.stringify(privateTranscript)}`"
               - set: activePhase
                 value: private-outbound-settlement
-              # Task settlement precedes channel flush. qa-channel replaces the full-text
+              # Native settlement precedes channel flush. qa-channel replaces the full-text
               # preview carrying tool metadata; wait for that deletion plus its final.
               # Crabline's state contains sends only, so Telegram's raw recorder owns
               # supplementary wire checks without a per-message retirement claim.
@@ -434,19 +435,19 @@ flow:
                   message: Telegram wire capture contained private text, media, or another message target.
               - forEach:
                   items:
-                    ref: privateTasks
-                  item: privateTask
+                    ref: privateRuns
+                  item: privateRun
                   actions:
                     - set: privateFallbackReceipts
                       value:
-                        expr: "await readDirectFallbackReceipts(privateTask)"
+                        expr: "await readDirectFallbackReceipts(privateRun)"
                     - assert:
                         expr: "privateFallbackReceipts.length === 0"
                         message: Private result reached the direct channel fallback.
               - set: appendPrivateVerdict
                 value:
-                  expr: "verdicts.push({ case: 'private', conversationId: privateConversationId, taskIds: privateTasks.map((task) => task.taskId), taskDeliveryStatus: 'delivered', privateSpawnReceiptCount: privateSpawnReceipts.length, messageToolDenied: !privateTools.has('message'), mediaReferenceConsumed: true, outboundAttachmentCount: privateOutboundEvents.reduce((count, event) => count + (event.message.attachments?.length ?? 0), 0), expectedTerminalSendCount: 0, actualTerminalSendCount: privateAcknowledgments.length - 1, kickoffTransportSendCount: privateOutbound.length, previewRetirementVerified: !privateTelegramWire, capturedTerminalPayloads: [], pass: true })"
-              # Every prior task is now terminal and delivery-settled, so restart from
+                  expr: "verdicts.push({ case: 'private', conversationId: privateConversationId, runIds: privateRuns.map((run) => run.runId), deliveryStatus: 'delivered', privateSpawnReceiptCount: privateSpawnReceipts.length, messageToolDenied: !privateTools.has('message'), mediaReferenceConsumed: true, outboundAttachmentCount: privateOutboundEvents.reduce((count, event) => count + (event.message.attachments?.length ?? 0), 0), expectedTerminalSendCount: 0, actualTerminalSendCount: privateAcknowledgments.length - 1, kickoffTransportSendCount: privateOutbound.length, previewRetirementVerified: !privateTelegramWire, capturedTerminalPayloads: [], pass: true })"
+              # Every prior run is now terminal and delivery-settled, so restart from
               # the lifecycle boundary rather than waiting an arbitrary grace period.
               - set: preRestartOutbound
                 value:
@@ -503,11 +504,11 @@ flow:
                   senderName: QA Restart Operator
                   text: "Subagent terminal reply QA check: restart. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP."
               - call: waitForCondition
-                saveAs: restartTask
+                saveAs: restartRun
                 args:
                   - lambda:
                       async: true
-                      expr: "(async () => { await env.mock?.terminalRequesters?.settle(env.gateway); const task = await readSettledTerminalTask('restart'); if (!task || (await readDirectFallbackReceipts(task)).length === 0) return undefined; const delivered = state.getSnapshot().messages.slice(restartStartIndex).some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === restartConversationId && String(candidate.text ?? '').trim() === config.restartMarker); return delivered ? task : undefined; })().catch(() => undefined)"
+                      expr: "(async () => { await env.mock?.terminalRequesters?.settle(env.gateway); const run = await readSettledTerminalRun('restart'); if (!run || (await readDirectFallbackReceipts(run)).length === 0) return undefined; const delivered = state.getSnapshot().messages.slice(restartStartIndex).some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === restartConversationId && String(candidate.text ?? '').trim() === config.restartMarker); return delivered ? run : undefined; })().catch(() => undefined)"
                   - 60000
                   - 250
               - set: restartMatches
@@ -515,14 +516,14 @@ flow:
                   expr: "state.getSnapshot().messages.slice(restartStartIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === restartConversationId && String(candidate.text ?? '').trim() === config.restartMarker)"
               - set: restartFallbackReceipts
                 value:
-                  expr: "await readDirectFallbackReceipts(restartTask)"
+                  expr: "await readDirectFallbackReceipts(restartRun)"
               - assert:
                   expr: "restartFallbackReceipts.length === 1 && restartFallbackReceipts[0].content.filter((block) => block.type === 'text').map((block) => block.text).join('') === config.restartMarker"
                   message:
                     expr: "`restart completion did not use its exact direct-fallback owner: ${JSON.stringify(restartFallbackReceipts)}`"
               - set: appendRestartFallbackProof
                 value:
-                  expr: "directFallbackProofs.push({ case: 'restart', taskId: restartTask.taskId, receiptKeys: restartFallbackReceipts.map((message) => message.__openclaw.idempotencyKey) })"
+                  expr: "directFallbackProofs.push({ case: 'restart', runId: restartRun.runId, receiptKeys: restartFallbackReceipts.map((message) => message.__openclaw.idempotencyKey) })"
               - assert:
                   expr: "restartMatches.length === 1"
                   message:
@@ -532,11 +533,11 @@ flow:
                   message:
                     expr: "`restart completion produced a failure diagnostic: outbound=${recentOutboundSummary(state)}`"
               - assert:
-                  expr: "restartTask.title === 'qa-terminal-restart' && restartTask.status === 'completed' && restartTask.deliveryStatus === 'delivered'"
+                  expr: "restartRun.label === 'qa-terminal-restart' && restartRun.execution.status === 'terminal' && restartRun.execution.outcome?.status === 'ok' && restartRun.delivery?.status === 'delivered'"
                   message:
-                    expr: "`restart completion task lifecycle did not settle authoritatively; task=${JSON.stringify(restartTask)}`"
-              # Use a new durably delivered task as the observation boundary. By then,
-              # restart recovery must not have replayed or invented output for settled tasks.
+                    expr: "`restart completion native lifecycle did not settle authoritatively; run=${JSON.stringify(restartRun)}`"
+              # Use a new durably delivered run as the observation boundary. By then,
+              # restart recovery must not have replayed or invented output for settled runs.
               - set: postRestartOutbound
                 value:
                   expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && verdicts.some((verdict) => verdict.conversationId === message.conversation.id)).map((message) => ({ id: message.id, conversationId: message.conversation.id, text: String(message.text ?? '') }))"
@@ -569,7 +570,7 @@ flow:
                     expr: "`Gateway restart exposed a private result on a channel: ${JSON.stringify(privatePostRestartEvents)}`"
               - set: appendRestartVerdict
                 value:
-                  expr: "verdicts.push({ case: 'restart', conversationId: restartConversationId, taskId: restartTask.taskId, taskDeliveryStatus: restartTask.deliveryStatus, inputDisposition: 'visible', restart: true, fallback: true, preRestartTerminalMessageCount: preRestartTerminalPayloads.length, postRestartTerminalPayloadCount: postRestartTerminalPayloads.length, priorTerminalPayloadReplayCount: postRestartTerminalPayloads.length - preRestartTerminalPayloads.length, unexpectedPostRestartPayloadCount: postRestartUnexpectedPayloads.length, unexpectedPostRestartPayloads: postRestartUnexpectedPayloads.map((message) => message.text), expectedTerminalSendCount: 1, actualTerminalSendCount: restartMatches.length, capturedTerminalPayloads: restartMatches.map((message) => String(message.text ?? '')), silenceTokenLeaked: false, internalMetadataLeak: false, pass: true })"
+                  expr: "verdicts.push({ case: 'restart', conversationId: restartConversationId, runId: restartRun.runId, deliveryStatus: restartRun.delivery?.status, inputDisposition: 'visible', restart: true, fallback: true, preRestartTerminalMessageCount: preRestartTerminalPayloads.length, postRestartTerminalPayloadCount: postRestartTerminalPayloads.length, priorTerminalPayloadReplayCount: postRestartTerminalPayloads.length - preRestartTerminalPayloads.length, unexpectedPostRestartPayloadCount: postRestartUnexpectedPayloads.length, unexpectedPostRestartPayloads: postRestartUnexpectedPayloads.map((message) => message.text), expectedTerminalSendCount: 1, actualTerminalSendCount: restartMatches.length, capturedTerminalPayloads: restartMatches.map((message) => String(message.text ?? '')), silenceTokenLeaked: false, internalMetadataLeak: false, pass: true })"
               - assert:
                   expr: "verdicts.length === 5 && verdicts.every((verdict) => verdict.pass === true)"
                   message:
@@ -589,21 +590,21 @@ flow:
                         const json = JSON.stringify(value);
                         return json === undefined ? null : json.length > limit ? { omitted: true, serializedCharacters: json.length } : value;
                       };
-                      const [requests, taskList] = await Promise.all([
+                      const [requests, runList] = await Promise.all([
                         fetchJson(`${env.mock.baseUrl}/debug/requests?after=${suiteRequestCursor}`),
-                        env.gateway.call('tasks.list', { agentId: 'qa', limit: 100 }, { timeoutMs: 10000 }).catch(error => ({ tasks: [], captureError: String(error) }))
+                        readNativeQaSubagentRuns(env).then(runs => ({ runs })).catch(error => ({ runs: [], captureError: String(error) }))
                       ]);
                       const phaseRequests = requests.filter(request => request.cursor > activeRequestCursor);
                       const selectedRequests = [...new Map([...requests.slice(0, 4), ...phaseRequests.slice(0, 2), ...requests.slice(-2)].map(request => [request.cursor, request])).values()];
                       const selected = snapshotTerminalRequests(selectedRequests);
-                      const tasks = (taskList.tasks ?? []).slice(0, 20).map(task => ({
-                        taskId: task.taskId, title: task.title, status: task.status, deliveryStatus: task.deliveryStatus,
-                        childSessionKey: task.childSessionKey, runId: task.runId
+                      const runs = (runList.runs ?? []).slice(0, 20).map(run => ({
+                        runId: run.runId, label: run.label, execution: run.execution, delivery: run.delivery,
+                        childSessionKey: run.childSessionKey
                       }));
                       const outbound = state.getSnapshot().events.filter(event => event.cursor > suiteEventCursor && ['outbound-message', 'message-edited', 'message-deleted'].includes(event.kind));
                       const artifact = { captureStage: 'final', activePhase, suiteRequestCursor, activeRequestCursor, suiteEventCursor,
                         requestCount: requests.length, omittedRequestCount: requests.length - selected.length, requests: selected,
-                        taskCount: taskList.tasks?.length ?? 0, tasks, taskCaptureError: taskList.captureError,
+                        runCount: runList.runs?.length ?? 0, runs, runCaptureError: runList.captureError,
                         outboundEventCount: outbound.length, outboundEvents: bounded(outbound.slice(-20), 65536),
                         failure: typeof terminalFlowError === 'undefined' ? null : String(terminalFlowError) };
                       return await publishTerminalDiagnostic(artifact);

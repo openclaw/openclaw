@@ -1,20 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { callGateway } from "../../../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { isPathInside } from "../../../infra/path-guards.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
-import type { listOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.test-support.js";
-import { captureTaskDeliveryWork } from "../../../tasks/task-registry-delivery.test-support.js";
-import { configureTaskRegistryMaintenance } from "../../../tasks/task-registry.maintenance.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../../../tasks/task-runtime.test-helpers.js";
+import { listOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.test-support.js";
+import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
@@ -52,6 +47,20 @@ export function createSubagentPersistenceRuntime(call: typeof callGateway): Gate
   };
 }
 
+export function resetSubagentPersistenceGatewayCalls(call: typeof callGateway) {
+  vi.mocked(call).mockReset().mockResolvedValue({ status: "ok", startedAt: 111, endedAt: 222 });
+}
+
+export function activateSubagentPersistenceRegistry(
+  registry: Pick<typeof import("./subagent-registry.test-helpers.js"), "activateSubagentRegistry">,
+  call: typeof callGateway,
+) {
+  const recoveryRuntime = createSubagentPersistenceRuntime(call);
+  registry.activateSubagentRegistry(
+    () => ({ resolveGatewayContext: () => ({ recoveryRuntime }) }) as never,
+  );
+}
+
 export function listFixtureAgentDatabases(
   listDatabases: typeof listOpenClawAgentDatabasesForTest,
   stateDir: string,
@@ -59,28 +68,44 @@ export function listFixtureAgentDatabases(
   return listDatabases().filter((database) => isPathInside(stateDir, database.path));
 }
 
+export async function closeSubagentPersistenceFixtureDatabases(params: {
+  stateDir: string;
+  cleanupSessionState: typeof cleanupSessionStateForTest;
+  listAgentDatabases: typeof listOpenClawAgentDatabasesForTest;
+  closeStateDatabase: typeof closeOpenClawStateDatabaseForTest;
+}) {
+  // The resumed registry owns a separate agent-DB cache after resetModules.
+  // Agent cleanup releases leases through state DB writes, so close state DBs last.
+  await params.cleanupSessionState({ stateDir: params.stateDir });
+  for (const [label, listDatabases] of [
+    ["seed", listOpenClawAgentDatabasesForTest],
+    ["post-reset", params.listAgentDatabases],
+  ] as const) {
+    expect(
+      listFixtureAgentDatabases(listDatabases, params.stateDir),
+      `${label} agent handles closed before fixture removal`,
+    ).toEqual([]);
+  }
+  closeOpenClawStateDatabaseForTest();
+  params.closeStateDatabase();
+}
+
 export function useSubagentPersistenceFixture() {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   let tempStateDir: string | null = null;
-  let deliveries: ReturnType<typeof captureTaskDeliveryWork> | undefined;
-  const settle = () => settleSubagentRegistryPersistenceWork(deliveries);
+  const settle = () => settleSubagentRegistryPersistenceWork();
 
   beforeEach(() => {
     // Failed cleanup retains this case's stores and capture until its work retires.
-    if (tempStateDir !== null || deliveries !== undefined) {
+    if (tempStateDir !== null) {
       throw new Error("Previous persistence fixture cleanup is incomplete");
     }
     setRuntimeConfigSnapshot({});
-    configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
     announceSpy.mockReset();
     announceSpy.mockResolvedValue("delivered");
-    vi.mocked(callGateway).mockReset();
-    vi.mocked(callGateway).mockResolvedValue({ status: "ok", startedAt: 111, endedAt: 222 });
+    resetSubagentPersistenceGatewayCalls(callGateway);
     vi.mocked(onAgentEvent).mockReset();
     vi.mocked(onAgentEvent).mockReturnValue(() => undefined);
-    deliveries = captureTaskDeliveryWork();
   });
 
   afterEach(async () => {
@@ -97,8 +122,6 @@ export function useSubagentPersistenceFixture() {
         if (tempStateDir) {
           await cleanupSessionStateForTest({ stateDir: tempStateDir });
         }
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
         if (tempStateDir) {
           // Resource cleanup finished; removal failure must not retain a retired owner.
           try {
@@ -112,12 +135,9 @@ export function useSubagentPersistenceFixture() {
             failures.push(error);
           }
         }
-        configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
         clearRuntimeConfigSnapshot();
         envSnapshot.restore();
-        deliveries?.[Symbol.dispose]();
         vi.restoreAllMocks();
-        deliveries = undefined;
         tempStateDir = null;
       } catch (error) {
         failures.push(error);

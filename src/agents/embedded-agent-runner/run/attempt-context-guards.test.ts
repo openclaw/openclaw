@@ -370,9 +370,6 @@ describe("installEmbeddedAttemptContextGuards", () => {
           expect(() => wrapped(cacheModel, { messages: [] })).toThrow("failed before dispatch");
         } else {
           const stream = await wrapped(cacheModel, { messages: [] });
-          for await (const _ of stream) {
-            // Consume the provider completion.
-          }
           if (outcome !== "empty") {
             await stream.result();
           }

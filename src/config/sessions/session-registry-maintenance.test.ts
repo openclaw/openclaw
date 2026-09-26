@@ -1,7 +1,7 @@
 // Session registry maintenance tests cover the task-owned cron-run pruning seam.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -14,6 +14,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
+import * as lifecycleProjection from "./session-accessor.sqlite-projection.js";
 import { runSessionRegistryMaintenanceForStore } from "./session-registry-maintenance.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionEntry } from "./types.js";
@@ -71,6 +72,40 @@ async function listDeletedArchiveFiles(root: string): Promise<string[]> {
 }
 
 describe("runSessionRegistryMaintenanceForStore", () => {
+  it("rechecks caller authority inside the removal transaction after planning", async () => {
+    const sessionKey = "agent:main:cron:authority:run:old";
+    const storePath = await createStore({
+      [sessionKey]: sessionEntry("authority-old", Date.now() - 8 * DAY_MS),
+    });
+    let current = true;
+    const apply = lifecycleProjection.applySessionEntryLifecycleMutation;
+    const mutation = vi
+      .spyOn(lifecycleProjection, "applySessionEntryLifecycleMutation")
+      .mockImplementation((params) => {
+        current = false;
+        return apply(params);
+      });
+    try {
+      await expect(
+        runSessionRegistryMaintenanceForStore({
+          agentId: "main",
+          storePath,
+          apply: true,
+          retentionMs: 7 * DAY_MS,
+          runningCronJobIds: new Set(),
+          assertCurrent() {
+            if (!current) {
+              throw new Error("maintenance owner retired");
+            }
+          },
+        }),
+      ).rejects.toThrow("maintenance owner retired");
+      expect(mutation).toHaveBeenCalledOnce();
+      expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("authority-old");
+    } finally {
+      mutation.mockRestore();
+    }
+  });
   it("summarizes a missing store without creating it", async () => {
     const dir = await fixtureSuite.createCaseDir("missing-store");
     const storePath = path.join(dir, "sessions.json");

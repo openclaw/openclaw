@@ -135,7 +135,6 @@ function createListFixture() {
   return createClientFixture({
     "agents.list": { agents: [] },
     "sessions.list": { sessions: [] },
-    "tasks.list": { tasks: [] },
     "models.list": { models: [] },
     "tools.catalog": { tools: [] },
     "exec.approval.list": { approvals: [] },
@@ -489,13 +488,13 @@ describe("OpenClaw SDK", () => {
     const { transport, oc } = createClientFixture();
 
     await expect(oc.artifacts.list(undefined as never)).rejects.toThrow(
-      "oc.artifacts.list requires one of sessionKey, runId, or taskId",
+      "oc.artifacts.list requires sessionKey or runId",
     );
     await expect(oc.artifacts.get("artifact_123", undefined as never)).rejects.toThrow(
-      "oc.artifacts.get requires one of sessionKey, runId, or taskId",
+      "oc.artifacts.get requires sessionKey or runId",
     );
     await expect(oc.artifacts.download("artifact_123", undefined as never)).rejects.toThrow(
-      "oc.artifacts.download requires one of sessionKey, runId, or taskId",
+      "oc.artifacts.download requires sessionKey or runId",
     );
     expect(transport.calls).toStrictEqual([]);
   });
@@ -525,67 +524,6 @@ describe("OpenClaw SDK", () => {
           confirm: false,
           idempotencyKey: "tools-invoke-test",
         },
-        options: undefined,
-      },
-    ]);
-  });
-
-  it("calls task ledger Gateway methods", async () => {
-    const task = {
-      id: "task_123",
-      status: "running",
-      title: "Investigate issue",
-      lastActivity: "Running focused tests",
-      diffStat: { files: 2, added: 12, removed: 3 },
-    };
-    const listedTask = {
-      ...task,
-      runId: "run_123",
-      sessionKey: "agent:main:main",
-      lastActivity: "Editing the registry",
-    };
-    const { transport, oc } = createClientFixture({
-      "tasks.list": { tasks: [structuredClone(listedTask)] },
-      "tasks.get": { task: structuredClone(task) },
-      "tasks.cancel": {
-        found: true,
-        cancelled: true,
-        task: { id: "task_123", status: "cancelled" },
-      },
-    });
-    const taskList = await oc.tasks.list({
-      status: "running",
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sortBy: "endedAt",
-    });
-    expect(taskList.tasks).toEqual([listedTask]);
-    const taskGet = await oc.tasks.get("task_123");
-    expect(taskGet.task).toEqual(task);
-    const taskCancel = await oc.tasks.cancel("task_123", { reason: "user stopped task" });
-    expect(taskCancel.found).toBe(true);
-    expect(taskCancel.cancelled).toBe(true);
-    expect(taskCancel.task).toEqual({ id: "task_123", status: "cancelled" });
-
-    expect(transport.calls).toEqual([
-      {
-        method: "tasks.list",
-        params: {
-          status: "running",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          sortBy: "endedAt",
-        },
-        options: undefined,
-      },
-      {
-        method: "tasks.get",
-        params: { taskId: "task_123" },
-        options: undefined,
-      },
-      {
-        method: "tasks.cancel",
-        params: { taskId: "task_123", reason: "user stopped task" },
         options: undefined,
       },
     ]);
@@ -653,7 +591,6 @@ describe("OpenClaw SDK", () => {
     const { transport, oc } = createListFixture();
     await expect(oc.agents.list()).resolves.toEqual({ agents: [] });
     await expect(oc.sessions.list()).resolves.toEqual({ sessions: [] });
-    await expect(oc.tasks.list()).resolves.toEqual({ tasks: [] });
     await expect(oc.models.list()).resolves.toEqual({ models: [] });
     await expect(oc.tools.list()).resolves.toEqual({ tools: [] });
     await expect(oc.approvals.list()).resolves.toEqual({ approvals: [] });
@@ -662,7 +599,6 @@ describe("OpenClaw SDK", () => {
     expect(transport.calls).toEqual([
       { method: "agents.list", params: {}, options: undefined },
       { method: "sessions.list", params: {}, options: undefined },
-      { method: "tasks.list", params: {}, options: undefined },
       { method: "models.list", params: {}, options: undefined },
       { method: "tools.catalog", params: {}, options: undefined },
       { method: "exec.approval.list", params: {}, options: undefined },
@@ -675,7 +611,6 @@ describe("OpenClaw SDK", () => {
     const { transport, oc } = createListFixture();
     await (oc.agents.list as unknown as ListMethod).call(oc.agents, null);
     await (oc.sessions.list as unknown as ListMethod).call(oc.sessions, null);
-    await (oc.tasks.list as unknown as ListMethod).call(oc.tasks, null);
     await oc.models.list(null);
     await oc.tools.list(null);
     await oc.approvals.list(null);
@@ -684,7 +619,6 @@ describe("OpenClaw SDK", () => {
     expect(transport.calls).toEqual([
       { method: "agents.list", params: null, options: undefined },
       { method: "sessions.list", params: null, options: undefined },
-      { method: "tasks.list", params: null, options: undefined },
       { method: "models.list", params: null, options: undefined },
       { method: "tools.catalog", params: null, options: undefined },
       { method: "exec.approval.list", params: null, options: undefined },

@@ -5,8 +5,9 @@ import type {
   GatewayCloseParams as GatewayTeardownParams,
   GatewayClosePrepareParams,
 } from "./server-close.js";
+import type { GatewayCloseOptions } from "./server-public.js";
 
-type GatewayCloseParams = GatewayTeardownParams & GatewayClosePrepareParams;
+export type GatewayCloseParams = GatewayTeardownParams & GatewayClosePrepareParams;
 type GatewayCloseFixtureMocks = Pick<
   GatewayCloseParams,
   | "disposeAllBundleLspRuntimes"
@@ -17,6 +18,14 @@ type GatewayCloseFixtureMocks = Pick<
   drainRetainedEmbeddingProviders: GatewayCloseParams["drainRetainedOpenAiEmbeddingProviders"];
 };
 type GatewayCloseClient = GatewayCloseParams["clients"] extends Set<infer T> ? T : never;
+
+export function createGatewayCloseTestHandlerFactory({
+  prepareGatewayClose,
+  completeGatewayClose,
+}: Pick<typeof import("./server-close.js"), "prepareGatewayClose" | "completeGatewayClose">) {
+  return (params: GatewayCloseParams) => async (opts?: GatewayCloseOptions) =>
+    completeGatewayClose(params, await prepareGatewayClose(params, opts));
+}
 
 export function createTestChatRunState() {
   const state = createChatRunState();
@@ -64,7 +73,6 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       cron: { stop: vi.fn() },
       heartbeatRunner: { stop: vi.fn() } as never,
       updateCheckStop: null,
-      stopTaskRegistryMaintenance: null,
       nodePresenceTimers: new Map(),
       broadcast: vi.fn(),
       maintenance: {
@@ -75,7 +83,6 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       },
       stopMediaCleanup: vi.fn(async () => "drained" as const),
       agentUnsub: null,
-      taskUnsub: null,
       heartbeatUnsub: null,
       transcriptUnsub: null,
       lifecycleUnsub: null,

@@ -121,8 +121,6 @@ import {
   executeSkillUploadCommand,
 } from "../skills/lifecycle/upload-store.worker.js";
 import * as skillWorkshop from "../skills/workshop/store.worker.js";
-import { isTaskRegistryWorkerCommand } from "../tasks/task-registry.worker-contract.js";
-import { executeTaskRegistryCommand } from "../tasks/task-registry.worker.js";
 import { executeTranscriptRead } from "../transcripts/store-worker-read.js";
 import {
   executeTranscriptWrite,
@@ -326,16 +324,6 @@ export function executeSharedStateCommand(
           relayId: command.input.relayId,
         })?.record,
       { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
-    );
-  }
-  if (isTaskRegistryWorkerCommand(command)) {
-    return executeTaskRegistryCommand(
-      command,
-      {
-        path: context.databasePath,
-        env: getSqliteWorkerStateContext().environment,
-      },
-      open,
     );
   }
   if (command.type === "doctor.workshopMigrationRecords.read") {

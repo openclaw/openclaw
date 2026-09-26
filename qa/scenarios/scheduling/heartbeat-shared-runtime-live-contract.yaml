@@ -10,7 +10,7 @@ scenario:
     secondary:
       - automation.heartbeat-scheduling
       - automation.wake-and-cooldown-handling
-      - gateway.task-and-automation-apis
+      - gateway.agent-and-automation-apis
   gatewayConfigPatch:
     logging:
       consoleStyle: json

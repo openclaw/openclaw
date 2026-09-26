@@ -57,7 +57,6 @@ it("keeps version and injected instance surfaces independent of the broad runtim
     "sandbox",
     "worktrees",
     "webSearch",
-    "tasks",
     "modelConfig",
   ]);
   expect(Reflect.ownKeys(runtime)).toEqual(Reflect.ownKeys(descriptors));

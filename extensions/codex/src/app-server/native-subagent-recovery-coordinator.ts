@@ -1,10 +1,7 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   ChildState,
-  NativeTurnEnd,
-  NativeTurnObservation,
   ParentState,
-  TaskRecoveryCandidate,
   ThreadStatusRevision,
 } from "./native-subagent-monitor-types.js";
 import type { CodexNativeSubagentCompletion } from "./native-subagent-notification.js";
@@ -17,14 +14,12 @@ type NativeSubagentRecoveryDependencies = {
   parentState: (parentThreadId: string) => ParentState | undefined;
   isRetiredParent: (state: ParentState) => boolean;
   reconcileChildState: (child: ChildState) => Promise<boolean>;
-  reconcileTaskCandidateOnce: (candidate: TaskRecoveryCandidate) => Promise<void>;
   processCompletion: (
     state: ParentState,
     child: ChildState,
     completion: CodexNativeSubagentCompletion,
     eventAt: number,
   ) => Promise<void>;
-  onCandidateSettled: (parentState: ParentState) => void;
   now: () => number;
   recoveryPollDelaysMs?: readonly number[];
 };
@@ -34,56 +29,12 @@ export const DEFAULT_RECOVERY_POLL_DELAYS_MS = [
 ];
 
 export class CodexNativeSubagentRecoveryCoordinator {
-  private readonly taskReconciliations = new Map<
-    string,
-    { candidate: TaskRecoveryCandidate; promise: Promise<void> }
-  >();
-  private readonly taskReconciliationTimers = new Map<
-    string,
-    { candidate: TaskRecoveryCandidate; timer: ReturnType<typeof setTimeout> }
-  >();
   private readonly threadStatusRevisions = new Map<string, ThreadStatusRevision>();
   private readonly recoveryPollDelaysMs: readonly number[];
 
   constructor(private readonly dependencies: NativeSubagentRecoveryDependencies) {
     this.recoveryPollDelaysMs =
       dependencies.recoveryPollDelaysMs ?? DEFAULT_RECOVERY_POLL_DELAYS_MS;
-  }
-
-  allCandidates(): TaskRecoveryCandidate[] {
-    return [...this.taskReconciliations.values(), ...this.taskReconciliationTimers.values()].map(
-      ({ candidate }) => candidate,
-    );
-  }
-
-  observeUnregisteredTurn(
-    threadId: string,
-    turnId: string,
-    started: boolean,
-    end: NativeTurnEnd | undefined,
-  ): TaskRecoveryCandidate[] {
-    const candidates = [...new Set(this.allCandidates())].filter(
-      (candidate) =>
-        candidate.childThreadId === threadId &&
-        !this.dependencies.isRetiredParent(candidate.parentState),
-    );
-    for (const turns of new Set(candidates.map((candidate) => candidate.observedTurns))) {
-      const observed = turns.find((entry) => entry.turnId === turnId);
-      if (!started) {
-        if (observed) {
-          observed.state = end;
-        } else {
-          turns.push({ turnId, state: end });
-        }
-      } else if (!observed) {
-        const previous = turns.at(-1);
-        if (previous?.state === "active") {
-          previous.state = undefined;
-        }
-        turns.push({ turnId, state: "active", startObserved: true });
-      }
-    }
-    return candidates;
   }
 
   hasRevision(threadId: string): boolean {
@@ -115,33 +66,6 @@ export class CodexNativeSubagentRecoveryCoordinator {
     );
   }
 
-  dispose(): void {
-    this.releaseCandidates();
-  }
-
-  retireParent(parentState: ParentState): void {
-    this.releaseCandidates(parentState);
-  }
-
-  private releaseCandidates(parentState?: ParentState): void {
-    for (const [key, { candidate }] of this.taskReconciliations) {
-      if (!parentState || candidate.parentState === parentState) {
-        candidate.completionCustody?.release();
-        // A replacement registration must not join retired history work. The
-        // old promise's identity check keeps its finalizer off the new slot.
-        this.taskReconciliations.delete(key);
-      }
-    }
-    for (const [key, { timer, candidate }] of this.taskReconciliationTimers) {
-      if (parentState && candidate.parentState !== parentState) {
-        continue;
-      }
-      clearTimeout(timer);
-      candidate.completionCustody?.release();
-      this.taskReconciliationTimers.delete(key);
-    }
-  }
-
   async reconcileRegisteredChild(childState: ChildState): Promise<boolean> {
     if (
       childState.terminal ||
@@ -162,20 +86,6 @@ export class CodexNativeSubagentRecoveryCoordinator {
         childState.recoveryInFlight = undefined;
       }
     }
-  }
-
-  pendingChildRecoveries(state: ParentState, threadId: string): TaskRecoveryCandidate[] {
-    return [...new Set(this.allCandidates())].filter(
-      (candidate) =>
-        candidate.childThreadId === threadId &&
-        candidate.requesterSessionKey === state.requesterSessionKey &&
-        candidate.parentState.parentThreadId === state.parentThreadId &&
-        !this.dependencies.isRetiredParent(candidate.parentState),
-    );
-  }
-
-  resolveChildTurnBuffer(state: ParentState, threadId: string): NativeTurnObservation[] {
-    return this.pendingChildRecoveries(state, threadId)[0]?.observedTurns ?? [];
   }
 
   clearTerminalRevisionsForParent(parentThreadId: string): void {
@@ -305,77 +215,6 @@ export class CodexNativeSubagentRecoveryCoordinator {
       clearTimeout(childState.recoveryTimer);
       childState.recoveryTimer = undefined;
     }
-  }
-
-  async reconcileTaskCandidate(
-    candidate: TaskRecoveryCandidate,
-    after?: Promise<void>,
-  ): Promise<void> {
-    const key = `${candidate.requesterSessionKey}\0${candidate.runId}`;
-    const scheduled = this.taskReconciliationTimers.get(key);
-    if (scheduled) {
-      clearTimeout(scheduled.timer);
-      this.taskReconciliationTimers.delete(key);
-      if (scheduled.candidate !== candidate) {
-        scheduled.candidate.completionCustody?.release();
-      }
-    }
-    const existing = this.taskReconciliations.get(key);
-    if (existing) {
-      if (existing.candidate !== candidate) {
-        candidate.completionCustody?.release();
-      }
-      await existing.promise;
-      return;
-    }
-    // Hold single-flight through delivery. Releasing after the read lets a slower
-    // reconcile recreate a just-pruned child and deliver the same result twice.
-    const reconciliation = after
-      ? after.then(() => this.dependencies.reconcileTaskCandidateOnce(candidate))
-      : this.dependencies.reconcileTaskCandidateOnce(candidate);
-    this.taskReconciliations.set(key, { candidate, promise: reconciliation });
-    try {
-      await reconciliation;
-    } catch (error) {
-      this.scheduleTaskCandidateReconciliation(candidate);
-      throw error;
-    } finally {
-      if (this.taskReconciliations.get(key)?.promise === reconciliation) {
-        this.taskReconciliations.delete(key);
-      }
-      if (this.taskReconciliationTimers.get(key)?.candidate !== candidate) {
-        candidate.completionCustody?.release();
-      }
-      this.dependencies.onCandidateSettled(candidate.parentState);
-    }
-  }
-
-  scheduleTaskCandidateReconciliation(candidate: TaskRecoveryCandidate): void {
-    const key = `${candidate.requesterSessionKey}\0${candidate.runId}`;
-    if (
-      this.dependencies.isDisposed() ||
-      candidate.completionCustody?.signal.aborted ||
-      this.dependencies.isRetiredParent(candidate.parentState) ||
-      this.recoveryPollDelaysMs.length === 0 ||
-      this.taskReconciliationTimers.has(key)
-    ) {
-      return;
-    }
-    // The initial history read and handoff own the admitted root. A terminal
-    // result waiting for another history poll keeps only delivery authority.
-    if (candidate.terminal) {
-      candidate.completionCustody?.settleExecution();
-    }
-    const delayMs = delayForAttempt(this.recoveryPollDelaysMs, candidate.recoveryAttempt++);
-    const timer = setTimeout(() => {
-      this.taskReconciliationTimers.delete(key);
-      void this.reconcileTaskCandidate(candidate).catch((error: unknown) => {
-        logRecoveryFailure(candidate.childThreadId, error);
-        this.scheduleTaskCandidateReconciliation(candidate);
-      });
-    }, delayMs);
-    this.taskReconciliationTimers.set(key, { candidate, timer });
-    timer.unref();
   }
 }
 

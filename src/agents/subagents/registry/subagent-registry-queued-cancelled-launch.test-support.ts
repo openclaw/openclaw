@@ -63,8 +63,6 @@ export function registerQueuedCancelledLaunchCases(
       expect(f.scope.canCleanupSession()).toBe(true);
       await f.scope.settleFailedLaunch("duplicate callback");
       expect(f.writes).toHaveLength(4);
-      expect(params.finalizer()).not.toHaveBeenCalled();
-      expect(params.createTask).toHaveBeenCalledOnce();
       expect(f.options.persistOrThrow).not.toHaveBeenCalled();
     } finally {
       f.acknowledgeAllWrites();
@@ -93,7 +91,6 @@ export function registerQueuedCancelledLaunchCases(
         expect(entry.killReconciliation).toEqual(killed.killReconciliation);
         expect(Boolean(entry.collectorCompletion)).toBe(outcome === "committed");
         expect(f.scope.canCleanupSession()).toBe(false);
-        expect(params.finalizer()).not.toHaveBeenCalled();
       } finally {
         f.acknowledgeAllWrites();
       }
@@ -124,7 +121,6 @@ export function registerQueuedCancelledLaunchCases(
         expect(entry).toEqual(killed);
         expect(successor).toEqual(successorSnapshot);
         expect(f.scope.canCleanupSession()).toBe(false);
-        expect(params.finalizer()).not.toHaveBeenCalled();
       } finally {
         f.acknowledgeAllWrites();
       }

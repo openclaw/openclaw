@@ -301,10 +301,6 @@ const policyTestWatches = [
       "src/agents/sandbox/ssh-backend.ts",
     ],
   },
-  {
-    testFile: "src/tasks/task-boundaries.test.ts",
-    watchGlobs: ["src/**/!(*.test|*.test-harness|*.test-utils|*.e2e-harness).ts"],
-  },
 ] satisfies readonly PolicyTestWatch[];
 
 /** Resolve watched tests, optionally restricting to complete owners of the changed input. */
@@ -2528,7 +2524,6 @@ const SPLIT_NODE_SHARDS = new Map<string, NodeTestSplitShard[] | (() => NodeTest
         configs: [
           "test/vitest/vitest.acp.config.ts",
           "test/vitest/vitest.shared-core.config.ts",
-          "test/vitest/vitest.tasks.config.ts",
           "test/vitest/vitest.utils.config.ts",
         ],
         requiresDist: false,

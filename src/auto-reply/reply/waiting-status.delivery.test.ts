@@ -1,8 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as SubagentRegistry from "../../agents/subagents/registry/subagent-registry.js";
-import type { ProgressContinuationReceipt } from "../../channels/progress-continuation.js";
-import type * as ProgressRequester from "../../tasks/task-progress-requester.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { markAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
@@ -18,16 +16,6 @@ import {
   createMockTypingController,
 } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
-
-const { createContinuation, settleRequester } = vi.hoisted(() => ({
-  createContinuation: vi.fn<typeof ProgressRequester.createTaskProgressContinuation>(),
-  settleRequester: vi.fn<typeof SubagentRegistry.settleRequesterAfterSessionSpawns>(() => true),
-}));
-
-vi.mock("../../tasks/task-progress-requester.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof ProgressRequester>()),
-  createTaskProgressContinuation: createContinuation,
-}));
 vi.mock("../../agents/subagents/registry/subagent-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof SubagentRegistry>()),
   settleRequesterAfterSessionSpawns: settleRequester,
@@ -36,14 +24,11 @@ vi.mock("../../agents/live-model-switch.js", () => ({
   consolidateLiveModelSwitchAfterRun: vi.fn(async () => {}),
 }));
 
+const settleRequester = vi.hoisted(() =>
+  vi.fn<typeof SubagentRegistry.settleRequesterAfterSessionSpawns>(() => true),
+);
+
 const runId = "waiting-progress-run";
-const receipt: ProgressContinuationReceipt = {
-  channel: "discord",
-  to: "channel:C1",
-  messageId: "progress-card",
-  text: "IndexWorker is working.",
-  snapshot: { lines: ["IndexWorker is working."] },
-};
 
 function createContext(): FinalizeReplyAgentRunInput {
   const sessionKey = "agent:main:waiting-progress";
@@ -139,21 +124,6 @@ async function prepare(lane: "ordinary" | "queued", context: FinalizeReplyAgentR
 
 beforeEach(() => {
   settleRequester.mockReset().mockReturnValue(true);
-  createContinuation.mockReset().mockImplementation(async (params) => {
-    let open = true;
-    return {
-      adopt: async () => {
-        if (!open) {
-          return false;
-        }
-        params.onAdopted?.({ operationId: "progress-operation" });
-        return true;
-      },
-      close: () => {
-        open = false;
-      },
-    };
-  });
 });
 
 describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (lane) => {
@@ -198,9 +168,6 @@ describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (la
           expect(onPendingContinuation.mock.calls).toEqual([[]]);
         }
       }
-      if (precedence !== "explicit acknowledgment") {
-        expect(createContinuation).not.toHaveBeenCalled();
-      }
     },
   );
 
@@ -214,28 +181,13 @@ describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (la
         context.execution.result.didDeliverSourceReplyViaMessageTool = true;
       }
       expect(await prepare(lane, context)).toEqual([]);
-      expect(createContinuation).not.toHaveBeenCalled();
     },
   );
-
-  it("does not offer adoption for a yield without accepted children", async () => {
-    const context = createContext();
-    context.execution.result.acceptedSessionSpawns = [];
-    const payloads = await prepare(lane, context);
-    expect(getReplyPayloadMetadata(payloads[0] ?? {})?.continuationStatus).toBe(true);
-    expect(getReplyPayloadMetadata(payloads[0] ?? {})?.progressContinuation?.adopt).toBeUndefined();
-    expect(createContinuation).not.toHaveBeenCalled();
-  });
 });
 
-it.each([
-  { delivered: true, adopted: false },
-  { delivered: false, adopted: false },
-  { delivered: true, adopted: true },
-  { delivered: false, adopted: true },
-])(
-  "settles an implicit continuation once after delivery=$delivered adoption=$adopted",
-  async ({ delivered, adopted }) => {
+it.each([true, false])(
+  "settles an implicit continuation once after delivery=%s",
+  async (delivered) => {
     const context = createContext();
     context.execution.result.meta = {
       durationMs: 0,
@@ -254,10 +206,7 @@ it.each([
       continuationStatus: true,
       deliverDespiteSourceReplySuppression: true,
     });
-    const adopt = getReplyPayloadMetadata(payloads[0] ?? {})?.progressContinuation?.adopt;
-    if (adopted) {
-      await expect(adopt?.(receipt)).resolves.toBe(true);
-    }
+
     expect(settleRequester).not.toHaveBeenCalled();
     expect(onPendingContinuation).toHaveBeenCalledOnce();
     const settlement = onPendingContinuation.mock.calls[0]?.[0];
@@ -265,34 +214,9 @@ it.each([
     await settlement?.settle(delivered);
     expect(settleRequester).toHaveBeenCalledOnce();
     expect(settleRequester.mock.calls[0]?.[0]).toMatchObject({
-      requesterYielded: delivered || adopted,
-      ...(adopted ? { progressPresentation: { operationId: "progress-operation" } } : {}),
+      requesterYielded: delivered,
     });
-    await expect(adopt?.(receipt)).resolves.toBe(false);
+    await settlement?.settle(delivered);
+    expect(settleRequester).toHaveBeenCalledOnce();
   },
 );
-
-it("releases child delivery if a receipt-backed handoff fails after an ambiguous send", async () => {
-  const context = createContext();
-  context.execution.result.meta = { durationMs: 0, continuationPending: true };
-  const onPendingContinuation = vi.fn<(settlement?: PendingContinuationSettlement) => void>();
-  context.opts = { onPendingContinuation };
-  const payloads = await prepare("ordinary", context);
-  const adopt = getReplyPayloadMetadata(payloads[0] ?? {})?.progressContinuation?.adopt;
-  await expect(adopt?.(receipt)).resolves.toBe(true);
-  settleRequester.mockReturnValueOnce(false);
-
-  await expect(onPendingContinuation.mock.calls[0]?.[0]?.settle(false)).rejects.toThrow(
-    "accepted continuation children could not transfer terminal delivery",
-  );
-  expect(
-    settleRequester.mock.calls.map(([params]) => ({
-      yielded: params.requesterYielded,
-      presentation: params.progressPresentation,
-    })),
-  ).toEqual([
-    { yielded: true, presentation: { operationId: "progress-operation" } },
-    { yielded: false, presentation: undefined },
-  ]);
-  await expect(adopt?.(receipt)).resolves.toBe(false);
-});

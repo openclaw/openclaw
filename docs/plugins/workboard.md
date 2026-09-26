@@ -152,13 +152,11 @@ Unlinked cards without an active or unresolved task association can start work d
 
 Autonomous starts use the Gateway's task-tracked agent run path (default agent
 and model unless Claude/OpenAI is chosen explicitly). Workboard then links the
-resulting task, run id, and session key back onto the card. Each linked
+resulting run id and session key back onto the card. Each linked
 execution also records an attempt summary (engine, mode, model, run id,
 timestamps, status, rolling failure count) so repeated failures stay visible.
 
-The Control UI refreshes task status from the Gateway task ledger for its
-lifecycle display, matching tasks to cards by task id, run id, or an exact
-linked session. Card status changes are persisted by the Gateway-side Workboard
+The Control UI reads lifecycle from the card's linked session. Card status changes are persisted by the Gateway-side Workboard
 plugin using the linked run and session lifecycle (see
 [Session lifecycle sync](#session-lifecycle-sync)).
 

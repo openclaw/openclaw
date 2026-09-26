@@ -64,12 +64,10 @@ export async function prepareGatewayRestartIteration(
   // Interrupted tasks from the previous lifecycle may have left `active`
   // counts elevated (their finally blocks never ran), permanently blocking
   // new work from draining. The same boundary also discards stale restart
-  // deferral timers and reloads the task registry from durable state so
-  // cancelled/completed work is not kept alive by old in-memory maps.
+  // deferral timers. Execution owners restore only their own durable work.
   const {
     abortActiveCronTaskRuns,
     advanceCronActiveJobGeneration,
-    reloadTaskRuntimeStateFromStore,
     retireActiveCronTaskRunTracking,
     resetCronActiveJobs,
     resetAllLanes,
@@ -108,6 +106,5 @@ export async function prepareGatewayRestartIteration(
   } catch (error) {
     logger.warn(`failed to reset ambient runtime state: ${formatErrorMessage(error)}`);
   }
-  await reloadTaskRuntimeStateFromStore();
   markGatewayRestartTrace("restart.next-start");
 }

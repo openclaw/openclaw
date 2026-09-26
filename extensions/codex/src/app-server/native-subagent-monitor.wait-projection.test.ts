@@ -8,7 +8,6 @@ import {
   notifyChildStarted,
   registerParent,
   successfulSendInputOutput,
-  taskRecord,
   turnStartedNotification,
 } from "./native-subagent-monitor.test-support.js";
 
@@ -126,89 +125,6 @@ async function awaitingAdmission(
 }
 
 describe("native wait assignment projection", () => {
-  it.each(["running", "queued", "succeeded"] as const)(
-    "reprojects an observed receiver when discovery restores its recorded follow-up assignment (%s)",
-    async (status) => {
-      const historyOwner = nativeHistoryOwner();
-      const { client, runtime, events } = await createFixture(historyOwner);
-      await notifyChildStarted(client, "parent-thread", "waiter");
-      await startTurn(client, "waiter", "waiter-turn");
-      await waitItem(client, "started", ["receiver"]);
-      expect(events.at(-1)?.data.wait).toMatchObject({
-        dependencies: [{ runId: "codex-thread:receiver" }],
-      });
-      runtime.listTaskRecords.mockReturnValue([
-        ...runtime.listTaskRecords(),
-        taskRecord({ childThreadId: "receiver:turn:turn-b", status, historyOwner }),
-      ]);
-      await notifyChildStarted(client, "parent-thread", "receiver");
-      expect(events.at(-1)?.data).toMatchObject({
-        state: "waiting",
-        executionId: "waiter-turn",
-        wait: {
-          kind: "children",
-          dependencies: [{ runId: "codex-thread:receiver:turn:turn-b" }],
-          pendingCount: 1,
-        },
-      });
-      if (status !== "succeeded") {
-        const projectedEventCount = events.length;
-        await startTurn(client, "receiver", "turn-b");
-        await endTurn(client, "receiver", "turn-b");
-        expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
-          expect.objectContaining({
-            runId: "codex-thread:receiver:turn:turn-b",
-            status: "succeeded",
-            terminalSummary: "turn-b",
-          }),
-        );
-        expect(events).toHaveLength(projectedEventCount);
-      }
-    },
-  );
-
-  it.each(["missing-history", "foreign-history", "active-foreign-parent"])(
-    "does not adopt an ineligible recorded receiver into an observed wait: %s",
-    async (scenario) => {
-      const historyOwner = nativeHistoryOwner();
-      const { client, runtime, events } = await createFixture(historyOwner);
-      await notifyChildStarted(client, "parent-thread", "waiter");
-      await startTurn(client, "waiter", "waiter-turn");
-      await waitItem(client, "started", ["receiver"]);
-      const eventCount = events.length;
-      runtime.listTaskRecords.mockReturnValue([
-        taskRecord({
-          childThreadId: "receiver:turn:turn-b",
-          status: scenario === "active-foreign-parent" ? "running" : "succeeded",
-          ...(scenario === "missing-history"
-            ? {}
-            : {
-                historyOwner:
-                  scenario === "foreign-history"
-                    ? { ...historyOwner, connectionFingerprint: "b".repeat(64) }
-                    : scenario === "active-foreign-parent"
-                      ? { ...historyOwner, parentThreadId: "other-parent" }
-                      : historyOwner,
-              }),
-        }),
-      ]);
-      await notifyChildStarted(client, "parent-thread", "receiver");
-      if (scenario === "active-foreign-parent") {
-        await startTurn(client, "receiver", "turn-b");
-        await endTurn(client, "receiver", "turn-b");
-        expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalledWith(
-          expect.objectContaining({ runId: "codex-thread:receiver:turn:turn-b" }),
-        );
-      }
-      expect(events).toHaveLength(eventCount);
-      expect(events.at(-1)?.data.wait).toMatchObject({
-        kind: "children",
-        dependencies: [{ runId: "codex-thread:receiver" }],
-        pendingCount: 1,
-      });
-    },
-  );
-
   it.each([
     { previousStatus: "completed", laterPendingTurn: false },
     { previousStatus: "interrupted", laterPendingTurn: false },
@@ -216,7 +132,7 @@ describe("native wait assignment projection", () => {
   ] as const)(
     "tracks admission after $previousStatus with later pending turn $laterPendingTurn without settling its wait",
     async ({ previousStatus, laterPendingTurn }) => {
-      const { client, runtime, events } = await awaitingAdmission({
+      const { client, events } = await awaitingAdmission({
         previousStatus,
         laterPendingTurn,
       });
@@ -247,9 +163,7 @@ describe("native wait assignment projection", () => {
       const admittedEventCount = events.length;
       await endTurn(client, "receiver", "turn-b");
       expect(events).toHaveLength(admittedEventCount);
-      expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalledWith(
-        expect.objectContaining({ runId: "codex-thread:waiter" }),
-      );
+
       await waitItem(client, "completed", ["receiver"]);
       expect(events.at(-1)?.data).toMatchObject({ state: "running", executionId: "waiter-turn" });
       expect(events.at(-1)?.data.wait).toBeUndefined();

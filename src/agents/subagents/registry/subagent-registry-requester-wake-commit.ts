@@ -139,9 +139,10 @@ export function commitRequesterWake(
   context: SubagentLifecycleWakeContext,
   entries: readonly SubagentRunRecord[],
   generation: number | undefined,
-  commit: (entries: readonly SubagentRunRecord[]) => boolean,
+  commit: (entries: readonly SubagentRunRecord[]) => boolean | Promise<boolean>,
   retainOnFailure: boolean,
-): void {
+  retryWholeBatch = false,
+): Promise<void> {
   const owners = entries.map((entry) => ({
     entry,
     runId: entry.runId,
@@ -158,6 +159,7 @@ export function commitRequesterWake(
   const pending: PendingRequesterSettleWakeCommit = {
     entries: [...entries],
     commit,
+    retryWholeBatch,
     failures: 0,
     nextAttemptAt: 0,
     isCurrent: (current) =>
@@ -210,47 +212,74 @@ export function commitRequesterWake(
         },
       ),
   };
-  const retain = () => {
-    if (!retainOnFailure) {
-      return;
+  // Sibling wakes must observe the same fence while the first worker write is
+  // still settling, before a failure has established its retry deadline.
+  for (const entry of entries) {
+    if (pending.isCurrent(entry)) {
+      context.pendingRequesterSettleWakeCommits.set(entry, pending);
     }
-    deferWakeCommit(context, pending);
-    for (const entry of entries) {
-      if (pending.isCurrent(entry)) {
-        context.pendingRequesterSettleWakeCommits.set(entry, pending);
-      }
-    }
-  };
-  try {
-    // A temporarily closed Gateway can defer settlement without invalidating
-    // already observed delivery. Only changed row ownership drops its fence.
-    if (!commit(entries)) {
-      retain();
-    }
-  } catch (error) {
-    retain();
-    throw error;
   }
+  return runPendingWakeCommit(context, pending, retainOnFailure, "initial");
 }
 
 export function retryPendingWakeCommit(
   context: SubagentLifecycleWakeContext,
   pending: PendingRequesterSettleWakeCommit,
-): void {
+): Promise<void> {
+  if (pending.inFlight) {
+    return pending.inFlight;
+  }
   if (pending.nextAttemptAt > Date.now()) {
-    return;
+    return Promise.resolve();
   }
-  try {
-    const members = pending.entries.filter(
-      (member) => getPendingWakeCommit(context, member) === pending,
-    );
-    if (pending.commit(members)) {
-      clearPendingWakeCommit(context, pending);
-    } else {
+  return runPendingWakeCommit(context, pending, true, "retry");
+}
+
+function runPendingWakeCommit(
+  context: SubagentLifecycleWakeContext,
+  pending: PendingRequesterSettleWakeCommit,
+  retainOnFailure: boolean,
+  attempt: "initial" | "retry",
+): Promise<void> {
+  const retain = () => {
+    if (retainOnFailure) {
       deferWakeCommit(context, pending);
+    } else {
+      clearPendingWakeCommit(context, pending);
     }
-  } catch (error) {
-    deferWakeCommit(context, pending);
-    throw error;
-  }
+  };
+  const operation = Promise.resolve()
+    .then(async () => {
+      try {
+        const members = pending.entries.filter(
+          (member) => getPendingWakeCommit(context, member) === pending,
+        );
+        // A no-wake decision belongs to its complete original batch. Storage may
+        // retry it unchanged; changed membership needs a fresh sweeper decision.
+        if (pending.retryWholeBatch && members.length !== pending.entries.length) {
+          clearPendingWakeCommit(context, pending);
+          return;
+        }
+        // First admission requires every captured owner, including child-generation
+        // authority. Only retries can retain a known outcome for surviving members.
+        if (attempt === "initial" && members.length !== pending.entries.length) {
+          retain();
+          return;
+        }
+        if (members.length === 0 || (await pending.commit(members))) {
+          clearPendingWakeCommit(context, pending);
+        } else {
+          // A temporarily closed Gateway cannot erase already observed delivery.
+          retain();
+        }
+      } catch (error) {
+        retain();
+        throw error;
+      }
+    })
+    .finally(() => {
+      pending.inFlight = undefined;
+    });
+  pending.inFlight = operation;
+  return operation;
 }

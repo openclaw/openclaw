@@ -9,7 +9,10 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
-import { reconcileRetiredSubagentCancellation } from "../completion/subagent-completion-admission.store.js";
+import {
+  blockSubagentCompletionDelivery,
+  reconcileRetiredSubagentCancellation,
+} from "../completion/subagent-completion-admission.store.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
@@ -18,6 +21,7 @@ import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { createInterruptedRecoveryCoordinator } from "./subagent-registry-restart-recovery-coordinator.js";
 import { isRestoredQueuedFailureSettlementClaimed } from "./subagent-registry-restore.js";
 import {
@@ -277,9 +281,24 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         if (
-          entry.killReconciliation &&
-          reconcileRetiredSubagentCancellation(entry, now) === false
+          subagentRuns.isCompletionAuthorityRetired(entry) &&
+          ["pending", "in_progress"].includes(entry.delivery?.status ?? "")
         ) {
+          await blockSubagentCompletionDelivery({
+            subagent: entry,
+            reason: "store replaced",
+            suspendedReason: "permanent_failure",
+            storeReplaced: true,
+          });
+          continue;
+        }
+        if (
+          entry.killReconciliation &&
+          (await reconcileRetiredSubagentCancellation(entry, now)) === false
+        ) {
+          continue;
+        }
+        if (runs.get(runId) !== entry) {
           continue;
         }
         // Yield freezes the parent's wake before its children finish. Keep

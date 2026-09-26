@@ -380,8 +380,7 @@ function createGlobalFeaturePane(
   methods: string[],
 ) {
   const client = createGatewayBrowserClientFixture({
-    request: (method, params) =>
-      method === "tasks.list" ? Promise.resolve({ tasks: [] }) : request(method, params),
+    request: (method, params) => request(method, params),
   });
   const sessions = createSessionCapabilityFixture({
     state: { modelOverrides: {}, result: null, loading: false, error: null },

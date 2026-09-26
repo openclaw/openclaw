@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createAgentHarnessCompletionScope } from "../agents/agent-harness-completion-scope.js";
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
 import { prepareCatalogExecutor } from "../agents/embedded-agent-runner/run/attempt-stream-prepare.test-support.js";
@@ -25,18 +26,12 @@ import { listSessionPendingInputs } from "../config/sessions/session-accessor.pe
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
   captureAgentHarnessCompletionCustody,
-  captureAgentHarnessTaskAssignment,
-  createAgentHarnessTaskRuntime,
-  deliverAgentHarnessTaskCompletion,
-  matchesAgentHarnessTaskAssignment,
+  deliverAgentHarnessCompletion,
   type AgentHarnessCompletionCustody,
-} from "../plugin-sdk/agent-harness-task-runtime.js";
+} from "../plugin-sdk/agent-harness-completion.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { tryBeginGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import * as userTurnTranscript from "../sessions/user-turn-transcript.js";
-import { createAgentHarnessTaskRuntimeScope } from "../tasks/agent-harness-task-runtime-scope.js";
-import { getTaskById } from "../tasks/runtime-internal.js";
-import { captureTaskDeliveryWork } from "../tasks/task-registry-delivery.test-support.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -51,7 +46,6 @@ import {
 type OwnerChange = "live" | "operator-revoked" | "requester-replaced";
 
 async function createCompletion(context: GatewayRequestContext) {
-  using notifications = captureTaskDeliveryWork();
   const id = randomUUID();
   const requesterSessionKey = `agent:main:native-completion:${id}`;
   const sessionId = `requester-${id}`;
@@ -69,7 +63,7 @@ async function createCompletion(context: GatewayRequestContext) {
     sessionId,
     storePath: loaded.storePath,
   };
-  const scope = createAgentHarnessTaskRuntimeScope({
+  const scope = createAgentHarnessCompletionScope({
     requesterSessionKey,
     gatewayContextResolver: context.resolveGatewayContext,
   });
@@ -110,32 +104,7 @@ async function createCompletion(context: GatewayRequestContext) {
       "Expected native completion custody",
     );
     custody = retainedCustody;
-    const runtime = createAgentHarnessTaskRuntime({
-      runtime: "subagent",
-      taskKind: "native-proof",
-      scope,
-    });
-    const task = runtime.createRunningTaskRun({
-      runId: childSessionKey,
-      task: "Produce the retained child result",
-      notifyPolicy: "silent",
-    });
-    const expectedTask = captureAgentHarnessTaskAssignment(task);
-    runtime.finalizeTaskRunByRunId({
-      runId: childSessionKey,
-      expectedTask,
-      completionCustody: retainedCustody,
-      status: "succeeded",
-      terminalSummary: "Retained child result",
-      endedAt: Date.now(),
-    });
-    runtime.setDetachedTaskDeliveryStatusByRunId({
-      runId: childSessionKey,
-      expectedTask,
-      completionCustody: retainedCustody,
-      deliveryStatus: "pending",
-    });
-    await notifications.settle();
+    retainedCustody.settleExecution();
     // The original request has ended. Only its retained completion owns the handoff.
     source.release();
     root.release();
@@ -153,23 +122,15 @@ async function createCompletion(context: GatewayRequestContext) {
         }
       },
       deliver: () =>
-        deliverAgentHarnessTaskCompletion({
+        deliverAgentHarnessCompletion({
           scope,
           completionCustody: retainedCustody,
-          expectedTask,
           childSessionKey,
           childSessionId: `child-${id}`,
           announceId,
           status: "succeeded",
           result: "Retained child result",
-          isSourceSessionAdmissionAllowed: () => {
-            const current = getTaskById(task.taskId);
-            return (
-              retainedCustody.isCurrent() &&
-              current !== undefined &&
-              matchesAgentHarnessTaskAssignment(current, expectedTask)
-            );
-          },
+          isSourceSessionAdmissionAllowed: () => retainedCustody.isCurrent(),
         }),
       [Symbol.dispose]: dispose,
     };

@@ -170,7 +170,6 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
         kind: request.kind,
         params: {
           target: capturedTarget,
-          run: request.params.run ? { ...request.params.run } : undefined,
         },
       };
     }

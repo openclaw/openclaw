@@ -11,14 +11,14 @@ import {
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
 } from "../../../sessions/session-lifecycle-admission.js";
-import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
-import { findTaskByRunId } from "../../../tasks/task-registry.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
+import { SUBAGENT_KILL_TASK_ERROR } from "./subagent-control.types.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
 const owner = "agent:main:main";
@@ -124,7 +124,7 @@ it.each(
             throw new Error(`Root never reached child drain: ${JSON.stringify(result)}`);
           }),
         ]);
-        expect(findTaskByRunId("root")?.status).toBe("cancelled");
+        expect(resolveSubagentSessionStatus(subagentRuns.get("root"))).toBe("killed");
         armed = true;
         admission.release();
       }
@@ -137,8 +137,12 @@ it.each(
       expect(result).toHaveProperty("error", expect.stringContaining(failure));
       expect(root.endedReason).toBe("subagent-killed");
       const childKills = phase === "descendant drain" ? 2 : 0;
-      expect(findTaskByRunId("child")?.status).toBe(childKills ? "cancelled" : "running");
-      expect(findTaskByRunId("healthy")?.status).toBe(childKills ? "cancelled" : "running");
+      expect(resolveSubagentSessionStatus(subagentRuns.get("child"))).toBe(
+        childKills ? "killed" : "running",
+      );
+      expect(resolveSubagentSessionStatus(subagentRuns.get("healthy"))).toBe(
+        childKills ? "killed" : "running",
+      );
       expect(result).toMatchObject(
         boundary === "bulk"
           ? {
@@ -230,9 +234,11 @@ it.each([false, true])(
       expect(result.error).toContain(failure);
       // Identical labels and runtime errors on distinct nodes remain distinct diagnostics.
       expect(result.error.match(/Subagent is still active/g)).toHaveLength(sameTextSibling ? 2 : 1);
-      expect(findTaskByRunId("root")?.status).toBe("running");
-      expect(findTaskByRunId("child")?.status).toBe("cancelled");
-      expect(findTaskByRunId("healthy")?.status).toBe(sameTextSibling ? "running" : "cancelled");
+      expect(resolveSubagentSessionStatus(subagentRuns.get("root"))).toBe("running");
+      expect(resolveSubagentSessionStatus(subagentRuns.get("child"))).toBe("killed");
+      expect(resolveSubagentSessionStatus(subagentRuns.get("healthy"))).toBe(
+        sameTextSibling ? "running" : "killed",
+      );
     } finally {
       armed = false;
       admission.release();

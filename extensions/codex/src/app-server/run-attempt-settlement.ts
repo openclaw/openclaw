@@ -2,7 +2,6 @@ import { addAbortListener } from "node:events";
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS } from "./attempt-timeouts.js";
-import { prepareCodexNativeCommandTasks } from "./native-command-tasks.js";
 import { readCodexRetainedBackgroundCommands } from "./native-process-authority.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
@@ -61,10 +60,8 @@ export async function beginCodexAttemptSettlement(
   const settlement = drainNotificationQueue().then(async () => {
     const commands = activeProjector.getPendingNativeCommands();
     if (commands.size > 0 && !params.oneShotCliRun && !state.pluginRuntimeRefreshStop) {
-      let tasks: ReturnType<typeof prepareCodexNativeCommandTasks>;
       try {
-        tasks = prepareCodexNativeCommandTasks(resources, activeTurnId, commands);
-        const { readCurrent, inventory } = await readCodexRetainedBackgroundCommands({
+        const readCurrent = await readCodexRetainedBackgroundCommands({
           client: resourceState.client,
           threadId: resourceState.thread.threadId,
           turnId: activeTurnId,
@@ -82,15 +79,11 @@ export async function beginCodexAttemptSettlement(
             return new Map();
           }
         };
-        await drainNotificationQueue();
-        await tasks?.retain(inventory, readCurrent());
       } catch (error) {
         embeddedAgentLog.debug("could not confirm retained native commands", {
           threadId: resourceState.thread.threadId,
           error: formatErrorMessage(error),
         });
-      } finally {
-        await tasks?.closeAdmission();
       }
       // Native exit may arrive while the inventory RPC is pending.
       await drainNotificationQueue();

@@ -55,11 +55,11 @@ flow:
                   - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
             catchAs: handoffError
             catch:
-              - set: handoffTasks
+              - set: handoffRuns
                 value:
-                  expr: "await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }).catch((error) => ({ error: formatErrorMessage(error) }))"
+                  expr: "await readNativeQaSubagentRuns(env, 'agent:qa:subagent').catch((error) => ({ error: formatErrorMessage(error) }))"
               - throw:
-                  expr: "`subagent handoff stalled: ${formatErrorMessage(handoffError)}; outbound=${recentOutboundSummary(state, 8)} tasks=${JSON.stringify(handoffTasks)}`"
+                  expr: "`subagent handoff stalled: ${formatErrorMessage(handoffError)}; outbound=${recentOutboundSummary(state, 8)} runs=${JSON.stringify(handoffRuns)}`"
         - assert:
             expr: "!['failed to delegate','could not delegate','subagent unavailable'].some((needle) => normalizeLowercaseStringOrEmpty(outbound.text).includes(needle))"
             message:

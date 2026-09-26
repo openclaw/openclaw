@@ -39,8 +39,6 @@ vi.mock("./register.status-health-sessions.js", () => ({
     program.command("status");
     program.command("health");
     program.command("sessions");
-    const tasks = program.command("tasks");
-    tasks.command("show");
   },
 }));
 
@@ -84,6 +82,7 @@ describe("command-registry", () => {
     expect(names).toContain("mcp");
     expect(names).toContain("agent");
     expect(names).toContain("agents");
+    expect(names).not.toContain("tasks");
   });
 
   it("only exposes Claws after an explicit process opt-in", () => {
@@ -105,7 +104,7 @@ describe("command-registry", () => {
     expect(names).toContain("backup");
     expect(names).toContain("mcp");
     expect(names).toContain("sessions");
-    expect(names).toContain("tasks");
+    expect(names).not.toContain("tasks");
     expect(names).toContain("agent");
     expect(names).not.toContain("setup");
     expect(names).not.toContain("status");
@@ -125,10 +124,11 @@ describe("command-registry", () => {
     expect(agentProgram.commands.map((command) => command.name())).toEqual(["agent"]);
   });
 
-  it("registerCoreCliByName returns false for unknown commands", async () => {
+  it.each(["nonexistent", "tasks"])("registerCoreCliByName returns false for %s", async (name) => {
     const program = createProgram();
-    const found = await registerCoreCliByName(program, testProgramContext, "nonexistent");
+    const found = await registerCoreCliByName(program, testProgramContext, name);
     expect(found).toBe(false);
+    expect(namesOf(program)).toEqual([]);
   });
 
   it("registers doctor placeholder for doctor primary command", () => {
@@ -153,6 +153,7 @@ describe("command-registry", () => {
     expect(names).toContain("doctor");
     expect(names).toContain("triage");
     expect(names).toContain("status");
+    expect(names).not.toContain("tasks");
     expect(names.length).toBeGreaterThan(1);
   });
 
@@ -181,20 +182,18 @@ describe("command-registry", () => {
     expect(names).toContain("status");
     expect(names).toContain("health");
     expect(names).toContain("sessions");
-    expect(names).toContain("tasks");
+    expect(names).not.toContain("tasks");
   });
 
   it("can eagerly register the status/session command group repeatedly for completion", async () => {
     const program = createProgram();
 
-    for (const name of ["status", "health", "sessions", "tasks"]) {
+    for (const name of ["status", "health", "sessions"]) {
       await expect(registerCoreCliByName(program, testProgramContext, name)).resolves.toBe(true);
     }
 
     const names = namesOf(program);
-    const countName = (target: string) =>
-      names.reduce((count, name) => count + (name === target ? 1 : 0), 0);
-    expect(countName("tasks")).toBe(1);
+    expect(names).toEqual(["status", "health", "sessions"]);
   });
 
   it("replaces placeholders when loading a grouped entry by secondary command name", async () => {

@@ -41,6 +41,7 @@ import type {
   ExecutionIdentityInspectionQuery,
   InternalAuditRunInspectResult,
 } from "./execution-identity-inspection.types.js";
+import type { OwnerLifecycleSchemaFacts } from "./execution-owner-lifecycle-receipts.js";
 
 type ExecutionIdentityDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -67,6 +68,10 @@ type ExecutionIdentityStoreOptions = OpenClawStateDatabaseOptions & {
     pruneBatchRows: number;
   };
 };
+
+/** Feature-table availability belongs to the admitted read connection, not its queries. */
+export type ExecutionIdentityInspectionSchemaFacts = OwnerLifecycleSchemaFacts &
+  Readonly<{ executionIdentityContexts: boolean; auditEvents: boolean }>;
 
 type ExecutionIdentityReadOptions = OpenClawStateDatabaseOptions & {
   now?: number;
@@ -326,9 +331,10 @@ function readExecutionIdentityContextByExecutionId(
   db: DatabaseSync,
   executionId: string,
   now: number,
+  schema: ExecutionIdentityInspectionSchemaFacts,
 ): ExecutionIdentityContextReadResult {
   const normalizedExecutionId = ensureBoundedExecutionIdentityRef(executionId, "execution id");
-  if (!tableExists(db, "execution_identity_contexts")) {
+  if (!schema.executionIdentityContexts) {
     return { status: "missing" };
   }
   const row = readRowByExecutionId(db, normalizedExecutionId);
@@ -435,12 +441,19 @@ function missingInspectionResult(
 function inspectExactExecution(
   db: DatabaseSync,
   params: Extract<ExecutionIdentityInspectionQuery, { executionId: string }>,
+  schema: ExecutionIdentityInspectionSchemaFacts,
 ): InternalAuditRunInspectResult {
   const executionId = ensureBoundedExecutionIdentityRef(params.executionId, "execution id");
   const selector = { executionId };
-  const contextResult = readExecutionIdentityContextByExecutionId(db, executionId, params.now);
+  const contextResult = readExecutionIdentityContextByExecutionId(
+    db,
+    executionId,
+    params.now,
+    schema,
+  );
   if (contextResult.status === "found") {
     return presentExecutionDecisionReceiptsInDatabase(db, {
+      schema,
       context: contextResult.context,
       decisionCursor: params.decisionCursor,
       decisionLimit: params.decisionLimit,
@@ -489,8 +502,13 @@ function hasAnyRunContext(db: DatabaseSync, runId: string): boolean {
   );
 }
 
-function hasRetainedAuditRun(db: DatabaseSync, runId: string, now: number): boolean {
-  if (!tableExists(db, "audit_events")) {
+function hasRetainedAuditRun(
+  db: DatabaseSync,
+  runId: string,
+  now: number,
+  schema: ExecutionIdentityInspectionSchemaFacts,
+): boolean {
+  if (!schema.auditEvents) {
     return false;
   }
   return Boolean(
@@ -510,10 +528,11 @@ function hasRetainedAuditRun(db: DatabaseSync, runId: string, now: number): bool
 function inspectRunSelector(
   db: DatabaseSync,
   params: Extract<ExecutionIdentityInspectionQuery, { runId: string }>,
+  schema: ExecutionIdentityInspectionSchemaFacts,
 ): InternalAuditRunInspectResult {
   const runId = ensureBoundedExecutionIdentityRef(params.runId, "run id");
   const now = params.now;
-  const firstMatches = tableExists(db, "execution_identity_contexts")
+  const firstMatches = schema.executionIdentityContexts
     ? readRowsByRunId(db, runId, now, 0, 2)
     : [];
   if (firstMatches.length === 1) {
@@ -536,6 +555,7 @@ function inspectRunSelector(
       });
     }
     return presentExecutionDecisionReceiptsInDatabase(db, {
+      schema,
       context,
       decisionCursor: params.decisionCursor,
       decisionLimit: params.decisionLimit,
@@ -590,7 +610,7 @@ function inspectRunSelector(
       ],
     });
   }
-  if (tableExists(db, "execution_identity_contexts") && hasAnyRunContext(db, runId)) {
+  if (schema.executionIdentityContexts && hasAnyRunContext(db, runId)) {
     return unavailableIdentityContext(
       { runId },
       {
@@ -600,7 +620,7 @@ function inspectRunSelector(
     );
   }
   try {
-    if (hasRetainedAuditRun(db, runId, now)) {
+    if (hasRetainedAuditRun(db, runId, now, schema)) {
       return unavailableIdentityContext(
         { runId },
         {
@@ -631,10 +651,11 @@ function inspectRunSelector(
 export function inspectExecutionIdentityRunInDatabase(
   db: DatabaseSync,
   params: ExecutionIdentityInspectionQuery,
+  schema: ExecutionIdentityInspectionSchemaFacts,
 ): InternalAuditRunInspectResult {
   return "executionId" in params
-    ? inspectExactExecution(db, params)
-    : inspectRunSelector(db, params);
+    ? inspectExactExecution(db, params, schema)
+    : inspectRunSelector(db, params, schema);
 }
 
 /** Inspect one exact execution or discover bounded executions without host SQLite. */

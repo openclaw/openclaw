@@ -319,7 +319,7 @@ describe("authenticated Gateway RPC diagnostics", () => {
     "records %s rejection without a handler sample",
     async (reason) => {
       const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true));
-      const fixture = createRequest(handler, "tasks.list");
+      const fixture = createRequest(handler, "sessions.list");
       if (reason === "authorization") {
         fixture.client.connect.scopes = [];
       } else {

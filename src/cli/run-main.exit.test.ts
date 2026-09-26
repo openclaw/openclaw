@@ -86,8 +86,6 @@ const getActiveMcpLoopbackRuntimeMock = vi.hoisted(() =>
   vi.fn<() => { port: number } | undefined>(() => undefined),
 );
 const closeMcpLoopbackServerMock = vi.hoisted(() => vi.fn(async () => {}));
-const ensureTaskRegistryReadyMock = vi.hoisted(() => vi.fn());
-const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
 const outputPrecomputedRootHelpTextMock = vi.hoisted(() => vi.fn(() => false));
 const outputPrecomputedBrowserHelpTextMock = vi.hoisted(() => vi.fn(() => false));
@@ -372,14 +370,6 @@ vi.mock("../gateway/mcp-http.loopback-runtime.js", () => ({
 
 vi.mock("../gateway/mcp-http.js", () => ({
   closeMcpLoopbackServer: closeMcpLoopbackServerMock,
-}));
-
-vi.mock("../tasks/task-registry.js", () => ({
-  ensureTaskRegistryReady: ensureTaskRegistryReadyMock,
-}));
-
-vi.mock("../tasks/task-registry.maintenance.js", () => ({
-  startTaskRegistryMaintenance: startTaskRegistryMaintenanceMock,
 }));
 
 vi.mock("./program/root-help.js", () => ({
@@ -824,8 +814,6 @@ describe("runCli exit behavior", () => {
     expect(routeOrder).toBeGreaterThan(captureOrder);
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
     expect(disposeRegisteredAgentHarnessesMock).not.toHaveBeenCalled();
-    expect(ensureTaskRegistryReadyMock).not.toHaveBeenCalled();
-    expect(startTaskRegistryMaintenanceMock).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });

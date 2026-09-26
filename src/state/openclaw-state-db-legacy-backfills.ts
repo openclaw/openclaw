@@ -3,8 +3,6 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asFiniteNumber, asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { estimateAcpEventRowBytes, estimateAcpSessionRowBytes } from "../acp/event-ledger-bytes.js";
-import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
-import { selectDeliverableSessionsReply } from "../agents/tools/sessions-send-tokens.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
@@ -13,10 +11,6 @@ import { compactLegacyDeliveryQueueFailures } from "./openclaw-state-db-delivery
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
-
-// SQLite's default trim removes only spaces; task records use ECMAScript String.trim.
-const taskIdentifierWhitespace =
-  "\u0009\u000a\u000b\u000c\u000d \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
 
 export function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
   if (!tableExists(db, "operator_approvals")) {
@@ -69,122 +63,11 @@ export function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
   });
 }
 
-export function repairLegacyTaskAgentAttribution(db: DatabaseSync): void {
-  if (!tableExists(db, "task_runs") || !tableHasColumn(db, "task_runs", "requester_agent_id")) {
-    return;
-  }
-  // Before requester_agent_id existed, scoped subagent/ACP rows stored the
-  // requester in agent_id. Repair only rows with recoverable requester
-  // provenance; global legacy rows must keep the existing fallback behavior.
-  db.exec(`
-    UPDATE task_runs
-    SET
-      requester_agent_id = CASE
-        WHEN owner_key GLOB 'agent:*:*' THEN substr(
-          owner_key,
-          7,
-          instr(substr(owner_key, 7), ':') - 1
-        )
-        WHEN requester_session_key GLOB 'agent:*:*' THEN substr(
-          requester_session_key,
-          7,
-          instr(substr(requester_session_key, 7), ':') - 1
-        )
-        WHEN agent_id <> substr(
-          child_session_key,
-          7,
-          instr(substr(child_session_key, 7), ':') - 1
-        ) THEN agent_id
-        ELSE NULL
-      END,
-      agent_id = substr(
-        child_session_key,
-        7,
-        instr(substr(child_session_key, 7), ':') - 1
-      )
-    WHERE requester_agent_id IS NULL
-      AND runtime IN ('subagent', 'acp')
-      AND child_session_key GLOB 'agent:*:*'
-      AND instr(substr(child_session_key, 7), ':') > 1
-      AND (
-        owner_key GLOB 'agent:*:*'
-        OR requester_session_key GLOB 'agent:*:*'
-        OR (
-          agent_id IS NOT NULL
-          AND agent_id <> substr(
-            child_session_key,
-            7,
-            instr(substr(child_session_key, 7), ':') - 1
-          )
-        )
-      );
-  `);
-}
-
-export function repairLegacyTaskDeliveryStatuses(db: DatabaseSync): void {
-  if (!tableExists(db, "task_runs") || !tableHasColumn(db, "task_runs", "delivery_status")) {
-    return;
-  }
-  // Successful sidecar imports archive their source, so database open must
-  // also canonicalize rows already copied by released migrations.
-  db.exec(`
-    UPDATE task_runs
-    SET delivery_status = 'not_applicable'
-    WHERE delivery_status = 'not-requested';
-  `);
-}
-
 type LegacyRetainedResultRow = {
   run_id: string;
   payload_json: string;
   pending_final_delivery_payload_json?: string | null;
 };
-
-/** Recover the task owner lost by stable steer replacements before runtime hydration. */
-export function repairLegacySubagentTaskBindings(db: DatabaseSync): void {
-  if (!tableExists(db, "subagent_runs") || !tableExists(db, "task_runs")) {
-    return;
-  }
-  // v2026.6.34 replaced runId/createdAt but retained sessionStartedAt. A reused
-  // child session is not an owner: require one task/run, matching requester and
-  // timing, and no competing binding. Running replacements need repair too.
-  db.prepare(`
-    WITH runs AS MATERIALIZED (
-      SELECT run_id, trim(child_session_key, ?) AS child_session_key, requester_session_key, created_at,
-        CASE WHEN json_valid(payload_json) THEN payload_json ELSE 'null' END AS payload
-      FROM subagent_runs
-    ), bindings AS MATERIALIZED (
-      SELECT run.run_id, task.run_id AS task_run_id
-      FROM runs AS run JOIN task_runs AS task
-        ON task.child_session_key = run.child_session_key
-      WHERE task.runtime = 'subagent'
-        AND task.requester_session_key = run.requester_session_key
-        AND task.run_id <> '' AND trim(task.run_id) = task.run_id
-        AND json_type(run.payload, '$.taskRunId') IS NULL
-        AND json_type(run.payload, '$.completion.required') = 'true'
-        AND json_type(run.payload, '$.sessionStartedAt') IN ('integer', 'real')
-        AND json_extract(run.payload, '$.sessionStartedAt') < run.created_at
-        AND task.created_at BETWEEN json_extract(run.payload, '$.sessionStartedAt')
-          AND run.created_at
-        AND (SELECT count(*) FROM runs AS sibling
-          WHERE sibling.child_session_key = run.child_session_key) = 1
-        AND (SELECT count(*) FROM task_runs AS sibling
-          WHERE sibling.runtime = 'subagent'
-            AND sibling.child_session_key = run.child_session_key) = 1
-        AND (SELECT count(*) FROM task_runs AS sibling
-          WHERE sibling.run_id = task.run_id) = 1
-        AND NOT EXISTS (SELECT 1 FROM runs AS sibling
-          WHERE json_type(sibling.payload) <> 'object' OR coalesce(
-            CASE WHEN json_type(sibling.payload, '$.taskRunId') = 'text'
-              THEN nullif(trim(json_extract(sibling.payload, '$.taskRunId'), ?), '') END,
-            sibling.run_id
-          ) = task.run_id)
-    )
-    UPDATE subagent_runs SET payload_json = json_set(payload_json, '$.taskRunId',
-      (SELECT task_run_id FROM bindings WHERE bindings.run_id = subagent_runs.run_id))
-    WHERE run_id IN (SELECT run_id FROM bindings);
-  `).run(taskIdentifierWhitespace, taskIdentifierWhitespace);
-}
 
 function nullableTextValue(record: Record<string, unknown> | null, key: string) {
   if (!record || !Object.hasOwn(record, key)) {
@@ -194,19 +77,7 @@ function nullableTextValue(record: Record<string, unknown> | null, key: string) 
   return typeof value === "string" || value === null ? value : undefined;
 }
 
-function selectLegacyRetainedTaskResult(
-  completion: Record<string, unknown>,
-  primary: string | null | undefined,
-  fallback: string | null | undefined,
-): string | null {
-  const terminalReply = normalizeAgentRunTerminalReplySnapshot(completion.terminalReply);
-  if (terminalReply) {
-    return terminalReply.disposition === "visible" ? terminalReply.text : null;
-  }
-  return selectDeliverableSessionsReply(primary, fallback) ?? null;
-}
-
-/** Promote shipped retained results before runtime hydrates canonical subagent/task state. */
+/** Promote shipped retained results before runtime hydrates canonical subagent state. */
 export function repairLegacySubagentRetainedResults(db: DatabaseSync): void {
   if (!tableExists(db, "subagent_runs")) {
     return;
@@ -229,22 +100,10 @@ export function repairLegacySubagentRetainedResults(db: DatabaseSync): void {
           SET payload_json = ?
         WHERE run_id = ?`,
     );
-    const canProjectTasks =
-      tableExists(db, "task_runs") && tableHasColumn(db, "task_runs", "progress_summary");
-    const updateTask = canProjectTasks
-      ? db.prepare(
-          `UPDATE task_runs
-              SET progress_summary = ?
-            WHERE runtime = 'subagent'
-              AND run_id = ?
-              AND (progress_summary IS NULL
-                OR trim(progress_summary) = ''
-                OR (? IS NOT NULL AND trim(progress_summary) = ?))`,
-        )
-      : undefined;
-
     for (const row of rows) {
-      const payload = parseJsonRecord(row.payload_json);
+      const stored = parseJsonRecord(row.payload_json);
+      const parent = stored ? recordField(stored, "parentCompletion") : null;
+      const payload = parent?.completionTarget === "parent" ? parent : stored;
       const completion = payload ? recordField(payload, "completion") : null;
       if (!payload || !completion) {
         continue;
@@ -282,16 +141,7 @@ export function repairLegacySubagentRetainedResults(db: DatabaseSync): void {
       }
       delete deliveryPayload?.frozenResultText;
       delete deliveryPayload?.fallbackFrozenResultText;
-      const primary = nullableTextValue(completion, "resultText");
-      const fallback = nullableTextValue(completion, "fallbackResultText");
-      updateRun.run(JSON.stringify(payload), row.run_id);
-      const taskRunId = textField(payload, "taskRunId")?.trim() ?? row.run_id;
-      const terminalReply = normalizeAgentRunTerminalReplySnapshot(completion.terminalReply);
-      const taskResult = selectLegacyRetainedTaskResult(completion, primary, fallback);
-      if (updateTask && (taskResult || terminalReply)) {
-        const retainedPrimary = primary?.trim() || null;
-        updateTask.run(taskResult, taskRunId, retainedPrimary, retainedPrimary);
-      }
+      updateRun.run(JSON.stringify(stored), row.run_id);
     }
   };
   if (db.isTransaction) {

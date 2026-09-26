@@ -9,6 +9,7 @@ import {
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { getCanonicalGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
@@ -181,21 +182,46 @@ describe("gateway caller context wrapper", () => {
   it("pins caller identity to the Gateway present at admission", async () => {
     const admitted = {} as GatewayRequestContext;
     const replacement = {} as GatewayRequestContext;
+    admitted.resolveGatewayContext = () => admitted;
+    replacement.resolveGatewayContext = () => replacement;
     let current = admitted;
+    const selectGateway = vi.fn(() => current);
 
-    await withGatewayToolCallerIdentity(
+    const first = await withGatewayToolCallerIdentity(
       {
         agentId: "agent-a",
         sessionKey: "agent-a:session",
-        gatewayContextResolver: () => current,
+        gatewayContextResolver: selectGateway,
       },
       () => {
-        const resolveGatewayContext = getGatewayToolCallerIdentity()?.gatewayContextResolver;
-        expect(resolveGatewayContext?.()).toBe(admitted);
+        const resolveGatewayContext = expectDefined(
+          getGatewayToolCallerIdentity()?.gatewayContextResolver,
+          "admitted caller Gateway",
+        );
+        expect(resolveGatewayContext()).toBe(admitted);
         current = replacement;
-        expect(resolveGatewayContext?.()).toBeUndefined();
+        expect(resolveGatewayContext()).toBeUndefined();
+        return resolveGatewayContext;
       },
     );
+    const second = await withGatewayToolCallerIdentity(
+      {
+        agentId: "agent-a",
+        sessionKey: "agent-a:session",
+        gatewayContextResolver: selectGateway,
+      },
+      () =>
+        expectDefined(
+          getGatewayToolCallerIdentity()?.gatewayContextResolver,
+          "replacement caller Gateway",
+        ),
+    );
+    const callsBeforeLookup = selectGateway.mock.calls.length;
+    expect(getCanonicalGatewayContextResolver(first)).toBe(admitted.resolveGatewayContext);
+    expect(getCanonicalGatewayContextResolver(second)).toBe(replacement.resolveGatewayContext);
+    expect(selectGateway).toHaveBeenCalledTimes(callsBeforeLookup);
+    expect(first()).toBeUndefined();
+    expect(second()).toBe(replacement);
   });
 
   it("scopes nested approval ownership without replacing the native runtime owner", async () => {

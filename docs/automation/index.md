@@ -1,6 +1,6 @@
 ---
 doc-schema-version: 1
-summary: "Overview of automation mechanisms: tasks, automations, hooks, standing orders, and Task Flow"
+summary: "Overview of automation mechanisms: automations, hooks, standing orders, and workflows"
 read_when:
   - Deciding how to automate work with OpenClaw
   - Choosing between heartbeat, automations, hooks, and standing orders
@@ -8,7 +8,7 @@ read_when:
 title: "Automation"
 ---
 
-OpenClaw runs work in the background through tasks, scheduled jobs, event hooks,
+OpenClaw runs work in the background through native runtimes, scheduled jobs, event hooks,
 and standing instructions. Use this page to pick the right mechanism.
 
 ## Quick decision guide
@@ -16,7 +16,6 @@ and standing instructions. Use this page to pick the right mechanism.
 ```mermaid
 flowchart TD
     START([What do you need?]) --> Q1{Schedule work?}
-    START --> Q2{Track detached work?}
     START --> Q3{Orchestrate multi-step flows?}
     START --> Q4{React to lifecycle events?}
     START --> Q5{Give the agent persistent instructions?}
@@ -25,8 +24,7 @@ flowchart TD
     Q1a -->|Specific job| CRON["Automations"]
     Q1a -->|Ambient monitor| HEARTBEAT["Heartbeat monitor automation"]
 
-    Q2 -->|Yes| TASKS[Background Tasks]
-    Q3 -->|Yes| FLOW[Task Flow]
+    Q3 -->|Yes| FLOW[Lobster]
     Q4 -->|Yes| HOOKS[Hooks]
     Q5 -->|Yes| SO[Standing Orders]
 ```
@@ -40,9 +38,6 @@ flowchart TD
 | Trigger safely on new IMAP email          | IMAP plugin                                | Sender-gated isolated reader sessions                  |
 | Monitor calendar for upcoming events      | Automations                                | Explicit recurring schedule and delivery policy        |
 | Surface ambient main-session updates      | Heartbeat                                  | System-owned monitor automation and quiet alerts       |
-| Inspect status of a subagent or ACP run   | Background Tasks                           | Tasks ledger tracks all detached work                  |
-| Audit what ran and when                   | Background Tasks                           | `openclaw tasks list` and `openclaw tasks audit`       |
-| Multi-step research then summarize        | Task Flow                                  | Durable orchestration with revision tracking           |
 | Run a script on session reset             | Hooks                                      | Internal `HOOK.md` scripts react to lifecycle events   |
 | Trigger an agent from an external service | [Webhooks](/automation/cron-jobs#webhooks) | Authenticated HTTP ingress, not an internal event hook |
 | Execute code on every tool call           | Plugin hooks                               | Typed `api.on(...)` handlers can intercept tool calls  |
@@ -56,7 +51,6 @@ flowchart TD
 | --------------- | ------------------------------------------- | --------------------------------------- |
 | Timing          | One-shot, interval, or cron expression      | Scheduler-owned interval, default 30min |
 | Session context | Isolated, current, named, or main session   | Main session, optionally isolated       |
-| Task records    | Created for detached runs                   | Not created for monitor turns           |
 | Delivery        | Channel, webhook, or silent                 | Owner-routed alerts or silent           |
 | Best for        | Explicit reports, reminders, recurring work | Ambient monitoring and event follow-up  |
 
@@ -76,17 +70,16 @@ inbound webhook triggers.
 
 See [Automations](/automation/cron-jobs).
 
-### Tasks
+### Background execution and workflows
 
-The background task ledger tracks all detached work: ACP runs, subagent spawns, isolated automation runs, and CLI operations. Tasks are records, not schedulers. Use `openclaw tasks list` and `openclaw tasks audit` to inspect them.
+Use [Sub-agents](/tools/subagents) to launch and wait for delegated runs,
+[ACP](/tools/acp-agents) for coding harness sessions, and automation run history
+to inspect scheduled work. Each runtime owns execution and completion.
 
-See [Background Tasks](/automation/tasks).
-
-### Task Flow
-
-Task Flow is the flow orchestration substrate above background tasks. It manages durable multi-step flows with managed and mirrored sync modes, revision tracking, and `openclaw tasks flow list|show|cancel` for inspection.
-
-See [Task Flow](/automation/taskflow).
+[Lobster](/tools/lobster) runs local pipelines with resumable approvals.
+The shared Tasks ledger, TaskFlow orchestration API, and TaskFlow Webhooks plugin
+have been removed. Generic [Gateway HTTP hooks](/automation/cron-jobs#webhooks)
+remain available for authenticated external triggers.
 
 ### Standing orders
 
@@ -108,8 +101,7 @@ See [Hooks](/automation/hooks).
 
 Heartbeat is a system-owned monitor automation that runs a periodic main-session
 turn, every 30 minutes by default. It can use small monitor-scratch context to
-surface anything requiring attention without creating a detached task record or
-extending session freshness. Create separate automation jobs for work requiring
+surface anything requiring attention without extending session freshness. Create separate automation jobs for work requiring
 its own schedule. Empty scratch skips as `empty-heartbeat-file`. Scheduled
 monitor turns defer while the main queue or automation work is busy, another run
 for the same agent is active, or the target session has active or queued work.
@@ -118,12 +110,10 @@ See [Heartbeat](/gateway/heartbeat).
 
 ## How they work together
 
-- **Automations** own every recurring schedule, including reports, reminders, and heartbeat monitors. Detached automation runs create task records; main-session runs do not.
+- **Automations** own every recurring schedule, including reports, reminders, and heartbeat monitors.
 - **Heartbeat** is the system-owned ambient monitor automation. Independently scheduled checks belong in their own automation jobs.
 - **Hooks** react to specific events (session resets, compaction, message flow) with custom scripts. Plugin hooks cover tool calls.
 - **Standing orders** give the agent persistent context and authority boundaries.
-- **Task Flow** coordinates multi-step flows above individual tasks.
-- **Tasks** automatically track all detached work so you can inspect and audit it.
 
 ## Retired inferred commitments
 
@@ -140,8 +130,6 @@ schedule and instructions you choose; they do not restore inferred follow-ups.
 
 - [Automations](/automation/cron-jobs) — precise scheduling and one-shot reminders
 - [IMAP email trigger](/automation/imap) — sender-gated inbound email and isolated reader sessions
-- [Background Tasks](/automation/tasks) — task ledger for all detached work
-- [Task Flow](/automation/taskflow) — durable multi-step flow orchestration
 - [Hooks](/automation/hooks) — event-driven lifecycle scripts
 - [Plugin hooks](/plugins/hooks) — in-process tool, prompt, message, and lifecycle hooks
 - [Standing Orders](/automation/standing-orders) — persistent agent instructions

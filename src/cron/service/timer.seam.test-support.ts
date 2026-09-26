@@ -1,4 +1,4 @@
-import { findTaskByRunId, listTaskRecords } from "../../tasks/runtime-internal.js";
+import { findCronRunForTests, readCronRunRecordsForTests } from "../run-history.test-support.js";
 import type { CronJob } from "../types.js";
 
 export function createDueMainJob(params: { now: number; wakeMode: CronJob["wakeMode"] }): CronJob {
@@ -77,7 +77,7 @@ export function createDueScriptJob(params: {
 
 export function findCronTaskByBaseRunId(baseRunId: string) {
   return (
-    findTaskByRunId(baseRunId) ??
-    listTaskRecords().find((task) => task.runId?.startsWith(`${baseRunId}:`))
+    findCronRunForTests(baseRunId) ??
+    readCronRunRecordsForTests().find((task) => task.runId?.startsWith(`${baseRunId}:`))
   );
 }

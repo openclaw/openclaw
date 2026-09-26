@@ -1,5 +1,5 @@
-import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { releaseCompletionCustody } from "./native-subagent-admission-custody.js";
+import type { CodexNativeSubagentAssignmentInventory } from "./native-subagent-assignment-inventory.js";
 import type { CodexNativeSubagentCloseOwner } from "./native-subagent-close-owner.js";
 import { CodexNativeSubagentDeliveryReceipts } from "./native-subagent-delivery-receipts.js";
 import {
@@ -21,9 +21,10 @@ export type NativeParentRegistration = Pick<
   ParentState,
   | "parentThreadId"
   | "requesterSessionKey"
-  | "taskRuntimeScope"
+  | "completionScope"
   | "historyOwner"
   | "submissionStore"
+  | "assignmentStore"
   | "agentId"
 > &
   Pick<
@@ -46,8 +47,7 @@ type ParentDependencies = {
   isClosed: () => boolean;
   isRetired: (state: ParentState) => boolean;
   runtime: Pick<NativeSubagentMonitorRuntime, "captureAgentHarnessCompletionCustody">;
-  prepare: (state: ParentState) => void;
-  reconcile: (state: ParentState, owner: ParentOwner) => Promise<void>;
+  assignments: Pick<CodexNativeSubagentAssignmentInventory, "restore" | "drain">;
   submissions: Pick<CodexNativeSubagentSubmissionOwner, "restore" | "bind" | "drain">;
   closes: Pick<CodexNativeSubagentCloseOwner, "bind" | "prune" | "settlements">;
   deliverPending: (state: ParentState, child: ChildState) => Promise<void>;
@@ -152,8 +152,8 @@ export async function registerNativeSubagentParent(
     rootModelBinding = undefined;
   };
   try {
-    owner.completionCustody = params.taskRuntimeScope
-      ? await dependencies.runtime.captureAgentHarnessCompletionCustody(params.taskRuntimeScope)
+    owner.completionCustody = params.completionScope
+      ? await dependencies.runtime.captureAgentHarnessCompletionCustody(params.completionScope)
       : undefined;
     if (
       dependencies.isClosed() ||
@@ -193,11 +193,11 @@ export async function registerNativeSubagentParent(
       }
     }
     params.assertCurrent?.();
-    state.taskRuntimeScope ??= params.taskRuntimeScope;
+    state.completionScope ??= params.completionScope;
     state.historyOwner ??= params.historyOwner;
     state.submissionStore ??= params.submissionStore;
     state.agentId ??= params.agentId;
-    dependencies.prepare(state);
+    state.assignmentStore ??= params.assignmentStore;
     state.owners.set(ownerKey, owner);
     state.preparing = undefined;
     for (const child of dependencies.children.values()) {
@@ -205,13 +205,6 @@ export async function registerNativeSubagentParent(
         void dependencies.deliverPending(state, child);
       }
     }
-    // History recovery remains independent of the foreground start path.
-    void dependencies.reconcile(state, owner).catch((error: unknown) => {
-      embeddedAgentLog.warn("Failed to reconcile Codex native subagent task rows", {
-        parentThreadId,
-        error: formatErrorMessage(error),
-      });
-    });
     dependencies.submissions.restore(state, owner);
   } catch (error) {
     releaseRootModelBinding();
@@ -227,9 +220,11 @@ export async function registerNativeSubagentParent(
     state.pendingRegistrations -= 1;
     dependencies.prune(registeredState);
   }
+  const ready = dependencies.assignments.restore(state, owner);
   let registered = true;
   let settlement: Promise<void> | undefined;
   return {
+    ready,
     bindTurn: (turnIdInput, mapping) => {
       const turnId = turnIdInput.trim();
       if (!turnId || dependencies.states.get(parentThreadId) !== registeredState) {
@@ -317,10 +312,12 @@ export async function registerNativeSubagentParent(
       owner.modelSource?.release();
       notifyNativeModelSourceWaiters(registeredState);
       dependencies.prune(registeredState);
-      settlement = Promise.allSettled([
-        dependencies.submissions.drain(registeredState),
-        ...dependencies.closes.settlements(registeredState),
-      ]).then(() => {});
+      settlement = (async () => {
+        // A confirmed close can enqueue writes after unregister starts.
+        await Promise.allSettled([ready, ...dependencies.closes.settlements(registeredState)]);
+        await Promise.allSettled([dependencies.submissions.drain(registeredState)]);
+        await Promise.allSettled([dependencies.assignments.drain(registeredState)]);
+      })();
       return settlement;
     },
   };

@@ -132,7 +132,6 @@ describe("buildStatusCommandReportData", () => {
       Item: "OS",
       Value: "macOS · node " + process.versions.node,
     });
-    expect(result.taskMaintenanceHint).toBe("Task maintenance: openclaw tasks maintenance --apply");
     expect(result.pluginCompatibilityLines.map(stripAnsi)).toEqual(["  WARN a legacy"]);
     const pairingTitle = expectDefined(result.pairingRecoveryLines[0], "pairing recovery title");
     expect(stripAnsi(pairingTitle)).toBe("Gateway pairing approval required.");
@@ -200,49 +199,6 @@ describe("buildStatusCommandReportData", () => {
       expect(row?.Detail).toContain("openclaw gateway restart");
     },
   );
-
-  it("surfaces retained lost task cleanup timing only for detailed reports", async () => {
-    const baseParams = createStatusCommandReportDataParams();
-    const summary = {
-      ...baseParams.summary,
-      taskAuditRetainedLost: {
-        count: 1,
-        nextCleanupAfter: Date.parse("2026-03-30T01:00:00.000Z"),
-      },
-    };
-
-    const deepResult = await buildStatusCommandReportData(
-      createStatusCommandReportDataParams({ summary, opts: { deep: true } }),
-    );
-    const fastResult = await buildStatusCommandReportData(
-      createStatusCommandReportDataParams({ summary, opts: {} }),
-    );
-
-    expect(stripAnsi(expectDefined(deepResult.retainedLostTaskLine, "retained lost task"))).toBe(
-      "1 lost task retained until 2026-03-30T01:00:00.000Z",
-    );
-    expect(fastResult.retainedLostTaskLine).toBeNull();
-  });
-
-  it("falls back when retained lost task cleanup timing is Date-invalid", async () => {
-    const baseParams = createStatusCommandReportDataParams();
-    const result = await buildStatusCommandReportData(
-      createStatusCommandReportDataParams({
-        summary: {
-          ...baseParams.summary,
-          taskAuditRetainedLost: {
-            count: 2,
-            nextCleanupAfter: 8_700_000_000_000_000,
-          },
-        },
-        opts: { deep: true },
-      }),
-    );
-
-    expect(stripAnsi(expectDefined(result.retainedLostTaskLine, "retained lost task"))).toBe(
-      "2 lost tasks retained until cleanupAfter",
-    );
-  });
 
   it("adds pinned-session model selection lines", async () => {
     const baseParams = createStatusCommandReportDataParams();

@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { publishedBackupRollback } from "./backup-rollback-summary.mjs";
+import { publishedNativeAssignments } from "./native-assignment-summary.mjs";
 import { publishedPluginPolicy } from "./plugin-policy-summary.mjs";
 
 // Capture and snapshot validation stay plain Node. The host entrypoint owns
@@ -45,6 +46,15 @@ const backupRollbackLogs = [
   "backup-rollback-restore.json",
   "backup-rollback-restore.json.err",
 ];
+const nativeAssignmentLogs = [
+  "native-assignment-eligibility.json",
+  "native-assignment-baseline.json",
+  "native-assignment-first-hop.json",
+  "native-assignment-proof.json",
+  "native-assignment-messages.jsonl",
+  "native-assignment-server.log",
+];
+
 const pluginPolicyLogs = [
   "webhooks-only-policy/result.json",
   "webhooks-only-policy/update.json",
@@ -95,6 +105,7 @@ const logNames = [
   "physical-candidate-repair.json",
   "legacy-operator-cron-history-proof.json",
   ...pluginPolicyLogs,
+  ...nativeAssignmentLogs,
   "webhooks-only-policy/update.err",
   "webhooks-only-policy/gateway.log",
   "webhooks-only-policy/baseline-gateway.log",
@@ -1653,6 +1664,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     throw new Error();
   }
   const pluginPolicy = publishedPluginPolicy(snapshot, { sanitize, boundedList });
+  const nativeAssignments = publishedNativeAssignments(snapshot);
   for (const value of [
     snapshot.baseline?.spec,
     snapshot.baseline?.version,
@@ -1727,6 +1739,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     firstHopPostCore: publishedPostCore(snapshot.firstHopPostCore, sanitize),
     backupRollback: publishedBackupRollback(snapshot, { sanitize, boundedList, textFields }),
     ...(pluginPolicy ? { pluginPolicy } : {}),
+    ...(nativeAssignments ? { nativeAssignments } : {}),
     timings,
     phases: boundedList(snapshot.phases).map((event) => {
       if (
@@ -1748,6 +1761,11 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
         ...(snapshot.scenario === "custom-plugin-siblings" ? siblingRefusalLogs : []),
         ...(snapshot.scenario === "legacy-operator-state" ? backupRollbackLogs : []),
         ...(pluginPolicy ? pluginPolicyLogs : []),
+        ...(nativeAssignments?.status === "not-applicable"
+          ? ["native-assignment-eligibility.json"]
+          : nativeAssignments
+            ? nativeAssignmentLogs
+            : []),
         ...(snapshot.scenario === "workshop-doctor-recovery"
           ? [
               "workshop-doctor-recovery.json",

@@ -59,7 +59,6 @@ export function createSubscriptionTestFixture() {
         sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
         chatAbortControllers: new Map(),
         restartRecoveryCandidates: new Map(),
-        terminalSessions: { closeTaskSessions: vi.fn() },
         refreshConnectedUserProfiles: vi.fn(),
       };
     },
@@ -242,7 +241,6 @@ export function registerAuditSubscriptionTests(params: {
     unsubs.heartbeatUnsub();
     unsubs.transcriptUnsub();
     unsubs.lifecycleUnsub();
-    await unsubs.taskUnsub();
     const restarted = start();
     expect(
       consumeChannelAdmissionEvidence(

@@ -6,7 +6,6 @@ import type {
   WorkboardTemplateId,
 } from "@openclaw/workboard-contract";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { TaskSummary } from "../tasks/task-summary.ts";
 
 export * from "@openclaw/workboard-contract";
 export type { WorkboardBoardSummary } from "@openclaw/workboard-contract";
@@ -29,8 +28,6 @@ export type WorkboardLifecycle = {
   targetStatus?: WorkboardStatus;
   sourceUpdatedAt?: number;
 };
-
-export type WorkboardTaskSummary = TaskSummary;
 
 type WorkboardDependencyParent = {
   id: string;
@@ -85,8 +82,6 @@ export type WorkboardUiState = {
   cards: WorkboardCard[];
   boards: WorkboardBoardSummary[];
   statuses: readonly WorkboardStatus[];
-  tasksByCardId: Map<string, WorkboardTaskSummary>;
-  missingTaskIds: Set<string>;
   lastDispatchSummary: WorkboardDispatchSummary | null;
   dispatching: boolean;
   query: string;
@@ -107,14 +102,6 @@ export type WorkboardUiState = {
   lastRefreshStartedAt: number | null;
   lastRefreshError: string | null;
   lastRefreshSource: WorkboardRefreshSource | null;
-  lifecycleTasksPrepared: boolean;
-  lifecycleTasksPreparedAt: number | null;
-  lifecycleTaskRefreshFailed: boolean;
-  lifecycleTaskRefreshRetryAt: number | null;
-  lifecycleTaskRefreshContinueAt: number | null;
-  lifecycleTaskRefreshError: string | null;
-  lifecycleConfirmedTaskIds: Set<string>;
-  lifecycleTaskConfirmationStartedAt: number | null;
   draftOpen: boolean;
   draftDiscardOpen: boolean;
   draftSaving: boolean;
@@ -143,8 +130,3 @@ export type WorkboardUiState = {
   dragBeforeCardId: string | null;
   capturingSessionKeys: Set<string>;
 };
-
-export type WorkboardTaskLinkState = Pick<
-  WorkboardUiState,
-  "cards" | "tasksByCardId" | "missingTaskIds"
->;

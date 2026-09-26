@@ -119,7 +119,7 @@ profiles:
       - automation.cron-jobs
       - automation.event-ingress
       - automation.automation-hooks
-      - automation.background-tasks-and-flows
+      - automation.background-work
       - automation.heartbeat
       - automation.polling-controls
       - media.media-understanding
@@ -392,9 +392,9 @@ surfaces:
           - name: Agent and artifact APIs
             coverageIds: [gateway.agent-and-artifact-apis]
             description: "`agents.*`, agent files, environments, and artifact RPCs."
-          - name: Task and automation APIs
-            coverageIds: [gateway.task-and-automation-apis]
-            description: "`wake`, `cron.*`, and `tasks.*` RPCs."
+          - name: Agent execution and automation APIs
+            coverageIds: [gateway.agent-and-automation-apis]
+            description: "`agent`, `agent.wait`, `chat.abort`, `wake`, and `cron.*` RPCs."
           - name: Tool and skill APIs
             coverageIds: [gateway.tool-and-skill-apis]
             description: "`commands.list`, `tools.*`, and `skills.*` RPCs."
@@ -3356,7 +3356,7 @@ surfaces:
     family: core
     level: beta
     level_code: M3
-    rationale: Cron, hooks, tasks, Task Flow, and durable work surfaces are documented and usable. Scenario proof should cover unattended delivery, recovery, and failure visibility.
+    rationale: Cron, event ingress, hooks, background work, heartbeat, and polling surfaces are documented and usable. Scenario proof should cover unattended delivery, recovery, and failure visibility.
     completeness_instructions: references/completeness/automation-cron-hooks-tasks-polling.md
     categories:
       - name: Cron Jobs
@@ -3432,7 +3432,6 @@ surfaces:
           - docs/automation/cron-jobs.md
           - docs/cli/cron.md
           - docs/gateway/protocol.md
-          - docs/automation/tasks.md
           - docs/channels/discord.md
         search_anchors:
           - Create/edit/remove jobs
@@ -3585,42 +3584,12 @@ surfaces:
           - cron_changed
         category_note: internal-hooks.md
         human_lts_override: false
-      - name: Background Tasks and Flows
-        id: background-tasks-and-flows
+      - name: Background Work
+        id: background-work
         features:
-          - name: Task list/show/cancel
-            coverageIds: [automation.task-list-show-cancel]
-            description: Covers Task list/show/cancel across task creation, status transitions, runtime types, owner/session access, and related background task ledger behavior.
-          - name: Task notifications
-            coverageIds: [automation.task-notifications]
-            description: Covers Task notifications across task creation, status transitions, runtime types, owner/session access, and related background task ledger behavior.
-          - name: Task audit and maintenance
-            coverageIds: [automation.task-audit-and-maintenance]
-            description: Covers Task audit and maintenance across task creation, status transitions, runtime types, owner/session access, and related background task ledger behavior.
-          - name: Chat task board
-            coverageIds: [automation.chat-task-board]
-            description: Covers Chat task board across task creation, status transitions, runtime types, owner/session access, and related background task ledger behavior.
-          - name: Task pressure status
-            coverageIds: [automation.task-pressure-status]
-            description: Covers Task pressure status across task creation, status transitions, runtime types, owner/session access, and related background task ledger behavior.
-          - name: Managed flows
-            coverageIds: [automation.managed-flows]
-            description: Covers Managed flows across managed and mirrored flow modes, flow registry persistence, revision tracking, owner-scoped access, and related task flow behavior.
-          - name: Mirrored flows
-            coverageIds: [automation.mirrored-flows]
-            description: Covers Mirrored flows across managed and mirrored flow modes, flow registry persistence, revision tracking, owner-scoped access, and related task flow behavior.
-          - name: openclaw tasks flow
-            coverageIds: [automation.openclaw-tasks-flow]
-            description: Covers openclaw tasks flow across managed and mirrored flow modes, flow registry persistence, revision tracking, owner-scoped access, and related task flow behavior.
-          - name: Flow audit and maintenance
-            coverageIds: [automation.flow-audit-and-maintenance]
-            description: Covers Flow audit and maintenance across managed and mirrored flow modes, flow registry persistence, revision tracking, owner-scoped access, and related task flow behavior.
-          - name: Plugin managedFlows
-            coverageIds: [automation.plugin-managedflows]
-            description: Covers Plugin managedFlows across managed and mirrored flow modes, flow registry persistence, revision tracking, owner-scoped access, and related task flow behavior.
           - name: Workboard planning and dispatch
             coverageIds: [automation.workboard-planning-and-dispatch]
-            description: Workboard card planning, assignment, dependency promotion, and dispatch into task-tracked worker runs.
+            description: Workboard card planning, assignment, dependency promotion, and dispatch into native worker sessions.
           - name: Standing orders and recurring programs
             coverageIds: [automation.standing-orders-and-recurring-programs]
             description: Workspace-defined standing authority combined with scheduled triggers, escalation boundaries, and recurring operator programs.
@@ -3629,33 +3598,20 @@ surfaces:
             description: Durable session progress state, user-visible notifications, and final result delivery for long-running work.
           - name: Orphan reconciliation and recovery
             coverageIds: [automation.orphan-reconciliation-and-recovery]
-            description: Recovery of interrupted tasks and flows, stale claim cleanup, cancellation settlement, and visible blocked or lost outcomes.
+            description: Recovery of interrupted native runs, stale receipt cleanup, cancellation settlement, and visible blocked outcomes.
         docs:
-          - docs/automation/tasks.md
           - docs/automation/index.md
           - docs/automation/standing-orders.md
-          - docs/cli/tasks.md
           - docs/cli/workboard.md
-          - docs/automation/taskflow.md
           - docs/plugins/workboard.md
           - docs/plugins/sdk-runtime.md
           - docs/tools/progress-card.md
         search_anchors:
-          - Task list/show/cancel
-          - Task notifications
-          - Task audit and maintenance
-          - Chat task board
-          - Task pressure status
-          - Managed flows
-          - Mirrored flows
-          - openclaw tasks flow
-          - Flow audit and maintenance
-          - Plugin managedFlows
           - Workboard CLI
           - Standing orders
           - Progress card
-          - Flow statuses
-        category_note: background-task-ledger.md
+          - Subagent completion
+        category_note: background-work.md
         human_lts_override: false
       - name: Heartbeat
         id: heartbeat
@@ -5179,9 +5135,6 @@ surfaces:
           - name: "Artifact resources — Builds"
             coverageIds: [app-sdk.artifact-resources-builds]
             description: "Exact coverage for builds within Artifact resources."
-          - name: Tasks
-            coverageIds: [app-sdk.tasks]
-            description: SDK helpers around Gateway task APIs.
           - name: Environments
             coverageIds: [app-sdk.environments]
             description: Managed environment provider lifecycle and metadata.
@@ -5191,7 +5144,7 @@ surfaces:
           - Models, tools, artifacts, and approvals
           - ToolSpace model
           - Artifact model
-          - tasks and environments
+          - environments
           - Managed environment provider
         category_note: resource-helpers.md
         human_lts_override: false
@@ -11523,15 +11476,12 @@ surfaces:
           - action=list provider inspection
         category_note: configuration-model-refs-and-provider-discovery.md
         human_lts_override: false
-      - name: Task Lifecycle and Delivery
-        id: task-lifecycle-and-delivery
+      - name: Media Operation Lifecycle and Delivery
+        id: operation-lifecycle-and-delivery
         features:
           - name: background task creation
             coverageIds: [media-generation.background-task-creation]
             description: Covers background task creation across `image_generate`, `video_generate`, and `music_generate` tool exposure, background task scheduling, and related async task lifecycle behavior.
-          - name: task status/list/show/cancel
-            coverageIds: [media-generation.task-status-list-show-cancel]
-            description: Covers task status/list/show/cancel across `image_generate`, `video_generate`, and `music_generate` tool exposure, background task scheduling, and related async task lifecycle behavior.
           - name: duplicate guards
             coverageIds: [media-generation.duplicate-guards]
             description: Covers duplicate guards across `image_generate`, `video_generate`, and `music_generate` tool exposure, background task scheduling, and related async task lifecycle behavior.
@@ -11569,7 +11519,6 @@ surfaces:
           - docs/tools/music-generation.md
         search_anchors:
           - background task creation
-          - task status/list/show/cancel
           - duplicate guards
           - progress keepalive
           - completion/failure wake

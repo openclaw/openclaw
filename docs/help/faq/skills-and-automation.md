@@ -62,7 +62,7 @@ read_when:
 
     Long tasks and sub-agents both consume tokens; set a cheaper model for sub-agents via `agents.defaults.subagents.model` if cost matters.
 
-    Docs: [Sub-agents](/tools/subagents), [Background Tasks](/automation/tasks).
+    Docs: [Sub-agents](/tools/subagents).
 
   </Accordion>
 
@@ -89,9 +89,9 @@ read_when:
     - Invalid or stale targets can also force queue fallback or final delivery failure.
     - If the child's last visible assistant reply is exactly `NO_REPLY` / `no_reply` or `ANNOUNCE_SKIP`, OpenClaw intentionally suppresses the announce instead of posting stale earlier progress.
 
-    Debug: `openclaw tasks show <lookup>` where `<lookup>` is a task id, run id, or session key.
+    Debug from the requester conversation with `/subagents list`, then `/subagents info <id|#>` and `/subagents log <id|#>`. Inspect Gateway logs for delivery failures; a finished execution does not by itself confirm that its completion was delivered.
 
-    Docs: [Sub-agents](/tools/subagents), [Background Tasks](/automation/tasks), [Session Tools](/concepts/session-tool).
+    Docs: [Sub-agents](/tools/subagents), [Session Tools](/concepts/session-tool).
 
   </Accordion>
 
@@ -125,10 +125,9 @@ read_when:
     Debug:
     ```bash
     openclaw automations runs <jobId> --limit 50
-    openclaw tasks show <lookup>
     ```
 
-    Docs: [Cron jobs](/automation/cron-jobs), [Background Tasks](/automation/tasks).
+    Docs: [Cron jobs](/automation/cron-jobs).
 
   </Accordion>
 

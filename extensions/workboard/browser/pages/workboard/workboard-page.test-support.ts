@@ -36,9 +36,6 @@ export function mountPage(
     if (method === "workboard.cards.list") {
       return { cards };
     }
-    if (method === "tasks.list") {
-      return { tasks: [] };
-    }
     return {};
   });
   fixture.host.request = request as typeof fixture.host.request;

@@ -129,7 +129,6 @@ The anchors from the single-page version still resolve here.
 - <a id="subagent-session-messages-types-renamed"></a>[Subagent session messages types renamed](/plugins/sdk-migration/removed-surfaces#subagent-session-messages-types-renamed)
 - <a id="removed-session-and-transcript-file-apis"></a>[Removed session and transcript file APIs](/plugins/sdk-migration/removed-surfaces#removed-session-and-transcript-file-apis)
 - <a id="agent"></a>[Agent harness attempt params -> V2 host-capability contract](/plugins/sdk-migration/removed-surfaces#agent)
-- <a id="runtime-tasks-flow"></a>[`runtime.tasks.flow` -> `runtime.tasks.managedFlows`](/plugins/sdk-migration/removed-surfaces#runtime-tasks-flow)
 - <a id="embedded"></a>[Embedded extension factories -> agent tool-result middleware](/plugins/sdk-migration/removed-surfaces#embedded)
 - <a id="openclawschematype"></a>[`OpenClawSchemaType` alias -> `OpenClawConfig`](/plugins/sdk-migration/removed-surfaces#openclawschematype)
 
@@ -171,3 +170,7 @@ The anchors from the single-page version still resolve here.
 - [Plugin Internals](/plugins/architecture) - architecture deep dive
 - [Plugin Manifest](/plugins/manifest) - manifest schema reference
 - [Plugin hooks](/plugins/hooks) - typed and custom hook surfaces
+
+<a id="runtime-tasks-flow" />
+
+For the removed Tasks and TaskFlow surfaces, see [Tasks and TaskFlow API removal](/plugins/sdk-migration/removed-surfaces#tasks-and-taskflow-apis-removed).

@@ -3,17 +3,9 @@
  *
  * Combines persisted snapshots with in-memory live runs for UI, announce, control, and recovery paths.
  */
-import { isVitestRuntimeEnv } from "../../../infra/env.js";
-import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
-import {
-  executeExistingOpenClawStateRead,
-  getActiveOpenClawStateDatabaseReadSnapshot,
-} from "../../../state/openclaw-state-db-readonly.js";
-import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registry-memory.js";
-import { getSubagentRegistryPublicationRevision } from "./subagent-registry-publication.js";
 import {
   buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
@@ -32,16 +24,14 @@ import {
 } from "./subagent-registry-queries.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import {
-  getSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForChildSessions,
-  getSubagentSessionListRunsSnapshotForSessions,
   getSubagentRunsSnapshotForChildSession,
-  getPreparedSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead,
   getSubagentRunsSnapshotForSessions,
+  getSubagentSessionListRunsSnapshotForRead,
+  getSubagentSessionListRunsSnapshotForSessions,
 } from "./subagent-registry-state.js";
-import { loadSubagentRunsForChildSessionFromSqlite } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSubagentRunLive } from "./subagent-run-liveness.js";
 export { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
@@ -207,26 +197,6 @@ export function listSubagentRunsForRequester(
   return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
 }
 
-/** Whether any current or durable generation still owns this logical task, including waits/recovery. */
-export function hasSubagentTaskOwner(params: {
-  taskRunId: string;
-  childSessionKey: string;
-  requesterSessionKey: string;
-}): boolean {
-  const ownsTask = (entry: SubagentRunRecord) =>
-    (entry.taskRunId ?? entry.runId) === params.taskRunId &&
-    entry.childSessionKey === params.childSessionKey &&
-    entry.requesterSessionKey === params.requesterSessionKey;
-  for (const entry of getSubagentRunsForChildSession(params.childSessionKey)) {
-    if (ownsTask(entry)) {
-      return true;
-    }
-  }
-  // Absence permits maintenance to settle stranded tasks. Unlike presentation
-  // snapshots, this read must propagate failures rather than treating them as absence.
-  return loadSubagentRunsForChildSessionFromSqlite(params.childSessionKey).some(ownsTask);
-}
-
 /** Returns the preferred child-session run from its scoped readable snapshot. */
 export function getSubagentRunByChildSessionKey(childSessionKey: string): SubagentRunRecord | null {
   const key = childSessionKey.trim();
@@ -278,63 +248,4 @@ export function getLatestLiveSubagentRunByChildSessionKey(
       matches,
     ) ?? null
   );
-}
-
-/** Consume fresh retained state and the current live overlay in the caller's synchronous phase. */
-export async function withPreparedLatestSubagentRunByChildSessionKey<T>(
-  childSessionKey: string,
-  context: OpenClawStateWorkerContext,
-  consume: (read: () => SubagentRunRecord | null) => T,
-): Promise<T> {
-  const key = childSessionKey.trim();
-  const requestSignal = getAsyncWorkSignal();
-  const readOptions = { path: context.admission.databasePath, env: context.environment };
-  const snapshot = getActiveOpenClawStateDatabaseReadSnapshot(readOptions);
-  const assertCurrent = () => {
-    requestSignal?.throwIfAborted();
-    getAsyncWorkSignal()?.throwIfAborted();
-    if (getActiveOpenClawStateDatabaseReadSnapshot(readOptions) !== snapshot) {
-      throw new Error("Prepared subagent child-session read left its database snapshot scope");
-    }
-    context.maintenanceScope?.assertAdmission();
-    context.admission.assertCurrent();
-  };
-  for (;;) {
-    assertCurrent();
-    const revision = getSubagentRegistryPublicationRevision();
-    const reply =
-      key &&
-      (!isVitestRuntimeEnv() || process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE === "1")
-        ? await executeExistingOpenClawStateRead(
-            readOptions,
-            { type: "subagents.forChildSession", childSessionKey: key },
-            { context },
-          )
-        : undefined;
-    assertCurrent();
-    if (revision !== getSubagentRegistryPublicationRevision()) {
-      continue;
-    }
-    if (reply && (!reply.ok || reply.type !== "subagents.forChildSession")) {
-      throw new Error("Unexpected subagent child-session read response");
-    }
-    const persisted = reply?.runs ?? [];
-    let active = true;
-    try {
-      return consume(() => {
-        assertCurrent();
-        if (!active || revision !== getSubagentRegistryPublicationRevision()) {
-          throw new Error("Prepared subagent child-session read is no longer current");
-        }
-        return key
-          ? (getLatestSubagentRunByChildSessionKeyFromRuns(
-              getPreparedSubagentRunsSnapshotForChildSession(subagentRuns, key, persisted, context),
-              key,
-            ) ?? null)
-          : null;
-      });
-    } finally {
-      active = false;
-    }
-  }
 }

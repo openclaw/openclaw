@@ -1,6 +1,5 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { ChannelProgressDraftCompositorSnapshot } from "../../channels/progress-draft-compositor.types.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
 import {
@@ -13,14 +12,11 @@ import {
   beginConversationDeliveryOperation,
   findConversationTurnDeliveryByReplyTarget,
   getConversationDeliveryOperation,
-  getConversationProgressSnapshot,
   markConversationDeliveryQueued,
   markConversationDeliveryRejected,
   markConversationDeliveryReplied,
   markConversationDeliverySent,
   markConversationDeliveryUnknown,
-  recordConversationProgressReceipt,
-  updateConversationProgressSnapshot,
 } from "./conversation-delivery-store.js";
 import { resolveConversation } from "./conversation-registry.js";
 import {
@@ -82,7 +78,7 @@ async function withConversationStore(
 }
 
 describe("conversation delivery store", () => {
-  it("reopens old receipts and retains desired progress independently of delivery evidence", async () => {
+  it("reopens retained delivery receipts", async () => {
     await withConversationStore(({ scope, conversationRef }) => {
       beginConversationDeliveryOperation(scope, {
         operationId: "legacy",
@@ -93,171 +89,6 @@ describe("conversation delivery store", () => {
       const legacy = markConversationDeliverySent(scope, "legacy", "legacy-message");
       closeOpenClawAgentDatabasesForTest();
       expect(getConversationDeliveryOperation(scope, "legacy")).toEqual(legacy);
-      expect(getConversationProgressSnapshot(scope, "legacy")).toBeUndefined();
-
-      const snapshot: ChannelProgressDraftCompositorSnapshot = {
-        lines: [{ kind: "tool", text: "Inspect", label: "Inspect", id: "inspect", complete: true }],
-        label: "Working",
-        statusHeadline: "Waiting for workers",
-        statusHeadlineFormat: "plain",
-        plan: [
-          { step: "Inspect", status: "completed" },
-          { step: "Implement", status: "in_progress" },
-        ],
-        preparedBlocks: [{ text: "Waiting for workers", format: "plain" }],
-        diffStat: { files: 1, added: 2, removed: 0 },
-      };
-      recordConversationProgressReceipt(scope, {
-        operationId: "progress",
-        conversationRef,
-        sourceSessionKey: "agent:main:reef:direct:peer-agent",
-        message: "original card",
-        platformMessageId: "card-message",
-        progressSnapshot: snapshot,
-        assertCurrent: () => {},
-      });
-      const receipt = getConversationDeliveryOperation(scope, "progress");
-      closeOpenClawAgentDatabasesForTest();
-      expect(getConversationDeliveryOperation(scope, "progress")).toEqual(receipt);
-      expect(getConversationProgressSnapshot(scope, "progress")).toEqual(snapshot);
-      const replied = markConversationDeliveryReplied(scope, {
-        operationId: "progress",
-        reply: { messageId: "reply", text: "continue", timestamp: 2 },
-      });
-      const desired: ChannelProgressDraftCompositorSnapshot = {
-        ...snapshot,
-        statusHeadline: "Finishing",
-        plan: [
-          { step: "Inspect", status: "completed" },
-          { step: "Implement", status: "completed" },
-        ],
-      };
-      updateConversationProgressSnapshot(scope, {
-        operationId: "progress",
-        progressSnapshot: desired,
-        assertCurrent: () => {},
-      });
-      closeOpenClawAgentDatabasesForTest();
-      expect(getConversationDeliveryOperation(scope, "progress")).toEqual(replied);
-      expect(getConversationProgressSnapshot(scope, "progress")).toEqual(desired);
-      expect(getConversationDeliveryOperation(scope, "legacy")).toEqual(legacy);
-    });
-  });
-
-  it("fences progress receipt identity and rolls back stale writes", async () => {
-    await withConversationStore(({ scope, conversationRef }) => {
-      const input = {
-        operationId: "guarded-progress",
-        conversationRef,
-        sourceSessionKey: "agent:main:reef:direct:peer-agent",
-        message: "card",
-        platformMessageId: "card-message",
-        progressSnapshot: { lines: [] },
-        assertCurrent: () => {},
-      };
-      const stale = () => {
-        throw new Error("turn superseded");
-      };
-      expect(() =>
-        recordConversationProgressReceipt(scope, { ...input, assertCurrent: stale }),
-      ).toThrow("turn superseded");
-      expect(getConversationDeliveryOperation(scope, input.operationId)).toBeUndefined();
-      expect(getConversationProgressSnapshot(scope, input.operationId)).toBeUndefined();
-      recordConversationProgressReceipt(scope, input);
-      const receipt = getConversationDeliveryOperation(scope, input.operationId);
-      for (const changed of [
-        { conversationRef: "another-conversation" },
-        { sourceSessionKey: "agent:main:another-turn" },
-        { message: "another card" },
-        { platformMessageId: "another-message" },
-      ]) {
-        expect(() => recordConversationProgressReceipt(scope, { ...input, ...changed })).toThrow();
-      }
-      expect(() =>
-        updateConversationProgressSnapshot(scope, {
-          operationId: input.operationId,
-          progressSnapshot: { lines: ["must not persist"] },
-          assertCurrent: stale,
-        }),
-      ).toThrow("turn superseded");
-      expect(getConversationDeliveryOperation(scope, input.operationId)).toEqual(receipt);
-      expect(getConversationProgressSnapshot(scope, input.operationId)).toEqual(
-        input.progressSnapshot,
-      );
-
-      beginConversationDeliveryOperation(scope, {
-        ...input,
-        operationId: "other-turn",
-        operationKind: "turn",
-      });
-      expect(() =>
-        recordConversationProgressReceipt(scope, { ...input, operationId: "other-turn" }),
-      ).toThrow("reused with different input");
-      beginConversationDeliveryOperation(scope, {
-        ...input,
-        operationId: "prepared",
-        operationKind: "send",
-        preparedMessageId: "another-message",
-      });
-      expect(() =>
-        recordConversationProgressReceipt(scope, { ...input, operationId: "prepared" }),
-      ).toThrow("conflicts with existing delivery");
-      expect(() =>
-        updateConversationProgressSnapshot(scope, {
-          operationId: "prepared",
-          progressSnapshot: input.progressSnapshot,
-          assertCurrent: input.assertCurrent,
-        }),
-      ).toThrow("requires an identified sent receipt");
-      markConversationDeliveryUnknown(scope, "prepared");
-      expect(() =>
-        recordConversationProgressReceipt(scope, { ...input, operationId: "prepared" }),
-      ).toThrow("conflicts with existing delivery");
-    });
-  });
-
-  it("rejects unbounded or private snapshot data without hiding receipts on corrupt optional reads", async () => {
-    await withConversationStore(({ scope, conversationRef }) => {
-      const input = {
-        operationId: "bounded-progress",
-        conversationRef,
-        sourceSessionKey: "agent:main:reef:direct:peer-agent",
-        message: "card",
-        platformMessageId: "card-message",
-        progressSnapshot: { lines: [] },
-        assertCurrent: () => {},
-      };
-      recordConversationProgressReceipt(scope, input);
-      const receipt = getConversationDeliveryOperation(scope, input.operationId);
-      for (const snapshot of [
-        { lines: [], credentials: "not-display-data" },
-        { lines: [], callback: () => {} },
-        { lines: Array.from({ length: 129 }, () => "line") },
-        { lines: ["x".repeat(4097)] },
-        { lines: Array.from({ length: 64 }, () => "x".repeat(2048)) },
-        { lines: [], plan: [{ step: "Work", status: "failed" }] },
-        { lines: [], diffStat: { files: -1, added: 0, removed: 0 } },
-      ]) {
-        expect(() =>
-          updateConversationProgressSnapshot(scope, {
-            operationId: input.operationId,
-            progressSnapshot: snapshot as ChannelProgressDraftCompositorSnapshot,
-            assertCurrent: input.assertCurrent,
-          }),
-        ).toThrow();
-      }
-      expect(getConversationDeliveryOperation(scope, input.operationId)).toEqual(receipt);
-      expect(getConversationProgressSnapshot(scope, input.operationId)).toEqual(
-        input.progressSnapshot,
-      );
-      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteReadScope(scope)));
-      for (const invalid of ["{broken", '{"lines":[],"callback":"private"}', '{"lines":false}']) {
-        database.db
-          .prepare("UPDATE cache_entries SET value_json = ? WHERE scope = ? AND key = ?")
-          .run(invalid, "conversation-progress", input.operationId);
-        expect(getConversationProgressSnapshot(scope, input.operationId)).toBeUndefined();
-        expect(getConversationDeliveryOperation(scope, input.operationId)).toEqual(receipt);
-      }
     });
   });
 
@@ -467,24 +298,26 @@ describe("conversation delivery store", () => {
   it("removes only source-bound delivery evidence and its progress cache when fully deleted", async () => {
     await withConversationStore(async ({ scope, conversationRef }) => {
       const sessionKey = "agent:main:reef:direct:peer-agent";
-      const input = {
-        conversationRef,
-        sourceSessionKey: sessionKey,
-        message: "hello",
-        platformMessageId: "platform-deleted",
-        progressSnapshot: { lines: ["Working"] },
-        assertCurrent: () => {},
-      };
-      recordConversationProgressReceipt(scope, {
-        ...input,
-        operationId: "operation-deleted-session",
-      });
-      recordConversationProgressReceipt(scope, {
-        ...input,
-        operationId: "operation-other-session",
-        sourceSessionKey: "agent:main:other",
-      });
       const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteReadScope(scope)));
+      const progressJson = JSON.stringify({ lines: ["Working"] });
+      for (const [operationId, sourceSessionKey] of [
+        ["operation-deleted-session", sessionKey],
+        ["operation-other-session", "agent:main:other"],
+      ] as const) {
+        beginConversationDeliveryOperation(scope, {
+          operationId,
+          operationKind: "send",
+          conversationRef,
+          sourceSessionKey,
+          message: "hello",
+        });
+        markConversationDeliverySent(scope, operationId, "platform-deleted");
+        database.db
+          .prepare(
+            "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES ('conversation-progress', ?, ?, 1)",
+          )
+          .run(operationId, progressJson);
+      }
       database.db
         .prepare(
           "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)",
@@ -500,10 +333,13 @@ describe("conversation delivery store", () => {
       });
 
       expect(getConversationDeliveryOperation(scope, "operation-deleted-session")).toBeUndefined();
-      expect(getConversationProgressSnapshot(scope, "operation-deleted-session")).toBeUndefined();
-      expect(getConversationProgressSnapshot(scope, "operation-other-session")).toEqual(
-        input.progressSnapshot,
-      );
+      expect(
+        database.db
+          .prepare(
+            "SELECT key, value_json FROM cache_entries WHERE scope = 'conversation-progress'",
+          )
+          .all(),
+      ).toEqual([{ key: "operation-other-session", value_json: progressJson }]);
       expect(
         database.db
           .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")

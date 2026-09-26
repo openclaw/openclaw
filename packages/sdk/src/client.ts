@@ -31,10 +31,6 @@ import type {
   SessionCreateParams,
   SessionSendParams,
   SessionTarget,
-  TasksCancelResult,
-  TasksGetResult,
-  TasksListParams,
-  TasksListResult,
   ToolsEffectiveParams,
   ToolInvokeParams,
   ToolInvokeResult,
@@ -150,11 +146,11 @@ type RunTerminalSource = { kind: "canonical" } | { kind: "chat"; eventType: Open
 function requireArtifactQueryScope(api: string, params: ArtifactQuery): ArtifactQuery {
   const record = asRecord(params);
   if (
-    ![record.sessionKey, record.runId, record.taskId].some(
+    ![record.sessionKey, record.runId].some(
       (value) => typeof value === "string" && value.trim().length > 0,
     )
   ) {
-    throw new Error(`${api} requires one of sessionKey, runId, or taskId`);
+    throw new Error(`${api} requires sessionKey or runId`);
   }
   return params;
 }
@@ -261,7 +257,6 @@ export class OpenClaw {
   readonly agents: AgentsNamespace;
   readonly sessions: SessionsNamespace;
   readonly runs: RunsNamespace;
-  readonly tasks: TasksNamespace;
   readonly models: ModelsNamespace;
   readonly tools: ToolsNamespace;
   readonly artifacts: ArtifactsNamespace;
@@ -289,7 +284,6 @@ export class OpenClaw {
     this.agents = new AgentsNamespace(this);
     this.sessions = new SessionsNamespace(this);
     this.runs = new RunsNamespace(this);
-    this.tasks = new TasksNamespace(this);
     this.models = new ModelsNamespace(this);
     this.tools = new ToolsNamespace(this);
     this.artifacts = new ArtifactsNamespace(this);
@@ -772,28 +766,6 @@ class RpcNamespace {
     options?: GatewayRequestOptions,
   ): Promise<T> {
     return await this.client.request<T>(`${this.prefix}.${method}`, params, options);
-  }
-}
-
-/** Task query and cancellation namespace. */
-export class TasksNamespace extends RpcNamespace {
-  constructor(client: OpenClaw) {
-    super(client, "tasks");
-  }
-
-  async list(params?: TasksListParams): Promise<TasksListResult> {
-    return await this.call("list", params === undefined ? {} : params);
-  }
-
-  async get(taskId: string): Promise<TasksGetResult> {
-    return await this.call("get", { taskId });
-  }
-
-  async cancel(taskId: string, options?: { reason?: string }): Promise<TasksCancelResult> {
-    return await this.call("cancel", {
-      taskId,
-      ...(options?.reason ? { reason: options.reason } : {}),
-    });
   }
 }
 

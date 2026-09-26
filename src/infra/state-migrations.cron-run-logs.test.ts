@@ -10,7 +10,6 @@ import {
   repairOpenClawStateDatabaseSchema,
   prepareOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const CRON_RUN_LOG_TASK_IMPORT_MIGRATION_ID = "state:cron-run-logs-to-task-runs:v1";
@@ -238,7 +237,6 @@ describe("cron run-log task import", () => {
             .prepare("SELECT report_json FROM migration_runs WHERE id = ?")
             .get(CRON_RUN_LOG_TASK_IMPORT_MIGRATION_ID),
         ).toEqual({ report_json: report.report_json });
-        resetTaskRegistryForTests({ persist: false });
       },
     );
   });

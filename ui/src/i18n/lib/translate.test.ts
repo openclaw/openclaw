@@ -7,7 +7,7 @@ import {
   createStorageMock,
   installSafeLocalStorageForTesting,
 } from "../../test-helpers/storage.ts";
-import { registerBackgroundTasksEnglish } from "../locales/en-background-tasks.ts";
+import { registerCommandPaletteEnglish } from "../locales/en-command-palette.ts";
 import { createI18nManagerForTesting } from "./translate.test-support.ts";
 import type { Locale, TranslationMap } from "./types.ts";
 
@@ -112,20 +112,17 @@ describe("I18nManager pending locale retry", () => {
     expect(manager.translateActive("common.connected")).toBeUndefined();
   });
 
-  it("uses lazy task English as fallback without replacing the active language", async () => {
+  it("uses lazy English as fallback without replacing the active language", async () => {
     const { manager } = createManager();
     manager.registerTranslation("de", {
-      chat: { backgroundTasks: { waiting: "Warten" } },
+      commandPalette: { newSessionSettings: "Neue Sitzung" },
     });
     await manager.setLocale("de");
-
-    registerBackgroundTasksEnglish();
-
-    expect(manager.t("chat.backgroundTasks.waiting")).toBe("Warten");
-    expect(manager.t("chat.backgroundTasks.waitingChildren")).toBe("Waiting for children");
-    expect(manager.t("chat.backgroundTasks.deliveryQueued")).toBe("Queued for parent");
+    registerCommandPaletteEnglish();
+    expect(manager.t("commandPalette.newSessionSettings")).toBe("Neue Sitzung");
+    expect(manager.t("commandPalette.rememberUnavailable")).toBe("Reconnect to remember settings.");
     await manager.setLocale("en");
-    expect(manager.t("chat.backgroundTasks.waiting")).toBe("Waiting");
+    expect(manager.t("commandPalette.newSessionSettings")).toBe("New session settings");
   });
 
   it("deduplicates an in-flight target and permits retry after the shared load settles", async () => {

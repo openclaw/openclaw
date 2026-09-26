@@ -219,5 +219,21 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         await import("./src/migration/session-binding-sidecars.js")
       ).migrateLegacySessionBindingSidecars(params),
   },
+  {
+    id: "codex-native-task-assignments",
+    label: "Codex native pending assignments",
+    collectBackupResources: async (params) =>
+      (
+        await import("./src/migration/native-task-assignments.js")
+      ).codexNativeTaskAssignmentMigration.collectBackupResources(params),
+    detectLegacyState: async (params) =>
+      (
+        await import("./src/migration/native-task-assignments.js")
+      ).codexNativeTaskAssignmentMigration.detectLegacyState(params),
+    migrateLegacyState: async (params) =>
+      (
+        await import("./src/migration/native-task-assignments.js")
+      ).codexNativeTaskAssignmentMigration.migrateLegacyState(params),
+  },
   codexOrphanedSessionBindingMigration,
 ];

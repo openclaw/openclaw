@@ -1,3 +1,18 @@
+import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
+vi.mock("../media-generation-activity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media-generation-activity.js")>();
+  const { observeMediaActivity } =
+    await import("../media-generation-activity.observer.test-support.js");
+  return observeMediaActivity(actual, {
+    ...taskExecutorMocks,
+    listOperations: mediaActivityMocks.listOperations,
+  });
+});
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async () => {
+  const { createMediaRequesterReadMock } =
+    await import("./media-generation-lifecycle.test-support.js");
+  return createMediaRequesterReadMock();
+});
 // video_generate tool tests cover provider/model selection, plugin metadata,
 // background task handling, input media, and saved video output.
 import { MAX_VIDEO_BYTES } from "@openclaw/media-core/constants";
@@ -65,22 +80,15 @@ function createVideoGenerateTool(
   });
 }
 
-const taskRuntimeInternalMocks = vi.hoisted(() => {
-  const mocks = {
-    listTasksForOwnerKey: vi.fn(),
-    listFreshTasksForOwnerKey: vi.fn(),
-  };
-  mocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
-    mocks.listTasksForOwnerKey(ownerKey),
-  );
-  return mocks;
-});
+const mediaActivityMocks = vi.hoisted(() => ({
+  listOperations: vi.fn(),
+}));
 
 const taskExecutorMocks = vi.hoisted(() => ({
-  recordTaskRunProgressByRunId: vi.fn(),
-  failTaskRunByRunId: vi.fn(),
-  completeTaskRunByRunId: vi.fn(),
-  createRunningTaskRun: vi.fn(),
+  recordProgress: vi.fn(),
+  failOperation: vi.fn(),
+  completeOperation: vi.fn(),
+  createOperation: vi.fn(),
 }));
 const probeMediaFilesWithinBudgetMock = vi.hoisted(() =>
   vi.fn(async (inputs: readonly unknown[]) => inputs.map(() => ({}))),
@@ -113,9 +121,6 @@ const VIDEO_GENERATION_PROVIDER_AUTH_ENV_VARS = [
   "XAI_API_KEY",
   "VYDRA_API_KEY",
 ] as const;
-
-vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
-vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
 vi.mock("../../media/media-probe.js", () => ({
   probeMediaFilesWithinBudget: probeMediaFilesWithinBudgetMock,
 }));
@@ -262,21 +267,18 @@ function resetVideoGenerateMocks() {
     vi.stubEnv(key, "");
   }
   vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
-  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
-  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
-  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
-  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
-    taskRuntimeInternalMocks.listTasksForOwnerKey(ownerKey),
-  );
+  mediaActivityMocks.listOperations.mockReset();
+  mediaActivityMocks.listOperations.mockReturnValue(undefined);
   resetRecentMediaGenerationDuplicateGuardsForTests();
+  resetGeneratedMediaTaskActivityForTests();
   probeMediaFilesWithinBudgetMock.mockReset();
   probeMediaFilesWithinBudgetMock.mockImplementation(async (inputs: readonly unknown[]) =>
     inputs.map(() => ({})),
   );
-  taskExecutorMocks.createRunningTaskRun.mockReset();
-  taskExecutorMocks.completeTaskRunByRunId.mockReset();
-  taskExecutorMocks.failTaskRunByRunId.mockReset();
-  taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
+  taskExecutorMocks.createOperation.mockReset();
+  taskExecutorMocks.completeOperation.mockReset();
+  taskExecutorMocks.failOperation.mockReset();
+  taskExecutorMocks.recordProgress.mockReset();
 }
 
 describe("createVideoGenerateTool", () => {
@@ -474,19 +476,14 @@ describe("createVideoGenerateTool", () => {
   });
 
   it("generates videos, saves them, and emits MEDIA paths without a session-backed detach", async () => {
-    taskExecutorMocks.createRunningTaskRun.mockReturnValue({
+    taskExecutorMocks.createOperation.mockReturnValue({
       taskId: "task-123",
-      runtime: "cli",
       requesterSessionKey: "agent:main:discord:direct:123",
-      ownerKey: "agent:main:discord:direct:123",
-      scopeKind: "session",
       task: "friendly lobster surfing",
       status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
       createdAt: Date.now(),
     });
-    taskExecutorMocks.completeTaskRunByRunId.mockReturnValue(undefined);
+    taskExecutorMocks.completeOperation.mockReturnValue(undefined);
     vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
       provider: "qwen",
       model: "wan2.6-t2v",
@@ -561,8 +558,8 @@ describe("createVideoGenerateTool", () => {
     );
     expect(details.paths).toEqual([savedPath]);
     expect(details.metadata).toEqual({ taskId: "task-1" });
-    expect(taskExecutorMocks.createRunningTaskRun).not.toHaveBeenCalled();
-    expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
+    expect(taskExecutorMocks.createOperation).not.toHaveBeenCalled();
+    expect(taskExecutorMocks.completeOperation).not.toHaveBeenCalled();
   });
 
   it("uses configured timeoutMs for video generation and lets calls override it", async () => {
@@ -889,16 +886,11 @@ describe("createVideoGenerateTool", () => {
   });
 
   it("starts background generation and wakes the session with URL and saved video names", async () => {
-    taskExecutorMocks.createRunningTaskRun.mockReturnValue({
+    taskExecutorMocks.createOperation.mockReturnValue({
       taskId: "task-123",
-      runtime: "cli",
       requesterSessionKey: "agent:main:discord:direct:123",
-      ownerKey: "agent:main:discord:direct:123",
-      scopeKind: "session",
       task: "friendly lobster surfing",
       status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
       createdAt: Date.now(),
     });
     const wakeSpy = vi
@@ -978,13 +970,13 @@ describe("createVideoGenerateTool", () => {
       MAX_VIDEO_BYTES,
       "saved-lobster.mp4",
     );
-    const progress = firstMockCallArg(taskExecutorMocks.recordTaskRunProgressByRunId) as {
+    const progress = firstMockCallArg(taskExecutorMocks.recordProgress) as {
       runId: string;
       progressSummary: string;
     };
     expect(progress.runId).toMatch(/^tool:video_generate:/);
     expect(progress.progressSummary).toBe("Generating video");
-    const completion = firstMockCallArg(taskExecutorMocks.completeTaskRunByRunId) as {
+    const completion = firstMockCallArg(taskExecutorMocks.completeOperation) as {
       runId: string;
     };
     expect(completion.runId).toMatch(/^tool:video_generate:/);
@@ -1050,7 +1042,7 @@ describe("createVideoGenerateTool", () => {
   defineMediaGenerationDuplicateTests({
     kind: "video",
     tasks: taskExecutorMocks,
-    listTasks: taskRuntimeInternalMocks.listTasksForOwnerKey,
+    listTasks: mediaActivityMocks.listOperations,
     createTool: (options) => expectVideoGenerateTool(createVideoGenerateTool(options)),
     requesterOrigin: { channel: "discord", to: "channel:1" },
     setupProviders: () => {
@@ -1093,7 +1085,7 @@ describe("createVideoGenerateTool", () => {
     await expect(tool.execute("call-2", { prompt: "broken lobster" })).rejects.toThrow(
       "queue boom",
     );
-    expect(taskExecutorMocks.failTaskRunByRunId).not.toHaveBeenCalled();
+    expect(taskExecutorMocks.failOperation).not.toHaveBeenCalled();
   });
 
   it("shows duration normalization details from runtime metadata", async () => {

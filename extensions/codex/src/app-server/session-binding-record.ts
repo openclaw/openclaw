@@ -15,6 +15,11 @@ import {
   type CodexNativeSubagentHistoryOwner,
 } from "./native-subagent-history-owner.js";
 import {
+  matchesNativeAssignmentLifecycle,
+  readNativePendingAssignments,
+  type CodexNativeSubagentPendingAssignment,
+} from "./native-subagent-pending-assignments.js";
+import {
   matchesCodexNativeSubagentSubmissionOwner,
   readCodexNativeSubagentSubmissions,
   type CodexNativeSubagentSubmission,
@@ -307,6 +312,9 @@ const storedBindingSchema = z.discriminatedUnion("state", [
     lease: bindingLeaseSchema.optional().catch(undefined),
     // Keep unknown receipt versions opaque; ordinary binding writes must not erase them.
     nativeSubagentSubmissions: z.unknown().optional(),
+    // Independent vendor facts; never widen the strict V1 follow-up receipt codec.
+    nativeSubagentAssignments: z.unknown().optional(),
+    nativeSubagentTaskImport: z.unknown().optional(),
   }),
   z.object({
     version: z.literal(1),
@@ -314,6 +322,7 @@ const storedBindingSchema = z.discriminatedUnion("state", [
     sessionId: storedSessionIdSchema,
     lease: bindingLeaseSchema.optional().catch(undefined),
     retired: z.literal(true).optional().catch(undefined),
+    nativeSubagentTaskImport: z.unknown().optional(),
   }),
 ]);
 
@@ -514,6 +523,49 @@ export function readCurrentCodexNativeSubagentSubmissions(
   return submissions && matchesCodexNativeSubagentSubmissionOwner(submissions.owner, owner)
     ? submissions.receipts
     : [];
+}
+
+export function readCurrentNativePendingAssignments(
+  state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup">,
+  identity: CodexAppServerBindingIdentity,
+  owner: CodexNativeSubagentHistoryOwner,
+): readonly CodexNativeSubagentPendingAssignment[] {
+  const key = bindingStoreKey(identity);
+  const raw = state.lookup(key);
+  const stored = readStoredCodexAppServerBinding(raw);
+  if (raw !== undefined && !stored) {
+    throw new Error(`Invalid Codex app-server binding row: ${key}`);
+  }
+  if (
+    stored?.state !== "active" ||
+    !ownsStoredSessionGeneration(identity, stored) ||
+    (identity.kind === "session" && owner.sessionId !== identity.sessionId) ||
+    !matchesCodexNativeSubagentSubmissionBinding(stored.binding, owner)
+  ) {
+    return [];
+  }
+  return (readNativePendingAssignments(stored.nativeSubagentAssignments)?.assignments ?? []).filter(
+    (entry) => matchesNativeAssignmentLifecycle(entry.owner, owner),
+  );
+}
+
+export function preserveNativeTaskImport(current: StoredCodexAppServerBinding | undefined) {
+  return current?.nativeSubagentTaskImport !== undefined
+    ? { nativeSubagentTaskImport: current.nativeSubagentTaskImport }
+    : {};
+}
+
+/** Preserve inventory through native rotation, never across a connection-policy change. */
+export function preserveNativePendingAssignments(
+  current: CodexAppServerThreadBinding,
+  next: CodexAppServerThreadBinding,
+  value: unknown,
+): unknown {
+  return codexNativeSubagentHistoryConnectionFingerprint(current) ===
+    codexNativeSubagentHistoryConnectionFingerprint(next) &&
+    isDeepStrictEqual(current.pendingSupervisionBranch, next.pendingSupervisionBranch)
+    ? value
+    : undefined;
 }
 
 export class CodexSupervisionBindingReplacementError extends Error {

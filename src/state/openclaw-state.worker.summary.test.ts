@@ -10,11 +10,6 @@ import {
   withSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
-import { buildFlowRecord } from "../tasks/task-flow-registry.records.js";
-import { upsertTaskFlowRegistryRecordToSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
-import { readTaskRegistrySnapshot } from "../tasks/task-registry.store.kernel.js";
-import { upsertTaskWithDeliveryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
-import { TASK_RUNTIMES, type TaskStatus } from "../tasks/task-registry.types.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -30,7 +25,7 @@ import {
 let state: OpenClawTestState;
 const backends = new Set<ReturnType<typeof createSqliteWorkerBackend>>();
 beforeEach(async () => {
-  state = await createOpenClawTestState({ prefix: "openclaw-flow-summary-", applyEnv: true });
+  state = await createOpenClawTestState({ prefix: "openclaw-native-handles-", applyEnv: true });
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -42,127 +37,6 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-async function fixture(statuses: readonly TaskStatus[] = ["running"]) {
-  const ownerKey = "agent:main:summary";
-  const flow = buildFlowRecord({
-    controllerId: "tests/summary",
-    ownerKey,
-    goal: "Synthetic flow",
-    createdAt: 100,
-  });
-  upsertTaskFlowRegistryRecordToSqlite(flow);
-  let index = 0;
-  for (const runtime of TASK_RUNTIMES) {
-    for (const status of statuses) {
-      const count =
-        runtime === "subagent" && status === "queued"
-          ? 3
-          : runtime === "cli" && status === "failed"
-            ? 2
-            : 1;
-      for (let copy = 0; copy < count; copy++) {
-        upsertTaskWithDeliveryStateToSqlite({
-          task: {
-            taskId: `task-${index++}`,
-            runtime,
-            status,
-            parentFlowId: flow.flowId,
-            ownerKey,
-            requesterSessionKey: ownerKey,
-            scopeKind: "session",
-            task: "Large task ".repeat(1024),
-            progressSummary: "Progress ".repeat(1024),
-            deliveryStatus: "not_applicable",
-            notifyPolicy: "silent",
-            createdAt: 100,
-          },
-        });
-      }
-    }
-  }
-  const context = captureOpenClawStateWorkerContext();
-  const backend = runWithSqliteWorkerStateContext(context, () =>
-    createSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
-  );
-  backends.add(backend);
-  await backend[SQLITE_WORKER_PREPARE_COMMAND]?.("flows.summary");
-  const summary = (requestedOwner = ownerKey, flowId = flow.flowId) =>
-    runWithSqliteWorkerStateContext(context, () =>
-      backend.execute({ type: "flows.summary", input: { ownerKey: requestedOwner, flowId } }),
-    );
-  const detail = () =>
-    runWithSqliteWorkerStateContext(context, () =>
-      backend.execute({
-        type: "flows.detail",
-        input: { ownerKey, lookup: "id", token: flow.flowId },
-      }),
-    );
-  return { summary, detail, database: openOpenClawStateDatabase() };
-}
-
-it("counts every status and runtime without mixing another flow, including empty and missing flows", async () => {
-  const { summary, database } = await fixture([
-    "queued",
-    "running",
-    "succeeded",
-    "failed",
-    "timed_out",
-    "cancelled",
-    "lost",
-  ]);
-  const expected = {
-    total: 31,
-    active: 10,
-    terminal: 21,
-    failures: 13,
-    byStatus: {
-      queued: 6,
-      running: 4,
-      succeeded: 4,
-      failed: 5,
-      timed_out: 4,
-      cancelled: 4,
-      lost: 4,
-    },
-    byRuntime: { subagent: 9, acp: 7, cron: 7, cli: 8 },
-  };
-  expect(summary()).toEqual(expected);
-  expect(summary("agent:other:summary")).toBeUndefined();
-  expect(summary(undefined, "missing")).toBeUndefined();
-  const unrelated = buildFlowRecord({
-    controllerId: "tests/summary",
-    ownerKey: "agent:main:summary",
-    goal: "Empty flow",
-    createdAt: 100,
-  });
-  upsertTaskFlowRegistryRecordToSqlite(unrelated);
-  expect(summary(undefined, unrelated.flowId)).toEqual({
-    total: 0,
-    active: 0,
-    terminal: 0,
-    failures: 0,
-    byStatus: {
-      queued: 0,
-      running: 0,
-      succeeded: 0,
-      failed: 0,
-      timed_out: 0,
-      cancelled: 0,
-      lost: 0,
-    },
-    byRuntime: { subagent: 0, acp: 0, cron: 0, cli: 0 },
-  });
-  database.db
-    .prepare("UPDATE task_runs SET parent_flow_id = ? WHERE task_id = 'task-0'")
-    .run(unrelated.flowId);
-  expect(summary()).toMatchObject({
-    total: 30,
-    active: 9,
-    byStatus: { queued: 5 },
-    byRuntime: { subagent: 8 },
-  });
-});
-
 it("retains the shared native handle until its last actor closes and preserves rows on reopen", async () => {
   const context = captureOpenClawStateWorkerContext();
   const first = runWithSqliteWorkerStateContext(context, () =>
@@ -172,39 +46,58 @@ it("retains the shared native handle until its last actor closes and preserves r
     openExistingSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
   );
   backends.add(first).add(second);
-  await first[SQLITE_WORKER_PREPARE_COMMAND]?.("flows.createManaged");
-  await second[SQLITE_WORKER_PREPARE_COMMAND]?.("flows.current");
+  await first[SQLITE_WORKER_PREPARE_COMMAND]?.("pluginState.register");
+  await second[SQLITE_WORKER_PREPARE_COMMAND]?.("pluginState.lookup");
   const database = openOpenClawStateDatabase();
-  const flow = buildFlowRecord({
-    controllerId: "tests/native-borrow",
-    ownerKey: "agent:main:borrow",
-    goal: "Keep the surviving actor usable",
-    createdAt: 100,
-  });
-  runWithSqliteWorkerStateContext(context, () =>
-    first.execute({ type: "flows.createManaged", input: { flow } }),
-  );
+  const key = { pluginId: "native-borrow-fixture", namespace: "shared", key: "answer" };
+  const register = (backend: typeof first, value: number) => {
+    const stages: string[] = [];
+    const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+      stages.push(request.stage);
+      context.admission.assertCurrent();
+      grant();
+    });
+    const nativePost = admission.port.postMessage.bind(admission.port);
+    // Service the real grant on this thread before the native backend waits synchronously.
+    const dispatch = vi
+      .spyOn(admission.port, "postMessage")
+      .mockImplementation((message, transferList) => {
+        nativePost(message, transferList);
+        admission.service();
+      });
+    try {
+      const result = runWithSqliteWorkerStateContext(context, () =>
+        withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+          backend.execute({
+            type: "pluginState.register",
+            input: {
+              ...key,
+              valueJson: JSON.stringify(value),
+              maxEntries: 4,
+              overflowPolicy: "reject-new",
+            },
+          }),
+        ),
+      );
+      expect(stages).toEqual(["transaction", "commit"]);
+      return result;
+    } finally {
+      dispatch.mockRestore();
+      admission.finish();
+    }
+  };
+  expect(register(first, 1)).toEqual({ ok: true, value: undefined });
+  // A read-only lookup does not borrow the native writer; promote this actor before closing its sibling.
+  expect(register(second, 1)).toEqual({ ok: true, value: undefined });
   expect(
     runWithSqliteWorkerStateContext(context, () =>
-      second.execute({ type: "flows.current", input: { flowId: flow.flowId } }),
+      second.execute({ type: "pluginState.lookup", input: key }),
     ),
-  ).toMatchObject({ flowId: flow.flowId, revision: 0 });
+  ).toEqual({ ok: true, value: 1 });
 
   await first.close();
   expect(database.db.isOpen).toBe(true);
-  expect(
-    runWithSqliteWorkerStateContext(context, () =>
-      second.execute({
-        type: "flows.updateManaged",
-        input: {
-          flowId: flow.flowId,
-          ownerKey: flow.ownerKey,
-          expectedRevision: 0,
-          patch: { status: "succeeded", updatedAt: 200, endedAt: 200 },
-        },
-      }),
-    ),
-  ).toMatchObject({ applied: true, flow: { status: "succeeded", revision: 1 } });
+  expect(register(second, 2)).toEqual({ ok: true, value: undefined });
   await second.close();
   expect(database.db.isOpen).toBe(false);
 
@@ -213,15 +106,15 @@ it("retains the shared native handle until its last actor closes and preserves r
     createSqliteWorkerBackend(undefined, { databasePath: reopenedContext.admission.databasePath }),
   );
   backends.add(reopened);
-  await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("flows.current");
+  await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("pluginState.lookup");
   expect(
     runWithSqliteWorkerStateContext(reopenedContext, () =>
-      reopened.execute({ type: "flows.current", input: { flowId: flow.flowId } }),
+      reopened.execute({ type: "pluginState.lookup", input: key }),
     ),
-  ).toMatchObject({ flowId: flow.flowId, status: "succeeded", revision: 1 });
+  ).toEqual({ ok: true, value: 2 });
 });
 
-it.each(["kv", "task"] as const)(
+it.each(["kv", "health"] as const)(
   "retains a promoted KV actor's native handle when %s closes first",
   async (firstToClose) => {
     const context = captureOpenClawStateWorkerContext();
@@ -273,32 +166,48 @@ it.each(["kv", "task"] as const)(
       dispatch.mockRestore();
       admission.finish();
     }
-    const task = runWithSqliteWorkerStateContext(context, () =>
+    const health = runWithSqliteWorkerStateContext(context, () =>
       createSqliteWorkerBackend(undefined, { databasePath }),
     );
-    backends.add(task);
-    await task[SQLITE_WORKER_PREPARE_COMMAND]?.("flows.createManaged");
+    backends.add(health);
+    await health[SQLITE_WORKER_PREPARE_COMMAND]?.("config.health.patch");
     const database = openOpenClawStateDatabase();
-    const flow = buildFlowRecord({
-      controllerId: "tests/kv-native-borrow",
-      ownerKey: "agent:main:kv-borrow",
-      goal: "Keep both state readers available",
-      createdAt: 100,
-    });
+    const configPath = "/synthetic-native-borrow.json";
     expect(
       runWithSqliteWorkerStateContext(context, () =>
-        task.execute({ type: "flows.createManaged", input: { flow } }),
+        health.execute({
+          type: "config.health.patch",
+          input: {
+            configPath,
+            patch: { last_observed_suspicious_signature: "first" },
+            expected: null,
+            updatedAtMs: 100,
+          },
+        }),
       ),
-    ).toMatchObject({ flowId: flow.flowId, revision: 0 });
+    ).toBe(true);
 
-    await (firstToClose === "kv" ? kv : task).close();
+    await (firstToClose === "kv" ? kv : health).close();
     expect(database.db.isOpen).toBe(true);
     if (firstToClose === "kv") {
       expect(
         runWithSqliteWorkerStateContext(context, () =>
-          task.execute({ type: "flows.current", input: { flowId: flow.flowId } }),
+          health.execute({
+            type: "config.health.patch",
+            input: {
+              configPath,
+              patch: { last_observed_suspicious_signature: "second" },
+              expected: {
+                lastKnownGoodJson: null,
+                lastPromotedGoodJson: null,
+                suspiciousSignature: "first",
+                updatedAtMs: 100,
+              },
+              updatedAtMs: 200,
+            },
+          }),
         ),
-      ).toMatchObject({ flowId: flow.flowId, revision: 0 });
+      ).toBe(true);
     } else {
       expect(
         runWithSqliteWorkerStateContext(context, () =>
@@ -306,7 +215,7 @@ it.each(["kv", "task"] as const)(
         ),
       ).toEqual({ ok: true, value: { value: 42 } });
     }
-    await (firstToClose === "kv" ? task : kv).close();
+    await (firstToClose === "kv" ? health : kv).close();
     expect(database.db.isOpen).toBe(false);
 
     const reopenedContext = captureOpenClawStateWorkerContext();
@@ -322,9 +231,17 @@ it.each(["kv", "task"] as const)(
     ).toEqual({ ok: true, value: { value: 42 } });
     expect(
       runWithSqliteWorkerStateContext(reopenedContext, () =>
-        reopened.execute({ type: "flows.current", input: { flowId: flow.flowId } }),
+        reopened.execute({ type: "config.health.read", input: { artifactPreserving: false } }),
       ),
-    ).toMatchObject({ flowId: flow.flowId, revision: 0 });
+    ).toMatchObject({
+      state: {
+        entries: {
+          [configPath]: {
+            lastObservedSuspiciousSignature: firstToClose === "kv" ? "second" : "first",
+          },
+        },
+      },
+    });
   },
 );
 
@@ -420,29 +337,3 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
     expect(reopenedDatabase.db.isOpen).toBe(false);
   },
 );
-
-it.each(["runtime", "status"] as const)(
-  "rejects invalid count input %s only after checking flow ownership",
-  async (field) => {
-    const { summary, database } = await fixture();
-    database.db.exec(`UPDATE task_runs SET ${field} = 'invalid' WHERE task_id = 'task-0'`);
-    expect(summary("agent:other:summary")).toBeUndefined();
-    expect(summary(undefined, "missing")).toBeUndefined();
-    expect(() => summary()).toThrow(`Invalid persisted task ${field}: "invalid"`);
-  },
-);
-
-it.each([
-  ["scope_kind", "scope kind"],
-  ["delivery_status", "delivery status"],
-  ["notify_policy", "notify policy"],
-  ["terminal_outcome", "terminal outcome"],
-] as const)("leaves unused %s validation with full record readers", async (field, label) => {
-  const { summary, detail, database } = await fixture();
-  database.db.exec(`UPDATE task_runs SET ${field} = 'invalid' WHERE task_id = 'task-0'`);
-  expect(summary()).toMatchObject({ total: 4, active: 4, terminal: 0, failures: 0 });
-  expect(() => detail()).toThrow(`Invalid persisted task ${label}: "invalid"`);
-  expect(() => readTaskRegistrySnapshot(database)).toThrow(
-    `Invalid persisted task ${label}: "invalid"`,
-  );
-});

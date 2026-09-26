@@ -158,9 +158,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["users.authConnect.status", "users", "operator.write", "2026.8"],
   ["users.authConnect.cancel", "users", "operator.write", "2026.8"],
   ["users.authConnect.catalog", "users", "operator.write", "2026.8"],
-  ["tasks.list", "tasks", "operator.read", "<=2026.7"],
-  ["tasks.get", "tasks", "operator.read", "<=2026.7"],
-  ["tasks.cancel", "tasks", "operator.write", "<=2026.7"],
   ["taskSuggestions.list", "task-suggestions", "operator.read", "<=2026.7"],
   ["taskSuggestions.create", "task-suggestions", "operator.write", "<=2026.7"],
   ["taskSuggestions.accept", "task-suggestions", "operator.admin", "<=2026.7"],
@@ -514,9 +511,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["skills.proposals.evaluate", "skills", "operator.admin", "2026.7", CONTROL_PLANE_WRITE],
   // Additive hook status RPC appends so older advertised method indices stay stable.
   ["hooks.status", "hooks-status", "operator.read", "2026.7"],
-  // Additive task recovery RPCs append so older advertised method indices stay stable.
-  ["tasks.retry", "tasks", "operator.write", "2026.7"],
-  ["tasks.dismiss", "tasks", "operator.write", "2026.7"],
   // Additive audit inspection appends so older advertised method indices stay stable.
   ["audit.run.inspect", "audit", "operator.read", "2026.7"],
   ["sessions.patchMany", "sessions-mutations", "dynamic", "2026.8"],
@@ -658,7 +652,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["plugins.catalog.browse", "plugins", "operator.read", "2026.9"],
   ["plugins.catalog.categories", "plugins", "operator.read", "2026.9"],
   ["plugins.catalog.get", "plugins", "operator.read", "2026.9"],
-  ["tasks.history", "tasks", "operator.read", "2026.9"],
   [
     "environments.prepare",
     "environments",
@@ -713,6 +706,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["themes.import", "themes", "operator.write", "2026.9"],
   ["controlUi.githubDetail", "control-ui", "operator.read", "2026.9"],
   ["progressCard.refresh", "progress-card", "operator.write", "2026.9"],
+  ["cron.history", "cron", "operator.read", "2026.9"],
   ["webSearch.status", "web-search", "operator.read", "2026.9"],
   ["webSearch.test", "web-search", "operator.admin", "2026.9"],
   ["sessions.providerReview.continue", "sessions-provider-review", "operator.write", "2026.9"],
@@ -743,5 +737,4 @@ export const CORE_GATEWAY_METHOD_SPECS = [
     "2026.9",
     { sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "portal" } },
   ],
-  ["cron.history", "cron", "operator.read", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

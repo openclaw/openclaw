@@ -82,7 +82,7 @@ async function reconcileForeignRunReceipts(state: CronServiceState): Promise<voi
       if (schedulingChanged) {
         await ensureLoaded(state, { forceReload: true });
         for (const interrupted of interruptedRuns) {
-          emitInterruptedCronRun(state, interrupted);
+          await emitInterruptedCronRun(state, interrupted);
         }
       }
     }
@@ -135,7 +135,7 @@ export async function waitForRunSettlement(
           if (changed) {
             await ensureLoaded(state, { forceReload: true });
             for (const interrupted of interruptedRuns) {
-              emitInterruptedCronRun(state, interrupted);
+              await emitInterruptedCronRun(state, interrupted);
             }
             if (state.schedulerStarted) {
               armTimer(state);
@@ -229,7 +229,7 @@ export async function start(state: CronServiceState): Promise<void> {
       }
       // Publish committed interruptions before a replacement can start catch-up.
       for (const interrupted of interruptedRuns) {
-        emitInterruptedCronRun(state, interrupted);
+        await emitInterruptedCronRun(state, interrupted);
       }
     }
     if (state.stopped || state.lifecycleGeneration !== generation) {

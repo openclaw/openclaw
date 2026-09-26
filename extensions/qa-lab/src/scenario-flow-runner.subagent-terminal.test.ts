@@ -1,5 +1,5 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
@@ -23,7 +23,7 @@ function readPublicTerminalChecks() {
     throw new Error("Terminal completion flow has no public case loop");
   }
   const start = loop.actions.findIndex(
-    (action) => asOptionalRecord(action)?.saveAs === "terminalTask",
+    (action) => asOptionalRecord(action)?.saveAs === "terminalRun",
   );
   const end = loop.actions.findIndex(
     (action) => asOptionalRecord(action)?.set === "appendDirectFallbackProof",
@@ -48,6 +48,7 @@ async function runTerminalAcknowledgment(
 ) {
   const { actions, terminalCase, config } = readPublicTerminalChecks();
   const conversationId = "terminal-parent-ack";
+  const caseName = expectDefined(readStringField(terminalCase, "name"), "terminal case name");
   const marker = String(terminalCase.marker);
   const acknowledgment = String(config.parentAcknowledgment);
   const state = createQaBusState();
@@ -84,7 +85,14 @@ async function runTerminalAcknowledgment(
       ],
     },
     api: {
-      readSettledTerminalTask: async () => ({ taskId: "completed-child" }),
+      readSettledTerminalRun: async () => ({
+        runId: "completed-child",
+        label: `qa-terminal-${caseName}`,
+        requesterSessionKey: "agent:qa:terminal-parent",
+        childSessionKey: "agent:qa:terminal-child",
+        execution: { status: "terminal", outcome: { status: "ok" } },
+        delivery: { status: "delivered" },
+      }),
       readDirectFallbackReceipts: async () => [{ content: [{ type: "text", text: marker }] }],
       publishTerminalDiagnostic: async () => undefined,
       snapshotTerminalRequests: () => [],

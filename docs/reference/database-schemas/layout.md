@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Which SQLite database holds what, and the tables behind individual features"
 read_when:
   - "Locating the global state database or a per-agent database on disk"
@@ -13,7 +14,7 @@ title: "Database layout"
 | Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state             |
 | Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state |
 
-The task registry uses the shared state database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
+The shared-state database retains `task_runs`, `task_delivery_state`, and `flow_runs`, including their existing columns and indexes. The Tasks and TaskFlow runtime, tools, and UI are removed; their non-Cron rows remain untouched and unused by the runtime. Cron owns only the `runtime = 'cron'` rows in `task_runs` through its history store. It does not move history to another table. Native execution and completion remain with the subagent registry and harness-binding owners; native Codex pending assignments use metadata in the existing parent binding, not a new table. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
 In agent schema 23, `transcript_events` retains original event JSON as either
 `event_json` TEXT or `event_zstd` BLOB, with byte counts and bounded navigation
@@ -22,15 +23,15 @@ to reconstruct history; selecting `event_json` alone omits compressed events.
 Memory chunk/cache embeddings are little-endian Float64 BLOBs. See
 [compact agent payload storage](/reference/database-schemas/agent-schema-history#compact-agent-payload-storage).
 
-Doctor normalizes historical task run and child-session identifiers together
-with their related subagent bindings, so scoped mutations can use the existing
-indexes. Legacy sidecar imports use the same transactional repair. Gateway
-restore and reads consume stored identifiers without repairing them. New task
-records and explicit identifier changes normalize before persistence and receipt
-publication; unrelated patches preserve the existing identity. Schema versions
-and retention are unchanged. `openclaw update` runs Doctor before activation;
-after a direct binary replacement or using an older writer, run
-`openclaw doctor --fix` before starting the new Gateway.
+Retired Task and TaskFlow feature records remain in place. The Codex plugin's
+[Doctor migration](/gateway/doctor/config-migrations#native-codex-recovery-after-tasks-removal)
+copies eligible, owner-stamped native child recovery facts into existing parent
+binding metadata, while leaving source Task rows byte-identical. This is a
+migration-only read, with no replacement ledger or runtime Task reader. Their
+historical UI and API are removed while the database layout remains unchanged. Retired pre-June sidecar
+imports stay retired; [upgrading very old versions](/install/updating#upgrading-very-old-versions)
+describes the bridge-release path. Run the current Doctor after a direct binary
+replacement before starting the new Gateway.
 
 ### Activity session recaps
 

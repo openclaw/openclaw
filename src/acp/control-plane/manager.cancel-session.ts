@@ -1,6 +1,5 @@
 /** Cancellation path for active ACP turns and idle runtime handles. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { captureTaskCancellationControl } from "../../tasks/task-cancellation-context.js";
 import {
   AcpRuntimeError,
   toAcpRuntimeError,
@@ -35,7 +34,6 @@ export async function runManagerCancelSession(params: {
   setSessionState: SetManagerSessionState;
 }): Promise<void> {
   params.assertActive?.();
-  const cancellationControl = captureTaskCancellationControl();
   const actorKey = acpSessionActorKey(params);
   const expectedRunId = params.expectedRunId?.trim();
   const expectedInstanceId = params.expectedInstanceId?.trim();
@@ -73,10 +71,7 @@ export async function runManagerCancelSession(params: {
           acceptedTurn,
           reason: params.reason,
           revalidate: requireExpectedOwner,
-          assertCancellationAllowed: () => {
-            params.assertActive?.();
-            cancellationControl?.assertCurrent();
-          },
+          assertCancellationAllowed: params.assertActive,
         }),
       ),
     );

@@ -78,9 +78,6 @@ function normalizeNamedEventType(event: GatewayEvent): OpenClawEventType {
     case "exec.approval.resolved":
     case "plugin.approval.resolved":
       return "approval.resolved";
-    case "task.updated":
-    case "tasks.changed":
-      return "task.updated";
     default:
       return "raw";
   }
@@ -92,7 +89,6 @@ export function normalizeGatewayEvent(event: GatewayEvent): OpenClawEvent {
   const runId = readNonEmptyString(payload.runId);
   const sessionId = readNonEmptyString(payload.sessionId);
   const sessionKey = readNonEmptyString(payload.sessionKey);
-  const taskId = readNonEmptyString(payload.taskId);
   const agentId = readNonEmptyString(payload.agentId);
   const ts = asFiniteNumber(payload.ts) ?? Date.now();
   const idParts = [event.seq ?? "local", event.event, runId, sessionKey, ts].filter(
@@ -107,7 +103,6 @@ export function normalizeGatewayEvent(event: GatewayEvent): OpenClawEvent {
     ...(runId ? { runId } : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(sessionKey ? { sessionKey } : {}),
-    ...(taskId ? { taskId } : {}),
     ...(agentId ? { agentId } : {}),
     data: payload.data ?? payload,
     raw: event,

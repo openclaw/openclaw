@@ -1,6 +1,15 @@
 import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
+import type { CodexNativeSubagentPendingAssignment } from "./native-subagent-pending-assignments.js";
 import type { CodexAppServerBindingIdentity } from "./session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
+
+/** Both read and write projections must leave retained assignment facts unchanged. */
+function projectAssignmentOwner(
+  assignment: CodexNativeSubagentPendingAssignment,
+  owner: CodexNativeSubagentHistoryOwner,
+): CodexNativeSubagentPendingAssignment {
+  return { ...assignment, owner };
+}
 
 /** Carries one prepared run identity through callers that rederive it from public params. */
 export function scopeCodexRunBindingStore(params: {
@@ -39,6 +48,15 @@ export function scopeCodexRunBindingStore(params: {
             readMany(identities.map(mapIdentity)),
         }
       : {}),
+    readNativeSubagentAssignments: (identity, owner) =>
+      (
+        params.bindingStore.readNativeSubagentAssignments?.(
+          mapIdentity(identity),
+          mapHistoryOwner(identity, owner),
+        ) ?? []
+      ).map((assignment) =>
+        projectAssignmentOwner(assignment, { ...assignment.owner, sessionId: owner.sessionId }),
+      ),
     readNativeSubagentSubmissions: (identity, owner) =>
       params.bindingStore.readNativeSubagentSubmissions(
         mapIdentity(identity),
@@ -52,10 +70,20 @@ export function scopeCodexRunBindingStore(params: {
     mutate: (identity, mutation, assertCurrent) =>
       params.bindingStore.mutate(
         mapIdentity(identity),
-        mutation.kind === "record-native-subagent-submission" ||
-          mutation.kind === "consume-native-subagent-submission"
-          ? { ...mutation, owner: mapHistoryOwner(identity, mutation.owner) }
-          : mutation,
+        mutation.kind === "record-native-subagent-assignment" ||
+          mutation.kind === "consume-native-subagent-assignment"
+          ? {
+              ...mutation,
+              owner: mapHistoryOwner(identity, mutation.owner),
+              assignment: projectAssignmentOwner(
+                mutation.assignment,
+                mapHistoryOwner(identity, mutation.assignment.owner),
+              ),
+            }
+          : mutation.kind === "record-native-subagent-submission" ||
+              mutation.kind === "consume-native-subagent-submission"
+            ? { ...mutation, owner: mapHistoryOwner(identity, mutation.owner) }
+            : mutation,
         assertCurrent,
       ),
     prepareSessionGenerationReclaim: (identity) =>

@@ -1,4 +1,4 @@
-// Status summary tests cover aggregate status text for channels, sessions, tasks, and audit findings.
+// Status summary tests cover aggregate status text for channels, sessions, and audit findings.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
@@ -7,10 +7,6 @@ import {
   setActiveCredentialDegradedOwner,
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
-import {
-  createEmptyTaskRegistrySummary,
-  createEmptyTaskStatusSummary,
-} from "../tasks/task-registry.summary.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   registerStatusSummarySessionRowCases,
@@ -29,10 +25,6 @@ const statusSummaryMocks = vi.hoisted(() => ({
   >(() => []),
   loadExactSessionEntryReadOnly:
     vi.fn<typeof import("../config/sessions/session-accessor.js").loadExactSessionEntryReadOnly>(),
-  getInspectableTaskStatusSummaryReadOnly:
-    vi.fn<
-      typeof import("../tasks/task-registry.maintenance.js").getInspectableTaskStatusSummaryReadOnly
-    >(),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -158,11 +150,6 @@ vi.mock("../infra/system-events.js", () => ({
   peekSystemEvents: vi.fn(() => []),
 }));
 
-vi.mock("../tasks/task-registry.maintenance.js", () => ({
-  getInspectableTaskStatusSummaryReadOnly:
-    statusSummaryMocks.getInspectableTaskStatusSummaryReadOnly,
-}));
-
 vi.mock("../routing/session-key.js", async () => {
   const actual = await vi.importActual<typeof import("../routing/session-key.js")>(
     "../routing/session-key.js",
@@ -211,14 +198,6 @@ describe("getStatusSummary", () => {
     setActiveDegradedPlugins([]);
     clearActiveCredentialDegradedOwner("account", "telegram:work");
     setActiveDegradedSecretOwners([]);
-    const taskStatusSummary = createEmptyTaskStatusSummary();
-    taskStatusSummary.taskAudit.total = 1;
-    taskStatusSummary.taskAudit.warnings = 1;
-    taskStatusSummary.taskAudit.byCode.delivery_failed = 1;
-    statusSummaryMocks.getInspectableTaskStatusSummaryReadOnly.mockResolvedValue({
-      state: "ready",
-      ...taskStatusSummary,
-    });
     statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     statusSummaryMocks.buildChannelSummary.mockResolvedValue(["ok"]);
     statusSummaryMocks.resolveProviderStaticModel.mockReset();
@@ -318,8 +297,6 @@ describe("getStatusSummary", () => {
         },
       ]);
       expect(summary.channelSummary).toEqual(["ok"]);
-      expect(summary.tasks).toEqual(createEmptyTaskRegistrySummary());
-      expect(summary.taskAudit.warnings).toBe(1);
     },
   );
 
@@ -547,46 +524,6 @@ describe("getStatusSummary", () => {
     ]);
     expect(JSON.stringify(summary.degradedPlugins)).not.toContain("/private/plugins");
     expect(JSON.stringify(summary.degradedPlugins)).not.toContain("/private/host");
-  });
-
-  it("reports task schema migration state without failing status", async () => {
-    statusSummaryMocks.getInspectableTaskStatusSummaryReadOnly.mockResolvedValue({
-      state: "migration-required",
-      ...createEmptyTaskStatusSummary(),
-    });
-
-    const summary = await getStatusSummary();
-
-    expect(summary.tasks.total).toBe(0);
-    expect(summary.tasks.warning).toBe(
-      "Task history is unavailable until Gateway startup or openclaw doctor --fix repairs the state database.",
-    );
-  });
-
-  it("passes through the retained-lost task projection unchanged", async () => {
-    const cleanupAfter = Date.now() + 60_000;
-    const taskStatusSummary = createEmptyTaskStatusSummary();
-    taskStatusSummary.tasks = {
-      ...taskStatusSummary.tasks,
-      total: 1,
-      terminal: 1,
-      byStatus: {
-        ...taskStatusSummary.tasks.byStatus,
-        lost: 1,
-      },
-      byRuntime: { ...taskStatusSummary.tasks.byRuntime, subagent: 1 },
-    };
-    taskStatusSummary.taskAuditRetainedLost = { count: 1, nextCleanupAfter: cleanupAfter };
-    statusSummaryMocks.getInspectableTaskStatusSummaryReadOnly.mockResolvedValue({
-      state: "ready",
-      ...taskStatusSummary,
-    });
-
-    const summary = await getStatusSummary();
-
-    expect(summary.tasks).toEqual(taskStatusSummary.tasks);
-    expect(summary.taskAudit).toEqual(taskStatusSummary.taskAudit);
-    expect(summary.taskAuditRetainedLost).toEqual(taskStatusSummary.taskAuditRetainedLost);
   });
 
   it("skips channel summary imports when no channels are configured", async () => {

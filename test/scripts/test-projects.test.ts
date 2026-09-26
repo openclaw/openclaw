@@ -3366,7 +3366,6 @@ describe("scripts/test-projects changed-target routing", () => {
       ["src/process", "test/vitest/vitest.process.config.ts"],
       ["src/secrets", "test/vitest/vitest.secrets.config.ts"],
       ["src/shared", "test/vitest/vitest.shared-core.config.ts"],
-      ["src/tasks", "test/vitest/vitest.tasks.config.ts"],
       ["src/tui", "test/vitest/vitest.tui.config.ts"],
       ["src/utils", "test/vitest/vitest.utils.config.ts"],
       ["src/wizard", "test/vitest/vitest.wizard.config.ts"],

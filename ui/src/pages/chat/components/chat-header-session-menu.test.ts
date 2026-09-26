@@ -21,7 +21,6 @@ import {
   createTestChatPane,
 } from "../chat-pane.test-support.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
-import { createBackgroundTasksProps } from "./chat-background-tasks.ts";
 import type {
   HeaderMenuAction,
   HeaderMenuActionKind,
@@ -256,7 +255,6 @@ describe("chat header session menu", () => {
       render(
         pane.renderPaneHeader(
           createSessionWorkspaceProps(state),
-          createBackgroundTasksProps(state),
           session,
           false,
           undefined,
@@ -336,7 +334,6 @@ describe("chat header session menu", () => {
     render(
       pane.renderPaneHeader(
         createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
         session,
         false,
         undefined,
@@ -457,18 +454,18 @@ describe("chat header session menu", () => {
   });
 
   it("keeps panel and layout actions available from the session menu", async () => {
-    const showTasks = vi.fn();
+    const showFiles = vi.fn();
     const showChanges = vi.fn();
     const splitRight = vi.fn();
     const menu = await mountMenu({
       panelActions: [
         {
-          id: "background-tasks",
-          label: "Show background tasks",
+          id: "session-files",
+          label: "Show session files",
           icon: icons.listChecks,
           active: false,
           badge: 2,
-          onActivate: showTasks,
+          onActivate: showFiles,
         },
         {
           id: "changes",
@@ -491,7 +488,7 @@ describe("chat header session menu", () => {
     const panelItems = Array.from(
       panels.querySelectorAll<MenuItemElement>("wa-dropdown-item[slot='submenu']"),
     );
-    expect(panelItems.map(itemLabel)).toEqual(["Show background tasks", "Show session changes"]);
+    expect(panelItems.map(itemLabel)).toEqual(["Show session files", "Show session changes"]);
     expect(panelItems[0]?.checked).toBe(false);
     expect(panelItems[0]?.querySelector('[slot="details"]')?.textContent?.trim()).toBe("2");
     expect(
@@ -500,10 +497,10 @@ describe("chat header session menu", () => {
       ).map(itemLabel),
     ).toEqual(["Split right"]);
 
-    select(menu, "quick:panels:background-tasks");
+    select(menu, "quick:panels:session-files");
     select(menu, "quick:panels:changes");
     select(menu, "quick:layout:split-right");
-    expect(showTasks).toHaveBeenCalledOnce();
+    expect(showFiles).toHaveBeenCalledOnce();
     expect(showChanges).toHaveBeenCalledOnce();
     expect(splitRight).toHaveBeenCalledOnce();
   });
@@ -541,7 +538,7 @@ describe("chat header session menu", () => {
   });
 
   it("drills into compact menu groups without rendering side flyouts", async () => {
-    const showTasks = vi.fn();
+    const showFiles = vi.fn();
     const onOpenCommandPalette = vi.fn();
     const onSettingsChange = vi.fn<(patch: Partial<UiSettings>) => void>();
     const onAction = vi.fn<(action: HeaderMenuAction) => void>();
@@ -551,11 +548,11 @@ describe("chat header session menu", () => {
       worktreePath: "/work/openclaw",
       panelActions: [
         {
-          id: "background-tasks",
-          label: "Show background tasks",
+          id: "session-files",
+          label: "Show session files",
           icon: icons.listChecks,
           badge: 2,
-          onActivate: showTasks,
+          onActivate: showFiles,
         },
       ],
       layoutActions: [
@@ -634,11 +631,11 @@ describe("chat header session menu", () => {
     await menu.updateComplete;
     select(menu, "compact:open-panels");
     await menu.updateComplete;
-    const action = item(menu, "Show background tasks");
+    const action = item(menu, "Show session files");
     expect(action.querySelector('[slot="details"]')?.textContent?.trim()).toBe("2");
 
-    select(menu, "quick:panels:background-tasks");
-    expect(showTasks).toHaveBeenCalledOnce();
+    select(menu, "quick:panels:session-files");
+    expect(showFiles).toHaveBeenCalledOnce();
 
     select(menu, "compact:open-assign-owner");
     await menu.updateComplete;

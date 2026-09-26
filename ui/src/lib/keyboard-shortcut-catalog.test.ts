@@ -215,7 +215,6 @@ describe("keyboard shortcut catalog presentation", () => {
       workspaceFiles: "⌘⇧B",
       sideChat: "⌘⇧S",
       browserPanel: "⌘⌥⇧U",
-      tasksPanel: "⌘⌥⇧K",
       desktopPanel: "⌘⌥⇧D",
       discussionPanel: "⌘⌥⇧J",
       dashboardPanel: "⌘⌥⇧G",

@@ -1,6 +1,5 @@
 // Owns process-local agent run context, ownership, and projection state.
 import { randomUUID } from "node:crypto";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { registerListener } from "../shared/listeners.js";
 import { recordAgentEventRouting } from "./agent-event-execution-context.js";
 import {
@@ -12,9 +11,9 @@ import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js"
 import {
   areAgentRunModelsEqual,
   buildAgentRunProjectionIndex,
-  mergeProjectedAgentRunStates,
   projectedAgentRunInputKey,
   projectedRunIdentity,
+  resolveAgentRunProjectionProgressState,
 } from "./agent-run-projection.js";
 import {
   getAgentRunRegistryState,
@@ -543,6 +542,17 @@ export function hasAgentRunContextExecutionOwner(runId: string): boolean {
   );
 }
 
+/** Counts admitted executions, excluding retained display-only context. */
+export function getActiveAgentRunContextCount(): number {
+  let count = 0;
+  for (const runId of getAgentRunRegistryState().contexts.keys()) {
+    if (hasAgentRunContextExecutionOwner(runId)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 /** Live display projection also includes a producer's active-session marker. */
 export function hasLiveAgentRunContext(runId: string): boolean {
   const state = getAgentRunRegistryState();
@@ -611,28 +621,10 @@ export function resolveProjectedAgentRunProgressState(params: {
   defaultAgentId?: string;
   index?: ProjectedAgentRunIndex;
 }): ProjectedAgentRunState | undefined {
-  const index = params.index ?? buildProjectedAgentRunIndex();
-  const agentId =
-    params.agentId ??
-    params.sessionKeys.flatMap((key) => parseAgentSessionKey(key)?.agentId ?? [])[0] ??
-    params.defaultAgentId;
-  if (!agentId) {
-    return undefined;
-  }
-  const mayAdoptOwnerless =
-    params.defaultAgentId !== undefined &&
-    normalizeAgentId(agentId) === normalizeAgentId(params.defaultAgentId);
-  const statuses = params.sessionKeys.flatMap((sessionKey) => [
-    index.sessionKeys.get(projectedRunIdentity(agentId, sessionKey)),
-    ...(mayAdoptOwnerless ? [index.ownerlessSessionKeys.get(sessionKey)] : []),
-  ]);
-  if (params.sessionId !== undefined) {
-    statuses.push(index.sessionIds.get(projectedRunIdentity(agentId, params.sessionId)));
-    if (mayAdoptOwnerless) {
-      statuses.push(index.ownerlessSessionIds.get(params.sessionId));
-    }
-  }
-  return statuses.reduce(mergeProjectedAgentRunStates, undefined);
+  return resolveAgentRunProjectionProgressState({
+    ...params,
+    index: params.index ?? buildProjectedAgentRunIndex(),
+  });
 }
 
 /** Clears context state for a run that has ended or been discarded. */

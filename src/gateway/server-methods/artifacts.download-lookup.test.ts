@@ -137,7 +137,7 @@ describe("artifact download lookup", () => {
           { type: "file", url: "https://example.test/result.txt" },
           { type: "file", artifactId: managedId, title: "managed.txt" },
         ],
-        __openclaw: { seq: 2, runId: "run-output", taskId: "task-output" },
+        __openclaw: { seq: 2, runId: "run-output" },
       },
     ]);
     hoisted.resolveManagedArtifactDownload.mockResolvedValue({
@@ -151,7 +151,6 @@ describe("artifact download lookup", () => {
     const query = {
       sessionKey: "agent:main:main",
       runId: "run-output",
-      taskId: "task-output",
       messageRole: "assistant",
     };
     const summaries = expectArtifactList((await listArtifacts(query)).calls).artifacts!;
@@ -256,7 +255,6 @@ describe("artifact download lookup", () => {
 
   it.each([
     { runId: "other-run" },
-    { taskId: "other-task" },
     { messageRole: "assistant" },
     { sessionKey: "agent:main:other" },
   ])("keeps concurrent download query scopes separate: %j", async (filter) => {

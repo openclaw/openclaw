@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "What the Control UI can do today, grouped by capability with its Gateway RPC names"
 read_when:
   - Checking whether a capability exists in the Control UI
@@ -13,7 +14,7 @@ Control UI capabilities grouped by area, each with the Gateway RPC methods behin
 
 <AccordionGroup>
   <Accordion title="Chat and Talk">
-    - Subagent transcripts hide author avatars in both the main chat view and task details. Assistant and peer sender names remain visible; your name is hidden when no other human participant is known.
+    - Subagent transcripts hide author avatars in the main chat view. Assistant and peer sender names remain visible; your name is hidden when no other human participant is known.
     - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`). Archived sessions keep the composer disabled and show a banner with an **Unarchive** action before the conversation can continue.
     - Thinking controls and `/think` use the selected model's published choices and default. A model with no choices offers no effort control or default. Missing capability metadata is shown as unknown, without guessed levels; an explicit command still uses server validation. Saved overrides and matching inherited choices remain separate from the active fallback model.
     - Opening or refreshing chat requests up to 80 recent messages. Each background warming pass reads at most two inactive sessions sequentially, with up to 20 messages per session, after presented chat loads finish. Automatic warming waits for a visible conversation on the current page; dashboard-only views still warm the session you hover or keyboard-focus. Scrolling back requests up to 1,000 older messages per page and prefetches the next page. Per-message text caps and response-byte limits can reduce these counts.
@@ -44,9 +45,8 @@ Control UI capabilities grouped by area, each with the Gateway RPC methods behin
     - Onboarding memory offer: when the Control UI opens in [onboarding mode](/web/urls#other-special-documents-and-startup-modes), a one-page dialog offers to import detected memories with the same plan/apply flow; skipping leaves the settings page as the later entry point.
 
   </Accordion>
-  <Accordion title="Cron, tasks, plugins, skills, devices, exec approvals">
+  <Accordion title="Cron, plugins, skills, devices, exec approvals">
     - Automations (cron jobs): stat cards (automation count, failing count, scheduler state, next wake) above an Automations/Run history tab switch; the Automations tab lists jobs in a filterable table (All/Active/Paused, search, schedule and last-run filters, per-row action menu) with starter suggestions below, and the Run history tab shows recent runs across all automations (`cron.*`).
-    - Chat Tasks panel: the Background tasks rail groups running and finished work; selecting a rail row opens that task's live status and transcript or prompt/output inspector within **Tasks**. **Back to tasks** returns to the list; **Review** keeps the session diff separate. In Tasks, consecutive tool calls form a compact overview with operation counts and separate outcome indicators. Expand the overview for a scrollable list, then expand an individual row for its full command or input. Routine polling stays out of the overview but remains inspectable in the list.
     - Plugins: browse the installed inventory and curated store, search ClawHub, install and remove plugin code, and enable or disable installed plugins (`plugins.*`). **Install** starts immediately and accepts the staged plugin’s declared capabilities without changing your hook and model permissions. Configured install-policy warnings still require an explicit acknowledgment. Catalog categories remain available while you search. MCP server rows edit `mcp.servers` through the config methods.
     - Skills: status, enable/disable, install, API key updates (`skills.*`).
     - Devices: one inventory joins paired device records, the node catalog, and live presence (`device.pair.list`, `node.list`, `system-presence`). The Gateway host is pinned first; paired clients show connection status, roles, tokens, capabilities, and commands. Duplicate pairings collapse into an expandable group, and **Clean up N stale** bulk-removes admin-confirmed offline duplicates that were auto-approved (silent local, trusted-CIDR, or SSH-verified) or predate approval provenance. Paired rows have an **Actions** menu to copy its device ID, **Edit alias** (a non-empty operator label of up to 64 characters, preserving the device ID and client-reported name), remove its pairing (`node.pair.remove`, `device.pair.remove`), or approve/reject a pending node re-approval (`node.pair.approve`/`reject`). Device pairing requests retain their visible **Approve** and **Reject** buttons (`device.pair.*`), and mobile setup codes can be created from the same card. **Details** groups device identity, IP, scopes, token rotation/revocation, and commands into labeled facts.

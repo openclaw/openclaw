@@ -597,7 +597,6 @@ describe("private subagent completion processing receipts", () => {
         task: "synthetic continuation child",
         cleanup: "keep",
         expectsCompletionMessage: false,
-        taskRowOwnership: "required",
       });
       // Keep both producers live until the child's registration and wait request
       // are admitted; a slow socket handshake must not hide the outstanding wait.

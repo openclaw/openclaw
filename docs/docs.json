@@ -1063,10 +1063,6 @@
       "destination": "/gateway/trusted-proxy-auth"
     },
     {
-      "source": "/automation/clawflow",
-      "destination": "/automation/taskflow"
-    },
-    {
       "source": "/automation/poll",
       "destination": "/cli/message"
     },
@@ -1089,10 +1085,6 @@
     {
       "source": "/automation/gmail-pubsub",
       "destination": "/automation/cron-jobs#gmail-pubsub-integration"
-    },
-    {
-      "source": "/cli/flows",
-      "destination": "/cli/tasks#flow"
     },
     {
       "source": "/concepts/memory-qmd",
@@ -1285,6 +1277,22 @@
     {
       "source": "/ci/runner-backend-modes",
       "destination": "/ci/runners#runner-backend-modes"
+    },
+    {
+      "source": "/automation/tasks",
+      "destination": "/automation#background-execution-and-workflows"
+    },
+    {
+      "source": "/automation/taskflow",
+      "destination": "/tools/lobster"
+    },
+    {
+      "source": "/cli/tasks",
+      "destination": "/automation#background-execution-and-workflows"
+    },
+    {
+      "source": "/plugins/webhooks",
+      "destination": "/automation#background-execution-and-workflows"
     }
   ],
   "navigation": {
@@ -1912,8 +1920,6 @@
                     ]
                   },
                   "automation/imap",
-                  "automation/tasks",
-                  "automation/taskflow",
                   "automation/standing-orders",
                   "automation/hooks",
                   {
@@ -2792,7 +2798,6 @@
                       "cli/models",
                       "cli/promos",
                       "cli/sessions",
-                      "cli/tasks",
                       "cli/transcripts",
                       "cli/wiki"
                     ]

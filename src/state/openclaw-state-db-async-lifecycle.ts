@@ -102,11 +102,6 @@ export function getOpenClawDatabaseMaintenanceScope():
   return maintenanceResources.current.getStore()?.scope;
 }
 
-/** Delayed work acquires its own resources instead of inheriting the completed scope. */
-export function runOutsideOpenClawDatabaseMaintenanceScope<T>(operation: () => T): T {
-  return maintenanceResources.current.exit(operation);
-}
-
 export function isOpenClawDatabaseMaintenanceResourceOwned(
   resource: object,
   scope: OpenClawDatabaseMaintenanceScope,

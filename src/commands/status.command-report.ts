@@ -12,10 +12,6 @@ export async function buildStatusCommandReportLines(params: {
   renderTable: (input: RenderTableOptions) => string;
   width: number;
   overviewRows: Array<{ Item: string; Value: string }>;
-  showTaskMaintenanceHint: boolean;
-  taskMaintenanceHint: string;
-  taskRegistryMigrationHint?: string | null;
-  retainedLostTaskLine?: string | null;
   pluginCompatibilityLines: string[];
   pairingRecoveryLines: string[];
   modelSelectionLines: string[];
@@ -43,17 +39,6 @@ export async function buildStatusCommandReportLines(params: {
   // Prepare callbacks and column snapshots before rendering any table, as one report view.
   const overviewColumns = [...statusOverviewTableColumns];
   const overviewRows = params.overviewRows;
-  const maintenanceLines =
-    params.showTaskMaintenanceHint ||
-    params.taskRegistryMigrationHint ||
-    params.retainedLostTaskLine
-      ? [
-          "",
-          ...(params.showTaskMaintenanceHint ? [params.muted(params.taskMaintenanceHint)] : []),
-          ...(params.taskRegistryMigrationHint ? [params.taskRegistryMigrationHint] : []),
-          ...(params.retainedLostTaskLine ? [params.retainedLostTaskLine] : []),
-        ]
-      : [];
   const pluginCompatibilityLines = params.pluginCompatibilityLines;
   const pairingRecoveryLines =
     params.pairingRecoveryLines.length > 0 ? ["", ...params.pairingRecoveryLines] : [];
@@ -76,7 +61,6 @@ export async function buildStatusCommandReportLines(params: {
   const footerLines = ["", ...params.footerLines];
 
   appendStatusReportTable(report, "Overview", overviewColumns, overviewRows);
-  lines.push(...maintenanceLines);
   if (pluginCompatibilityLines.length > 0) {
     appendStatusReportLines(report, "Plugin compatibility", pluginCompatibilityLines);
   }

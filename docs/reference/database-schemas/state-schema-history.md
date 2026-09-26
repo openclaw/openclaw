@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Shared state database schema versions, their changes, and their first releases"
 read_when:
   - "Looking up which release first shipped a state schema version"

@@ -7,7 +7,6 @@ import {
   sendGatewayCronWebhook,
 } from "../gateway/server-cron-notifications.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runCronCommandJob } from "./command-runner.js";
@@ -96,7 +95,6 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
       await withOpenClawTestState(
         { layout: "state-only", prefix: "openclaw-cron-webhook-delivery-" },
         async (state) => {
-          resetTaskRegistryForTests({ persist: false });
           const storePath = state.path("cron", "jobs.json");
           const cron = new CronService({
             scheduler: createTestGatewayScheduler(),
@@ -179,7 +177,6 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             expect(receiver.requests[1]?.body).toMatchObject({ status: "error" });
           } finally {
             cron.stop();
-            resetTaskRegistryForTests({ persist: false });
           }
         },
       );
@@ -194,7 +191,6 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
       await withOpenClawTestState(
         { layout: "state-only", prefix: "openclaw-cron-failure-destination-" },
         async (state) => {
-          resetTaskRegistryForTests({ persist: false });
           const storePath = state.path("cron", "jobs.json");
           const cron = new CronService({
             scheduler: createTestGatewayScheduler(),
@@ -308,7 +304,6 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             ).toHaveLength(1);
           } finally {
             cron.stop();
-            resetTaskRegistryForTests({ persist: false });
           }
         },
       );
@@ -323,7 +318,6 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
       await withOpenClawTestState(
         { layout: "state-only", prefix: "openclaw-cron-completion-failure-" },
         async (state) => {
-          resetTaskRegistryForTests({ persist: false });
           const storePath = state.path("cron", "jobs.json");
           let now = Date.now();
           const runIsolatedAgentJob = vi.fn(async () => ({
@@ -444,7 +438,6 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             expect(receiver.requests).toHaveLength(2);
           } finally {
             cron.stop();
-            resetTaskRegistryForTests({ persist: false });
           }
         },
       );
@@ -539,7 +532,6 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
       await withOpenClawTestState(
         { layout: "state-only", prefix: "openclaw-cron-skipped-alert-" },
         async (state) => {
-          resetTaskRegistryForTests({ persist: false });
           const storePath = state.path("cron", "jobs.json");
           const cron = new CronService({
             scheduler: createTestGatewayScheduler(),
@@ -611,7 +603,6 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             });
           } finally {
             cron.stop();
-            resetTaskRegistryForTests({ persist: false });
           }
         },
       );
@@ -624,7 +615,6 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-delivery-preview-" },
       async (state) => {
-        resetTaskRegistryForTests({ persist: false });
         const cron = new CronService({
           scheduler: createTestGatewayScheduler(),
           nowMs: () => Date.now(),
@@ -671,7 +661,6 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
           });
         } finally {
           cron.stop();
-          resetTaskRegistryForTests({ persist: false });
         }
       },
     );

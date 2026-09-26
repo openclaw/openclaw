@@ -26,6 +26,7 @@ import { createCronStoreHarness } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { upsertCronJobRow } from "../store/row-codec.js";
+import * as runReceiptStore from "../store/run-receipt-store.js";
 import {
   claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
@@ -33,12 +34,12 @@ import {
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
-import * as runReceiptStore from "../store/run-receipt-store.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
+import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type { CronJob } from "../types.js";
 import { listForeignReceipts } from "./foreign-receipt-monitor.js";
+import { findCronRunRecoveryInDatabase } from "./run-history-recovery.js";
 import type { CronServiceState } from "./state.js";
-import { findCronTaskRunRecoveryInDatabase } from "./task-runs.js";
 
 const serviceUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.service);
 const schedulerClockUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.schedulerClock);
@@ -328,6 +329,7 @@ function claimMarkerlessReceipt(storePath: string, job: CronJob, startedAtMs: nu
   return runOpenClawStateWriteTransaction(({ db }) =>
     claimCronRunReceiptInDatabase({
       database: db,
+      receiptSchema: prepareCronRunReceiptWriteSchema(db),
       prepared,
       resolveAgentId: (current) => current.agentId!,
     }),
@@ -428,7 +430,7 @@ describe("cron durable run ownership", () => {
       expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBe(
         retained?.startedAtMs,
       );
-      const recovery = findCronTaskRunRecoveryInDatabase({
+      const recovery = findCronRunRecoveryInDatabase({
         database,
         jobId: job.id,
         startedAt: retained!.startedAtMs,
@@ -881,7 +883,7 @@ describe("cron durable run ownership", () => {
       consecutiveErrors: 10,
     });
     expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "error" });
-    const recovered = findCronTaskRunRecoveryInDatabase({
+    const recovered = findCronRunRecoveryInDatabase({
       database: openOpenClawStateDatabase().db,
       jobId: job.id,
       startedAt: persisted!.state.lastRunAtMs!,

@@ -101,12 +101,12 @@ const transitionRequesterSettleWakeBatch = (
   return true;
 };
 
-const completeRequesterSettleWakeBatch = (
+const completeRequesterSettleWakeBatch = async (
   context: SubagentLifecycleWakeContext,
   entries: readonly SubagentRunRecord[],
   rearmGeneration?: number,
   outcome?: SubagentAnnounceDeliveryResult,
-) => {
+): Promise<boolean> => {
   const params = context.options;
   if (
     !isCurrentRequesterSettleWakeBatch(
@@ -119,16 +119,8 @@ const completeRequesterSettleWakeBatch = (
     return false;
   }
   if (outcome) {
-    settleRequesterCompletionBatch({
-      entries: entries.map((subagent) => {
-        const resolution = params.resolveSubagentTask(subagent);
-        if (resolution.lookup !== "available") {
-          throw new Error(
-            "subagent completion owner unavailable before settlement: " + subagent.runId,
-          );
-        }
-        return { subagent, taskId: resolution.task?.taskId };
-      }),
+    await settleRequesterCompletionBatch({
+      entries: entries.map((subagent) => ({ subagent })),
       outcome,
       isCurrent: () =>
         isCurrentRequesterSettleWakeBatch(
@@ -167,7 +159,18 @@ const completeRequesterSettleWakeBatch = (
       throw error;
     }
   }
-  releaseRequesterSettleWakeBatch(context, entries, rearmGeneration);
+  // The commit receipt remains authoritative even if acknowledgement arrives
+  // after replacement. Release only resources still owned by these rows.
+  releaseRequesterSettleWakeBatch(
+    context,
+    entries.filter((entry) => {
+      const current = params.runs.get(entry.runId);
+      return (
+        current === entry || (current === undefined && !context.newerGenerationOwnsSession(entry))
+      );
+    }),
+    rearmGeneration,
+  );
   return true;
 };
 
@@ -436,91 +439,103 @@ export function scheduleRequesterSettleWake(
   runWithoutOwnedSessionTranscriptWrites(() => {
     void context
       .runRequesterSettleWake(entry, async () => {
-        // Admission may wait behind restored work. Revalidate the durable block
-        // after that wait, not only when the wake was initially scheduled.
-        if (
-          isCompletedRequesterDeliveryBlocked(entry) &&
-          entry.requesterSettleWake?.requesterYieldBatch !== true
-        ) {
-          return false;
-        }
-        const pending = getPendingWakeCommit(context, entry);
-        if (pending) {
-          retryPendingWakeCommit(context, pending);
-          return false;
-        }
-        return params.maybeWakeRequesterAfterAllChildrenSettled({
-          requesterSessionKey,
-          requesterOrigin: entry.requesterOrigin,
-          settledEntry: entry,
-          transitionBatch: (batch, state) =>
-            commitRequesterWake(
+        try {
+          // Admission may wait behind restored work. Revalidate the durable block
+          // after that wait, not only when the wake was initially scheduled.
+          if (
+            isCompletedRequesterDeliveryBlocked(entry) &&
+            entry.requesterSettleWake?.requesterYieldBatch !== true
+          ) {
+            return;
+          }
+          const pending = getPendingWakeCommit(context, entry);
+          if (pending) {
+            await retryPendingWakeCommit(context, pending);
+            return;
+          }
+          await params.maybeWakeRequesterAfterAllChildrenSettled({
+            requesterSessionKey,
+            requesterOrigin: entry.requesterOrigin,
+            settledEntry: entry,
+            transitionBatch: (batch, state) =>
+              commitRequesterWake(
+                context,
+                batch,
+                state.rearmGeneration,
+                (members) => transitionRequesterSettleWakeBatch(context, members, state),
+                state.nextAttemptAt !== undefined &&
+                  batch.every((member) => member.requesterSettleWake?.status === "dispatching"),
+              ),
+            completeBatch: (batch, rearmGeneration, outcome, onCommitted) =>
+              commitRequesterWake(
+                context,
+                batch,
+                rearmGeneration,
+                async (members) => {
+                  const committed = await completeRequesterSettleWakeBatch(
+                    context,
+                    members,
+                    rearmGeneration,
+                    outcome,
+                  );
+                  if (committed) {
+                    onCommitted?.();
+                  }
+                  return committed;
+                },
+                true,
+                outcome === undefined,
+              ),
+          });
+        } catch (error: unknown) {
+          // Restart admission defers the durable wake to startup; it is not a delivery failure.
+          if (isGatewayRestartDrainError(error)) {
+            return;
+          }
+          const safeError = buildSafeLifecycleErrorMeta(error);
+          if (shouldReportRequesterSettleWakeFailure(context, entry, safeError)) {
+            params.warn("requester settle wake failed", {
+              error: safeError,
+              runId: maskLifecycleIdentifier(runId, "run"),
+              requesterSessionKey: maskLifecycleIdentifier(requesterSessionKey, "session"),
+            });
+          }
+          const current = params.runs.get(runId);
+          if (
+            getPendingWakeCommit(context, entry) ||
+            !admittedWake ||
+            current !== entry ||
+            current.requesterSettleWake !== admittedWake
+          ) {
+            return;
+          }
+          try {
+            await commitRequesterWake(
               context,
-              batch,
-              state.rearmGeneration,
-              (members) => transitionRequesterSettleWakeBatch(context, members, state),
-              state.nextAttemptAt !== undefined &&
-                batch.every((member) => member.requesterSettleWake?.status === "dispatching"),
-            ),
-          completeBatch: (batch, rearmGeneration, outcome, onCommitted) =>
-            commitRequesterWake(
-              context,
-              batch,
-              rearmGeneration,
-              (members) => {
-                const committed = completeRequesterSettleWakeBatch(
-                  context,
-                  members,
-                  rearmGeneration,
-                  outcome,
-                );
-                if (committed) {
-                  onCommitted?.();
-                }
-                return committed;
-              },
+              admittedBatch,
+              admittedWake.rearmGeneration,
+              (members) =>
+                completeRequesterSettleWakeBatch(context, members, admittedWake.rearmGeneration, {
+                  delivered: false,
+                  path: "none",
+                  error: safeError.message,
+                }),
               true,
-            ),
-        });
+            );
+          } catch (settleError) {
+            params.warn("failed to persist requester settle wake rejection", {
+              error: buildSafeLifecycleErrorMeta(settleError),
+              runId: maskLifecycleIdentifier(runId, "run"),
+              requesterSessionKey: maskLifecycleIdentifier(requesterSessionKey, "session"),
+            });
+          }
+        }
       })
       .catch((error: unknown) => {
-        // Restart admission defers the durable wake to startup; it is not a delivery failure.
-        if (isGatewayRestartDrainError(error)) {
-          return;
-        }
-        const safeError = buildSafeLifecycleErrorMeta(error);
-        if (shouldReportRequesterSettleWakeFailure(context, entry, safeError)) {
-          params.warn("requester settle wake failed", {
-            error: safeError,
-            runId: maskLifecycleIdentifier(runId, "run"),
-            requesterSessionKey: maskLifecycleIdentifier(requesterSessionKey, "session"),
-          });
-        }
-        const current = params.runs.get(runId);
-        if (
-          getPendingWakeCommit(context, entry) ||
-          !admittedWake ||
-          current !== entry ||
-          current.requesterSettleWake !== admittedWake
-        ) {
-          return;
-        }
-        try {
-          commitRequesterWake(
-            context,
-            admittedBatch,
-            admittedWake.rearmGeneration,
-            (members) =>
-              completeRequesterSettleWakeBatch(context, members, admittedWake.rearmGeneration, {
-                delivered: false,
-                path: "none",
-                error: safeError.message,
-              }),
-            true,
-          );
-        } catch (settleError) {
-          params.warn("failed to persist requester settle wake rejection", {
-            error: buildSafeLifecycleErrorMeta(settleError),
+        // Admission can reject before the tracked wake callback begins.
+        if (!isGatewayRestartDrainError(error)) {
+          params.warn("requester settle wake admission failed", {
+            error: buildSafeLifecycleErrorMeta(error),
             runId: maskLifecycleIdentifier(runId, "run"),
             requesterSessionKey: maskLifecycleIdentifier(requesterSessionKey, "session"),
           });

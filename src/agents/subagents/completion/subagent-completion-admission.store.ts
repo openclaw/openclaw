@@ -1,87 +1,51 @@
-import {
-  bindDeliveryQueueEntry,
-  loadDeliveryQueueEntryInDatabase,
-  upsertBoundDeliveryQueueEntryInDatabase,
-} from "../../../infra/delivery-queue-sqlite-bound.js";
-import {
-  getDeliveryQueueEntryOwnersInDatabase,
-  type DeliveryQueueStoredStatus,
-} from "../../../infra/delivery-queue-sqlite.kernel.js";
+import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { DeliveryQueueStoredStatus } from "../../../infra/delivery-queue-sqlite.kernel.js";
 import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
+import type { QueuedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
+import type { SessionDeliveryWorkerOperations } from "../../../infra/session-delivery-queue.worker-contract.js";
 import {
-  prepareClaimedSessionDelivery,
-  SESSION_DELIVERY_QUEUE_NAME,
-  type QueuedSessionDelivery,
-} from "../../../infra/session-delivery-queue.records.js";
-import { deferSqlitePostCommitPublication } from "../../../infra/sqlite-post-commit.js";
+  createSqliteWorkerOperationAdmission,
+  type SqliteWorkerOperationAdmission,
+} from "../../../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { resolveEventSessionKey } from "../../../routing/session-key.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "../../../state/openclaw-state-db.js";
+import type { OpenClawStateDatabaseOptions } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import { publishTaskRecordAfterAtomicStore } from "../../../tasks/runtime-internal.js";
-import { resolveRequiredCompletionDeliveryFailureTerminalResult } from "../../../tasks/task-completion-contract.js";
-import { formatTaskBlockedFollowupMessage } from "../../../tasks/task-executor-policy.js";
-import { syncFlowFromTaskAfterTaskMutation } from "../../../tasks/task-registry-state.js";
-import {
-  bindTaskRecord,
-  findTaskRecordByRunIdForViewInDatabase,
-  readTaskRecord,
-  upsertTaskRunRowInDatabase,
-} from "../../../tasks/task-registry.store.kernel.js";
-import type { TaskRecord } from "../../../tasks/task-registry.types.js";
-import { resolveTaskCleanupAfter } from "../../../tasks/task-retention.js";
+import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
+import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import {
-  ensureDeliveryState,
-  isCompletedRequesterDeliveryBlocked,
-} from "../registry/subagent-delivery-state.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
-import {
-  resolveFinalizedSubagentTaskState,
-  resolveSubagentTaskTerminalStatus,
-} from "../registry/subagent-registry-completion.js";
-import { updateSubagentArchiveAtMs } from "../registry/subagent-registry-helpers.js";
-import {
-  clearSubagentPendingDelivery,
-  loadPendingFinalDeliveryPayload,
-  markRequesterSettleWakePending,
-} from "../registry/subagent-registry-lifecycle-delivery.js";
-import { subagentRuns } from "../registry/subagent-registry-memory.js";
+  getSubagentRunsForChildSession,
+  subagentRuns,
+} from "../registry/subagent-registry-memory.js";
+import { withSubagentRegistryWriteAuthority } from "../registry/subagent-registry-persistence.js";
 import { publishSubagentRunsAfterAtomicStore } from "../registry/subagent-registry-state.js";
-import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import {
-  deleteSubagentRunRowInDatabase,
-  upsertSubagentRunRowInDatabase,
-} from "../registry/subagent-registry.store.kernel.js";
-import {
-  loadSubagentRunsForChildSessionFromSqlite,
-  readSubagentRun,
-} from "../registry/subagent-registry.store.sqlite.js";
+  rowToSubagentRunRecord,
+  type SubagentRunSqliteRow,
+} from "../registry/subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
+import { retiredCancellationEndedAt } from "./subagent-completion-mutation.kernel.js";
+import type {
+  BlockSubagentCompletionRequest,
+  SubagentCompletionMutation,
+  SubagentCompletionMutationResult,
+} from "./subagent-completion-mutation.types.js";
 
 const log = createSubsystemLogger("subagents/completion");
+class SubagentCompletionSourceChangedError extends Error {}
 
-export const SUSPENDED_RETENTION_MS = 7 * 24 * 60 * 60_000;
-
-type AdmissionTestHooks = {
-  afterBind?: () => unknown;
-  afterMutation?: (
-    phase: "queue" | "subagent" | "task",
-    database: OpenClawStateDatabase,
-  ) => unknown;
-};
-
-function invokeSynchronousHook(hook: (() => unknown) | undefined): void {
-  const result = hook?.();
-  if (result && typeof (result as PromiseLike<unknown>).then === "function") {
-    throw new Error("subagent completion admission transaction hooks must be synchronous");
-  }
-}
+type AdmissionReceipt =
+  SessionDeliveryWorkerOperations["sessionDelivery.admitSubagentCompletion"]["output"];
+type MutationReceipt = SubagentCompletionMutationResult & { writeId: string };
+type CompletionCommand = {
+  [Key in "sessionDelivery.admitSubagentCompletion" | "sessionDelivery.mutateSubagentCompletion"]: {
+    type: Key;
+    input: SessionDeliveryWorkerOperations[Key]["input"];
+  };
+}["sessionDelivery.admitSubagentCompletion" | "sessionDelivery.mutateSubagentCompletion"];
 
 function replaceCommittedSubagent(subagent: SubagentRunRecord): void {
   const live = subagentRuns.get(subagent.runId);
@@ -95,638 +59,351 @@ function replaceCommittedSubagent(subagent: SubagentRunRecord): void {
   }
 }
 
-function publishCommittedSubagent(
-  subagent: SubagentRunRecord,
-  deferredObserverEvents: Array<() => void> = [],
-): Array<() => void> {
+export function publishCommittedRecords(subagent: SubagentRunRecord, databasePath?: string): void {
   replaceCommittedSubagent(subagent);
-  publishSubagentRunsAfterAtomicStore(subagentRuns, [subagent.runId], deferredObserverEvents);
-  return deferredObserverEvents;
+  const events: Array<() => void> = [];
+  publishSubagentRunsAfterAtomicStore(subagentRuns, [subagent.runId], events, databasePath);
+  events.forEach((emit) => emit());
 }
 
-export function publishCommittedRecords(subagent: SubagentRunRecord, task: TaskRecord): void {
-  const deferredObserverEvents: Array<() => void> = [];
-  publishCommittedSubagent(subagent, deferredObserverEvents);
-  const published = publishTaskRecordAfterAtomicStore(task, { deferredObserverEvents });
-  syncFlowFromTaskAfterTaskMutation(published, "atomic completion admission");
-  for (const emitObserverEvent of deferredObserverEvents) {
-    emitObserverEvent();
-  }
-}
-
-function assertCorrelatedEntry(params: {
-  queueEntry: QueuedSessionDelivery;
-  subagent: SubagentRunRecord;
-  task: TaskRecord;
-}): void {
-  const owner = params.queueEntry.kind === "agentTurn" ? params.queueEntry.owner : undefined;
-  const delivery = params.subagent.delivery;
+function parseNativeRow(row: unknown): SubagentRunSqliteRow {
   if (
-    !owner ||
-    owner.kind !== "subagent_completion" ||
-    owner.runId !== params.subagent.runId ||
-    owner.taskId !== params.task.taskId ||
-    owner.generation !== delivery?.generation ||
-    owner.deadlineAt !== delivery.deadlineAt ||
-    params.queueEntry.id !== delivery.queueId ||
-    params.task.deliveryStatus !== "session_queued"
+    !isRecord(row) ||
+    typeof row.run_id !== "string" ||
+    typeof row.child_session_key !== "string" ||
+    typeof row.requester_session_key !== "string" ||
+    typeof row.created_at !== "number" ||
+    typeof row.payload_json !== "string" ||
+    (row.controller_session_key !== null && typeof row.controller_session_key !== "string") ||
+    (row.requester_store_path !== null && typeof row.requester_store_path !== "string") ||
+    (row.controller_store_path !== null && typeof row.controller_store_path !== "string")
   ) {
-    throw new Error("subagent completion admission records do not share one owner generation");
+    throw new Error("Subagent completion acknowledgment has an invalid native record");
+  }
+  return {
+    run_id: row.run_id,
+    child_session_key: row.child_session_key,
+    requester_session_key: row.requester_session_key,
+    controller_session_key: row.controller_session_key,
+    requester_store_path: row.requester_store_path,
+    controller_store_path: row.controller_store_path,
+    created_at: row.created_at,
+    payload_json: row.payload_json,
+  };
+}
+
+function parseAdmissionReceipt(value: unknown, writeId: string, runId: string): AdmissionReceipt {
+  if (
+    !isRecord(value) ||
+    value.writeId !== writeId ||
+    typeof value.claimed !== "boolean" ||
+    typeof value.status !== "string"
+  ) {
+    throw new Error("Subagent completion acknowledgment does not identify its write");
+  }
+  const row = parseNativeRow(value.row);
+  if (row.run_id !== runId) {
+    throw new Error("Subagent completion acknowledged another native owner");
+  }
+  return { writeId, claimed: value.claimed, status: value.status, row };
+}
+
+function parseMutationReceipt(
+  value: unknown,
+  writeId: string,
+  runIds: readonly string[],
+): MutationReceipt {
+  if (
+    !isRecord(value) ||
+    value.writeId !== writeId ||
+    (typeof value.applied !== "boolean" && value.applied !== null) ||
+    !Array.isArray(value.records) ||
+    !Array.isArray(value.retiredRunIds) ||
+    !Array.isArray(value.queueIds) ||
+    !value.retiredRunIds.every(
+      (id): id is string => typeof id === "string" && runIds.includes(id),
+    ) ||
+    !value.queueIds.every((id): id is string => typeof id === "string")
+  ) {
+    throw new Error("Subagent completion mutation acknowledgment does not identify its write");
+  }
+  const records = value.records.map((record) => {
+    if (
+      !isRecord(record) ||
+      (record.cleanupHandled !== undefined && typeof record.cleanupHandled !== "boolean")
+    ) {
+      throw new Error("Subagent completion acknowledgment has invalid publication facts");
+    }
+    const row = parseNativeRow(record.row);
+    if (!runIds.includes(row.run_id)) {
+      throw new Error("Subagent completion acknowledged another native owner");
+    }
+    return { row, cleanupHandled: record.cleanupHandled };
+  });
+  return {
+    writeId,
+    applied: value.applied,
+    records,
+    retiredRunIds: value.retiredRunIds,
+    queueIds: value.queueIds,
+  };
+}
+
+async function executeCompletionCommand<T>(
+  context: OpenClawStateWorkerContext,
+  command: CompletionCommand,
+  assertCurrent: () => void,
+  parse: (value: unknown) => T,
+): Promise<T> {
+  let admission: SqliteWorkerOperationAdmission | undefined;
+  try {
+    return await runOpenClawStateWorkerOperation(
+      context,
+      async (scope) => parse(await scope.execute(command)),
+      {
+        assertCurrent,
+        createAdmission: () => {
+          let phase: "waiting" | "transaction" | "commit" = "waiting";
+          admission = createSqliteWorkerOperationAdmission((request, grant) => {
+            if (
+              request.facts !== command.input.writeId ||
+              !(
+                (phase === "waiting" && request.stage === "transaction") ||
+                (phase === "transaction" && request.stage === "commit")
+              )
+            ) {
+              throw new Error("Subagent completion write authority requested out of order");
+            }
+            assertCurrent();
+            if (!grant()) {
+              throw new Error("Subagent completion write authority expired");
+            }
+            phase = request.stage === "transaction" ? "transaction" : "commit";
+          });
+          return {
+            admission,
+            nativeLocations: [
+              context.admission.databasePath,
+              context.admission.identity.canonicalPath,
+            ],
+          };
+        },
+      },
+    );
+  } catch (error) {
+    const committed = admission?.committed;
+    if (!committed) {
+      throw error;
+    }
+    // Broker failure joins native settlement; a lost reply cannot revoke committed work.
+    return parse(committed.facts);
   }
 }
 
-/**
- * Commits the physical queue generation, logical completion owner, and task
- * projection as one database-only transaction on one exact shared-state handle.
- */
-export function admitSubagentCompletionDelivery(params: {
+export async function admitSubagentCompletionDelivery(params: {
   queueEntry: QueuedSessionDelivery;
+  expected: SubagentRunRecord;
   subagent: SubagentRunRecord;
-  task: TaskRecord;
-  databaseOptions?: OpenClawStateDatabaseOptions;
-  /** Transaction cut points used by the real-store crash-consistency tests. */
-  testHooks?: AdmissionTestHooks;
-}): { claimed: boolean; status: DeliveryQueueStoredStatus } {
-  assertCorrelatedEntry(params);
-  const boundQueue = bindDeliveryQueueEntry({
-    queueName: SESSION_DELIVERY_QUEUE_NAME,
-    entry: params.queueEntry,
-    insertOnly: true,
+  context: OpenClawStateWorkerContext;
+  assertCurrent: () => void;
+}): Promise<{ claimed: boolean; status: DeliveryQueueStoredStatus; subagent: SubagentRunRecord }> {
+  const input = structuredClone({
+    writeId: randomUUID(),
+    queueEntry: params.queueEntry,
+    expected: params.expected,
+    subagent: params.subagent,
   });
-  const boundSubagent = bindSubagentRunRecord(params.subagent);
-  const boundTask = bindTaskRecord(params.task);
-  invokeSynchronousHook(params.testHooks?.afterBind);
+  const receipt = await executeCompletionCommand(
+    params.context,
+    { type: "sessionDelivery.admitSubagentCompletion", input },
+    params.assertCurrent,
+    (value) => parseAdmissionReceipt(value, input.writeId, input.subagent.runId),
+  );
+  const subagent = rowToSubagentRunRecord(receipt.row);
+  if (!subagent) {
+    throw new Error("Subagent completion acknowledged an undecodable native record");
+  }
+  return { claimed: receipt.claimed, status: receipt.status, subagent };
+}
 
-  return runOpenClawStateWriteTransaction(
-    (database) => {
-      const claimed = upsertBoundDeliveryQueueEntryInDatabase(boundQueue, database);
-      invokeSynchronousHook(() => params.testHooks?.afterMutation?.("queue", database));
-      if (!claimed) {
-        const existing = loadDeliveryQueueEntryInDatabase(
-          database,
-          SESSION_DELIVERY_QUEUE_NAME,
-          params.queueEntry.id,
-        ) as QueuedSessionDelivery | null;
-        const expectedOwner =
-          params.queueEntry.kind === "agentTurn" ? params.queueEntry.owner : undefined;
-        const existingOwner = existing?.kind === "agentTurn" ? existing.owner : undefined;
-        if (
-          !existingOwner ||
-          !expectedOwner ||
-          existingOwner.kind !== expectedOwner.kind ||
-          existingOwner.runId !== expectedOwner.runId ||
-          existingOwner.taskId !== expectedOwner.taskId ||
-          existingOwner.generation !== expectedOwner.generation ||
-          existingOwner.deadlineAt !== expectedOwner.deadlineAt
-        ) {
-          throw new Error(`session delivery queue conflict for ${params.queueEntry.id}`);
+type CompletionMutationOptions = {
+  databaseOptions?: OpenClawStateDatabaseOptions;
+  assertCurrent?: () => void;
+};
+
+async function mutateCompletion(
+  entries: readonly SubagentRunRecord[],
+  mutation: SubagentCompletionMutation,
+  options: CompletionMutationOptions = {},
+): Promise<boolean | null> {
+  const selected = entries.map((entry) => ({ entry, snapshot: structuredClone(entry) }));
+  const runIds = selected.map(({ snapshot }) => snapshot.runId);
+  const context = captureOpenClawStateWorkerContext({
+    path: options.databaseOptions?.database?.path ?? options.databaseOptions?.path,
+    env: options.databaseOptions?.env,
+  });
+  const input = structuredClone({ writeId: randomUUID(), mutation });
+  const sourceIsCurrent = () =>
+    selected.every(
+      ({ entry, snapshot }) =>
+        subagentRuns.get(snapshot.runId) === entry &&
+        isDeepStrictEqual(entry, snapshot) &&
+        (retiredCancellationEndedAt(snapshot, Date.now()) === undefined ||
+          ![...getSubagentRunsForChildSession(snapshot.childSessionKey)].some(
+            (candidate) => compareSubagentRunGeneration(candidate, snapshot) > 0,
+          )),
+    );
+  return withSubagentRegistryWriteAuthority(
+    runIds,
+    {
+      context,
+      assertCurrent: () => {
+        options.assertCurrent?.();
+        if (!sourceIsCurrent()) {
+          throw new SubagentCompletionSourceChangedError(
+            "Subagent completion source changed during mutation",
+          );
+        }
+      },
+    },
+    async (authority) => {
+      const receipt = await executeCompletionCommand(
+        context,
+        { type: "sessionDelivery.mutateSubagentCompletion", input },
+        authority.assertCurrent,
+        (value) => parseMutationReceipt(value, input.writeId, runIds),
+      );
+      try {
+        authority.assertDatabase();
+        options.assertCurrent?.();
+      } catch {
+        return receipt.applied;
+      }
+      if (
+        receipt.applied === true &&
+        authority.currentRunIds().length === runIds.length &&
+        sourceIsCurrent()
+      ) {
+        const changed = [...receipt.records.map(({ row }) => row.run_id), ...receipt.retiredRunIds];
+        const records = receipt.records.map(({ row, cleanupHandled }) => {
+          const record = rowToSubagentRunRecord(row);
+          if (!record) {
+            throw new Error("Subagent completion acknowledged an undecodable native record");
+          }
+          record.cleanupHandled = cleanupHandled;
+          return record;
+        });
+        records.forEach(replaceCommittedSubagent);
+        receipt.retiredRunIds.forEach((id) => subagentRuns.delete(id));
+        if (changed.length) {
+          const events: Array<() => void> = [];
+          publishSubagentRunsAfterAtomicStore(
+            subagentRuns,
+            changed,
+            events,
+            context.admission.databasePath,
+          );
+          events.forEach((emit) => emit());
         }
       }
-      upsertSubagentRunRowInDatabase(database, boundSubagent);
-      invokeSynchronousHook(() => params.testHooks?.afterMutation?.("subagent", database));
-      upsertTaskRunRowInDatabase(database, boundTask);
-      invokeSynchronousHook(() => params.testHooks?.afterMutation?.("task", database));
-      const status =
-        getDeliveryQueueEntryOwnersInDatabase(
-          database,
-          [SESSION_DELIVERY_QUEUE_NAME],
-          params.queueEntry.id,
-        ).get(SESSION_DELIVERY_QUEUE_NAME)?.status ?? "pending";
-      return { claimed, status };
-    },
-    params.databaseOptions,
-    { operationLabel: "subagent completion delivery admission" },
-  );
-}
-
-/** Atomically consumes a correlated queue settlement into registry and task projections. */
-export function settleSubagentCompletionDelivery(params: {
-  subagent: SubagentRunRecord;
-  task: TaskRecord;
-  databaseOptions?: OpenClawStateDatabaseOptions;
-  mutateSubagent?: (entry: SubagentRunRecord) => unknown;
-}): void {
-  const boundTask = bindTaskRecord(params.task);
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      invokeSynchronousHook(() => params.mutateSubagent?.(params.subagent));
-      upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(params.subagent));
-      upsertTaskRunRowInDatabase(database, boundTask);
-    },
-    params.databaseOptions,
-    { operationLabel: "subagent completion delivery settlement" },
-  );
-}
-
-function retiredCancellationEndedAt(subagent: SubagentRunRecord, now: number): number | undefined {
-  const endedAt = subagent.execution.endedAt;
-  if (
-    subagent.execution.status !== "terminal" ||
-    subagent.execution.outcome?.status !== "error" ||
-    subagent.endedReason !== SUBAGENT_ENDED_REASON_KILLED ||
-    typeof endedAt !== "number" ||
-    !Number.isFinite(endedAt) ||
-    typeof subagent.cleanupCompletedAt !== "number" ||
-    !Number.isFinite(subagent.cleanupCompletedAt) ||
-    subagent.cleanupCompletedAt < endedAt ||
-    subagent.pauseReason ||
-    subagent.killIntent ||
-    subagent.terminalOwner ||
-    subagent.execution.restartRecovery ||
-    subagent.suppressAnnounceReason === "steer-restart" ||
-    subagent.expectsCompletionMessage !== true ||
-    subagent.completion?.required !== true ||
-    !subagent.requesterSettleWake ||
-    subagent.delivery?.status !== "pending" ||
-    subagent.delivery.queueId ||
-    resolveTaskCleanupAfter({ status: "cancelled", endedAt, createdAt: subagent.createdAt }) > now
-  ) {
-    return undefined;
-  }
-  return endedAt;
-}
-
-function ownsTasklessCompletion(
-  database: OpenClawStateDatabase,
-  subagent: SubagentRunRecord,
-  expected: SubagentRunRecord,
-): boolean {
-  // Announce records transport observations before committing suspension; they do
-  // not transfer ownership of the result, execution, or requester wake.
-  const ownerPayload = ({ delivery, ...entry }: SubagentRunRecord) =>
-    bindSubagentRunRecord({
-      ...entry,
-      delivery: delivery && {
-        ...delivery,
-        disposition: undefined,
-        enqueuedAt: undefined,
-        lastError: undefined,
-        lastDropReason: undefined,
-      },
-    }).payload_json;
-  const newerSibling = (candidate: SubagentRunRecord) =>
-    candidate.childSessionKey === subagent.childSessionKey &&
-    compareSubagentRunGeneration(candidate, subagent) > 0;
-  return (
-    subagentRuns.get(subagent.runId) === expected &&
-    ownerPayload(subagent) === ownerPayload(expected) &&
-    !findTaskRecordByRunIdForViewInDatabase(database.db, subagent.taskRunId ?? subagent.runId) &&
-    ![...subagentRuns.values()].some(newerSibling) &&
-    !loadSubagentRunsForChildSessionFromSqlite(subagent.childSessionKey, database).some(
-      newerSibling,
-    )
-  );
-}
-
-/** A changed historical owner stays deferred instead of falling through to repeat cleanup. */
-export function reconcileRetiredSubagentCancellation(
-  expected: SubagentRunRecord,
-  now: number,
-): boolean | undefined {
-  const endedAt = retiredCancellationEndedAt(expected, now);
-  const marker = expected.killReconciliation;
-  if (
-    endedAt === undefined ||
-    !marker ||
-    !Number.isFinite(marker.killedAt) ||
-    marker.killedAt > endedAt
-  ) {
-    return undefined;
-  }
-  return runOpenClawStateWriteTransaction((database) => {
-    const subagent = readSubagentRun(database, expected.runId);
-    if (!subagent || retiredCancellationEndedAt(subagent, now) !== endedAt) {
-      return false;
-    }
-    // Retained tasks still use ordinary cancellation and requester-wake ordering.
-    if (findTaskRecordByRunIdForViewInDatabase(database.db, subagent.taskRunId ?? subagent.runId)) {
-      return undefined;
-    }
-    if (!ownsTasklessCompletion(database, subagent, expected)) {
-      return false;
-    }
-    subagent.killReconciliation = undefined;
-    upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(subagent));
-    deferSqlitePostCommitPublication(database.db, () => {
-      publishCommittedSubagent(subagent).forEach((emit) => emit());
-    });
-    return true;
-  });
-}
-
-type BlockSubagentCompletionParams = {
-  subagent: SubagentRunRecord;
-  taskId: string;
-  reason: string;
-  suspendedReason?: "expiry" | "permanent_failure";
-  storeReplaced?: true;
-  lastDropReason?: NonNullable<SubagentRunRecord["delivery"]>["lastDropReason"];
-  disposition?: NonNullable<SubagentRunRecord["delivery"]>["disposition"];
-  databaseOptions?: OpenClawStateDatabaseOptions;
-};
-
-type CompletionMutation = {
-  subagent: SubagentRunRecord;
-  task?: TaskRecord;
-  queued?: QueuedSessionDelivery;
-  retire?: boolean;
-};
-
-// One mutation kernel serves ordinary blocking and whole requester-batch settlement.
-// It only prepares records; its caller owns the transaction and final publication.
-function prepareBlockedSubagentCompletion(
-  database: OpenClawStateDatabase,
-  params: BlockSubagentCompletionParams,
-  now: number,
-  subagent: SubagentRunRecord | null,
-): CompletionMutation | undefined {
-  const generation = params.subagent.delivery?.generation ?? 1;
-  const task = readTaskRecord(database.db, params.taskId);
-  if (subagent && !task) {
-    // Missing task ownership cannot recover on retry. Fence the exact persisted
-    // completion and retain its result instead of recreating historical work.
-    if (
-      subagent.execution.status !== "terminal" ||
-      !Number.isFinite(subagent.execution.endedAt) ||
-      subagent.pauseReason ||
-      subagent.killIntent ||
-      subagent.killReconciliation ||
-      subagent.terminalOwner ||
-      subagent.execution.restartRecovery ||
-      subagent.suppressAnnounceReason === "steer-restart" ||
-      subagent.expectsCompletionMessage !== true ||
-      subagent.completion?.required !== true ||
-      !["pending", "in_progress"].includes(subagent.delivery?.status ?? "pending") ||
-      subagent.delivery?.deliveredAt !== undefined ||
-      subagent.delivery?.announcedAt !== undefined ||
-      !ownsTasklessCompletion(database, subagent, params.subagent)
-    ) {
-      return undefined;
-    }
-    const delivery = ensureDeliveryState(subagent);
-    Object.assign(delivery, {
-      status: "discarded" as const,
-      disposition: "permanent_failure" as const,
-      discardReason: "task-missing" as const,
-      discardedAt: now,
-      lastError: "task-missing",
-      nextAttemptAt: undefined,
-      queueId: undefined,
-    });
-    Object.assign(subagent, {
-      suppressCompletionDelivery: true,
-      // Revoke the in-flight announce tail; cleanupCompletedAt fences restarts.
-      cleanupHandled: false,
-      cleanupCompletedAt: now,
-      requesterSettleWake: undefined,
-      requesterTurnRunId: undefined,
-      requesterTurnYielded: undefined,
-      retireAfterRequesterTurn: undefined,
-      wakeOnDescendantSettle: undefined,
-    });
-    updateSubagentArchiveAtMs(subagent);
-    return { subagent };
-  }
-  if (
-    !subagent ||
-    !task ||
-    task.runtime !== "subagent" ||
-    subagent.execution.status !== "terminal" ||
-    subagent.expectsCompletionMessage !== true ||
-    (subagent.taskRunId ?? subagent.runId) !== task.runId ||
-    (subagent.delivery?.generation ?? 1) !== generation
-  ) {
-    return undefined;
-  }
-  const successful = task.status === "succeeded" && subagent.execution.outcome?.status === "ok";
-  // A cancelled yielded run may never capture a reply. Compare execution
-  // outcomes, not reply readiness; missing or superseded owners still refuse settlement.
-  if (
-    !successful &&
-    ((params.suspendedReason !== undefined && !params.storeReplaced) ||
-      !["cancelled", "failed", "timed_out"].includes(task.status) ||
-      resolveSubagentTaskTerminalStatus(subagent) !== task.status ||
-      !["pending", "in_progress", "failed"].includes(subagent.delivery?.status ?? "pending"))
-  ) {
-    return undefined;
-  }
-  const delivery = ensureDeliveryState(subagent);
-  if (
-    params.storeReplaced &&
-    (delivery.status === "delivered" ||
-      delivery.announcedAt !== undefined ||
-      delivery.deliveredAt !== undefined)
-  ) {
-    return undefined;
-  }
-  delivery.payload ??= loadPendingFinalDeliveryPayload(subagent);
-  Object.assign(delivery, {
-    status: params.suspendedReason ? ("suspended" as const) : ("failed" as const),
-    disposition: params.storeReplaced
-      ? ("intentional_non_delivery" as const)
-      : params.suspendedReason
-        ? ("permanent_failure" as const)
-        : (params.disposition ?? delivery.disposition),
-    lastError: params.reason,
-    deliveredAt: undefined,
-    announcedAt: undefined,
-    suspendedAt: params.suspendedReason ? (delivery.suspendedAt ?? now) : delivery.suspendedAt,
-    suspendedReason: params.suspendedReason ?? delivery.suspendedReason,
-    lastDropReason: params.lastDropReason ?? delivery.lastDropReason,
-    nextAttemptAt: undefined,
-    queueId: undefined,
-  });
-  Object.assign(subagent, { cleanupHandled: false, wakeOnDescendantSettle: undefined });
-  if (params.storeReplaced) {
-    subagent.requesterSettleWake = undefined;
-  } else if (params.suspendedReason) {
-    if (isCompletedRequesterDeliveryBlocked(subagent)) {
-      // This requester already ran. An ordinary settle wake would replay it;
-      // a separately owned yield batch still has genuine unfinished work.
-      if (subagent.requesterSettleWake?.requesterYieldBatch !== true) {
-        subagent.requesterSettleWake = undefined;
-      }
-    } else {
-      markRequesterSettleWakePending(subagent);
-    }
-  } else {
-    subagent.suppressCompletionDelivery = true;
-  }
-  if (successful && !params.storeReplaced) {
-    const terminal = resolveRequiredCompletionDeliveryFailureTerminalResult(params.reason);
-    Object.assign(task, {
-      ...terminal,
-      error: params.reason,
-      cleanupAfter: Math.max(task.cleanupAfter ?? 0, now + SUSPENDED_RETENTION_MS),
-    });
-  }
-  Object.assign(task, {
-    deliveryStatus: "failed" as const,
-    lastEventAt: now,
-  });
-  const text =
-    successful && !params.storeReplaced && task.notifyPolicy !== "silent"
-      ? formatTaskBlockedFollowupMessage(task)
-      : null;
-  const queued = text
-    ? prepareClaimedSessionDelivery(
-        {
-          kind: "systemEvent",
-          sessionKey: resolveEventSessionKey(task.requesterSessionKey),
-          ...(task.requesterAgentId ? { agentId: task.requesterAgentId } : {}),
-          text,
-          ...(subagent.requesterOrigin ? { deliveryContext: subagent.requesterOrigin } : {}),
-          idempotencyKey: `subagent-completion-blocked:${task.taskId}:generation:${generation}`,
-        },
-        0,
-        now,
-      )
-    : undefined;
-  return { subagent, task, queued };
-}
-
-function commitCompletionMutations(
-  database: OpenClawStateDatabase,
-  mutations: readonly CompletionMutation[],
-  options?: OpenClawStateDatabaseOptions,
-): void {
-  for (const { subagent, task, queued, retire } of mutations) {
-    if (queued) {
-      upsertBoundDeliveryQueueEntryInDatabase(
-        bindDeliveryQueueEntry({
-          queueName: SESSION_DELIVERY_QUEUE_NAME,
-          entry: queued,
-          insertOnly: true,
-        }),
-        database,
-      );
-    }
-    if (task) {
-      upsertTaskRunRowInDatabase(database, bindTaskRecord(task));
-    }
-    if (retire) {
-      deleteSubagentRunRowInDatabase(database, subagent.runId);
-    } else {
-      upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(subagent));
-    }
-  }
-  deferSqlitePostCommitPublication(database.db, () => {
-    const events: Array<() => void> = [];
-    for (const { subagent, retire } of mutations) {
-      if (retire) {
-        subagentRuns.delete(subagent.runId);
-      } else {
-        replaceCommittedSubagent(subagent);
-      }
-    }
-    publishSubagentRunsAfterAtomicStore(
-      subagentRuns,
-      mutations.map(({ subagent }) => subagent.runId),
-      events,
-    );
-    const tasks = mutations.flatMap(({ task }) =>
-      task ? [publishTaskRecordAfterAtomicStore(task, { deferredObserverEvents: events })] : [],
-    );
-    for (const task of tasks) {
-      syncFlowFromTaskAfterTaskMutation(task, "atomic completion settlement");
-    }
-    for (const emit of events) {
-      emit();
-    }
-    for (const { subagent } of mutations) {
-      if (subagent.delivery?.discardReason === "task-missing") {
-        log.warn("Subagent completion retired: task-missing", {
-          runId: subagent.runId,
-          disposition: "task-missing",
-        });
-      }
-    }
-    for (const { queued } of mutations) {
-      if (queued) {
-        void (async () => {
-          const queueContext = captureOpenClawStateWorkerContext({
-            path: database.path,
-            env: options?.env,
-          });
-          await scheduleSessionDelivery(queued.id, queueContext);
-        })().catch((error: unknown) => {
+      for (const id of receipt.queueIds) {
+        try {
+          await scheduleSessionDelivery(id, context);
+        } catch (error) {
           log.warn("Subagent completion remains queued after scheduling failed", {
-            queueId: queued.id,
+            queueId: id,
             error,
           });
-        });
+        }
       }
-    }
-  });
+      return receipt.applied;
+    },
+  );
 }
 
-export function blockSubagentCompletionDelivery(params: BlockSubagentCompletionParams): boolean {
-  return runOpenClawStateWriteTransaction((database) => {
-    const mutation = prepareBlockedSubagentCompletion(
-      database,
+export async function settleSubagentCompletionDelivery(
+  params: {
+    subagent: SubagentRunRecord;
+  } & CompletionMutationOptions,
+): Promise<void> {
+  const current = subagentRuns.get(params.subagent.runId);
+  if (!current) {
+    throw new Error("Subagent completion owner is unavailable");
+  }
+  const subagent = structuredClone(params.subagent);
+  await mutateCompletion(
+    [current],
+    { kind: "settle", expected: structuredClone(current), subagent },
+    params,
+  );
+}
+
+export async function blockSubagentCompletionDelivery(
+  params: BlockSubagentCompletionRequest & CompletionMutationOptions,
+): Promise<boolean> {
+  if (subagentRuns.get(params.subagent.runId) !== params.subagent) {
+    return false;
+  }
+  if (params.storeReplaced) {
+    subagentRuns.retireCompletionAuthority(params.subagent);
+  }
+  const { databaseOptions: _databaseOptions, assertCurrent: _assertCurrent, ...request } = params;
+  return (
+    (await mutateCompletion(
+      [params.subagent],
+      { kind: "block", params: request, now: Date.now() },
       params,
-      Date.now(),
-      readSubagentRun(database, params.subagent.runId),
-    );
-    if (!mutation) {
+    )) === true
+  );
+}
+
+export async function reconcileRetiredSubagentCancellation(
+  expected: SubagentRunRecord,
+  now: number,
+): Promise<boolean | undefined> {
+  const endedAt = retiredCancellationEndedAt(expected, now);
+  if (endedAt === undefined || !expected.killReconciliation) {
+    return undefined;
+  }
+  if (subagentRuns.get(expected.runId) !== expected) {
+    return false;
+  }
+  try {
+    const result = await mutateCompletion([expected], {
+      kind: "reconcileCancelled",
+      expected,
+      now,
+    });
+    return result ?? undefined;
+  } catch (error) {
+    if (error instanceof SubagentCompletionSourceChangedError) {
       return false;
     }
-    commitCompletionMutations(database, [mutation], params.databaseOptions);
-    return true;
-  }, params.databaseOptions);
+    throw error;
+  }
 }
 
-/** Commits delivery, task, blocked alert, wake consumption, and retirement as one exact batch. */
-export function settleRequesterCompletionBatch(params: {
-  entries: readonly { subagent: SubagentRunRecord; taskId?: string }[];
+export async function settleRequesterCompletionBatch(params: {
+  entries: readonly { subagent: SubagentRunRecord }[];
   outcome: SubagentAnnounceDeliveryResult;
   isCurrent(): boolean;
   databaseOptions?: OpenClawStateDatabaseOptions;
-}): void {
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      if (!params.isCurrent()) {
-        throw new Error("subagent completion owner changed before settlement");
-      }
-      const now = Date.now();
-      const entries = params.entries;
-      const ids = new Set(entries.map(({ subagent }) => subagent.runId));
-      const first = entries[0]?.subagent;
-      const cohort = first?.requesterSettleWake?.batchRunIds?.toSorted().join("\0");
-      const checkedOmittedIds = new Set<string>();
-      const mutations = entries.map(({ subagent: expected, taskId }): CompletionMutation => {
-        const changedOwner = () =>
-          new Error("subagent completion owner changed before settlement: " + expected.runId);
-        const subagent = readSubagentRun(database, expected.runId);
-        if (
-          !subagent ||
-          !subagent.requesterSettleWake ||
-          subagent.requesterSessionKey !== first?.requesterSessionKey ||
-          subagent.requesterAgentId !== first?.requesterAgentId ||
-          subagent.requesterSettleWake.rearmGeneration !==
-            first?.requesterSettleWake?.rearmGeneration ||
-          subagent.requesterSettleWake.batchRunIds?.toSorted().join("\0") !== cohort ||
-          subagentRuns.get(expected.runId) !== expected ||
-          bindSubagentRunRecord(subagent).payload_json !==
-            bindSubagentRunRecord(expected).payload_json
-        ) {
-          throw changedOwner();
-        }
-        // A caller may omit retired rows, never a surviving member of the same frozen wave.
-        for (const id of subagent.requesterSettleWake?.batchRunIds ?? []) {
-          if (!ids.has(id) && !checkedOmittedIds.has(id)) {
-            const member = readSubagentRun(database, id);
-            if (
-              member?.requesterSettleWake &&
-              member.requesterSettleWake.rearmGeneration ===
-                subagent.requesterSettleWake?.rearmGeneration
-            ) {
-              throw changedOwner();
-            }
-            // Planning performs no writes, so this check holds for the remaining same-wave rows.
-            checkedOmittedIds.add(id);
-          }
-        }
-        // Decoding restores restart defaults, not the active process's cleanup ownership.
-        subagent.cleanupHandled = expected.cleanupHandled;
-        // An exact requester receipt can arrive after expiry transferred this result to its wake.
-        const acknowledgeExpiredDelivery =
-          params.outcome.delivered &&
-          subagent.delivery?.status === "suspended" &&
-          subagent.delivery.suspendedReason === "expiry";
-        let mutation: CompletionMutation = { subagent };
-        if (
-          subagent.pauseReason !== "sessions_yield" &&
-          subagent.expectsCompletionMessage === true &&
-          (["pending", "in_progress"].includes(subagent.delivery?.status ?? "pending") ||
-            acknowledgeExpiredDelivery)
-        ) {
-          if (params.outcome.delivered) {
-            const task = readTaskRecord(database.db, taskId ?? "");
-            if (!task) {
-              const missing = prepareBlockedSubagentCompletion(
-                database,
-                { subagent: expected, taskId: taskId ?? "", reason: "task-missing" },
-                now,
-                subagent,
-              );
-              if (!missing) {
-                throw changedOwner();
-              }
-              return missing;
-            }
-            if (
-              task.runtime !== "subagent" ||
-              task.runId !== (subagent.taskRunId ?? subagent.runId)
-            ) {
-              throw changedOwner();
-            }
-            const delivery = ensureDeliveryState(subagent);
-            const deliveredAt = params.outcome.deliveredAt ?? now;
-            Object.assign(delivery, {
-              status: "delivered",
-              disposition: "delivered",
-              deliveredAt,
-              announcedAt: deliveredAt,
-              lastDropReason: undefined,
-            });
-            clearSubagentPendingDelivery(subagent);
-            if (acknowledgeExpiredDelivery) {
-              const finalized = resolveFinalizedSubagentTaskState(subagent);
-              if (!finalized || finalized.status !== task.status) {
-                throw changedOwner();
-              }
-              // Restore the execution/result verdict, not an unconditional success.
-              Object.assign(task, {
-                error: finalized.error,
-                terminalOutcome: finalized.terminalOutcome ?? undefined,
-                terminalSummary: finalized.terminalSummary ?? undefined,
-              });
-            }
-            Object.assign(task, { deliveryStatus: "delivered", lastEventAt: now });
-            mutation.task = task;
-          } else {
-            const blocked = prepareBlockedSubagentCompletion(
-              database,
-              {
-                subagent: expected,
-                taskId: taskId ?? "",
-                reason:
-                  params.outcome.error ?? params.outcome.reason ?? "requester settle wake failed",
-                disposition: params.outcome.disposition,
-                storeReplaced: params.outcome.storeReplaced,
-                suspendedReason: params.outcome.storeReplaced ? "permanent_failure" : undefined,
-              },
-              now,
-              subagent,
-            );
-            if (!blocked) {
-              throw changedOwner();
-            }
-            mutation = blocked;
-          }
-        }
-        const settled = mutation.subagent;
-        if (settled.delivery?.discardReason === "task-missing") {
-          return mutation;
-        }
-        if (settled.pauseReason !== "sessions_yield") {
-          if (settled.requesterTurnRunId && settled.expectsCompletionMessage === true) {
-            settled.retireAfterRequesterTurn =
-              settled.retireAfterRequesterTurn === true ||
-              settled.requesterSettleWake?.retireAfterSettle === true
-                ? true
-                : undefined;
-          } else {
-            mutation.retire = settled.requesterSettleWake?.retireAfterSettle === true;
-          }
-        }
-        settled.requesterSettleWake = undefined;
-        return mutation;
-      });
-      commitCompletionMutations(database, mutations, params.databaseOptions);
+}): Promise<void> {
+  await mutateCompletion(
+    params.entries.map(({ subagent }) => subagent),
+    {
+      kind: "requesterBatch",
+      entries: params.entries,
+      outcome: params.outcome,
+      now: Date.now(),
     },
-    params.databaseOptions,
-    { operationLabel: "requester completion batch settlement" },
+    {
+      databaseOptions: params.databaseOptions,
+      assertCurrent: () => {
+        if (!params.isCurrent()) {
+          throw new Error("Subagent completion owner changed before settlement");
+        }
+      },
+    },
   );
 }

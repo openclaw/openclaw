@@ -1,7 +1,7 @@
 /**
  * Subagent run manager.
  *
- * Waits for child runs, records terminal outcomes, creates task-runtime entries, and archives completed sessions.
+ * Waits for child runs, records native terminal outcomes, and archives completed sessions.
  */
 import {
   getAgentEventLifecycleGeneration,
@@ -10,8 +10,6 @@ import {
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { clearGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
-import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
-import { finalizeTaskRunByRunId } from "../../../tasks/detached-task-runtime.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import { isSwarmRunActive, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -149,31 +147,6 @@ class SubagentRunManager extends SubagentLaunchManager {
     const entriesByChildSessionKey = new Map<string, SubagentRunRecord>();
     const queuedCollectorRunIds: string[] = [];
     const entrySnapshots = new Map<SubagentRunRecord, SubagentRunRecord>();
-    const pendingTaskFinalizations: Array<{ entry: SubagentRunRecord; endedAt: number }> = [];
-    const finalizeKilledTask = (entry: SubagentRunRecord, endedAt: number) => {
-      const taskResolution = this.options.resolveSubagentTask(entry);
-      const task = taskResolution.lookup === "available" ? taskResolution.task : undefined;
-      const targetRunId = task?.runId ?? entry.taskRunId ?? entry.runId;
-      const targetSessionKey = task?.childSessionKey ?? entry.childSessionKey;
-      try {
-        finalizeTaskRunByRunId({
-          runId: targetRunId,
-          runtime: "subagent",
-          sessionKey: targetSessionKey,
-          status: "cancelled",
-          endedAt,
-          lastEventAt: endedAt,
-          error: SUBAGENT_KILL_TASK_ERROR,
-          suppressDelivery: entry.killReconciliation?.suppressTaskDelivery === true,
-        });
-      } catch (err) {
-        log.warn("failed to finalize killed subagent task run", {
-          err,
-          runId: targetRunId,
-          childSessionKey: targetSessionKey,
-        });
-      }
-    };
     for (const runId of runIds) {
       this.options.clearPendingLifecycleError(runId);
       this.options.clearPendingLifecycleTimeout(runId);
@@ -274,7 +247,6 @@ class SubagentRunManager extends SubagentLaunchManager {
       } else if (!entry.collect) {
         updateSubagentArchiveAtMs(entry, this.options.getRuntimeConfig());
       }
-      pendingTaskFinalizations.push({ entry, endedAt: taskEndedAt });
       if (!entriesByChildSessionKey.has(entry.childSessionKey)) {
         entriesByChildSessionKey.set(entry.childSessionKey, entry);
       }
@@ -290,9 +262,6 @@ class SubagentRunManager extends SubagentLaunchManager {
           this.restoreRunRecord(entry, snapshot);
         }
         throw error;
-      }
-      for (const pending of pendingTaskFinalizations) {
-        finalizeKilledTask(pending.entry, pending.endedAt);
       }
       for (const runId of queuedCollectorRunIds) {
         const entry = this.options.runs.get(runId);

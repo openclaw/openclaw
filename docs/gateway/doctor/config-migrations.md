@@ -165,6 +165,51 @@ from the refusal. See [Database schemas](/reference/database-schemas#schema-bump
 for the publication contract and the remaining risk for an old CLI stalled
 beyond the grace period.
 
+## Native Codex recovery after Tasks removal
+
+The Codex plugin's `codex-native-task-assignments` Doctor migration preserves
+recoverable native child work when upgrading from the Tasks runtime. It runs
+through the existing plugin state-migration lifecycle, including update-time
+Doctor. After a direct binary replacement, run `openclaw doctor --fix` before
+starting the new Gateway.
+
+During maintenance, Doctor reads a snapshot of
+`~/.openclaw/state/openclaw.sqlite` and selects legacy `task_runs` records with
+`runtime = 'subagent'` and `task_kind = 'codex-native'`. It imports only uniquely
+identified, unacknowledged work whose `nativeHistory` owner stamp matches the
+current requester's physical session, lifecycle revision, and Codex connection.
+These ownership stamps are already present in published 2026.9.4 state.
+The original native parent may differ
+after native thread rotation, but rotation cannot supply missing requester
+ownership. Initial children and follow-ups already promoted into Task rows keep
+their exact child and turn locators. A persisted terminal summary, status, and
+completion time remain available when native history no longer contains the
+result.
+
+Terminal deliveries marked `failed` after exhausting their retry budget remain
+historical and are not automatically restarted.
+
+The migration writes `nativeSubagentAssignments` and the per-source Task ID
+marker `nativeSubagentTaskImport` together in one compare-and-apply operation on
+the existing `app-server-thread-bindings` plugin state. A changed binding is
+preserved and reported for retry. Acknowledgement can consume the assignment,
+while the import marker survives acknowledgement, native rotation, clear, and
+reset so unchanged legacy rows cannot resurrect completed work. The shared
+database is declared in the migration's backup inventory; every source Task row
+remains byte-identical. There is no new SQL table, schema-version bump, Tasks
+runtime reader, or replacement Task ledger. Native execution and completion
+delivery continue to require current requester authority.
+
+Unstamped records, including 2026.9.2-era rows, cannot establish the missing
+physical requester and connection history. Doctor also preserves ambiguous
+duplicate run IDs and records whose ownership no longer matches. It emits a
+recoverable warning identifying the Task and native run, without disabling the
+Gateway or unrelated sessions. Inspect the child in its original native Codex
+account, or restore the pre-update backup with its matching OpenClaw version to
+finish delivery. After resolving a repairable binding conflict, run
+`openclaw doctor --fix` again. The migration does not guess ownership from the
+current parent alone.
+
 ## Replay a July 2026 config upgrade
 
 From a source checkout with its pnpm dependencies installed, run:

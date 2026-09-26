@@ -164,18 +164,6 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
   if (command.type === "operatorApprovals.history") {
     return { ...command, input: { ...command.input } };
   }
-  if (command.type === "tasks.mutationSnapshot") {
-    const scope = command.input;
-    return {
-      type: command.type,
-      input:
-        scope === undefined
-          ? undefined
-          : "taskId" in scope
-            ? { ...scope }
-            : scope.map((entry) => Object.assign({}, entry)),
-    };
-  }
   if (
     command.type === "githubPublication.knownPullRequestUrls" ||
     command.type === "githubRepository.knownPullRequestUrls"
@@ -347,22 +335,6 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   }
   if (command.type === "deliveryQueue.outbound") {
     return bytes + Buffer.byteLength(command.id ?? "", "utf8");
-  }
-  if (command.type === "tasks.mutationSnapshot") {
-    const scope = command.input;
-    const scopes = scope === undefined ? [] : "taskId" in scope ? [scope] : scope;
-    return scopes.reduce(
-      (total, entry) =>
-        total +
-        Buffer.byteLength(entry.taskId, "utf8") +
-        Buffer.byteLength(entry.flowId ?? "", "utf8") +
-        Buffer.byteLength(entry.runId ?? "", "utf8") +
-        Buffer.byteLength(entry.childSessionKey ?? "", "utf8"),
-      bytes,
-    );
-  }
-  if (command.type === "tasks.retentionSource") {
-    return bytes + Buffer.byteLength(command.taskId, "utf8");
   }
   if (
     command.type === "githubPublication.request" ||

@@ -1,9 +1,5 @@
 // Preserve module setup before modules that consume it.
-// oxfmt-ignore
-import {
-  resetAgentTaskRegistryForTests,
-  restoreAgentTaskRegistryRuntimeAfterTests,
-} from "./agent.test-harness.js";
+import "./agent.test-harness.js";
 import { afterAll, beforeAll } from "vitest";
 import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
@@ -25,7 +21,6 @@ import "./agent.caller-authority.test-utils.js";
 import "./agent.dispatch-clock.test-utils.js";
 
 let metadataOwner: GatewayPluginMetadataOwner | undefined;
-resetAgentTaskRegistryForTests();
 beforeAll(() => {
   // Handler cases share the real startup inventory; no case changes plugin
   // installation, so admission can consume prepared metadata like a live Gateway.
@@ -37,6 +32,5 @@ beforeAll(() => {
   setGatewayPluginMetadataSnapshot(snapshot, { config: {} });
 });
 afterAll(async () => {
-  restoreAgentTaskRegistryRuntimeAfterTests();
   await metadataOwner?.close();
 });

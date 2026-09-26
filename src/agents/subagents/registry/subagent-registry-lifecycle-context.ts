@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { callGateway as defaultCallGateway } from "../../../gateway/call.js";
 // This type-only leaf exists solely to keep lifecycle sibling modules from importing the controller.
 // Keeping the controller out of their dependency graph satisfies the architecture cycle gate.
-import type { DetachedTaskFindResult } from "../../../tasks/detached-task-runtime-contract.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -29,9 +28,6 @@ export type SubagentLifecycleOptions = {
     matches?: (entry: SubagentRunRecord) => boolean,
   ): SubagentRunRecord | null;
   suppressAnnounceForSteerRestart(entry?: SubagentRunRecord): boolean;
-  /** Synchronous permission/revocation commits retain their native contract. */
-  resolveSubagentTask(entry: SubagentRunRecord): DetachedTaskFindResult;
-  resolveSubagentTaskAsync(entry: SubagentRunRecord): Promise<DetachedTaskFindResult>;
   shouldEmitEndedHookForRun(args: {
     entry: SubagentRunRecord;
     reason: SubagentLifecycleEndedReason;
@@ -103,7 +99,9 @@ export interface SubagentLifecycleAnnounceCleanupContext
 export type PendingRequesterSettleWakeCommit = {
   entries: readonly SubagentRunRecord[];
   isCurrent(entry: SubagentRunRecord): boolean;
-  commit(entries: readonly SubagentRunRecord[]): boolean;
+  commit(entries: readonly SubagentRunRecord[]): boolean | Promise<boolean>;
+  retryWholeBatch: boolean;
+  inFlight?: Promise<void>;
   failures: number;
   nextAttemptAt: number;
   /** One sustained-failure report was emitted for this retry episode. */

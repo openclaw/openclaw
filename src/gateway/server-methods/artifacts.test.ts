@@ -1,11 +1,10 @@
-// Artifact method tests cover collection from transcript messages, run/task
+// Artifact method tests cover collection from transcript messages, run
 // session lookup, list/get/download responses, and validation errors.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { artifactsHandlers } from "./artifacts.js";
 import {
   assistantFileMessage,
-  assistantImageMessage,
   expectArtifactList,
   expectErrorDetails,
   expectFields,
@@ -17,16 +16,11 @@ import {
 } from "./artifacts.test-support.js";
 
 const hoisted = vi.hoisted(() => ({
-  getTaskById: vi.fn(),
   loadSessionEntry: vi.fn(),
   resolveManagedArtifactDownload: vi.fn(),
   resolveManagedUrlDownload: vi.fn(),
   visitSessionMessagesAsync: vi.fn(),
   resolveSessionKeyForRun: vi.fn(),
-}));
-
-vi.mock("../../tasks/task-registry-read.js", () => ({
-  prepareTaskRegistryRead: async () => ({ getTaskById: hoisted.getTaskById }),
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -78,7 +72,6 @@ function createResponder() {
 }
 
 type ArtifactMethod = "artifacts.list" | "artifacts.get" | "artifacts.download";
-type ArtifactResponderCalls = ReturnType<typeof createResponder>["calls"];
 
 async function invokeArtifactHandler(
   method: ArtifactMethod,
@@ -121,27 +114,12 @@ async function downloadArtifact(
   return await invokeArtifactHandler("artifacts.download", params, options);
 }
 
-function expectArtifactScopeNotFound(
-  calls: ArtifactResponderCalls,
-  params: { message?: string } = {},
-): void {
-  expect(calls[0]?.ok).toBe(false);
-  expect(hoisted.getTaskById).toHaveBeenCalledWith("task-1");
-  expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
-  expect(hoisted.resolveSessionKeyForRun).not.toHaveBeenCalled();
-  if (params.message) {
-    expectFields(calls[0]?.error, { message: params.message });
-  }
-  expectFields(expectErrorDetails(calls), { type: "artifact_scope_not_found" });
-}
-
 describe("artifacts RPC handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hoisted.resolveSessionKeyForRun.mockReset();
     hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
     hoisted.resolveManagedUrlDownload.mockResolvedValue(null);
-    hoisted.getTaskById.mockReturnValue(undefined);
     hoisted.loadSessionEntry.mockReturnValue({
       storePath: "/tmp/sessions.json",
       entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
@@ -299,76 +277,6 @@ describe("artifacts RPC handlers", () => {
     });
   });
 
-  it("uses the compatibility owner instead of the executor for a global task requester", async () => {
-    hoisted.getTaskById.mockReturnValue({
-      agentId: "work",
-      requesterSessionKey: "global",
-      ownerKey: "global",
-    });
-    mockedMessages([assistantFileMessage({ title: "task.txt", taskId: "task-global" })]);
-
-    const { calls } = await listArtifacts(
-      { taskId: "task-global" },
-      {
-        id: "global-task-agent-scope",
-        context: runtimeContext({
-          session: { scope: "global" },
-          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-        }),
-      },
-    );
-
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "main" });
-    expectFields(expectFirstArtifact(calls), { sessionKey: "global", taskId: "task-global" });
-  });
-
-  it("returns typed selection-required instead of adopting the task executor", async () => {
-    hoisted.getTaskById.mockReturnValue({
-      agentId: "work",
-      requesterSessionKey: "global",
-      ownerKey: "global",
-    });
-    const { calls } = await listArtifacts(
-      { taskId: "task-global" },
-      {
-        context: runtimeContext({
-          session: { scope: "global" },
-          agents: {
-            ownership: "explicit",
-            list: [{ id: "ops" }, { id: "work" }],
-          },
-        }),
-      },
-    );
-
-    expect(calls[0]).toMatchObject({
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: expect.stringContaining("agent") },
-    });
-    expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
-  });
-
-  it("translates a keyless task selection failure into INVALID_REQUEST", async () => {
-    hoisted.getTaskById.mockReturnValue({ runId: "run-keyless" });
-
-    const { calls } = await listArtifacts(
-      { taskId: "task-keyless" },
-      {
-        context: runtimeContext({
-          agents: {
-            ownership: "explicit",
-            list: [{ id: "ops" }, { id: "research" }],
-          },
-        }),
-      },
-    );
-
-    expect(calls[0]).toMatchObject({
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: expect.stringContaining("agent") },
-    });
-  });
-
   it.each([
     { type: "file", data: "", sizeBytes: 0, title: "direct.bin" },
     {
@@ -504,224 +412,6 @@ describe("artifacts RPC handlers", () => {
     expectFields(expectOkPayload(downloaded.calls), {
       url: `${url}?mediaTicket=ticket`,
       expiresAt: "2026-07-28T05:00:00.000Z",
-    });
-  });
-
-  it("preserves task agent scope when taskId resolves through runId", async () => {
-    hoisted.getTaskById.mockReturnValue({
-      runId: "run-for-task-1",
-      agentId: "work",
-    });
-    hoisted.resolveSessionKeyForRun.mockReturnValue("acp:run-for-task-1");
-    mockedMessages([
-      assistantImageMessage({ alt: "task-result.png", data: "dGFyZ2V0", taskId: "task-1" }),
-    ]);
-    const { calls } = await listArtifacts({ taskId: "task-1" }, { id: "task-run-agent-scope" });
-
-    expect(calls[0]?.ok).toBe(true);
-    expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-for-task-1", {
-      agentId: "work",
-    });
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:work:acp:run-for-task-1");
-  });
-
-  it("resolves taskId queries through prepared task reads and filters artifacts by messageTaskId", async () => {
-    hoisted.getTaskById.mockReturnValue({
-      requesterSessionKey: "agent:main:main",
-      runId: "run-for-task-1",
-      agentId: "main",
-    });
-    mockedMessages([
-      {
-        role: "assistant",
-        content: [{ type: "image", data: "dGFyZ2V0", alt: "task-result.png" }],
-        __openclaw: { seq: 2, messageTaskId: "task-1" },
-      },
-      {
-        role: "assistant",
-        content: [{ type: "image", data: "b3RoZXI=", alt: "other-task.png" }],
-        __openclaw: { seq: 3, messageTaskId: "task-2" },
-      },
-      {
-        role: "assistant",
-        content: [{ type: "image", data: "dW50YWdnZWQ=", alt: "untagged.png" }],
-        __openclaw: { seq: 4 },
-      },
-    ]);
-
-    const list = createResponder();
-    await artifactsHandlers["artifacts.list"]?.({
-      req: { type: "req", id: "task-list", method: "artifacts.list", params: {} },
-      params: { taskId: "task-1" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond: list.respond,
-      context: {} as never,
-    });
-
-    expect(list.calls[0]?.ok).toBe(true);
-    expect(hoisted.getTaskById).toHaveBeenCalledWith("task-1");
-    expect(hoisted.resolveSessionKeyForRun).not.toHaveBeenCalled();
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:main:main");
-    const listPayload = list.calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
-    expect(listPayload.artifacts).toHaveLength(1);
-    expectFields(listPayload.artifacts?.[0], {
-      taskId: "task-1",
-      title: "task-result.png",
-    });
-
-    const artifactId = listPayload.artifacts?.[0]?.id as string | undefined;
-    const artifactIdString = requireNonEmptyString(artifactId, "expected task artifact id");
-
-    const get = await getArtifact(
-      { taskId: "task-1", artifactId: artifactIdString },
-      { id: "task-get" },
-    );
-    const getPayload = expectOkPayload(get.calls) as { artifact?: Record<string, unknown> };
-    expectFields(getPayload.artifact, {
-      id: artifactId,
-      taskId: "task-1",
-      title: "task-result.png",
-    });
-
-    const download = await downloadArtifact(
-      { taskId: "task-1", artifactId },
-      { id: "task-download" },
-    );
-    const downloadPayload = expectOkPayload(download.calls) as {
-      artifact?: Record<string, unknown>;
-    };
-    expectFields(downloadPayload, {
-      encoding: "base64",
-      data: "dGFyZ2V0",
-    });
-    expectFields(downloadPayload.artifact, {
-      id: artifactId,
-      taskId: "task-1",
-      title: "task-result.png",
-    });
-  });
-
-  it("does not resolve taskId artifact queries when agentId does not match the task", async () => {
-    hoisted.getTaskById.mockReturnValue({
-      requesterSessionKey: "agent:work:main",
-      runId: "run-for-task-1",
-      agentId: "work",
-    });
-    const { calls } = await listArtifacts(
-      { taskId: "task-1", agentId: "main" },
-      { id: "task-agent-mismatch" },
-    );
-
-    expectArtifactScopeNotFound(calls, {
-      message: "no session found for artifact query",
-    });
-  });
-
-  it("keeps cross-agent task artifacts scoped to the requester transcript", async () => {
-    hoisted.getTaskById.mockReturnValue({
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      runId: "run-for-task-1",
-      agentId: "worker",
-      requesterAgentId: "main",
-    });
-    mockedMessages([
-      assistantImageMessage({ alt: "task-result.png", data: "dGFyZ2V0", taskId: "task-1" }),
-    ]);
-
-    const { calls } = await listArtifacts(
-      { taskId: "task-1", agentId: "worker" },
-      { id: "task-cross-agent-requester-session" },
-    );
-
-    expect(hoisted.resolveSessionKeyForRun).not.toHaveBeenCalled();
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:main:main");
-    expectFields(expectFirstArtifact(calls), {
-      taskId: "task-1",
-      sessionKey: "agent:main:main",
-    });
-  });
-
-  it("uses the requester agent store for cross-agent global task artifacts", async () => {
-    hoisted.getTaskById.mockReturnValue({
-      requesterSessionKey: "global",
-      ownerKey: "global",
-      runId: "run-for-task-1",
-      agentId: "worker",
-      requesterAgentId: "main",
-    });
-    mockedMessages([
-      assistantImageMessage({ alt: "task-result.png", data: "dGFyZ2V0", taskId: "task-1" }),
-    ]);
-
-    const { calls } = await listArtifacts(
-      { taskId: "task-1", agentId: "worker" },
-      {
-        id: "task-cross-agent-global-requester",
-        context: runtimeContext({
-          session: { scope: "global" },
-          agents: { list: [{ id: "main", default: true }, { id: "worker" }] },
-        }),
-      },
-    );
-
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "main" });
-    expectFields(expectFirstArtifact(calls), {
-      taskId: "task-1",
-      sessionKey: "global",
-    });
-  });
-
-  it("derives taskId artifact scope from requesterSessionKey when task agentId is absent", async () => {
-    hoisted.getTaskById.mockReturnValue({
-      requesterSessionKey: "agent:work:main",
-      runId: "run-for-task-1",
-    });
-    const { calls } = await listArtifacts(
-      { taskId: "task-1", agentId: "main" },
-      { id: "task-requester-agent-mismatch" },
-    );
-
-    expectArtifactScopeNotFound(calls);
-  });
-
-  it("treats legacy task requester session keys as the main agent for artifact scope", async () => {
-    hoisted.getTaskById.mockReturnValue({
-      requesterSessionKey: "main",
-      runId: "run-for-task-1",
-    });
-    const { calls } = await listArtifacts(
-      { taskId: "task-1", agentId: "work" },
-      { id: "task-legacy-requester-agent-mismatch" },
-    );
-
-    expectArtifactScopeNotFound(calls);
-  });
-
-  it("uses the configured default agent for legacy task requester session keys", async () => {
-    hoisted.getTaskById.mockReturnValue({
-      requesterSessionKey: "main",
-      runId: "run-for-task-1",
-    });
-    mockedMessages([
-      assistantImageMessage({ alt: "task-result.png", data: "dGFyZ2V0", taskId: "task-1" }),
-    ]);
-
-    const { calls } = await listArtifacts(
-      { taskId: "task-1", agentId: "work" },
-      {
-        id: "task-legacy-default-agent",
-        context: runtimeContext({
-          agents: { list: [{ id: "work", default: true }] },
-        }),
-      },
-    );
-
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:work:main");
-    expectFields(expectFirstArtifact(calls), {
-      taskId: "task-1",
-      sessionKey: "agent:work:main",
     });
   });
 

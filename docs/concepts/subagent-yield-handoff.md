@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Ownership of subagent completion and progress when a requester yields"
 read_when:
   - Changing nested subagent completion or sessions_yield behavior
@@ -126,48 +127,22 @@ with its scheduler-owned continuation.
 
 ## Progress after yield
 
-Yield closes the old execution, not the delegated work. On Discord and Telegram,
-an interactive requester can hand its existing progress card to the core task
-presenter. The message ID, checklist, commentary, and bounded public display
-state survive the handoff. Channel cleanup stops the old stream without
-deleting the adopted card. The final answer remains a separate delivery.
-Discord requires `streaming.mode: "progress"`; this handoff does not change
-channel streaming defaults.
+Yield closes the old execution, not the delegated work. When the turn would
+otherwise be silent, the shared reply pipeline can send a waiting acknowledgment.
+The native subagent registry retains the completion obligation and wakes the
+requester through its accepted completion path; progress text is not proof that
+a child finished or that its result was delivered.
 
-An adopted card can continue for `done_only` children; `silent` children remain
-excluded. Channel commentary, tool-detail, and quiet-mode settings still apply.
-Without a usable card, the shared reply pipeline provides its normal waiting
-acknowledgment when the turn would otherwise be silent. It does not create a
-second detached progress card.
-Tasks explicitly set to `state_changes` still receive brief state notifications
-through the same core batching owner. Without an adopted card, those notices do
-not include command arguments or commentary.
+The former Tasks-backed detached presenter and its notification policies are no
+longer available. A yielded turn does not start a separate task or flow projection
+to keep editing a channel progress message. Ordinary channel streaming still
+follows the channel's settings while its turn is active.
 
-Core coalesces prepared child activity over 15 seconds and edits the captured
-channel, account, recipient, and thread. Updates show named child activity and
-terminal outcomes within the channel's line budget. Public commentary and tool
-details follow the shared compositor and redaction policy; private prompts,
-reasoning, and raw child results are not progress content. An admitted requester
-continuation can update the retained checklist.
-
-After the requester confirms delivery of its final answer and its current child
-batch is terminal, core waits for pending edits and deletes the adopted message
-on channels with guarded deletion support. Silent private consumption, failed or
-uncertain final delivery, and another delegation wave do not trigger this cleanup.
-The final answer remains separate; a cleanup failure never retries that answer.
-
-Progress does not start a requester turn or credit completion delivery.
-Cancellation, reset, replacement, silence, and Gateway shutdown invalidate stale
-publication authority. Each edit rechecks current ownership after asynchronous
-preparation and immediately before transport handoff. Stored message IDs and
-display snapshots do not revive old callbacks or execution authority.
-
-The existing conversation receipt owner persists the bounded display snapshot.
-Restart restores presentation from that receipt only for the current task and
-requester window. Process-local queues remain bounded to 128 batches with at
-most 32 accepted children each. Missing or ambiguous receipts do not authorize
-a replacement message; activity remains available in Tasks. Presentation
-failure never takes ownership of the final result from completion delivery.
+[Progress cards](/tools/progress-card) remain durable session state. The parent
+updates its own card as work advances and when child results return. Inspect
+native child status or retained messages through [sub-agent commands](/tools/subagents/slash-command)
+and session history. Neither a saved card nor a stored message ID authorizes a
+new execution or delivery.
 
 Cron observes the registry's descendant settlement boundary before starting
 its bounded synthesis grace period. A yielded task remains pending between the

@@ -64,7 +64,7 @@ beforeAll(async () => {
     },
   });
 
-  const [cliShim, githubCleanup, plugins, workers, projection, lifetime, tasks, discovery, skills] =
+  const [cliShim, githubCleanup, plugins, workers, projection, lifetime, discovery, skills] =
     await Promise.all([
       import("../infra/openclaw-cli-shim.js"),
       import("../agents/github-tool-profile-cleanup.js"),
@@ -72,7 +72,6 @@ beforeAll(async () => {
       import("./server-worker-environment-startup.js"),
       import("./session-row-projection.js"),
       import("./server-lifetime-sidecars.js"),
-      import("../tasks/runtime-internal.js"),
       import("./server-discovery-runtime.js"),
       import("../skills/runtime/remote.js"),
     ]);
@@ -93,9 +92,6 @@ beforeAll(async () => {
   );
   vi.spyOn(lifetime, "attachInitialGatewayLifetimeSidecars").mockImplementation(() =>
     rejectDeferredWork("initial lifetime sidecars"),
-  );
-  vi.spyOn(tasks, "ensureTaskRuntimeStateReady").mockImplementation(() =>
-    rejectDeferredWork("task runtime preparation"),
   );
   vi.spyOn(discovery, "startGatewayDiscovery").mockImplementation(() =>
     rejectDeferredWork("discovery"),

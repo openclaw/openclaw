@@ -69,7 +69,6 @@ describe("gateway run-owned cancellation", () => {
       cleanupAbortController,
       io: createAgentTurnIo(respond),
       context,
-      taskTrackingMode: "none",
     });
     const payload = {
       runId,

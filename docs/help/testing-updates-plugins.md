@@ -260,7 +260,7 @@ Those default release runs pin this scenario to the published 2026.9.4 driver,
 including when the source candidate still reports version 2026.9.4; other
 scenarios retain their existing baseline selection.
 
-The opt-in `projects-doctor`, `projects-startup-migration`, and `taskflow-restoration` scenarios require the exact
+The opt-in `projects-doctor` and `projects-startup-migration` scenarios require the exact
 published `openclaw@2026.9.4` baseline and a frozen candidate tarball. They use
 isolated state, manual restart, and no live providers or registry companion fixtures;
 none runs through `reported-issues` or `far-reaching`. They verify the original
@@ -289,12 +289,6 @@ candidate `commit`, `agentSchema`, and `operations.prepare`/`operations.open`
 triples of compiled basename, exact export symbol, and SHA-256. The snapshot
 preparer and SQLite opener must match the installed candidate payload; the file
 is mounted read-only. This scenario uses no remote repository or model turn.
-`taskflow-restoration` preserves three terminal tasks and two flows, starts a fresh
-candidate Gateway, exercises awaited task SDK reads through a synthetic local plugin,
-and reads two task pages on the same Gateway connection. Complete task, delivery,
-and flow records are checked again after Gateway shutdown. The taskflow cell covers
-terminal persisted state; it does not exercise active task recovery or provider work.
-
 The opt-in `channel-owner-policy` scenario uses the same pinned `openclaw@2026.9.4`
 published-driver and candidate-package checks. It seeds an existing
 `operator.channelPolicy` JSON specimen in the published database's machine-state

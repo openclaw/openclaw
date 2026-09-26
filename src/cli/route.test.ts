@@ -25,10 +25,6 @@ vi.mock("../commands/status.js", () => ({ statusCommand: runRouteMock }));
 vi.mock("../commands/status-json.js", () => ({ statusJsonCommand: runRouteMock }));
 vi.mock("../commands/health.js", () => ({ healthCommand: runRouteMock }));
 vi.mock("../commands/agents.commands.list.js", () => ({ agentsListCommand: runRouteMock }));
-vi.mock("../commands/tasks-json.js", () => ({
-  tasksListJsonCommand: runRouteMock,
-  tasksAuditJsonCommand: runRouteMock,
-}));
 vi.mock("../commands/sessions.js", () => ({ sessionsCommand: runRouteMock }));
 vi.mock("../commands/channels/list.js", () => ({ channelsListCommand: runRouteMock }));
 vi.mock("../commands/channels/status.js", () => ({ channelsStatusCommand: runRouteMock }));
@@ -107,9 +103,6 @@ describe("tryRouteCli", () => {
     ["plugins", "list", "--json"],
     ["gateway", "status", "--json"],
     ["sessions", "--json"],
-    ["tasks", "--json"],
-    ["tasks", "list", "--json"],
-    ["tasks", "audit", "--json"],
   ])("dispatches %j without startup config observation or plugin activation", async (...args) => {
     await expect(tryRouteCli(["node", "openclaw", ...args])).resolves.toBe(true);
 
@@ -296,7 +289,7 @@ describe("tryRouteCli", () => {
 
   it("falls back before bootstrap when the route cannot parse the argv", async () => {
     await expect(
-      tryRouteCli(["node", "openclaw", "tasks", "list", "--json", "--unknown"]),
+      tryRouteCli(["node", "openclaw", "sessions", "--json", "--unknown"]),
     ).resolves.toBe(false);
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();

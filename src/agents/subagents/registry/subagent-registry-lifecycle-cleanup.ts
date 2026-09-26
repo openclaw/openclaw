@@ -28,21 +28,23 @@ import {
   resolveAnnounceRetryDelayMs,
 } from "./subagent-registry-helpers.js";
 import type {
-  SubagentLifecycleCommonContext,
   SubagentLifecycleAnnounceCleanupContext,
-  SubagentLifecycleCompletionContext,
   SubagentLifecycleCleanupContext,
-  SubagentLifecycleWakeContext,
+  SubagentLifecycleCommonContext,
+  SubagentLifecycleCompletionContext,
   SubagentLifecycleOptions,
+  SubagentLifecycleWakeContext,
 } from "./subagent-registry-lifecycle-context.js";
 import {
   buildSafeLifecycleErrorMeta,
   maskLifecycleIdentifier,
 } from "./subagent-registry-lifecycle-delivery.js";
 import { scheduleRequesterSettleWake } from "./subagent-registry-lifecycle-wake.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const MAX_DETACHED_CLEANUP_RETRIES = 3;
+const pendingStoreRetirements = new WeakMap<SubagentRunRecord, Promise<void>>();
 type BrowserCleanup = typeof cleanupBrowserSessionsForLifecycleEnd;
 
 function runWithSubagentCleanupWorkAdmission<T>(run: () => Promise<T>): Promise<T> {
@@ -165,27 +167,33 @@ export function runDetachedCleanupAttempt(
   });
 }
 
-export function suspendPendingFinalDelivery(
+export async function suspendPendingFinalDelivery(
   context: SubagentLifecycleCleanupContext & SubagentLifecycleWakeContext,
   args: {
     runId: string;
     entry: SubagentRunRecord;
     reason: "expiry" | "permanent_failure";
     error?: string;
+    enqueuedAt?: number;
+    lastDropReason?: NonNullable<SubagentRunRecord["delivery"]>["lastDropReason"];
     storeReplaced?: true;
   },
-): void {
+): Promise<void> {
   const params = context.options;
-  const committed = blockSubagentCompletionDelivery({
+  const generation = args.entry.generation;
+  const committed = await blockSubagentCompletionDelivery({
     subagent: args.entry,
-    taskId: params.resolveSubagentTask(args.entry).task?.taskId ?? "",
     reason: args.error ?? getDeliveryLastError(args.entry) ?? args.reason,
     suspendedReason: args.reason,
-    lastDropReason: args.entry.delivery?.lastDropReason,
+    lastDropReason: args.lastDropReason ?? args.entry.delivery?.lastDropReason,
+    enqueuedAt: args.enqueuedAt,
     storeReplaced: args.storeReplaced,
   });
   if (!committed) {
     throw new Error(`subagent completion owner changed before suspension: ${args.runId}`);
+  }
+  if (params.runs.get(args.runId) !== args.entry || args.entry.generation !== generation) {
+    return;
   }
   params.resumedRuns.delete(args.runId);
   if (args.entry.delivery?.discardReason === "task-missing") {
@@ -204,6 +212,7 @@ export function isSubagentCompletionDeliveryAllowed(
 ): boolean {
   const { runId, requesterSessionKey, requesterStorePath, requesterAgentId } = entry;
   const allowed =
+    !subagentRuns.isCompletionAuthorityRetired(entry) &&
     entry.suppressCompletionDelivery !== true &&
     !isDeliverySuspended(entry) &&
     (entry.delivery?.status !== "delivered" || entry.delivery === committedDelivery) &&
@@ -214,49 +223,89 @@ export function isSubagentCompletionDeliveryAllowed(
   ) {
     return allowed;
   }
-  if (entry.delivery?.status !== "delivered") {
-    suspendPendingFinalDelivery(context, {
-      runId,
-      entry,
-      reason: "permanent_failure",
-      error: "store replaced",
-      storeReplaced: true,
-    });
+  if (entry.expectsCompletionMessage === true) {
+    subagentRuns.retireCompletionAuthority(entry);
   }
   return false;
 }
 
-export function suspendReplacedStoreNotifications(options: SubagentLifecycleOptions): void {
-  for (const entry of options.runs.values()) {
-    const { delivery, requesterSessionKey, requesterStorePath, requesterAgentId } = entry;
-    if (
-      !delivery ||
-      !["pending", "in_progress"].includes(delivery.status) ||
-      delivery.deliveredAt !== undefined ||
-      delivery.announcedAt !== undefined ||
-      entry.execution.status !== "terminal" ||
-      entry.expectsCompletionMessage !== true ||
-      isSystemEventStoreCurrent(requesterSessionKey, requesterStorePath, requesterAgentId)
-    ) {
-      continue;
-    }
-    if (
-      !blockSubagentCompletionDelivery({
-        subagent: entry,
-        taskId: options.resolveSubagentTask(entry).task?.taskId ?? "",
-        reason: "store replaced",
-        suspendedReason: "permanent_failure",
-        storeReplaced: true,
-      })
-    ) {
-      options.warn("subagent notification store retirement has no current task owner", {
-        runId: entry.runId,
-      });
-      continue;
-    }
-    options.resumedRuns.delete(entry.runId);
-    recordSystemEventStoreReplaced();
+export function suspendReplacedStoreNotifications(
+  options: SubagentLifecycleOptions,
+): Promise<void> {
+  // Capture retirement before yielding: restoring the old selector cannot revive these notifications.
+  const pending = new Set<Promise<void>>();
+  const entries = [...options.runs.values()]
+    .filter((entry) => {
+      const work = pendingStoreRetirements.get(entry);
+      if (!work) {
+        return true;
+      }
+      pending.add(work);
+      return false;
+    })
+    .filter((entry) => {
+      const { delivery, requesterSessionKey, requesterStorePath, requesterAgentId } = entry;
+      return (
+        delivery &&
+        ["pending", "in_progress"].includes(delivery.status) &&
+        delivery.deliveredAt === undefined &&
+        delivery.announcedAt === undefined &&
+        entry.execution.status === "terminal" &&
+        entry.expectsCompletionMessage === true &&
+        !isSystemEventStoreCurrent(requesterSessionKey, requesterStorePath, requesterAgentId)
+      );
+    })
+    .map((entry) => ({
+      entry,
+      generation: entry.generation,
+      deliveryGeneration: entry.delivery?.generation,
+    }));
+  if (!entries.length) {
+    return Promise.all(pending).then(() => {});
   }
+  entries.forEach(({ entry }) => subagentRuns.retireCompletionAuthority(entry));
+  const work = runWithSubagentCleanupWorkAdmission(async () => {
+    for (const { entry, generation, deliveryGeneration } of entries) {
+      if (
+        options.runs.get(entry.runId) !== entry ||
+        entry.generation !== generation ||
+        entry.delivery?.generation !== deliveryGeneration
+      ) {
+        continue;
+      }
+      if (
+        !(await blockSubagentCompletionDelivery({
+          subagent: entry,
+          reason: "store replaced",
+          suspendedReason: "permanent_failure",
+          storeReplaced: true,
+        }))
+      ) {
+        options.warn("subagent notification store retirement has no current native owner", {
+          runId: entry.runId,
+        });
+        continue;
+      }
+      if (
+        options.runs.get(entry.runId) !== entry ||
+        entry.generation !== generation ||
+        entry.delivery?.generation !== deliveryGeneration
+      ) {
+        continue;
+      }
+      options.resumedRuns.delete(entry.runId);
+      recordSystemEventStoreReplaced();
+    }
+  }).finally(() => {
+    for (const { entry } of entries) {
+      pendingStoreRetirements.delete(entry);
+    }
+  });
+  for (const { entry } of entries) {
+    pendingStoreRetirements.set(entry, work);
+  }
+  pending.add(work);
+  return Promise.all(pending).then(() => {});
 }
 
 export function beginSubagentCleanup(

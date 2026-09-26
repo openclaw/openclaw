@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Native session bindings, the OpenClaw transcript mirror, tool and media result delivery, terminal tool outcomes, and settled-turn finalization"
 read_when:
   - You are storing a native session, thread, or resume token
@@ -110,66 +111,6 @@ writes with the exact host creation handle. Rollback requires the matching
 store, identity, binding, and live authority, removes only the exact upstream
 link, then invokes backend cleanup. Queue selection, native protocol/policy,
 and resource cleanup remain with the backend; core owns host session lifecycle.
-
-## Background command tasks
-
-Official harnesses can use `createAgentHarnessCommandTask` from the existing
-private `openclaw/plugin-sdk/agent-harness-task-runtime` entrypoint to expose a
-native command in Tasks after its foreground turn ends. Pass the host-issued
-task scope and retain the original native connection and source authority. The
-helper creates a worker-persisted CLI task and binds cancellation to that exact
-task run; it does not take custody of the native process.
-
-The cancellation callback receives `assertTaskCurrent`; call it after awaited
-preparation and immediately before stopping work, alongside the retained source
-and concrete command checks. Publish the native terminal outcome with `finish`.
-It returns `"published"` after terminal publication or `"retired"` when the original
-task was replaced. Retirement releases the old binding without changing its
-successor; both results let the harness release its native observation leases.
-A successful stop requires the original task to settle as cancelled; natural
-completion racing Stop remains success. Failed publication retains the run owner;
-the harness must either own a subsequent settlement attempt or release the binding
-so normal task recovery can reconcile the row. A one-shot terminal notification
-must not leave a finished command holding live ownership indefinitely. Release
-the binding when the native owner closes and cannot publish an outcome. Restored
-rows do not recreate native process authority.
-
-Command previews use the shared redacted exec formatter, and Incognito content
-stays private. These tasks are silent: recording completion does not schedule a
-new model turn.
-
-## Subagent task history
-
-Native subagents can expose the shared task transcript view through the optional
-`taskHistory` harness capability. Declare the owned `taskKinds` and implement
-`read({ task, cfg, cursor, limit, assertCurrent })`. Return chronological chat
-`messages` with a stable `messageId` (or canonical `__openclaw.id`) and an optional
-`nextCursor` for older history. Internal runtime-only IDs are insufficient: the
-shared viewer must recognize the identity across pages and refreshes. Rows that
-share a transcript entry ID remain one display group.
-Preserve typed thinking, tool-call, and tool-result content so the normal chat
-renderer can display it. Bound native reads and response sizes.
-
-The Gateway's `tasks.history` method authorizes the task's requester session and
-routes history to its existing OpenClaw child session or the owning harness.
-It accepts a task ID, an optional opaque cursor, and a limit from 1 to 200
-(default 100). The harness must verify native parent/child lineage and the
-bound connection, and call `assertCurrent()` after awaited work. The Gateway
-rechecks access before returning a page and caps the response at 4 MiB.
-
-Record immutable native history routing facts in task detail when creating the
-task. A later parent turn can replace its current native thread without changing
-the child's source. Preserve the original parent and connection identity across
-progress, completion, and recovery; never reconstruct them from a replacement
-binding. Preserve authorized compaction transfers within the same session
-lifecycle, while rejecting resets and account or connection changes.
-Runtime task detail participates in the Gateway's cursor and
-after-await identity checks.
-
-Keep `childSessionKey` absent for native children: it describes an OpenClaw
-session and also determines lifecycle ownership. Reading history must not adopt
-the child, create another transcript store, or change cancellation and recovery.
-`TaskSummary.hasTranscript` advertises readable history to the shared viewer.
 
 ## Tool and media results
 

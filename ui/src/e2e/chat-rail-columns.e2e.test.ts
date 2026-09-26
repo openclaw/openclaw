@@ -62,7 +62,6 @@ function scenario(): ControlUiMockGatewayScenario {
       "environments.list",
       "environments.status",
       "sessions.diff",
-      "tasks.list",
       "terminal.open",
     ],
     historyMessages,
@@ -140,25 +139,6 @@ function scenario(): ControlUiMockGatewayScenario {
         ],
         root: "/workspace/openclaw",
         sessionKey,
-      },
-      "tasks.list": {
-        tasks: [
-          {
-            agentId: "main",
-            createdAt: Date.now() - 240_000,
-            id: "task-navigation",
-            kind: "subagent",
-            ownerKey: sessionKey,
-            sessionKey,
-            progressSummary: "Checking panel navigation and persisted state",
-            runtime: "subagent",
-            startedAt: Date.now() - 210_000,
-            status: "running",
-            taskId: "task-navigation",
-            title: "Verify tab navigation",
-            updatedAt: Date.now(),
-          },
-        ],
       },
       "terminal.list": { sessions: [] },
       "terminal.open": {
@@ -358,8 +338,8 @@ suite.define(() => {
             )
             .toBe(dock === "bottom");
 
-          await page.locator(".chat-tasks-toggle").click();
-          await sidePanel(page).locator('[data-panel-slot="tasks"]:not([hidden])').waitFor();
+          await openFromPlus(page, "Files");
+          await sidePanel(page).locator('[data-panel-slot="workspace"]:not([hidden])').waitFor();
           await expect
             .poll(() =>
               page.evaluate(() => {
@@ -410,7 +390,7 @@ suite.define(() => {
           await page.locator(".chat-group").first().waitFor();
 
           const topbarButtons = page.locator(".chat-pane__actions .chat-icon-btn");
-          await expect.poll(() => topbarButtons.count()).toBe(5);
+          await expect.poll(() => topbarButtons.count()).toBe(4);
           await expect
             .poll(async () => {
               const buttons = (await topbarButtons.all()).map(async (button) => ({
@@ -424,9 +404,6 @@ suite.define(() => {
               const glyphCenters = geometry.map(
                 ({ glyph }) => (glyph?.y ?? 0) + (glyph?.height ?? 0) / 2,
               );
-              const taskBadge = await page.locator(".chat-tasks-toggle__badge").boundingBox();
-              const taskButton = geometry[1]!.button;
-              const taskGlyph = geometry[1]!.glyph;
               const gaps = geometry.slice(1).map(({ button }, index) => {
                 const previous = geometry[index]!.button;
                 return (button?.x ?? 0) - ((previous?.x ?? 0) + (previous?.width ?? 0));
@@ -438,20 +415,11 @@ suite.define(() => {
                 gapSpread: spread(gaps),
                 glyphCenterSpread: spread(glyphCenters),
                 glyphSizes: geometry.map(({ glyph }) => [glyph?.width, glyph?.height]),
-                taskBadgeCenterDelta: Math.abs(
-                  (taskBadge?.y ?? 0) +
-                    (taskBadge?.height ?? 0) / 2 -
-                    ((taskGlyph?.y ?? 0) + (taskGlyph?.height ?? 0) / 2),
-                ),
-                taskBadgeContained:
-                  (taskBadge?.x ?? 0) >= (taskButton?.x ?? 0) &&
-                  (taskBadge?.x ?? 0) + (taskBadge?.width ?? 0) <=
-                    (taskButton?.x ?? 0) + (taskButton?.width ?? 0),
               };
             })
             .toEqual({
               buttonCenterSpread: 0,
-              buttonHeights: [28, 28, 28, 28, 28],
+              buttonHeights: [28, 28, 28, 28],
               gapSpread: 0,
               glyphCenterSpread: 0,
               glyphSizes: [
@@ -459,10 +427,7 @@ suite.define(() => {
                 [16, 16],
                 [16, 16],
                 [16, 16],
-                [16, 16],
               ],
-              taskBadgeCenterDelta: 6,
-              taskBadgeContained: false,
             });
 
           await page.locator(".chat-side-panel-toggle").click();
@@ -483,8 +448,6 @@ suite.define(() => {
           const terminalOpen = await gateway.waitForRequest("terminal.open");
           expect(terminalOpen.params).toMatchObject({ agentId: "main", sessionKey });
           await sidePanel(page).locator('[data-panel-slot="terminal"]:not([hidden])').waitFor();
-          await openFromPlus(page, "Tasks");
-          await expect.poll(() => sidePanel(page).textContent()).toContain("Verify tab navigation");
           await openFromPlus(page, "Browser");
           await sidePanel(page).locator('[data-panel-slot="browser"]:not([hidden])').waitFor();
           await captureRichPanel(page, `rails-tabs-browser-${themeMode}`);
@@ -498,7 +461,7 @@ suite.define(() => {
           await captureRichPanel(page, `rails-tabs-desktop-${themeMode}`);
           await expect
             .poll(() => tabLabels(page))
-            .toEqual(["Files", "Review", "zsh", "Tasks", "Browser", "Side chat", "Desktop"]);
+            .toEqual(["Files", "Review", "zsh", "Browser", "Side chat", "Desktop"]);
           await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
           await expect
             .poll(() =>
@@ -798,7 +761,7 @@ suite.define(() => {
           await sidePanel(page).locator('[data-region-header="side"]').waitFor();
           await expect
             .poll(() => tabLabels(page))
-            .toEqual(["Files", "Review", "zsh", "Tasks", "Browser", "Side chat", "Desktop"]);
+            .toEqual(["Files", "Review", "zsh", "Browser", "Side chat", "Desktop"]);
           await expect
             .poll(() =>
               sidePanelBody(page).evaluate((element) => element.getBoundingClientRect().width),
@@ -825,7 +788,7 @@ suite.define(() => {
           await page.keyboard.press("Control+Backquote");
           await expect.poll(async () => (await tabLabels(page)).includes("zsh")).toBe(false);
 
-          for (const label of ["Review", "Tasks", "Browser", "Side chat", "Desktop", "Files"]) {
+          for (const label of ["Review", "Browser", "Side chat", "Desktop", "Files"]) {
             await sidePanel(page)
               .locator('[data-region-header="side"]')
               .getByRole("button", { name: `Close ${label}`, exact: true })
@@ -917,14 +880,13 @@ suite.define(() => {
               .evaluate((tooltip) => Reflect.get(tooltip, "open")),
           ).toBe(false);
           await openFromPlus(page, "Review");
-          await openFromPlus(page, "Tasks");
           await sidePanel(page)
             .getByRole("button", { name: "Close tab: shell 1", exact: true })
             .click();
           await sidePanel(page)
             .getByRole("button", { name: "Close Terminal", exact: true })
             .click();
-          await expect.poll(() => tabLabels(page)).toEqual(["Review", "Tasks"]);
+          await expect.poll(() => tabLabels(page)).toEqual(["Review"]);
           // Closing back down to a strip that fits must release the shrink state:
           // the in-pill fade is a symptom of overflow, so labels that fit again
           // report their natural width and carry no mask.

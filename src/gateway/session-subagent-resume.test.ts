@@ -16,8 +16,6 @@ import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/sub
 import { getRuntimeConfig } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { publishSystemEventStoreResolver } from "../infra/system-event-ownership.js";
-import { findTaskByRunId } from "../tasks/task-registry.js";
-import { resolveGatewayAgentTaskTrackingMode } from "./server-methods/agent-task-tracking.js";
 import {
   assertParentSubagentResumeCurrent,
   assertParentSubagentResumeSuccessorCurrent,
@@ -99,8 +97,6 @@ it.each(["agent:main:subagent:resume-child", "agent:main:dashboard:resume-child"
       batchRunIds: [previousRunId],
     };
     persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
-    const taskId = findTaskByRunId(previousRunId)?.taskId;
-    expect(taskId).toBeTruthy();
     const adopt = await state.prepare();
     expect(adopt()).toBe(previousRunId);
     const next = subagentRuns.get(nextRunId)!;
@@ -114,8 +110,6 @@ it.each(["agent:main:subagent:resume-child", "agent:main:dashboard:resume-child"
     expect(next.pauseReason).toBeUndefined();
     expect(next.requesterSettleWake?.batchRunIds).toEqual([nextRunId]);
     expect(subagentRuns.has(previousRunId)).toBe(false);
-    expect(findTaskByRunId(previousRunId)?.taskId).toBe(taskId);
-    expect(findTaskByRunId(previousRunId)?.status).toBe("running");
     const stored = loadSubagentRegistryFromSqlite();
     expect(stored.get(nextRunId)).toMatchObject({
       taskRunId: previousRunId,
@@ -129,8 +123,6 @@ it.each(["agent:main:subagent:resume-child", "agent:main:dashboard:resume-child"
 
 it("rejects binding a paused child without task-owned completion", async () => {
   const state = await arrangePausedChild();
-  const task = findTaskByRunId(previousRunId);
-  expect(task).toBeDefined();
   state.entry.expectsCompletionMessage = false;
   persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
   expect(() =>
@@ -144,13 +136,10 @@ it("rejects binding a paused child without task-owned completion", async () => {
   expect(subagentRuns.has(nextRunId)).toBe(false);
   expect(subagentRuns.get(previousRunId)).toBe(state.entry);
   expect(state.entry.pauseReason).toBe("sessions_yield");
-  expect(findTaskByRunId(previousRunId)).toEqual(task);
 });
 
 it("rejects adoption when task-owned completion is disabled after binding", async () => {
   const state = await arrangePausedChild();
-  const task = findTaskByRunId(previousRunId);
-  expect(task).toBeDefined();
   const adopt = await state.prepare();
   state.entry.expectsCompletionMessage = false;
   persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
@@ -158,7 +147,6 @@ it("rejects adoption when task-owned completion is disabled after binding", asyn
   expect(subagentRuns.has(nextRunId)).toBe(false);
   expect(subagentRuns.get(previousRunId)).toBe(state.entry);
   expect(state.entry.pauseReason).toBe("sessions_yield");
-  expect(findTaskByRunId(previousRunId)).toEqual(task);
 });
 
 it.each(["selection", "admission"] as const)(
@@ -173,7 +161,6 @@ it.each(["selection", "admission"] as const)(
     expect(shouldResumeParentSubagent(state)).toBe(true);
     const adopt = await state.prepare();
     publishSystemEventStoreResolver(() => `${originalStorePath}.replacement`);
-    const task = findTaskByRunId(previousRunId);
     if (stage === "selection") {
       expect(shouldResumeParentSubagent(state)).toBe(false);
       expect(() => bindParentSubagentResume({ ...state, childSessionId: sessionId })).toThrow(
@@ -184,7 +171,6 @@ it.each(["selection", "admission"] as const)(
     }
     expect(subagentRuns.has(nextRunId)).toBe(false);
     expect(subagentRuns.get(previousRunId)?.pauseReason).toBe("sessions_yield");
-    expect(findTaskByRunId(previousRunId)).toEqual(task);
   },
 );
 
@@ -217,24 +203,13 @@ it.each(["resume", "cancel"] as const)(
         suppressTaskDelivery: true,
       });
       expect(result).toMatchObject({ killed: 1 });
-      expect(findTaskByRunId(previousRunId)?.status).toBe("cancelled");
+      expect(subagentRuns.get(previousRunId)?.endedReason).toBe("subagent-killed");
     }
   },
 );
 
 it("does not adopt ordinary peer messages or forged message provenance", async () => {
   const state = await arrangePausedChild();
-  expect(
-    resolveGatewayAgentTaskTrackingMode({
-      client: null,
-      sessionKey: state.childSessionKey,
-      inputProvenance: {
-        kind: "inter_session",
-        sourceTool: "sessions_send",
-        sourceSessionKey: parent,
-      },
-    }),
-  ).toBe("none");
   expect(subagentRuns.get(previousRunId)).toBe(state.entry);
   expect(() =>
     bindParentSubagentResume({
@@ -340,7 +315,7 @@ it("delivers a result once after the former synchronous wait window, through the
     data: { phase: "end", endedAt: Date.now(), yielded: true },
   });
   await fixture.settle();
-  expect(findTaskByRunId(previousRunId)?.status).toBe("succeeded");
+  expect(subagentRuns.get(nextRunId)?.cleanupCompletedAt).toBeDefined();
   expect(subagentRuns.get(nextRunId)?.pauseReason).toBeUndefined();
   expect(announce).toHaveBeenCalledTimes(1);
 });

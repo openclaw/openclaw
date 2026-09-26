@@ -79,7 +79,15 @@ export function registerLateDescendantControlTests({
       const registerChild = () => {
         const requester = phase === "admission drain" ? activeChild : parent;
         expect(requester.execution.endedAt).toBeUndefined();
-        const registration = registerSubagentRun({
+        enqueueSwarmRun({
+          groupId: "late-descendants",
+          runId: "late-child",
+          activeRunIds: [parent.runId],
+          maxConcurrent: 1,
+          start,
+          onStartFailure: () => true,
+        });
+        return registerSubagentRun({
           runId: "late-child",
           childSessionKey: childKey,
           requesterSessionKey: requester.childSessionKey,
@@ -90,17 +98,6 @@ export function registerLateDescendantControlTests({
           collect: true,
           queued: true,
         });
-        const enqueue = () => {
-          enqueueSwarmRun({
-            groupId: "late-descendants",
-            runId: "late-child",
-            activeRunIds: [parent.runId],
-            maxConcurrent: 1,
-            start,
-            onStartFailure: () => true,
-          });
-        };
-        return registration ? registration.then(enqueue) : enqueue();
       };
       setSubagentControlDepsForTest({
         isEmbeddedAgentRunActive: () => true,

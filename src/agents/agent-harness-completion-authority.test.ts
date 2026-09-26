@@ -8,11 +8,10 @@ import {
 } from "../gateway/server-plugin-in-process-dispatch.test-support.js";
 import {
   captureAgentHarnessCompletionCustody,
-  createAgentHarnessTaskRuntime,
-  deliverAgentHarnessTaskCompletion,
+  deliverAgentHarnessCompletion,
   type AgentHarnessCompletionDelivery,
   type AgentHarnessCompletionCustody,
-} from "../plugin-sdk/agent-harness-task-runtime.js";
+} from "../plugin-sdk/agent-harness-completion.js";
 import {
   getGatewayContextLifetime,
   getPluginRuntimeGatewayRequestScope,
@@ -26,11 +25,10 @@ import {
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as profileReader from "../state/user-profile-list.js";
-import { runWithAgentHarnessCompletionCustody } from "../tasks/agent-harness-completion-custody.js";
-import { createAgentHarnessTaskRuntimeScope } from "../tasks/agent-harness-task-runtime-scope.js";
-import { resetTaskRegistryForTests } from "../tasks/task-registry.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
+import { runWithAgentHarnessCompletionCustody } from "./agent-harness-completion-custody.js";
+import { createAgentHarnessCompletionScope } from "./agent-harness-completion-scope.js";
 import { buildAnnounceIdempotencyKey } from "./announce-idempotency.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -54,7 +52,7 @@ describe("harness completion caller lifetime", () => {
           storePath: path.join(state.sessionsDir(), "sessions.json"),
         };
         await replaceSessionEntry(target, { sessionId: "original", updatedAt: Date.now() });
-        const scope = createAgentHarnessTaskRuntimeScope({
+        const scope = createAgentHarnessCompletionScope({
           requesterSessionKey: target.sessionKey,
           gatewayContextResolver: resolver,
         });
@@ -142,7 +140,7 @@ describe("harness completion caller lifetime", () => {
           },
         }))!;
         client.internal = { operatorRunAuthority: source.authority };
-        const scope = createAgentHarnessTaskRuntimeScope({
+        const scope = createAgentHarnessCompletionScope({
           requesterSessionKey: "agent:main:main",
           gatewayContextResolver: resolver,
         });
@@ -168,7 +166,7 @@ describe("harness completion caller lifetime", () => {
               }),
           );
           for (const gatewayContextResolver of [undefined, () => createContext()]) {
-            const foreignScope = createAgentHarnessTaskRuntimeScope({
+            const foreignScope = createAgentHarnessCompletionScope({
               requesterSessionKey: scope.requesterSessionKey,
               gatewayContextResolver,
             });
@@ -202,7 +200,6 @@ describe("harness completion caller lifetime", () => {
     "delivers an owned child result when its spawning caller is %s",
     async (callerState) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        resetTaskRegistryForTests();
         const requesterSessionKey = "agent:main:main";
         const childSessionKey = "native:child";
         const announceId = "native:parent:child:succeeded";
@@ -226,7 +223,7 @@ describe("harness completion caller lifetime", () => {
           },
           { sessionId: "parent-session", updatedAt: Date.now() },
         );
-        const scope = createAgentHarnessTaskRuntimeScope({
+        const scope = createAgentHarnessCompletionScope({
           requesterSessionKey,
           gatewayContextResolver: resolveGatewayContext,
         });
@@ -249,34 +246,12 @@ describe("harness completion caller lifetime", () => {
               const parentCustody = await captureAgentHarnessCompletionCustody(scope);
               custody = parentCustody?.retain();
               parentCustody?.release();
-              const runtime = createAgentHarnessTaskRuntime({
-                scope,
-                runtime: "subagent",
-                taskKind: "native-child",
-                runIdPrefix: "native:",
-              });
-              runtime.createRunningTaskRun({
-                runId: childSessionKey,
-                sourceId: childSessionKey,
-                task: "Produce a result for the requester",
-                requesterAgentId: "main",
-                notifyPolicy: "silent",
-              });
-              runtime.finalizeTaskRunByRunId({
-                runId: childSessionKey,
-                status: "succeeded",
-                endedAt: Date.now(),
-                terminalSummary: "Child result",
-              });
-              runtime.setDetachedTaskDeliveryStatusByRunId({
-                runId: childSessionKey,
-                deliveryStatus: "pending",
-              });
               // Native monitor callbacks retain this async context after the parent yields.
               delivery = (async () => {
                 await ready.promise;
-                return await deliverAgentHarnessTaskCompletion({
+                return await deliverAgentHarnessCompletion({
                   scope,
+                  isSourceSessionAdmissionAllowed: () => custody?.isCurrent() ?? !retired,
                   completionCustody: callerState === "uncaptured" ? undefined : custody,
                   childSessionKey,
                   childSessionId: "child-session",

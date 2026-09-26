@@ -1,37 +1,42 @@
-// Exercises the automatic sender with real task/session stores and recording transport.
+// Exercises the automatic sender with real native completion/session stores and recording transport.
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { captureCommandOwnerAssertion } from "../../auto-reply/command-owner-authority.js";
+import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { SessionWorkStartChangedError } from "../../config/sessions/lifecycle.js";
-import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
+import {
+  buildRestartRecoveryClaimCleanupPatch,
+  getRestartRecoveryTerminalDeliveryEvidence,
+} from "../../config/sessions/restart-recovery-state.js";
+import type { RestartRecoveryTerminalDeliveryEvidence } from "../../config/sessions/restart-recovery-types.js";
 import {
   appendTranscriptMessage,
+  loadExactSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import * as transcriptReads from "../../config/sessions/session-accessor.sqlite-active-events.js";
+import * as replacementWorker from "../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { drainPendingDeliveriesCore } from "../../infra/outbound/delivery-queue-recovery.js";
 import { loadUnfinishedDeliveries as loadPendingDeliveries } from "../../infra/outbound/delivery-queue-storage.js";
 import { createRecoveryLog } from "../../infra/outbound/delivery-queue.test-helpers.js";
-import { createAgentHarnessTaskRuntime } from "../../plugin-sdk/agent-harness-task-runtime.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { addTestHook } from "../../plugins/hooks.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { captureHarnessCompletionRecovery } from "../../tasks/agent-harness-completion-recovery.js";
-import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
-import { getTaskById, markTaskTerminalById } from "../../tasks/task-registry.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-registry.test-support.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { bindCommandHarnessCompletionAssertion } from "../agent-command-restart-recovery.js";
 import { reconcileHarnessCompletionDelivery } from "../agent-harness-completion-delivery.js";
+import { captureAdmittedHarnessCompletionForTest } from "../agent-harness-completion.test-support.js";
 import { resolveSourceReplyDelivery } from "../embedded-agent-runner/delivery-evidence.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner/types.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
@@ -41,7 +46,6 @@ import { deliverAgentCommandResult } from "./delivery.js";
 afterEach(() => {
   resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
-  resetTaskRegistryForTests();
 });
 
 describe("native completion final-send custody", () => {
@@ -67,9 +71,9 @@ describe("native completion final-send custody", () => {
             "owner-bound-unchanged",
             "owner-bound-source-interleaved",
           ] as const)
-        : (["unchanged", "cancelled", "failed"] as const);
+        : (["unchanged", "physical", "revision"] as const);
     it.each(authorizationOutcomes)(
-      `enforces %s task authorization across ${boundary}`,
+      `enforces %s requester authorization across ${boundary}`,
       async (outcome) => {
         const queued = boundary.startsWith("queued");
         const unchanged = outcome.endsWith("unchanged");
@@ -84,31 +88,10 @@ describe("native completion final-send custody", () => {
               deliver: deliverOutboundPayloads,
               selectEntry: () => ({ match: true, bypassBackoff: true }),
             });
-          resetTaskRegistryForTests();
           const key = "agent:main:matrix:direct:owner";
           const child = "codex-thread:final-send-child";
           const source = "announce:final-send-child:succeeded";
           const recovery = "restart-recovery:final-send";
-          const runtime = createAgentHarnessTaskRuntime({
-            runtime: "subagent",
-            taskKind: "codex-native-subagent",
-            scope: createAgentHarnessTaskRuntimeScope({ requesterSessionKey: key }),
-            runIdPrefix: "codex-thread:",
-          });
-          const task = runtime.createRunningTaskRun({
-            runId: child,
-            sourceId: child,
-            task: "Produce a result for the final-send custody check",
-            requesterAgentId: "main",
-            notifyPolicy: "silent",
-          });
-          runtime.finalizeTaskRunByRunId({
-            runId: child,
-            status: "succeeded",
-            endedAt: Date.now(),
-            terminalSummary: "child result",
-          });
-          runtime.setDetachedTaskDeliveryStatusByRunId({ runId: child, deliveryStatus: "pending" });
           const target = {
             agentId: "main",
             sessionKey: key,
@@ -128,7 +111,7 @@ describe("native completion final-send custody", () => {
             sourceChannel: "internal",
             sourceSessionKey: child,
           };
-          const claim = captureHarnessCompletionRecovery({
+          const claim = await captureAdmittedHarnessCompletionForTest({
             agentId: "main",
             sessionKey: key,
             entry,
@@ -315,10 +298,6 @@ describe("native completion final-send custody", () => {
               { message: { role: "user", content: "A new request", timestamp: Date.now() } },
             );
             expect(assertCurrent).toThrow(SessionWorkStartChangedError);
-          } else if (outcome === "cancelled" || outcome === "failed") {
-            markTaskTerminalById({ taskId: task.taskId, status: outcome, endedAt: Date.now() + 1 });
-            expect(getTaskById(task.taskId)?.status).toBe(outcome);
-            expect(assertCurrent).toThrow();
           }
           if (boundary === "queued after cleanup") {
             await appendTranscriptMessage(
@@ -351,6 +330,26 @@ describe("native completion final-send custody", () => {
                 terminalSourceRunId: source,
               }),
             });
+            const cleaned = loadExactSessionEntry({ ...target, readConsistency: "latest" })?.entry;
+            expect(cleaned?.restartRecoveryDeliveryRunId).toBeUndefined();
+            expect(cleaned?.restartRecoveryHarnessCompletion).toBeUndefined();
+            expect(cleaned?.restartRecoveryTerminalDeliveryEvidence).toEqual([
+              {
+                runId: source,
+                harnessCompletion: claim,
+                deliveryContext: markerEntry.pendingFinalDelivery?.context,
+                captured: true,
+              },
+            ]);
+          }
+          if (outcome === "physical" || outcome === "revision") {
+            await replaceSessionEntry(target, {
+              ...marker.sessionEntry!,
+              ...(outcome === "physical"
+                ? { sessionId: "replacement-parent" }
+                : { lifecycleRevision: "replacement-revision" }),
+            });
+            expect(assertCurrent).toThrow();
           }
           if (handoff) {
             if (restart) {
@@ -388,13 +387,9 @@ describe("native completion final-send custody", () => {
             await recover();
             expect(writes).toEqual(unchanged ? ["The completed child result"] : []);
           }
-          expect(getTaskById(task.taskId)?.deliveryStatus).toBe(
-            unchanged ? "delivered" : "pending",
-          );
           if (unchanged) {
-            // Reopen task state as startup would: queue acknowledgment must not
+            // Reconcile native completion state as startup would: queue acknowledgment must not
             // be the only copy of the exact harness completion receipt.
-            resetTaskRegistryForTests({ persist: false });
             expect(
               reconcileHarnessCompletionDelivery({
                 ...target,
@@ -402,12 +397,308 @@ describe("native completion final-send custody", () => {
                 taskRunId: child,
               }),
             ).toBe("delivered");
-            expect(getTaskById(task.taskId)?.deliveryStatus).toBe("delivered");
           }
         });
       },
     );
   }
+});
+
+describe("native completion marker commit", () => {
+  it("preserves existing send evidence without assigning it to a different completion claim", async () => {
+    await withAdminIngress(async ({ state }) => {
+      for (const binding of ["missing", "foreign", "matching"] as const) {
+        const key = `agent:main:existing-evidence-${binding}`;
+        const source = `announce:existing-evidence-${binding}`;
+        const target = {
+          agentId: "main",
+          sessionKey: key,
+          storePath: path.join(state.sessionsDir(), "sessions.json"),
+        };
+        const entry = {
+          sessionId: `requester-${binding}`,
+          lifecycleRevision: "current-revision",
+          updatedAt: Date.now(),
+          status: "running" as const,
+          restartRecoveryDeliveryRunId: source,
+          restartRecoveryDeliverySourceRunId: source,
+        };
+        const provenance = {
+          kind: "inter_session",
+          sourceTool: "agent_harness_completion",
+          sourceChannel: "internal",
+          sourceSessionKey: `codex-thread:existing-evidence-${binding}`,
+        };
+        await replaceSessionEntry(target, entry);
+        const claim = await captureAdmittedHarnessCompletionForTest({
+          agentId: "main",
+          sessionKey: key,
+          entry,
+          runId: source,
+          inputProvenance: provenance,
+        });
+        if (!claim) {
+          throw new Error("Expected admitted completion claim");
+        }
+        const deliveryContext = { channel: "matrix", to: "!owner:example", accountId: "default" };
+        const receipt: RestartRecoveryTerminalDeliveryEvidence = {
+          runId: source,
+          captured: true,
+          payloads: [{ visible: true }],
+          deliveryContext,
+          deliveryStatus: { status: "sent", resultCount: 1 },
+          ...(binding === "missing"
+            ? {}
+            : {
+                harnessCompletion:
+                  binding === "matching" ? claim : { ...claim, sessionId: "previous-requester" },
+                durableFinalReceipt: {
+                  intentId: "sent-intent",
+                  deliveryId: "sent-delivery",
+                  platformMessageId: "sent-message",
+                },
+              }),
+        };
+        const current = {
+          ...entry,
+          restartRecoveryHarnessCompletion: claim,
+          restartRecoveryTerminalDeliveryEvidence: [receipt],
+        };
+        await replaceSessionEntry(target, current);
+        await appendTranscriptMessage(
+          { ...target, sessionId: entry.sessionId },
+          {
+            message: {
+              role: "user",
+              content: "Completion result",
+              idempotencyKey: `${source}:user`,
+              __openclaw: { runId: source },
+              provenance,
+            },
+          },
+        );
+        const read = () => loadExactSessionEntry({ ...target, readConsistency: "latest" })?.entry;
+        const before = getRestartRecoveryTerminalDeliveryEvidence(read(), source);
+        expect(before?.deliveryStatus, binding).toEqual({ status: "sent", resultCount: 1 });
+        const reconcile = () =>
+          reconcileHarnessCompletionDelivery({
+            ...target,
+            sourceRunId: source,
+            taskRunId: claim.taskRunId,
+          });
+        expect(reconcile(), binding).toBe(binding === "matching" ? "delivered" : "pending");
+        const marker = await persistPendingFinalDeliveryMarker({
+          ...target,
+          deliver: true,
+          sessionStore: { [key]: current },
+          sessionEntry: current,
+          suppressVisibleSessionEffects: false,
+          sessionReboundDuringRun: false,
+          payloads: [{ text: "Captured final" }],
+          deliveryContext,
+          runOwnedSessionId: entry.sessionId,
+        });
+        expect(marker.pendingFinalDeliveryMarkerPersisted, binding).toBe(true);
+        const after = read();
+        expect
+          .soft(getRestartRecoveryTerminalDeliveryEvidence(after, source), binding)
+          .toEqual(before);
+        if (!after) {
+          throw new Error("Requester entry disappeared");
+        }
+        await replaceSessionEntry(target, {
+          ...after,
+          ...buildRestartRecoveryClaimCleanupPatch({
+            entry: after,
+            recordTerminalSource: true,
+            terminalSourceRunId: source,
+            terminalRunId: source,
+          }),
+        });
+        const cleaned = read();
+        expect(cleaned?.restartRecoveryHarnessCompletion, binding).toBeUndefined();
+        expect
+          .soft(getRestartRecoveryTerminalDeliveryEvidence(cleaned, source), binding)
+          .toEqual(before);
+        expect(reconcile(), binding).toBe(binding === "matching" ? "delivered" : "blocked");
+      }
+    });
+  });
+
+  it("checkpoints canonical storage while preserving ordinary and opaque caller keys", async () => {
+    await withAdminIngress(async ({ state }) => {
+      const storePath = path.join(state.sessionsDir(), "sessions.json");
+      for (const [requestKey, storedKey] of [
+        [
+          "agent:main:assist:01M21F31SCNCCQQ3N4X43AY420",
+          "agent:main:assist:01m21f31scnccqq3n4x43ay420",
+        ],
+        ["main", "agent:main:main"],
+        ["agent:main:signal:group:AbC=", "agent:main:signal:group:AbC="],
+        ["agent:main:matrix:group:!Room:example.org", "agent:main:matrix:group:!Room:example.org"],
+      ] as const) {
+        const entry = { sessionId: requestKey, updatedAt: 1 };
+        const target = { agentId: "main", storePath, sessionKey: storedKey };
+        await replaceSessionEntry(target, entry);
+        const sessionStore = { [requestKey]: entry };
+        const payloads = [{ text: "Final for this exact route" }];
+        const result = await persistPendingFinalDeliveryMarker({
+          agentId: "main",
+          sessionKey: requestKey,
+          storePath,
+          sessionStore,
+          sessionEntry: entry,
+          deliver: true,
+          suppressVisibleSessionEffects: false,
+          sessionReboundDuringRun: false,
+          payloads,
+          deliveryContext: { channel: "matrix", to: "!owner:example" },
+          runOwnedSessionId: entry.sessionId,
+        });
+        expect(result.pendingFinalDeliveryMarkerPersisted, requestKey).toBe(true);
+        const persisted = loadExactSessionEntry({ ...target, readConsistency: "latest" })?.entry;
+        expect(persisted?.pendingFinalDelivery?.intentId).toBe(result.pendingFinalDeliveryIntentId);
+        expect(sessionStore[requestKey]).toEqual(persisted);
+        expect(Object.keys(sessionStore)).toEqual([requestKey]);
+        expect(
+          getReplyPayloadMetadata(payloads[0]!)?.pendingFinalDeliveryCompletion?.sessionKey,
+        ).toBe(requestKey);
+      }
+    });
+  });
+
+  it.each(["source", "receipt", "authority"] as const)(
+    "keeps a newer %s when marker planning yields before its worker commit",
+    async (changed) => {
+      await withAdminIngress(async ({ state }) => {
+        const key = "agent:main:marker-race";
+        const target = {
+          agentId: "main",
+          sessionKey: key,
+          storePath: path.join(state.sessionsDir(), "sessions.json"),
+        };
+        const original = {
+          sessionId: "marker-session",
+          lifecycleRevision: "marker-revision",
+          status: "running" as const,
+          updatedAt: Date.now(),
+        };
+        await replaceSessionEntry(target, original);
+        const claim = await captureAdmittedHarnessCompletionForTest({
+          agentId: "main",
+          sessionKey: key,
+          entry: original,
+          runId: "announce:marker-race",
+          inputProvenance: {
+            kind: "inter_session",
+            sourceTool: "agent_harness_completion",
+            sourceChannel: "internal",
+            sourceSessionKey: "codex-thread:marker-child",
+          },
+        });
+        if (!claim) {
+          throw new Error("Completion claim was not admitted");
+        }
+        const entry = { ...original, restartRecoveryHarnessCompletion: claim };
+        await replaceSessionEntry(target, entry);
+        const context = { channel: "matrix", to: "!owner:example", accountId: "default" };
+        const entered = createDeferred();
+        const released = createDeferred();
+        let current = true;
+        const commit = replacementWorker.commitSessionEntryReplacementsInWorker;
+        const committing = vi
+          .spyOn(replacementWorker, "commitSessionEntryReplacementsInWorker")
+          .mockImplementationOnce(async (...args) => {
+            entered.resolve();
+            await released.promise;
+            return await commit(...args);
+          });
+        const pending = persistPendingFinalDeliveryMarker({
+          ...target,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("Marker source was revoked");
+            }
+          },
+          deliver: true,
+          sessionStore: { [key]: entry },
+          sessionEntry: entry,
+          suppressVisibleSessionEffects: false,
+          sessionReboundDuringRun: false,
+          payloads: [{ text: "Original final" }],
+          deliveryContext: context,
+          runOwnedSessionId: entry.sessionId,
+        });
+        void pending.catch(() => {});
+        try {
+          await Promise.race([entered.promise, pending]);
+          expect(committing).toHaveBeenCalledOnce();
+          const before = loadExactSessionEntry({ ...target, readConsistency: "latest" })?.entry;
+          if (!before) {
+            throw new Error("Marker target is missing");
+          }
+          expect(before.pendingFinalDelivery).toBeUndefined();
+          expect(before.restartRecoveryTerminalDeliveryEvidence).toBeUndefined();
+          const replacement = structuredClone(before);
+          if (changed === "source") {
+            replacement.restartRecoveryHarnessCompletion = {
+              ...claim,
+              sourceRunId: "announce:new-source",
+              taskId: "codex-thread:new-child",
+              taskRunId: "codex-thread:new-child",
+            };
+          } else if (changed === "receipt") {
+            replacement.restartRecoveryTerminalDeliveryEvidence = [
+              {
+                runId: claim.sourceRunId,
+                harnessCompletion: claim,
+                deliveryContext: context,
+                captured: true,
+                payloads: [{ visible: true }],
+                deliveryStatus: { status: "sent", resultCount: 1 },
+                durableFinalReceipt: {
+                  intentId: "settled-intent",
+                  deliveryId: "settled-delivery",
+                  platformMessageId: "settled-message",
+                },
+              },
+            ];
+          } else {
+            current = false;
+          }
+          if (changed !== "authority") {
+            // A foreign writer can commit while planning holds no SQLite transaction.
+            const database = new DatabaseSync(
+              resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+            );
+            try {
+              database
+                .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+                .run(JSON.stringify(replacement), key);
+            } finally {
+              database.close();
+            }
+          }
+          released.resolve();
+          await expect(pending).rejects.toThrow(
+            changed === "authority" ? "Marker source was revoked" : "changed before replacement",
+          );
+          const after = loadExactSessionEntry({ ...target, readConsistency: "latest" })?.entry;
+          expect(after?.pendingFinalDelivery).toBeUndefined();
+          expect(after?.restartRecoveryHarnessCompletion).toEqual(
+            replacement.restartRecoveryHarnessCompletion,
+          );
+          expect(after?.restartRecoveryTerminalDeliveryEvidence).toEqual(
+            replacement.restartRecoveryTerminalDeliveryEvidence,
+          );
+        } finally {
+          released.resolve();
+          await pending.catch(() => {});
+          committing.mockRestore();
+        }
+      });
+    },
+  );
 });
 
 describe("message-tool source reply custody", () => {

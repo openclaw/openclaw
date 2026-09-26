@@ -689,9 +689,7 @@ type CodexAppServerRequestParamsOverride = {
 };
 
 type CodexAppServerRequestResultMap = {
-  "thread/backgroundTerminals/list": {
-    data: { itemId: string; processId: string; command: string; cwd: string }[];
-  };
+  "thread/backgroundTerminals/list": { data: { itemId: string; processId: string }[] };
   "thread/backgroundTerminals/terminate": { terminated: boolean };
   initialize: CodexInitializeResponse;
   "account/rateLimits/read": JsonValue;

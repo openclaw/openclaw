@@ -46,11 +46,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import * as taskRegistryListener from "../../tasks/task-registry-listener-state.js";
-import { getTaskRegistryStore } from "../../tasks/task-registry.store.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-registry.test-support.js";
-import { findTaskByRunIdForStatus } from "../../tasks/task-status-access.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import type { callGateway } from "../call.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -104,7 +99,6 @@ beforeEach(async () => {
   cfg = { agents: { list: [{ id: "main", default: true, workspace: stateDir }] } };
   setRuntimeConfigSnapshot(cfg);
   resetSubagentRegistryForTests({ persist: false });
-  resetTaskRegistryForTests({ persist: false });
   attempts = 0;
   harnesses = listRegisteredAgentHarnesses();
   registryGateway.mockReset().mockImplementation(async (options) => {
@@ -123,9 +117,7 @@ beforeEach(async () => {
     },
   );
   await registerCollector(runId);
-  expect(findTaskByRunIdForStatus(runId)?.status).toBe("queued");
   expect(settleFailedQueuedSubagentLaunch(runId, "launch failed")).toBe(true);
-  expect(findTaskByRunIdForStatus(runId)?.status).toBe("failed");
   await testing.sweepOnceForTests();
   expect(attempts).toBe(1);
   expect(loadSubagentRegistryFromSqlite().get(runId)?.collectorLaunchCleanupPending).toBe(true);
@@ -147,15 +139,11 @@ async function registerCollector(id: string, childSessionKey = key, agentId = "m
     swarmRequesterSessionKey: "agent:main:main",
     queued: true,
     expectsCompletionMessage: false,
-    taskRowOwnership: "required",
   });
 }
 
 afterEach(async () => {
   // Preserve failures from the accepted prefix before imports can retire their entries.
-  await taskRegistryListener.captureTaskRegistryReadFence(
-    captureOpenClawStateWorkerContext().admission,
-  );
   await settleSubagentRegistryPersistenceWork();
   vi.restoreAllMocks();
   restoreRegisteredAgentHarnesses(harnesses);
@@ -163,7 +151,6 @@ afterEach(async () => {
     stateDir,
     resetRegistry: () => resetSubagentRegistryForTests({ persist: false }),
     closeDatabases: () => {
-      resetTaskRegistryForTests({ persist: false });
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
     },
@@ -197,7 +184,6 @@ test.each(["unchanged", "reset", "reset-reopen", "reopen-reset-reopen"])(
 
 function reopen() {
   resetSubagentRegistryForTests({ persist: false });
-  resetTaskRegistryForTests({ persist: false });
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   initSubagentRegistry();
@@ -213,10 +199,6 @@ async function expectResultRetained() {
       config: cfg,
     }),
   ).resolves.toMatchObject({ runId, status: "failed", result: "launch failed" });
-  expect(findTaskByRunIdForStatus(runId)).toMatchObject({
-    status: "failed",
-    error: "launch failed",
-  });
 }
 
 function agentDatabase() {
@@ -308,7 +290,6 @@ async function startAnnouncingSubagent(id: string) {
     cleanup: "delete",
     queued: true,
     expectsCompletionMessage: true,
-    taskRowOwnership: "required",
   });
   emitAgentEvent({
     runId: id,
@@ -340,33 +321,17 @@ async function settleCollectorCleanup(id: string) {
   } finally {
     unsubscribe();
   }
-  await taskRegistryListener.captureTaskRegistryReadFence(
-    captureOpenClawStateWorkerContext().admission,
-  );
   await settleSubagentRegistryPersistenceWork();
 }
 
-test("same-turn reset keeps its active continuation and task unsuppressed", async () => {
+test("same-turn reset keeps its active continuation unsuppressed", async () => {
   const activeId = "active-continuation";
   await registerCollector(activeId);
-  const snapshotReady = createDeferredCore();
-  const releaseSnapshot = createDeferredCore();
-  const store = getTaskRegistryStore();
-  const readSnapshot = store.loadMutationSnapshotAsync.bind(store);
-  vi.spyOn(store, "loadMutationSnapshotAsync").mockImplementation(async (...args) => {
-    const snapshot = await readSnapshot(...args);
-    if (args[1] && "taskId" in args[1] && args[1].runId === activeId) {
-      snapshotReady.resolve();
-      await releaseSnapshot.promise;
-    }
-    return snapshot;
-  });
-  const readFence = taskRegistryListener.captureTaskRegistryReadFence;
   const interrupt = vi.fn();
   let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
   try {
     emitCollectorStart(activeId);
-    await snapshotReady.promise;
+    await settleSubagentRegistryPersistenceWork();
     admission = await beginSessionWorkAdmission({
       scope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
       identities: [key, "reset-cleanup-session"],
@@ -380,21 +345,13 @@ test("same-turn reset keeps its active continuation and task unsuppressed", asyn
     expect(
       loadSubagentRegistryFromSqlite().get(activeId)?.execution.suppressSessionEffects,
     ).not.toBe(true);
-    expect(findTaskByRunIdForStatus(activeId)?.status).toBe("running");
     expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.suppressSessionEffects).toBe(
       true,
     );
-    // Keep the accepted event's publication pending across reset until settlement joins it.
-    vi.spyOn(taskRegistryListener, "captureTaskRegistryReadFence").mockImplementation((owner) => {
-      const settled = readFence(owner);
-      releaseSnapshot.resolve();
-      return settled;
-    });
     await settleSubagentRegistryPersistenceWork();
   } finally {
-    releaseSnapshot.resolve();
     admission?.release();
-    await readFence(captureOpenClawStateWorkerContext().admission);
+    await settleSubagentRegistryPersistenceWork();
   }
 });
 
@@ -576,9 +533,6 @@ test("reset cannot publish while a terminal completion owns an awaited capture",
     await expectDefined(completion.mock.results[0]?.value, "completion attempt");
     const deletion = await deletionStarted.promise;
     await deletion.completion;
-    await taskRegistryListener.captureTaskRegistryReadFence(
-      captureOpenClawStateWorkerContext().admission,
-    );
     await settleSubagentRegistryPersistenceWork();
   }
 });
@@ -602,9 +556,6 @@ test("a retained kill claim cannot revive durably revoked session cleanup", asyn
     stream: "lifecycle",
     data: { phase: "end", aborted: true, stopReason: "aborted", endedAt: Date.now() },
   });
-  await taskRegistryListener.captureTaskRegistryReadFence(
-    captureOpenClawStateWorkerContext().admission,
-  );
   await settleSubagentRegistryPersistenceWork();
   expect(loadSubagentRegistryFromSqlite().get(id)?.execution.suppressSessionEffects).toBe(true);
   await testing.sweepOnceForTests();

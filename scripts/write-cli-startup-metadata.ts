@@ -50,7 +50,6 @@ const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = [
   "models",
   "plugins",
   "sessions",
-  "tasks",
 ] as const;
 const CORE_CHANNEL_ORDER = [
   "telegram",

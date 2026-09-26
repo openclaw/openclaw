@@ -17,7 +17,6 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import {
   installTranscriptDomMocks,
@@ -87,7 +86,6 @@ describe("chat pane session menu boundary", () => {
       render(
         pane.renderPaneHeader(
           createSessionWorkspaceProps(pane.state),
-          createBackgroundTasksProps(pane.state),
           selectedChatSessionRow(pane.state),
           false,
           undefined,
@@ -154,7 +152,6 @@ describe("chat pane session menu boundary", () => {
       render(
         pane.renderPaneHeader(
           createSessionWorkspaceProps(state),
-          createBackgroundTasksProps(state),
           session,
           catalog,
           undefined,
@@ -203,7 +200,6 @@ describe("chat pane session menu boundary", () => {
       render(
         pane.renderPaneHeader(
           createSessionWorkspaceProps(state),
-          createBackgroundTasksProps(state),
           session,
           false,
           undefined,
@@ -309,7 +305,6 @@ describe("chat pane session menu boundary", () => {
     render(
       pane.renderPaneHeader(
         createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
         session,
         false,
         undefined,

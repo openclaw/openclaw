@@ -6,7 +6,6 @@ import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { captureCoordinatorDatabase } from "../infra/sqlite-coordinator.test-support.js";
 import * as workerStores from "../infra/sqlite-worker-store.js";
 import { acquireGatewayLifecycleCoordinator } from "../infra/state-database-coordinator.js";
-import { buildFlowRecord } from "../tasks/task-flow-registry.records.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-resources.js";
 import {
@@ -24,39 +23,40 @@ afterEach(async () => {
 });
 
 function createSharedWorkerClient(env: NodeJS.ProcessEnv) {
-  const ownerKey = "agent:main:maintenance-resource";
-  const flowIds = new Map<string, string>();
+  const namespace = { pluginId: "maintenance-resources-fixture", namespace: "shared" };
   return {
     async register(key: string, value: { value: string }) {
-      const flow = buildFlowRecord({
-        ownerKey,
-        controllerId: "tests/maintenance-resources",
-        goal: key,
-        stateJson: value,
+      const result = await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
+        type: "pluginState.register",
+        input: {
+          ...namespace,
+          key,
+          valueJson: JSON.stringify(value),
+          maxEntries: 10,
+          overflowPolicy: "reject-new",
+        },
       });
-      await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
-        type: "flows.createManaged",
-        input: { flow },
-      });
-      flowIds.set(key, flow.flowId);
+      expect(result).toEqual({ ok: true, value: undefined });
     },
     async lookup(key: string) {
-      const flowId = flowIds.get(key);
-      if (flowId === undefined) {
-        return undefined;
-      }
-      const flow = await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
-        type: "flows.current",
-        input: { flowId },
+      const result = await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
+        type: "pluginState.lookup",
+        input: { ...namespace, key },
       });
-      return flow?.stateJson;
+      if (!result.ok) {
+        throw new Error("Synthetic shared-state lookup failed", { cause: result.error });
+      }
+      return result.value;
     },
     async entries() {
-      const flows = await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
-        type: "flows.list",
-        input: { ownerKey },
+      const result = await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
+        type: "pluginState.entries",
+        input: namespace,
       });
-      return flows.map((flow) => ({ key: flow.goal, value: flow.stateJson }));
+      if (!result.ok) {
+        throw new Error("Synthetic shared-state listing failed", { cause: result.error });
+      }
+      return result.value;
     },
   };
 }
@@ -313,8 +313,8 @@ it("reopens shared state after another owner completes failed-admission cleanup"
     });
     const read = () =>
       executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env: state.env }), {
-        type: "flows.list",
-        input: { ownerKey: "agent:main:cleanup-handoff" },
+        type: "pluginState.entries",
+        input: { pluginId: "maintenance-resources-fixture", namespace: "shared" },
       });
     try {
       await expect(read()).rejects.toMatchObject({
@@ -330,7 +330,7 @@ it("reopens shared state after another owner completes failed-admission cleanup"
       await workerStores.closeUnclaimedSharedStateSqliteWorkers(databasePath);
       expect(database.isOpen).toBe(false);
       expect(workerStores.hasUnclaimedSharedStateSqliteCleanup(databasePath)).toBe(false);
-      await expect(read()).resolves.toEqual([]);
+      await expect(read()).resolves.toEqual({ ok: true, value: [] });
     } finally {
       opening.mockRestore();
       dispatch.mockRestore();

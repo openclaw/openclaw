@@ -1780,7 +1780,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-turn-recap--continuation")?.textContent).toContain(
       "Done in 5 seconds",
     );
-    expect(container.querySelector(".chat-tasks-status__claw")).toBeNull();
+    expect(container.querySelector(".chat-turn-recap__claw")).toBeNull();
     expect(container.querySelector(".chat-group-footer")).not.toBeNull();
   });
 

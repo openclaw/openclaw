@@ -75,7 +75,6 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
     filterWorkboardCards({
       cards: scopedCards,
       filters: state,
-      tasksByCardId: state.tasksByCardId,
       sessions: props.sessions,
       now,
       ignore,
@@ -109,9 +108,8 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
     value: key,
     label: t(key === "stale" ? "workboard.filterStale" : "workboard.filterMissingProof"),
     title: t(key === "stale" ? "workboard.filterStaleHint" : "workboard.filterMissingProofHint"),
-    count: attentionCards.filter((card) =>
-      workboardCardMatchesHealthKey(card, key, props.sessions, state.tasksByCardId.get(card.id)),
-    ).length,
+    count: attentionCards.filter((card) => workboardCardMatchesHealthKey(card, key, props.sessions))
+      .length,
   }));
   const clearFilters = () => {
     state.query = "";

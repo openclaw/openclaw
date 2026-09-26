@@ -8,7 +8,7 @@ export function isReservedSessionKey(sessionKey: string): boolean {
   return key === "global" || key === "unknown";
 }
 
-export function workboardSessionLookupKeys(sessionKey: string): string[] {
+function workboardSessionLookupKeys(sessionKey: string): string[] {
   const key = normalizeSessionKeyForUiComparison(sessionKey);
   if (!key) {
     return [];

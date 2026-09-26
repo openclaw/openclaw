@@ -1,6 +1,9 @@
 import pLimit from "p-limit";
 import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
-import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  getCanonicalGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   runWithGatewayDetachedWorkContinuation,
   runWithGatewayIndependentRootWorkContinuation,
@@ -236,7 +239,7 @@ export class SubagentLifecycleController {
       const resolve = getGatewayContextResolver(entry);
       // Native caller wrappers share the instance resolver. Standalone bindings
       // retain their captured resolver; wholly unbound calls belong to this controller.
-      const owner = resolve?.()?.resolveGatewayContext ?? resolve ?? this;
+      const owner = (resolve && getCanonicalGatewayContextResolver(resolve)) ?? resolve ?? this;
       // Retired callbacks keep their queue and roots, but cannot consume the
       // replacement Gateway's capacity while their old async work unwinds.
       let limit = this.restoredRequesterSettleWakeLimits.get(owner);

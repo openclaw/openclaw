@@ -1,5 +1,5 @@
 // Builds the status summary used by human and JSON status output.
-// It aggregates sessions, tasks, heartbeat, channel summary, and model/runtime metadata.
+// It aggregates sessions, heartbeat, channel summary, and model/runtime metadata.
 
 import { expectDefined } from "@openclaw/normalization-core";
 import type { SystemInfoResult } from "../../packages/gateway-protocol/src/schema/system-info.js";
@@ -65,9 +65,6 @@ const channelPluginIdsModuleLoader = createLazyImportLoader(
   () => import("../plugins/channel-plugin-ids.js"),
 );
 const linkChannelModuleLoader = createLazyImportLoader(() => import("./link-channel.js"));
-const taskRegistryMaintenanceModuleLoader = createLazyImportLoader(
-  () => import("../tasks/task-registry.maintenance.js"),
-);
 const staticModelCatalogResolverLoader = createLazyImportLoader(async () => {
   const modelCatalog = await import("../agents/embedded-agent-runner/model.static-catalog.js");
   return {
@@ -353,7 +350,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
   };
 }
 
-/** Builds the aggregate status summary for agents, sessions, tasks, heartbeat, and channels. */
+/** Builds the aggregate status summary for agents, sessions, heartbeat, and channels. */
 export async function getStatusSummary(
   options: {
     includeSensitive?: boolean;
@@ -471,21 +468,7 @@ export async function getStatusSummary(
       ),
     ),
   );
-  const taskMaintenanceModule = await taskRegistryMaintenanceModuleLoader.load();
-  // Status may overlap a live Gateway, so task inspection must not initialize
-  // the writable process registry or its schema-owning shared-state handle.
-  const taskInspection = await taskMaintenanceModule.getInspectableTaskStatusSummaryReadOnly();
   const now = Date.now();
-  const { taskAudit, taskAuditRetainedLost } = taskInspection;
-  const tasks = {
-    ...taskInspection.tasks,
-    ...(taskInspection.state === "migration-required"
-      ? {
-          warning:
-            "Task history is unavailable until Gateway startup or openclaw doctor --fix repairs the state database.",
-        }
-      : {}),
-  };
 
   const sessionDetails = includeSensitive ? await prepareSessionStatusDetails(cfg, now) : undefined;
 
@@ -569,9 +552,6 @@ export async function getStatusSummary(
       state,
       diagnostic: toPublicPluginVerificationDiagnostic(diagnostic),
     })),
-    tasks,
-    taskAudit,
-    ...(taskAuditRetainedLost.count > 0 ? { taskAuditRetainedLost } : {}),
     sessions: {
       paths: includeSensitive ? sessionStores.paths : [],
       count: sessionStores.count,
@@ -591,7 +571,7 @@ export type StatusSummary = Omit<
 > &
   Pick<
     GatheredStatusSummary,
-    "heartbeat" | "channelSummary" | "queuedSystemEvents" | "tasks" | "taskAudit" | "sessions"
+    "heartbeat" | "channelSummary" | "queuedSystemEvents" | "sessions"
   > & {
     runtimeVersion?: string | null;
     eventLoop?: NonNullable<SystemInfoResult["eventLoop"]>;

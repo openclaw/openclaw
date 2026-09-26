@@ -1,17 +1,14 @@
 import { setImmediate } from "node:timers/promises";
-import type { AgentHarnessTaskRecord } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
-import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import {
   childTurnCompletedNotification,
   CodexNativeSubagentMonitor,
   createClient,
-  createRecordedRuntime,
-  createTaskScope,
+  createRuntime,
+  createCompletionScope,
   notifyChildStarted,
   successfulSendInputOutput,
-  taskRecord,
   threadRead,
   turnStartedNotification,
 } from "./native-subagent-monitor.test-support.js";
@@ -93,13 +90,9 @@ async function submitFollowup(client: Client, submissionId = "turn-b") {
   await client.notify(successfulSendInputOutput({ callId: "send-b", submissionId }));
 }
 
-async function createFixture(
-  records = new Map<string, AgentHarnessTaskRecord>(),
-  submissionStore?: CodexNativeSubagentSubmissionStore,
-  historyOwner?: CodexNativeSubagentHistoryOwner,
-) {
+async function createFixture(submissionStore?: CodexNativeSubagentSubmissionStore) {
   const client = createClient();
-  const runtime = createRecordedRuntime(records);
+  const runtime = createRuntime();
   let connected = true;
   const heldClients = new Set<symbol>();
   const heldThreads = new Set<symbol>();
@@ -134,10 +127,9 @@ async function createFixture(
   const owner = await monitor.registerParent({
     parentThreadId: "parent-thread",
     requesterSessionKey: "agent:main:discord:channel:C123",
-    taskRuntimeScope: createTaskScope(),
+    completionScope: createCompletionScope(),
     agentId: "main",
     submissionStore,
-    historyOwner,
   });
   owner.bindTurn("parent-turn");
   return {
@@ -145,7 +137,6 @@ async function createFixture(
     runtime,
     monitor,
     owner,
-    records,
     heldClients,
     heldThreads,
     releaseHistory,
@@ -168,10 +159,8 @@ describe("Codex native transient predecessor anchor", () => {
     "parent-output-before-a-end",
     "parent-unregister-before-anchor",
   ] as const)("preserves the accepted follow-up when %s", async (order) => {
-    const records = new Map<string, AgentHarnessTaskRecord>();
     const receipts = new Map<string, CodexNativeSubagentSubmission>();
     const ownerStatesAtRecord: boolean[] = [];
-    const tasksAtConsume: Array<AgentHarnessTaskRecord | undefined> = [];
     let parentRegistered = true;
     const submissionStore = {
       assertCurrent: () => {},
@@ -184,18 +173,15 @@ describe("Codex native transient predecessor anchor", () => {
       }),
       consume: vi.fn<CodexNativeSubagentSubmissionStore["consume"]>(async (receipt, guard) => {
         guard();
-        tasksAtConsume.push(structuredClone(records.get(followupRunId)));
         return receipts.delete(receipt.callId);
       }),
     } satisfies CodexNativeSubagentSubmissionStore;
     const fixture = await createFixture(
-      records,
       order === "parent-unregister-before-anchor" ? submissionStore : undefined,
     );
     const { client, runtime, monitor, owner } = fixture;
     try {
       await notifyChildStarted(client);
-      expect(records.size).toBe(1);
       const startObservedBeforeOutput =
         order === "child-lifecycle-first" || order === "parent-output-before-a-end";
       if (startObservedBeforeOutput) {
@@ -208,7 +194,6 @@ describe("Codex native transient predecessor anchor", () => {
         await deliverInitialResult(client);
       }
       await submitFollowup(client);
-      expect(records.get(followupRunId)).toBeUndefined();
       if (order === "parent-unregister-before-anchor") {
         await owner.unregister();
         parentRegistered = false;
@@ -233,13 +218,6 @@ describe("Codex native transient predecessor anchor", () => {
         );
         expect(ownerStatesAtRecord).toEqual([false]);
       }
-      const completedA = structuredClone(records.get(initialRunId));
-      expect(completedA).toMatchObject({
-        status: "succeeded",
-        deliveryStatus: "delivered",
-        terminalSummary: "A result",
-        detail: { nativeTurnId: "turn-a" },
-      });
       await startTurn(client, "turn-b");
       await completeTurn(client, "turn-b", "B result");
       fixture.releaseHistory();
@@ -247,19 +225,11 @@ describe("Codex native transient predecessor anchor", () => {
       await owner.unregister();
       await setImmediate();
 
-      expect(records.get(initialRunId)).toEqual(completedA);
-      expect(records.get(followupRunId)).toMatchObject({
-        status: "succeeded",
-        deliveryStatus: "delivered",
-        terminalSummary: "B result",
-        detail: { nativeTurnId: "turn-b" },
-      });
-      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledExactlyOnceWith(
+      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ childSessionKey: followupRunId, result: "B result" }),
       );
       if (order === "parent-unregister-before-anchor") {
         expect(submissionStore.consume).toHaveBeenCalledOnce();
-        expect(tasksAtConsume).toEqual([expect.objectContaining({ runId: followupRunId })]);
         expect(receipts.size).toBe(0);
       }
     } finally {
@@ -268,7 +238,6 @@ describe("Codex native transient predecessor anchor", () => {
   });
 
   it("persists an admitted held receipt after detached observation loses its backing", async () => {
-    const records = new Map<string, AgentHarnessTaskRecord>();
     const receipts = new Map<string, CodexNativeSubagentSubmission>();
     const recordEntered = createDeferred<void>();
     const releaseRecord = createDeferred<void>();
@@ -288,7 +257,7 @@ describe("Codex native transient predecessor anchor", () => {
       }),
       consume: vi.fn<CodexNativeSubagentSubmissionStore["consume"]>(async () => false),
     } satisfies CodexNativeSubagentSubmissionStore;
-    const fixture = await createFixture(records, submissionStore);
+    const fixture = await createFixture(submissionStore);
     const { client, monitor, owner } = fixture;
     try {
       await notifyChildStarted(client);
@@ -298,13 +267,6 @@ describe("Codex native transient predecessor anchor", () => {
       await startTurn(client, "turn-a");
       await completeTurn(client, "turn-a", "A result");
       await recordEntered.promise;
-      const completedA = structuredClone(records.get(initialRunId));
-      expect(completedA).toMatchObject({
-        status: "succeeded",
-        deliveryStatus: "delivered",
-        detail: { nativeTurnId: "turn-a" },
-      });
-
       fixture.dropObservationBacking();
       fixture.releaseHistory();
       await monitor.reconcileChildThread("child-thread");
@@ -326,7 +288,6 @@ describe("Codex native transient predecessor anchor", () => {
           predecessorNativeTurnId: "turn-a",
         },
       ]);
-      expect([...records.values()]).toEqual([completedA]);
       expect(submissionStore.consume).not.toHaveBeenCalled();
       expect(fixture.heldClients.size).toBe(0);
       expect(fixture.heldThreads.size).toBe(0);
@@ -337,9 +298,9 @@ describe("Codex native transient predecessor anchor", () => {
     }
   });
 
-  it("creates no extra task or retained observation for an opaque steer after A catches up", async () => {
+  it("keeps an opaque steer from admitting completion or retaining observation after A catches up", async () => {
     const fixture = await createFixture();
-    const { client, owner, records, runtime } = fixture;
+    const { client, owner, runtime } = fixture;
     try {
       await notifyChildStarted(client);
       await submitFollowup(client, "opaque-steer-submission");
@@ -350,65 +311,11 @@ describe("Codex native transient predecessor anchor", () => {
       await owner.unregister();
       await setImmediate();
 
-      expect([...records.values()]).toEqual([
-        expect.objectContaining({
-          runId: initialRunId,
-          status: "succeeded",
-          deliveryStatus: "delivered",
-          detail: expect.objectContaining({ nativeTurnId: "turn-a" }),
-        }),
-      ]);
-      expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+      expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
       expect(fixture.heldClients.size).toBe(0);
       expect(fixture.heldThreads.size).toBe(0);
     } finally {
       await fixture.close();
     }
   });
-
-  it.each(["running", "succeeded"] as const)(
-    "does not invent a predecessor anchor for a %s legacy row from copied history or the submitted turn",
-    async (status) => {
-      const historyOwner = {
-        parentThreadId: "parent-thread",
-        sessionId: "session-1",
-        connectionFingerprint: "a".repeat(64),
-      };
-      const legacyA: AgentHarnessTaskRecord = {
-        ...taskRecord({
-          childThreadId: "child-thread",
-          status,
-          deliveryStatus: status === "succeeded" ? "delivered" : "not_applicable",
-          ...(status === "succeeded" ? { endedAt: 1 } : {}),
-        }),
-        ...(status === "succeeded" ? { terminalSummary: "A result" } : {}),
-        detail: {
-          nativeHistory: historyOwner,
-        },
-      };
-      const snapshot = structuredClone(legacyA);
-      const fixture = await createFixture(
-        new Map([[initialRunId, legacyA]]),
-        undefined,
-        historyOwner,
-      );
-      const { client, monitor, owner, records, runtime } = fixture;
-      try {
-        await notifyChildStarted(client);
-        await startTurn(client, "turn-b");
-        await completeTurn(client, "turn-b", "B result");
-        await submitFollowup(client);
-        fixture.releaseHistory();
-        await monitor.reconcileChildThread("child-thread");
-        await owner.unregister();
-        await setImmediate();
-
-        expect([...records.values()]).toEqual([snapshot]);
-        expect(records.get(followupRunId)).toBeUndefined();
-        expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
-      } finally {
-        await fixture.close();
-      }
-    },
-  );
 });

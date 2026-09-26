@@ -1,3 +1,9 @@
+import type {
+  SubagentCompletionMutation,
+  SubagentCompletionMutationResult,
+} from "../agents/subagents/completion/subagent-completion-mutation.types.js";
+import type { SubagentRunSqliteRow } from "../agents/subagents/registry/subagent-registry.store.codec.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import type { bindDeliveryQueueEntry } from "./delivery-queue-sqlite-bound.js";
 import type { DeliveryQueueStoredStatus } from "./delivery-queue-sqlite.kernel.js";
 import type { QueuedSessionDelivery } from "./session-delivery-queue.records.js";
@@ -12,6 +18,24 @@ export type SessionDeliveryAgentRunUpdate = {
 type PreparedEntry = ReturnType<typeof bindDeliveryQueueEntry>;
 
 export type SessionDeliveryWorkerOperations = {
+  "sessionDelivery.mutateSubagentCompletion": {
+    input: { writeId: string; mutation: SubagentCompletionMutation };
+    output: SubagentCompletionMutationResult & { writeId: string };
+  };
+  "sessionDelivery.admitSubagentCompletion": {
+    input: {
+      writeId: string;
+      queueEntry: QueuedSessionDelivery;
+      expected: SubagentRunRecord;
+      subagent: SubagentRunRecord;
+    };
+    output: {
+      writeId: string;
+      claimed: boolean;
+      status: DeliveryQueueStoredStatus;
+      row: SubagentRunSqliteRow;
+    };
+  };
   "sessionDelivery.enqueue": { input: PreparedEntry; output: void };
   "sessionDelivery.enqueueClaimed": {
     input: PreparedEntry;
@@ -44,6 +68,8 @@ export function isSessionDeliveryCommand(command: {
   input: unknown;
 }): command is SqliteWorkerCommand<SessionDeliveryWorkerOperations> {
   return (
+    command.type === "sessionDelivery.mutateSubagentCompletion" ||
+    command.type === "sessionDelivery.admitSubagentCompletion" ||
     command.type === "sessionDelivery.enqueue" ||
     command.type === "sessionDelivery.enqueueClaimed" ||
     command.type === "sessionDelivery.releaseClaim" ||

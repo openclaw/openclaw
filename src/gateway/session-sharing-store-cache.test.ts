@@ -1,17 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sessionsConfig from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import { setCanonicalSqliteSessionMainKey } from "../config/sessions/session-canonical-key.js";
 import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
-import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   initializeSessionReadContext,
@@ -25,9 +20,7 @@ import {
   resolveSessionMutationAuthorization,
   resolveSessionSharingTarget,
 } from "./session-sharing.js";
-import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
-import { canAccessTaskRequesterSession } from "./task-session-access.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -317,78 +310,6 @@ describe("session mutation authorization store caches", () => {
           });
           expect(alias.authorization).toBeUndefined();
         }
-      });
-    },
-  );
-
-  it.each(["warm", "cold canonical", "cold main alias"] as const)(
-    "bounds task visibility reads and rereads changed access with %s stores",
-    async (mode) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const sessionKey = "agent:main:task-requester";
-        const cfg = rolePolicyConfig();
-        if (mode === "cold main alias") {
-          cfg.session = { mainKey: "task-requester" };
-          setCanonicalSqliteSessionMainKey(
-            openOpenClawAgentDatabase({ agentId: "main" }),
-            "task-requester",
-          );
-        }
-        const requestClient = roleClient("view", "task-viewer");
-        const owner = roleClient("view", "task-owner");
-        const entry = {
-          sessionId: "session-task-requester",
-          updatedAt: 1,
-          visibility: "shared" as const,
-          createdActor: {
-            type: "human" as const,
-            source: "profile" as const,
-            id: owner.authenticatedUserProfile!.profileId,
-          },
-        };
-        await sessionAccessor.upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
-        for (let index = 0; index < 24; index += 1) {
-          await sessionAccessor.upsertSessionEntryCore(
-            { agentId: "main", sessionKey: `agent:main:unrelated-${index}` },
-            { sessionId: `unrelated-task-access-session-${index}`, updatedAt: 1 },
-          );
-        }
-        if (mode === "warm") {
-          expect(
-            sessionAccessor.loadExactSessionEntryReadOnly({ agentId: "main", sessionKey }),
-          ).toBeDefined();
-        } else {
-          closeOpenClawAgentDatabasesForTest();
-        }
-        const access = {
-          cfg,
-          client: requestClient,
-          task: {
-            requesterAgentId: "main",
-            requesterSessionKey: mode === "cold main alias" ? "main" : sessionKey,
-            ownerKey: sessionKey,
-          },
-        };
-        const parseSpy = vi.spyOn(JSON, "parse");
-        expect(canAccessTaskRequesterSession(access)).toBe(true);
-        // Both cold and warm exact reads validate only their selected candidate keys.
-        expect(
-          parseSpy.mock.calls.filter(([value]) => value.includes("unrelated-task-access-session-")),
-        ).toHaveLength(0);
-        parseSpy.mockClear();
-        expect(canAccessTaskRequesterSession(access)).toBe(true);
-        expect(
-          parseSpy.mock.calls.filter(([value]) => value.includes("unrelated-task-access-session-")),
-        ).toHaveLength(0);
-        if (mode !== "warm") {
-          expect(listOpenClawAgentDatabasesForTest()).toHaveLength(0);
-        }
-        await sessionAccessor.upsertSessionEntryCore(
-          { agentId: "main", sessionKey },
-          { ...entry, visibility: "draft", updatedAt: 2 },
-        );
-        expect(canAccessTaskRequesterSession(access)).toBe(false);
-        expect(canAccessTaskRequesterSession({ ...access, client: owner })).toBe(true);
       });
     },
   );

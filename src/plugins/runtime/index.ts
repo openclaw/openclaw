@@ -25,8 +25,6 @@ import { createRuntimeChannel } from "./runtime-channel.js";
 import { createRuntimeEvents } from "./runtime-events.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
-import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
-import { createRuntimeTasks } from "./runtime-tasks.js";
 import type { PluginRuntimeFactory, PluginRuntime } from "./types.js";
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("../../plugin-sdk/tts-runtime.js"));
@@ -199,10 +197,6 @@ export const createPluginRuntime: PluginRuntimeFactory = (
   _options = {},
   base = createRuntimeBase(),
 ) => {
-  const taskFlow = createRuntimeTaskFlow();
-  const tasks = createRuntimeTasks({
-    managedTaskFlow: taskFlow,
-  });
   const agent = createRuntimeAgent();
   let modelAuth = _options.modelAuth;
   let modelConfig = _options.modelConfig;
@@ -240,7 +234,6 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
     state: base.state,
-    tasks,
 
     tts: createRuntimeTts(),
     mediaUnderstanding: createRuntimeMediaUnderstandingFacade(),

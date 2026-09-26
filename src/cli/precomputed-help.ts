@@ -24,7 +24,6 @@ const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = new Set<PrecomputedSubcommandHelpNa
   "models",
   "plugins",
   "sessions",
-  "tasks",
 ]);
 
 function resolvePrecomputedCommandHelpName<T extends string>(

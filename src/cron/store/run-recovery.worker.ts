@@ -3,6 +3,7 @@ import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contra
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type { CronJobPolicyContext, Logger } from "../service/state.js";
 import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
+import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import { repairCronRunInDatabase } from "./run-recovery.kernel.js";
 import type { CronRunRecoveryOutcome } from "./run-recovery.types.js";
 import {
@@ -17,6 +18,7 @@ export function repairCronRunInWorker(
 ): CronRuntimeWorkerOperations["cron.repairRun"]["output"] {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
+      const receiptSchema = prepareCronRunReceiptWriteSchema(db);
       const row = loadCronRows(db, input.storeKey, new Set([input.proposal.jobId]))[0];
       const job = row ? loadedCronStoreFromRows([row]).store.jobs[0] : undefined;
       const preparation = prepareCronRuntimeMutation("cron.repairRun", input.nonce, {
@@ -44,6 +46,7 @@ export function repairCronRunInWorker(
       };
       const result = repairCronRunInDatabase({
         database,
+        receiptSchema,
         row,
         job,
         storeKey: input.storeKey,

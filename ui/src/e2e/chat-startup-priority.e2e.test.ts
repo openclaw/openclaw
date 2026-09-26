@@ -1,6 +1,5 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { TaskSummary } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -17,7 +16,6 @@ const sessionKey = "agent:research:dashboard:12345678-90ab-cdef-1234-567890abcde
 const historyText = "Authoritative selected conversation.";
 const bulkMethods = ["sessions.list", "sessions.catalog.list"];
 const secondaryMethods = [
-  "tasks.list",
   "taskSuggestions.list",
   "progressCard.get",
   "sessions.groups.list",
@@ -59,7 +57,6 @@ async function installStartupGateway(page: Page) {
         ],
       },
       "sessions.catalog.list": { catalogs: [] },
-      "tasks.list": { tasks: [] },
       "taskSuggestions.list": { suggestions: [] },
       "taskSuggestions.dismiss": { taskId: "explicit-suggestion", dismissed: true },
       "progressCard.get": { card: null },
@@ -128,18 +125,6 @@ suite.define(() => {
         }
         await expectBulkReadsHeld(gateway);
         const fixtureTime = Date.now();
-        const task = {
-          id: "startup-task",
-          taskId: "startup-task",
-          status: "running",
-          runtime: "subagent",
-          agentId: "research",
-          title: "Queued task during startup",
-          sessionKey,
-          createdAt: fixtureTime,
-          updatedAt: fixtureTime,
-          startedAt: fixtureTime,
-        } satisfies TaskSummary;
         const suggestion = {
           id: "startup-suggestion",
           title: "Queued suggestion during startup",
@@ -150,7 +135,6 @@ suite.define(() => {
           agentId: "research",
           createdAt: fixtureTime,
         };
-        await gateway.setMethodResponse("tasks.list", { tasks: [task] });
         await gateway.setMethodResponse("taskSuggestions.list", { suggestions: [suggestion] });
         await gateway.setMethodResponse("progressCard.get", {
           card: {
@@ -160,7 +144,6 @@ suite.define(() => {
             markdown: "Current rollout progress",
           },
         });
-        await gateway.emitGatewayEvent("task", { action: "upserted", task });
         await gateway.emitGatewayEvent("task.suggestion", { action: "created", suggestion });
         await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 2 });
         await gateway.emitGatewayEvent("sessions.changed", {
@@ -201,7 +184,7 @@ suite.define(() => {
               ),
           )
           .toBe(true);
-        for (const method of ["tasks.list", "taskSuggestions.list", "progressCard.get"]) {
+        for (const method of ["taskSuggestions.list", "progressCard.get"]) {
           expect(await gateway.getRequests(method), `${method} while hidden`).toEqual([]);
         }
         await page.evaluate(() => {
@@ -214,7 +197,7 @@ suite.define(() => {
         await transcript.getByText(historyText, { exact: true }).waitFor();
         for (const method of secondaryMethods) {
           await gateway.waitForRequest(method);
-          expect(await gateway.getRequests(method)).toHaveLength(method === "tasks.list" ? 2 : 1);
+          expect(await gateway.getRequests(method)).toHaveLength(1);
         }
         await page
           .locator(".chat-pane-cache__pane--active")
@@ -263,78 +246,6 @@ suite.define(() => {
       }
     });
   });
-
-  it.each([
-    { outcome: "success", opener: "toolbar" },
-    { outcome: "hidden failure", opener: "toolbar" },
-    { outcome: "hidden retry", opener: "toolbar" },
-    { outcome: "success", opener: "keyboard" },
-  ] as const)(
-    "keeps explicitly opened Tasks current after $outcome via $opener while chat remains held",
-    async ({ outcome, opener }) => {
-      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-        const gateway = await installStartupGateway(page);
-        await openPendingChat(page, gateway);
-        for (const method of secondaryMethods) {
-          expect(await gateway.getRequests(method)).toEqual([]);
-        }
-        await gateway.deferNext("tasks.list");
-        if (opener === "keyboard") {
-          await page.keyboard.press("Meta+Alt+Shift+K");
-        } else {
-          await page.locator(".chat-pane-cache__pane--active .chat-tasks-toggle").click();
-        }
-        await gateway.waitForRequest("tasks.list");
-        expect(await gateway.getRequests("tasks.list")).toHaveLength(2);
-        await gateway.emitGatewayEvent("task", { action: "restored" });
-        if (outcome !== "success") {
-          await page.evaluate(() => {
-            Object.defineProperty(document, "visibilityState", {
-              configurable: true,
-              get: () => "hidden",
-            });
-            document.dispatchEvent(new Event("visibilitychange"));
-          });
-          await gateway.rejectDeferred("tasks.list", {
-            code: "UNAVAILABLE",
-            message: "Superseded task snapshot failed.",
-            ...(outcome === "hidden retry" ? { retryable: true, retryAfterMs: 1 } : {}),
-          });
-          await expect
-            .poll(() =>
-              page.locator(".chat-pane-cache__pane--active").evaluate(
-                (pane) =>
-                  (
-                    pane as HTMLElement & {
-                      state: { backgroundTasksState: { loading: boolean } };
-                    }
-                  ).state.backgroundTasksState.loading,
-              ),
-            )
-            .toBe(false);
-          expect(await gateway.getRequests("tasks.list")).toHaveLength(2);
-          await page.evaluate(() => {
-            Object.defineProperty(document, "visibilityState", {
-              configurable: true,
-              get: () => "visible",
-            });
-            document.dispatchEvent(new Event("visibilitychange"));
-          });
-        } else {
-          await gateway.resolveDeferred("tasks.list");
-        }
-        await gateway.waitForRequest("tasks.list", { after: 2 });
-        expect(await gateway.getRequests("tasks.list")).toHaveLength(4);
-        for (const method of secondaryMethods.filter((candidate) => candidate !== "tasks.list")) {
-          expect(await gateway.getRequests(method)).toEqual([]);
-        }
-        expect(await page.getByText(historyText, { exact: true }).count()).toBe(0);
-        await gateway.resolveDeferred("chat.startup");
-        await page.locator(".chat-thread").getByText(historyText, { exact: true }).waitFor();
-        expect(await gateway.getRequests("tasks.list")).toHaveLength(4);
-      });
-    },
-  );
 
   it.each([
     { visibility: "hidden document", pendingSnapshot: false },
@@ -400,74 +311,6 @@ suite.define(() => {
           .waitFor();
         // A pending snapshot already carrying revision 3 satisfies the hidden event.
         expect(await gateway.getRequests("progressCard.get")).toHaveLength(pendingSnapshot ? 1 : 2);
-      });
-    },
-  );
-
-  it.each([false, true])(
-    "keeps task events through initial snapshot failure (before admission: %s)",
-    async (early) => {
-      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-        const gateway = await installStartupGateway(page);
-        await openPendingChat(page, gateway);
-        const task = {
-          id: "resumed-task",
-          taskId: "resumed-task",
-          status: "running",
-          runtime: "subagent",
-          agentId: "research",
-          title: "Task received around snapshot failure",
-          sessionKey,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        } satisfies TaskSummary;
-        if (early) {
-          await gateway.emitGatewayEvent("task", { action: "upserted", task });
-          expect(await gateway.getRequests("tasks.list")).toHaveLength(0);
-        }
-        await gateway.deferNext("tasks.list");
-        await gateway.resolveDeferred("chat.startup");
-        await gateway.waitForRequest("tasks.list");
-        await gateway.rejectDeferred("tasks.list", {
-          code: "INVALID_REQUEST",
-          message: "Synthetic task snapshot failure.",
-        });
-        await expect
-          .poll(() =>
-            page.locator(".chat-pane-cache__pane--active").evaluate(
-              (pane) =>
-                (
-                  pane as HTMLElement & {
-                    state: { backgroundTasksState: { error: string | null } };
-                  }
-                ).state.backgroundTasksState.error,
-            ),
-          )
-          .toBe("Synthetic task snapshot failure.");
-        if (early) {
-          await page.getByText(task.title, { exact: true }).waitFor();
-          expect(await gateway.getRequests("tasks.list")).toHaveLength(2);
-          return;
-        }
-        await page.evaluate(() => {
-          Object.defineProperty(document, "visibilityState", {
-            configurable: true,
-            get: () => "hidden",
-          });
-          document.dispatchEvent(new Event("visibilitychange"));
-        });
-        await gateway.setMethodResponse("tasks.list", { tasks: [task] });
-        await gateway.emitGatewayEvent("task", { action: "upserted", task });
-        expect(await gateway.getRequests("tasks.list")).toHaveLength(2);
-        await page.evaluate(() => {
-          Object.defineProperty(document, "visibilityState", {
-            configurable: true,
-            get: () => "visible",
-          });
-          document.dispatchEvent(new Event("visibilitychange"));
-        });
-        await gateway.waitForRequest("tasks.list", { after: 2 });
-        expect(await gateway.getRequests("tasks.list")).toHaveLength(4);
       });
     },
   );
@@ -589,7 +432,7 @@ suite.define(() => {
             message: "Synthetic history unavailable.",
           });
           await page.getByRole("alert").getByText("Synthetic history unavailable.").waitFor();
-          for (const method of ["tasks.list", "taskSuggestions.list", "progressCard.get"]) {
+          for (const method of ["taskSuggestions.list", "progressCard.get"]) {
             await gateway.waitForRequest(method);
           }
         } else {
@@ -602,7 +445,7 @@ suite.define(() => {
           await gateway.resolveDeferred("chat.startup");
           expect(new URL(page.url()).pathname).toBe("/new");
           expect(await page.getByText(historyText, { exact: true }).isVisible()).toBe(false);
-          for (const method of ["tasks.list", "taskSuggestions.list", "progressCard.get"]) {
+          for (const method of ["taskSuggestions.list", "progressCard.get"]) {
             expect(await gateway.getRequests(method), `${method} from retired chat`).toEqual([]);
           }
         }

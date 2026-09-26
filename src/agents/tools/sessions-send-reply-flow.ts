@@ -15,7 +15,7 @@ import {
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 const log = createSubsystemLogger("agents/sessions-send");
 
-/** Legacy peers observe a run; native child followups consume their existing task result. */
+/** Legacy peers observe a run; native child followups consume their retained result. */
 export function startSessionsSendReplyFlow(
   params: Parameters<typeof runSessionsSendA2AFlow>[0] & {
     runId: string;

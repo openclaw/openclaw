@@ -11,11 +11,6 @@ import {
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { configureInMemoryTaskStoresForTests } from "../../tasks/task-registry.test-support.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../../tasks/task-runtime.test-helpers.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import {
   runContextEngineMaintenance,
@@ -40,9 +35,6 @@ it.for([
 ] as const)("joins every factory lifetime for $name", async ({ ids, releaseFailure }, ctx) => {
   await withStateDirEnv("openclaw-factory-disposal-", async ({ stateDir }) => {
     resetCommandQueueStateForTest();
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    configureInMemoryTaskStoresForTests();
     const db = new DatabaseSync(path.join(stateDir, "factory.sqlite"));
     db.exec("CREATE TABLE answer(value INTEGER); INSERT INTO answer VALUES (42)");
     const context = new AsyncLocalStorage<string>();
@@ -178,7 +170,7 @@ it.for([
       });
     };
     try {
-      // Maintenance includes durable settlement; its phase waits share the test's
+      // Maintenance includes descendant settlement; its phase waits share the test's
       // cancellation boundary rather than imposing a separate latency contract.
       await schedule(ids[0], 0);
       await racePromiseWithAbortSignal(activeEntered.promise, ctx.signal);
@@ -231,8 +223,6 @@ it.for([
       db.close();
       warn.mockRestore();
       resetCommandQueueStateForTest();
-      resetTaskRegistryForTests({ persist: false });
-      resetTaskFlowRegistryForTests({ persist: false });
     }
   });
 });

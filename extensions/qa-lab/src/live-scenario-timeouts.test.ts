@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import type { QaNativeSubagentRun } from "./execution-identity-storage-inspection.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
@@ -21,14 +22,8 @@ type CompletionSuccessfulToolEvent = {
   toolCallId: string;
 };
 
-type CompletionTaskFixture = {
+type CompletionRunFixture = Omit<QaNativeSubagentRun, "childSessionKey"> & {
   childSessionKey?: string;
-  createdAt: number;
-  deliveryStatus: "delivered" | "pending";
-  endedAt?: number;
-  label: string;
-  requesterSessionKey: string;
-  status: "running" | "succeeded";
 };
 
 type CompletionParentReplyFixture = {
@@ -46,15 +41,19 @@ type CompletionParentOutboundFixture = {
   text?: string;
 };
 
-const deliveredCompletionTask: CompletionTaskFixture = {
+const deliveredCompletionRun = {
+  runId: "completion-child-run",
   childSessionKey: completionChildSessionKey,
   createdAt: completionAttemptStartedAt + 1,
-  deliveryStatus: "delivered",
-  endedAt: completionChildEndedAt,
+  delivery: { status: "delivered" },
+  execution: {
+    status: "terminal",
+    endedAt: completionChildEndedAt,
+    outcome: { status: "ok" },
+  },
   label: "issue-109025-completion-child-00000000",
   requesterSessionKey: completionParentSessionKey,
-  status: "succeeded",
-};
+} satisfies QaNativeSubagentRun;
 
 function runCompletionPolicyFlow(
   params: {
@@ -75,13 +74,13 @@ function runCompletionPolicyFlow(
     successfulChildReads?: number;
     successfulParentToolEvents?: CompletionSuccessfulToolEvent[];
     successfulParentToolCalls?: Record<string, number>;
-    taskLookupError?: Error;
-    tasks?: CompletionTaskFixture[];
+    runLookupError?: Error;
+    runs?: CompletionRunFixture[];
   } = {},
 ) {
   const state = createQaBusState();
   const gatewayCalls: Array<{ method: string; request: { sessionKey?: string } }> = [];
-  const taskCommands: unknown[] = [];
+  const runRequesterSessionKeys: string[] = [];
   const transcriptSessionKeys: string[] = [];
   const transcriptReadOptions: unknown[] = [];
   const workspaceWrites: Array<{ content: string; filePath: string }> = [];
@@ -307,12 +306,12 @@ function runCompletionPolicyFlow(
         }
         throw new Error(`unexpected completion transcript session: ${sessionKey}`);
       },
-      runQaCli: async (_env: unknown, command: unknown) => {
-        taskCommands.push(command);
-        if (params.taskLookupError) {
-          throw params.taskLookupError;
+      readNativeQaSubagentRuns: async (_env: unknown, requesterSessionKey: string) => {
+        runRequesterSessionKeys.push(requesterSessionKey);
+        if (params.runLookupError) {
+          throw params.runLookupError;
         }
-        return { tasks: params.tasks ?? [deliveredCompletionTask] };
+        return params.runs ?? [deliveredCompletionRun];
       },
     },
   });
@@ -321,7 +320,7 @@ function runCompletionPolicyFlow(
     gatewayCalls,
     result,
     state,
-    taskCommands,
+    runRequesterSessionKeys,
     transcriptReadOptions,
     transcriptSessionKeys,
     workspaceWrites,
@@ -416,37 +415,65 @@ describe("live subagent scenario timeouts", () => {
   });
 
   it.each([
-    { reason: "missing child task", tasks: [] },
+    { reason: "missing child run", runs: [] },
     {
-      reason: "stale child task",
-      tasks: [{ ...deliveredCompletionTask, createdAt: completionAttemptStartedAt - 1 }],
+      reason: "stale child run",
+      runs: [{ ...deliveredCompletionRun, createdAt: completionAttemptStartedAt - 1 }],
     },
     {
       reason: "different child label",
-      tasks: [{ ...deliveredCompletionTask, label: "another-child" }],
+      runs: [{ ...deliveredCompletionRun, label: "another-child" }],
     },
     {
       reason: "different requester session",
-      tasks: [{ ...deliveredCompletionTask, requesterSessionKey: "agent:qa:someone-else" }],
+      runs: [{ ...deliveredCompletionRun, requesterSessionKey: "agent:qa:someone-else" }],
     },
     {
-      reason: "unfinished child task",
-      tasks: [{ ...deliveredCompletionTask, status: "running" as const }],
+      reason: "unfinished child run",
+      runs: [
+        {
+          ...deliveredCompletionRun,
+          execution: { ...deliveredCompletionRun.execution, status: "running" },
+        },
+      ],
+    },
+    {
+      reason: "failed child run",
+      runs: [
+        {
+          ...deliveredCompletionRun,
+          execution: { ...deliveredCompletionRun.execution, outcome: { status: "error" } },
+        },
+      ],
+    },
+    {
+      reason: "missing child outcome",
+      runs: [
+        {
+          ...deliveredCompletionRun,
+          execution: { ...deliveredCompletionRun.execution, outcome: undefined },
+        },
+      ],
     },
     {
       reason: "undelivered child completion",
-      tasks: [{ ...deliveredCompletionTask, deliveryStatus: "pending" as const }],
+      runs: [{ ...deliveredCompletionRun, delivery: { status: "pending" } }],
     },
     {
       reason: "missing child session identity",
-      tasks: [{ ...deliveredCompletionTask, childSessionKey: undefined }],
+      runs: [{ ...deliveredCompletionRun, childSessionKey: undefined }],
     },
     {
       reason: "missing child completion timestamp",
-      tasks: [{ ...deliveredCompletionTask, endedAt: undefined }],
+      runs: [
+        {
+          ...deliveredCompletionRun,
+          execution: { ...deliveredCompletionRun.execution, endedAt: undefined },
+        },
+      ],
     },
-  ])("rejects a $reason despite matching Gateway completion text", async ({ tasks }) => {
-    await expect(runCompletionPolicyFlow({ tasks }).result).rejects.toThrow(
+  ])("rejects a $reason despite matching Gateway completion text", async ({ runs }) => {
+    await expect(runCompletionPolicyFlow({ runs }).result).rejects.toThrow(
       "test condition was not met",
     );
   });
@@ -684,11 +711,11 @@ describe("live subagent scenario timeouts", () => {
     },
   );
 
-  it("surfaces task snapshot failures without converting them into retry timeouts", async () => {
+  it("surfaces native run snapshot failures without converting them into retry timeouts", async () => {
     await expect(
-      runCompletionPolicyFlow({ taskLookupError: new Error("durable task snapshot unavailable") })
+      runCompletionPolicyFlow({ runLookupError: new Error("native run snapshot unavailable") })
         .result,
-    ).rejects.toThrow("durable task snapshot unavailable");
+    ).rejects.toThrow("native run snapshot unavailable");
   });
 
   it.each([
@@ -702,7 +729,7 @@ describe("live subagent scenario timeouts", () => {
       successfulChildReads: 3,
       failure: "child did not successfully read the complete chain",
     },
-  ])("rejects a delivered task with the $reason", async (fixture) => {
+  ])("rejects a delivered child with the $reason", async (fixture) => {
     await expect(runCompletionPolicyFlow(fixture).result).rejects.toThrow(fixture.failure);
   });
 
@@ -711,7 +738,7 @@ describe("live subagent scenario timeouts", () => {
       gatewayCalls,
       result,
       state,
-      taskCommands,
+      runRequesterSessionKeys,
       transcriptReadOptions,
       transcriptSessionKeys,
     } = runCompletionPolicyFlow();
@@ -723,7 +750,7 @@ describe("live subagent scenario timeouts", () => {
         request: { sessionKey: completionParentSessionKey, limit: 100, maxChars: 131_072 },
       },
     ]);
-    expect(taskCommands).toEqual([["tasks", "list", "--json", "--runtime", "subagent"]]);
+    expect(runRequesterSessionKeys).toEqual([completionParentSessionKey]);
     expect(transcriptSessionKeys).toEqual([
       completionParentSessionKey,
       completionParentSessionKey,

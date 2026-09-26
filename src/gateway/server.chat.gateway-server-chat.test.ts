@@ -1451,8 +1451,9 @@ describe("gateway server chat", () => {
             getEmbeddedRuns: () => 0,
             getCronRuns: () => 0,
             getBackgroundExecSessions: () => 0,
-            getActiveTasks: () => 0,
-            getTaskBlockers: () => [],
+            getAgentRuns: () => 0,
+            getAcpRuns: () => 0,
+            getMediaRuns: () => 0,
           };
           expect(createSafeGatewayRestartPreflight(restartInspectors)).toMatchObject({
             safe: false,
@@ -1483,10 +1484,7 @@ describe("gateway server chat", () => {
       const sessionsRes = await rpcReq<{ sessions?: unknown[] }>(ws, "sessions.list", {});
       expect(sessionsRes.ok).toBe(true);
       const session = sessionsRes.payload?.sessions?.find(
-        (row): row is Record<string, unknown> =>
-          Boolean(row) &&
-          typeof row === "object" &&
-          (row as { key?: unknown }).key === "agent:main:main",
+        (row) => isRecord(row) && row.key === "agent:main:main",
       );
       const actualSession = expectRecordFields(session, {
         status: "failed",

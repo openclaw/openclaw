@@ -12,8 +12,8 @@ import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../conte
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AssistantMessage, Model } from "../../../llm/types.js";
 import type { CommandQueueTaskDeadline } from "../../../process/command-queue.types.js";
-import type { AgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import type { AgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.types.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
@@ -217,8 +217,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   runtimePlan?: AgentRuntimePlan;
   /** Reports terminal tool facts to the host-owned attempt outcome accumulator. */
   observeToolTerminal?: EmbeddedRunAttemptToolTerminalObserver;
-  /** Host-issued scope for harnesses that mirror native child runs into task state. */
-  agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
+  /** Host-issued scope for harness-owned child completion. */
+  agentHarnessCompletionScope?: AgentHarnessCompletionScope;
   /** Host-only originals retained across native image projection. */
   inputAttachmentMedia?: RunEmbeddedAgentParams["media"];
   /** Storage-aware trajectory recorder owned by the OpenClaw host. */

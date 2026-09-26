@@ -97,7 +97,6 @@ export {
   pluginStateDeleteEntriesIfUnchanged,
   pluginStateDoctorEntriesInKeyRange,
 } from "./plugin-state-store.sqlite.js";
-export { sweepExpiredPluginStateEntriesInWorker as sweepExpiredPluginStateEntries } from "./plugin-state-worker-client.js";
 
 function createKeyedStoreForPluginId<T>(
   pluginId: string,

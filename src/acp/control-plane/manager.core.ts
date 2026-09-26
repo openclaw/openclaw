@@ -5,13 +5,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
+import { recordSubagentTerminalState } from "../../sessions/subagent-terminal-state.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import {
   runAcceptedManagerTurn,
   type AcceptedTurns,
   type AcceptedTurnState,
 } from "./manager.accepted-turns.js";
-import { recordQueuedBackgroundTaskCancellation } from "./manager.background-task.js";
 import { cancelManagerAcceptedTurn, runManagerCancelSession } from "./manager.cancel-session.js";
 import { runManagerCloseSession } from "./manager.close-session.js";
 import { reconcileManagerRuntimeSessionIdentifiers } from "./manager.identity-reconcile.js";
@@ -35,6 +35,7 @@ import { runManagerGetSessionStatus } from "./manager.status.js";
 import { runManagerTurn } from "./manager.turn-runner.js";
 import { emitCancelledAcpTurn } from "./manager.turn-stream.js";
 import {
+  DEFAULT_DEPS,
   type AcpCloseSessionInput,
   type AcpCloseSessionResult,
   type AcpInitializeSessionInput,
@@ -47,19 +48,18 @@ import {
   type AcpSessionTarget,
   type AcpStartupIdentityReconcileResult,
   type ActiveTurnState,
-  DEFAULT_DEPS,
-  type SessionAcpMeta,
-  type SessionEntry,
-  type TurnLatencyStats,
   type EnsureManagerRuntimeHandle,
   type ReconcileManagerRuntimeSessionIdentifiers,
+  type SessionAcpMeta,
+  type SessionEntry,
   type SetManagerSessionState,
+  type TurnLatencyStats,
   type WriteManagerSessionMeta,
 } from "./manager.types.js";
 import {
-  resolveAcpSessionTarget,
-  normalizeAcpErrorCode,
   acpSessionActorKey,
+  normalizeAcpErrorCode,
+  resolveAcpSessionTarget,
   resolveMissingMetaError,
 } from "./manager.utils.js";
 import {
@@ -344,14 +344,31 @@ export class AcpSessionManager {
       turns: this.acceptedTurns,
       withSessionActor: this.withSessionActor.bind(this),
       onQueuedCancellation: async (assertCurrent) => {
-        await recordQueuedBackgroundTaskCancellation({
-          input,
-          ...target,
-          deps: this.deps,
-          startedAt,
-          assertCurrent,
-        });
         assertCurrent();
+        const firstAccepted = [...(this.acceptedTurns.get(acpSessionActorKey(target)) ?? [])].find(
+          (turn) => turn.requestId === input.requestId,
+        );
+        // The signal is keyed by run id; an earlier accepted instance still owns it.
+        if (
+          input.mode === "prompt" &&
+          firstAccepted?.instanceId === input.admittedRunContext.operationalRunInstance.instanceId
+        ) {
+          const entry = this.deps.loadSessionEntry({ cfg: input.cfg, ...target })?.entry;
+          const requesterSessionKey =
+            normalizeText(entry?.spawnedBy) ?? normalizeText(entry?.parentSessionKey);
+          if (requesterSessionKey) {
+            await recordSubagentTerminalState(
+              {
+                childSessionKey: target.sessionKey,
+                runId: input.requestId,
+                requesterSessionKey,
+                outcomeStatus: "cancelled",
+              },
+              assertCurrent,
+            );
+            assertCurrent();
+          }
+        }
         await emitCancelledAcpTurn(input.onEvent);
         this.recordTurnCompletion({ startedAt });
       },

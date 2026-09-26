@@ -5,11 +5,8 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/co
 import { resetConfigOverrides } from "../../../../src/config/runtime-overrides.js";
 import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { createCronRunHandle, finishCronRun } from "../../../../src/cron/service/run-history.js";
 import { createCronServiceState } from "../../../../src/cron/service/state.js";
-import {
-  tryCreateCronTaskRunHandle,
-  tryFinishCronTaskRun,
-} from "../../../../src/cron/service/task-runs.js";
 import { saveCronStore } from "../../../../src/cron/store.js";
 import type { CronJob } from "../../../../src/cron/types.js";
 import {
@@ -19,7 +16,6 @@ import {
 import { resetAgentEventsForTest } from "../../../../src/infra/agent-events.js";
 import { resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
-import { resetTaskRegistryForTests } from "../../../../src/tasks/task-runtime.test-helpers.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../../../src/test-utils/env.js";
 import { createTestGatewayScheduler } from "../../../../src/test-utils/gateway-scheduler-clock.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
@@ -48,7 +44,6 @@ function resetGatewayState(): void {
   clearSessionStoreCacheForTest();
   resetAgentEventsForTest({ preserveListeners: true });
   resetSystemEventsForTest();
-  resetTaskRegistryForTests({ persist: false });
 }
 
 function cronJob(params: {
@@ -108,7 +103,6 @@ describe("Gateway cron startup recovery", () => {
     }
     deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
     closeOpenClawStateDatabaseForTest();
-    resetTaskRegistryForTests({ persist: false });
 
     const startedAtMs = Date.now() - 30_000;
     const endedAtMs = startedAtMs + 2_000;
@@ -156,15 +150,15 @@ describe("Gateway cron startup recovery", () => {
     });
 
     for (const job of jobs) {
-      const taskRunId = tryCreateCronTaskRunHandle({
+      const taskRunId = createCronRunHandle({
         state: executionState,
         job,
         startedAt: startedAtMs,
       })?.runId;
       if (!taskRunId) {
-        throw new Error(`task history was not created for ${job.id}`);
+        throw new Error(`cron history identity was not created for ${job.id}`);
       }
-      tryFinishCronTaskRun(executionState, {
+      await finishCronRun(executionState, {
         taskRunId,
         job,
         event: {

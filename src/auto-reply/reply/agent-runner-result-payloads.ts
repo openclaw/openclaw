@@ -1,9 +1,9 @@
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
+  hasVisibleOutboundDeliveryEvidence,
   resolveExplicitFinalSourceReplyDeliveryEvidence,
   resolveSourceReplyDelivery,
-  hasVisibleOutboundDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
   isSyntheticSourceReplyTurn,
@@ -33,15 +33,14 @@ import {
   isReplyPayloadStatusNotice,
   isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
-  setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
   buildSilentFallbackFailurePayload,
   hasSuccessfulSourceReplyDelivery,
-  resolveTerminalReplyDelivery,
   refreshSessionEntryFromStore,
   resolveSourceReplyPolicy,
+  resolveTerminalReplyDelivery,
 } from "./agent-runner-core.js";
 import { buildEmptyInteractiveReplyPayload } from "./agent-runner-failure-reply.js";
 import { signalTypingIfNeeded } from "./agent-runner-helpers.js";
@@ -610,25 +609,6 @@ export async function prepareReplyAgentPayloads(state: {
           },
         };
         opts?.onPendingContinuation?.(settlement);
-      }
-      // Ordinary replies must not load the task presentation runtime.
-      const { createTaskProgressContinuation } =
-        await import("../../tasks/task-progress-requester.js");
-      const progressContinuation = await createTaskProgressContinuation({
-        requesterSessionKey,
-        requesterAgentId: followupRun.run.agentId,
-        requesterTurnRunId: runId,
-        acceptedSessionSpawns,
-        ...(implicitContinuation
-          ? {
-              onAdopted: (presentation: ProgressContinuationState) => {
-                progressPresentation = presentation;
-              },
-            }
-          : {}),
-      });
-      if (progressContinuation) {
-        setReplyPayloadMetadata(statusPayload, { progressContinuation });
       }
     }
   }

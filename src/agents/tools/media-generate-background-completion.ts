@@ -1,19 +1,29 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { sessionMatchesExpectedTranscriptTurn } from "../../config/sessions/session-transcript-turn-state.js";
+import {
+  captureSessionTranscriptStorageEnvironment,
+  sameSessionTranscriptStorageEnvironment,
+  type SessionTranscriptTargetBinding,
+} from "../../config/sessions/transcript-target-binding.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SessionDeliveryRequesterBinding } from "../../infra/session-delivery-queue.records.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { RequiredCompletionTerminalResult } from "../../tasks/task-completion-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import type { RequiredCompletionTerminalResult } from "../completion-result.js";
 import {
   formatGeneratedAttachmentLines,
   mediaUrlsFromGeneratedAttachments,
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
+import { isMediaGenerationOperationCurrent } from "../media-generation-activity.js";
 import { deliverSubagentAnnouncement } from "../subagents/announce/subagent-announce-delivery.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-completion");
 // Only blocked results missed the requester; retain references instead of resending.
-// Match task-summary.ts TASK_RESULT_MAX_CHARS so authorized reads keep the full payload.
+// Bound the process-local failure summary independently of durable transcript retention.
 const MEDIA_GENERATION_RETAINED_RESULT_MAX_CHARS = 4_000;
 
 export type MediaGenerationTaskHandle = {
@@ -22,8 +32,59 @@ export type MediaGenerationTaskHandle = {
   requesterSessionKey: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
+  detach: boolean;
+  requesterTranscript?: SessionTranscriptTargetBinding & { lifecycleRevision: string | null };
   taskLabel: string;
 };
+
+/** Preserve an undelivered result in its original conversation without resending it. */
+export async function retainBlockedMediaCompletion(params: {
+  handle: MediaGenerationTaskHandle | null;
+  terminalResult: RequiredCompletionTerminalResult | undefined;
+  attachments?: AgentGeneratedAttachment[];
+  mediaUrls?: string[];
+}): Promise<void> {
+  const handle = params.handle;
+  const target = handle?.requesterTranscript;
+  if (!handle || !target || params.terminalResult?.terminalOutcome !== "blocked") {
+    return;
+  }
+  const assertCurrent = () => {
+    if (
+      !isMediaGenerationOperationCurrent(handle.runId) ||
+      !sameSessionTranscriptStorageEnvironment(
+        target.env,
+        captureSessionTranscriptStorageEnvironment(process.env),
+      )
+    ) {
+      throw new Error("Media generation owner is no longer current");
+    }
+  };
+  assertCurrent();
+  const result = await appendAssistantMessageToSessionTranscript({
+    agentId: target.agentId,
+    sessionKey: target.sessionKey,
+    storePath: target.storePath,
+    expectedSessionId: target.sessionId,
+    expectedLifecycleRevision: target.lifecycleRevision,
+    idempotencyKey: `media-completion-retained:${handle.runId}`,
+    // Keyed appends run this inside the transaction, after awaited preparation.
+    beforeMessageWrite: ({ message }) => {
+      assertCurrent();
+      return message;
+    },
+    text: "Generated media is ready, but completion delivery was not confirmed. The saved media is retained here.",
+    mediaUrls: Array.from(
+      new Set([
+        ...(params.mediaUrls ?? []),
+        ...mediaUrlsFromGeneratedAttachments(params.attachments),
+      ]),
+    ),
+  });
+  if (!result.ok) {
+    throw new Error(`Could not retain generated media in the original session: ${result.reason}`);
+  }
+}
 
 export type MediaGenerationCompletionWakeOutcome =
   | { status: "delivered" }
@@ -86,10 +147,65 @@ export async function wakeMediaGenerationTaskCompletion(params: {
   toolName: string;
   completionLabel: string;
 }): Promise<MediaGenerationCompletionWakeOutcome> {
-  if (!params.handle) {
+  const handle = params.handle;
+  if (!handle) {
     return { status: "delivered" };
   }
-  const announceId = `${params.toolName}:${params.handle.taskId}:${params.status}`;
+  const target = handle.requesterTranscript;
+  const isSourceCurrent = () =>
+    Boolean(
+      target &&
+      isMediaGenerationOperationCurrent(handle.runId) &&
+      sameSessionTranscriptStorageEnvironment(
+        target.env,
+        captureSessionTranscriptStorageEnvironment(process.env),
+      ),
+    );
+  if (!target || !isSourceCurrent()) {
+    return { status: "permanent_failure" };
+  }
+  let requesterEntry;
+  try {
+    requesterEntry = await withSessionEntryReadOnlyInWorker(
+      { ...target, hydrateSkillPromptRefs: false },
+      () => {
+        if (!isSourceCurrent()) {
+          throw new Error("Media completion source is no longer current");
+        }
+      },
+      async (read) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        return sessionMatchesExpectedTranscriptTurn(
+          read.value ? { entry: read.value } : undefined,
+          {
+            expectedSessionId: target.sessionId,
+            expectedLifecycleRevision: target.lifecycleRevision,
+          },
+        )
+          ? read.value
+          : undefined;
+      },
+    );
+  } catch (error) {
+    if (!isSourceCurrent()) {
+      return { status: "permanent_failure" };
+    }
+    log.warn("Media completion requester could not be read", { runId: handle.runId, error });
+    return { status: "pending" };
+  }
+  if (!requesterEntry || !isSourceCurrent()) {
+    return { status: "permanent_failure" };
+  }
+  const requesterBinding: SessionDeliveryRequesterBinding = {
+    agentId: target.agentId,
+    sessionKey: target.sessionKey,
+    storePath: target.storePath,
+    sessionId: target.sessionId,
+    lifecycleRevision: target.lifecycleRevision,
+  };
+  const announceId = `${params.toolName}:${handle.taskId}:${params.status}`;
   const mediaUrls = Array.from(
     new Set([
       ...(params.mediaUrls ?? []),
@@ -100,10 +216,10 @@ export async function wakeMediaGenerationTaskCompletion(params: {
     {
       type: "task_completion",
       source: params.eventSource,
-      childSessionKey: `${params.toolName}:${params.handle.taskId}`,
-      childSessionId: params.handle.taskId,
+      childSessionKey: `${params.toolName}:${handle.taskId}`,
+      childSessionId: handle.taskId,
       announceType: params.announceType,
-      taskLabel: params.handle.taskLabel,
+      taskLabel: handle.taskLabel,
       status: params.status,
       statusLabel: params.statusLabel,
       result: params.result,
@@ -120,16 +236,19 @@ export async function wakeMediaGenerationTaskCompletion(params: {
     formatAgentInternalEventsForPrompt(internalEvents) ||
     `A ${params.completionLabel} generation task finished. Process the completion update now.`;
   const delivery = await deliverSubagentAnnouncement({
-    requesterSessionKey: params.handle.requesterSessionKey,
-    requesterAgentId: params.handle.requesterAgentId,
-    targetRequesterSessionKey: params.handle.requesterSessionKey,
+    isSourceSessionAdmissionAllowed: isSourceCurrent,
+    isSourceSessionEffectsAllowed: isSourceCurrent,
+    requesterSessionKey: handle.requesterSessionKey,
+    requesterAgentId: handle.requesterAgentId,
+    targetRequesterSessionKey: target.sessionKey,
+    preparedRequester: { binding: requesterBinding, entry: requesterEntry },
     triggerMessage,
     steerMessage: triggerMessage,
     internalEvents,
-    requesterSessionOrigin: params.handle.requesterOrigin,
-    completionDirectOrigin: params.handle.requesterOrigin,
-    directOrigin: params.handle.requesterOrigin,
-    sourceSessionKey: `${params.toolName}:${params.handle.taskId}`,
+    requesterSessionOrigin: handle.requesterOrigin,
+    completionDirectOrigin: handle.requesterOrigin,
+    directOrigin: handle.requesterOrigin,
+    sourceSessionKey: `${params.toolName}:${handle.taskId}`,
     sourceTool: params.toolName,
     requesterIsSubagent: false,
     expectsCompletionMessage: true,
@@ -141,14 +260,15 @@ export async function wakeMediaGenerationTaskCompletion(params: {
   }
   if (
     delivery.disposition === "session_queued" ||
+    delivery.disposition === "retryable" ||
     delivery.reason === "completion_handoff_pending"
   ) {
     return { status: "pending" };
   }
   if (delivery.disposition === "ambiguous") {
     log.warn("Media generation completion delivery stopped after terminal fallback", {
-      taskId: params.handle.taskId,
-      runId: params.handle.runId,
+      taskId: handle.taskId,
+      runId: handle.runId,
       toolName: params.toolName,
       error: delivery.error,
     });
@@ -158,8 +278,8 @@ export async function wakeMediaGenerationTaskCompletion(params: {
   }
   if (delivery.error) {
     log.error("Media generation completion wake failed; requester session was not woken", {
-      taskId: params.handle.taskId,
-      runId: params.handle.runId,
+      taskId: handle.taskId,
+      runId: handle.runId,
       toolName: params.toolName,
       error: delivery.error,
     });

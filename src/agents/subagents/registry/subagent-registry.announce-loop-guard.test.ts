@@ -1,11 +1,6 @@
 // Announce loop-guard tests prove deferred delivery retries through its time
 // window, then gives up instead of looping forever after repeated failures.
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
-import { configureInMemoryTaskStoresForTests } from "../../../tasks/task-registry.test-support.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../../../tasks/task-runtime.test-helpers.js";
 import { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -98,7 +93,6 @@ vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
 
 describe("announce loop guard (#18264)", () => {
   let registry: typeof import("./subagent-registry.test-helpers.js");
-  let taskRuntime: typeof import("../../../tasks/detached-task-runtime.js");
 
   function hydrateAndActivateRegistry() {
     registry.initSubagentRegistry();
@@ -135,14 +129,10 @@ describe("announce loop guard (#18264)", () => {
 
   beforeAll(async () => {
     registry = await import("./subagent-registry.test-helpers.js");
-    taskRuntime = await import("../../../tasks/detached-task-runtime.js");
   });
 
   beforeEach(() => {
     vi.useFakeTimers();
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    configureInMemoryTaskStoresForTests();
     vi.clearAllMocks();
     mocks.loadSubagentRegistryFromSqlite.mockReset();
     mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map());
@@ -158,8 +148,6 @@ describe("announce loop guard (#18264)", () => {
       await flushAsync();
     } finally {
       registry.resetSubagentRegistryForTests({ persist: false });
-      resetTaskRegistryForTests({ persist: false });
-      resetTaskFlowRegistryForTests({ persist: false });
       vi.useRealTimers();
       vi.restoreAllMocks();
       vi.clearAllMocks();
@@ -230,23 +218,6 @@ describe("announce loop guard (#18264)", () => {
       expectsCompletionMessage: true,
       delivery: { status: "pending", attemptCount: 3, lastAttemptAt: now - 30_000 },
     };
-    vi.spyOn(taskRuntime, "findDetachedTaskRunAsync").mockResolvedValue({
-      lookup: "available",
-      task: {
-        taskId: "task-retry-budget",
-        runId: entry.runId,
-        runtime: "subagent",
-        requesterSessionKey: entry.requesterSessionKey,
-        ownerKey: entry.requesterSessionKey,
-        scopeKind: "session",
-        childSessionKey: entry.childSessionKey,
-        task: entry.task,
-        status: "succeeded",
-        deliveryStatus: "pending",
-        notifyPolicy: "done_only",
-        createdAt: entry.createdAt,
-      },
-    });
     mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[entry.runId, entry]]));
 
     hydrateAndActivateRegistry();

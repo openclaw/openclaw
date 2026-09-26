@@ -1,18 +1,14 @@
-/** Tests ACP session manager resolution, turn execution, state transitions, and cleanup. */
-import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
+/** Tests ACP session manager resolution, turn execution, state transitions, and cleanup. */
 import type { AcpRuntimeEvent, AcpRuntimeTurnInput } from "@openclaw/acp-core/runtime/types";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
-import {
-  requireTaskByRunId,
-  withAcpManagerTaskStateDir,
-} from "../../../test/helpers/acp-manager-task-state.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { isAcpTurnActive } from "./active-turns.js";
+import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import { listActiveAcpSessionsForOwner } from "./active-turns.js";
 import {
-  installMutableAcpSessionMetaUpsert,
   AcpRuntimeError,
   AcpSessionManager,
   baseCfg,
@@ -24,11 +20,12 @@ import {
   flushMicrotasks,
   hoisted,
   installAcpSessionManagerTestLifecycle,
+  installMutableAcpSessionMetaUpsert,
   mockCallArg,
   mockParentedAcpSessionEntries,
   readySessionMeta,
-  type OpenClawConfig,
   resetAcpSessionManagerForTests,
+  type OpenClawConfig,
   type SessionAcpMeta,
 } from "./manager.test-helpers.js";
 
@@ -108,185 +105,6 @@ describe("AcpSessionManager", () => {
     ]);
   });
 
-  it("tracks parented direct ACP turns in the task registry", async () => {
-    await withAcpManagerTaskStateDir(async () => {
-      const runtimeState = createRuntime();
-      runtimeState.runTurn.mockImplementation(async function* () {
-        yield {
-          type: "text_delta" as const,
-          stream: "output" as const,
-          text: "Write failed: ",
-        };
-        yield {
-          type: "text_delta" as const,
-          stream: "output" as const,
-          text: "permission ",
-        };
-        yield {
-          type: "text_delta" as const,
-          stream: "output" as const,
-          text: "denied for ",
-        };
-        yield {
-          type: "text_delta" as const,
-          stream: "output" as const,
-          text: "/root/",
-        };
-        yield {
-          type: "text_delta" as const,
-          stream: "output" as const,
-          text: "oc-acp-write-",
-        };
-        yield {
-          type: "text_delta" as const,
-          stream: "output" as const,
-          text: "should-fail.txt.",
-        };
-        yield { type: "done" as const };
-      });
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Quant patch",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
-      });
-
-      const manager = new AcpSessionManager();
-      await manager.runTurn({
-        provenance: "system",
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:child-1",
-        text: "Implement the feature and report back",
-        mode: "prompt",
-        requestId: "direct-parented-run",
-      });
-      await flushMicrotasks();
-
-      expectRecordFields(requireTaskByRunId("direct-parented-run"), {
-        runtime: "acp",
-        ownerKey: "agent:quant:telegram:quant:direct:822430204",
-        scopeKind: "session",
-        childSessionKey: "agent:codex:acp:child-1",
-        label: "Quant patch",
-        task: "Implement the feature and report back",
-        status: "succeeded",
-        progressSummary: "Write failed: permission denied for /root/oc-acp-write-should-fail.txt.",
-        terminalOutcome: "blocked",
-        terminalSummary: "Permission denied for /root/oc-acp-write-should-fail.txt.",
-      });
-    });
-  }, 300_000);
-
-  it("preserves token-streamed ACP progress boundaries in parented task summaries", async () => {
-    await withAcpManagerTaskStateDir(async () => {
-      const runtimeState = createRuntime();
-      const chunks = [
-        "현재 ",
-        "작업 ",
-        "디",
-        "렉토",
-        "리는 ",
-        "/home/",
-        "by",
-        "kim",
-        "0119/",
-        ".open",
-        "claw/",
-        "workspace",
-        "\n\t",
-        "입니다",
-      ];
-      runtimeState.runTurn.mockImplementation(async function* () {
-        for (const text of chunks) {
-          yield {
-            type: "text_delta" as const,
-            stream: "output" as const,
-            text,
-          };
-        }
-        yield { type: "done" as const };
-      });
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Korean path",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
-      });
-
-      const manager = new AcpSessionManager();
-      await manager.runTurn({
-        provenance: "system",
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:child-1",
-        text: "Print the current directory in Korean",
-        mode: "prompt",
-        requestId: "direct-parented-korean-path-run",
-      });
-      await flushMicrotasks();
-
-      expectRecordFields(requireTaskByRunId("direct-parented-korean-path-run"), {
-        runtime: "acp",
-        ownerKey: "agent:quant:telegram:quant:direct:822430204",
-        scopeKind: "session",
-        childSessionKey: "agent:codex:acp:child-1",
-        label: "Korean path",
-        task: "Print the current directory in Korean",
-        status: "succeeded",
-        progressSummary: "현재 작업 디렉토리는 /home/bykim0119/.openclaw/workspace 입니다",
-      });
-    });
-  }, 300_000);
-
   it("serializes concurrent turns for the same ACP session", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
@@ -350,8 +168,9 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
   });
 
-  it("reports a live turn under the task record's childSessionKey while it is in flight (#88205)", async () => {
-    await withAcpManagerTaskStateDir(async () => {
+  it("reports a live turn under the native session key while it is in flight (#88205)", async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
+      const ownerSessionKey = "agent:quant:telegram:quant:direct:822430204";
       const runtimeState = createRuntime();
       const releaseTurn = createDeferred();
       runtimeState.runTurn.mockImplementation(async function* () {
@@ -371,13 +190,13 @@ describe("AcpSessionManager", () => {
             entry: {
               sessionId: "child-1",
               updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
+              spawnedBy: ownerSessionKey,
               label: "Live turn",
             },
             acp: readySessionMeta(),
           };
         }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
+        if (sessionKey === ownerSessionKey) {
           return {
             sessionKey,
             storeSessionKey: sessionKey,
@@ -403,30 +222,23 @@ describe("AcpSessionManager", () => {
         { interval: 1 },
       );
 
-      // The maintenance sweep probes liveness with exactly this key; prove it resolves to the
-      // turn the manager actually registered, so the reclaim gate cannot over-reclaim a live run.
-      const childSessionKey = requireTaskByRunId("live-acp-turn").childSessionKey;
-      if (!childSessionKey) {
-        throw new Error("Expected the ACP task record to carry a childSessionKey");
-      }
-      expect(childSessionKey).toBe("agent:codex:acp:child-1");
-      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(true);
+      const childSessionKey = "agent:codex:acp:child-1";
+      expect(listActiveAcpSessionsForOwner(ownerSessionKey)).toEqual([childSessionKey]);
 
       releaseTurn.resolve();
       await turn;
       await flushMicrotasks();
 
-      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(false);
+      expect(listActiveAcpSessionsForOwner(ownerSessionKey)).toEqual([]);
     });
   }, 300_000);
 
   it("marks liveness during runtime initialization, before the turn streams (#88205)", async () => {
-    await withAcpManagerTaskStateDir(async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
+      const ownerSessionKey = "agent:quant:telegram:quant:direct:822430204";
       const runtimeState = createRuntime();
       const releaseInit = createDeferred();
-      // Hold runtime init (ensureSession) so the turn is stuck initializing: the task record
-      // already exists but the turn stream has not started. This is the window that previously
-      // let the authoritative sweep mark a live, slow-to-initialize ACP task as lost.
+      // Liveness must cover slow initialization before the backend starts streaming.
       runtimeState.ensureSession.mockImplementation(
         async (input: { sessionKey: string; mode: "persistent" | "oneshot" }) => {
           await releaseInit.promise;
@@ -450,13 +262,13 @@ describe("AcpSessionManager", () => {
             entry: {
               sessionId: "child-1",
               updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
+              spawnedBy: ownerSessionKey,
               label: "Init window",
             },
             acp: readySessionMeta(),
           };
         }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
+        if (sessionKey === ownerSessionKey) {
           return {
             sessionKey,
             storeSessionKey: sessionKey,
@@ -482,38 +294,38 @@ describe("AcpSessionManager", () => {
         { interval: 1 },
       );
 
-      const childSessionKey = requireTaskByRunId("init-window-acp-turn").childSessionKey;
-      if (!childSessionKey) {
-        throw new Error("Expected the ACP task record to carry a childSessionKey");
-      }
+      const childSessionKey = "agent:codex:acp:child-1";
       // Liveness must already cover initialization, while the turn stream has not started.
       expect(runtimeState.runTurn).not.toHaveBeenCalled();
-      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(true);
+      expect(listActiveAcpSessionsForOwner(ownerSessionKey)).toEqual([childSessionKey]);
 
       releaseInit.resolve();
       await turn;
       await flushMicrotasks();
 
-      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(false);
+      expect(listActiveAcpSessionsForOwner(ownerSessionKey)).toEqual([]);
     });
   }, 300_000);
 
-  it("clears liveness when retry setup throws before task terminal update (#88205)", async () => {
-    await withAcpManagerTaskStateDir(async () => {
+  it("clears liveness when retry setup throws before terminal publication (#88205)", async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
+      const ownerSessionKey = "agent:quant:telegram:quant:direct:822430204";
       const runtimeState = createRuntime();
+      const childSessionKey = "agent:codex:acp:child-1";
+      let initialTurnFailed = false;
       runtimeState.runTurn.mockImplementationOnce(async function* () {
+        expect(listActiveAcpSessionsForOwner(ownerSessionKey)).toEqual([childSessionKey]);
+        initialTurnFailed = true;
         yield { type: "error" as const, message: "acpx exited with code 1" };
       });
       hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
         id: "acpx",
         runtime: runtimeState.runtime,
       });
-      let childReads = 0;
       hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
         const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          childReads += 1;
-          if (childReads > 2) {
+        if (sessionKey === childSessionKey) {
+          if (initialTurnFailed) {
             throw new Error("session store unavailable");
           }
           return {
@@ -522,13 +334,13 @@ describe("AcpSessionManager", () => {
             entry: {
               sessionId: "child-1",
               updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
+              spawnedBy: ownerSessionKey,
               label: "Retry cleanup",
             },
             acp: readySessionMeta(),
           };
         }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
+        if (sessionKey === ownerSessionKey) {
           return {
             sessionKey,
             storeSessionKey: sessionKey,
@@ -550,11 +362,8 @@ describe("AcpSessionManager", () => {
         }),
       ).rejects.toThrow("session store unavailable");
 
-      const childSessionKey = requireTaskByRunId("retry-cleanup-failure-acp-turn").childSessionKey;
-      if (!childSessionKey) {
-        throw new Error("Expected the ACP task record to carry a childSessionKey");
-      }
-      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(false);
+      expect(runtimeState.runTurn).toHaveBeenCalledOnce();
+      expect(listActiveAcpSessionsForOwner(ownerSessionKey)).toEqual([]);
     });
   }, 300_000);
 
@@ -564,79 +373,64 @@ describe("AcpSessionManager", () => {
       id: "acpx",
       runtime: runtimeState.runtime,
     });
+    const target = { cfg: baseCfg, sessionKey: "agent:codex:acp:session-1" };
     hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey: "agent:codex:acp:session-1",
-      storeSessionKey: "agent:codex:acp:session-1",
+      sessionKey: target.sessionKey,
+      storeSessionKey: target.sessionKey,
       acp: readySessionMeta(),
     });
 
-    let firstTurnStarted = false;
-    let releaseFirstTurn: (() => void) | undefined;
+    const firstTurnStarted = createDeferred();
+    const releaseFirstTurn = createDeferred();
     runtimeState.runTurn.mockImplementation(async function* (input: { requestId: string }) {
       if (input.requestId === "r1") {
-        firstTurnStarted = true;
-        await new Promise<void>((resolve) => {
-          releaseFirstTurn = resolve;
-        });
+        firstTurnStarted.resolve();
+        await releaseFirstTurn.promise;
       }
       yield { type: "done" as const };
     });
 
     const manager = new AcpSessionManager();
     const first = manager.runTurn({
+      ...target,
       provenance: "system",
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
       text: "first",
       mode: "prompt",
       requestId: "r1",
     });
-    await vi.waitFor(
-      () => {
-        expect(firstTurnStarted).toBe(true);
-      },
-      { interval: 1 },
-    );
-
     const abortController = new AbortController();
     const events: AcpRuntimeEvent[] = [];
-    const second = manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "second",
-      mode: "prompt",
-      requestId: "r2",
-      signal: abortController.signal,
-      onEvent: (event) => {
-        events.push(event);
-      },
-    });
-    abortController.abort();
+    let second: Promise<void> | undefined;
+    try {
+      await Promise.race([firstTurnStarted.promise, first]);
+      second = manager.runTurn({
+        ...target,
+        provenance: "system",
+        text: "second",
+        mode: "prompt",
+        requestId: "r2",
+        admittedRunContext: createTestAdmittedRunContext("r2"),
+        signal: abortController.signal,
+        onEvent: (event) => {
+          events.push(event);
+        },
+      });
+      expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(2);
+      abortController.abort();
+      await second;
 
-    const secondOutcome = await Promise.race([
-      second.then(
-        () => ({ status: "resolved" as const }),
-        (error: unknown) => ({ status: "rejected" as const, error }),
-      ),
-      new Promise<{ status: "pending" }>((resolve) => {
-        scheduleNativeTimeout(() => resolve({ status: "pending" }), 100);
-      }),
-    ]);
-
-    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(2);
-    releaseFirstTurn?.();
-    await first;
-    await vi.waitFor(
-      () => {
-        expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(0);
-      },
-      { interval: 1 },
-    );
-
-    expect(secondOutcome).toEqual({ status: "resolved" });
-    expect(events).toEqual([{ type: "done", status: "cancelled", stopReason: "cancel" }]);
-    expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+      expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(2);
+      expect(events).toEqual([{ type: "done", status: "cancelled", stopReason: "cancel" }]);
+      expect(runtimeState.runTurn).toHaveBeenCalledOnce();
+      releaseFirstTurn.resolve();
+      await first;
+      await manager.getSessionStatus(target);
+      expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(0);
+    } finally {
+      abortController.abort();
+      releaseFirstTurn.resolve();
+      await Promise.allSettled([first, second]);
+    }
   });
 
   it("forwards the exact elicitation closure with the manager-composed turn signal", async () => {
@@ -686,7 +480,7 @@ describe("AcpSessionManager", () => {
   it("times out a hung persistent turn after partial progress without closing the session and lets queued work continue", async () => {
     vi.useFakeTimers();
     try {
-      await withAcpManagerTaskStateDir(async () => {
+      await withStateDirEnv("openclaw-acp-manager-", async () => {
         const runtimeState = createRuntime();
         hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
           id: "acpx",
@@ -764,11 +558,6 @@ describe("AcpSessionManager", () => {
           queueDepth: 0,
           completed: 1,
           failed: 1,
-        });
-        expectRecordFields(requireTaskByRunId("r1"), {
-          status: "timed_out",
-          progressSummary: "Working on it...",
-          terminalSummary: "Working on it...",
         });
 
         const states = extractStatesFromUpserts();

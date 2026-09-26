@@ -46,30 +46,11 @@ export function expectErrorDetails(calls: ResponderCalls): Record<string, unknow
   return calls[0] ? (calls[0].error as { details?: Record<string, unknown> }).details : undefined;
 }
 
-export function assistantImageMessage(params: {
-  data?: string;
-  alt: string;
-  seq?: number;
-  runId?: string;
-  taskId?: string;
-}) {
-  return {
-    role: "assistant",
-    content: [{ type: "image", data: params.data ?? "aGVsbG8=", alt: params.alt }],
-    __openclaw: {
-      seq: params.seq ?? 2,
-      ...(params.runId ? { runId: params.runId } : {}),
-      ...(params.taskId ? { messageTaskId: params.taskId } : {}),
-    },
-  };
-}
-
 export function assistantFileMessage(params: {
   data?: string;
   title: string;
   seq?: number;
   runId?: string;
-  taskId?: string;
 }) {
   return {
     role: "assistant",
@@ -84,7 +65,6 @@ export function assistantFileMessage(params: {
     __openclaw: {
       seq: params.seq ?? 2,
       ...(params.runId ? { runId: params.runId } : {}),
-      ...(params.taskId ? { taskId: params.taskId } : {}),
     },
   };
 }

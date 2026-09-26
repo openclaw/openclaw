@@ -48,7 +48,7 @@ function sweepCronRunSessions(
   return sweepCronRunSessionsImpl({ ...params, agentId: "main" });
 }
 
-vi.mock("../tasks/task-status-access.js", () => ({
+vi.mock("../agents/media-generation-activity.js", () => ({
   buildPendingGeneratedMediaSessionKeySet: taskStatusMocks.buildPendingSet,
 }));
 vi.mock("../agents/subagents/registry/subagent-registry-state.js", () => ({

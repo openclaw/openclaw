@@ -181,7 +181,6 @@ async function expectSelectedCodexAccountStatus(params: {
       defaultGroupActivation: () => "mention",
       modelAuthOverride: "oauth",
       activeModelAuthOverride: "oauth",
-      skipDefaultTaskLookup: true,
     });
     expect(usageProfileIds).toEqual(["openai:chatgpt-default"]);
     expect(status).toContain("Week 75% left");

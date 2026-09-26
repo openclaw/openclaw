@@ -3,6 +3,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CapabilityProviderFor } from "../../plugins/capability-provider-runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { recordRecentMediaGenerationTaskStartForSession } from "../media-generation-task-status-shared.js";
 import {
@@ -15,10 +16,10 @@ import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import { ToolInputError, readToolStringParam } from "./common.js";
 import {
   buildMediaGenerationStartedToolResult,
+  captureMediaGenerationAdmission,
   createMediaGenerationTaskLifecycle,
   notifyMediaGenerationAsyncTaskStarted,
   scheduleMediaGenerationTaskCompletion,
-  shouldDetachMediaGenerationTask,
   type MediaGenerateAsyncStartCallback,
   type MediaGenerateBackgroundScheduler,
   type MediaGenerationExecutionResult,
@@ -133,6 +134,7 @@ export async function prepareMediaGenerationTask<
   >;
 }) {
   const { cfg, generationLabel, model, options, signal } = params;
+  const assertSourceCurrent = captureAgentToolSourceExecutionGuard(signal);
   const explicitModelConfig = hasExplicitMediaModel(
     cfg.agents?.defaults?.mediaModels?.[generationLabel],
   );
@@ -214,6 +216,10 @@ export async function prepareMediaGenerationTask<
     ...prepared.params,
     generationLabel: params.generationLabel,
     resources,
+    assertAdmissionCurrent: () => {
+      assertSourceCurrent();
+      resources?.assertOpen();
+    },
   });
 }
 
@@ -234,11 +240,13 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
   detailExtras?: Record<string, unknown>;
   messages?: Array<string | undefined>;
   resources?: MediaGenerationTaskResources;
+  assertAdmissionCurrent?: () => void;
   run: (
     handle: MediaGenerationTaskHandle | null,
   ) => Promise<T & { contentText: string; details: Record<string, unknown> }>;
 }) {
   const resources = params.resources;
+  const assertAdmissionCurrent = captureMediaGenerationAdmission(params.assertAdmissionCurrent);
   let resourcesTransferred = false;
   const run = resources
     ? async (handle: MediaGenerationTaskHandle | null) => {
@@ -262,15 +270,22 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
     const toolName = `${generationLabel}_generate`;
     const progressSummary = `Generating ${generationLabel}`;
     const title = `${generationLabel.charAt(0).toUpperCase()}${generationLabel.slice(1)}`;
-    const handle = lifecycle.createTaskRun({
+    const handle = await lifecycle.createTaskRun({
       sessionKey: params.sessionKey,
       requesterAgentId: params.requesterAgentId,
       requesterOrigin: params.requesterOrigin,
       prompt: params.prompt,
       providerId: params.providerId,
+      assertCurrent: assertAdmissionCurrent,
     });
+    try {
+      assertAdmissionCurrent();
+    } catch (error) {
+      lifecycle.failTaskRun({ handle, error });
+      throw error;
+    }
 
-    if (handle && shouldDetachMediaGenerationTask(params.sessionKey, params.requesterAgentId)) {
+    if (handle?.detach) {
       recordRecentMediaGenerationTaskStartForSession({
         sessionKey: params.sessionKey,
         agentId: params.requesterAgentId,

@@ -19,6 +19,7 @@ export type CronReceiptTerminal = {
 };
 
 export type CronRuntimeMutationInputs = {
+  "cron.maintainHistory": Record<string, never>;
   "cron.activateRun": {
     storeKey: string;
     handle: CronRunReceiptHandle;

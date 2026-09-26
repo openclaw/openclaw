@@ -420,26 +420,6 @@
   stroke-width: 1.6px;
 }
 
-.chat-pane__actions .chat-tasks-toggle {
-  position: relative;
-}
-
-.chat-tasks-toggle__badge {
-  position: absolute;
-  top: 0;
-  right: -2px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: var(--radius-full);
-  background: var(--primary);
-  color: var(--primary-foreground);
-  font-size: 9px;
-  font-weight: 650;
-  line-height: 14px;
-  text-align: center;
-}
-
 .chat-pane__sharing-menu {
   flex: 0 0 auto;
 }

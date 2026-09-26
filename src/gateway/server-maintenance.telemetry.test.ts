@@ -12,11 +12,13 @@ const {
   checkTelemetryUpdateMock,
   generateSecureIntMock,
   devicePairCleanupMock,
+  pluginStateCleanupMock,
   forbiddenDefaultAdapter,
 } = vi.hoisted(() => ({
   checkTelemetryUpdateMock: vi.fn<typeof import("../infra/telemetry.js").checkTelemetryUpdate>(),
   generateSecureIntMock: vi.fn<typeof import("../infra/secure-random.js").generateSecureInt>(),
   devicePairCleanupMock: vi.fn(async () => 0),
+  pluginStateCleanupMock: vi.fn(async (_options: { assertActive: () => void }) => undefined),
   forbiddenDefaultAdapter: vi.fn((adapter: string): never => {
     throw new Error(`Unexpected default maintenance adapter: ${adapter}`);
   }),
@@ -31,11 +33,15 @@ vi.mock("../infra/device-bootstrap.js", () => ({
   pruneExpiredDevicePairSetupCompletions: devicePairCleanupMock,
 }));
 
+vi.mock("../plugin-state/plugin-state-worker-client.js", () => ({
+  sweepExpiredPluginStateEntriesInWorker: pluginStateCleanupMock,
+}));
+
 vi.mock("../infra/telemetry.js", () => ({
   checkTelemetryUpdate: checkTelemetryUpdateMock,
 }));
 
-// These default readers are unused by the supplied callbacks and empty task fixture.
+// These default readers are unused by the supplied callbacks and native work fixture.
 vi.mock("../agents/worktrees/owner-protection.js", () => ({
   createManagedWorktreeOwnerPolicy: () => forbiddenDefaultAdapter("worktree owner policy"),
 }));
@@ -86,10 +92,6 @@ vi.mock("./server/health-state.js", () => ({
   setBroadcastHealthUpdate: vi.fn(),
 }));
 
-vi.mock("../tasks/task-registry.maintenance.js", () => ({
-  getInspectableActiveTaskRestartBlockers: () => [],
-}));
-
 async function stopMaintenanceTimers(
   timers: ReturnType<typeof import("./server-maintenance.js").startGatewayMaintenanceTimers>,
 ): Promise<void> {
@@ -107,6 +109,7 @@ describe("gateway telemetry maintenance", () => {
     checkTelemetryUpdateMock.mockReset();
     generateSecureIntMock.mockReset();
     devicePairCleanupMock.mockReset().mockResolvedValue(0);
+    pluginStateCleanupMock.mockReset().mockResolvedValue(undefined);
     expect(defaultAdapterCalls).toHaveLength(0);
   });
 
@@ -117,6 +120,8 @@ describe("gateway telemetry maintenance", () => {
     ["worktree", "next"],
     ["device-pair", "first"],
     ["device-pair", "next"],
+    ["plugin-state", "first"],
+    ["plugin-state", "next"],
   ] as const)("joins admitted %s %s work and its cleanup before stopping", async (owner, phase) => {
     vi.useFakeTimers();
     generateSecureIntMock.mockReturnValue(0);
@@ -141,6 +146,11 @@ describe("gateway telemetry maintenance", () => {
         await run();
       }
       return 0;
+    });
+    pluginStateCleanupMock.mockImplementation(async () => {
+      if (owner === "plugin-state") {
+        await run();
+      }
     });
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const timers = startGatewayMaintenanceTimers({
@@ -168,6 +178,10 @@ describe("gateway telemetry maintenance", () => {
             : 60_000,
       );
       expect(calls).toBe(phase === "first" ? 1 : 2);
+      if (owner === "plugin-state") {
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(calls).toBe(phase === "first" ? 1 : 2);
+      }
       markGatewayRestartDraining();
       let stopped = false;
       const stopping = timers.stopPeriodicTasks().then(() => {

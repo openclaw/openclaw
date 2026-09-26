@@ -5,8 +5,6 @@ import { measureCliCommandStartup } from "../cli/command-startup-timing.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { runExec } from "../process/exec.js";
-import { createEmptyTaskAuditSummary } from "../tasks/task-registry.audit.shared.js";
-import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import type { StatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import {
   buildTailscaleHttpsUrl,
@@ -42,8 +40,6 @@ export function buildColdStartStatusSummary() {
     channelSummary: [],
     queuedSystemEvents: [],
     degradedSecretOwners: [],
-    tasks: createEmptyTaskRegistrySummary(),
-    taskAudit: createEmptyTaskAuditSummary(),
     sessions: {
       paths: [],
       count: 0,

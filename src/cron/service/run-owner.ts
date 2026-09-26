@@ -6,6 +6,7 @@ import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { findActiveCronRunReceiptInDatabase } from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
 import { hasActiveCronRun } from "./jobs-scheduling.js";
+import { finishCronRun } from "./run-history.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import {
   emit,
@@ -14,11 +15,10 @@ import {
   type DeferredCronNotifications,
 } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
-import { tryFinishCronTaskRun } from "./task-runs.js";
 import { applyJobResult } from "./timer-outcomes.js";
 
 /** Records ownerless scheduled attempts before one invalid job can block batch admission. */
-export function skipCronJobsWithoutOwners(
+export async function skipCronJobsWithoutOwners(
   state: CronServiceState,
   candidates: CronJob[],
   nowMs: number,
@@ -30,7 +30,7 @@ export function skipCronJobsWithoutOwners(
       scheduleOwnershipAtMs?: number;
     };
   },
-): CronJob[] {
+): Promise<CronJob[]> {
   const resolveOwnerAgentId = (job: CronJob) =>
     tryResolveCronJobEffectiveAgentId(
       job,
@@ -102,24 +102,24 @@ export function skipCronJobsWithoutOwners(
       { jobId: job.id, error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE },
       "cron: skipping job with unresolved owner",
     );
-    emitOwnerlessFinished(state, job, nowMs, opts?.manualRun);
+    await emitOwnerlessFinished(state, job, nowMs, opts?.manualRun);
   }
   // Acknowledged manual requests still need a result when a newer row rejects the skip.
   if (opts?.manualRun) {
     for (const job of skipped.rejected) {
-      emitOwnerlessFinished(state, job, nowMs, opts.manualRun);
+      await emitOwnerlessFinished(state, job, nowMs, opts.manualRun);
     }
   }
   runPostPersistCronNotifications(state, notifications);
   return candidates.filter((job) => !unresolved.has(job.id));
 }
 
-function emitOwnerlessFinished(
+async function emitOwnerlessFinished(
   state: CronServiceState,
   job: CronJob,
   nowMs: number,
   manualRun?: { runId?: string; terminalTracker?: { emitted: boolean } },
-): void {
+): Promise<void> {
   const event: CronEvent & { action: "finished" } = {
     jobId: job.id,
     action: "finished",
@@ -134,7 +134,7 @@ function emitOwnerlessFinished(
     deliveryStatus: job.state.lastDeliveryStatus,
     deliveryError: job.state.lastDeliveryError,
   };
-  tryFinishCronTaskRun(state, { event, ownerlessRun: true });
+  await finishCronRun(state, { event, ownerlessRun: true });
   emit(state, event);
   if (manualRun?.terminalTracker) {
     manualRun.terminalTracker.emitted = true;

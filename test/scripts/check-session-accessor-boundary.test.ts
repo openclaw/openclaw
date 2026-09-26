@@ -294,7 +294,6 @@ describe("session accessor boundary guard", () => {
       { line: 3, reason: 'imports legacy transcript writer "emitSessionTranscriptUpdate"' },
     ]);
   });
-
   it("flags direct and namespace legacy transcript writer calls", () => {
     expect(
       findTranscriptWriterBoundaryViolations(

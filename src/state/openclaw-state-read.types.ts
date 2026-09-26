@@ -68,11 +68,6 @@ import type {
 } from "../plugin-state/plugin-blob-worker-contract.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SkillLibraryReadOnlyOperations } from "../skills/library/selection-read.kernel.js";
-import type { TaskRetentionSource } from "../tasks/task-registry-retention-source.js";
-import type {
-  TaskRegistryMutationScope,
-  TaskRegistryStoreSnapshot,
-} from "../tasks/task-registry.store.types.js";
 import type { TuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import type {
   AgentDatabaseDeletionSnapshot,
@@ -162,11 +157,6 @@ export type OpenClawStateReadCommand =
   | { type: "agentDeletionJournal.status"; agentId: string }
   | { type: "workerEnvironments.snapshot"; ids?: readonly string[] }
   | { type: "workerEnvironments.pruneCandidates"; input: WorkerEnvironmentPruneReadInput }
-  | {
-      type: "tasks.mutationSnapshot";
-      input: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[] | undefined;
-    }
-  | { type: "tasks.retentionSource"; taskId: string }
   | { type: "sessionGroups.snapshot" }
   | { type: "sessionGroups.members"; cfg: OpenClawConfig }
   | { type: "onboardingRecommendations.read"; configKey: string }
@@ -287,18 +277,6 @@ export type OpenClawStateReadReply = (
     }
   | PluginBlobReadReply
   | { ok: true; type: "subagents.forChildSession"; sourceAdmitted: true; runs: SubagentRunRecord[] }
-  | {
-      ok: true;
-      type: "tasks.mutationSnapshot";
-      sourceAdmitted: true;
-      snapshot: TaskRegistryStoreSnapshot;
-    }
-  | {
-      ok: true;
-      type: "tasks.retentionSource";
-      sourceAdmitted: true;
-      source: TaskRetentionSource | undefined;
-    }
   | {
       [Kind in keyof SkillLibraryReadOnlyOperations]: {
         ok: true;

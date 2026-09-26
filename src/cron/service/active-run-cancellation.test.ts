@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { clearCronJobActive, markCronJobActive, noteActiveCronJobRemoval } from "../active-jobs.js";
+import {
+  clearCronJobActive,
+  markCronJobActive,
+  noteActiveCronJobRemoval,
+  requestActiveCronJobCancellation,
+} from "../active-jobs.js";
 import {
   abortActiveCronTaskRuns,
-  cancelActiveCronTaskRun,
   getSuspensionVisibleCronTaskRunCount,
   registerActiveCronTaskRun,
   retireActiveCronTaskRunTracking,
@@ -223,6 +227,7 @@ describe("cron task cancellation tracking", () => {
     const unaffectedController = new AbortController();
     const cancelledRun = createDeferred();
     const unaffectedRun = createDeferred();
+    const marker = markCronJobActive("cancelled-job");
     let release: (() => void) | undefined;
 
     try {
@@ -232,12 +237,18 @@ describe("cron task cancellation tracking", () => {
       release = registerActiveCronTaskRun({
         runId: "cancelled-run",
         controller: cancelledController,
+        activeJobMarker: marker,
       });
       const existingTimerCount = vi.getTimerCount();
 
-      expect(cancelActiveCronTaskRun({ runId: "cancelled-run" })).toBe(true);
+      requestActiveCronJobCancellation("cancelled-job", "Cancelled by operator.");
+      expect(cancelledController.signal.aborted).toBe(true);
+      expect(cancelledController.signal.reason).toBe("Cancelled by operator.");
+      expect(unaffectedController.signal.aborted).toBe(false);
       expect(vi.getTimerCount()).toBe(existingTimerCount + 1);
-      expect(cancelActiveCronTaskRun({ runId: "cancelled-run" })).toBe(false);
+      requestActiveCronJobCancellation("cancelled-job", "Repeated cancellation.");
+      expect(cancelledController.signal.reason).toBe("Cancelled by operator.");
+      expect(vi.getTimerCount()).toBe(existingTimerCount + 1);
       release?.();
 
       await vi.advanceTimersByTimeAsync(CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS + 1);
@@ -249,6 +260,7 @@ describe("cron task cancellation tracking", () => {
       expect(getSuspensionVisibleCronTaskRunCount()).toBe(2);
     } finally {
       release?.();
+      clearCronJobActive("cancelled-job", marker);
       cancelledRun.resolve();
       unaffectedRun.resolve();
       await Promise.allSettled([cancelledRun.promise, unaffectedRun.promise]);

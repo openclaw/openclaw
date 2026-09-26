@@ -16,7 +16,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { upsertTaskWithDeliveryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
 import { runStartupSessionMigration } from "./server-startup-session-migration.js";
 
 const stateRoot = process.env.OPENCLAW_STATE_DIR!;
@@ -49,7 +48,7 @@ async function runLayout(stateDir: string, layout: string, mode: string) {
     "yielded",
     "queued",
     "recovering",
-    "retained-task",
+    "retired-task-session",
     "registry-queued",
     "registry-recovering",
     "registry-completion",
@@ -71,7 +70,6 @@ async function runLayout(stateDir: string, layout: string, mode: string) {
     runs: openOpenClawStateDatabase()
       .db.prepare("SELECT * FROM subagent_runs ORDER BY run_id")
       .all(),
-    tasks: openOpenClawStateDatabase().db.prepare("SELECT * FROM task_runs ORDER BY task_id").all(),
   });
   const lock = await acquireGatewayLock({
     allowInTests: true,
@@ -137,21 +135,6 @@ async function runLayout(stateDir: string, layout: string, mode: string) {
             "INSERT INTO subagent_runs(run_id,child_session_key,requester_session_key,created_at,payload_json) VALUES(?,?,?,?,?)",
           )
           .run("malformed-owner", key("malformed-owner"), "agent:main:main", Date.now(), "{}");
-        upsertTaskWithDeliveryStateToSqlite({
-          task: {
-            taskId: "retained-task",
-            runtime: "subagent",
-            requesterSessionKey: "agent:main:main",
-            ownerKey: "agent:main:main",
-            childSessionKey: key("retained-task"),
-            scopeKind: "session",
-            task: "retained completion",
-            status: "succeeded",
-            deliveryStatus: "pending",
-            notifyPolicy: "done_only",
-            createdAt: Date.now(),
-          },
-        });
       } else if (mode === "successor" || mode === "embedded") {
         await replaceSessionEntry(scope("incognito-control"), {
           sessionId: "incognito",

@@ -16,12 +16,10 @@ import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
 import {
-  appendTranscriptMessageSync,
   listSessionChildEntriesReadOnly,
   listSessionEntriesReadOnly,
   recordInboundSessionMeta,
   replaceSessionEntry,
-  replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { CronJob } from "../cron/types.js";
@@ -54,7 +52,7 @@ import {
   type GatewaySessionStoreDiscoveryCache,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
-  resolveGatewaySessionStoreTargetsReadOnly,
+  prepareGatewaySessionStoreTargetsReadOnly,
 } from "./session-utils-store-lookup.js";
 import {
   listAgentsForGateway,
@@ -65,7 +63,11 @@ import {
 } from "./session-utils-store.js";
 import { withAgentPermissionState } from "./session-utils.permissions.test-support.js";
 import {
+  appendTranscriptMessages,
   closeSessionSqliteDatabasesForTest,
+  createModelDefaultsConfig,
+  createSingleAgentAvatarConfig,
+  seedSessionEntries,
   useSessionStoreFixture,
   withStateDirEnv,
 } from "./session-utils.test-support.js";
@@ -178,32 +180,6 @@ test("projects a channel avatar route without exposing its media-store reference
   expect(replacedRow.channelAvatarUrl).not.toBe(row.channelAvatarUrl);
 });
 
-function seedSessionEntries(storePath: string, entries: Record<string, SessionEntry>): void {
-  for (const [sessionKey, entry] of Object.entries(entries)) {
-    replaceSessionEntrySync({ sessionKey, storePath }, entry);
-  }
-}
-
-function appendTranscriptMessages(params: {
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-  messages: unknown[];
-  agentId?: string;
-}) {
-  for (const message of params.messages) {
-    appendTranscriptMessageSync(
-      {
-        agentId: params.agentId ?? "main",
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      },
-      { message },
-    );
-  }
-}
-
 function createSymlinkOrSkip(targetPath: string, linkPath: string): boolean {
   try {
     fs.symlinkSync(targetPath, linkPath);
@@ -215,35 +191,6 @@ function createSymlinkOrSkip(targetPath: string, linkPath: string): boolean {
     }
     throw error;
   }
-}
-
-function createSingleAgentAvatarConfig(workspace: string): OpenClawConfig {
-  return {
-    session: { mainKey: "main" },
-    agents: {
-      list: [{ id: "main", default: true, workspace, identity: { avatar: "avatar-link.png" } }],
-    },
-  } as OpenClawConfig;
-}
-
-function createModelDefaultsConfig(params: {
-  primary: string;
-  models?: Record<string, { agentRuntime?: { id: string } }>;
-  agentRuntime?: { id: string };
-}): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        model: { primary: params.primary },
-        models: {
-          ...params.models,
-          ...(params.agentRuntime
-            ? { [params.primary]: { agentRuntime: params.agentRuntime } }
-            : {}),
-        },
-      },
-    },
-  } as OpenClawConfig;
 }
 
 function requireString(value: string | undefined, label: string): string {
@@ -3337,11 +3284,18 @@ describe("gateway session utils", () => {
       expect(target.storePath).toBe(path.resolve(fixedStorePath));
       expect(target.store["agent:ops:main"]?.sessionId).toBe("sess-fixed");
       expect(
-        resolveGatewaySessionStoreTargetsReadOnly({ cfg, targets: [{ key: "agent:ops:main" }] }),
+        prepareGatewaySessionStoreTargetsReadOnly({
+          cfg,
+          targets: [{ key: "agent:ops:main" }],
+          projection: "list",
+        }),
       ).toMatchObject([
         {
-          storePath: path.resolve(fixedStorePath),
-          store: { "agent:ops:main": { sessionId: "sess-fixed" } },
+          ok: true,
+          value: {
+            storePath: path.resolve(fixedStorePath),
+            store: { "agent:ops:main": { sessionId: "sess-fixed" } },
+          },
         },
       ]);
     });
@@ -3418,13 +3372,17 @@ describe("gateway session utils", () => {
         );
       }
       expect(
-        resolveGatewaySessionStoreTargetsReadOnly({
+        prepareGatewaySessionStoreTargetsReadOnly({
           cfg,
           targets: ["research", "ops"].map((agentId) => ({ key: "global", agentId })),
+          projection: "list",
         }),
       ).toMatchObject([
-        { agentId: "research", store: { global: { sessionId: "global-research" } } },
-        { agentId: "ops", store: { global: { sessionId: "global-ops" } } },
+        {
+          ok: true,
+          value: { agentId: "research", store: { global: { sessionId: "global-research" } } },
+        },
+        { ok: true, value: { agentId: "ops", store: { global: { sessionId: "global-ops" } } } },
       ]);
       for (const directory of ["Retired Agent", "retired-agent"]) {
         seedSessionEntries(path.join(stateDir, "agents", directory, "sessions", "sessions.json"), {
@@ -3435,9 +3393,11 @@ describe("gateway session utils", () => {
       expect(() =>
         resolveGatewaySessionStoreTargetWithStore({ cfg, key, readOnly: true, exactRead: true }),
       ).toThrow("openclaw doctor --fix");
-      expect(() => resolveGatewaySessionStoreTargetsReadOnly({ cfg, targets: [{ key }] })).toThrow(
-        "openclaw doctor --fix",
-      );
+      expect(
+        prepareGatewaySessionStoreTargetsReadOnly({ cfg, targets: [{ key }], projection: "list" }),
+      ).toMatchObject([
+        { ok: false, error: { message: expect.stringContaining("openclaw doctor --fix") } },
+      ]);
     });
   });
 
@@ -3478,11 +3438,18 @@ describe("gateway session utils", () => {
       expect(target.storePath).toBe(path.resolve(retiredStorePath));
       expect(target.store["agent:old:main"]?.sessionId).toBe("sess-retired-cross-root");
       expect(
-        resolveGatewaySessionStoreTargetsReadOnly({ cfg, targets: [{ key: "agent:old:main" }] }),
+        prepareGatewaySessionStoreTargetsReadOnly({
+          cfg,
+          targets: [{ key: "agent:old:main" }],
+          projection: "list",
+        }),
       ).toMatchObject([
         {
-          storePath: path.resolve(retiredStorePath),
-          store: { "agent:old:main": { sessionId: "sess-retired-cross-root" } },
+          ok: true,
+          value: {
+            storePath: path.resolve(retiredStorePath),
+            store: { "agent:old:main": { sessionId: "sess-retired-cross-root" } },
+          },
         },
       ]);
     });
@@ -3522,11 +3489,12 @@ describe("gateway session utils", () => {
       expect(fs.existsSync(sqlitePath!)).toBe(false);
       expect(fs.readdirSync(retiredSessionsDir)).toEqual(["sessions.json"]);
       expect(
-        resolveGatewaySessionStoreTargetsReadOnly({
+        prepareGatewaySessionStoreTargetsReadOnly({
           cfg,
           targets: [{ key: "agent:retired:main" }],
+          projection: "list",
         }),
-      ).toMatchObject([{ storePath: retiredStorePath, store: {} }]);
+      ).toMatchObject([{ ok: true, value: { storePath: retiredStorePath, store: {} } }]);
       expect(fs.existsSync(sqlitePath!)).toBe(false);
     });
   });
@@ -3737,9 +3705,15 @@ describe("gateway session utils", () => {
             includeStoreChildEntries: true,
           }),
         ).toThrow("openclaw doctor --fix");
-        expect(() =>
-          resolveGatewaySessionStoreTargetsReadOnly({ cfg, targets: [{ key: "main" }] }),
-        ).toThrow("openclaw doctor --fix");
+        expect(
+          prepareGatewaySessionStoreTargetsReadOnly({
+            cfg,
+            targets: [{ key: "main" }],
+            projection: "list",
+          }),
+        ).toMatchObject([
+          { ok: false, error: { message: expect.stringContaining("openclaw doctor --fix") } },
+        ]);
       });
     } finally {
       resetConfigRuntimeState();
@@ -3826,15 +3800,19 @@ describe("gateway session utils", () => {
           });
           try {
             expect(
-              resolveGatewaySessionStoreTargetsReadOnly({
+              prepareGatewaySessionStoreTargetsReadOnly({
                 cfg,
                 targets: [{ key: "agent:main:main", agentId }],
+                projection: "list",
               }),
             ).toMatchObject([
               {
-                agentId: "main",
-                storePath: path.resolve(deletedStorePath),
-                store: { "agent:main:main": { sessionId: "sess-deleted-main" } },
+                ok: true,
+                value: {
+                  agentId: "main",
+                  storePath: path.resolve(deletedStorePath),
+                  store: { "agent:main:main": { sessionId: "sess-deleted-main" } },
+                },
               },
             ]);
             expect(liveDefaultParses).toBe(0);
@@ -3880,10 +3858,15 @@ describe("gateway session utils", () => {
             requestedKey === key ? "incognito-owner" : undefined,
           );
           expect(target.store["agent:main:main"]).toBeUndefined();
-          const [batched] = resolveGatewaySessionStoreTargetsReadOnly({
+          const [prepared] = prepareGatewaySessionStoreTargetsReadOnly({
             cfg,
             targets: [{ key: requestedKey }],
+            projection: "list",
           });
+          if (!prepared?.ok) {
+            throw new Error("Expected prepared incognito lookup to succeed");
+          }
+          const batched = prepared.value;
           expect(batched).toMatchObject({
             storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
             storeKeys: [requestedKey],
@@ -3926,9 +3909,15 @@ describe("gateway session utils", () => {
         setRuntimeConfigSnapshot(cfg, cfg);
 
         expect(() => loadSessionEntry("agent:main:work")).toThrow("openclaw doctor --fix");
-        expect(() =>
-          resolveGatewaySessionStoreTargetsReadOnly({ cfg, targets: [{ key: "agent:main:work" }] }),
-        ).toThrow("openclaw doctor --fix");
+        expect(
+          prepareGatewaySessionStoreTargetsReadOnly({
+            cfg,
+            targets: [{ key: "agent:main:work" }],
+            projection: "list",
+          }),
+        ).toMatchObject([
+          { ok: false, error: { message: expect.stringContaining("openclaw doctor --fix") } },
+        ]);
       });
     } finally {
       resetConfigRuntimeState();

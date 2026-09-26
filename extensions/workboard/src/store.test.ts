@@ -1246,14 +1246,13 @@ describe("WorkboardStore", () => {
     expect(card.position).toBe(0);
   });
 
-  it("keeps initial session, run, and task links when creating cards", async () => {
+  it("keeps initial native session and run links when creating cards", async () => {
     const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
 
     const card = await store.create({
       title: "Follow up",
       sessionKey: "agent:main:dashboard:1",
       runId: "run-1",
-      taskId: "task-1",
       execution: {
         id: "exec-1",
         kind: "agent-session",
@@ -1270,7 +1269,6 @@ describe("WorkboardStore", () => {
     expect(card).toMatchObject({
       sessionKey: "agent:main:dashboard:1",
       runId: "run-1",
-      taskId: "task-1",
       execution: {
         engine: "claude",
         mode: "manual",

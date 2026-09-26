@@ -152,8 +152,6 @@ const rawSqliteAllowPathGroups = {
     "src/plugins/installed-plugin-index-store-write.ts",
     "src/plugin-state/plugin-state-store.sqlite.ts",
     "src/proxy-capture/store.sqlite.ts",
-    "src/tasks/task-flow-registry.store.sqlite.ts",
-    "src/tasks/task-registry.store.kernel.ts",
   ],
 };
 
@@ -366,9 +364,6 @@ function isPersistedRowExpression(expression: Expression) {
 
 function isPersistedStringCastType(typeText: string) {
   return [
-    /\bTaskRecord\["(?:runtime|scopeKind|status|deliveryStatus|notifyPolicy|terminalOutcome)"\]/u,
-    /\bTaskFlowRecord\["(?:status|notifyPolicy)"\]/u,
-    /\bTaskFlowSyncMode\b/u,
     /\bVirtualAgentFsEntryKind\b/u,
     /\b[A-Z][A-Za-z0-9]*(?:Status|Kind|Mode|Policy|Runtime|Outcome)\b/u,
   ].some((pattern) => pattern.test(typeText));

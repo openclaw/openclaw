@@ -6,7 +6,7 @@ import {
   readCurrentProjectionSnapshot,
   type CurrentTranscriptProjection,
 } from "../config/sessions/session-accessor.sqlite-projection-read.js";
-import { readSessionTranscriptBindingFromProjection } from "../config/sessions/session-accessor.sqlite-task-history.js";
+import { readSessionTranscriptBindingFromProjection } from "../config/sessions/session-accessor.sqlite-transcript-binding.js";
 import type { SessionTranscriptRawDeltaLimits } from "../config/sessions/session-accessor.types.js";
 import { readWithCanonicalSessionAdmission } from "../config/sessions/session-canonical-key.js";
 import {
@@ -115,8 +115,8 @@ export function createReadonlySessionHistoryReader(
     return result.value.value;
   };
   return {
-    readTranscriptBinding: (run?: { id: string; maxBytes: number }) =>
-      readSnapshot((projection) => readSessionTranscriptBindingFromProjection(projection, run)),
+    readTranscriptBinding: () =>
+      readSnapshot((projection) => readSessionTranscriptBindingFromProjection(projection)),
     readTranscriptDisplayDelta: (limits: SessionTranscriptRawDeltaLimits) =>
       readSnapshot((projection) => readTranscriptDisplayDeltaFromProjection(projection, limits)),
     ...createSessionTranscriptReader({

@@ -1,4 +1,4 @@
-// Real-provider task continuation and its Control UI retention share one Gateway.
+// Real-provider child continuation and retained Control UI transcripts share one Gateway.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -6,10 +6,6 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { afterEach, describe, expect, it } from "vitest";
-import type {
-  TasksGetResult,
-  TasksListResult,
-} from "../../../../packages/gateway-protocol/src/schema/tasks.js";
 import { createControlUiE2eArtifactDir } from "../../../../ui/src/test-helpers/control-ui-e2e-artifacts.js";
 import { waitForControlUiGatewayReady } from "../../../../ui/src/test-helpers/control-ui-e2e-readiness.js";
 import {
@@ -31,7 +27,7 @@ import {
 import type { OpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../../../test-utils/ports.js";
 import { isLiveTestEnabled } from "../../live-test-helpers.js";
-import { listSubagentRunsForRequester } from "../registry/subagent-registry.test-helpers.js";
+import { listSubagentRunsForRequester } from "../registry/subagent-registry-read.js";
 import {
   createGatewayClient,
   createLiveSubagentState,
@@ -146,21 +142,22 @@ describeLive("subagent continuation live", () => {
       const originalRunId = paused.runId;
       const originalTaskRunId = paused.taskRunId ?? paused.runId;
       const childSessionKey = paused.childSessionKey;
-      const initialTasks = await gateway.request<TasksListResult>("tasks.list", {
-        sessionKey,
+      const originalGeneration = paused.generation ?? 0;
+      const childSessionId = loadSessionEntry({
+        agentId: "main",
+        sessionKey: childSessionKey,
+      })?.sessionId;
+      expect(childSessionId).toEqual(expect.any(String));
+      // The in-process Gateway owns these native execution and completion rows.
+      expect(paused).toMatchObject({
+        requesterSessionKey: sessionKey,
+        pauseReason: "sessions_yield",
+        execution: { status: "terminal" },
+        completion: { required: true },
       });
-      const originalTask = initialTasks.tasks.find(
-        (task) => task.childSessionKey === childSessionKey,
-      );
-      expect(originalTask).toMatchObject({
-        status: "running",
-        sessionKey,
-        ownerKey: sessionKey,
-        execution: { state: "waiting" },
-      });
-      if (!originalTask) {
-        throw new Error("The yielded child has no public task record");
-      }
+      expect(paused.execution.outcome).toBeUndefined();
+      expect(paused.completion?.resultText).toBeUndefined();
+      expect(paused.delivery).toEqual({ status: "pending" });
       await gateway.request("sessions.patch", {
         key: sessionKey,
         label: "Release evidence review",
@@ -197,9 +194,6 @@ describeLive("subagent continuation live", () => {
         await parentPage.getByText(initialAcknowledgement, { exact: true }).waitFor();
         await idleSend.waitFor({ state: "visible" });
         expect(await stop.count()).toBe(0);
-        const row = page.locator(`[data-subagent-task-id="${originalTask.id}"]`);
-        await row.waitFor({ state: "visible" });
-        expect(await row.getAttribute("aria-label")).toContain("Waiting");
         await page.screenshot({ path: path.join(artifactDir, "01-waiting-for-approval.png") });
         stage = "send ordinary parent continuation";
         const continuation = await runParent(
@@ -232,41 +226,33 @@ describeLive("subagent continuation live", () => {
             : undefined;
         });
         childFinalObserved = true;
-        stage = "settle original task";
-        const completedTask = await waitFor(
-          "original task completion",
-          async () => {
-            const { task } = await gateway.request<TasksGetResult>("tasks.get", {
-              taskId: originalTask.id,
-            });
-            return task.status === "completed" ? task : undefined;
-          },
+        stage = "settle continued native run";
+        const completedRun = await waitFor(
+          "continued child execution and captured result",
+          () =>
+            listSubagentRunsForRequester(sessionKey).find(
+              (run) =>
+                run.childSessionKey === childSessionKey &&
+                run.execution.status === "terminal" &&
+                run.pauseReason === undefined &&
+                run.completion?.resultText !== undefined,
+            ),
           120_000,
         );
-        expect(completedTask).toMatchObject({
-          id: originalTask.id,
-          taskId: originalTask.taskId,
-          runId: originalTask.runId,
-          sessionKey,
-          ownerKey: sessionKey,
+        expect(completedRun).toMatchObject({
+          taskRunId: originalTaskRunId,
+          requesterSessionKey: sessionKey,
           childSessionKey,
-          execution: { state: "finished" },
-          result: childToken,
+          execution: { status: "terminal", outcome: { status: "ok" } },
+          completion: { resultText: childToken },
         });
-        const endedAt =
-          typeof completedTask.endedAt === "number"
-            ? completedTask.endedAt
-            : Date.parse(completedTask.endedAt ?? "");
-        stage = "observe parent delivery and activity expiry";
-        const [retention, parentCompletion, delivery] = await Promise.allSettled([
-          waitFor(
-            "completed task retention period",
-            () => {
-              const elapsedMs = Date.now() - endedAt;
-              return elapsedMs >= 60_000 ? elapsedMs : undefined;
-            },
-            80_000,
-          ),
+        expect(completedRun.runId).not.toBe(originalRunId);
+        expect(completedRun.generation).toBeGreaterThan(originalGeneration);
+        expect(loadSessionEntry({ agentId: "main", sessionKey: childSessionKey })?.sessionId).toBe(
+          childSessionId,
+        );
+        stage = "observe native completion delivery to parent";
+        const [parentCompletion, delivery] = await Promise.allSettled([
           waitFor("parent receives completion", async () => {
             const messages = await readMessages(sessionKey);
             return messages.some(
@@ -278,26 +264,21 @@ describeLive("subagent continuation live", () => {
               : undefined;
           }),
           waitFor(
-            "original task delivery",
-            async () => {
-              const { task } = await gateway.request<TasksGetResult>("tasks.get", {
-                taskId: originalTask.id,
-              });
-              return task.deliveryStatus === "delivered" ? task : undefined;
-            },
+            "continued child delivery receipt",
+            () =>
+              listSubagentRunsForRequester(sessionKey).find(
+                (run) => run.runId === completedRun.runId && run.delivery?.status === "delivered",
+              ),
             120_000,
           ),
         ]);
-        if (retention.status === "rejected") {
-          throw toErrorObject(retention.reason, "Activity retention wait failed");
-        }
         if (parentCompletion.status === "rejected") {
           throw toErrorObject(parentCompletion.reason, "Parent completion failed");
         }
         if (delivery.status === "rejected") {
-          throw toErrorObject(delivery.reason, "Task delivery failed");
+          throw toErrorObject(delivery.reason, "Native child delivery failed");
         }
-        stage = "verify expired activity after parent finishes";
+        stage = "verify visible parent completion";
         await idleSend.waitFor({ state: "visible" });
         expect(await stop.count()).toBe(0);
         const visibleParentReply = parentPage
@@ -305,14 +286,22 @@ describeLive("subagent continuation live", () => {
           .filter({ hasText: new RegExp(`^${parentToken}$`) });
         await visibleParentReply.waitFor();
         await visibleParentReply.scrollIntoViewIfNeeded();
-        await row.waitFor({ state: "detached", timeout: 80_000 });
-        expect(await parentPage.locator(".chat-subagent-activity").count()).toBe(0);
-        expect(await idleSend.isVisible()).toBe(true);
-        expect(await stop.count()).toBe(0);
-        const rowAbsentAfterMs = Date.now() - endedAt;
-        expect(rowAbsentAfterMs).toBeGreaterThanOrEqual(60_000);
+        expect(await visibleParentReply.count()).toBe(1);
         await parentPage.screenshot({
-          path: path.join(artifactDir, "03-completed-row-expired.png"),
+          path: path.join(artifactDir, "02-parent-completed.png"),
+        });
+        // The removed activity-row TTL is not a completion signal. A fresh chat
+        // read must retain the exact delivered reply and leave the composer idle.
+        stage = "verify completion transcript after reload";
+        await parentPage.reload();
+        await waitForControlUiGatewayReady(parentPage);
+        await visibleParentReply.waitFor();
+        await visibleParentReply.scrollIntoViewIfNeeded();
+        await idleSend.waitFor({ state: "visible" });
+        expect(await visibleParentReply.count()).toBe(1);
+        expect(await stop.count()).toBe(0);
+        await parentPage.screenshot({
+          path: path.join(artifactDir, "03-completion-retained-after-reload.png"),
         });
         const parentMessages = await readMessages(sessionKey);
         const sends = parentMessages.flatMap((message) =>
@@ -334,6 +323,7 @@ describeLive("subagent continuation live", () => {
         expect(receipt).toMatchObject({
           status: "accepted",
           mode: "resume",
+          runId: completedRun.runId,
           taskRunId: originalTaskRunId,
           sessionKey: childSessionKey,
           completion: "task",
@@ -345,23 +335,39 @@ describeLive("subagent continuation live", () => {
             extractAssistantPhaseText(message)?.trim() === parentToken,
         );
         expect(visibleCompletions).toHaveLength(1);
-        const finalTasks = await gateway.request<TasksListResult>("tasks.list", { sessionKey });
-        expect(finalTasks.tasks.filter((task) => task.childSessionKey === childSessionKey)).toEqual(
-          [expect.objectContaining({ id: originalTask.id, status: "completed" })],
-        );
+        expect(
+          listSubagentRunsForRequester(sessionKey).filter(
+            (run) => run.childSessionKey === childSessionKey,
+          ),
+        ).toEqual([
+          expect.objectContaining({
+            runId: completedRun.runId,
+            taskRunId: originalTaskRunId,
+            execution: expect.objectContaining({ status: "terminal" }),
+            delivery: expect.objectContaining({ status: "delivered" }),
+          }),
+        ]);
+        expect(
+          (await readMessages(childSessionKey)).filter(
+            (message) =>
+              message.role === "assistant" &&
+              extractAssistantPhaseText(message)?.trim() === childToken,
+          ),
+        ).toHaveLength(1);
         await fs.writeFile(
           path.join(artifactDir, "proof.json"),
           JSON.stringify(
             {
-              originalTaskId: originalTask.id,
               originalRunId,
               originalTaskRunId,
+              successorRunId: completedRun.runId,
+              childSessionKey,
+              childSessionId,
               childFinalObserved,
-              taskStatus: completedTask.status,
-              deliveryStatus: delivery.value.deliveryStatus,
+              execution: completedRun.execution,
+              deliveryStatus: delivery.value.delivery?.status,
               visibleCompletionCount: visibleCompletions.length,
-              retentionElapsedMs: retention.value,
-              rowAbsentAfterMs,
+              visibleCompletionRetainedAfterReload: true,
               parentIdle: true,
             },
             null,
@@ -375,9 +381,9 @@ describeLive("subagent continuation live", () => {
             JSON.stringify(await readMessages(sessionKey), null, 2) + "\n",
           );
           await page?.screenshot({ path: path.join(artifactDir, "failure-parent-chat.png") });
-          const { task } = await gateway.request<TasksGetResult>("tasks.get", {
-            taskId: originalTask.id,
-          });
+          const runs = listSubagentRunsForRequester(sessionKey).filter(
+            (run) => run.childSessionKey === childSessionKey,
+          );
           const ui = page
             ? {
                 initialAcknowledgementVisible: await page
@@ -394,7 +400,6 @@ describeLive("subagent continuation live", () => {
                 idleSendVisible: await page
                   .getByRole("button", { name: "Write a message to send.", exact: true })
                   .isVisible(),
-                subagentRows: await page.locator("[data-subagent-task-id]").count(),
               }
             : undefined;
           await fs.writeFile(
@@ -403,10 +408,9 @@ describeLive("subagent continuation live", () => {
               {
                 stage,
                 childFinalObserved,
-                originalTaskId: originalTask.id,
-                status: task.status,
-                execution: task.execution,
-                deliveryStatus: task.deliveryStatus,
+                originalRunId,
+                originalTaskRunId,
+                runs,
                 ui,
               },
               null,

@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "How OpenClaw records schema versions, when a bump is required, and how updaters cross one"
 read_when:
   - "Deciding whether a storage change needs a schema-version bump"
@@ -55,27 +56,28 @@ same-version readers can ignore the extra index, so binary rollback leaves it
 intact. The accepted design is recorded in the
 [session label index decision](https://github.com/openclaw/openclaw/pull/147837#issuecomment-5658783288).
 
-Task and maintenance lookups add nonunique indexes without changing state schema
-17 or agent schema 21: task requester sessions, worker placements by environment,
-and session entries whose
-validity is not yet confirmed. Existing task matching, stored rows, retention,
-and ownership checks are unchanged. Read-only admission accepts missing indexes;
-the canonical writable schema owner installs or repairs them. Initial construction
+Task and maintenance lookups added nonunique indexes without changing state
+schema 17 or agent schema 21: task requester sessions, worker placements by
+environment, and session entries whose validity is not yet confirmed. The task
+requester index remains in the physical schema after the Tasks runtime removal.
+Stored rows, retention, and ownership checks are unchanged. Read-only admission
+accepts missing indexes; the canonical writable schema owner installs or repairs them. Initial construction
 uses time and temporary disk proportional to the affected tables, and subsequent
 writes maintain the added indexes. Older same-version readers can ignore them,
 so binary rollback preserves both rows and indexes. See the
 [accepted index design](https://github.com/openclaw/openclaw/issues/153533).
 
-Task execution ownership uses three bare nullable columns on `task_runs`:
-`execution_owner_host TEXT`, `execution_owner_pid INTEGER`, and
-`execution_owner_start_identity INTEGER`. The first task write ensures them
-idempotently; read-only inspection does not add them. They are declared in the
-canonical schema and included in the existing additive migration path, without
-changing the schema version. Older readers ignore these columns. Legacy rows
-remain unknown until an execution owner explicitly records its identity; restore
-never guesses their owner. Confirmed process-exit settlement uses existing task
-terminal fields and retention rules. Downgrading code does not undo a terminal
-outcome already recorded by restore.
+Removing the Tasks and TaskFlow runtime does not change the shared-state or agent
+schema. The existing tables, indexes, and optional execution-owner columns
+remain part of the released storage contract. Cron reads and writes its existing
+`runtime = 'cron'` history rows in `task_runs` through its own store. Non-Cron
+Task and TaskFlow rows remain untouched and unused by the runtime; they are not
+converted into a replacement ledger. The Codex plugin's
+[Doctor migration](/gateway/doctor/config-migrations#native-codex-recovery-after-tasks-removal)
+preserves eligible native child recovery facts from owner-stamped legacy rows
+in existing parent binding metadata, with an atomic import marker preventing
+replay. Source rows stay byte-identical. No table drop, SQL schema change, or
+schema-version bump accompanies this removal.
 
 Node worker recovery uses the private `node_worker_launch_cleanup` companion
 table in the existing launch journal. The launch owner adds it on first use and
@@ -209,7 +211,7 @@ A missing table or row means no recorded retirement; earlier edits cannot be
 reconstructed from the final job definition. Older compatible readers ignore the
 companion but do not enforce this protection. To preserve edited watcher state,
 complete active runs and pending scheduler reconciliation on the current build
-before downgrading. A terminal task or receipt can still leave job state
+before downgrading. A terminal history result or receipt can still leave job state
 unreconciled.
 
 Scheduling edits made while a run awaits reconciliation record a private
@@ -251,25 +253,22 @@ for updated binaries. Older readers ignore it and can reopen and update the
 same database safely; their association update invalidates context captured by
 a newer writer so it cannot be replayed after re-upgrade.
 
-Conversation progress continuations reuse the agent database's `cache_entries`
+Retained conversation progress snapshots use the agent database's `cache_entries`
 table with scope `conversation-progress` and the delivery operation ID as the key.
-No table, column, schema-version change, or migration is required. A missing cache
-entry means no retained presentation; older receipts are not backfilled.
+The Tasks-backed detached presenter is removed, but its stored snapshots and
+receipt cleanup contract are unchanged. No table, column, schema-version change,
+or migration accompanies this removal. Older receipts are not backfilled.
 
 The receipt owns the known platform message identity and delivery status.
-Adoption records that evidence and its bounded, data-only prepared snapshot in
-one guarded transaction. Later updates write only the snapshot cache, leaving
-the receipt unchanged: desired presentation is not proof that a platform edit
-was delivered or that work completed. Snapshots are limited to 64 KiB of JSON,
-4,096 characters per string, 128 rolling lines, and 64 checklist steps or prepared
-blocks. Invalid optional snapshots are ignored without hiding delivery evidence.
+The removed presenter no longer writes or reads progress snapshots. Existing
+snapshot bytes remain opaque retained data; desired presentation is not proof
+that a platform edit was delivered or that work completed.
 
-Reopening restores cached presentation only under the existing task and
-requester checks; the snapshot never grants authority. Older builds ignore the
-cache scope and cannot resume the newer presentation flow. Canonical session
-repair carries snapshots with their receipt identities. The existing session
-delivery cleanup removes matching snapshot keys with their receipts, with no new
-expiry policy, cleanup loop, or completion owner.
+Reopening does not restore the removed Tasks presenter from cached snapshots;
+a snapshot never grants execution or delivery authority. Canonical session repair
+carries snapshots with their receipt identities. The existing session delivery
+cleanup removes matching snapshot keys with their receipts, with no new expiry
+policy, cleanup loop, or completion owner.
 
 Transcript context eligibility uses a bare nullable
 `session_transcript_active_events.context_eligible INTEGER` column without

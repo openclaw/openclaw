@@ -116,7 +116,6 @@ const enCommandPalette = {
       workspaceFiles: "Toggle workspace files",
       sideChat: "Toggle side chat",
       browserPanel: "Toggle browser panel",
-      tasksPanel: "Toggle tasks panel",
       desktopPanel: "Toggle desktop panel",
       discussionPanel: "Toggle discussion panel",
       dashboardPanel: "Toggle dashboard panel",

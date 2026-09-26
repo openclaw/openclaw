@@ -86,8 +86,6 @@ describe("listGatewayMethods", () => {
     "skills.proposals.events.list",
     "skills.proposals.evaluate",
     "hooks.status",
-    "tasks.retry",
-    "tasks.dismiss",
     "audit.run.inspect",
     "sessions.patchMany",
     "update.hold",
@@ -185,7 +183,7 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("approval.resolve");
   });
 
-  it("appends new methods after model probing without shifting older method indices", () => {
+  it("appends new methods after model probing while preserving retained older method order", () => {
     const expectedSuffix = [
       ...expectedMethodsAfterModelProbe,
       "canvas.document.view",
@@ -203,7 +201,6 @@ describe("listGatewayMethods", () => {
       "session.publicShare.set",
       "claws.monitors",
       ...pluginDiscoveryMethods,
-      "tasks.history",
       "environments.prepare",
       "models.authRefresh",
       "models.authLogin",
@@ -234,6 +231,7 @@ describe("listGatewayMethods", () => {
       "themes.import",
       "controlUi.githubDetail",
       "progressCard.refresh",
+      "cron.history",
       "webSearch.status",
       "webSearch.test",
       "sessions.providerReview.continue",
@@ -245,11 +243,11 @@ describe("listGatewayMethods", () => {
       "portal.session.list",
       "portal.session.open",
       "portal.session.close",
-      "cron.history",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
     const legacyCount = LEGACY_ADVERTISED_GATEWAY_METHODS.length;
+    expect(methods.some((method) => method.startsWith("tasks."))).toBe(false);
 
     expect(methods.slice(0, legacyCount)).toEqual(LEGACY_ADVERTISED_GATEWAY_METHODS);
     expect(methods.slice(legacyCount, legacyCount + 4)).toEqual([
@@ -269,7 +267,6 @@ describe("listGatewayMethods", () => {
       "session.publicShare.set",
       "claws.monitors",
       ...pluginDiscoveryMethods,
-      "tasks.history",
       "environments.prepare",
       "models.authRefresh",
       "models.authLogin",
@@ -300,6 +297,7 @@ describe("listGatewayMethods", () => {
       "themes.import",
       "controlUi.githubDetail",
       "progressCard.refresh",
+      "cron.history",
       "webSearch.status",
       "webSearch.test",
       "sessions.providerReview.continue",
@@ -311,7 +309,6 @@ describe("listGatewayMethods", () => {
       "portal.session.list",
       "portal.session.open",
       "portal.session.close",
-      "cron.history",
     ]);
   });
 
@@ -464,7 +461,6 @@ describe("listGatewayMethods", () => {
       "session.publicShare.set",
       "claws.monitors",
       ...pluginDiscoveryMethods,
-      "tasks.history",
       "environments.prepare",
       "models.authRefresh",
       "models.authLogin",
@@ -495,6 +491,7 @@ describe("listGatewayMethods", () => {
       "themes.import",
       "controlUi.githubDetail",
       "progressCard.refresh",
+      "cron.history",
       "webSearch.status",
       "webSearch.test",
       "sessions.providerReview.continue",
@@ -506,12 +503,11 @@ describe("listGatewayMethods", () => {
       "portal.session.list",
       "portal.session.open",
       "portal.session.close",
-      "cron.history",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
-    expect(methods.indexOf("audit.run.inspect")).toBe(methods.indexOf("tasks.dismiss") + 1);
+    expect(methods.indexOf("audit.run.inspect")).toBe(methods.indexOf("hooks.status") + 1);
     expect(methods.indexOf("sessions.patchMany")).toBe(methods.indexOf("audit.run.inspect") + 1);
     expect(methods.indexOf("update.hold")).toBe(methods.indexOf("sessions.patchMany") + 1);
     expect(methods.indexOf("sessions.catalog.startTerminal")).toBe(

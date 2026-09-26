@@ -1,21 +1,16 @@
 // Imported by agent.test.ts to retain its shared mocked module graph.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { findTaskByRunId } from "../../tasks/task-registry.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as agentHandlerHelpers from "../agent-turn/agent-handler-helpers.js";
 import { waitForAcceptedRunDispatch } from "./agent-clock.test-helpers.js";
-import {
-  mockSpawnedChildSessionEntry,
-  spyDetachedCreateRunningTaskRun,
-} from "./agent-task-tracking.test-helpers.js";
+import { mockSpawnedChildSessionEntry } from "./agent.spawned-child.test-support.js";
 import {
   backendGatewayClient,
   describe0AfterEach0,
   getAgentTestMocks,
   invokeAgent,
   requireValue,
-  resetAgentTaskRegistryForTests,
   useTestStateDir,
   waitForAgentCommandCall,
 } from "./agent.test-harness.js";
@@ -55,7 +50,6 @@ describe("gateway accepted dispatch clock", () => {
       async (state) => {
         const root = state.stateDir;
         useTestStateDir(root);
-        resetAgentTaskRegistryForTests();
         const childSessionKey = "agent:main:subagent:native-delayed-child";
         const runId = "native-delayed-subagent-run";
         const baseClient = requireValue(backendGatewayClient(), "expected backend client");
@@ -65,7 +59,6 @@ describe("gateway accepted dispatch clock", () => {
           payloads: [{ text: "ok" }],
           meta: { durationMs: 100 },
         });
-        const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
         const prepared = createDeferred();
         const originalYield = agentHandlerHelpers.yieldAfterAgentAcceptedAck;
         const advancePending = vi.runOnlyPendingTimersAsync.bind(vi);
@@ -103,8 +96,8 @@ describe("gateway accepted dispatch clock", () => {
             },
           );
           await waitForAgentCommandCall();
-          expect(createRunningTaskRunSpy).not.toHaveBeenCalled();
-          expect(findTaskByRunId(runId)).toBeUndefined();
+          expect(mocks.agentCommand).toHaveBeenCalledOnce();
+          expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "accepted", runId });
         } finally {
           prepared.resolve();
           pump.mockRestore();

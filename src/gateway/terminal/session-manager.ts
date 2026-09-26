@@ -10,7 +10,6 @@ import { spawnTerminalPty } from "../../process/terminal-pty.js";
 import {
   agentTerminalOwnerMatches,
   AgentTerminalSessionDrainTracker,
-  terminalTaskOwnerMatches,
 } from "./agent-session-drain.js";
 import type { TerminalBackend } from "./backend.js";
 import { TERMINAL_EVENT_DATA, TERMINAL_EVENT_EXIT } from "./gateway-transport.js";
@@ -418,22 +417,6 @@ export class TerminalSessionManager {
     }
     this.finalize(session, "closed", {});
     return { ok: true };
-  }
-
-  /** Closes every live or spawning PTY bound to one exact terminal task. */
-  closeTaskSessions(taskId: string): number {
-    for (const [pending, owner] of this.pendingOpens) {
-      if (terminalTaskOwnerMatches(owner, taskId)) {
-        pending.abort("terminal closed because its task ended");
-      }
-    }
-    const owned = [...this.sessions.values()].filter(
-      (session) => !session.closed && terminalTaskOwnerMatches(session.owner, taskId),
-    );
-    for (const session of owned) {
-      this.finalize(session, "closed", {});
-    }
-    return owned.length;
   }
 
   /** Fences and closes one durable agent-session incarnation through archive commit. */

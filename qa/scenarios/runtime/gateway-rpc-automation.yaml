@@ -1,4 +1,4 @@
-title: Gateway task and automation RPC evidence
+title: Gateway agent and automation RPC evidence
 
 scenario:
   id: gateway-rpc-automation
@@ -6,25 +6,25 @@ scenario:
   category: gateway.gateway-rpc-apis-and-events
   coverage:
     primary:
-      - gateway.task-and-automation-apis
+      - gateway.agent-and-automation-apis
       - agent-runtime.session-heartbeat-target-none
-  objective: Verify the real Gateway persists cron RPC mutations, wakes a heartbeat into the agent runtime, and controls a Gateway-created agent task.
+  objective: Verify the real Gateway persists cron RPC mutations, wakes a heartbeat into the agent runtime, and cancels a Gateway-created agent run.
   successCriteria:
     - Cron add, get, list, update, and remove RPCs expose the persisted job state after each mutation.
     - A wake RPC with mode now executes a real heartbeat turn whose provider returns a concrete reply.
     - last-heartbeat records skipped status, target-none reason, and the provider reply preview.
     - This scenario makes no channel delivery claim; target-none is asserted through the recorded heartbeat outcome.
-    - A real agent RPC creates a running CLI task exposed through tasks.list and tasks.get.
-    - tasks.cancel records the terminal cancelled state, and later agent completion does not overwrite it.
+    - A real agent RPC returns the admitted run identity.
+    - chat.abort cancels that exact session run, and agent.wait observes its terminal lifecycle.
   docsRefs:
     - docs/gateway/protocol.md
     - docs/automation/cron-jobs.md
-    - docs/automation/tasks.md
+    - docs/concepts/session.md
   codeRefs:
     - src/gateway/server-methods/cron.ts
-    - src/gateway/server-methods/tasks.ts
+    - src/gateway/server-methods/chat-abort-runtime.ts
     - test/e2e/qa-lab/runtime/gateway-rpc-automation.e2e.test.ts
   execution:
     kind: vitest
     path: test/e2e/qa-lab/runtime/gateway-rpc-automation.e2e.test.ts
-    summary: Run one isolated real-Gateway scenario over cron CRUD, wake-to-heartbeat delivery, and Gateway-created agent task list/get/cancel.
+    summary: Run one isolated real-Gateway scenario over cron CRUD, wake-to-heartbeat delivery, and Gateway-created agent run admission, abort, and wait.

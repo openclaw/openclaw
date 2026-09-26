@@ -10,7 +10,6 @@ import {
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
-import { setDetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime.test-support.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
 import { registerEmbeddingProvider } from "./embedding-providers.js";
@@ -39,7 +38,6 @@ import {
   getEmbeddingProvider,
   listEmbeddingProviders,
   expectGlobalHookRunner,
-  createDetachedTaskRuntimeStub,
   loadRegistryFromSinglePlugin,
   updatePluginManifest,
   expectDiagnosticContaining,
@@ -65,7 +63,6 @@ import { createEmptyPluginRegistry } from "./registry.js";
 import {
   getActivePluginChannelRegistry,
   getActivePluginRegistry,
-  requireActivePluginRegistry,
   getActivePluginRegistryKey,
   getActivePluginRegistryWorkspaceDir,
   getActivePluginRuntimeSubagentMode,
@@ -868,169 +865,6 @@ describe("loadOpenClawPlugins", () => {
     expect(getMemoryRuntime()).toBeUndefined();
   });
 
-  it("does not replace the active detached task runtime during non-activating loads", () => {
-    useNoBundledPlugins();
-    const activeRuntime = createDetachedTaskRuntimeStub("active");
-    setDetachedTaskLifecycleRuntime(activeRuntime, "active-runtime");
-
-    const plugin = writePlugin({
-      id: "snapshot-detached-runtime",
-      filename: "snapshot-detached-runtime.cjs",
-      registration: `api.registerDetachedTaskRuntime({
-        createQueuedTaskRun() { throw new Error("snapshot createQueuedTaskRun should not run"); },
-        createRunningTaskRun() { throw new Error("snapshot createRunningTaskRun should not run"); },
-        startTaskRunByRunId() { throw new Error("snapshot startTaskRunByRunId should not run"); },
-        recordTaskRunProgressByRunId() { throw new Error("snapshot recordTaskRunProgressByRunId should not run"); },
-        finalizeTaskRunByRunId() { throw new Error("snapshot finalizeTaskRunByRunId should not run"); },
-        completeTaskRunByRunId() { throw new Error("snapshot completeTaskRunByRunId should not run"); },
-        failTaskRunByRunId() { throw new Error("snapshot failTaskRunByRunId should not run"); },
-        setDetachedTaskDeliveryStatusByRunId() { throw new Error("snapshot setDetachedTaskDeliveryStatusByRunId should not run"); },
-        async cancelDetachedTaskRunById() { return { found: true, cancelled: true }; },
-      });`,
-    });
-
-    const scoped = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: { allow: ["snapshot-detached-runtime"] },
-      options: { activate: false, onlyPluginIds: ["snapshot-detached-runtime"] },
-    });
-
-    expect(scoped.plugins.find((entry) => entry.id === "snapshot-detached-runtime")?.status).toBe(
-      "loaded",
-    );
-    const runtimeRegistration = requireActivePluginRegistry().detachedTaskRuntimes[0];
-    expect(runtimeRegistration?.pluginId).toBe("active-runtime");
-    expect(runtimeRegistration?.runtime).toBe(activeRuntime);
-  });
-
-  it("replaces a detached task runtime registered twice by the same plugin", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "detached-runtime-refresh",
-      filename: "detached-runtime-refresh.cjs",
-      registration: `api.registerDetachedTaskRuntime({ marker: "first" });
-      api.registerDetachedTaskRuntime({ marker: "second" });`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: { allow: ["detached-runtime-refresh"] },
-      options: { onlyPluginIds: ["detached-runtime-refresh"] },
-    });
-
-    expect(registry.detachedTaskRuntimes).toHaveLength(1);
-    expect(
-      (registry.detachedTaskRuntimes[0]?.runtime as { marker?: string } | undefined)?.marker,
-    ).toBe("second");
-  });
-
-  it("does not let another plugin replace the detached task runtime", () => {
-    useNoBundledPlugins();
-    const plugins = ["first-plugin", "second-plugin"].map((id) =>
-      writePlugin({
-        id,
-        body: `module.exports = { register(api) {
-          api.registerDetachedTaskRuntime({ marker: ${JSON.stringify(id)} });
-        } };`,
-      }),
-    );
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          allow: plugins.map(({ id }) => id),
-          load: { paths: plugins.map(({ dir }) => dir) },
-        },
-      },
-    });
-
-    expect(registry.detachedTaskRuntimes).toEqual([
-      { pluginId: "first-plugin", runtime: { marker: "first-plugin" } },
-    ]);
-    expect(registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        pluginId: "second-plugin",
-        message: "detached task runtime already registered by first-plugin",
-      }),
-    );
-  });
-
-  it("clears newly-registered detached task runtimes when plugin register fails", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "failing-detached-runtime",
-      filename: "failing-detached-runtime.cjs",
-      registration: `api.registerDetachedTaskRuntime({
-        createQueuedTaskRun() { throw new Error("failing createQueuedTaskRun should not run"); },
-        createRunningTaskRun() { throw new Error("failing createRunningTaskRun should not run"); },
-        startTaskRunByRunId() { throw new Error("failing startTaskRunByRunId should not run"); },
-        recordTaskRunProgressByRunId() { throw new Error("failing recordTaskRunProgressByRunId should not run"); },
-        finalizeTaskRunByRunId() { throw new Error("failing finalizeTaskRunByRunId should not run"); },
-        completeTaskRunByRunId() { throw new Error("failing completeTaskRunByRunId should not run"); },
-        failTaskRunByRunId() { throw new Error("failing failTaskRunByRunId should not run"); },
-        setDetachedTaskDeliveryStatusByRunId() { throw new Error("failing setDetachedTaskDeliveryStatusByRunId should not run"); },
-        async cancelDetachedTaskRunById() { return { found: true, cancelled: true }; },
-      });
-      throw new Error("detached runtime register failed");`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: { allow: ["failing-detached-runtime"] },
-      options: { onlyPluginIds: ["failing-detached-runtime"] },
-    });
-
-    expect(registry.plugins.find((entry) => entry.id === "failing-detached-runtime")?.status).toBe(
-      "error",
-    );
-    expect(requireActivePluginRegistry().detachedTaskRuntimes[0]).toBeUndefined();
-  });
-
-  it("restores detached task runtime registrations after registry replacement", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "cached-detached-runtime",
-      filename: "cached-detached-runtime.cjs",
-      registration: `api.registerDetachedTaskRuntime({
-        createQueuedTaskRun() { throw new Error("cached createQueuedTaskRun should not run"); },
-        createRunningTaskRun() { throw new Error("cached createRunningTaskRun should not run"); },
-        startTaskRunByRunId() { throw new Error("cached startTaskRunByRunId should not run"); },
-        recordTaskRunProgressByRunId() { throw new Error("cached recordTaskRunProgressByRunId should not run"); },
-        finalizeTaskRunByRunId() { throw new Error("cached finalizeTaskRunByRunId should not run"); },
-        completeTaskRunByRunId() { throw new Error("cached completeTaskRunByRunId should not run"); },
-        failTaskRunByRunId() { throw new Error("cached failTaskRunByRunId should not run"); },
-        setDetachedTaskDeliveryStatusByRunId() { throw new Error("cached setDetachedTaskDeliveryStatusByRunId should not run"); },
-        async cancelDetachedTaskRunById() { return { found: true, cancelled: true }; },
-      });`,
-    });
-
-    const loadOptions = {
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["cached-detached-runtime"],
-        },
-      },
-      onlyPluginIds: ["cached-detached-runtime"],
-    } satisfies Parameters<typeof loadOpenClawPlugins>[0];
-
-    loadOpenClawPlugins(loadOptions);
-    expect(requireActivePluginRegistry().detachedTaskRuntimes[0]?.pluginId).toBe(
-      "cached-detached-runtime",
-    );
-
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    expect(requireActivePluginRegistry().detachedTaskRuntimes[0]).toBeUndefined();
-
-    loadOpenClawPlugins(loadOptions);
-
-    expect(requireActivePluginRegistry().detachedTaskRuntimes[0]?.pluginId).toBe(
-      "cached-detached-runtime",
-    );
-  });
-
   it("restores legacy internal hook registrations after registry replacement", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -1148,23 +982,6 @@ describe("loadOpenClawPlugins", () => {
     expect(registration?.namespace).toBe("hue");
     expect(registration?.channel).toBe("telegram");
     expect(claimPluginInteractiveCallbackDedupe(dedupeKey, 1_003)).toBe(false);
-  });
-
-  it("clears stale detached task runtime registrations on active reloads when no plugin re-registers one", () => {
-    useNoBundledPlugins();
-    setDetachedTaskLifecycleRuntime(createDetachedTaskRuntimeStub("stale"), "stale-runtime");
-
-    loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          load: { paths: [] },
-          allow: [],
-        },
-      },
-    });
-
-    expect(requireActivePluginRegistry().detachedTaskRuntimes[0]).toBeUndefined();
   });
 
   it("restores memory capability public artifacts with a fresh registry after replacement", async () => {

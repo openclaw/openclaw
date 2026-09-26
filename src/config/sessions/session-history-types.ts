@@ -148,7 +148,7 @@ export type SessionHistoryWorkerRequest =
     }
   | {
       kind: "transcript-binding";
-      params: { target: SessionTranscriptReadScope; run?: { id: string; maxBytes: number } };
+      params: { target: SessionTranscriptReadScope };
     }
   | { kind: "rpc"; params: ChatHistoryPageParams & { sessionId: string; storePath: string } }
   | { kind: "message-lookup"; params: { target: SessionTranscriptReadScope; messageId: string } }

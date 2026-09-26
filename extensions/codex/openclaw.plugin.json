@@ -25,6 +25,7 @@
     "configRepair": true,
     "stateMigrations": [
       { "id": "codex-app-server-sidecars-to-plugin-state" },
+      { "id": "codex-native-task-assignments" },
       {
         "id": "codex-app-server-orphaned-session-bindings",
         "doctorOnly": true,

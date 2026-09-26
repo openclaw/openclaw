@@ -1,26 +1,34 @@
 import fs from "node:fs/promises";
 import { MessagePort } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { NativeHookRelayBridgeRecord } from "../agents/harness/native-hook-relay-store.js";
 import { captureCoordinatorDatabase } from "../infra/sqlite-coordinator.test-support.js";
 import * as coordinatorDelegate from "../infra/state-database-coordinator-delegate.js";
 import * as stateCoordinator from "../infra/state-database-coordinator.js";
-import type { ManagedTaskFlowRecord } from "../plugins/runtime/runtime-taskflow.types.js";
-import { createRuntimeAsyncTasks } from "../plugins/runtime/runtime-tasks-async.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
-import { resetTaskFlowRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+
+function relayRecord(revision: number): NativeHookRelayBridgeRecord {
+  return {
+    relayId: "doctor",
+    pid: revision,
+    hostname: "127.0.0.1",
+    port: 18789,
+    token: "synthetic-doctor-worker-token",
+    expiresAtMs: 20000,
+  };
+}
 
 afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
-  resetTaskFlowRegistryForTests({ persist: false });
 });
 
-describe("Doctor maintenance with managed-flow workers", () => {
+describe("Doctor maintenance with shared-state workers", () => {
   it.each([false, true])(
     "preserves pooling until worker close requests retirement (close before owner release=%s)",
     async (closeBeforeRelease) => {
@@ -44,8 +52,8 @@ describe("Doctor maintenance with managed-flow workers", () => {
               try {
                 expect(
                   await executeOpenClawStateWorker(context, {
-                    type: "tasks.list",
-                    input: { ownerKey: "agent:main:doctor" },
+                    type: "plugins.conversationBindingApprovals.read",
+                    input: undefined,
                   }),
                 ).toEqual([]);
                 if (closeBeforeRelease) {
@@ -82,77 +90,73 @@ describe("Doctor maintenance with managed-flow workers", () => {
         { scenario: "external-service", label: "doctor-managed-worker" },
         async () => {
           openOpenClawStateDatabase();
-          let flows = createRuntimeAsyncTasks().managedFlows.bindSession({
-            sessionKey: "agent:main:doctor",
-          });
+          let execute = executeOpenClawStateWorker;
+          let capture = captureOpenClawStateWorkerContext;
           if (alreadyOpen) {
-            await flows.list();
+            await execute(capture(), {
+              type: "nativeHookRelay.read",
+              input: { relayId: "doctor" },
+            });
           }
           let enterMaintenance = beginDoctorMaintenance;
           if (reload) {
             await closeOpenClawStateDatabaseAsync();
             vi.resetModules();
-            const [reloadedDoctor, reloadedTasks] = await Promise.all([
+            const [doctor, worker, contexts] = await Promise.all([
               import("./doctor-maintenance.js"),
-              import("../plugins/runtime/runtime-tasks-async.js"),
+              import("../state/openclaw-state-worker-store.js"),
+              import("../state/openclaw-state-worker-context.js"),
             ]);
-            enterMaintenance = reloadedDoctor.beginDoctorMaintenance;
-            flows = reloadedTasks.createRuntimeAsyncTasks().managedFlows.bindSession({
-              sessionKey: "agent:main:doctor",
-            });
+            enterMaintenance = doctor.beginDoctorMaintenance;
+            execute = worker.executeOpenClawStateWorker;
+            capture = contexts.captureOpenClawStateWorkerContext;
           }
           const maintenance = await enterMaintenance({
             options: { repair: true, nonInteractive: true },
             root: null,
             runtime: { log() {}, error() {}, exit() {} },
           });
-          let flowId: string;
+          const record = relayRecord(1);
           try {
-            flowId = await maintenance!.run(async () => {
-              const created = await flows.createManaged({
-                controllerId: "tests/doctor",
-                goal: "Complete Doctor repair",
+            await maintenance!.run(async () => {
+              await execute(capture(), {
+                type: "nativeHookRelay.write",
+                input: { record, updatedAtMs: 1 },
               });
-              const createdFlowId = created.flowId;
-              expect(created.revision).toBe(0);
-              await expect(
-                flows.finish({
-                  flowId: createdFlowId,
-                  expectedRevision: created.revision,
-                  stateJson: { completed: true },
+              expect(
+                await execute(capture(), {
+                  type: "nativeHookRelay.read",
+                  input: { relayId: record.relayId },
                 }),
-              ).resolves.toMatchObject({
-                applied: true,
-                flow: { flowId: createdFlowId, status: "succeeded", revision: 1 },
-              });
-              return createdFlowId;
+              ).toEqual(record);
             });
           } finally {
             await maintenance?.release();
           }
           await closeOpenClawStateDatabaseAsync();
-          expect(await flows.list()).toEqual([
-            expect.objectContaining({
-              flowId,
-              goal: "Complete Doctor repair",
-              status: "succeeded",
-              revision: 1,
-              stateJson: { completed: true },
+          expect(
+            await execute(capture(), {
+              type: "nativeHookRelay.read",
+              input: { relayId: record.relayId },
             }),
-          ]);
-          const next = await flows.createManaged({
-            controllerId: "tests/doctor",
-            goal: "Continue after maintenance",
+          ).toEqual(record);
+          const successor = relayRecord(2);
+          await execute(capture(), {
+            type: "nativeHookRelay.write",
+            input: { record: successor, updatedAtMs: 2 },
           });
-          expect((await flows.list()).map((flow) => flow.flowId).toSorted()).toEqual(
-            [flowId, next.flowId].toSorted(),
-          );
+          expect(
+            await execute(capture(), {
+              type: "nativeHookRelay.read",
+              input: { relayId: record.relayId },
+            }),
+          ).toEqual(successor);
         },
       );
     },
   );
 
-  it("preserves a committed flow receipt when its retained coordinator release fails", async () => {
+  it("preserves a committed write receipt when its retained coordinator release fails", async () => {
     await withOpenClawTestState(
       { scenario: "external-service", label: "doctor-managed-cleanup" },
       async () => {
@@ -162,15 +166,16 @@ describe("Doctor maintenance with managed-flow workers", () => {
           root: null,
           runtime: { log() {}, error() {}, exit() {} },
         });
-        const flows = createRuntimeAsyncTasks().managedFlows.bindSession({
-          sessionKey: "agent:main:doctor",
-        });
+        const context = captureOpenClawStateWorkerContext();
         const receipt: {
           delegate?: ReturnType<typeof stateCoordinator.tryCreateStateLifecycleDelegate>;
         } = {};
         try {
           await maintenance!.run(async () => {
-            await flows.list();
+            await executeOpenClawStateWorker(context, {
+              type: "nativeHookRelay.read",
+              input: { relayId: "doctor" },
+            });
             const createDelegate = stateCoordinator.tryCreateStateLifecycleDelegate;
             let failRelease = true;
             const spy = vi
@@ -195,19 +200,23 @@ describe("Doctor maintenance with managed-flow workers", () => {
                   },
                 };
               });
-            let created: ManagedTaskFlowRecord | null;
+            const created = relayRecord(1);
             try {
-              created = await flows.tryCreateManaged({
-                controllerId: "tests/doctor",
-                goal: "Retain confirmed result",
+              await executeOpenClawStateWorker(context, {
+                type: "nativeHookRelay.write",
+                input: { record: created, updatedAtMs: 1 },
               });
-              expect(created).toMatchObject({ goal: "Retain confirmed result", revision: 0 });
             } finally {
               spy.mockRestore();
             }
             await closeOpenClawStateDatabaseAsync();
             expect(receipt.delegate?.closed).toBe(true);
-            expect(await flows.list()).toEqual([created]);
+            expect(
+              await executeOpenClawStateWorker(context, {
+                type: "nativeHookRelay.read",
+                input: { relayId: "doctor" },
+              }),
+            ).toEqual(created);
           });
         } finally {
           receipt.delegate?.release();
@@ -224,11 +233,12 @@ describe("Doctor maintenance with managed-flow workers", () => {
         { scenario: "external-service", label: "doctor-managed-setup" },
         async () => {
           openOpenClawStateDatabase();
-          const flows = createRuntimeAsyncTasks().managedFlows.bindSession({
-            sessionKey: "agent:main:doctor",
-          });
+          const context = captureOpenClawStateWorkerContext();
           if (beforeMaintenance) {
-            await flows.list();
+            await executeOpenClawStateWorker(context, {
+              type: "nativeHookRelay.read",
+              input: { relayId: "doctor" },
+            });
           }
           const maintenance = await beginDoctorMaintenance({
             options: { repair: true, nonInteractive: true },
@@ -241,7 +251,10 @@ describe("Doctor maintenance with managed-flow workers", () => {
           try {
             await maintenance!.run(async () => {
               if (!beforeMaintenance) {
-                await flows.list();
+                await executeOpenClawStateWorker(context, {
+                  type: "nativeHookRelay.read",
+                  input: { relayId: "doctor" },
+                });
               }
               const create = coordinatorDelegate.createCoordinatorDelegate;
               let failRelease = true;
@@ -278,24 +291,35 @@ describe("Doctor maintenance with managed-flow workers", () => {
                 });
               try {
                 await expect(
-                  flows.tryCreateManaged({
-                    controllerId: "tests/doctor",
-                    goal: "Undispatched repair",
+                  executeOpenClawStateWorker(context, {
+                    type: "nativeHookRelay.write",
+                    input: { record: relayRecord(1), updatedAtMs: 1 },
                   }),
-                ).resolves.toBeNull();
+                ).rejects.toThrow("Synthetic delegate setup failure");
               } finally {
                 send.mockRestore();
                 delegate.mockRestore();
               }
               await closeOpenClawStateDatabaseAsync();
               expect(receipt.retained?.closed).toBe(true);
-              expect(await flows.list()).toEqual([]);
-              const created = await flows.createManaged({
-                controllerId: "tests/doctor",
-                goal: "Continue after setup failure",
+              expect(
+                await executeOpenClawStateWorker(context, {
+                  type: "nativeHookRelay.read",
+                  input: { relayId: "doctor" },
+                }),
+              ).toBeUndefined();
+              const created = relayRecord(2);
+              await executeOpenClawStateWorker(context, {
+                type: "nativeHookRelay.write",
+                input: { record: created, updatedAtMs: 2 },
               });
               await closeOpenClawStateDatabaseAsync();
-              expect(await flows.list()).toEqual([created]);
+              expect(
+                await executeOpenClawStateWorker(context, {
+                  type: "nativeHookRelay.read",
+                  input: { relayId: "doctor" },
+                }),
+              ).toEqual(created);
             });
           } finally {
             receipt.retained?.release();

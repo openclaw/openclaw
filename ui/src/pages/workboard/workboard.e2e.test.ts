@@ -362,7 +362,6 @@ suite.define(() => {
         methodResponses: {
           "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([sessionRow()]),
-          "tasks.list": { nextCursor: null, tasks: [] },
           "workboard.cards.list": cardsListResponse([]),
         },
       });
@@ -625,7 +624,6 @@ suite.define(() => {
       await setWorkboardDraftField(editForm, "Notes", unsavedNotes);
       const listBeforeLiveRefresh = (await writableGateway.getRequests("workboard.cards.list"))
         .length;
-      const tasksBeforeLiveRefresh = (await writableGateway.getRequests("tasks.list")).length;
       const liveRefreshResponse = cardsListResponse([liveRefreshedCard]);
       liveRefreshResponse.boards.push({
         id: "live",
@@ -659,7 +657,6 @@ suite.define(() => {
           .getByRole("heading", { name: liveRefreshedCard.title, exact: true, includeHidden: true })
           .count(),
       ).toBe(0);
-      expect(await writableGateway.getRequests("tasks.list")).toHaveLength(tasksBeforeLiveRefresh);
       const listBeforeDraftClose = (await writableGateway.getRequests("workboard.cards.list"))
         .length;
       await editForm
@@ -707,7 +704,6 @@ suite.define(() => {
           "sessions.list": sessionsListResponse([
             sessionRow({ hasActiveRun: false, status: "done", updatedAt: baseTime + 4 }),
           ]),
-          "tasks.list": { nextCursor: null, tasks: [] },
           "workboard.cards.list": cardsListResponse([runningCard]),
         },
       });
@@ -775,7 +771,6 @@ suite.define(() => {
         methodResponses: {
           "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([sessionRow()]),
-          "tasks.list": { nextCursor: null, tasks: [] },
           "workboard.cards.list": cardsListResponse(crowdedCards),
         },
       });
@@ -825,7 +820,6 @@ suite.define(() => {
         methodResponses: {
           "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([]),
-          "tasks.list": { nextCursor: null, tasks: [] },
           "workboard.cards.list": cardsListResponse([reviewCard, doneCard]),
           "workboard.cards.move": { card: { ...reviewCard, status: "ready" } },
         },
@@ -966,7 +960,6 @@ suite.define(() => {
         methodResponses: {
           "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([]),
-          "tasks.list": { nextCursor: null, tasks: [] },
           "workboard.cards.list": cardsListResponse([
             card({ id: "touch-review-card", status: "review", title: "Review on touch" }),
           ]),
@@ -1028,7 +1021,6 @@ suite.define(() => {
         methodResponses: {
           "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([]),
-          "tasks.list": { nextCursor: null, tasks: [] },
           "workboard.boards.list": { boards },
           "workboard.cards.list": cardsListResponse([defaultCard, opsCard], boards),
         },

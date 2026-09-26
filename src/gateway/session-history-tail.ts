@@ -21,11 +21,11 @@ import type {
   SessionTranscriptReadScope,
 } from "./session-transcript-read-kernel.js";
 
-export const SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES = 8_000;
+const SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES = 8_000;
 const SILENT_CHAT_HISTORY_TAIL_SCAN_CHUNK_MESSAGES = 100;
 const SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_CHUNK_MESSAGES = 400;
 
-export function resolveChatHistoryTailReadMaxBytes(maxBytes: number): number {
+function resolveChatHistoryTailReadMaxBytes(maxBytes: number): number {
   return Math.max(maxBytes * 2, 1024 * 1024);
 }
 

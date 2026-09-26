@@ -170,21 +170,22 @@ export async function recordExternalFailure(
           { deferredNotifications: postPersistNotifications },
         );
         current.state.nextRunAtMs = undefined;
-        emitCronRunFinished(state, {
-          jobId: current.id,
-          action: "finished",
-          job: current,
-          status: "error",
-          error,
-          runAtMs: now,
-          durationMs: 0,
-          failureNotificationDelivery: failureNotificationDeliveryFromJobState(current),
-        });
+
         return { upsertJobIds: [current.id], value: current };
       },
     });
     runPostPersistCronNotifications(state, postPersistNotifications);
     if (committedJob) {
+      await emitCronRunFinished(state, {
+        jobId: committedJob.id,
+        action: "finished",
+        job: committedJob,
+        status: "error",
+        error,
+        runAtMs: now,
+        durationMs: 0,
+        failureNotificationDelivery: failureNotificationDeliveryFromJobState(committedJob),
+      });
       applyCronRuntimeRowsToState(state, [committedJob]);
     }
     armTimer(state);

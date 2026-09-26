@@ -27,10 +27,10 @@ import {
   createPluginStateSyncKeyedStore,
   pluginStateEntriesInKeyRange,
   registerPluginStateSequencedJournalEntry,
-  sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
+import { sweepExpiredPluginStateEntriesInWorker } from "./plugin-state-worker-client.js";
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -71,7 +71,7 @@ describe("worker plugin state", () => {
       const observation = observeHostDataSql(state.env);
       try {
         expect(existsSync(databasePath)).toBe(false);
-        expect(await sweepExpiredPluginStateEntries({ env: state.env })).toBe(0);
+        expect(await sweepExpiredPluginStateEntriesInWorker({ env: state.env })).toBe(0);
         expect(existsSync(databasePath)).toBe(true);
         for (const method of observation.calls) {
           expect(method).not.toHaveBeenCalled();
@@ -98,8 +98,8 @@ describe("worker plugin state", () => {
         for (const method of observation.calls) {
           method.mockClear();
         }
-        expect(await sweepExpiredPluginStateEntries({ env: state.env })).toBe(1);
-        expect(await sweepExpiredPluginStateEntries({ env: state.env })).toBe(0);
+        expect(await sweepExpiredPluginStateEntriesInWorker({ env: state.env })).toBe(1);
+        expect(await sweepExpiredPluginStateEntriesInWorker({ env: state.env })).toBe(0);
         for (const method of observation.calls) {
           expect(method).not.toHaveBeenCalled();
         }

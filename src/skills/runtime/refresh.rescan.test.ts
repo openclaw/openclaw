@@ -818,6 +818,7 @@ describe("skills content rescan handoff", () => {
     ({ phase, source }) => {
       vi.stubEnv("CHOKIDAR_USEPOLLING", "false");
       vi.useFakeTimers();
+      vi.stubEnv("CHOKIDAR_USEPOLLING", "false");
       const watches = start(phase);
       watches[source].emit(
         "error",

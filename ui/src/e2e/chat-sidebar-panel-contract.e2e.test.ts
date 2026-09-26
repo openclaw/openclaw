@@ -49,7 +49,6 @@ const offeredSlotLabels = [
   "Browser",
   "Files",
   "Side chat",
-  "Tasks",
   "Desktop",
   "Discussion",
 ] as const;
@@ -57,8 +56,6 @@ const offeredSlotLabels = [
 type OfferedSlotLabel = (typeof offeredSlotLabels)[number];
 
 const actionlessEmptyStateAllowlist = new Set<OfferedSlotLabel>([
-  // Tasks: no background tasks, nothing to inspect.
-  "Tasks",
   // Discussion: no external URL, nothing to open.
   "Discussion",
 ]);
@@ -77,7 +74,6 @@ function coldOpenScenario(): ControlUiMockGatewayScenario {
       "sessions.companion.state",
       "sessions.diff",
       "sessions.files.list",
-      "tasks.list",
       "terminal.open",
     ],
     methodResponses: {
@@ -97,7 +93,6 @@ function coldOpenScenario(): ControlUiMockGatewayScenario {
         root: "/tmp/plain-workspace",
         sessionKey: "main",
       },
-      "tasks.list": { tasks: [] },
       "terminal.open": {
         agentId: "main",
         confined: false,
@@ -205,24 +200,6 @@ function populatedColdOpenScenario(): ControlUiMockGatewayScenario {
         gitCheckout: true,
         root: "/tmp/checkout",
         sessionKey: "main",
-      },
-      "tasks.list": {
-        tasks: [
-          {
-            agentId: "main",
-            createdAt: Date.now() - 2_000,
-            id: "task-sidebar-invariant",
-            kind: "subagent",
-            ownerKey: "main",
-            progressSummary: "Checking every offered panel",
-            runtime: "subagent",
-            startedAt: Date.now() - 1_000,
-            status: "running",
-            taskId: "task-sidebar-invariant",
-            title: "Verify cold-open behavior",
-            updatedAt: Date.now(),
-          },
-        ],
       },
       "terminal.open": {
         agentId: "main",

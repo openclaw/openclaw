@@ -1,7 +1,7 @@
+import { getOwedHarnessCompletionTask } from "../../agents/agent-harness-completion-recovery.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
-import { getOwedHarnessCompletionTask } from "../../tasks/agent-harness-completion-recovery.js";
 import {
   getReplyPayloadMetadata,
   type ReplyPayload,

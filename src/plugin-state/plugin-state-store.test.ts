@@ -23,7 +23,6 @@ import {
   createPluginStateSyncKeyedStore,
   pluginStateEntriesInKeyRange,
   resetPluginStateStoreForTests,
-  sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
 import { closePluginStateDatabase } from "./plugin-state-store.sqlite.js";
 import {
@@ -31,6 +30,7 @@ import {
   seedPluginStateEntriesForTests,
 } from "./plugin-state-store.test-helpers.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
+import { sweepExpiredPluginStateEntriesInWorker } from "./plugin-state-worker-client.js";
 
 let testState: OpenClawTestState | undefined;
 
@@ -400,7 +400,7 @@ describe("plugin state keyed store", () => {
         expiresAt: Date.now() + 86_400_000,
       },
     ]);
-    expect(await sweepExpiredPluginStateEntries()).toBe(1);
+    expect(await sweepExpiredPluginStateEntriesInWorker()).toBe(1);
     expect(store.entries().map((entry) => entry.key)).toEqual(["override"]);
   });
 

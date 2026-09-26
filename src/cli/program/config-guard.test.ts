@@ -389,22 +389,30 @@ describe("ensureConfigReady", () => {
     expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(undefined, {});
   });
 
-  it("exits for invalid config on non-allowlisted commands", async () => {
-    setInvalidSnapshot();
-    const runtime = await runEnsureConfigReady(["message"]);
+  it.each([
+    { commandPath: ["message"] },
+    { commandPath: ["tasks"] },
+    { commandPath: ["tasks", "list"] },
+    { commandPath: ["tasks", "audit"] },
+  ])(
+    "exits for invalid config on non-allowlisted command: $commandPath",
+    async ({ commandPath }) => {
+      setInvalidSnapshot();
+      const runtime = await runEnsureConfigReady(commandPath);
 
-    expect(plainErrorCalls(runtime)).toEqual([
-      "OpenClaw config is invalid",
-      "File: /tmp/openclaw.json",
-      "Problem:",
-      "  - channels.quietchat: invalid",
-      "",
-      `Inspect: ${formatCliCommand("openclaw config validate")}`,
-      "Audit, status, health, logs, tasks list/audit, and doctor commands still run with invalid config.",
-      `Run "${formatCliCommand("openclaw doctor --fix")}" to repair the config, then retry.`,
-    ]);
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-  });
+      expect(plainErrorCalls(runtime)).toEqual([
+        "OpenClaw config is invalid",
+        "File: /tmp/openclaw.json",
+        "Problem:",
+        "  - channels.quietchat: invalid",
+        "",
+        `Inspect: ${formatCliCommand("openclaw config validate")}`,
+        "Audit, status, health, logs, and doctor commands still run with invalid config.",
+        `Run "${formatCliCommand("openclaw doctor --fix")}" to repair the config, then retry.`,
+      ]);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
 
   it("renders unknown keys and received values with the shared source diagnostics", async () => {
     setInvalidSnapshot({
@@ -634,18 +642,6 @@ describe("ensureConfigReady", () => {
 
     const gatewayRuntime = await runEnsureConfigReady(["gateway", "health"]);
     expect(gatewayRuntime.exit).not.toHaveBeenCalled();
-
-    const tasksListRuntime = await runEnsureConfigReady(["tasks", "list"]);
-    expect(tasksListRuntime.exit).not.toHaveBeenCalled();
-
-    const tasksParentRuntime = await runEnsureConfigReady(["tasks"]);
-    expect(tasksParentRuntime.exit).not.toHaveBeenCalled();
-
-    const tasksAuditRuntime = await runEnsureConfigReady(["tasks", "audit"]);
-    expect(tasksAuditRuntime.exit).not.toHaveBeenCalled();
-
-    const tasksRunRuntime = await runEnsureConfigReady(["tasks", "run"]);
-    expect(tasksRunRuntime.exit).toHaveBeenCalledWith(1);
 
     const doctorRuntime = await runEnsureConfigReady(["doctor", "fix"]);
     expect(doctorRuntime.exit).not.toHaveBeenCalled();

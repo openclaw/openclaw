@@ -322,7 +322,7 @@ function prepareStream(
       }
       let requiresTaskWait = false;
       try {
-        requiresTaskWait = await requiresCompletionRequiredAsyncTaskWait({
+        requiresTaskWait = requiresCompletionRequiredAsyncTaskWait({
           sessionKey: attempt.sessionKey,
           toolMetas: toolMetasForTerminal,
           abortSignal: input.runAbortController.signal,

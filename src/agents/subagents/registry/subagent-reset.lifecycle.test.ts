@@ -27,17 +27,26 @@ import { sessionMutationHandlers } from "../../../gateway/server-methods/session
 import { registerInternalHook, unregisterInternalHook } from "../../../hooks/internal-hooks.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { findTaskByRunId } from "../../../tasks/task-registry.js";
 import { killAllControlledSubagentRuns, killSessionSubagentRuns } from "./subagent-control-kill.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { resolveSubagentDisplayStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
 const parentKey = "agent:main:main";
 const controllerKey = "agent:main:telegram:default:direct:123";
 const childKey = (id: string) => "agent:main:subagent:" + id;
+
+function expectUnfinishedYieldedRun(runId: string) {
+  const entry = subagentRuns.get(runId);
+  expect(entry?.pauseReason, runId).toBe("sessions_yield");
+  expect(entry?.endedReason, runId).toBeUndefined();
+  expect(entry?.execution.status, runId).toBe("terminal");
+  expect(entry?.execution.outcome, runId).toBeUndefined();
+  expect(entry?.completion?.capturedAt, runId).toBeUndefined();
+}
 
 it.each(
   (["chat", "rpc"] as const).flatMap((boundary) =>
@@ -160,11 +169,17 @@ it.each(
     }
     for (const id of ["requester-child", "controller-child", "queued-child"]) {
       expect
-        .soft(findTaskByRunId(id)?.status, id)
-        .toBe(failed && id === "requester-child" ? "running" : "cancelled");
+        .soft(resolveSubagentDisplayStatus(subagentRuns.get(id)!), id)
+        .toBe(failed && id === "requester-child" ? "waiting for external continuation" : "killed");
+      if (failed && id === "requester-child") {
+        expectUnfinishedYieldedRun(id);
+      }
       expect(loadSessionEntry({ storePath, sessionKey: childKey(id) })?.sessionId).toBe(id);
     }
-    expect(findTaskByRunId("unrelated-child")?.status).toBe("running");
+    expect(resolveSubagentDisplayStatus(subagentRuns.get("unrelated-child")!)).toBe(
+      "waiting for external continuation",
+    );
+    expectUnfinishedYieldedRun("unrelated-child");
     for (const [sessionId, transcript] of childTranscripts) {
       expect(await loadTranscriptEvents({ storePath, sessionId })).toEqual(transcript);
     }
@@ -297,7 +312,7 @@ it.each(["chat", "rpc", "chat-rebind"] as const)(
           undefined,
         );
       }
-      expect(findTaskByRunId("draining")?.status).toBe("cancelled");
+      expect(resolveSubagentDisplayStatus(subagentRuns.get("draining")!)).toBe("killed");
       expect(loadSessionEntry({ storePath, sessionKey: parentKey })?.lifecycleRevision).not.toBe(
         "before-reset",
       );
@@ -350,15 +365,21 @@ it("lifecycle requester cleanup respects agent ownership without granting ordina
     runs: [...subagentRuns.values()],
   });
   expect(ordinary).toMatchObject({ status: "ok", killed: 0 });
-  expect(findTaskByRunId("main")?.status).toBe("running");
+  expect(resolveSubagentDisplayStatus(subagentRuns.get("main")!)).toBe(
+    "waiting for external continuation",
+  );
+  expectUnfinishedYieldedRun("main");
   expect(
     await killSessionSubagentRuns({ cfg, sessionKey: "global", agentId: "main" }),
   ).toMatchObject({
     status: "ok",
     killed: 1,
   });
-  expect(findTaskByRunId("main")?.status).toBe("cancelled");
-  expect(findTaskByRunId("work")?.status).toBe("running");
+  expect(resolveSubagentDisplayStatus(subagentRuns.get("main")!)).toBe("killed");
+  expect(resolveSubagentDisplayStatus(subagentRuns.get("work")!)).toBe(
+    "waiting for external continuation",
+  );
+  expectUnfinishedYieldedRun("work");
 });
 
 it.each(["sessionId", "lifecycleRevision"] as const)(
@@ -428,7 +449,10 @@ it.each(["sessionId", "lifecycleRevision"] as const)(
         req: { type: "req", id: "reset", method: "sessions.reset" },
         isWebchatConnect: () => false,
       });
-      expect(findTaskByRunId("replacement-child")?.status).toBe("running");
+      expect(resolveSubagentDisplayStatus(subagentRuns.get("replacement-child")!)).toBe(
+        "waiting for external continuation",
+      );
+      expectUnfinishedYieldedRun("replacement-child");
       expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
       expect(loadSessionEntry({ storePath, sessionKey: parentKey })?.[field]).toBe("replacement");
       expect.soft(cancel).not.toHaveBeenCalled();

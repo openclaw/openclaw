@@ -23,10 +23,7 @@ import {
 } from "./archive-compression.js";
 import { deleteSessionEntryLifecycle, findTranscriptEvent } from "./session-accessor.js";
 import { withSqliteTranscriptArchiveSession } from "./session-accessor.sqlite-archive-session.js";
-import {
-  MAX_TASK_ARCHIVE_RECORD_BYTES,
-  TASK_ARCHIVE_RECORD_CAPACITY_ERROR,
-} from "./session-accessor.sqlite-archive-stream.js";
+import { MAX_TASK_ARCHIVE_RECORD_BYTES } from "./session-accessor.sqlite-archive-stream.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
@@ -157,11 +154,13 @@ describe("SQLite transcript archive reads", () => {
       replaceSuccessor(oversizedSuccessor);
       // The capped candidate cannot establish whether the readable match is unique.
       await expect(readSessionTaskArchivePageReadOnly(scope, { runId })).rejects.toThrow(
-        TASK_ARCHIVE_RECORD_CAPACITY_ERROR,
+        "Archived transcript is unavailable because a record exceeds the task-history read capacity.",
       );
       await expect(
         verifySessionTranscriptArchivePageBindingReadOnly(scope, runId, page.binding),
-      ).rejects.toThrow(TASK_ARCHIVE_RECORD_CAPACITY_ERROR);
+      ).rejects.toThrow(
+        "Archived transcript is unavailable because a record exceeds the task-history read capacity.",
+      );
       replaceSuccessor(successor);
       await expect(
         readSessionTaskArchivePageReadOnly(scope, { ...continuation, runId: "next-run" }),

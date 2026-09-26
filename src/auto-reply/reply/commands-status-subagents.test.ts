@@ -6,11 +6,7 @@ import {
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
-import { createSubagentTaskBackingDetail } from "../../tasks/task-backing-records.js";
-import { createRunningTaskRunCore } from "../../tasks/task-executor.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { buildStatusReplyForTest } from "./commands-status.test-support.js";
-import { configureInMemoryTaskRegistryStoreForTests } from "./commands.test-harness.js";
 
 vi.mock("../../status/status-plugin-health.runtime.js", () => ({
   collectRuntimePluginHealthSnapshot: () => ({
@@ -26,14 +22,11 @@ describe("buildStatusReply execution observations", () => {
   beforeEach(() => {
     clearAgentHarnesses();
     resetSubagentRegistryForTests();
-    resetTaskRegistryForTests({ persist: false });
-    configureInMemoryTaskRegistryStoreForTests();
   });
 
   afterEach(() => {
     clearAgentHarnesses();
     resetSubagentRegistryForTests();
-    resetTaskRegistryForTests({ persist: false });
   });
 
   it("shows canonical successor tool activity resuming after approval without changing counts", async () => {
@@ -52,14 +45,6 @@ describe("buildStatusReply execution observations", () => {
       createdAt: Date.now() - 60_000,
       startedAt: Date.now() - 60_000,
     });
-    createRunningTaskRunCore({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      childSessionKey,
-      runId: taskRunId,
-      task: "observed worker",
-      detail: createSubagentTaskBackingDetail(2),
-    });
     registerAgentRunContext(runId, { sessionKey: childSessionKey, projectSessionActive: true });
     try {
       emitAgentEvent({
@@ -72,7 +57,6 @@ describe("buildStatusReply execution observations", () => {
         ?.split("\n")
         .find((line) => line.includes("• observed worker"));
       expect(running?.text).toContain("Subagents: 1 active");
-      expect(running?.text).toContain("Tasks: 1 active · 1 total");
       expect(runningDetail).toMatch(/running/i);
       expect(runningDetail).toMatch(/\bread\b/);
 
@@ -87,7 +71,6 @@ describe("buildStatusReply execution observations", () => {
         .find((line) => line.includes("• observed worker"));
       expect(approvalDetail).toMatch(/wait.*approval/i);
       expect(approvalDetail).not.toMatch(/\brunning\b/i);
-      expect(approval?.text).toContain("Tasks: 1 active · 1 total");
 
       emitAgentEvent({
         runId,
@@ -107,7 +90,6 @@ describe("buildStatusReply execution observations", () => {
       expect(resumedDetail).toMatch(/\bread\b/);
       expect(resumedDetail).not.toMatch(/approval/i);
       expect(resumed?.text).toContain("Subagents: 1 active");
-      expect(resumed?.text).toContain("Tasks: 1 active · 1 total");
     } finally {
       clearAgentRunContext(runId);
     }
@@ -127,20 +109,11 @@ describe("buildStatusReply execution observations", () => {
       createdAt: Date.now() - 60_000,
       startedAt: Date.now() - 60_000,
     });
-    createRunningTaskRunCore({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      childSessionKey,
-      runId,
-      task: "retained worker",
-      detail: createSubagentTaskBackingDetail(1),
-    });
 
     const reply = await buildStatusReplyForTest({});
     const detail = reply?.text?.split("\n").find((line) => line.includes("• retained worker"));
 
     expect(reply?.text).toContain("Subagents: 1 active");
-    expect(reply?.text).toContain("Tasks: 1 active · 1 total");
     expect(detail).toMatch(/unknown|unavailable/i);
     expect(detail).not.toMatch(/\b(running|queued)\b/i);
   });
@@ -157,14 +130,6 @@ describe("buildStatusReply execution observations", () => {
         task: "previous worker",
         createdAt: now - 2_000,
         startedAt: now - 2_000,
-      });
-      createRunningTaskRunCore({
-        runtime: "subagent",
-        requesterSessionKey: "agent:main:main",
-        childSessionKey,
-        runId: "status-previous",
-        task: "previous worker",
-        detail: createSubagentTaskBackingDetail(1),
       });
       emitAgentEvent({
         runId: "status-previous",

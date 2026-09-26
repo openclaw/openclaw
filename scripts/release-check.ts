@@ -942,34 +942,6 @@ function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: str
   );
 }
 
-function runPackedTaskRegistryControlRuntimeSmoke(packageRoot: string): void {
-  const runtimePath = join(packageRoot, "dist", "task-registry-control.runtime.js");
-  if (!existsSync(runtimePath)) {
-    throw new Error("release-check: packed task-registry control runtime is missing.");
-  }
-  const runtimeImportExpression = [
-    `(0, Function)("specifier", "return " + "im" + "port(specifier)")`,
-    `(${JSON.stringify(pathToFileURL(runtimePath).href)})`,
-  ].join("");
-  const source = `
-const runtime = await ${runtimeImportExpression};
-if (typeof runtime.getAcpSessionManager !== "function") {
-  throw new Error("missing getAcpSessionManager export");
-}
-if (typeof runtime.killSubagentRunAdmin !== "function") {
-  throw new Error("missing killSubagentRunAdmin export");
-}
-`;
-  runReleaseCheckCommand(
-    { command: process.execPath, args: ["--input-type=module", "--eval", source] },
-    {
-      cwd: packageRoot,
-      stdio: "inherit",
-      env: createPackedCliSmokeEnv(process.env),
-    },
-  );
-}
-
 function runPackedCliSmoke(params: {
   prefixDir: string;
   cwd: string;
@@ -1063,7 +1035,6 @@ function runPackedBundledChannelEntrySmoke(tarballPath: string, packedRoot: stri
     });
     runCriticalPluginSdkEntrypointImportSmoke(packageRoot);
     runPackedBundledPluginActivationSmoke(packageRoot, tmpRoot);
-    runPackedTaskRegistryControlRuntimeSmoke(packageRoot);
     runPackedPluginSdkTypescriptSmoke(tarballPath, tmpRoot, localPackageTarballs);
     const bundledChannelEntrySmoke = resolvePackedBundledChannelEntrySmokeCommand();
     runReleaseCheckCommand(

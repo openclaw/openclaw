@@ -149,7 +149,6 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   talk: () => import("../talk/handlers/index.js").then((module) => module.talkHandlers),
   // Mode synchronization does not depend on loading speech or realtime providers.
   "talk-mode": () => import("../talk/handlers/mode.js").then((module) => module.talkModeHandlers),
-  tasks: () => import("./tasks.js").then((module) => module.tasksHandlers),
   "task-suggestions": () =>
     import("./task-suggestions.js").then((module) => module.taskSuggestionsHandlers),
   "tools-catalog": () => import("./tools-catalog.js").then((module) => module.toolsCatalogHandlers),

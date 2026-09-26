@@ -112,7 +112,12 @@ const {
         queueSize: 0,
         pendingReplies: 0,
         embeddedRuns: 0,
-        activeTasks: 0,
+        cronRuns: 0,
+        backgroundExecSessions: 0,
+        rootRequests: 0,
+        agentRuns: 0,
+        acpRuns: 0,
+        mediaRuns: 0,
         totalActive: 0,
       },
       blockers: [],
@@ -151,14 +156,6 @@ function enqueueSystemEventWithReceipt(text: string, opts?: unknown) {
   return systemEventReceiptRemoveMock;
 }
 
-function requestHeartbeat(...args: unknown[]) {
-  return requestHeartbeatMock(...args);
-}
-
-function requestHeartbeatAndWait(...args: unknown[]) {
-  return requestHeartbeatAndWaitMock(...args);
-}
-
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent,
   enqueueSystemEventWithReceipt,
@@ -170,8 +167,8 @@ vi.mock("../infra/heartbeat-wake.js", async () => {
   );
   return {
     ...actual,
-    requestHeartbeat,
-    requestHeartbeatAndWait,
+    requestHeartbeat: requestHeartbeatMock,
+    requestHeartbeatAndWait: requestHeartbeatAndWaitMock,
   };
 });
 

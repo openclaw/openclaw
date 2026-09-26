@@ -11,7 +11,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { nextWorkboardCardPosition, setWorkboardCards } from "../../lib/workboard/card-state.ts";
-import { getWorkboardState, stopWorkboardLifecycleRefresh } from "../../lib/workboard/index.ts";
+import { getWorkboardState, resetWorkboardConnectionState } from "../../lib/workboard/index.ts";
 import {
   createGatewaySession,
   createWorkboardCard,
@@ -915,28 +915,6 @@ describe("renderWorkboard", () => {
     },
   );
 
-  it("prioritizes mutation failures over existing page and lifecycle refresh errors", () => {
-    const { state, container, renderView } = createWorkboardView();
-    state.lastRefreshError = "Card refresh unavailable";
-    state.lifecycleTaskRefreshError = "Task refresh unavailable";
-    renderView();
-    expect(toast(container).props.message).toBe("Task refresh unavailable");
-
-    const pageError = "Agent metadata unavailable";
-    renderView({ pageError });
-    expect(toast(container).props.message).toBe(pageError);
-
-    state.error = "Write denied";
-    renderView({ pageError });
-    expect(toast(container).props.message).toBe("Write denied");
-
-    state.error = null;
-    renderView({ pageError });
-    expect(toast(container).props.message).toBe(pageError);
-    renderView({ pageError: null });
-    expect(toast(container).props.message).toBe("Task refresh unavailable");
-  });
-
   it("keeps dispatch available during refresh and disables it during writes", () => {
     const { state, container, renderView } = createWorkboardView();
     state.loading = true;
@@ -1262,7 +1240,7 @@ describe("renderWorkboard", () => {
         title: "Stale cached card",
       }),
     ];
-    stopWorkboardLifecycleRefresh(host);
+    resetWorkboardConnectionState(host);
     renderView();
 
     expect(buttonByLabel(container, "Edit card")).toBeNull();
@@ -1287,7 +1265,7 @@ describe("renderWorkboard", () => {
     state.draftOpen = true;
     state.editingCardId = "card-1";
     state.draftTitle = "Unsaved edit";
-    stopWorkboardLifecycleRefresh(host);
+    resetWorkboardConnectionState(host);
     renderView();
     state.mutationReadiness = "stale_edit_draft";
     renderView();
@@ -2310,62 +2288,6 @@ describe("renderWorkboard", () => {
     ]);
   });
 
-  it("renders linked Gateway task status on cards", async () => {
-    const { state, container, renderView } = createWorkboardView();
-    state.cards = [
-      createWorkboardCard({
-        title: "Review task result",
-        status: "running",
-        sessionKey: "agent:main:subagent:workboard-default-card-1",
-        runId: "run-1",
-        taskId: "task-1",
-      }),
-    ];
-    state.tasksByCardId.set("card-1", {
-      id: "task-1",
-      taskId: "task-1",
-      status: "completed",
-      title: "Review task result",
-      childSessionKey: "agent:main:subagent:workboard-default-card-1",
-      runId: "run-1",
-      terminalSummary: "Ready for operator review.",
-    });
-    renderView();
-
-    expect(container.querySelector(".workboard-card")?.textContent).not.toContain("task linked");
-    const status = expectDefined(
-      container.querySelector<HTMLElement & { presentation: { label: string; detail: string } }>(
-        "openclaw-workboard-session-status",
-      ),
-      "completed task status",
-    );
-    expect(status.presentation.label).toBe("Done");
-    expect(status.presentation.detail).toContain("Ready for operator review.");
-    expect(container.querySelector(".workboard-card__session-marker")).toBeNull();
-    expect(container.querySelector(".workboard-card__session-name")?.textContent).toContain(
-      "Review task result",
-    );
-    state.detailCardId = "card-1";
-    renderView();
-    for (const tab of ["Overview", "Session"]) {
-      expectDefined(
-        buttonByText(container.querySelector('[role="tablist"]')!, tab),
-        `${tab} tab`,
-      ).click();
-      renderView();
-      const panel = expectDefined(
-        container.querySelector(".workboard-detail__tabpanel:not([hidden])"),
-        "active panel",
-      );
-      expect(panel.querySelector(".workboard-detail__session-name")?.textContent).toContain(
-        "Review task result",
-      );
-      expect(panel.querySelector(".workboard-session-badge")?.textContent).toBe("Done");
-      expect(panel.textContent).toContain("Ready for operator review.");
-      expect(buttonByLabel(panel, "Open session")).not.toBeNull();
-    }
-  });
-
   it("shows completed session identity without repeating a synthetic completion summary", () => {
     const onOpenSession = vi.fn();
     const sessionKey = "agent:main:completed-review";
@@ -2476,131 +2398,6 @@ describe("renderWorkboard", () => {
     }
   });
 
-  it("uses terminal session lifecycle when cached task status is stale", async () => {
-    const { state, container, renderView } = createWorkboardView({
-      sessions: [
-        {
-          key: "agent:main:subagent:workboard-default-card-1",
-          kind: "direct",
-          displayName: "Finished session",
-          updatedAt: 2,
-          hasActiveRun: false,
-          status: "done",
-        },
-      ],
-      onRequestUpdate: () => undefined,
-    });
-    state.cards = [
-      createWorkboardCard({
-        title: "Finished despite stale task",
-        status: "running",
-        sessionKey: "agent:main:subagent:workboard-default-card-1",
-        runId: "run-1",
-        taskId: "task-1",
-      }),
-    ];
-    state.tasksByCardId.set("card-1", {
-      id: "task-1",
-      taskId: "task-1",
-      status: "running",
-      title: "Finished despite stale task",
-      childSessionKey: "agent:main:subagent:workboard-default-card-1",
-      runId: "run-1",
-      progressSummary: "Still running according to stale cache.",
-    });
-    renderView();
-
-    await vi.waitFor(() =>
-      expect(container.querySelector(".workboard-session-status__trigger")?.textContent).toContain(
-        "Done",
-      ),
-    );
-    expect(container.textContent).toContain("Finished session");
-    expect(
-      container.querySelector('.workboard-card__session-marker[aria-label="Running"]'),
-    ).toBeNull();
-    expect(container.textContent).not.toContain("Still running according to stale cache.");
-
-    container
-      .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    renderView();
-
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Finished session");
-    expect(container.querySelector("#workboard-detail-panel-overview")?.textContent).not.toContain(
-      "Still running according to stale cache.",
-    );
-  });
-
-  it("shows stop controls without start controls for active task-only cards", () => {
-    const { state, container, renderView } = createWorkboardView({
-      onRequestUpdate: () => undefined,
-    });
-    state.cards = [
-      createWorkboardCard({
-        title: "Task only run",
-        status: "running",
-        taskId: "task-1",
-      }),
-    ];
-    state.tasksByCardId.set("card-1", {
-      id: "task-1",
-      taskId: "task-1",
-      status: "running",
-      title: "Task only run",
-      progressSummary: "Worker is active.",
-    });
-    renderView();
-
-    expect(
-      container.querySelector('.workboard-card__session-marker[aria-label="Running"]'),
-    ).not.toBeNull();
-    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
-    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
-    expect(container.querySelector(".workboard-card")?.getAttribute("role")).toBe("button");
-
-    container
-      .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    renderView();
-
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain(
-      "Worker is active.",
-    );
-    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
-  });
-
-  it("keeps unresolved task-linked cards from exposing duplicate starts", () => {
-    const { state, container, renderView } = createWorkboardView();
-    state.cards = [
-      createWorkboardCard({
-        title: "Historical task link",
-        status: "running",
-        taskId: "task-older-than-poll-page",
-      }),
-    ];
-    renderView();
-
-    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
-    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
-  });
-
-  it("does not expose live controls for terminal cards with unresolved task links", () => {
-    const { state, container, renderView } = createWorkboardView();
-    state.cards = [
-      createWorkboardCard({
-        title: "Completed historical task",
-        status: "done",
-        taskId: "task-older-than-poll-page",
-      }),
-    ];
-    renderView();
-
-    expect(container.querySelector(".workboard-live")).toBeNull();
-    expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
-    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
-  });
-
   it("keeps newly started unresolved runs from exposing duplicate starts", () => {
     const { state, container, renderView } = createWorkboardView();
     state.cards = [
@@ -2615,22 +2412,6 @@ describe("renderWorkboard", () => {
 
     expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
-  });
-
-  it("allows starts for authoritatively missing historical task links", () => {
-    const { state, container, renderView } = createWorkboardView();
-    state.cards = [
-      createWorkboardCard({
-        title: "Historical task link",
-        status: "running",
-        taskId: "task-pruned-from-ledger",
-      }),
-    ];
-    state.missingTaskIds = new Set(["task-pruned-from-ledger"]);
-    renderView();
-
-    expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
-    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(1);
   });
 
   it("hides write controls for read-only operators", () => {
@@ -4101,9 +3882,6 @@ describe("renderWorkboard", () => {
       const client = createWorkboardTestClient((method) => {
         if (method === "workboard.cards.list") {
           return { cards: [canonical], boards: [] };
-        }
-        if (method === "tasks.list") {
-          return { tasks: [] };
         }
         if (method !== mutationMethod) {
           throw new Error(`Unexpected request: ${method}`);

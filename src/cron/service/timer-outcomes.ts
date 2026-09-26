@@ -22,8 +22,8 @@ import {
   recordScheduleComputeError,
 } from "./jobs-scheduling.js";
 import { resolveManualOneShotOccurrenceAtMs } from "./one-shot-schedule.js";
+import { recordQuietCronEvaluation } from "./run-history.js";
 import type { CronJobPolicyContext, CronServiceState, DeferredCronNotifications } from "./state.js";
-import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 import {
   type CronJobRunResult,
   type CronTriggerEvalOutcome,
@@ -602,21 +602,23 @@ export function applyTriggerNoFireResult(
   }
 }
 
-export function applyOutcomeToStoredJob(
+export async function applyOutcomeToStoredJob(
   state: CronServiceState,
   result: TimedCronRunOutcome,
   opts: { deferredNotifications: DeferredCronNotifications },
-): CronJob | undefined {
+): Promise<CronJob | undefined> {
   const store = state.store;
   if (!store) {
-    tryFinishCronTaskRunWithoutHistory(state, result);
+    if (result.status === "ok" && result.triggerEval?.fired === false) {
+      await recordQuietCronEvaluation(state, result);
+    }
     return undefined;
   }
   const jobs = store.jobs;
   const job = jobs.find((entry) => entry.id === result.jobId);
   if (!job || result.activeJobMarker?.jobRemoved === true) {
     if (result.status === "ok" && result.triggerEval?.fired === false) {
-      tryFinishCronTaskRunWithoutHistory(state, result);
+      await recordQuietCronEvaluation(state, result);
       return undefined;
     }
     // A run may finish after its job disappears; finalize the admitted job
@@ -625,7 +627,7 @@ export function applyOutcomeToStoredJob(
       scheduleOwnership: "stale",
       deferredNotifications: opts.deferredNotifications,
     });
-    emitCronOutcomeForJob(state, result.job, result);
+    await emitCronOutcomeForJob(state, result.job, result);
     state.deps.log.info(
       { jobId: result.jobId, status: result.status },
       "cron: finalized run after job was removed during execution",
@@ -633,7 +635,9 @@ export function applyOutcomeToStoredJob(
     return undefined;
   }
 
-  if (applyOutcomeToAuthoritativeJob(state, job, result, opts)) {
+  const shouldDelete = applyOutcomeToAuthoritativeJob(state, job, result, opts);
+  await emitCronOutcomeForJob(state, job, result);
+  if (shouldDelete) {
     store.jobs = jobs.filter((entry) => entry.id !== job.id);
     return job;
   }
@@ -647,7 +651,6 @@ export function applyOutcomeToAuthoritativeJob(
   result: TimedCronRunOutcome,
   opts: {
     deferredNotifications: DeferredCronNotifications;
-    emit?: boolean;
     triggerStateRetired?: boolean;
     // A requested run retains startup bookkeeping even when it advances ordinary cadence.
     request?: { preserveCadence: boolean; scheduleOwnershipAtMs: number };
@@ -714,10 +717,6 @@ export function applyOutcomeToAuthoritativeJob(
     }
   } else {
     job.state.startupCatchupAtMs = undefined;
-  }
-
-  if (opts.emit !== false) {
-    emitCronOutcomeForJob(state, job, result);
   }
 
   return shouldDelete;

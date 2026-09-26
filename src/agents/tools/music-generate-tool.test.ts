@@ -1,3 +1,18 @@
+import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
+vi.mock("../media-generation-activity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media-generation-activity.js")>();
+  const { observeMediaActivity } =
+    await import("../media-generation-activity.observer.test-support.js");
+  return observeMediaActivity(actual, {
+    ...taskExecutorMocks,
+    listOperations: mediaActivityMocks.listOperations,
+  });
+});
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async () => {
+  const { createMediaRequesterReadMock } =
+    await import("./media-generation-lifecycle.test-support.js");
+  return createMediaRequesterReadMock();
+});
 // Music generation tool tests cover provider selection, task lifecycle updates,
 // duplicate guards, media persistence, and result delivery metadata.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -59,22 +74,15 @@ function createMusicGenerateTool(
   });
 }
 
-const taskRuntimeInternalMocks = vi.hoisted(() => {
-  const mocks = {
-    listTasksForOwnerKey: vi.fn(),
-    listFreshTasksForOwnerKey: vi.fn(),
-  };
-  mocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
-    mocks.listTasksForOwnerKey(ownerKey),
-  );
-  return mocks;
-});
+const mediaActivityMocks = vi.hoisted(() => ({
+  listOperations: vi.fn(),
+}));
 
 const taskExecutorMocks = vi.hoisted(() => ({
-  createRunningTaskRun: vi.fn(),
-  completeTaskRunByRunId: vi.fn(),
-  failTaskRunByRunId: vi.fn(),
-  recordTaskRunProgressByRunId: vi.fn(),
+  createOperation: vi.fn(),
+  completeOperation: vi.fn(),
+  failOperation: vi.fn(),
+  recordProgress: vi.fn(),
 }));
 
 const configMocks = vi.hoisted(() => ({
@@ -100,92 +108,7 @@ const musicGenerationRuntimeMocks = vi.hoisted(() => ({
 }));
 
 const musicGenerateBackgroundMocks = vi.hoisted(() => ({
-  // Mirror the background lifecycle contract so tool tests can assert task-run
-  // effects without spawning detached completion workers.
-  musicGenerationTaskLifecycle: {
-    completeTaskRun: vi.fn(
-      (
-        params: Parameters<
-          typeof musicGenerateBackground.musicGenerationTaskLifecycle.completeTaskRun
-        >[0],
-      ) => {
-        if (!params.handle) {
-          return;
-        }
-        taskExecutorMocks.completeTaskRunByRunId({
-          runId: params.handle.runId,
-          runtime: "cli",
-          sessionKey: params.handle.requesterSessionKey,
-        });
-      },
-    ),
-    createTaskRun: vi.fn(
-      (
-        params: Parameters<
-          typeof musicGenerateBackground.musicGenerationTaskLifecycle.createTaskRun
-        >[0],
-      ) => {
-        const sessionKey = params.sessionKey?.trim();
-        if (!sessionKey) {
-          return null;
-        }
-        const runId = "tool:music_generate:test-run";
-        const task = taskExecutorMocks.createRunningTaskRun({
-          runId,
-          runtime: "cli",
-          requesterSessionKey: sessionKey,
-          ownerKey: sessionKey,
-          scopeKind: "session",
-          task: params.prompt,
-          deliveryStatus: "not_applicable",
-          notifyPolicy: "silent",
-          createdAt: Date.now(),
-        });
-        return {
-          taskId: task.taskId,
-          runId,
-          requesterSessionKey: sessionKey,
-          requesterOrigin: params.requesterOrigin,
-          taskLabel: params.prompt,
-        };
-      },
-    ),
-    failTaskRun: vi.fn(
-      (
-        params: Parameters<
-          typeof musicGenerateBackground.musicGenerationTaskLifecycle.failTaskRun
-        >[0],
-      ) => {
-        if (!params.handle) {
-          return;
-        }
-        taskExecutorMocks.failTaskRunByRunId({
-          runId: params.handle.runId,
-          runtime: "cli",
-          sessionKey: params.handle.requesterSessionKey,
-        });
-      },
-    ),
-    recordTaskProgress: vi.fn(
-      (
-        params: Parameters<
-          typeof musicGenerateBackground.musicGenerationTaskLifecycle.recordTaskProgress
-        >[0],
-      ) => {
-        if (!params.handle) {
-          return;
-        }
-        taskExecutorMocks.recordTaskRunProgressByRunId({
-          runId: params.handle.runId,
-          runtime: "cli",
-          sessionKey: params.handle.requesterSessionKey,
-          progressSummary: params.progressSummary,
-          eventSummary: params.eventSummary,
-        });
-      },
-    ),
-    wakeTaskCompletion: vi.fn(),
-  },
+  musicGenerationTaskLifecycle: { wakeTaskCompletion: vi.fn() },
 }));
 
 vi.mock("../../config/config.js", async (importOriginal) => ({
@@ -219,12 +142,16 @@ vi.mock("../../utils/fetch-timeout.js", async () => {
     buildTimeoutAbortSignal: vi.fn(actual.buildTimeoutAbortSignal),
   };
 });
-vi.mock("./media-generate-background.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./media-generate-background.js")>()),
-  ...musicGenerateBackgroundMocks,
-}));
-vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
-vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
+vi.mock("./media-generate-background.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./media-generate-background.js")>();
+  return {
+    ...actual,
+    musicGenerationTaskLifecycle: {
+      ...actual.musicGenerationTaskLifecycle,
+      ...musicGenerateBackgroundMocks.musicGenerationTaskLifecycle,
+    },
+  };
+});
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -251,18 +178,15 @@ function resetMusicGenerateMocks() {
   probeMediaFilesWithinBudgetMock.mockImplementation(async (inputs: readonly unknown[]) =>
     inputs.map(() => ({})),
   );
-  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
-  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
-  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
-  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
-    taskRuntimeInternalMocks.listTasksForOwnerKey(ownerKey),
-  );
+  mediaActivityMocks.listOperations.mockReset();
+  mediaActivityMocks.listOperations.mockReturnValue(undefined);
   resetRecentMediaGenerationDuplicateGuardsForTests();
+  resetGeneratedMediaTaskActivityForTests();
   vi.mocked(fetchTimeout.buildTimeoutAbortSignal).mockClear();
-  taskExecutorMocks.createRunningTaskRun.mockReset();
-  taskExecutorMocks.completeTaskRunByRunId.mockReset();
-  taskExecutorMocks.failTaskRunByRunId.mockReset();
-  taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
+  taskExecutorMocks.createOperation.mockReset();
+  taskExecutorMocks.completeOperation.mockReset();
+  taskExecutorMocks.failOperation.mockReset();
+  taskExecutorMocks.recordProgress.mockReset();
   musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mockReset();
   musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mockResolvedValue({
     status: "delivered",
@@ -287,7 +211,7 @@ function generateMusicOptions(
 }
 
 function taskProgressCall(callIndex = 0): Record<string, unknown> {
-  const call = taskExecutorMocks.recordTaskRunProgressByRunId.mock.calls[callIndex]?.[0];
+  const call = taskExecutorMocks.recordProgress.mock.calls[callIndex]?.[0];
   if (!call || typeof call !== "object") {
     throw new Error(`expected task progress call ${callIndex}`);
   }
@@ -295,7 +219,7 @@ function taskProgressCall(callIndex = 0): Record<string, unknown> {
 }
 
 function taskCompleteCall(callIndex = 0): Record<string, unknown> {
-  const call = taskExecutorMocks.completeTaskRunByRunId.mock.calls[callIndex]?.[0];
+  const call = taskExecutorMocks.completeOperation.mock.calls[callIndex]?.[0];
   if (!call || typeof call !== "object") {
     throw new Error(`expected task complete call ${callIndex}`);
   }
@@ -392,16 +316,11 @@ describe("createMusicGenerateTool", () => {
   });
 
   it("preserves the selected stored filename in foreground results", async () => {
-    taskExecutorMocks.createRunningTaskRun.mockReturnValue({
+    taskExecutorMocks.createOperation.mockReturnValue({
       taskId: "task-123",
-      runtime: "cli",
       requesterSessionKey: "agent:main:discord:direct:123",
-      ownerKey: "agent:main:discord:direct:123",
-      scopeKind: "session",
       task: "night-drive synthwave",
       status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
       createdAt: Date.now(),
     });
     vi.spyOn(musicGenerationRuntime, "generateMusic").mockResolvedValue({
@@ -489,8 +408,8 @@ describe("createMusicGenerateTool", () => {
     expect(text).toContain('name="anthem.wav"');
     expect(details.attachments).toEqual((details.media as { attachments?: unknown }).attachments);
     expect(details.metadata).toEqual({ taskId: "music-task-1" });
-    expect(taskExecutorMocks.createRunningTaskRun).not.toHaveBeenCalled();
-    expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
+    expect(taskExecutorMocks.createOperation).not.toHaveBeenCalled();
+    expect(taskExecutorMocks.completeOperation).not.toHaveBeenCalled();
   });
 
   it("raises too-small music timeouts to the provider-safe minimum", async () => {
@@ -787,16 +706,11 @@ describe("createMusicGenerateTool", () => {
   });
 
   it("preserves the selected stored filename in background completion", async () => {
-    taskExecutorMocks.createRunningTaskRun.mockReturnValue({
+    taskExecutorMocks.createOperation.mockReturnValue({
       taskId: "task-123",
-      runtime: "cli",
       requesterSessionKey: "agent:main:discord:direct:123",
-      ownerKey: "agent:main:discord:direct:123",
-      scopeKind: "session",
       task: "night-drive synthwave",
       status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
       createdAt: Date.now(),
     });
     const wakeSpy = vi
@@ -951,7 +865,7 @@ describe("createMusicGenerateTool", () => {
   defineMediaGenerationDuplicateTests({
     kind: "music",
     tasks: taskExecutorMocks,
-    listTasks: taskRuntimeInternalMocks.listTasksForOwnerKey,
+    listTasks: mediaActivityMocks.listOperations,
     createTool: (options) => expectMusicGenerateTool(createMusicGenerateTool(options)),
     requesterOrigin: { channel: "discord", to: "channel:1" },
     setupProviders: () => {

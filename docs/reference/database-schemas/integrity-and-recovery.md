@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Integrity checks, common database errors, and the supported downgrade recovery path"
 read_when:
   - "Diagnosing a quarantined database or a Gateway that refuses to start"
@@ -101,7 +102,9 @@ present when the application version changes. Run
 `openclaw doctor --fix` during update maintenance to repair historical accounting
 or legacy payload fields. A current-schema database that still contains the
 retired `cron_run_logs` table requires Doctor before runtime can open it; Doctor
-imports its retained history into task runs atomically before removing the table.
+imports its retained history into the `runtime = 'cron'` rows of `task_runs`
+atomically before removing the legacy table. This existing Doctor migration is
+separate from Tasks runtime removal, which adds no data-copy or table-drop migration.
 Shared-state integrity, schema, version, and ownership checks remain in place.
 
 Schema compatibility preflight can read agent schema headers without a full integrity scan. For ordinary rollback-mode agent databases and complete WAL families, a read-only child reads the schema version and optional writer build in one fresh SQLite transaction, including committed WAL changes, without copying unrelated database contents. Its source-reader lease stays held through native close; cancellation and timeout wait for child closure. Parent-side diagnostics do not open or close the live agent file, preserving the parent's SQLite locks. As with the previous online-backup reader, native SQLite may update SHM read marks or rebuild existing SHM after a quiescent family reopens; the database and WAL contents remain unchanged. The Gateway carries successful header facts from admission to its later compatibility preflight only while the database, WAL, and rollback-journal files are unchanged. Changed or uncertain files are inspected again. Full readiness and writable admission retain their existing validation and fresh authority checks.

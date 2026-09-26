@@ -80,7 +80,6 @@ export async function handleChatHistoryRequest({
   method: ChatHistoryMethod;
   retainedTranscript?: {
     sessionId: string;
-    run?: { id: string; maxBytes: number };
     requireCurrentSession?: boolean;
     verifyRetainedState?: () => Promise<boolean>;
   };
@@ -146,7 +145,6 @@ export async function handleChatHistoryRequest({
           kind: "transcript-binding",
           params: {
             target: { agentId: sessionAgentId, sessionId: requestedSessionId, storePath },
-            run: retainedTranscript?.run,
           },
         },
         signal,
@@ -161,7 +159,11 @@ export async function handleChatHistoryRequest({
     };
     if (!(await readTranscriptOwner())) {
       if (retainedTranscript) {
-        respondChatHistoryUnavailable(method, respond, "task transcript is no longer available");
+        respondChatHistoryUnavailable(
+          method,
+          respond,
+          "retained transcript is no longer available",
+        );
       } else {
         respond(
           false,

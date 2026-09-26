@@ -13,7 +13,6 @@ export const gatewayPluginTestFiles = [
 export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/agent-turn/agent-run-dispatch.execution-binding.test.ts",
   "src/gateway/agent-turn/agent-run-dispatch.sqlite.test.ts",
-  "src/gateway/agent-turn/agent-run-task-tracking.cleanup.test.ts",
   "src/gateway/approval-fixture.test.ts",
   "src/gateway/board-http.test.ts",
   "src/gateway/board-store.test.ts",
@@ -399,9 +398,6 @@ export const gatewayServerBackedHttpTestFiles = [
 export const gatewayMethodsIsolatedTestFiles = [
   // Heap scans should not traverse objects from unrelated test files.
   "src/gateway/server-methods/chat-metadata-runtime.cache.test.ts",
-  "src/gateway/server-methods/tasks.access.test.ts",
-  "src/gateway/server-methods/tasks.test.ts",
-  "src/gateway/server-methods/agent.task-runtime.test.ts",
   "src/gateway/server-methods/agent.test.ts",
   "src/gateway/server-methods/agent.visitor-access.test.ts",
   "src/gateway/server-methods/board.runtime-boundaries.test.ts",

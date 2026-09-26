@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { serializeConversationProgressSnapshot } from "../config/sessions/conversation-progress-snapshot.js";
 import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
 import type { ChannelProgressDraftCompositorParams } from "./progress-draft-compositor.types.js";
 
@@ -25,7 +24,7 @@ describe("progress draft snapshot continuation", () => {
     vi.useRealTimers();
   });
 
-  it("redacts public progress before rendering and durable snapshot capture", async () => {
+  it("redacts public progress before rendering and snapshot capture", async () => {
     const secret = `sk-test-${"a".repeat(48)}`;
     const update = vi.fn<NonNullable<ChannelProgressDraftCompositorParams["update"]>>(() => true);
     const progress = createProgress({
@@ -55,7 +54,7 @@ describe("progress draft snapshot continuation", () => {
       const snapshot = progress.getSnapshot();
       expect(JSON.stringify(update.mock.calls)).not.toContain(secret);
       expect(progress.getText()).not.toContain(secret);
-      expect(serializeConversationProgressSnapshot(snapshot)).not.toContain(secret);
+      expect(JSON.stringify(snapshot)).not.toContain(secret);
       expect(snapshot.plan?.[0]?.step).toContain("Check account");
       expect(update.mock.calls[0]?.[0]).toContain("Account");
     } finally {

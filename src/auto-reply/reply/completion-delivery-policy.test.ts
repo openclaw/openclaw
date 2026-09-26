@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   completionRequiresMessageToolDelivery,
   resolveDurableCompletionDeliveryMode,
-  shouldRouteCompletionThroughRequesterSession,
 } from "./completion-delivery-policy.js";
 
 const chatTypeProbeConfig = {
@@ -124,13 +123,5 @@ describe("completion delivery policy", () => {
   it("uses host-owned explicit delivery for durable completions under message-tool policy", () => {
     expect(resolveDurableCompletionDeliveryMode("message_tool_only")).toBe("host_owned");
     expect(resolveDurableCompletionDeliveryMode("automatic")).toBe("automatic");
-  });
-
-  it("routes group and channel task completions through the requester session", () => {
-    expect(shouldRouteCompletionThroughRequesterSession("agent:main:whatsapp:123@g.us")).toBe(true);
-    expect(
-      shouldRouteCompletionThroughRequesterSession("agent:main:discord:guild-123:channel-456"),
-    ).toBe(true);
-    expect(shouldRouteCompletionThroughRequesterSession("agent:main:discord:dm:U123")).toBe(false);
   });
 });

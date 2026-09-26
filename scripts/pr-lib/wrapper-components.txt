@@ -1310,7 +1310,6 @@ src/state/openclaw-state-db-snapshot-owner.ts
 src/state/openclaw-state-db-startup-checkpoint.ts
 src/state/openclaw-state-db-table-retirements.ts
 src/state/openclaw-state-db-task-delivery-recovery.ts
-src/state/openclaw-state-db-task-identifiers.ts
 src/state/openclaw-state-db-write-coordination.ts
 src/state/openclaw-state-db.paths.ts
 src/state/openclaw-state-db.ts

@@ -1,20 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
-import type { SqliteWorkerNativeSettlementOwner } from "../../infra/sqlite-worker-operation-settlement.js";
+import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
-import { prepareTaskRegistryRead } from "../../tasks/task-registry-read.js";
-import { getTaskRegistryStore } from "../../tasks/task-registry.store.js";
-import { createTaskFixture } from "../../tasks/task-registry.test-support.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   captureGatewayDeviceRevocation,
@@ -55,18 +47,11 @@ vi.mock("../managed-image-attachments.js", async (importOriginal) => ({
   resolveManagedOutgoingMediaUrlDownload: boundaries.managedUrl,
 }));
 
-beforeEach(() => {
-  // Shared workers clear agent listeners independently of the retained task registry.
-  resetTaskRegistryForTests({ persist: false });
-});
-
 afterEach(() => {
   vi.restoreAllMocks();
   boundaries.visit.mockReset();
   boundaries.managed.mockReset();
   boundaries.managedUrl.mockReset();
-  resetTaskRegistryForTests({ persist: false });
-  resetTaskFlowRegistryForTests({ persist: false });
   resetAgentEventsForTest({ preserveListeners: true });
   resetGatewayWorkAdmission();
 });
@@ -85,6 +70,7 @@ const registry = createGatewayMethodRegistry(
   createCoreGatewayMethodDescriptors(coreGatewayHandlers),
 );
 const sessionKey = "agent:main:artifact-request-authority";
+const runId = "artifact-request-authority-run";
 const managedId = "artifact_managed_image_11111111-1111-4111-8111-111111111111";
 
 async function exercise(
@@ -98,15 +84,6 @@ async function exercise(
       { agentId: "main", sessionKey },
       { sessionId: "artifact-request-authority", updatedAt: 1 },
     );
-    const task = createTaskFixture("cli", {
-      runId: "artifact-request-authority",
-      requesterSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      task: "Prepare artifacts under retained request authority",
-      notifyPolicy: "silent",
-      deliveryStatus: "not_applicable",
-    });
-    await prepareTaskRegistryRead();
     const requestController = new AbortController();
     const connection = new AbortController();
     const context = { getRuntimeConfig: () => ({}) } as GatewayRequestContext;
@@ -153,7 +130,7 @@ async function exercise(
         ? {
             role: "assistant",
             content: [{ type: "image", artifactId: managedId, title: "managed.png" }],
-            __openclaw: { seq: 2, taskId: task.taskId },
+            __openclaw: { seq: 2, runId },
           }
         : disclosureBoundary === "url"
           ? {
@@ -161,9 +138,9 @@ async function exercise(
               content: [
                 { type: "file", title: "result.txt", url: "https://example.invalid/result" },
               ],
-              __openclaw: { seq: 2, taskId: task.taskId },
+              __openclaw: { seq: 2 },
             }
-          : assistantFileMessage({ title: "result.txt", taskId: task.taskId });
+          : assistantFileMessage({ title: "result.txt" });
     boundaries.visit.mockImplementation(async (_scope, visit) => {
       visit(message, 2);
       return 1;
@@ -232,7 +209,7 @@ async function exercise(
       }
       const outcome = Promise.allSettled([
         invoke({
-          taskId: task.taskId,
+          sessionKey,
           ...(method === "artifacts.list" ? {} : { artifactId }),
           ...(method === "artifacts.download" && disclosureBoundary === "transcript"
             ? { transport: "http" }
@@ -272,63 +249,26 @@ async function exercise(
     const sessionReads = vi.spyOn(sessionUtils, "loadGatewaySessionEntryReadOnly");
     const sharingReads = vi.spyOn(sharing, "resolveSessionSharingTarget");
     const preparing = createDeferred();
-    const committed = createDeferred();
     const release = createDeferred();
     const prepare = resolution.prepareArtifactSessionResolution;
     let preparations = 0;
-    vi.spyOn(resolution, "prepareArtifactSessionResolution").mockImplementation((query) => {
-      if (query.taskId === task.taskId && ++preparations === (secondPreparation ? 2 : 1)) {
+    vi.spyOn(resolution, "prepareArtifactSessionResolution").mockImplementation(async (query) => {
+      const prepared = await prepare(query);
+      if (++preparations === (secondPreparation ? 2 : 1)) {
         preparing.resolve();
-      }
-      return prepare(query);
-    });
-    const store = getTaskRegistryStore();
-    const mutate = store.runAgentEventMutationAsync.bind(store);
-    let nativeOwner: SqliteWorkerNativeSettlementOwner | undefined;
-    let outcome: Promise<PromiseSettledResult<void>[]> | undefined;
-    const startRequest = () => {
-      outcome = Promise.allSettled([
-        invoke({ taskId: task.taskId, ...(method === "artifacts.list" ? {} : { artifactId }) }),
-      ]);
-    };
-    const writes = vi
-      .spyOn(store, "runAgentEventMutationAsync")
-      .mockImplementation(async (stateContext, input, assertCurrent, onGranted) => {
-        const receipt = await mutate(stateContext, input, assertCurrent, (owner) => {
-          nativeOwner = owner;
-          onGranted(owner);
-          if (!secondPreparation) {
-            startRequest();
-          }
-        });
-        committed.resolve();
-        // Native settlement is real; publication remains owned until this result returns.
         await release.promise;
-        return receipt;
-      });
-    const emit = () =>
-      emitAgentEvent({
-        runId: task.runId!,
-        stream: "tool",
-        data: { phase: "start", name: "authority-fence" },
-      });
-    if (secondPreparation) {
-      boundaries.visit.mockImplementationOnce(async (_scope, visit) => {
-        visit(message, 2);
-        emit();
-        return 1;
-      });
-    }
-    try {
-      if (secondPreparation) {
-        startRequest();
-      } else {
-        emit();
       }
-      await committed.promise;
+      return prepared;
+    });
+    const outcome = Promise.allSettled([
+      invoke({
+        sessionKey,
+        ...(secondPreparation ? { runId } : {}),
+        ...(method === "artifacts.list" ? {} : { artifactId }),
+      }),
+    ]);
+    try {
       await preparing.promise;
-      expect(nativeOwner?.settlement?.kind).toBe("completed");
-      expect(nativeOwner?.committed?.facts).toBeDefined();
       expect(respond).not.toHaveBeenCalled();
       expect(guard).toHaveBeenCalled();
       const readsBeforeRelease = {
@@ -347,7 +287,6 @@ async function exercise(
       );
       release.resolve();
       const settled = await outcome;
-      expect(writes).toHaveBeenCalledOnce();
       if (change === "reconnected") {
         expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
         expect(respond.mock.calls[0]?.[0]).toBe(true);
@@ -375,7 +314,6 @@ async function exercise(
     } finally {
       release.resolve();
       await outcome;
-      await prepareTaskRegistryRead();
       captured.release();
       closeGatewayDeviceRevocation(context);
       await closeOpenClawStateDatabaseAsync();
@@ -384,7 +322,7 @@ async function exercise(
   });
 }
 
-describe("registered artifact request authority after task preparation", () => {
+describe("registered artifact request authority after session preparation", () => {
   it.each(methods.flatMap((method) => changes.map((change) => ({ method, change }))))(
     "checks $change after $method preparation",
     async ({ method, change }) => exercise(method, change),

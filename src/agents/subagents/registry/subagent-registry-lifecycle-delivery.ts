@@ -13,17 +13,6 @@ import {
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
-import type { DetachedTaskFindResult } from "../../../tasks/detached-task-runtime-contract.js";
-import { DetachedTaskLegacyRuntimeError } from "../../../tasks/detached-task-runtime-errors.js";
-import {
-  completeTaskRunByRunIdAsync,
-  failTaskRunByRunIdAsync,
-  setDetachedTaskDeliveryStatusByRunIdAsync,
-} from "../../../tasks/detached-task-runtime.async.js";
-import {
-  isTerminalTaskStatus,
-  type TaskDeliveryStatus,
-} from "../../../tasks/task-registry.types.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
@@ -37,7 +26,6 @@ import {
   ensureDeliveryState,
 } from "./subagent-delivery-state.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
-import { resolveFinalizedSubagentTaskState } from "./subagent-registry-completion.js";
 import { capFrozenResultText } from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleCommonContext,
@@ -234,183 +222,6 @@ export const hasPriorRequesterDeliveryMirror = async (
   }
 };
 
-const resolveSubagentTaskTarget = (
-  entry: SubagentRunRecord,
-  resolution: DetachedTaskFindResult,
-) => {
-  const durableTaskRunId = entry.taskRunId ?? entry.runId;
-  return {
-    ...(resolution.task ? { taskId: resolution.task.taskId } : {}),
-    runId:
-      resolution.lookup === "available"
-        ? (resolution.task?.runId ?? durableTaskRunId)
-        : durableTaskRunId,
-    sessionKey:
-      resolution.lookup === "available"
-        ? (resolution.task?.childSessionKey ?? entry.childSessionKey)
-        : entry.childSessionKey,
-  };
-};
-
-export const safeSetSubagentTaskDeliveryStatus = async (
-  params: SubagentLifecycleOptions,
-  args: {
-    entry: SubagentRunRecord;
-    deliveryStatus: Extract<TaskDeliveryStatus, "pending" | "delivered" | "failed">;
-    deliveryError?: string;
-    isCurrent: () => boolean;
-  },
-) => {
-  const runId = args.entry.runId;
-  const generation = args.entry.generation;
-  const delivery = args.entry.delivery;
-  const assertCurrent = () => {
-    if (
-      !args.isCurrent() ||
-      params.runs.get(runId) !== args.entry ||
-      args.entry.runId !== runId ||
-      args.entry.generation !== generation ||
-      args.entry.delivery !== delivery ||
-      args.entry.delivery?.status !== args.deliveryStatus
-    ) {
-      throw new Error("subagent task delivery owner changed before commit");
-    }
-  };
-  assertCurrent();
-  const resolution = await params.resolveSubagentTaskAsync(args.entry);
-  assertCurrent();
-  const target = resolveSubagentTaskTarget(args.entry, resolution);
-  try {
-    await setDetachedTaskDeliveryStatusByRunIdAsync(
-      {
-        runId: target.runId,
-        sessionKey: target.sessionKey,
-        runtime: "subagent",
-        deliveryStatus: args.deliveryStatus,
-        error: args.deliveryStatus === "failed" ? args.deliveryError : undefined,
-      },
-      assertCurrent,
-    );
-  } catch (err) {
-    assertCurrent();
-    if (!(err instanceof DetachedTaskLegacyRuntimeError)) {
-      throw err;
-    }
-    params.warn("failed to update subagent background task delivery state", {
-      error: buildSafeLifecycleErrorMeta(err),
-      runId: maskLifecycleIdentifier(target.runId, "run"),
-      childSessionKey: maskLifecycleIdentifier(target.sessionKey, "session"),
-      deliveryStatus: args.deliveryStatus,
-    });
-  }
-  assertCurrent();
-};
-
-export const finalizeSubagentTaskRun = async (
-  params: SubagentLifecycleOptions,
-  args: {
-    entry: SubagentRunRecord;
-    outcome: SubagentRunOutcome;
-    taskResolution?: DetachedTaskFindResult;
-  },
-): ReturnType<typeof completeTaskRunByRunIdAsync> => {
-  const terminal = resolveFinalizedSubagentTaskState(args.entry);
-  if (!terminal) {
-    return [];
-  }
-  // Provisional completion is staged off-registry; retain its canonical kill owner.
-  const runId = args.entry.runId;
-  const owner = params.runs.get(runId);
-  const generation = owner?.generation;
-  const execution = owner?.execution;
-  const killReconciliation = owner?.killReconciliation;
-  const killIntent = owner?.killIntent;
-  const terminalOwner = owner?.terminalOwner;
-  const pauseReason = owner?.pauseReason;
-  const suppressCompletionDelivery = owner?.suppressCompletionDelivery;
-  const suppressAnnounceReason = owner?.suppressAnnounceReason;
-  const assertCurrent = () => {
-    if (
-      !owner ||
-      params.runs.get(runId) !== owner ||
-      owner.runId !== runId ||
-      owner.generation !== generation ||
-      owner.execution !== execution ||
-      owner.killReconciliation !== killReconciliation ||
-      owner.killIntent !== killIntent ||
-      owner.terminalOwner !== terminalOwner ||
-      owner.pauseReason !== pauseReason ||
-      owner.suppressCompletionDelivery !== suppressCompletionDelivery ||
-      owner.suppressAnnounceReason !== suppressAnnounceReason
-    ) {
-      throw new Error("subagent task completion owner changed before commit");
-    }
-  };
-  assertCurrent();
-  const taskResolution = args.taskResolution ?? (await params.resolveSubagentTaskAsync(args.entry));
-  assertCurrent();
-  const pendingTask =
-    taskResolution.lookup === "available" &&
-    taskResolution.task &&
-    !isTerminalTaskStatus(taskResolution.task.status)
-      ? taskResolution.task
-      : undefined;
-  const target = resolveSubagentTaskTarget(args.entry, taskResolution);
-  const { status, error, terminalOutcome, ...details } = terminal;
-  const suppressDelivery = args.entry.suppressCompletionDelivery === true;
-  let finalized: Awaited<ReturnType<typeof completeTaskRunByRunIdAsync>>;
-  try {
-    if (status === "succeeded") {
-      finalized = await completeTaskRunByRunIdAsync(
-        {
-          ...target,
-          runtime: "subagent",
-          ...details,
-          terminalOutcome,
-          suppressDelivery,
-        },
-        assertCurrent,
-      );
-    } else {
-      finalized = await failTaskRunByRunIdAsync(
-        {
-          ...target,
-          runtime: "subagent",
-          ...details,
-          status,
-          error,
-          suppressDelivery,
-        },
-        assertCurrent,
-      );
-    }
-  } catch (err) {
-    assertCurrent();
-    params.warn("failed to finalize subagent background task state", {
-      error: buildSafeLifecycleErrorMeta(err),
-      runId: maskLifecycleIdentifier(args.entry.runId, "run"),
-      childSessionKey: maskLifecycleIdentifier(args.entry.childSessionKey, "session"),
-      outcomeStatus: args.outcome.status,
-    });
-    if (pendingTask || !(err instanceof DetachedTaskLegacyRuntimeError)) {
-      throw err;
-    }
-    return [];
-  }
-  assertCurrent();
-  // A failed task write must keep the native terminal owner replayable.
-  // Otherwise cleanup can discard the only outcome that repairs the running task.
-  if (
-    pendingTask &&
-    !finalized?.some(
-      (task) => task.taskId === pendingTask.taskId && isTerminalTaskStatus(task.status),
-    )
-  ) {
-    throw new Error("subagent task projection did not finalize");
-  }
-  return finalized;
-};
-
 export const freezeRunResultAtCompletion = async (
   context: SubagentLifecycleCommonContext,
   entry: SubagentRunRecord,
@@ -426,6 +237,9 @@ export const freezeRunResultAtCompletion = async (
     completion.capturedAt = Date.now();
     return true;
   }
+  const owner = params.runs.get(entry.runId);
+  const generation = owner?.generation;
+  const execution = owner?.execution;
   let resultText: string | null;
   try {
     const transcriptTarget = entry.execution.transcriptTarget;
@@ -465,6 +279,10 @@ export const freezeRunResultAtCompletion = async (
   }
   const liveEntry = params.runs.get(entry.runId);
   if (
+    !owner ||
+    liveEntry !== owner ||
+    liveEntry.generation !== generation ||
+    liveEntry.execution !== execution ||
     entry.pauseReason === "sessions_yield" ||
     liveEntry?.pauseReason === "sessions_yield" ||
     context.newerGenerationOwnsSession(entry)

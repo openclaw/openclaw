@@ -5,9 +5,9 @@ import {
   nativeHookRelayTesting,
   onAgentEvent,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createAgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import { loadNodeExecAvailability } from "openclaw/plugin-sdk/node-selection-runtime";
 import {
   createAdmittedHostCapabilityTestFixture,
   createMockPluginRegistry,
@@ -32,9 +32,16 @@ import {
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
+vi.mock("openclaw/plugin-sdk/node-selection-runtime", { spy: true });
 
 describe("native follow-up custody through the registered attempt", () => {
   beforeEach(() => {
+    // Native custody is exercised with no remote nodes. Discovery must not open
+    // an ambient Gateway connection or wait on its real I/O under this clock.
+    vi.mocked(loadNodeExecAvailability).mockResolvedValue({
+      cacheKey: "[]",
+      isAvailable: () => false,
+    });
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   });
 
@@ -95,20 +102,14 @@ describe("native follow-up custody through the registered attempt", () => {
       nativeModelPolicySupport: "exact",
     });
     assert(
-      host.agentHarnessTaskRuntimeScope,
-      "Expected the session fixture to issue a task runtime scope",
+      host.agentHarnessCompletionScope,
+      "Expected the session fixture to issue a completion scope",
     );
     params.hostCapabilities = host.hostCapabilities;
-    params.agentHarnessTaskRuntimeScope = host.agentHarnessTaskRuntimeScope;
-    const taskRuntime = createAgentHarnessTaskRuntime({
-      runtime: "subagent",
-      taskKind: "codex-native",
-      runIdPrefix: "codex-thread:",
-      scope: host.agentHarnessTaskRuntimeScope,
-    });
-    // Keep the real scoped persistence and registered monitor; isolate final user delivery.
+    params.agentHarnessCompletionScope = host.agentHarnessCompletionScope;
+    // Keep the real admitted host and registered monitor; isolate final user delivery.
     const delivery = vi
-      .spyOn(defaultNativeSubagentMonitorRuntime, "deliverAgentHarnessTaskCompletion")
+      .spyOn(defaultNativeSubagentMonitorRuntime, "deliverAgentHarnessCompletion")
       .mockResolvedValue({ delivered: true, path: "direct" });
     const attempts = new Set<Promise<void>>();
     // Invoked below with .call(this, ...) so the observed instance remains the receiver.
@@ -122,15 +123,14 @@ describe("native follow-up custody through the registered attempt", () => {
       this: CodexNativeSubagentCompletionDelivery,
       state,
       child,
-      trigger,
     ) {
-      const attempt = originalDelivery.call(this, state, child, trigger);
+      const attempt = originalDelivery.call(this, state, child);
       attempts.add(attempt);
       return attempt;
     });
     const settleCompletionAttempts = async () => {
-      // Native receipts start worker persistence independently of notification dispatch.
-      // Observe its real completion before reading rows or retiring the fixture host.
+      // Native receipts can settle independently of notification dispatch.
+      // Join their owner before asserting completion or retiring the fixture host.
       while (attempts.size > 0) {
         const pending = [...attempts];
         attempts.clear();
@@ -152,7 +152,16 @@ describe("native follow-up custody through the registered attempt", () => {
     });
     let relayId: string | undefined;
     try {
-      await turnStarted.promise;
+      // Startup can settle before the fake server receives turn/start. Surface that
+      // outcome instead of waiting on a notification that can no longer arrive.
+      await Promise.race([
+        turnStarted.promise,
+        run.then((result) => {
+          throw new Error(`Codex attempt settled before turn/start (${result.terminal.kind})`, {
+            cause: readAttemptTerminal(result).promptError,
+          });
+        }),
+      ]);
       allowTurnStart.resolve();
       await run.waitForTurnAccepted();
       relayId = extractRelayIdFromThreadRequest(
@@ -198,15 +207,7 @@ describe("native follow-up custody through the registered attempt", () => {
         agentsStates: { [childThreadId]: { status: "completed", message: "A result" } },
       });
       await settleCompletionAttempts();
-      const previous = taskRuntime.listTaskRecords().find((task) => task.runId === runA);
-      expect(previous).toMatchObject({
-        status: "succeeded",
-        deliveryStatus: "delivered",
-        terminalSummary: "A result",
-      });
-      const previousSnapshot = structuredClone(previous);
-
-      // A completed A and not-yet-mirrored B cannot authorize sessions_yield.
+      // A completed A and not-yet-admitted B cannot authorize sessions_yield.
       // This independently running sibling supplies a real pending completion.
       await notify("thread/started", {
         thread: {
@@ -306,7 +307,6 @@ describe("native follow-up custody through the registered attempt", () => {
       if (scenario === "delayed-success" || scenario === "opaque-steer") {
         await childStart();
       }
-      const startedRows = taskRuntime.listTaskRecords();
       const claimedAfterStart = isCodexAppServerLiveThreadClaimed(harness.client, childThreadId);
       if (!accepted) {
         await expect(
@@ -358,7 +358,6 @@ describe("native follow-up custody through the registered attempt", () => {
       });
       await nativeHookRelayUnregisterQueue.flush();
       await settleCompletionAttempts();
-      const finalRows = taskRuntime.listTaskRecords();
       const claimedAfterCompletion = isCodexAppServerLiveThreadClaimed(
         harness.client,
         childThreadId,
@@ -366,22 +365,12 @@ describe("native follow-up custody through the registered attempt", () => {
       const relayAfterCompletion = Boolean(
         nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
       );
-      expect.soft(finalRows.find((task) => task.runId === runA)).toEqual(previousSnapshot);
       if (accepted) {
-        expect
-          .soft(startedRows.find((task) => task.runId === runB))
-          .toMatchObject({ status: "running" });
-        expect.soft(finalRows.find((task) => task.runId === runB)).toMatchObject({
-          status: "succeeded",
-          deliveryStatus: "delivered",
-          terminalSummary: "B result",
-        });
         expect
           .soft(delivery.mock.calls.filter(([call]) => call.childSessionKey === runB))
           .toEqual([[expect.objectContaining({ childSessionKey: runB, result: "B result" })]]);
         expect.soft(claimedAfterStart).toBe(true);
       } else {
-        expect.soft(finalRows.find((task) => task.runId === runB)).toBeUndefined();
         expect
           .soft(delivery.mock.calls.filter(([call]) => call.childSessionKey === runB))
           .toHaveLength(0);
@@ -399,15 +388,20 @@ describe("native follow-up custody through the registered attempt", () => {
       unsubscribe();
       allowTurnStart.resolve();
       lifetime.abort("test_cleanup");
-      harness.close();
       try {
-        await run.catch(() => undefined);
+        harness.close();
+        // Attempt cleanup can enqueue relay retirement. Join it before flushing the
+        // queue or releasing the admitted host, without masking the original failure.
+        await Promise.allSettled([run]);
         await settleCompletionAttempts();
         await nativeHookRelayUnregisterQueue.flush();
       } finally {
         observeAttempt.mockRestore();
-        host.closeHost();
-        host.closeAdmission();
+        try {
+          host.closeHost();
+        } finally {
+          host.closeAdmission();
+        }
       }
     }
   });

@@ -94,9 +94,9 @@ export function withCronMutationCommitHook(
   }
   return {
     ...hooks,
-    afterWrite: (db) => {
+    afterWrite: (db, receiptSchema) => {
       deferSqlitePostCommitPublication(db, committed);
-      return hooks?.afterWrite?.(db);
+      return hooks?.afterWrite?.(db, receiptSchema);
     },
   };
 }

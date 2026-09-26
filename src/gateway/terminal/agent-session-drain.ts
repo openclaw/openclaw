@@ -19,13 +19,6 @@ export function agentTerminalOwnerMatches(
   );
 }
 
-type TaskBoundAgentOwner = Extract<TerminalOwner, { kind: "agent" }> & { taskId?: string };
-
-export function terminalTaskOwnerMatches(owner: TerminalOwner | null, taskId: string): boolean {
-  // SAFETY: taskId is manager-private metadata added only to host-minted agent owners.
-  return owner?.kind === "agent" && (owner as TaskBoundAgentOwner).taskId === taskId;
-}
-
 function drainKey(owner: AgentTerminalOwner): string {
   return JSON.stringify([owner.agentSessionKey, owner.agentSessionId, owner.agentId]);
 }

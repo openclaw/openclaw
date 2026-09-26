@@ -63,7 +63,6 @@ type ChatPaneHeaderProps = {
   panelLayoutActions: TemplateResult | typeof nothing;
   discussionAction: TemplateResult | typeof nothing;
   diffAction: TemplateResult | typeof nothing;
-  backgroundTasksAction: TemplateResult | typeof nothing;
   sessionRailAction: TemplateResult | typeof nothing;
   workspaceAction: TemplateResult | typeof nothing;
   presence?: TemplateResult | typeof nothing;
@@ -458,8 +457,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             ${
               props.catalog || compactSessionActions
                 ? nothing
-                : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}
-                  ${props.sessionRailAction}`
+                : html`${props.diffAction} ${props.workspaceAction} ${props.sessionRailAction}`
             }
             ${(
               [

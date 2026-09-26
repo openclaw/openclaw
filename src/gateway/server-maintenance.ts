@@ -346,6 +346,31 @@ export function startGatewayMaintenanceTimers(params: {
     void performDevicePairSetupCompletionGc(Date.now());
   }
 
+  // Plugin-state expiry belongs to Gateway maintenance, not background-run tracking.
+  let pluginStateGcInFlight: Promise<void> | undefined;
+  const performPluginStateGc = () => {
+    if (periodicTasksStopPromise || pluginStateGcInFlight) {
+      return;
+    }
+    pluginStateGcInFlight = periodicWork
+      .track(async () => {
+        const { sweepExpiredPluginStateEntriesInWorker } =
+          await import("../plugin-state/plugin-state-worker-client.js");
+        await sweepExpiredPluginStateEntriesInWorker({
+          assertActive: () => periodicWork.signal.throwIfAborted(),
+        });
+      })
+      .catch((error: unknown) => {
+        params.logHealth.error(`plugin state cleanup failed: ${formatError(error)}`);
+      })
+      .finally(() => {
+        pluginStateGcInFlight = undefined;
+      });
+  };
+  if (!restartDrainSignal.aborted) {
+    performPluginStateGc();
+  }
+
   const skillUsageCleanup = registerSkillUsageTracking();
 
   // dedupe cache cleanup
@@ -354,6 +379,7 @@ export function startGatewayMaintenanceTimers(params: {
     const now = Date.now();
     params.chatRunState.toolEventRecipients.pruneExpired(now);
     void performDevicePairSetupCompletionGc(now);
+    performPluginStateGc();
     if (now - deliveryQueueMediaGcStartedAtMs >= DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS) {
       void performDeliveryQueueMediaGc();
     }

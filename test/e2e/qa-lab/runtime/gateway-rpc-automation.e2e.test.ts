@@ -2,13 +2,7 @@ import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type {
-  TasksCancelResult,
-  TasksGetResult,
-  TasksListResult,
-} from "../../../../packages/gateway-protocol/src/index.js";
 import { withFastReplyConfig } from "../../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
-import { tasksCancelCommand } from "../../../../src/commands/tasks.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -24,9 +18,7 @@ import {
 import { buildMockOpenAiResponsesProvider } from "../../../../src/gateway/test-openai-responses-model.js";
 import { resetAgentEventsForTest } from "../../../../src/infra/agent-events.js";
 import { resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
-import { resetTaskRegistryForTests } from "../../../../src/tasks/task-runtime.test-helpers.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../../../src/test-utils/env.js";
-import { createRuntimeEnv } from "../../../../src/test-utils/plugin-runtime-env.js";
 import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
@@ -63,7 +55,6 @@ function resetGatewayState(): void {
   clearSessionStoreCacheForTest();
   resetAgentEventsForTest({ preserveListeners: true });
   resetSystemEventsForTest();
-  resetTaskRegistryForTests({ persist: false });
 }
 
 function writeAssistantResponse(response: ServerResponse, text: string): void {
@@ -93,14 +84,14 @@ function writeAssistantResponse(response: ServerResponse, text: string): void {
   ]);
 }
 
-describe("Gateway task and automation RPCs", () => {
+describe("Gateway run cancellation and automation RPCs", () => {
   beforeEach(resetGatewayState);
   afterEach(resetGatewayState);
 
-  it.each(["RPC", "CLI"] as const)(
-    "persists cron CRUD, wakes the heartbeat, and cancels an agent-created task through %s",
+  it(
+    "persists cron CRUD, wakes the heartbeat, and cancels an agent run through chat.abort",
     { timeout: 90_000 },
-    async (cancelSurface) => {
+    async () => {
       const envSnapshot = captureEnv([...ISOLATED_GATEWAY_ENV_KEYS]);
       const tempHome = tempDirs.make("openclaw-gateway-automation-");
       const stateDir = path.join(tempHome, ".openclaw");
@@ -298,84 +289,14 @@ describe("Gateway task and automation RPCs", () => {
         expect(started).toMatchObject({ runId, status: "accepted" });
 
         await expect
-          .poll(
-            async () => {
-              const page = await client.request<TasksListResult>("tasks.list", {
-                sessionKey,
-                status: "running",
-              });
-              return page.tasks.find(
-                (candidate) =>
-                  candidate.runtime === "cli" &&
-                  candidate.runId === runId &&
-                  candidate.sessionKey === sessionKey,
-              )?.id;
-            },
-            { timeout: 10_000, interval: 50 },
-          )
-          .toBeTypeOf("string");
-        const runningTasks = await client.request<TasksListResult>("tasks.list", {
-          sessionKey,
-          status: "running",
-        });
-        const taskId = runningTasks.tasks.find(
-          (candidate) =>
-            candidate.runtime === "cli" &&
-            candidate.runId === runId &&
-            candidate.sessionKey === sessionKey,
-        )?.id;
-        expect(taskId).toBeTypeOf("string");
-        if (!taskId) {
-          throw new Error("gateway-created agent task disappeared before lookup");
-        }
-
-        await expect(
-          client.request<TasksGetResult>("tasks.get", { taskId }),
-        ).resolves.toMatchObject({
-          task: {
-            id: taskId,
-            runtime: "cli",
-            status: "running",
-            prompt: taskPrompt,
-          },
-        });
-        await expect
           .poll(() => providerRequests.some((body) => JSON.stringify(body).includes(taskPrompt)), {
             timeout: 10_000,
             interval: 50,
           })
           .toBe(true);
-        const cancellationReason =
-          cancelSurface === "RPC"
-            ? "Gateway RPC automation evidence complete"
-            : "Cancelled by operator.";
-        if (cancelSurface === "RPC") {
-          const cancelled = await client.request<TasksCancelResult>("tasks.cancel", {
-            taskId,
-            reason: cancellationReason,
-          });
-          expect(cancelled).toMatchObject({
-            found: true,
-            cancelled: true,
-            task: { id: taskId, status: "cancelled" },
-          });
-        } else {
-          const runtime = createRuntimeEnv();
-          await tasksCancelCommand({ lookup: taskId }, runtime);
-          expect(runtime.error).not.toHaveBeenCalled();
-          expect(runtime.exit).not.toHaveBeenCalled();
-          expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
-            `Cancelled ${taskId} (cli) run ${runId}.`,
-          );
-        }
-        await expect(
-          client.request<TasksGetResult>("tasks.get", { taskId }),
-        ).resolves.toMatchObject({
-          task: {
-            id: taskId,
-            status: "cancelled",
-            error: cancellationReason,
-          },
+        await expect(client.request("chat.abort", { sessionKey, runId })).resolves.toMatchObject({
+          aborted: true,
+          runIds: [runId],
         });
         const releaseResponse = releaseTaskResponse;
         if (!releaseResponse) {
@@ -389,16 +310,6 @@ describe("Gateway task and automation RPCs", () => {
           { timeoutMs: 35_000 },
         );
         expect(agentWait).toMatchObject({ status: "error", stopReason: "rpc" });
-        await expect(
-          client.request<TasksGetResult>("tasks.get", { taskId }),
-        ).resolves.toMatchObject({
-          task: {
-            id: taskId,
-            status: "cancelled",
-            error: cancellationReason,
-          },
-        });
-
         const requestsBeforeWake = providerRequests.length;
         const wakeRequestedAt = Date.now();
         await expect(

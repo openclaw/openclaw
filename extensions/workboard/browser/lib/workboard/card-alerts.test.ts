@@ -6,7 +6,7 @@ import {
   type CardAlert,
 } from "./card-alerts.ts";
 import { getCardSessionState, type CardSessionState } from "./session-state.ts";
-import type { WorkboardCard, WorkboardLifecycle, WorkboardTaskSummary } from "./types.ts";
+import type { WorkboardCard, WorkboardLifecycle } from "./types.ts";
 
 const card: WorkboardCard = {
   id: "review",
@@ -21,23 +21,19 @@ const card: WorkboardCard = {
 
 const lifecycle: WorkboardLifecycle = { state: "failed", session: null };
 
-function task(status: WorkboardTaskSummary["status"]): WorkboardTaskSummary {
-  return { id: "task", taskId: "task", status };
-}
-
 describe("card session state", () => {
-  it("retains authoritative task outcomes over a different session terminal state", () => {
-    const timedOutSession: WorkboardLifecycle = {
-      state: "failed",
-      session: { key: "agent:main:review", kind: "direct", updatedAt: 100, status: "timeout" },
-    };
-    expect(getCardSessionState(timedOutSession, task("failed"))).toBe("failed");
-    expect(getCardSessionState(timedOutSession, task("cancelled"))).toBe("cancelled");
-    expect(getCardSessionState(timedOutSession, task("running"))).toBe("timed_out");
-    expect(getCardSessionState({ state: "running", session: null }, task("queued"))).toBe("queued");
-    expect(getCardSessionState({ state: "succeeded", session: null }, task("completed"))).toBe(
-      "succeeded",
-    );
+  it("uses the native session terminal outcome", () => {
+    expect(
+      getCardSessionState({
+        state: "failed",
+        session: {
+          key: "agent:main:review",
+          kind: "direct",
+          updatedAt: 100,
+          status: "timeout",
+        },
+      }),
+    ).toBe("timed_out");
   });
 });
 

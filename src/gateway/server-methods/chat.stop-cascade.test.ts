@@ -35,7 +35,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
-import { findTaskByRunId, getTaskById } from "../../tasks/task-registry.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
@@ -315,9 +314,13 @@ it.each(["replacement", "branch"] as const)(
         expect(successorDescendant.start).toHaveBeenCalledOnce();
       });
     } finally {
-      for (const runId of ["original-child", "successor-child"]) {
-        releaseSwarmRun(`${runId}-capacity`);
-        releaseSwarmRun(runId);
+      try {
+        await successorChild;
+      } finally {
+        for (const runId of ["original-child", "successor-child"]) {
+          releaseSwarmRun(`${runId}-capacity`);
+          releaseSwarmRun(runId);
+        }
       }
     }
   },
@@ -340,7 +343,6 @@ it.each(["during drain", "after abort"] as const)(
       cleanup: "keep",
       expectsCompletionMessage: false,
     });
-    const task = expectDefined(findTaskByRunId(runId), "child task");
     const parent = createActiveRun(test.parent.sessionKey, test.parent);
     test.context.chatAbortControllers.set("parent", parent);
     const controller = new AbortController();
@@ -395,9 +397,9 @@ it.each(["during drain", "after abort"] as const)(
       expect(onInterrupt).toHaveBeenCalledOnce();
       expect(controller.signal.aborted).toBe(accepted);
       expect(abort).toHaveBeenCalledTimes(Number(accepted));
-      expect(getTaskById(task.taskId)?.status).toBe(accepted ? "cancelled" : "running");
       const retained = expectDefined(loadSubagentRegistryFromSqlite().get(runId), "retained child");
       expect(retained.killIntent).toBeUndefined();
+      expect(retained.execution.status).toBe(accepted ? "terminal" : "running");
       expect(loadSessionEntryReadOnly(child)?.abortedLastRun === true).toBe(accepted);
       expect(test.otherRun.controller.signal.aborted).toBe(false);
     } finally {

@@ -289,7 +289,6 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
           ],
           ts: Date.now(),
         },
-        "tasks.list": { nextCursor: null, tasks: [] },
         "workboard.cards.list": {
           cards: [executionLinkedCard],
           statuses: [
@@ -396,10 +395,6 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
             },
           ],
           ts: Date.now(),
-        },
-        "tasks.list": {
-          nextCursor: null,
-          tasks: [],
         },
         "workboard.cards.list": {
           cards: [initialCard, productRunningCard, archivedDefaultRunningCard],

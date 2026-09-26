@@ -9,17 +9,12 @@ import {
 } from "../ui/src/test-helpers/control-ui-workboard-states.ts";
 
 /** Only the opt-in native fixture imports these projections. Persisted cards stay unchanged. */
-export const getFixtureLifecycle: typeof getWorkboardLifecycle = (
-  card,
-  sessions,
-  task,
-  resolution,
-) => {
+export const getFixtureLifecycle: typeof getWorkboardLifecycle = (card, sessions, resolution) => {
   const cell = getWorkboardStateCell(card.id);
   if (cell?.state === "unavailable" || cell?.state === "ambiguous") {
     return { session: null, state: cell.state };
   }
-  return getWorkboardLifecycle(card, sessions, task, resolution);
+  return getWorkboardLifecycle(card, sessions, resolution);
 };
 
 export const getFixtureAlerts: typeof getCardAlerts = (card, lifecycle, dependencies, now) => {

@@ -43,8 +43,8 @@ function fixture() {
     pathname,
     read: () =>
       executeOpenClawStateWorker(capture(), {
-        type: "tasks.list",
-        input: { ownerKey: "agent:main:main" },
+        type: "plugins.conversationBindingApprovals.read",
+        input: undefined,
       }),
   };
 }
@@ -203,14 +203,17 @@ describe("shared-state worker terminal admission", () => {
     });
     const requests = vi.spyOn(Worker.prototype, "postMessage");
     const active = runOpenClawStateWorkerOperation(state.capture(), (scope) =>
-      scope.execute({ type: "tasks.list", input: { ownerKey: "active" } }),
+      scope.execute({ type: "plugins.conversationBindingApprovals.read", input: undefined }),
     );
     let queued: Promise<unknown> | undefined;
     let draining: Promise<void> | undefined;
     try {
       await replyReady.promise;
       queued = runOpenClawStateWorkerOperation(state.capture(), (scope) => {
-        const reading = scope.execute({ type: "tasks.list", input: { ownerKey: "queued" } });
+        const reading = scope.execute({
+          type: "plugins.conversationBindingApprovals.read",
+          input: undefined,
+        });
         queuedReady.resolve();
         return reading;
       });

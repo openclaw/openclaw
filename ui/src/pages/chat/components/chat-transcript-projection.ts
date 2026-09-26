@@ -39,7 +39,6 @@ import {
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { resolveChatDefaultAvatarPlacement } from "./chat-author-avatar.ts";
-import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import { buildChatArchiveNotice, renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import { resolveMessageReplyText } from "./chat-message-markdown.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
@@ -601,17 +600,6 @@ export function projectChatTranscript(
       kind: "content",
       key: "turn-recap",
       content: renderTurnRecapRow(turnRecap),
-    });
-  }
-  const backgroundTasks =
-    !props.runWorking && !isEmpty && !showLoadingSkeleton
-      ? renderBackgroundTasksStatusRow(props.backgroundTasks)
-      : nothing;
-  if (backgroundTasks !== nothing) {
-    transcriptRows.push({
-      kind: "content",
-      key: "background-tasks",
-      content: backgroundTasks,
     });
   }
   const typingIndicator = renderChatTypingIndicator(props.typingActors, avatarPlacement);

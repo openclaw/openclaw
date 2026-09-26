@@ -306,23 +306,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "models-status" },
   },
   {
-    commandPath: ["tasks", "list"],
-    exact: true,
-    policy: PASSIVE_STARTUP_POLICY,
-    route: { id: "tasks-list" },
-  },
-  {
-    commandPath: ["tasks", "audit"],
-    exact: true,
-    policy: PASSIVE_STARTUP_POLICY,
-    route: { id: "tasks-audit" },
-  },
-  {
-    commandPath: ["tasks"],
-    policy: PASSIVE_STARTUP_POLICY,
-    route: { id: "tasks-list" },
-  },
-  {
     // This unregistered root is reserved so plugin registration cannot claim it;
     // the catalog entry preserves its startup policy.
     commandPath: ["tool"],

@@ -74,7 +74,6 @@ async function withAccessFixture(
         subscription.heartbeatUnsub();
         subscription.transcriptUnsub();
         subscription.lifecycleUnsub();
-        await subscription.taskUnsub();
       }
     }
   });
@@ -329,7 +328,6 @@ it("retires the identity listener with the Gateway lifecycle and installs one on
     first.heartbeatUnsub();
     first.transcriptUnsub();
     first.lifecycleUnsub();
-    await first.taskUnsub();
     const stopped = readGatewayAccessRevision();
     replaceSessionEntrySync(scope, { sessionId: "stopped", updatedAt: 3 });
     expect(readGatewayAccessRevision()).toBe(stopped);

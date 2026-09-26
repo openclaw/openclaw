@@ -5,7 +5,6 @@ import {
   type ArtifactsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeAgentId,
@@ -13,8 +12,6 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
-import { prepareTaskRegistryRead } from "../../tasks/task-registry-read.js";
-import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
@@ -95,7 +92,6 @@ function resolveScopedArtifactSessionKey(
 function resolveQuerySession(
   query: ArtifactQuery,
   cfg: OpenClawConfig | undefined,
-  task: TaskRecord | undefined,
 ): ResolvedArtifactSession | undefined {
   if (query.sessionKey) {
     const sessionKey = resolveScopedArtifactSessionKey(query.sessionKey, query.agentId, cfg);
@@ -117,43 +113,7 @@ function resolveQuerySession(
     const scopedSessionKey = resolveScopedArtifactSessionKey(sessionKey, agentId, cfg);
     return scopedSessionKey ? { sessionKey: scopedSessionKey, agentId } : undefined;
   }
-  if (!query.taskId) {
-    return undefined;
-  }
-  const requesterSessionKey = normalizeOptionalString(task?.requesterSessionKey);
-  const ownerAgentId = parseAgentSessionKey(task?.ownerKey)?.agentId;
-  const persistedRequesterOwner = requesterSessionKey
-    ? resolvePersistedSessionStoreOwnerForKey(cfg ?? {}, requesterSessionKey)
-    : { kind: "none" as const };
-  const requesterAgentId =
-    normalizeOptionalString(task?.requesterAgentId) ??
-    ownerAgentId ??
-    (persistedRequesterOwner.kind === "configured"
-      ? persistedRequesterOwner.agentId
-      : resolveArtifactSessionAgentId(requesterSessionKey, cfg));
-  const taskAgentId = normalizeOptionalString(task?.agentId) ?? requesterAgentId;
-  if (
-    query.agentId &&
-    taskAgentId &&
-    normalizeAgentId(query.agentId) !== normalizeAgentId(taskAgentId)
-  ) {
-    return undefined;
-  }
-  if (requesterSessionKey) {
-    // task.agentId identifies the executor. requesterAgentId keeps global
-    // requester transcripts in the correct agent store across restarts.
-    const sessionAgentId =
-      requesterAgentId ?? resolveArtifactSessionAgentId(requesterSessionKey, cfg);
-    const scopedSessionKey = sessionAgentId
-      ? resolveScopedArtifactSessionKey(requesterSessionKey, sessionAgentId, cfg)
-      : undefined;
-    return scopedSessionKey ? { sessionKey: scopedSessionKey, agentId: sessionAgentId } : undefined;
-  }
-  const agentId = query.agentId ?? taskAgentId ?? resolveSessionAgentId({ config: cfg });
-  const runId = normalizeOptionalString(task?.runId);
-  const sessionKey = runId ? resolveSessionKeyForRun(runId, { agentId }) : undefined;
-  const scopedSessionKey = resolveScopedArtifactSessionKey(sessionKey, agentId, cfg);
-  return scopedSessionKey ? { sessionKey: scopedSessionKey, agentId } : undefined;
+  return undefined;
 }
 
 export class ArtifactSessionResolutionError extends Error {
@@ -184,16 +144,8 @@ export async function prepareArtifactSessionResolution(
   ) => ResolvedArtifactSession | undefined
 > {
   const query = { ...input };
-  const taskId = !query.sessionKey && !query.runId ? query.taskId : undefined;
-  const read = taskId ? await prepareTaskRegistryRead() : undefined;
-  if (taskId && !read) {
-    throw new ArtifactSessionResolutionError(
-      errorShape(ErrorCodes.UNAVAILABLE, "Task activity did not stabilize. Refresh the artifacts."),
-    );
-  }
-  // The consuming frame rechecks task identity and current disclosure policy without yielding.
+  // Resolve the native session/run selector under current disclosure policy.
   return (cfg, client) => {
-    const task = taskId ? read?.getTaskById(taskId) : undefined;
     const sessionKey = normalizeOptionalString(query.sessionKey);
     let scopedQuery = query;
     if (sessionKey && cfg) {
@@ -203,7 +155,7 @@ export async function prepareArtifactSessionResolution(
       }
       scopedQuery = { ...query, agentId: owner.agentId };
     }
-    const resolved = resolveQuerySession(scopedQuery, cfg, task);
+    const resolved = resolveQuerySession(scopedQuery, cfg);
     if (!resolved) {
       return undefined;
     }

@@ -67,7 +67,7 @@
     "!dist/plugin-sdk/acp-runtime-backend.d.ts",
     "!dist/plugin-sdk/agent-core.d.ts",
     "!dist/plugin-sdk/agent-harness-exec-review-runtime.d.ts",
-    "!dist/plugin-sdk/agent-harness-task-runtime.d.ts",
+    "!dist/plugin-sdk/agent-harness-completion.d.ts",
     "!dist/plugin-sdk/agent-harness-tool-runtime.d.ts",
     "!dist/plugin-sdk/agent-runtime-test-contracts.js",
     "!dist/plugin-sdk/agent-runtime-test-contracts.d.ts",
@@ -901,8 +901,8 @@
     "./plugin-sdk/codex-session-transcript-runtime": {
       "default": "./dist/plugin-sdk/codex-session-transcript-runtime.js"
     },
-    "./plugin-sdk/agent-harness-task-runtime": {
-      "default": "./dist/plugin-sdk/agent-harness-task-runtime.js"
+    "./plugin-sdk/agent-harness-completion": {
+      "default": "./dist/plugin-sdk/agent-harness-completion.js"
     },
     "./plugin-sdk/agent-harness": {
       "types": "./dist/plugin-sdk/agent-harness.d.ts",
@@ -2143,7 +2143,6 @@
     "test:parallels:windows:prepare": "/bin/bash scripts/e2e/parallels-windows-prepare.sh",
     "test:parallels:windows": "/bin/bash scripts/e2e/parallels-windows-smoke.sh",
     "test:agents:concurrency": "node --import ./scripts/tsx.mjs scripts/bench-agent-concurrency.ts",
-    "test:tasks:sqlite-churn": "node --import ./scripts/tsx.mjs scripts/bench-task-registry-sqlite.ts",
     "test:perf:budget": "node --import ./scripts/tsx.mjs scripts/test-perf-budget.mts",
     "test:perf:changed:bench": "node --import ./scripts/tsx.mjs scripts/bench-test-changed.mts",
     "test:perf:groups": "node --import ./scripts/tsx.mjs scripts/test-group-report.mts",

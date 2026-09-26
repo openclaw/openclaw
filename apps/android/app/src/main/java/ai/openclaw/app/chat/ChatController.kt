@@ -76,8 +76,6 @@ private val SWARM_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 private const val WEAR_AGENT_PULSE_SWARM_MAX_ROWS = 1_000
 private const val WEAR_AGENT_PULSE_SWARM_FETCH_LIMIT = WEAR_AGENT_PULSE_SWARM_MAX_ROWS + 1
 private const val WEAR_AGENT_PULSE_DIRECT_CHILDREN_GROUP = "__wear_agent_pulse_direct_children__"
-private const val SUBAGENT_ACTIVITY_RETENTION_MS = 60_000L
-private const val MAX_RETAINED_TERMINAL_SUBAGENT_TASKS = 100
 private const val SESSION_EDITOR_MAX_BASE64_CHARS = ((OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES + 2) / 3) * 4
 private val MANAGED_MEDIA_PATH_REGEX =
   Regex("^/api/chat/media/outgoing/[^/]+/([0-9a-fA-F-]{36})/full(?:\\?.*)?$")
@@ -530,13 +528,6 @@ class ChatController internal constructor(
   private val _toolActivities = MutableStateFlow<List<ChatPendingToolCall>>(emptyList())
   val toolActivities: StateFlow<List<ChatPendingToolCall>> = _toolActivities.asStateFlow()
 
-  private val subagentActivityLock = Any()
-
-  // A null job preserves an expired terminal observation without retaining its UI row.
-  private val subagentActivityExpiryJobs = mutableMapOf<String, Job?>()
-  private val _subagentActivities = MutableStateFlow<Map<String, ChatSubagentActivity>>(emptyMap())
-  val subagentActivities: StateFlow<Map<String, ChatSubagentActivity>> = _subagentActivities.asStateFlow()
-
   private val _questions = MutableStateFlow<List<ChatQuestionPrompt>>(emptyList())
   val questions: StateFlow<List<ChatQuestionPrompt>> = _questions.asStateFlow()
   private val questionStateLock = Any()
@@ -728,54 +719,6 @@ class ChatController internal constructor(
 
   private val _commands = MutableStateFlow<List<ChatCommandEntry>>(emptyList())
   val commands: StateFlow<List<ChatCommandEntry>> = _commands.asStateFlow()
-
-  suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> {
-    val lease = captureRequestLease(cacheScope()) ?: throw GatewayRequestNotEnqueued("not connected")
-
-    suspend fun request(
-      statuses: List<String>?,
-      limit: Int,
-    ): List<BackgroundTask> {
-      val params =
-        buildJsonObject {
-          put("agentId", JsonPrimitive(agentId))
-          put("limit", JsonPrimitive(limit))
-          statuses?.let { values -> put("status", JsonArray(values.map(::JsonPrimitive))) }
-        }
-      if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
-      val response =
-        lease.request("tasks.list", params.toString()) { enqueue ->
-          if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
-          enqueue()
-        }
-      if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
-      return parseBackgroundTasks(json, response)
-    }
-
-    val active = request(listOf("queued", "running"), limit = 100)
-    val recent = request(listOf("completed", "failed", "cancelled", "timed_out"), limit = 50)
-    val tasks = mergeBackgroundTasks(active, recent)
-    if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
-    return tasks
-  }
-
-  suspend fun getBackgroundTask(taskId: String): BackgroundTask {
-    val lease = captureRequestLease(cacheScope()) ?: throw GatewayRequestNotEnqueued("not connected")
-    val params = buildJsonObject { put("taskId", JsonPrimitive(taskId)) }
-    if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
-    val response =
-      lease.request("tasks.get", params.toString()) { enqueue ->
-        if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
-        enqueue()
-      }
-    if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
-    val root = json.parseToJsonElement(response).jsonObject
-    val task =
-      root["task"]?.let(::parseBackgroundTask)
-        ?: error("Gateway returned no background task")
-    if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
-    return task
-  }
 
   private data class LiveRunTelemetryState(
     val highestSequence: Long,
@@ -1075,7 +1018,6 @@ class ChatController internal constructor(
         refreshHealth = false,
       )
       clearProgressCard()
-      clearSubagentActivities()
       clearLiveHistoryMarker()
       publishSessions(emptyList())
       publishRunPresentation()
@@ -3188,7 +3130,6 @@ class ChatController internal constructor(
           _sessionBranches.value = emptyList()
           _sessionBranchesLoading.value = false
           _sessionBranchSwitching.value = false
-          clearSubagentActivities()
           clearProgressCard()
         }
         val activeAgentId = resolveAgentIdForSessionKey(key)
@@ -3945,7 +3886,6 @@ class ChatController internal constructor(
         invalidateIncompleteRunTelemetry()
         publishRunPresentation()
         clearLiveRunUi()
-        clearSubagentActivities()
         refreshQuestions()
         refreshProgressCard()
         refreshHistoryForRecovery()
@@ -3993,10 +3933,6 @@ class ChatController internal constructor(
         handleAgentEvent(payloadJson)
       }
 
-      "task" -> {
-        if (payloadJson.isNullOrBlank()) return
-        handleTaskEvent(payloadJson)
-      }
 
       "question.requested" -> {
         if (payloadJson.isNullOrBlank()) return
@@ -7015,100 +6951,6 @@ class ChatController internal constructor(
       val activities = turnToolCallsById.map { (key, call) -> call.copy(runId = key.first?.runId) }.sortedBy { it.startedAtMs }
       _toolActivities.value = activities
       _pendingToolCalls.value = activities.filterNot { it.isComplete }
-    }
-  }
-
-  private fun handleTaskEvent(payloadJson: String) {
-    val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
-    if (payload["action"].asStringOrNull() == "deleted") {
-      payload["taskId"]
-        .asStringOrNull()
-        ?.trim()
-        ?.takeIf(String::isNotEmpty)
-        ?.let(::removeSubagentActivity)
-      return
-    }
-    val task = payload["task"].asObjectOrNull() ?: return
-    if (task["runtime"].asStringOrNull() != "subagent") return
-    if (task["sessionKey"].asStringOrNull()?.trim() != _sessionKey.value) return
-    val taskId = task["id"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) ?: return
-    val status = task["status"].asStringOrNull()?.trim()?.lowercase() ?: return
-    if (status !in setOf("queued", "running", "completed", "failed", "cancelled", "timed_out")) return
-
-    val terminal = status != "queued" && status != "running"
-    val now = System.currentTimeMillis()
-    synchronized(subagentActivityLock) {
-      val existing = _subagentActivities.value[taskId]
-      if (terminal && existing == null && subagentActivityExpiryJobs.containsKey(taskId)) return@synchronized
-      val lastActivity = task["lastActivity"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
-      val fallback =
-        task["progressSummary"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
-          ?: task["lastToolName"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
-      val activity =
-        ChatSubagentActivity(
-          id = taskId,
-          status = status,
-          snippet =
-            lastActivity
-              ?: if (terminal) existing?.snippet ?: fallback else fallback ?: existing?.snippet,
-          diffStat = parseChatDiffStat(task["diffStat"], includeFiles = true) ?: existing?.diffStat,
-          terminalSummary =
-            task["terminalSummary"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
-              ?: existing?.terminalSummary,
-          error =
-            task["error"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
-              ?: existing?.error,
-          startedAtMs =
-            task["startedAt"]?.let(::parseTaskTimestampMs)
-              ?: existing?.startedAtMs
-              ?: task["createdAt"]?.let(::parseTaskTimestampMs)
-              ?: now,
-          endedAtMs =
-            if (terminal) {
-              task["endedAt"]?.let(::parseTaskTimestampMs) ?: existing?.endedAtMs ?: now
-            } else {
-              null
-            },
-          childSessionKey =
-            task["childSessionKey"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
-              ?: existing?.childSessionKey,
-        )
-      _subagentActivities.value = _subagentActivities.value + (taskId to activity)
-      if (activity.isWorking) {
-        subagentActivityExpiryJobs.remove(taskId)?.cancel()
-      } else if (terminal && existing?.isWorking != false) {
-        // Local receipt starts retention; remote endedAt may be old.
-        // Duplicate terminal updates must not extend that retention window.
-        subagentActivityExpiryJobs[taskId] =
-          scope.launch {
-            delay(SUBAGENT_ACTIVITY_RETENTION_MS)
-            synchronized(subagentActivityLock) {
-              if (subagentActivityExpiryJobs[taskId] !== coroutineContext[Job]) return@synchronized
-              _subagentActivities.value = _subagentActivities.value - taskId
-              subagentActivityExpiryJobs[taskId] = null
-              if (subagentActivityExpiryJobs.count { it.value == null } > MAX_RETAINED_TERMINAL_SUBAGENT_TASKS) {
-                subagentActivityExpiryJobs.entries.firstOrNull { it.value == null }?.let {
-                  subagentActivityExpiryJobs.remove(it.key)
-                }
-              }
-            }
-          }
-      }
-    }
-  }
-
-  private fun removeSubagentActivity(taskId: String) {
-    synchronized(subagentActivityLock) {
-      subagentActivityExpiryJobs.remove(taskId)?.cancel()
-      _subagentActivities.value = _subagentActivities.value - taskId
-    }
-  }
-
-  private fun clearSubagentActivities() {
-    synchronized(subagentActivityLock) {
-      subagentActivityExpiryJobs.values.forEach { it?.cancel() }
-      subagentActivityExpiryJobs.clear()
-      _subagentActivities.value = emptyMap()
     }
   }
 

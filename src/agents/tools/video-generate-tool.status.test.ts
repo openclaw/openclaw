@@ -1,3 +1,10 @@
+vi.mock("../media-generation-activity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media-generation-activity.js")>();
+  return {
+    ...actual,
+    listMediaGenerationOperations: mediaActivityMocks.listMediaGenerationOperations,
+  };
+});
 // Video generation status tests cover duplicate guards and explicit status
 // actions for background video tasks.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,27 +17,25 @@ import {
   createVideoGenerateStatusActionResult,
 } from "./video-generate-tool.actions.js";
 
-const taskRuntimeInternalMocks = vi.hoisted(() => {
+const mediaActivityMocks = vi.hoisted(() => {
   const mocks = {
-    listTasksForOwnerKey: vi.fn(),
-    listFreshTasksForOwnerKey: vi.fn(),
+    listOperations: vi.fn(),
+    listMediaGenerationOperations: vi.fn(),
   };
-  mocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
-    mocks.listTasksForOwnerKey(ownerKey),
+  mocks.listMediaGenerationOperations.mockImplementation((ownerKey) =>
+    mocks.listOperations(ownerKey),
   );
   return mocks;
 });
 
-vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
-
 function resetVideoStatusMocks() {
   vi.restoreAllMocks();
   vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
-  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
-  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
-  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
-  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
-    taskRuntimeInternalMocks.listTasksForOwnerKey(ownerKey),
+  mediaActivityMocks.listOperations.mockReset();
+  mediaActivityMocks.listOperations.mockReturnValue([]);
+  mediaActivityMocks.listMediaGenerationOperations.mockReset();
+  mediaActivityMocks.listMediaGenerationOperations.mockImplementation((ownerKey) =>
+    mediaActivityMocks.listOperations(ownerKey),
   );
   resetRecentMediaGenerationDuplicateGuardsForTests();
 }
@@ -43,7 +48,7 @@ describe("createVideoGenerateTool status actions", () => {
   });
 
   it("returns active task status instead of starting a duplicate generation", async () => {
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+    mediaActivityMocks.listOperations.mockReturnValue([
       {
         taskId: "task-active",
         runtime: "cli",
@@ -86,7 +91,7 @@ describe("createVideoGenerateTool status actions", () => {
   });
 
   it("reports active task status when action=status is requested", async () => {
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+    mediaActivityMocks.listOperations.mockReturnValue([
       {
         taskId: "task-active",
         runtime: "cli",
@@ -137,7 +142,7 @@ describe("createVideoGenerateTool status actions", () => {
       progressSummary: "Generating video",
       nowMs: now - 20_000,
     });
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+    mediaActivityMocks.listOperations.mockReturnValue([
       {
         taskId: "task-recent-video",
         runtime: "cli",

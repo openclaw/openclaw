@@ -52,9 +52,9 @@ export function registerGatewayForcedRestartTests({
         : consumeGatewayRestartIntent
       ).mockReturnValueOnce({ force: true, ...(waitMs === undefined ? {} : { waitMs }) });
       createGatewayActiveWorkSnapshot.mockReturnValueOnce(
-        createActiveWorkSnapshot({ activeTasks: 1, embeddedRuns: 1 }, [
+        createActiveWorkSnapshot({ agentRuns: 1, embeddedRuns: 1 }, [
           {
-            kind: "task",
+            kind: "agent-run",
             count: 1,
             message: "taskId=task-force runId=run-force status=running runtime=cron label=forced",
           },
@@ -105,7 +105,7 @@ export function registerGatewayForcedRestartTests({
     "records cut work only when the forced caller drain budget expires (waitMs=$waitMs, refresh=$refreshMs, stalled close=$stallClose)",
     async ({ waitMs, refreshMs, stallClose }) => {
       const budget = waitMs ?? 45_000;
-      const active = createActiveWorkSnapshot({ activeTasks: 1, cronRuns: 1 });
+      const active = createActiveWorkSnapshot({ agentRuns: 1, cronRuns: 1 });
       const drain = createDeferredCore<{ drained: boolean; snapshot: GatewayActiveWorkSnapshot }>();
       let deadline: ReturnType<typeof setTimeout> | undefined;
       const nativeReply = { code: 0, stdout: "LoadState=loaded\nTimeoutStopUSec=330s", stderr: "" };
@@ -159,7 +159,7 @@ export function registerGatewayForcedRestartTests({
           await vi.advanceTimersByTimeAsync(budget > 0 ? 1 : 0);
           expect(abortActiveCronTaskRuns).toHaveBeenCalledWith("Gateway restarting.");
           expectRestartCloseCall(close, 0);
-          const warning = `restart drain budget ${budget - refreshMs}ms exhausted; cutting short cronRuns=1 activeTasks=1`;
+          const warning = `restart drain budget ${budget - refreshMs}ms exhausted; cutting short cronRuns=1 agentRuns=1`;
           expect(gatewayLog.warn).toHaveBeenCalledWith(warning);
           if (stallClose) {
             expect(start).toHaveBeenCalledOnce();

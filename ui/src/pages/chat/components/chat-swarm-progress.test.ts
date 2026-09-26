@@ -97,12 +97,7 @@ describe("chat Swarm progress", () => {
           failedOrStopped: "Falhou ou foi interrompida",
         },
       },
-      tasksPage: {
-        status: {
-          running: "Em execução",
-          completed: "Concluído",
-        },
-      },
+      common: { running: "Em execução", completed: "Concluído" },
     });
     await i18n.setLocale("pt-BR");
 

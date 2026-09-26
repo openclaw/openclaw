@@ -76,8 +76,6 @@ const TRAIN_2026_7_METHODS = [
   "skills.proposals.evaluate",
   "skills.proposals.events.list",
   "hooks.status",
-  "tasks.retry",
-  "tasks.dismiss",
 ] as const;
 
 const TRAIN_2026_8_METHODS = [

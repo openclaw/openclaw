@@ -50,7 +50,7 @@ This page is an index. Each section below moved to a child page, and every ancho
 
 - <a id="how-automations-work"></a>[How automations work](/automation/cron-jobs/how-it-works#how-automations-work)
 - <a id="isolated-run-hardening"></a>[Isolated run hardening](/automation/cron-jobs/how-it-works#isolated-run-hardening)
-- <a id="task-reconciliation"></a>[Task reconciliation](/automation/cron-jobs/how-it-works#task-reconciliation)
+- <a id="task-reconciliation"></a>[Run reconciliation](/automation/cron-jobs/how-it-works#task-reconciliation)
 - <a id="promoting-a-repeated-job-into-an-automation"></a>[Promoting a repeated job into an automation](/automation/cron-jobs/how-it-works#promoting-a-repeated-job-into-an-automation)
 
 ### Schedule and trigger sections
@@ -157,7 +157,6 @@ This page is an index. Each section below moved to a child page, and every ancho
 ## Related
 
 - [Automation](/automation) — all automation mechanisms at a glance
-- [Background Tasks](/automation/tasks) — task ledger for automation runs
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
 - [Standing intents](/concepts/standing-intents) — event-triggered work instead of a schedule
 - [Standing orders](/automation/standing-orders) — the operating authority a scheduled run acts under

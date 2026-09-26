@@ -210,8 +210,6 @@ const DecisionReceiptDisplayProvenanceV1Schema = Type.Union([
       Type.Literal("operator-approval"),
       Type.Literal("message-delivery"),
       Type.Literal("cron-lifecycle"),
-      Type.Literal("task-lifecycle"),
-      Type.Literal("flow-lifecycle"),
     ]),
   }),
   closedObject({ state: Type.Literal("unverified") }),

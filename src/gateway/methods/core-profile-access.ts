@@ -43,7 +43,6 @@ const PROFILE_DEPENDENT_CORE_PREFIXES = [
   "session.",
   "sessions.",
   "taskSuggestions.",
-  "tasks.",
   "terminal.",
   "transcripts.",
   "users.authConnect.",

@@ -15,7 +15,6 @@ export type RequestFixtures = {
   acquireGatewayLock: Mock<
     (opts?: { port?: number }) => Promise<{ release: Mock<() => Promise<void>> }>
   >;
-  reloadTaskRuntimeStateFromStore: Mock<() => Promise<void>>;
   runLoopWithStart: (params: {
     start: ReturnType<typeof createSignaledStart>["start"];
     runtime: ReturnType<typeof createRuntimeWithExitSignal>["runtime"];

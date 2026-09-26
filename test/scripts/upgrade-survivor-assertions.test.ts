@@ -367,7 +367,7 @@ describe("upgrade recovery result assertions", () => {
       }),
   );
 
-  it.each(["projects-doctor", "projects-startup-migration", "taskflow-restoration"])(
+  it.each(["projects-doctor", "projects-startup-migration"])(
     "validates published worker update results through the real assertion CLI (%s)",
     (scenario) =>
       withEnv({ OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario }, () => {

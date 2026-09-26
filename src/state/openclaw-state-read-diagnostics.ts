@@ -2,6 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { ExecutionDecisionCursorError } from "../audit/execution-decision-receipts.js";
 import { inspectExecutionIdentityRunInDatabase } from "../audit/execution-identity-context.js";
 import { readConfigSnapshotAuditRecordInDatabase } from "../config/config-journal-snapshot.kernel.js";
+import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type {
   OpenClawStateReadCommand,
   OpenClawStateReadReply,
@@ -28,7 +30,14 @@ export function readStateDiagnosticCommand(
       type: command.type,
       result: {
         status: "inspected",
-        inspection: inspectExecutionIdentityRunInDatabase(db, command.input),
+        inspection: runSqliteDeferredTransactionSync(db, () =>
+          inspectExecutionIdentityRunInDatabase(db, command.input, {
+            executionIdentityContexts: tableExists(db, "execution_identity_contexts"),
+            auditEvents: tableExists(db, "audit_events"),
+            cronRunReceipts: tableExists(db, "cron_run_receipts"),
+            executionOwnerLifecycleBindings: tableExists(db, "execution_owner_lifecycle_bindings"),
+          }),
+        ),
       },
     };
   } catch (error) {

@@ -31,8 +31,8 @@ describe("dispatch active command admission", () => {
     { source: "text", body: "/think high", commandName: "think" },
     { source: "text", body: "/help", commandName: "help" },
     { source: "native", body: "/help", commandName: "help" },
-    { source: "text", body: "/tasks", commandName: "tasks" },
-    { source: "native", body: "/tasks", commandName: "tasks" },
+    { source: "text", body: "/status", commandName: "status" },
+    { source: "native", body: "/status", commandName: "status" },
   ] as const)(
     "delivers authorized $source $body while its session operation is active",
     async ({ source, body, commandName }) => {

@@ -4,7 +4,10 @@ import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import { inspectQaExecutionIdentityStorage } from "./execution-identity-storage-inspection.js";
+import {
+  inspectQaExecutionIdentityStorage,
+  readNativeQaSubagentRuns,
+} from "./execution-identity-storage-inspection.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
 import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
@@ -43,6 +46,24 @@ describe("inspectQaExecutionIdentityStorage", () => {
           ('receipt-1', 'run-1', 'message', 'message_suppressed_inbound_metadata_echo'),
           ('receipt-2', 'run-1', 'model-routing', 'model_route_selected');
       `);
+      database.exec(
+        "CREATE TABLE subagent_runs (payload_json TEXT NOT NULL, requester_session_key TEXT NOT NULL, created_at INTEGER NOT NULL)",
+      );
+      for (const requesterSessionKey of ["parent", "other-parent"]) {
+        database.prepare("INSERT INTO subagent_runs VALUES (?, ?, ?)").run(
+          JSON.stringify({
+            runId: requesterSessionKey + "-run",
+            childSessionKey: "child",
+            requesterSessionKey,
+            label: "native-child",
+            execution: { status: "terminal", endedAt: 42, outcome: { status: "ok" } },
+            delivery: { status: "not_required", disposition: "intentional_non_delivery" },
+            task: "private fixture prompt must not be returned",
+          }),
+          requesterSessionKey,
+          1,
+        );
+      }
       database.close();
 
       const nativeCalls = [
@@ -73,6 +94,11 @@ describe("inspectQaExecutionIdentityStorage", () => {
             actions: [
               { set: "counts", value: { expr: "inspectQaExecutionIdentityStorage(env)" } },
               { assert: "counts.contextCount === 2 && counts.decisionCount === 2" },
+              { set: "runs", value: { expr: "readNativeQaSubagentRuns(env, 'parent')" } },
+              {
+                assert:
+                  "runs.length === 1 && runs[0].requesterSessionKey === 'parent' && runs[0].createdAt === 1 && runs[0].execution.outcome.status === 'ok' && runs[0].delivery.disposition === 'intentional_non_delivery' && !('task' in runs[0])",
+              },
             ],
           },
         ],
@@ -131,6 +157,9 @@ describe("inspectQaExecutionIdentityStorage", () => {
       await expect(
         inspectQaExecutionIdentityStorage({ gateway: createGateway(stateDir) }),
       ).resolves.toEqual({ contextCount: 0, decisionCount: 0 });
+      await expect(readNativeQaSubagentRuns({ gateway: createGateway(stateDir) })).resolves.toEqual(
+        [],
+      );
       const database = new DatabaseSync(databasePath, { readOnly: true });
       try {
         expect(

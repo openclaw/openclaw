@@ -57,8 +57,7 @@ across many turns:
 - A maintenance task: inspect current state, make bounded changes, run the
   right checks, and report what changed.
 
-A goal is not a task queue. Use [Task Flow](/automation/taskflow),
-[tasks](/automation/tasks), [cron jobs](/automation/cron-jobs), or
+A goal is not a task queue. Use [subagents](/tools/subagents), [cron jobs](/automation/cron-jobs), or
 [standing orders](/automation/standing-orders) when work should run detached,
 repeat on a schedule, fan out into managed sub-work, or persist as a policy.
 
@@ -326,5 +325,4 @@ and transcript-derived totals.
 - [TUI](/web/tui)
 - [Session tool](/concepts/session-tool)
 - [Compaction](/concepts/compaction)
-- [Task Flow](/automation/taskflow)
 - [Standing orders](/automation/standing-orders)

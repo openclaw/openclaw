@@ -9,15 +9,7 @@ import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { callGateway } from "../../../gateway/call.js";
 import { flushLogger, resetLogger } from "../../../logging/logger.js";
-import { revokePluginRecord } from "../../../plugins/registry-lifecycle.js";
-import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
-import { createPluginRecord } from "../../../plugins/status.test-helpers.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
-import type { DetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime-contract.js";
-import { resetDetachedTaskLifecycleRuntimeForTests } from "../../../tasks/detached-task-runtime.test-support.js";
-import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry.test-support.js";
-import { captureTaskDeliveryWork } from "../../../tasks/task-registry-delivery.test-support.js";
-import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
@@ -56,8 +48,7 @@ export const { persistSubagentRunsToDiskOrThrow } = await vi.importActual<typeof
 export function useSubagentControlFixture() {
   const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
   let stateDir = "";
-  let deliveries: ReturnType<typeof captureTaskDeliveryWork> | undefined;
-  const settle = () => settleSubagentRegistryPersistenceWork(deliveries);
+  const settle = () => settleSubagentRegistryPersistenceWork();
   const persist = vi.mocked(registryState.persistSubagentRunsToDiskOrThrow);
   const persistAsync = vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow);
   const gateway = vi.mocked(callGateway);
@@ -80,9 +71,6 @@ export function useSubagentControlFixture() {
     clearConfigCache();
     clearRuntimeConfigSnapshot();
     resetSubagentRegistryForTests({ persist: false });
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    deliveries = captureTaskDeliveryWork();
     gateway.mockReset().mockImplementation(async (request) => {
       if (request.method !== "agent.wait") {
         throw new Error(`Unexpected registry RPC ${request.method}`);
@@ -118,18 +106,13 @@ export function useSubagentControlFixture() {
     } catch (error) {
       failures.push(error);
     } finally {
-      deliveries?.[Symbol.dispose]();
-      deliveries = undefined;
       vi.restoreAllMocks();
     }
     // Preserve stores and their environment if detached writers have not settled.
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
         resetSubagentRegistryForTests({ persist: false });
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
         schedulerTesting.reset();
-        resetDetachedTaskLifecycleRuntimeForTests();
         await cleanupSessionStateForTest({ stateDir });
         for (const mock of [
           persist,
@@ -173,23 +156,5 @@ export function useSubagentControlFixture() {
     capture,
     wake,
     cleanup,
-    useTaskRuntime(runtime: DetachedTaskLifecycleRuntime) {
-      const registry = requireActivePluginRegistry();
-      const previous = [...registry.detachedTaskRuntimes];
-      const record = createPluginRecord({ id: "subagent-control-task-fixture" });
-      registry.plugins.push(record);
-      registry.detachedTaskRuntimes.splice(0, registry.detachedTaskRuntimes.length, {
-        pluginId: record.id,
-        runtime,
-      });
-      return () => {
-        registry.detachedTaskRuntimes.splice(0, registry.detachedTaskRuntimes.length, ...previous);
-        revokePluginRecord(registry, record);
-        const index = registry.plugins.indexOf(record);
-        if (index >= 0) {
-          registry.plugins.splice(index, 1);
-        }
-      };
-    },
   };
 }

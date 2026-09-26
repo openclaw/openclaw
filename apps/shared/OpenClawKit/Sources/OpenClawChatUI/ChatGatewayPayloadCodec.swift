@@ -270,9 +270,6 @@ public enum OpenClawChatGatewayPayloadCodec {
     private static func secondaryEvent(from frame: EventFrame) -> OpenClawChatTransportEvent? {
         guard let payload = frame.payload else { return nil }
         switch frame.event {
-        case "task":
-            return (try? GatewayPayloadDecoding.decode(payload, as: OpenClawChatTaskEvent.self))
-                .map(OpenClawChatTransportEvent.task)
         case "question.requested":
             return (try? GatewayPayloadDecoding.decode(payload, as: QuestionRecord.self))
                 .map(OpenClawChatTransportEvent.questionRequested)

@@ -60,7 +60,6 @@ const unitFastCandidatePatterns = prepareGlobPatterns(
     "src/sessions/**/*.test.ts",
     "src/shared/**/*.test.ts",
     "src/test-utils/**/*.test.ts",
-    "src/tasks/**/*.test.ts",
     "src/tts/**/*.test.ts",
     "src/utils/**/*.test.ts",
     "src/video-generation/**/*.test.ts",

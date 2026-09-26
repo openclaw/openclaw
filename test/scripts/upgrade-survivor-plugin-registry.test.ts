@@ -380,7 +380,7 @@ on_exit 0
     expect(existsSync(packageTarball)).toBe(true);
   });
 
-  it.each(["projects-doctor", "taskflow-restoration"])(
+  it.each(["projects-doctor"])(
     "isolates each %s run from retained evidence and preserves a failed runtime",
     (scenario) => {
       const artifacts = tempDirs.make("worker-cell-retained-artifacts-");
@@ -442,7 +442,7 @@ on_exit 0
   it("fails and retains state when container-owned cleanup fails", () => {
     const { captureDir, result } = runSurvivor({
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.9.4",
-      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "taskflow-restoration",
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "projects-doctor",
       FIXTURE_CLEANUP_EXIT: "43",
     });
     expect(result.status, result.stderr).toBe(1);
@@ -550,7 +550,6 @@ run_live_models
       "mobile-pairing-reconnect",
       "projects-doctor",
       "projects-startup-migration",
-      "taskflow-restoration",
       "dreaming-cron-doctor",
     ].map((scenario) => ({ scenario, liveEnv: {}, expectedModels: [] })),
   ])(

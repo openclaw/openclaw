@@ -18,9 +18,8 @@ import {
   refreshWorkboard,
   resetDraftState,
   resumeWorkboardLiveRefresh,
-  stopWorkboardLifecycleRefresh,
+  resetWorkboardConnectionState,
   stopWorkboardLiveRefresh,
-  syncWorkboardLifecycle,
   type WorkboardCard,
   type WorkboardUiState,
   WORKBOARD_CHANGED_EVENT,
@@ -92,7 +91,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
       }
       refreshActive = false;
       stopWorkboardLiveRefresh(workboard);
-      stopWorkboardLifecycleRefresh(workboard);
+      resetWorkboardConnectionState(workboard);
     };
     const refreshMetadata = () => {
       if (disposed || !connected) {
@@ -186,9 +185,6 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
           force,
           refreshDiagnostics: host.connection.canWrite,
         });
-        if (!state.dispatching) {
-          void syncWorkboardLifecycle({ host: workboard, client, requestUpdate });
-        }
         resumeWorkboardLiveRefresh(workboard);
       } else {
         stop();

@@ -1,10 +1,9 @@
-import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   captureAgentHarnessCompletionCustody,
-  createAgentHarnessTaskEventSink,
-  createAgentHarnessTaskRuntime,
-  deliverAgentHarnessTaskCompletion,
-} from "openclaw/plugin-sdk/agent-harness-task-runtime";
+  createAgentHarnessCompletionEventSink,
+  deliverAgentHarnessCompletion,
+} from "openclaw/plugin-sdk/agent-harness-completion";
+import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { interruptCodexTurnAndWaitBestEffort } from "./attempt-client-cleanup.js";
 import {
@@ -43,10 +42,9 @@ type NativeMonitorConstructor = new (
 ) => NativeMonitor;
 
 export const defaultNativeSubagentMonitorRuntime: NativeSubagentMonitorRuntime = {
+  deliverAgentHarnessCompletion,
   captureAgentHarnessCompletionCustody,
-  createAgentHarnessTaskEventSink,
-  createAgentHarnessTaskRuntime,
-  deliverAgentHarnessTaskCompletion,
+  createAgentHarnessCompletionEventSink,
 };
 
 export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorConstructor>(

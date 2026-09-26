@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Run OpenClaw embedded agent turns through the official Codex app-server harness"
 title: "Codex harness"
 read_when:
@@ -398,18 +399,11 @@ its tool row records **Outcome unknown** and explains that the process is still
 running. This is not command success or failure. Collect the retained handle
 with the native process-wait tool to obtain its output and exit code. The
 continuation records that result without rewriting the earlier turn's snapshot.
+Confirmed background commands keep their native thread subscribed until their
+matching completion or source closure, including when the sandbox exec-server
+is disabled. Idle conversation eviction does not interrupt that work.
 The existing unknown-outcome audit diagnostic remains; cancellation and a
 command with no confirmed live owner retain their failure handling.
-
-These retained commands also appear in **Tasks**, where you can follow completion
-or stop an individual command. The task follows the native process after the
-foreground turn ends; its final status does not rewrite the earlier tool row.
-A known nonzero exit reports **Command failed**, even if a Stop request races
-with completion. A confirmed Stop with no native exit result reports **Command
-stopped**; this records the acknowledged request without attributing the exit to
-a particular signal. Task updates do not automatically start another model
-turn. If the native connection is lost before completion is confirmed, the task
-reports an unknown outcome instead of success.
 
 Stopping an active Codex run interrupts its turn. With the OpenClaw sandbox
 exec-server, cleanup stops the concrete processes admitted by that turn and
@@ -473,26 +467,36 @@ Proxy launch arguments are rejected to avoid changing a shared daemon's login.
 
 ## Native subagent status
 
-Native Codex subagents appear under their parent in OpenClaw's task view.
-Their current execution, task result, and result delivery are separate facts.
+Native Codex subagents use Codex's execution and collaboration controls, not
+OpenClaw's retired Tasks view. Their current execution, assignment result, and
+result delivery remain separate facts.
 An approval or input request shows what needs attention. A native mailbox wait
 shows that the agent is waiting for messages; it does not invent a list of child
 dependencies. Idle, interrupted, or unloaded native threads do not prove that
 the delegated task succeeded. A resumed native turn clears the previous turn's
-current tool activity while retaining the task identity.
+current tool activity while retaining the native assignment identity.
 
-Follow-up work after a native child has finished creates a separate task run on
-the same Codex thread. Earlier results and their delivery status remain intact.
-Each task's transcript links to the full native child conversation, including later follow-ups.
-Interrupted work keeps its task identity when the native turn resumes.
+Follow-up work after a native child has finished creates a separate assignment
+on the same Codex thread. Earlier results and their delivery status remain intact.
+The native thread retains its conversation; there is no shared Tasks transcript
+viewer. Interrupted work keeps its assignment identity when the native turn resumes.
 If a recovered turn's end is still unknown, OpenClaw waits for native history or
-an end event before deciding whether later work resumes that task or starts a new one.
-Older tasks without enough native turn information remain unresolved instead of
-borrowing another turn's result.
+an end event before deciding whether later work resumes that assignment or starts
+a new one. Older assignments without enough native turn information remain
+unresolved instead of borrowing another turn's result.
+
+Pending native assignments retain their run, child-thread, native-parent, and
+known native-turn identities in metadata on the existing parent binding. This
+adds no SQL table and does not migrate old Tasks rows. On parent registration,
+OpenClaw can restore observation from those saved identities and native history
+only under fresh completion authority for the same requester session, lifecycle,
+and connection. Native-parent thread rotation can preserve those assignments;
+resetting the requester or changing the connection does not adopt them. Missing
+assignment metadata is not reconstructed from retired Tasks history.
 
 For Codex V1 follow-ups, OpenClaw retains a successful submission receipt with
-the parent binding until it records the matching native turn as a task. This
-allows recovery when the parent yields or the Gateway restarts before observing
+the parent binding until it records the matching native turn as an assignment.
+This allows recovery when the parent yields or the Gateway restarts before observing
 the child turn. A receipt alone does not keep an idle native connection alive.
 Observation follows the existing warm-thread lifetime; an unmatched receipt
 remains available for later recovery. Resetting the parent or replacing its native connection
@@ -503,18 +507,21 @@ when updating it.
 Closing a native child applies to the assignment selected when the close starts.
 OpenClaw waits for Codex to confirm that the child's runtime is absent before
 marking unfinished work canceled; a delayed close cannot cancel a later assignment.
-If confirmation is unavailable, the task asks you to retry the close request.
+If confirmation is unavailable, the close remains unresolved; retry the close
+request rather than treating it as successful cancellation.
 Native result receipts do not identify the child's turn. If an earlier result
 is still being recovered or repeated identical results make a receipt ambiguous,
 OpenClaw preserves the later pending delivery instead of risking a lost result;
 this can cause an additional continuation.
 
 Codex owns native subagent execution and controls. Follow up through the parent
-session, which can use Codex's native collaboration tools. OpenClaw's task view
-observes those children and delivers results after a parent yields. The native
-foreground parent already receives completion messages, so OpenClaw does not
+session, which can use Codex's native collaboration tools. For an admitted native
+assignment, OpenClaw's harness observes the child and routes results after the
+parent yields. The native foreground parent already receives completion messages, so OpenClaw does not
 send another continuation for a result it has consumed. Explicit OpenClaw or ACP
-delegation continues to use `sessions_spawn`.
+delegation continues to use `sessions_spawn`. Stored submission and result
+receipts are recovery evidence, not permission to adopt a child or deliver to a
+replacement parent.
 
 For native Codex V1 agents, a completed `wait` result also records delivery to
 the foreground parent. OpenClaw does not start another continuation for that

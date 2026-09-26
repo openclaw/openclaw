@@ -1,5 +1,5 @@
 ---
-summary: "What survives a gateway restart or crash: interrupted agent turns resume automatically, subagents and background tasks recover, queued deliveries drain"
+summary: "What survives a gateway restart or crash: eligible interrupted turns resume, native subagents settle, and queued deliveries drain"
 read_when:
   - You want to know whether restarting the gateway loses in-progress agent work
   - An agent run was interrupted by a restart, crash, or config reload
@@ -7,7 +7,7 @@ read_when:
 title: "Restart recovery"
 ---
 
-Conversations, transcripts, scheduled jobs, background task records, and queued
+Conversations, transcripts, scheduled jobs, native subagent records, and queued
 outbound messages live on disk. After a gateway restart, eligible work interrupted
 mid-turn is detected and resumed automatically. Recovery is always on and
 normally needs no manual intervention. Exhausted infrastructure retries, or a
@@ -25,7 +25,6 @@ and what the automatic resume looks like.
 | Accepted Control UI follow-ups | Per-agent SQLite pending inputs and browser outbox | Matching interrupted inputs are re-admitted when the browser reconnects |
 | Interrupted main-session turn  | Per-agent SQLite session row and transcript        | Automatically resumed or reconciled a few seconds after startup         |
 | Subagent runs                  | SQLite (shared state database)                     | Interrupted runs settle; the parent decides how to continue             |
-| Background tasks               | SQLite (shared state database)                     | Reconciled on boot; orphaned runs recovered or marked lost              |
 | Queued outbound deliveries     | SQLite delivery queue                              | Drained after restart; undelivered replies are retried                  |
 | Scheduled (cron) jobs          | SQLite cron store                                  | Schedules persist; the scheduler re-arms on boot                        |
 | Restart continuation           | SQLite restart sentinel                            | One-shot follow-up dispatched to the session that asked for the restart |
@@ -75,17 +74,34 @@ path: update its artifact alongside the Gateway. An intentionally pinned older
 plugin does not acquire the fix from a core-only update.
 
 A detached harness completion that has entered a parent turn with an outbound
-channel route can retain an exact task, terminal outcome, and requester-session claim. After a crash, main-session recovery
+channel route can retain an exact source completion, terminal outcome, and requester-session claim. After a crash, main-session recovery
 continues that admitted turn without starting the child again. The original
 completion identity remains distinct from the recovery run. A retained final
-receipt settles the task even if the old native monitor no longer exists; a
-pending recovery claim is not a delivered result. A later task outcome cannot authorize
+receipt settles the admitted completion even if the old native monitor no longer exists; a
+pending recovery claim is not a delivered result. A later outcome cannot authorize
 the earlier completion input or settle its receipt. Cancellation, session replacement,
-and missing or contradictory task identities do not authorize replay. A real held admission or a still-valid admitted input keeps recovery pending. Rejected input retains the task but releases the process monitor; it does not poll indefinitely. Native parent rotation must preserve the current connection and requester identity checks. Cold task reconstruction requires the saved native history owner. A later parent registration cannot supply missing historical ownership.
+and missing or contradictory source identities do not authorize replay. A held admission
+or still-valid admitted input keeps recovery pending. Native parent rotation must preserve
+the current connection and requester identity checks. A later parent registration cannot
+supply missing historical ownership.
 
-This applies to newly recorded channel-delivery claims. Route-less, transcript-only
-and Control UI parents are not covered by this recovery change. Nor does it recover
-every older native completion or a completion that never reached parent admission. Progress messages, empty or
+Before parent completion admission, native Codex pending assignments retain their
+run, child-thread, native-parent, and known native-turn identities in the existing
+parent binding metadata. Accepted follow-ups can also retain their submission
+receipt there. No new table or Tasks record is created, and historical Tasks
+rows are not imported. When the parent registers again, recovery reads the saved
+assignments and native history under fresh host-issued completion authority. It
+checks the original requester session, lifecycle, connection, and child lineage
+before restoring observation or routing a result. Native-parent thread rotation
+can preserve that metadata within the same requester lifecycle and connection;
+a reset, requester-generation replacement, or connection-policy change does not
+authorize adoption. Missing historical ownership stays unknown. This recovery
+requires a retained assignment and a new parent registration; native lineage
+alone does not reconstruct an unrecorded completion obligation.
+
+The admitted-turn recovery described above applies to newly recorded
+channel-delivery claims, not route-less, transcript-only, or Control UI parents.
+It does not recover every older native completion. Progress messages, empty or
 truncated receipts, and uncertain sends cannot establish final delivery. The
 Gateway and Codex plugin must both be updated for recovery joining. Older builds
 may discard the added receipt fields while rewriting session metadata, even
@@ -636,20 +652,13 @@ follow-up is waiting to retry or is interrupted by restart, the saved
 obligation survives and resumes after startup. Restart admission rejection
 does not consume an attempt, and cancellation of an admitted attempt does
 not exhaust the obligation. Existing delivery retry limits still apply.
-Settling a yielded turn's wake leaves its unfinished task and final delivery
-intact. A completed cancellation can also finish wake bookkeeping after its
-task record expires, without recreating the task or repeating cleanup.
+Settling a yielded turn's wake leaves its unfinished native run and final delivery
+intact. Completed cancellation keeps its wake and cleanup bookkeeping in the
+native subagent record; it does not require a separate Tasks row.
 Recovery reconciles an expired cancellation's retained marker before retrying
 its requester wake, preserving the original cleanup record. Live child cancellation
 can wake a waiting requester while normal cleanup reconciliation completes.
 A delayed cancellation callback cannot reopen completed cleanup.
-
-### Background tasks
-
-The [background task registry](/automation/tasks) is SQLite-backed and
-reconciled on boot and on a periodic interval: durable outcomes recorded by
-finished runs are recovered, and runs whose owning process disappeared are
-marked lost after a grace period instead of hanging forever.
 
 ### Agent-requested restarts
 

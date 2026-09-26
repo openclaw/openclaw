@@ -1,11 +1,11 @@
-// Storage-neutral session registry maintenance for task-owned cron run cleanup.
+// Storage-neutral session registry maintenance for cron run cleanup.
 import fs from "node:fs";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   applySessionEntryLifecycleMutation,
-  listSessionEntriesCore,
   type SessionEntryLifecycleRemoval,
 } from "./session-accessor.js";
+import { withSessionRegistryEntriesInWorker } from "./session-entry-read-runtime.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { collectActiveSessionWorkAdmissionKeys } from "./store-maintenance-preserve.js";
 import { pruneStaleEntries } from "./store-maintenance.js";
@@ -26,6 +26,7 @@ type SessionRegistryMaintenanceStoreOptions = SessionStoreTarget & {
   retentionMs: number;
   /** Currently running cron job ids, normalized to lowercase. */
   runningCronJobIds: ReadonlySet<string>;
+  assertCurrent?: () => void;
 };
 
 function parseCronRunSessionJobId(sessionKey: string): string | undefined {
@@ -95,13 +96,14 @@ function pruneSessionRegistryStore(params: {
 }
 
 /**
- * Runs task session-registry maintenance for one resolved agent store.
+ * Runs session-registry maintenance for one resolved agent store.
  * Preview prunes a clone; apply uses one store-sized write transaction and
  * skips generic session maintenance so non-cron rows stay outside this sweep.
  */
 export async function runSessionRegistryMaintenanceForStore(
   params: SessionRegistryMaintenanceStoreOptions,
 ): Promise<SessionRegistryMaintenanceStoreSummary> {
+  params.assertCurrent?.();
   const { agentId, storePath } = params;
   const sqliteTarget = resolveSqliteTargetFromSessionStorePath(storePath, { agentId });
   if (sqliteTarget.path && !fs.existsSync(sqliteTarget.path)) {
@@ -112,51 +114,60 @@ export async function runSessionRegistryMaintenanceForStore(
       pruned: 0,
     };
   }
-  const beforeStore = Object.fromEntries(
-    listSessionEntriesCore({ agentId, storePath }).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
-  );
-  const beforeCount = Object.keys(beforeStore).length;
-  if (!params.apply) {
-    const previewStore = structuredClone(beforeStore);
-    return {
-      beforeCount,
-      ...pruneSessionRegistryStore({
+  return await withSessionRegistryEntriesInWorker(
+    { agentId, storePath },
+    async (entries, assertReaderCurrent) => {
+      const assertCurrent = () => {
+        params.assertCurrent?.();
+        assertReaderCurrent();
+      };
+      assertCurrent();
+      const beforeStore = Object.fromEntries(
+        entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+      );
+      const beforeCount = Object.keys(beforeStore).length;
+      if (!params.apply) {
+        const previewStore = structuredClone(beforeStore);
+        return {
+          beforeCount,
+          ...pruneSessionRegistryStore({
+            retentionMs: params.retentionMs,
+            runningCronJobIds: params.runningCronJobIds,
+            storePath,
+            store: previewStore,
+          }),
+        };
+      }
+
+      const applyStore = structuredClone(beforeStore);
+      const removals: SessionEntryLifecycleRemoval[] = [];
+      const applied = pruneSessionRegistryStore({
         retentionMs: params.retentionMs,
+        removals,
         runningCronJobIds: params.runningCronJobIds,
         storePath,
-        store: previewStore,
-      }),
-    };
-  }
-
-  const applyStore = structuredClone(beforeStore);
-  const removals: SessionEntryLifecycleRemoval[] = [];
-  const applied = pruneSessionRegistryStore({
-    retentionMs: params.retentionMs,
-    removals,
-    runningCronJobIds: params.runningCronJobIds,
-    storePath,
-    store: applyStore,
-  });
-  if (removals.length > 0) {
-    const mutation = await applySessionEntryLifecycleMutation({
-      agentId,
-      storePath,
-      removals,
-      skipMaintenance: true,
-    });
-    return {
-      afterCount: mutation.afterCount,
-      beforeCount,
-      preservedRunning: applied.preservedRunning,
-      pruned: mutation.removedEntries,
-    };
-  }
-  return {
-    beforeCount,
-    ...applied,
-  };
+        store: applyStore,
+      });
+      if (removals.length > 0) {
+        const mutation = await applySessionEntryLifecycleMutation({
+          agentId,
+          storePath,
+          removals,
+          skipMaintenance: true,
+          beforeCommitInTransaction: assertCurrent,
+        });
+        assertCurrent();
+        return {
+          afterCount: mutation.afterCount,
+          beforeCount,
+          preservedRunning: applied.preservedRunning,
+          pruned: mutation.removedEntries,
+        };
+      }
+      return {
+        beforeCount,
+        ...applied,
+      };
+    },
+  );
 }

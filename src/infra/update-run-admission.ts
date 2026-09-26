@@ -26,6 +26,8 @@ export function runUpdateRunAdmission<T>(
   // Admission precedes managed shutdown. An older serving Gateway must not
   // force diagnostic writes through this candidate's runtime migrations.
   // Once a file exists, failures remain failures; never retry via bootstrap.
+  // Pre-v19 orphan recovery must remain here: schema-19 table retirement waits
+  // for managed shutdown and cannot run just to open the old driver's ledger.
   const inspection = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db, path }) => {
     try {
       assertSqliteIntegrity(db, path);

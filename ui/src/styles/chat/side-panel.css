@@ -319,8 +319,6 @@ openclaw-chat-detail-panel,
   > :is(
     .chat,
     .chat-workspace-rail,
-    .chat-tasks-rail,
-    .chat-task-detail,
     openclaw-chat-session-rail,
     openclaw-session-discussion,
     openclaw-terminal-panel,

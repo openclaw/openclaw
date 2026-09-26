@@ -27,8 +27,6 @@ import {
 } from "../sessions/input-provenance.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
-import { installInMemoryTaskRegistryRuntime } from "../test-utils/task-registry-runtime.js";
 import {
   waitForChatAbortControllerRemoval,
   waitForChatAbortTerminalPersistence,
@@ -36,8 +34,6 @@ import {
 import { abortChatRunById, removeChatAbortControllerEntry } from "./chat-abort.js";
 import type { AgentEventHandlerOptions } from "./server-chat.js";
 import { registerActivitySummaryPublicationTests } from "./server-runtime-subscriptions.activity-summary.test-support.js";
-import { registerTaskEventSubscriptionTests } from "./server-runtime-subscriptions.task-events.test-support.js";
-import { registerTaskSubscriptionOwnershipTests } from "./server-runtime-subscriptions.task-ownership.test-support.js";
 import {
   createSubscriptionTestFixture,
   lifecycleState,
@@ -54,7 +50,7 @@ function waitForFast<T>(
   return vi.waitFor(callback, { interval: 1, ...options });
 }
 
-const { log: mockLog, warn, createParams } = createSubscriptionTestFixture();
+const { warn, createParams } = createSubscriptionTestFixture();
 
 const auditTestState = vi.hoisted(() => ({
   created: 0,
@@ -199,7 +195,6 @@ describe("startGatewayEventSubscriptions", () => {
     agentEventHandlerMocks.create.mockReset().mockImplementation(() => {
       throw new Error("server-chat lazy load failure");
     });
-    installInMemoryTaskRegistryRuntime();
   });
 
   afterEach(async () => {
@@ -208,18 +203,9 @@ describe("startGatewayEventSubscriptions", () => {
     unsubs?.heartbeatUnsub();
     unsubs?.transcriptUnsub();
     unsubs?.lifecycleUnsub();
-    await unsubs?.taskUnsub();
     resetAgentEventsForTest();
-    resetTaskRegistryForTests({ persist: false });
     configureExecutionIdentityAdmissionSink(() => false)();
   });
-
-  registerTaskSubscriptionOwnershipTests(
-    (broadcast, terminalSessions = { closeTaskSessions: vi.fn(() => 1) }) => {
-      unsubs = startGatewayEventSubscriptions({ ...createParams(), broadcast, terminalSessions });
-      return { taskUnsub: unsubs.taskUnsub, closeTaskSessions: terminalSessions.closeTaskSessions };
-    },
-  );
 
   it.each([
     "same-id reset",
@@ -915,9 +901,4 @@ describe("startGatewayEventSubscriptions", () => {
       expect.objectContaining({ sessionKey: "agent:main:main" }),
     );
   });
-
-  registerTaskEventSubscriptionTests((overrides) => {
-    unsubs = startGatewayEventSubscriptions({ ...createParams(), ...overrides });
-    return unsubs;
-  }, mockLog);
 });

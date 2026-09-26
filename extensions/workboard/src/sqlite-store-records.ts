@@ -533,7 +533,6 @@ export function readCard(db: DatabaseSync, row: Row, preloaded?: CardChildRows):
     ...(stringValue(row, "agent_id") ? { agentId: stringValue(row, "agent_id") } : {}),
     ...(stringValue(row, "session_key") ? { sessionKey: stringValue(row, "session_key") } : {}),
     ...(stringValue(row, "run_id") ? { runId: stringValue(row, "run_id") } : {}),
-    ...(stringValue(row, "task_id") ? { taskId: stringValue(row, "task_id") } : {}),
     ...(stringValue(row, "source_url") ? { sourceUrl: stringValue(row, "source_url") } : {}),
     ...(execution ? { execution } : {}),
     ...(numberValue(row, "started_at") !== undefined

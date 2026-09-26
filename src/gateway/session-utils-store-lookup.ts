@@ -493,7 +493,7 @@ export function createGatewaySessionEntryReader(params: {
 }
 
 /** Resolve one synchronous set of logical metadata targets using exact grouped reads. */
-export function resolveGatewaySessionStoreTargetsReadOnly(params: {
+function resolveGatewaySessionStoreTargetsReadOnly(params: {
   env?: NodeJS.ProcessEnv;
   cfg: OpenClawConfig;
   targets: readonly { key: string; agentId?: string }[];

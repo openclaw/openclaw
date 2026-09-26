@@ -133,6 +133,9 @@ type SqliteForeignKeyViolation = {
 
 const MAX_REPORTED_FOREIGN_KEY_VIOLATIONS = 5;
 
+// Released pre-v19 databases can reach updater-ledger admission with this exact
+// orphan relation. Keep classification separate from permission: only the
+// update admission or fenced v19 migration owner may accept this typed refusal.
 export class SqliteRepairableForeignKeyError extends Error {
   readonly repair: Readonly<{
     kind: "task-delivery-orphans";
@@ -143,7 +146,7 @@ export class SqliteRepairableForeignKeyError extends Error {
 
   constructor(databaseLabel: string, orphanCount: number) {
     super(
-      `SQLite foreign_key_check failed for ${databaseLabel}: repairable task_delivery_state.task_id references task_runs.task_id cascade-owned orphans (${orphanCount} rows). Run openclaw doctor --fix to preserve and repair these rows before retrying.`,
+      `SQLite foreign_key_check failed for ${databaseLabel}: repairable task_delivery_state.task_id references task_runs.task_id cascade-owned orphans (${orphanCount} rows). Run openclaw doctor --fix to migrate this legacy state before retrying.`,
     );
     this.name = "SqliteRepairableForeignKeyError";
     this.repair = {

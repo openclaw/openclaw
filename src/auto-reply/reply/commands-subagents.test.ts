@@ -19,9 +19,6 @@ import {
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { failTaskRunByRunIdCore } from "../../tasks/task-executor.js";
-import { createTaskRecord } from "../../tasks/task-registry.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import type { ReplyPayload } from "../types.js";
 import { buildSubagentsStatusLine } from "./commands-status-subagents.js";
 import { extractSubagentMessageText } from "./commands-subagents-text.js";
@@ -29,11 +26,7 @@ import { handleSubagentsCommand } from "./commands-subagents.js";
 import { handleSubagentsInfoAction } from "./commands-subagents/action-info.js";
 import { handleSubagentsListAction } from "./commands-subagents/action-list.js";
 import { handleSubagentsLogAction } from "./commands-subagents/action-log.js";
-import {
-  baseCommandTestConfig,
-  buildCommandTestParams,
-  configureInMemoryTaskRegistryStoreForTests,
-} from "./commands.test-harness.js";
+import { baseCommandTestConfig, buildCommandTestParams } from "./commands.test-harness.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 
@@ -109,6 +102,7 @@ describe("subagents status", () => {
           requesterSessionKey: "agent:main:main",
           requesterDisplayKey: "main",
           task: "do thing",
+          completion: { required: true, resultText: "Completed the requested task" },
           cleanup: "keep",
           createdAt: 1000,
           startedAt: 1000,
@@ -348,8 +342,6 @@ describe("subagents command snapshots", () => {
 describe("subagents global-session inspection", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    resetTaskRegistryForTests({ persist: false });
-    configureInMemoryTaskRegistryStoreForTests();
     callGatewayMock.mockReset().mockResolvedValue({ messages: [] });
     for (const agentId of ["research", "ops"]) {
       addSubagentRunForTests({
@@ -426,8 +418,6 @@ describe("subagents info", () => {
   }
 
   beforeEach(() => {
-    resetTaskRegistryForTests({ persist: false });
-    configureInMemoryTaskRegistryStoreForTests();
     resetSubagentRegistryForTests();
   });
 
@@ -451,6 +441,7 @@ describe("subagents info", () => {
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "do thing",
+      completion: { required: true, resultText: "Completed the requested task" },
       cleanup: "keep",
       createdAt: now - 20_000,
       execution: {
@@ -468,17 +459,6 @@ describe("subagents info", () => {
         discardReason: "task-missing",
         discardedAt: now,
       };
-    } else {
-      createTaskRecord({
-        runtime: "subagent",
-        requesterSessionKey: "agent:main:main",
-        childSessionKey,
-        runId,
-        task: "do thing",
-        status: "succeeded",
-        terminalSummary: "Completed the requested task",
-        deliveryStatus: "delivered",
-      });
     }
     const cfg = buildCommandTestConfig();
     const result = handleSubagentsInfoAction(
@@ -489,13 +469,12 @@ describe("subagents info", () => {
     expect(text).toContain("Subagent info");
     expect(text).toContain(`Run: ${runId}`);
     expect(text).toContain("Status: done");
+    expect(text).toContain("Outcome: ok");
+    expect(text).toContain("Progress: Completed the requested task");
     if (taskMissing) {
       expect(text).toContain("Delivery: discarded");
       expect(text).toContain("Delivery disposition: task-missing");
       expect(text).toContain(`Delivery retired: ${new Date(now).toISOString()}`);
-    } else {
-      expect(text).toContain("TaskStatus: succeeded");
-      expect(text).toContain("Task summary: Completed the requested task");
     }
   });
 
@@ -651,6 +630,7 @@ describe("subagents info", () => {
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "Inspect the stuck run",
+      delivery: { status: "suspended", lastError: "Needs manual follow-up." },
       cleanup: "keep",
       createdAt: now - 20_000,
       execution: {
@@ -670,27 +650,6 @@ describe("subagents info", () => {
       },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
-    createTaskRecord({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      childSessionKey,
-      runId,
-      task: "Inspect the stuck run",
-      status: "running",
-      deliveryStatus: "delivered",
-    });
-    failTaskRunByRunIdCore({
-      runId,
-      endedAt: now - 1_000,
-      error: [
-        "OpenClaw runtime context (internal):",
-        "This context is runtime-generated, not user-authored. Keep internal details private.",
-        "",
-        "[Internal task completion event]",
-        "source: subagent",
-      ].join("\n"),
-      terminalSummary: "Needs manual follow-up.",
-    });
     const cfg = buildCommandTestConfig();
     const result = handleSubagentsInfoAction(
       buildInfoContext({ cfg, runs: [run], restTokens: ["1"] }),
@@ -705,7 +664,7 @@ describe("subagents info", () => {
     expect(text).not.toContain("Internal task completion event");
   });
 
-  it("uses the requester key for task ownership lookup", () => {
+  it("shows the selected routed requester completion", () => {
     const now = Date.now();
     const runId = "commands-subagents-info-routed-run";
     const childSessionKey = "agent:main:subagent:commands-info-routed";
@@ -715,6 +674,7 @@ describe("subagents info", () => {
       requesterSessionKey: "agent:main:target",
       requesterDisplayKey: "target",
       task: "do routed thing",
+      completion: { required: true, resultText: "Resolved via routed owner key" },
       cleanup: "keep",
       createdAt: now - 20_000,
       execution: {
@@ -725,16 +685,6 @@ describe("subagents info", () => {
       },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
-    createTaskRecord({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:target",
-      childSessionKey,
-      runId,
-      task: "do routed thing",
-      status: "succeeded",
-      terminalSummary: "Resolved via routed owner key",
-      deliveryStatus: "delivered",
-    });
     const cfg = {
       commands: { text: true },
       channels: { quietchat: { allowFrom: ["*"] } },
@@ -752,8 +702,8 @@ describe("subagents info", () => {
     const text = requireReplyText(result.reply);
 
     expect(result.shouldContinue).toBe(false);
-    expect(text).toContain("TaskStatus: succeeded");
-    expect(text).toContain("Task summary: Resolved via routed owner key");
+    expect(text).toContain("Outcome: ok");
+    expect(text).toContain("Progress: Resolved via routed owner key");
   });
 });
 

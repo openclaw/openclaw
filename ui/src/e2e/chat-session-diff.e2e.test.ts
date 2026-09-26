@@ -214,10 +214,10 @@ suite.define(() => {
     await waitForSessionDiff(page);
     await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(1);
 
-    await openChatSidePanelType(page, "Tasks");
+    await openChatSidePanelType(page, "Side chat");
     await expect
       .poll(() => page.locator(".tabstrip-tab__label").allTextContents())
-      .toContain("Tasks");
+      .toContain("Side chat");
     await page.evaluate(
       () =>
         new Promise<void>((resolve) => {

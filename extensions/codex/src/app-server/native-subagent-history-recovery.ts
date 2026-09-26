@@ -1,23 +1,15 @@
-import { isDeepStrictEqual } from "node:util";
-import {
-  matchesAgentHarnessTaskAssignment,
-  type AgentHarnessTaskRecord,
-} from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import {
   asFiniteNumber,
   normalizeOptionalString,
   readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  assertHistoryOwnerMatchesRegistration,
-  type CodexNativeSubagentHistoryOwner,
-  matchesCodexNativeSubagentHistoryOwner,
-  readCodexNativeSubagentHistoryOwner,
-} from "./native-subagent-history-owner.js";
+  normalizeIdentifier,
+  readThreadParentThreadId,
+  readThreadSpawnSource,
+  type NativeSubagentAssignment,
+} from "./native-subagent-assignment.js";
 import type {
-  ChildState,
-  ParentState,
-  TaskRecoveryCandidate,
   NativeSubagentMonitorClient,
   NativeTurnEnd,
   NativeTurnObservation,
@@ -26,13 +18,6 @@ import type {
   ThreadRecovery,
 } from "./native-subagent-monitor-types.js";
 import type { CodexNativeSubagentCompletion } from "./native-subagent-notification.js";
-import {
-  normalizeIdentifier,
-  readNativeTaskAssignment,
-  readThreadParentThreadId,
-  readThreadSpawnSource,
-  type NativeSubagentAssignment,
-} from "./native-subagent-task-ids.js";
 import type { JsonObject } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
@@ -49,277 +34,12 @@ type NativeSubagentHistoryQueries = {
 };
 
 const THREAD_READ_TIMEOUT_MS = 30_000;
-const RECENT_TERMINAL_TASK_RECONCILE_GRACE_MS = 60_000;
 
 export class CodexNativeSubagentHistoryRecovery {
-  private readonly recoveredParentSources = new Map<ParentState, Set<ParentState>>();
-
   constructor(
     private readonly client: Pick<NativeSubagentMonitorClient, "request">,
     private readonly queries: NativeSubagentHistoryQueries,
   ) {}
-
-  retainRecoveryParents(recovered: Iterable<ParentState | undefined>, source: ParentState): void {
-    for (const parent of recovered) {
-      if (!parent || parent === source) {
-        continue;
-      }
-      const sources = this.recoveredParentSources.get(parent) ?? new Set<ParentState>();
-      sources.add(source);
-      this.recoveredParentSources.set(parent, sources);
-    }
-  }
-
-  forgetRecoveredParent(state: ParentState): void {
-    const ancestors = this.recoveredParentSources.get(state);
-    if (ancestors) {
-      for (const sources of this.recoveredParentSources.values()) {
-        if (sources.has(state)) {
-          for (const ancestor of ancestors) {
-            sources.add(ancestor);
-          }
-        }
-      }
-    }
-    this.recoveredParentSources.delete(state);
-  }
-
-  parentsForRetirement(parentThreadId: string, parents: ReadonlyMap<string, ParentState>) {
-    const current = parents.get(parentThreadId);
-    const retiring = new Set<ParentState>(current ? [current] : []);
-    // The foreground registration can be pruned while recovered old-parent work
-    // continues. Keep its exact owner identity until that recovered state is gone.
-    for (const sources of this.recoveredParentSources.values()) {
-      for (const source of sources) {
-        if (
-          source.parentThreadId === parentThreadId &&
-          (!current ||
-            source === current ||
-            (source.historyOwner && current.historyOwner && this.acceptsParent(source, current)))
-        ) {
-          retiring.add(source);
-        }
-      }
-    }
-    for (const source of retiring) {
-      for (const [recovered, sources] of this.recoveredParentSources) {
-        if (sources.has(source)) {
-          retiring.add(recovered);
-        }
-      }
-    }
-    return [...retiring].filter((state) => parents.get(state.parentThreadId) === state);
-  }
-
-  selectTaskRecords(state: ParentState, records = state.taskRuntime?.listTaskRecords() ?? []) {
-    return records
-      .filter((task) => this.acceptsTask(task, state))
-      .toSorted((a, b) => (b.startedAt ?? b.createdAt) - (a.startedAt ?? a.createdAt));
-  }
-
-  acceptsParent(
-    stored: Pick<ParentState, "requesterSessionKey" | "historyOwner">,
-    current: ParentState,
-  ): boolean {
-    return (
-      stored.requesterSessionKey === current.requesterSessionKey &&
-      (!stored.historyOwner ||
-        (current.historyOwner !== undefined &&
-          matchesCodexNativeSubagentHistoryOwner(stored.historyOwner, current.historyOwner)))
-    );
-  }
-
-  acceptsTask(task: AgentHarnessTaskRecord, state: ParentState): boolean {
-    if (task.requesterSessionKey !== state.requesterSessionKey) {
-      return false;
-    }
-    return this.acceptsParent(
-      {
-        requesterSessionKey: task.requesterSessionKey,
-        historyOwner: readCodexNativeSubagentHistoryOwner(task.detail),
-      },
-      state,
-    );
-  }
-
-  canRestoreTask(task: AgentHarnessTaskRecord, state: ParentState): boolean {
-    const history = readCodexNativeSubagentHistoryOwner(task.detail);
-    try {
-      assertHistoryOwnerMatchesRegistration(
-        history,
-        state.historyOwner,
-        history?.parentThreadId ?? state.parentThreadId,
-        true,
-      );
-      return this.acceptsTask(task, state);
-    } catch {
-      return false;
-    }
-  }
-
-  readReceiverTask(state: ParentState, childThreadId: string) {
-    const records = state.taskRuntime?.listTaskRecords() ?? [];
-    const task = records
-      .toSorted((a, b) => (b.startedAt ?? b.createdAt) - (a.startedAt ?? a.createdAt))
-      .find((record) => readNativeTaskAssignment(record)?.childThreadId === childThreadId);
-    const assignment = task && readNativeTaskAssignment(task);
-    const history = task && readCodexNativeSubagentHistoryOwner(task.detail);
-    if (!task) {
-      return undefined;
-    }
-    if (
-      !assignment ||
-      !history ||
-      (history.parentThreadId !== state.parentThreadId &&
-        !["succeeded", "failed", "cancelled"].includes(task.status)) ||
-      !this.canRestoreTask(task, state)
-    ) {
-      return { restorable: false as const };
-    }
-    return {
-      restorable: true as const,
-      assignment,
-      nativeParentThreadId: history.parentThreadId,
-      records: this.selectTaskRecords(state, records),
-    };
-  }
-
-  readChildAssignments(
-    state: ParentState,
-    assignment: NativeSubagentAssignment,
-    tasks: readonly AgentHarnessTaskRecord[],
-  ) {
-    let current: NativeSubagentAssignment & { initialTurnId?: string } = assignment;
-    let latestAt = -Infinity;
-    let terminal = false;
-    let nativeParentThreadId = state.parentThreadId;
-    const storedTurnIds = new Set<string>();
-    const completedRunIds: string[] = [];
-    for (const task of tasks) {
-      const candidate = readNativeTaskAssignment(task);
-      if (!this.acceptsTask(task, state) || candidate?.childThreadId !== assignment.childThreadId) {
-        continue;
-      }
-      const history = readCodexNativeSubagentHistoryOwner(task.detail);
-      if (history && !this.canRestoreTask(task, state)) {
-        continue;
-      }
-      const taskTerminal =
-        task.status === "succeeded" || task.status === "failed" || task.status === "cancelled";
-      if (taskTerminal) {
-        completedRunIds.push(candidate.runId);
-      }
-      for (const turnId of [candidate.nativeTurnId, candidate.initialTurnId]) {
-        if (turnId) {
-          storedTurnIds.add(turnId);
-        }
-      }
-      const startedAt = task.startedAt ?? task.createdAt;
-      if (startedAt > latestAt) {
-        current = {
-          ...candidate,
-          nativeTurnId:
-            candidate.nativeTurnId ??
-            (candidate.runId === assignment.runId ? assignment.nativeTurnId : undefined),
-        };
-        terminal = taskTerminal;
-        nativeParentThreadId = history?.parentThreadId ?? state.parentThreadId;
-        latestAt = startedAt;
-      }
-    }
-    return {
-      current,
-      found: latestAt !== -Infinity,
-      terminal,
-      nativeParentThreadId,
-      storedTurnIds,
-      completedRunIds,
-    };
-  }
-
-  shouldReconcileTask(task: AgentHarnessTaskRecord, now: number): boolean {
-    if (
-      task.status === "queued" ||
-      task.status === "running" ||
-      task.deliveryStatus === "pending"
-    ) {
-      return true;
-    }
-    if (task.deliveryStatus !== "not_applicable" || task.endedAt === undefined) {
-      return false;
-    }
-    return task.endedAt >= now - RECENT_TERMINAL_TASK_RECONCILE_GRACE_MS;
-  }
-
-  prepareTaskRead(candidate: TaskRecoveryCandidate, child: ChildState | undefined, now: number) {
-    const tasks = candidate.taskRuntime
-      .listTaskRecords()
-      .filter((record) => record.runId === candidate.runId);
-    const task = tasks[0];
-    if (
-      tasks.length !== 1 ||
-      !task ||
-      !matchesAgentHarnessTaskAssignment(task, candidate.expectedTask) ||
-      !this.acceptsTask(task, candidate.parentState) ||
-      !this.shouldReconcileTask(task, now) ||
-      (child?.expectedTask && !matchesAgentHarnessTaskAssignment(task, child.expectedTask))
-    ) {
-      return undefined;
-    }
-    const assignment = child ?? readNativeTaskAssignment(task);
-    if (!assignment) {
-      return undefined;
-    }
-    return {
-      task,
-      historyOwner: readCodexNativeSubagentHistoryOwner(task.detail),
-      assignment,
-      terminal:
-        task.status === "succeeded" || task.status === "failed" || task.status === "cancelled",
-    };
-  }
-
-  isCurrentTask(
-    candidate: TaskRecoveryCandidate,
-    task: AgentHarnessTaskRecord,
-    history: CodexNativeSubagentHistoryOwner | undefined,
-    parentThreadId: string,
-    now: number,
-  ): boolean {
-    const currentTasks = candidate.taskRuntime
-      .listTaskRecords()
-      .filter((record) => record.runId === candidate.runId);
-    const current = currentTasks[0];
-    if (
-      currentTasks.length !== 1 ||
-      !current ||
-      !matchesAgentHarnessTaskAssignment(current, candidate.expectedTask) ||
-      !matchesAgentHarnessTaskAssignment(task, candidate.expectedTask)
-    ) {
-      return false;
-    }
-    try {
-      // History access can follow compaction; automatic completion cannot acquire
-      // a different physical requester's authority from that readable lineage.
-      assertHistoryOwnerMatchesRegistration(
-        readCodexNativeSubagentHistoryOwner(current.detail),
-        candidate.parentState.historyOwner,
-        parentThreadId,
-        true,
-      );
-    } catch {
-      return false;
-    }
-    return (
-      current &&
-      current.taskId === task.taskId &&
-      this.acceptsTask(current, candidate.parentState) &&
-      this.shouldReconcileTask(current, now) &&
-      isDeepStrictEqual(readCodexNativeSubagentHistoryOwner(current.detail), history) &&
-      // Unstamped rows can recover only through the current native parent.
-      parentThreadId === (history?.parentThreadId ?? candidate.parentState.parentThreadId)
-    );
-  }
 
   private requestThreadRead(childThreadId: string, includeTurns: boolean) {
     return this.client.request(
@@ -347,38 +67,12 @@ export class CodexNativeSubagentHistoryRecovery {
     );
   }
 
-  readTask(
-    assignment: NativeSubagentAssignment,
-    task: AgentHarnessTaskRecord,
-    candidate: TaskRecoveryCandidate,
-  ): Promise<ThreadRecovery> {
-    const recordedStatus =
-      task.status === "succeeded" || task.status === "failed" || task.status === "cancelled"
-        ? task.status
-        : undefined;
-    return this.read(assignment, {
-      resumeInterrupted: task.status === "queued" || task.status === "running",
-      getTaskRecords: () => this.selectTaskRecords(candidate.parentState),
-      observedTurns: candidate.observedTurns,
-      ...(recordedStatus && task.terminalSummary
-        ? {
-            recordedCompletion: {
-              childThreadId: candidate.childThreadId,
-              status: recordedStatus,
-              statusLabel: "recorded_task_result",
-              result: task.terminalSummary,
-              completedAt: task.endedAt,
-            },
-          }
-        : {}),
-    });
-  }
-
   async read(
     assignment: NativeSubagentAssignment,
     options: {
       resumeInterrupted: boolean;
-      getTaskRecords: () => readonly AgentHarnessTaskRecord[];
+      predecessorNativeTurnId?: string;
+      initialAssignment?: boolean;
       recordedCompletion?: RecoveredCompletion;
       observedTurns?: readonly NativeTurnObservation[];
     },
@@ -394,6 +88,20 @@ export class CodexNativeSubagentHistoryRecovery {
     if (!thread || readString(thread, "id")?.trim() !== childThreadId) {
       return { resumable: false, threadState: "unavailable", observedPendingTurns: [] };
     }
+    if (options.predecessorNativeTurnId) {
+      const turns = Array.isArray(thread.turns) ? thread.turns.filter(isJsonObject) : [];
+      const predecessor = turns.findIndex(
+        (turn) => readString(turn, "id") === options.predecessorNativeTurnId,
+      );
+      const target = turns.findIndex((turn) => readString(turn, "id") === assignment.nativeTurnId);
+      if (
+        predecessor < 0 ||
+        target <= predecessor ||
+        !["completed", "failed"].includes(readString(turns[predecessor], "status") ?? "")
+      ) {
+        return { resumable: false, threadState: "unavailable", observedPendingTurns: [] };
+      }
+    }
     const firstObserved = options.observedTurns?.[0];
     // Forked history can begin with copied parent turns. Only a native child
     // end observed before successor starts can anchor an unlocated predecessor.
@@ -404,7 +112,38 @@ export class CodexNativeSubagentHistoryRecovery {
       !firstObserved.startObserved
         ? firstObserved.turnId
         : undefined;
-    const turnId = assignment.nativeTurnId ?? observedPredecessor;
+    let initialTurnId: string | undefined;
+    if (options.initialAssignment && !assignment.nativeTurnId && !recordedCompletion) {
+      const forkedFromId = readString(thread, "forkedFromId");
+      if (forkedFromId) {
+        // Codex snapshots inherited history at fork time. A later parent read
+        // reflects rollback, not that immutable prefix; subtraction can label a
+        // copied parent final as child output. Wait for an observed child turn
+        // or native completion receipt instead of inventing its first turn.
+        return {
+          parentThreadId: readThreadParentThreadId(thread),
+          resumable: false,
+          threadState: "unavailable",
+          observedPendingTurns: [],
+        };
+      }
+      for (const turn of Array.isArray(thread.turns) ? thread.turns : []) {
+        const id = readString(turn, "id");
+        if (id) {
+          initialTurnId = id;
+          break;
+        }
+      }
+      if (!initialTurnId) {
+        return {
+          parentThreadId: readThreadParentThreadId(thread),
+          resumable: false,
+          threadState: "unavailable",
+          observedPendingTurns: [],
+        };
+      }
+    }
+    const turnId = assignment.nativeTurnId ?? initialTurnId ?? observedPredecessor;
     const pendingTurnIds = new Set([
       ...this.queries.getPendingTurnIds(childThreadId),
       ...(options.observedTurns?.map((turn) => turn.turnId) ?? []),
@@ -501,22 +240,8 @@ export class CodexNativeSubagentHistoryRecovery {
       const current = !latestTurn
         ? this.queries.getCurrentAssignmentState(childThreadId)
         : undefined;
-      const taskRecords = !latestTurn ? options.getTaskRecords() : [];
-      const task = taskRecords.find((record) => record.runId === assignment.runId);
-      // A delivered successor can outlive its monitor state. Its task row still
-      // prevents a thread-wide error from being assigned to an older pending result.
-      const hasSuccessor =
-        task &&
-        taskRecords.some(
-          (record) =>
-            record.requesterSessionKey === task.requesterSessionKey &&
-            (record.startedAt ?? record.createdAt) > (task.startedAt ?? task.createdAt) &&
-            readNativeTaskAssignment(record)?.childThreadId === childThreadId,
-        );
       const unresolvedCurrentAssignment =
-        current?.runId === assignment.runId &&
-        current?.nativeTurnState !== "completed" &&
-        !hasSuccessor;
+        current?.runId === assignment.runId && current?.nativeTurnState !== "completed";
       if (latestTurnStatus === "inprogress" && matchesAssignment) {
         nativeTurnId = readString(latestTurn, "id");
         nativeTurnState = "active";
@@ -549,15 +274,6 @@ export class CodexNativeSubagentHistoryRecovery {
       parentThreadId: readThreadParentThreadId(thread),
       agentPath: normalizeOptionalString(readString(readThreadSpawnSource(thread), "agent_path")),
     };
-    if (!turnId && !recordedCompletion && hasSavedSuccessor(assignment, options.getTaskRecords())) {
-      return {
-        ...lineage,
-        assignmentUnresolved: true,
-        observedPendingTurns,
-        resumable: false,
-        threadState: "unavailable",
-      };
-    }
     return {
       ...lineage,
       assignmentTurnId: turnId,
@@ -570,26 +286,6 @@ export class CodexNativeSubagentHistoryRecovery {
       threadState,
     };
   }
-}
-
-function hasSavedSuccessor(
-  assignment: NativeSubagentAssignment,
-  records: readonly AgentHarnessTaskRecord[],
-): boolean {
-  const task = records.find((record) => record.runId === assignment.runId);
-  return Boolean(
-    task &&
-    records.some((record) => {
-      const successor = readNativeTaskAssignment(record);
-      // Later assignments have turn-qualified run IDs even when their timestamps tie.
-      return (
-        record.requesterSessionKey === task.requesterSessionKey &&
-        record.runId !== assignment.runId &&
-        successor?.childThreadId === assignment.childThreadId &&
-        Boolean(successor.initialTurnId)
-      );
-    }),
-  );
 }
 
 function readThreadTurnRecovery(
