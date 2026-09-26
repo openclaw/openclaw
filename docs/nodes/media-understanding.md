@@ -278,6 +278,28 @@ Local attachments stay within the session's allowed media roots. Directory alias
 - Image, audio, and video decisions record one closed disposition for every attachment candidate: handled, handed to native vision, not selected after the attachment limit, disabled, missing a model, denied by chat scope, or failed.
 - Unhandled media gets a bounded model-visible marker. Images handed to native vision do not add markers. When a native harness owns the turn and OpenClaw runs only audio preprocessing, failed or skipped audio still gets a marker; image, video, and document inputs remain owned by the harness. Too-small audio keeps its placeholder transcript without a duplicate marker.
 
+## Vision models and image replay cost
+
+When the active reply model supports vision natively, OpenClaw skips image understanding by default and injects the raw image into the model context — the model sees the original pixels, and no description pass runs. A consequence is that the image is re-attached on later turns while it remains inside the replay window described in [Session pruning](/concepts/session-pruning#legacy-image-cleanup), so its full image-token cost recurs on those turns by design.
+
+If your sessions attach images that only need to be read once (identify, extract, transcribe) and per-turn image cost matters more than raw pixel access, add an image-capable entry to `tools.media.models[]`. An explicit image entry forces the description pass even when the reply model has native vision: the description text stands in for the raw image from ingestion onward, and later turns replay the short text instead of the image bytes.
+
+```json5
+{
+  tools: {
+    media: {
+      models: [{ provider: "google", model: "gemini-3-flash-preview", capabilities: ["image"] }],
+    },
+  },
+}
+```
+
+Tradeoffs and boundaries:
+
+- The reply model receives the description text instead of the original pixels, including on the current turn. That fits identification and extraction workflows; it is the wrong tool when the model must inspect pixels directly (screenshots, UI review, visual debugging).
+- Only an explicit image-capable `tools.media.models[]` entry forces this. `tools.media.image.preferredModel` alone does not override the native-vision skip.
+- `tools.media.image.enabled: false` disables image understanding entirely; it does not change native image delivery.
+
 ## Config examples
 
 <Tabs>
