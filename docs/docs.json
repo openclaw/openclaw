@@ -1464,6 +1464,7 @@
                       "channels/discord/messaging",
                       "channels/discord/threads-and-sessions",
                       "channels/discord/rich-messages",
+                      "channels/discord/actionable-cards",
                       "channels/discord/events",
                       "channels/discord/voice-channels",
                       "channels/discord/voice-transcripts",
