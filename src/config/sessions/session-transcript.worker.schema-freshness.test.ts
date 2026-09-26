@@ -1,24 +1,42 @@
+import assert from "node:assert/strict";
+import type { Transferable } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
+import type { SessionArtifactReadQuery } from "../../gateway/session-artifact-read.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
+import type { UsageCostWorkerReply } from "../../infra/session-cost-usage-worker.types.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
-import type { SessionTranscriptWorkerInput } from "./session-transcript-worker.types.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import type {
+  SessionTranscriptWorkerInput,
+  SessionTranscriptWorkerReply,
+  SessionTranscriptWorkerValues,
+} from "./session-transcript-worker.types.js";
+
+type WorkerReply =
+  | SessionTranscriptWorkerReply<keyof SessionTranscriptWorkerValues>
+  | UsageCostWorkerReply;
 
 const worker = vi.hoisted(() => ({
-  read: vi.fn<(input: SessionTranscriptWorkerInput) => Promise<unknown>>(),
+  read: vi.fn<(input: SessionTranscriptWorkerInput) => Promise<WorkerReply>>(),
   close: vi.fn<(key?: string) => void>(),
+  transfers: vi.fn<(reply: WorkerReply) => Transferable[]>(),
 }));
 vi.mock("../../infra/worker-task-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/worker-task-server.js")>()),
   serveOwnedWorkerTasks(
-    handler: (input: unknown) => Promise<unknown>,
-    options: { closeResource: (key?: string) => void },
+    handler: (input: unknown) => Promise<WorkerReply>,
+    options: {
+      closeResource: (key?: string) => void;
+      transferList?: (reply: WorkerReply) => Transferable[];
+    },
   ) {
     worker.read.mockImplementation(handler);
     worker.close.mockImplementation(options.closeResource);
+    worker.transfers.mockImplementation(options.transferList ?? (() => []));
   },
 }));
 import "./session-transcript.worker.js";
@@ -101,3 +119,89 @@ it.for([
     });
   },
 );
+
+it("transfers only owned artifact response bytes and leaves HEAD replies payload-free", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "main";
+    const sessionKey = "agent:main:artifact-transfer";
+    const sessionId = "artifact-transfer";
+    const options = { agentId, env: state.env };
+    const { path } = openOpenClawAgentDatabase(options);
+    const scope = { ...options, sessionKey, sessionId, storePath: path };
+    replaceSessionEntrySync(scope, { sessionId, updatedAt: 1 });
+    appendTranscriptMessageSync(scope, {
+      eventId: "artifact-message",
+      message: {
+        role: "assistant",
+        content: [{ type: "file", title: "bytes.bin", data: "AAECAwQFBgc=" }],
+      },
+    });
+    await closeOpenClawAgentDatabaseByPathAsync(path);
+    const read = async (query: SessionArtifactReadQuery) => {
+      const reply = await worker.read({
+        kind: "history-page",
+        database: { agentId, path },
+        request: { kind: "artifacts", params: { target: scope, query } },
+        target: {
+          transcript: { agentId, sessionId, sessionKey, storePath: path, sessionFile: sessionKey },
+          entryValidationKey: sessionKey,
+        },
+      });
+      assert(reply.ok);
+      assert(
+        typeof reply.value === "object" &&
+          reply.value !== null &&
+          "kind" in reply.value &&
+          reply.value.kind === "artifacts",
+      );
+      return { reply, result: reply.value.result };
+    };
+    try {
+      const listed = await read({ kind: "list", sessionKey, includeDownloadData: false });
+      assert(listed.result.kind === "list");
+      const artifactId = listed.result.artifacts[0]?.id;
+      assert(artifactId);
+      const grant = await read({ kind: "download-grant", sessionKey, artifactId });
+      assert(grant.result.kind === "download-grant" && grant.result.selection?.kind === "prepared");
+      const expectedDigest = grant.result.selection.download.digest;
+      expect(worker.transfers(grant.reply)).toEqual([]);
+      expect(grant.result.selection.download.artifact).not.toHaveProperty("data");
+
+      for (const method of ["GET", "HEAD"] as const) {
+        const { reply, result } = await read({
+          kind: "download-response",
+          sessionKey,
+          artifactId,
+          response: { expectedDigest, method, headers: { range: "bytes=1-4" } },
+        });
+        assert(result.kind === "download-response" && result.response);
+        const transfers = worker.transfers(reply);
+        if (method === "HEAD") {
+          expect(result.response.response).toMatchObject({ kind: "full", contentLength: 8 });
+          expect(result.response).not.toHaveProperty("body");
+          expect(transfers).toEqual([]);
+          continue;
+        }
+        const body = result.response.body;
+        assert(body);
+        expect(Array.from(body)).toEqual([1, 2, 3, 4]);
+        expect(body.buffer.byteLength).toBe(4);
+        expect(transfers).toEqual([body.buffer]);
+        const received = structuredClone(reply, { transfer: transfers });
+        expect(body.buffer.byteLength).toBe(0);
+        expect(received).toMatchObject({
+          ok: true,
+          value: {
+            kind: "artifacts",
+            result: {
+              kind: "download-response",
+              response: { body: new Uint8Array([1, 2, 3, 4]) },
+            },
+          },
+        });
+      }
+    } finally {
+      worker.close(JSON.stringify([{ path }]));
+    }
+  });
+});
