@@ -11,10 +11,7 @@ import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import {
-  SessionEntryLifecycleUpsertConflictError,
-  type SessionArchivedTranscriptCleanupRule,
-} from "./session-accessor.lifecycle-types.js";
+import { SessionEntryLifecycleUpsertConflictError } from "./session-accessor.lifecycle-types.js";
 import {
   prunePublishedSessionArchivesByRetention,
   publishSessionStateArchives,
@@ -27,8 +24,6 @@ import type {
   SessionLifecycleArchivedTranscript,
   DeletedAgentSessionEntryPurgeParams,
   SessionEntryLifecycleMutationResult,
-  SessionEntryLifecycleRemoval,
-  SessionEntryLifecycleUpsert,
 } from "./session-accessor.sqlite-contract.js";
 import {
   runPreparedSqliteSessionWrite,
@@ -63,6 +58,7 @@ import {
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   ProjectedLifecycleMutation,
+  SessionEntryLifecycleMutationParams,
   SessionEntryMaintenancePlan,
   SessionEntryRemovalPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
@@ -80,12 +76,7 @@ import {
   toDatabaseOptions,
   withSqliteSessionDatabase,
 } from "./session-accessor.sqlite-scope.js";
-import type {
-  SessionEntryCommitContext,
-  SessionEntryCreateWithTranscriptOptions,
-} from "./session-accessor.types.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
-import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 export { applySessionEntryExactReplacements as applySessionEntryReplacements } from "./session-accessor.sqlite-replacement-projection.js";
@@ -240,34 +231,9 @@ function readProjectedRemovalEntry(
 }
 
 /** Applies exact lifecycle removals/upserts using SQLite session rows. */
-export async function applySessionEntryLifecycleMutation(params: {
-  agentId?: string;
-  env?: NodeJS.ProcessEnv;
-  storePath: string;
-  removals?: Iterable<SessionEntryLifecycleRemoval>;
-  upserts?: Iterable<SessionEntryLifecycleUpsert>;
-  activeSessionKey?: string;
-  maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
-  skipMaintenance?: boolean;
-  cleanupArchivedTranscripts?: {
-    rules: SessionArchivedTranscriptCleanupRule[];
-    nowMs?: number;
-  };
-  captureArtifactCleanupError?: boolean;
-  /** Doctor-only bypass while exact malformed rows are removed in the same transaction. */
-  allowCanonicalRepair?: boolean;
-  /** Doctor-only synchronous state transfer that commits with the destination entry. */
-  afterUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
-  /** Fresh-row sidecar writes that must not retry unrelated pending archives. */
-  afterFreshUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
-  /** Synchronous caller-authority guard checked immediately before lifecycle writes. */
-  beforeCommitInTransaction?: () => void;
-  /** Retain source authority around the final writer, after projection and native preparation. */
-  withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
-  /** Non-throwing notification after outer COMMIT, before lifecycle publication and owner cleanup. */
-  onLifecycleCommitted?: () => void;
-  afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
-}): Promise<SessionEntryLifecycleMutationResult> {
+export async function applySessionEntryLifecycleMutation(
+  params: SessionEntryLifecycleMutationParams,
+): Promise<SessionEntryLifecycleMutationResult> {
   const resolved = captureLifecycleDatabaseScope(
     resolveSqliteScope({
       ...(params.agentId ? { agentId: params.agentId } : {}),
