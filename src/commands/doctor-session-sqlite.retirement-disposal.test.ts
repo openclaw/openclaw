@@ -230,7 +230,7 @@ describe("runDoctorSessionSqlite", () => {
             readConfig: async () => ({}),
             confirm,
           }),
-        ).rejects.toThrow("Gateway or another SQLite maintenance");
+        ).rejects.toThrow("state directory is locked by sqlite-maintenance");
       },
     });
     expect(confirm).not.toHaveBeenCalled();
