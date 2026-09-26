@@ -26,6 +26,17 @@ import {
 } from "./translator.presentation.js";
 import type { AcpTranslatorSessionUpdates } from "./translator.session-updates.js";
 
+const STRING_CONFIG_FIELDS = new Map<
+  string,
+  "thinkingLevel" | "verboseLevel" | "traceLevel" | "reasoningLevel" | "elevatedLevel"
+>([
+  [ACP_THOUGHT_LEVEL_CONFIG_ID, "thinkingLevel"],
+  [ACP_VERBOSE_LEVEL_CONFIG_ID, "verboseLevel"],
+  [ACP_TRACE_LEVEL_CONFIG_ID, "traceLevel"],
+  [ACP_REASONING_LEVEL_CONFIG_ID, "reasoningLevel"],
+  [ACP_ELEVATED_LEVEL_CONFIG_ID, "elevatedLevel"],
+]);
+
 export class AcpTranslatorSessionState {
   constructor(
     private readonly gateway: GatewayClient,
@@ -134,12 +145,12 @@ export class AcpTranslatorSessionState {
         `ACP bridge does not support non-string session config option values for "${configId}".`,
       );
     }
+    const field = STRING_CONFIG_FIELDS.get(configId);
+    if (field) {
+      const patch = { [field]: value };
+      return { patch, overrides: patch };
+    }
     switch (configId) {
-      case ACP_THOUGHT_LEVEL_CONFIG_ID:
-        return {
-          patch: { thinkingLevel: value },
-          overrides: { thinkingLevel: value },
-        };
       case ACP_FAST_MODE_CONFIG_ID: {
         const fastMode = normalizeFastMode(value);
         if (fastMode === undefined) {
@@ -150,21 +161,6 @@ export class AcpTranslatorSessionState {
           overrides: { fastMode },
         };
       }
-      case ACP_VERBOSE_LEVEL_CONFIG_ID:
-        return {
-          patch: { verboseLevel: value },
-          overrides: { verboseLevel: value },
-        };
-      case ACP_TRACE_LEVEL_CONFIG_ID:
-        return {
-          patch: { traceLevel: value },
-          overrides: { traceLevel: value },
-        };
-      case ACP_REASONING_LEVEL_CONFIG_ID:
-        return {
-          patch: { reasoningLevel: value },
-          overrides: { reasoningLevel: value },
-        };
       case ACP_RESPONSE_USAGE_CONFIG_ID: {
         const next = value === "inherit" ? null : value;
         return {
@@ -172,11 +168,6 @@ export class AcpTranslatorSessionState {
           overrides: { responseUsage: next as GatewaySessionPresentationRow["responseUsage"] },
         };
       }
-      case ACP_ELEVATED_LEVEL_CONFIG_ID:
-        return {
-          patch: { elevatedLevel: value },
-          overrides: { elevatedLevel: value },
-        };
       case ACP_TIMEOUT_CONFIG_ID:
       case ACP_TIMEOUT_SECONDS_CONFIG_ID:
         return {

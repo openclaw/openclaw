@@ -39,16 +39,7 @@ export async function awaitTurnWithTimeout<T>(params: {
   timeoutLabelMs: number;
   onTimeout: () => Promise<void>;
 }): Promise<T> {
-  const observedTurnPromise: Promise<
-    | {
-        kind: "value";
-        value: T;
-      }
-    | {
-        kind: "error";
-        error: unknown;
-      }
-  > = params.turnPromise.then(
+  const observedTurnPromise = params.turnPromise.then(
     (value) => ({
       kind: "value" as const,
       value,
@@ -59,15 +50,7 @@ export async function awaitTurnWithTimeout<T>(params: {
     }),
   );
 
-  if (params.timeoutMs <= 0) {
-    const outcome = await observedTurnPromise;
-    if (outcome.kind === "error") {
-      throw outcome.error;
-    }
-    return outcome.value;
-  }
-
-  const timeoutMs = clampTimerTimeoutMs(params.timeoutMs, 1);
+  const timeoutMs = params.timeoutMs <= 0 ? undefined : clampTimerTimeoutMs(params.timeoutMs, 1);
   if (timeoutMs === undefined) {
     const outcome = await observedTurnPromise;
     if (outcome.kind === "error") {
@@ -156,15 +139,7 @@ async function awaitCleanupWithGrace(params: {
   label: "cancel" | "close";
   promise: Promise<unknown>;
 }): Promise<boolean> {
-  const observedCleanupPromise: Promise<
-    | {
-        kind: "done";
-      }
-    | {
-        kind: "error";
-        error: unknown;
-      }
-  > = params.promise.then(
+  const observedCleanupPromise = params.promise.then(
     () => ({
       kind: "done" as const,
     }),

@@ -332,7 +332,13 @@ describe("runSearchSetupFlow", () => {
       select: select as never,
     });
 
-    await runSearchSetupFlow({ plugins: { allow: ["xai"] } }, createNonExitingRuntime(), prompter);
+    await withEnvAsync({ XAI_API_KEY: undefined }, async () => {
+      await runSearchSetupFlow(
+        { plugins: { allow: ["xai"] } },
+        createNonExitingRuntime(),
+        prompter,
+      );
+    });
 
     const options = select.mock.calls[0]?.[0]?.options as
       | Array<{ value: string; label?: string; hint?: string }>
