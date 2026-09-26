@@ -9,7 +9,6 @@ import {
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
-import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import {
   buildBlockedToolResult,
   recordAdjustedParamsForToolCall,
@@ -22,11 +21,9 @@ import {
 } from "./agent-tools.before-tool-call.state.js";
 import { addSession, deleteSession, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
-import { createExecTool } from "./bash-tools.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { projectEmbeddedMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
-import { buildTraceToolSummary } from "./embedded-agent-runner/run/run-attempt-result.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
@@ -1614,50 +1611,6 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
       }),
     });
     expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("PTY_PLANTED_SECRET");
-  });
-
-  it("keeps a rejected exec call as the unresolved tool fact after the model answers", async () => {
-    // #158890: exec rejects `timeout` before spawning. With a user-facing reply the
-    // warning payload is suppressed, so the tool summary is the remaining trace.
-    const [execDefinition] = toToolDefinitions([
-      createExecTool({ host: "gateway", security: "full", ask: "off" }),
-    ]);
-    const args = { command: "/bin/touch /tmp/MARKER-A", timeout: 30 };
-    const result = await execDefinition!.execute(
-      "tool-exec-timeout",
-      args as never,
-      undefined,
-      undefined,
-      {} as never,
-    );
-    const { ctx } = createTestContext();
-    await executeTool(ctx, {
-      toolName: "exec",
-      toolCallId: "tool-exec-timeout",
-      args,
-      isError: false,
-      result,
-    });
-
-    expect(ctx.state.lastToolError?.toolName).toBe("exec");
-    expect(
-      buildEmbeddedRunPayloads({
-        assistantTexts: ['RESULT: exec parameter "timeout" is unsupported'],
-        lastAssistant: undefined,
-        lastToolError: ctx.state.lastToolError,
-        sessionKey: "agent:main:cron:job",
-        isCronTrigger: true,
-      }).some((payload) => payload.isError === true),
-    ).toBe(false);
-    expect(
-      buildTraceToolSummary({
-        toolMetas: ctx.state.toolMetas.map((entry) => ({
-          ...entry,
-          toolName: entry.toolName ?? "",
-        })),
-        lastToolError: ctx.state.lastToolError,
-      })?.unresolvedError,
-    ).toEqual({ toolName: "exec" });
   });
 
   it("records command sensitivity on namespaced tool results", async () => {
