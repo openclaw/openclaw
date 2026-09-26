@@ -484,9 +484,7 @@ async function resolveOptionalApiKeyForProvider(
 // ChatGPT plans do not all offer the Codex default model. The default stays first so
 // working installs keep their route; configured OpenAI models are the recovery order
 // when the account rejects the model that hosts the image_generation tool.
-function resolveCodexImageResponsesModels(
-  cfg: OpenClawConfig | undefined,
-): [string, ...string[]] {
+function resolveCodexImageResponsesModels(cfg: OpenClawConfig | undefined): [string, ...string[]] {
   const agentModel = cfg?.agents?.defaults?.model;
   const retryModels = new Set<string>();
   for (const ref of [
