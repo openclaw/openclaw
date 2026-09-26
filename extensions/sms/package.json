@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/sms",
-  "version": "2026.9.6",
+  "version": "2026.9.7",
   "description": "OpenClaw SMS/MMS channel plugin for Twilio messages.",
   "repository": {
     "type": "git",
@@ -126,10 +126,10 @@
       }
     },
     "compat": {
-      "pluginApi": ">=2026.9.6"
+      "pluginApi": ">=2026.9.7"
     },
     "build": {
-      "openclawVersion": "2026.9.6",
+      "openclawVersion": "2026.9.7",
       "bundledDist": false
     },
     "install": {

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/typesafe",
-  "version": "2026.9.6",
+  "version": "2026.9.7",
   "description": "OpenClaw TypeSafe typed decisions and optional evaluation tool",
   "repository": {
     "type": "git",
@@ -24,11 +24,11 @@
       "minHostVersion": ">=2026.9.6"
     },
     "compat": {
-      "pluginApi": ">=2026.9.6"
+      "pluginApi": ">=2026.9.7"
     },
     "build": {
       "bundledDist": false,
-      "openclawVersion": "2026.9.6"
+      "openclawVersion": "2026.9.7"
     },
     "release": {
       "publishToClawHub": true,

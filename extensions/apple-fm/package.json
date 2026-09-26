@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/apple-fm-provider",
-  "version": "2026.9.6",
+  "version": "2026.9.7",
   "private": true,
   "description": "OpenClaw on-device Apple Foundation Models provider",
   "type": "module",
@@ -15,7 +15,7 @@
       "./index.ts"
     ],
     "build": {
-      "openclawVersion": "2026.9.6",
+      "openclawVersion": "2026.9.7",
       "staticAssets": [
         {
           "source": "./assets/AppleFoundationModels.swift",

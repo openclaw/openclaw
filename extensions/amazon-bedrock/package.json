@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/amazon-bedrock-provider",
-  "version": "2026.9.6",
+  "version": "2026.9.7",
   "description": "OpenClaw Amazon Bedrock provider plugin with model discovery, embeddings, and guardrail support.",
   "repository": {
     "type": "git",
@@ -29,10 +29,10 @@
       "minHostVersion": ">=2026.5.12-beta.1"
     },
     "compat": {
-      "pluginApi": ">=2026.9.6"
+      "pluginApi": ">=2026.9.7"
     },
     "build": {
-      "openclawVersion": "2026.9.6",
+      "openclawVersion": "2026.9.7",
       "bundledDist": false
     },
     "release": {
