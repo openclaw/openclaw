@@ -1191,10 +1191,34 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
   const authoredEntries = indexAgentRosterForWrite(params.rootAuthoredConfig, legacyIdsByIndex);
   const runtimeEntries = indexAgentRosterForWrite(params.runtimeConfig, legacyIdsByIndex);
   const sourceEntries = indexAgentRosterForWrite(params.sourceConfig, legacyIdsByIndex);
-  const nextEntries = toAgentEntriesRecord(
-    listAgentEntries(params.nextConfig as OpenClawConfig),
-  ) as Record<string, unknown>;
-  const explicitRoster = readAgentRosterProperty(params.valueSource);
+  const usesAuthoredList = authoredRoster?.kind === "list";
+  // A list-authored config materializes agents.entries during snapshot reading,
+  // which shadows the authored list when both are present on the prepared
+  // config. Prefer the list representation so an explicit list field edit
+  // (e.g. agents.list.0.agentDir) stays visible through roster canonicalization
+  // instead of being discarded as an empty materialized entry.
+  const readRosterEntries = (cfg: OpenClawConfig): Record<string, unknown> => {
+    const agents = (cfg as { agents?: unknown }).agents;
+    const list = isRecord(agents) && Array.isArray(agents.list) ? agents.list : undefined;
+    if (usesAuthoredList && list) {
+      return toAgentEntriesRecord(
+        listAgentEntries({ agents: { list } } as OpenClawConfig),
+      ) as Record<string, unknown>;
+    }
+    return toAgentEntriesRecord(listAgentEntries(cfg)) as Record<string, unknown>;
+  };
+  const nextEntries = readRosterEntries(params.nextConfig);
+  const explicitRoster = (() => {
+    if (usesAuthoredList) {
+      const valueAgents = (params.valueSource as { agents?: unknown }).agents;
+      const list =
+        isRecord(valueAgents) && Array.isArray(valueAgents.list) ? valueAgents.list : undefined;
+      if (list) {
+        return { kind: "list" as const, value: list };
+      }
+    }
+    return readAgentRosterProperty(params.valueSource);
+  })();
   const rosterFactOwner = coerceConfig(
     params.sourceConfigBeforeMigrations ?? params.rootAuthoredConfig,
   );

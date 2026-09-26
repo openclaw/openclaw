@@ -118,3 +118,37 @@ export function migrateBlankAgentDirForWrite(
 ): BlankAgentDirMigration {
   return migrateBlankAgentDirRaw(raw, explicitSetPaths);
 }
+
+/** Remap explicit legacy-list field paths (`agents.list.<N>.<field>`) to the
+ * canonical entries form (`agents.entries.<id>.<field>`) using the authored
+ * list ids. Canonical roster preparation converts an explicit list edit into
+ * entries and filters roster paths from the injected explicit set, so without
+ * this remap the write migration cannot tell that a converted blank was
+ * explicitly authored and would silently migrate it away instead of letting
+ * strict validation report the field error. */
+export function remapLegacyListExplicitPaths(
+  explicitSetPaths: readonly (readonly string[])[] | undefined,
+  nextConfig: unknown,
+): string[] {
+  const agents = isRecord(nextConfig) ? nextConfig.agents : undefined;
+  const list = isRecord(agents) && Array.isArray(agents.list) ? agents.list : undefined;
+  if (!explicitSetPaths || !list) {
+    return [];
+  }
+  const remapped: string[] = [];
+  for (const path of explicitSetPaths) {
+    if (path.length < 4 || path[0] !== "agents" || path[1] !== "list") {
+      continue;
+    }
+    const index = Number(path[2]);
+    if (!Number.isInteger(index) || index < 0 || index >= list.length) {
+      continue;
+    }
+    const entry = list[index];
+    if (!isRecord(entry) || typeof entry.id !== "string") {
+      continue;
+    }
+    remapped.push(["agents", "entries", entry.id, ...path.slice(3)].join("."));
+  }
+  return remapped;
+}

@@ -56,4 +56,37 @@ describe("parent-object blank agentDir authoring is still rejected", () => {
     expect(threw).toBe(true);
     expect(message).toContain("agentDir");
   });
+
+  it("setting a blank agentDir through the legacy agents.list path is rejected, not migrated", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "proof-151013-list-"));
+    fs.writeFileSync(
+      path.join(root, "openclaw.json"),
+      JSON.stringify({
+        agents: { list: [{ id: "alpha" }] },
+        gateway: { mode: "local", port: 18799, auth: { mode: "none" } },
+      }),
+    );
+    const ctx = makeContext(root);
+    const base = await readConfigFileSnapshotInternal(ctx, {});
+    const next = JSON.parse(JSON.stringify(base.snapshot.config));
+    // Canonical roster preparation converts the explicit list edit into
+    // agents.entries.alpha; the blank must still be rejected, not discarded.
+    next.agents.list = [{ id: "alpha", agentDir: " " }];
+    let threw = false;
+    let message = "";
+    try {
+      await writeConfigFileFromContext(
+        ctx,
+        next,
+        { explicitSetPaths: [["agents", "list", "0", "agentDir"]] },
+        async () => base,
+      );
+    } catch (e) {
+      threw = true;
+      message = (e as Error).message;
+    }
+    expect(threw).toBe(true);
+    expect(message).toContain("agentDir");
+    expect(message).toContain("blank");
+  });
 });

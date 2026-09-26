@@ -96,7 +96,10 @@ import {
 import { prepareConfigWriteTopology } from "./io.write-topology.js";
 import { formatConfigIssueLines } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
-import { migrateBlankAgentDirForWrite } from "./legacy.blank-agent-dir.js";
+import {
+  migrateBlankAgentDirForWrite,
+  remapLegacyListExplicitPaths,
+} from "./legacy.blank-agent-dir.js";
 import { applyMergePatch, createMergePatch } from "./merge-patch.js";
 import { resolveIncludeRoots } from "./paths.js";
 import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
@@ -253,6 +256,14 @@ export async function writeConfigFileFromContext(
   }
 
   const envForRestore = options.envSnapshotForRestore ?? deps.env;
+  const resolveExplicitSet = () =>
+    new Set([
+      ...(options.explicitSetPaths ?? []).map((p) => p.filter((s) => s.length > 0).join(".")),
+      // Canonical roster prep converts an explicit agents.list.N.<field> edit
+      // into agents.entries.<id>.<field>; keep the converted path so a
+      // converted blank the current write explicitly set stays preserved.
+      ...remapLegacyListExplicitPaths(options.explicitSetPaths, nextConfig),
+    ]);
   const resolveValidationCandidate = (candidate: unknown) => {
     // Validate removals now; apply them once to the final authored output after materialization.
     let config = applyUnsetPathsForWrite(candidate as OpenClawConfig, unsetPaths);
@@ -265,10 +276,7 @@ export async function writeConfigFileFromContext(
     // restoreAuthoredAgentRoster / include expansion) must not block an
     // unrelated settings change: migrate it unless the current write itself
     // sets that path (new blank authoring keeps the strict field error).
-    const explicitSet = new Set(
-      (options.explicitSetPaths ?? []).map((p) => p.filter((s) => s.length > 0).join(".")),
-    );
-    return migrateBlankAgentDirForWrite(preflight as OpenClawConfig, explicitSet).config;
+    return migrateBlankAgentDirForWrite(preflight as OpenClawConfig, resolveExplicitSet()).config;
   };
   const validationCandidate = resolveValidationCandidate(persistCandidate);
   const validateCandidate = (candidate: unknown) => {
@@ -314,15 +322,10 @@ export async function writeConfigFileFromContext(
   // The restored authored roster can carry a saved blank agentDir; remove it
   // from the persisted bytes too (unless this write explicitly sets that path),
   // so the saved file no longer round-trips an invalid value.
-  {
-    const explicitSet = new Set(
-      (options.explicitSetPaths ?? []).map((p) => p.filter((s) => s.length > 0).join(".")),
-    );
-    persistCandidate = migrateBlankAgentDirForWrite(
-      persistCandidate as OpenClawConfig,
-      explicitSet,
-    ).config;
-  }
+  persistCandidate = migrateBlankAgentDirForWrite(
+    persistCandidate as OpenClawConfig,
+    resolveExplicitSet(),
+  ).config;
 
   let cfgToWrite = persistCandidate as OpenClawConfig;
   try {
