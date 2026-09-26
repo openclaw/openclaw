@@ -37,7 +37,7 @@ import { finalizeAcceptedChatSendMessageInjection } from "./chat-send-message-in
 import { applyChatSendReplyContextFields } from "./chat-send-reply-context.js";
 import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 import { finalizeChatSendDispatchedReplies } from "./chat-send-reply-finalization.js";
-import { readChatSendReplySourceSessionId } from "./chat-send-reply-source.js";
+import { readChatSendReplySourceSessionId } from "./chat-send-reply-source-binding.js";
 import {
   classifyAcceptedChatSendFailure,
   runAcceptedChatSendDispatch,

@@ -6,7 +6,6 @@ import {
   matchesAgentDatabaseReadCandidatePath,
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
-import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
 
 /** Retire a display reference from committed owner publications, without polling SQLite.
  * This holds no row cache and grants no transcript-read or delivery authority.
@@ -115,28 +114,5 @@ export function retainChatSendReplySource(params: {
   } catch (error) {
     release();
     throw error;
-  }
-}
-
-/** The original active/queued work owner supplies the current SID, without another row read. */
-export function readChatSendReplySourceSessionId(
-  params: Pick<StartChatDispatchParams, "admission" | "context" | "session" | "userTurn">,
-): string | undefined {
-  const { admission, context, session, userTurn } = params;
-  try {
-    admission.assertWorkAdmissionCurrent();
-    if (!userTurn.replySource.isCurrent()) {
-      return undefined;
-    }
-    const queued = context.chatQueuedTurns.get(session.clientRunId);
-    if (
-      context.chatAbortControllers.get(session.clientRunId) !== admission.activeRunAbort.entry &&
-      queued?.controller !== admission.activeRunAbort.controller
-    ) {
-      return undefined;
-    }
-    return admission.sessionBinding.sessionId;
-  } catch {
-    return undefined;
   }
 }
