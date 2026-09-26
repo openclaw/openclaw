@@ -334,6 +334,7 @@ openclaw models auth login --provider <id> [--agent <agentId>]
 openclaw models auth login --provider openai --profile-id openai:work
 openclaw models auth login-github-copilot
 openclaw models auth activate <profileId> [--agent <id>]
+openclaw models auth clear-cooldown <profileId> [--agent <id>]
 openclaw models auth logout <profileId> [--yes]
 openclaw models auth paste-api-key --provider <id>
 openclaw models auth setup-token --provider <id>
@@ -363,11 +364,13 @@ For the shared-main agent, `--force` clears the provider's shared credentials an
 
 `models auth activate <profileId>` tests a saved sign-in and selects its verified model and account for the chosen agent. Use the exact command printed after unattended replacement setup, or find the saved id with `models auth list --json`. This command confirms activation without another prompt; a failed test leaves the current connection unchanged.
 
+`models auth clear-cooldown <profileId>` clears the saved cooldown, block, and disable state for one auth profile without changing its credentials or auth order. Use it after you fix the cause early, such as adding provider credit or resetting a spending limit before the recorded reset time. Like the other `models auth` write commands, it asks a running Gateway to reload its auth state and prints restart guidance when that Gateway cannot be refreshed. If the failure still applies, the next request records a new cooldown.
+
 `models auth logout <profileId>` removes one saved auth profile from the selected agent auth store. Use the profile id shown by `models auth list`. It also drops that profile from `auth.profiles` and from every `auth.order` list in your config, so no stale reference is left behind, and it deletes an `auth.order.<provider>` entry that would otherwise be emptied (an authored empty order means "select no profiles" and would disable the provider). It prompts for confirmation on a TTY; pass `--yes` for scripts and agents. Provider key references are cleared before the credential is removed. Model defaults and connection settings stay unchanged. Logout refuses when the profile is not in the store.
 
 `models auth login-github-copilot` is a shortcut for `models auth login --provider github-copilot --method device` (GitHub device flow); it accepts `--yes` to overwrite an existing profile without prompting.
 
-Use either `openclaw models auth --agent <id> <subcommand>` or `openclaw models auth <subcommand> --agent <id>` to target a specific configured agent store. Both forms are supported by `add`, `list`, `login`, `activate`, `logout`, `paste-api-key`, `setup-token`, `paste-token`, `login-github-copilot`, and `order get`/`set`/`clear`.
+Use either `openclaw models auth --agent <id> <subcommand>` or `openclaw models auth <subcommand> --agent <id>` to target a specific configured agent store. Both forms are supported by `add`, `list`, `login`, `activate`, `clear-cooldown`, `logout`, `paste-api-key`, `setup-token`, `paste-token`, `login-github-copilot`, and `order get`/`set`/`clear`.
 
 For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login. Use `--method api-key` only when you want to add an OpenAI API-key profile, usually as a backup for Codex subscription limits. Run `openclaw doctor --fix` to migrate older legacy OpenAI Codex prefix auth/profile state to `openai`.
 

@@ -560,7 +560,14 @@ export function buildAuthProfileUnusableHint(params: {
     return `Re-authenticate with ${formatOAuthRefreshFailureLoginCommandMarkdown(command)}.`;
   }
   if (params.kind === "disabled" && params.reason === "billing") {
-    return "Top up credits (provider billing) or switch provider.";
+    const profileId = sanitizeOAuthRefreshFailureProfileId(params.profileId);
+    if (!profileId) {
+      return "Top up credits (provider billing) or switch provider.";
+    }
+    const command = formatCliCommand(
+      `openclaw models auth clear-cooldown ${quoteShellArg(profileId)}`,
+    );
+    return `Top up credits (provider billing), then run ${formatOAuthRefreshFailureLoginCommandMarkdown(command)}, or switch provider.`;
   }
   return "Wait for cooldown or switch provider.";
 }

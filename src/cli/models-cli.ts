@@ -375,6 +375,20 @@ export function registerModelsCli(program: Command) {
     });
 
   auth
+    .command("clear-cooldown")
+    .description("Clear cooldown state for a saved auth profile after the provider recovered")
+    .argument("<profileId>", "Auth profile id from models auth list")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .action(async (profileId: string, opts, command) => {
+      await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
+        const agent = resolveModelAgentOption(command, opts);
+        const { modelsAuthClearCooldownCommand } =
+          await import("../commands/models/auth-clear-cooldown.js");
+        await modelsAuthClearCooldownCommand({ profileId, agent }, defaultRuntime);
+      });
+    });
+
+  auth
     .command("logout")
     .description("Remove a saved auth profile (see `models auth list` for ids)")
     .argument("<profileId>", "Auth profile id (e.g. openai:manual)")
