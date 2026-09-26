@@ -21,8 +21,6 @@ import type {
 export type CronListTab = "tasks" | "activity";
 export type CronDetailTab = "settings" | "history";
 export type CronProps = {
-  basePath: string;
-  agentId: string;
   loading: boolean;
   /** True once a cron.list response has completed (initial load finished). */
   hasLoaded: boolean;
@@ -57,7 +55,6 @@ export type CronProps = {
   runs: CronRunLogEntry[];
   runsState: CronRunsViewState;
   highlightedRunId?: string | null;
-  runsTotal: number;
   runsHasMore: boolean;
   runsLoadingMore: boolean;
   runsStatuses: CronRunsStatusValue[];

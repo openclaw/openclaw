@@ -41,7 +41,6 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { modelCatalogEventInvalidation } from "../../lib/model-catalog-cache.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
-import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -607,7 +606,6 @@ class CronPage extends OpenClawLightDomElement {
 
   override render() {
     const channels = this.context.channels.state;
-    const fallbackAgentId = resolveSessionNavigationAgentId(this.context);
     const suggestions = buildCronSuggestions({
       channels,
       runtimeConfig: this.context.runtimeConfig.state,
@@ -646,8 +644,6 @@ class CronPage extends OpenClawLightDomElement {
       ${this.runTranscript.render()}
       ${renderSettingsWorkspace(
         renderCron({
-          basePath: this.context.basePath,
-          agentId: fallbackAgentId,
           loading: this.cron.cronLoading,
           hasLoaded: this.cron.cronJobsSnapshotRevision !== null,
           listError: this.cron.cronJobsError,
@@ -684,7 +680,6 @@ class CronPage extends OpenClawLightDomElement {
           runs: this.cron.cronRuns,
           runsState: getCronRunsViewState(this.cron),
           highlightedRunId: this.highlightedRunId,
-          runsTotal: this.cron.cronRunsTotal,
           runsHasMore: this.cron.cronRunsHasMore,
           runsLoadingMore: this.cron.cronRunsLoadingMore,
           runsStatuses: this.cron.cronRunsStatuses,
