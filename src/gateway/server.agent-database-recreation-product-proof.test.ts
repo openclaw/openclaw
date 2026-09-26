@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentsDeleteResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import { loadConfig } from "../config/config.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { readSqliteReaderDiagnosticsForPath } from "../infra/sqlite-reader-lifecycle.js";
+import { registerMemoryCapability } from "../plugins/memory-state.js";
+import { disposePluginRegistryInstances, requireActivePluginRegistry } from "../plugins/runtime.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   inspectOpenClawAgentDatabaseOwner,
@@ -14,6 +18,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import type { GatewayClient } from "./client.js";
+import { createGatewayMemoryCloseRegistryFactory } from "./server-close.memory.test-support.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
@@ -182,11 +187,68 @@ describe("agent deletion product proof with a state dir outside home and the tem
                 client.request("agents.create", { name: "External State Agent", workspace }),
               ).resolves.toMatchObject({ agentId: EXTERNAL_STATE_AGENT_ID, ok: true });
               await fs.writeFile(path.join(workspace, "NOTES.md"), "keep me in Trash\n");
-
-              const result = await client.request<AgentsDeleteResult>("agents.delete", {
+              await client.request("sessions.create", {
                 agentId: EXTERNAL_STATE_AGENT_ID,
-                deleteFiles: true,
+                key: `agent:${EXTERNAL_STATE_AGENT_ID}:main`,
               });
+              await client.request("secrets.reload", {});
+              const databasePath = resolveOpenClawAgentSqlitePath({
+                agentId: EXTERNAL_STATE_AGENT_ID,
+                env: process.env,
+              });
+              const memoryConfig = {
+                ...loadConfig(),
+                memory: {
+                  search: {
+                    provider: "fixture-embedding",
+                    model: "synthetic-embedding",
+                    fallback: "none" as const,
+                    store: { vector: { enabled: false } },
+                  },
+                },
+              };
+              let memoryCloses = 0;
+              const createMemory = await createGatewayMemoryCloseRegistryFactory(memoryConfig);
+              const memory = createMemory(async () => {
+                memoryCloses += 1;
+              });
+              const registry = requireActivePluginRegistry();
+              const priorMemoryCapabilities = [...registry.memoryCapabilities];
+              registerMemoryCapability("memory-fixture", { runtime: memory.runtime });
+              let result: AgentsDeleteResult;
+              try {
+                const opened = await memory.runtime.getMemorySearchManager({
+                  cfg: memoryConfig,
+                  agentId: EXTERNAL_STATE_AGENT_ID,
+                });
+                expect(opened.manager, opened.error).not.toBeNull();
+                await expect(opened.manager!.probeEmbeddingAvailability()).resolves.toMatchObject({
+                  ok: true,
+                });
+                const survivor = await memory.runtime.getMemorySearchManager({
+                  cfg: memoryConfig,
+                  agentId: "main",
+                });
+                expect(survivor.manager, survivor.error).not.toBeNull();
+                await expect(survivor.manager!.probeEmbeddingAvailability()).resolves.toMatchObject(
+                  {
+                    ok: true,
+                  },
+                );
+                result = await client.request<AgentsDeleteResult>("agents.delete", {
+                  agentId: EXTERNAL_STATE_AGENT_ID,
+                  deleteFiles: true,
+                });
+                expect(memoryCloses).toBe(1);
+                expect(survivor.manager!.status().dbPath).toBe(
+                  resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+                );
+              } finally {
+                registry.memoryCapabilities = priorMemoryCapabilities;
+                await memory.runtime.closeAllMemorySearchManagers?.();
+                await disposePluginRegistryInstances(memory.registry);
+              }
+              expect(readSqliteReaderDiagnosticsForPath(databasePath).connections).toEqual([]);
 
               // Database files are removed by the database-owned deletion first; the
               // workspace and session directories are what reach Trash here.

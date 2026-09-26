@@ -2,7 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/runtime-snapshots.js";
 import { getRuntimeConfigSnapshotRefreshHandler } from "../config/runtime-snapshot.js";
 import { activateSecretsRuntimeSnapshot, getActiveSecretsRuntimeSnapshot } from "./runtime.js";
@@ -13,6 +14,7 @@ import {
 } from "./runtime.test-support.ts";
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function writeSecureFile(filePath: string, content: string, mode = 0o600): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -30,6 +32,32 @@ async function writeSecureFile(filePath: string, content: string, mode = 0o600):
 }
 
 describe("secrets runtime snapshot request secret refs", () => {
+  it("refreshes the current roster without retaining removed agents or losing explicit stores", async () => {
+    const stateDir = tempDirs.make("openclaw-refresh-roster-");
+    const explicitDir = path.join(stateDir, "explicit");
+    const departingDir = path.join(stateDir, "agents", "departing", "agent");
+    const config = asConfig({ agents: { entries: { main: {}, departing: {} } } });
+    const loadAuthStore = vi.fn(() => loadAuthStoreWithProfiles({}));
+    activateSecretsRuntimeSnapshot(
+      await prepareSecretsRuntimeSnapshot({
+        config,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        agentDirs: [explicitDir],
+        loadAuthStore,
+      }),
+    );
+    const refresh = getRuntimeConfigSnapshotRefreshHandler()!;
+    await expect(refresh.refresh({ sourceConfig: config })).resolves.toBe(true);
+    expect(loadAuthStore).toHaveBeenCalledWith(departingDir);
+    loadAuthStore.mockClear();
+
+    const sourceConfig = asConfig({ agents: { entries: { main: {} } } });
+    const preflightResult = await refresh.preflight!({ sourceConfig });
+    await expect(refresh.refresh({ sourceConfig, preflightResult })).resolves.toBe(true);
+    expect(loadAuthStore).toHaveBeenCalledWith(explicitDir);
+    expect(loadAuthStore).not.toHaveBeenCalledWith(departingDir);
+  });
+
   it("can skip auth-profile SecretRef resolution when includeAuthStoreRefs is false", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_SECRET_${Date.now()}`;
     delete process.env[missingEnvVar];

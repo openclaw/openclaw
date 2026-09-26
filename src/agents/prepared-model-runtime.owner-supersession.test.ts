@@ -6,8 +6,11 @@ import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getPreparedModelRuntimeSnapshot,
+  loadPublishedGatewayReplyDispatchRuntime,
   markPreparedModelRuntimeSnapshotsStale,
+  publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
+  retirePreparedModelRuntimeAgent,
 } from "./prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
 
@@ -15,6 +18,24 @@ const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime"
 const { mocks } = fixture;
 
 describe("prepared model runtime owner selection", () => {
+  it("retires only the deleted agent's physical owners", async () => {
+    mocks.configuredAgentIds = ["worker"];
+    mocks.configuredAgentDirs.set("worker", fixture.state.agentDir("isolated-worker"));
+    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    const separate = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" });
+    const input = { config: {}, agentId: "worker", agentDir: fixture.state.agentDir("worker") };
+    const deleted = await publishPreparedModelRuntimeSnapshot(input);
+    const sharing = await publishPreparedModelRuntimeSnapshot({ ...input, agentId: "survivor" });
+
+    await retirePreparedModelRuntimeAgent({ agentId: input.agentId, agentDirs: [input.agentDir] });
+
+    expect(deleted.isCurrent()).toBe(false);
+    expect(sharing.isCurrent()).toBe(true);
+    await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" })).resolves.toBe(
+      separate,
+    );
+  });
+
   it.each(["lost claim", "invalidation", "close"] as const)(
     "does not accept a joined refresh after %s",
     async (boundary) => {
