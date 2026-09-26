@@ -48,3 +48,16 @@ export async function legacyReefFileExists(filePath: string): Promise<boolean> {
     return false;
   }
 }
+
+export async function listLegacyReefFiles(
+  stateDir: string,
+  filenames: readonly string[],
+): Promise<string[]> {
+  const entries = await Promise.all(
+    filenames.map(async (filename) => ({
+      filename,
+      exists: await legacyReefFileExists(path.join(stateDir, filename)),
+    })),
+  );
+  return entries.filter((entry) => entry.exists).map((entry) => entry.filename);
+}

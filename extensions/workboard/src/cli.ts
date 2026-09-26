@@ -3,7 +3,6 @@ import {
   type WorkboardCard,
   type WorkboardStatus,
 } from "@openclaw/workboard-contract";
-// Workboard plugin module implements cli behavior.
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { addGatewayClientOptions, callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
@@ -11,8 +10,8 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
-import { redactClaimToken } from "./card-redaction.js";
-import type { WorkboardDispatchResult, WorkboardStore } from "./store.js";
+import { redactClaimToken, redactDispatchResult } from "./card-redaction.js";
+import type { WorkboardStore } from "./store.js";
 
 type JsonOptions = {
   json?: boolean;
@@ -71,16 +70,6 @@ function formatCardLine(card: WorkboardCard): string {
   const agent = card.agentId ? ` ${card.agentId}` : "";
   const archived = card.metadata?.archivedAt ? " (archived)" : "";
   return `${card.id.slice(0, 8)}  ${card.status.padEnd(8)}  ${card.priority.padEnd(6)}  ${boardId}${agent}  ${card.title}${archived}`;
-}
-
-function redactDispatchResult(result: WorkboardDispatchResult): WorkboardDispatchResult {
-  return {
-    ...result,
-    promoted: result.promoted.map(redactClaimToken),
-    reclaimed: result.reclaimed.map(redactClaimToken),
-    blocked: result.blocked.map(redactClaimToken),
-    orchestrated: result.orchestrated.map(redactClaimToken),
-  };
 }
 
 function writeCards(cards: WorkboardCard[], options: JsonOptions): void {

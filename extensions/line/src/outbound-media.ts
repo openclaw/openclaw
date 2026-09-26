@@ -126,7 +126,7 @@ function isLineUserTarget(target: string): boolean {
   return /^U/i.test(normalized);
 }
 
-export function createImageMessage(
+function createImageMessage(
   originalContentUrl: string,
   previewImageUrl?: string,
 ): messagingApi.ImageMessage {
@@ -137,7 +137,7 @@ export function createImageMessage(
   };
 }
 
-export function createVideoMessage(
+function createVideoMessage(
   originalContentUrl: string,
   previewImageUrl: string,
   trackingId?: string,
@@ -150,7 +150,7 @@ export function createVideoMessage(
   };
 }
 
-export function createAudioMessage(
+function createAudioMessage(
   originalContentUrl: string,
   durationMs: number,
 ): messagingApi.AudioMessage {

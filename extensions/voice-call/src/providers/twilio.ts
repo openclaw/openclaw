@@ -206,9 +206,6 @@ export class TwilioProvider implements VoiceCallProvider {
     this.mediaStreamHandler.clearTtsQueue(streamSid, reason);
   }
 
-  /**
-   * Make an authenticated request to the Twilio API.
-   */
   private async apiRequest<T = unknown>(
     endpoint: string,
     params: Record<string, string | string[]>,
@@ -260,9 +257,6 @@ export class TwilioProvider implements VoiceCallProvider {
     });
   }
 
-  /**
-   * Parse Twilio webhook event into normalized format.
-   */
   parseWebhookEvent(
     ctx: WebhookContext,
     options?: WebhookParseOptions,
@@ -303,9 +297,6 @@ export class TwilioProvider implements VoiceCallProvider {
     }
   }
 
-  /**
-   * Parse Twilio direction to normalized format.
-   */
   private static parseDirection(direction: string | null): "inbound" | "outbound" | undefined {
     if (direction === "inbound") {
       return "inbound";
@@ -324,9 +315,6 @@ export class TwilioProvider implements VoiceCallProvider {
     return Number(trimmed);
   }
 
-  /**
-   * Convert Twilio webhook params to normalized event format.
-   */
   private normalizeEvent(
     params: URLSearchParams,
     options?: {
@@ -578,9 +566,6 @@ export class TwilioProvider implements VoiceCallProvider {
     };
   }
 
-  /**
-   * Hang up a call via Twilio API.
-   */
   async hangupCall(input: HangupCallInput): Promise<void> {
     await this.apiRequest(
       `/Calls/${input.providerCallId}.json`,
@@ -769,9 +754,6 @@ export class TwilioProvider implements VoiceCallProvider {
     });
   }
 
-  /**
-   * Start listening for speech via Twilio <Gather>.
-   */
   async startListening(input: StartListeningInput): Promise<void> {
     const webhookUrl = this.callWebhookUrls.get(input.providerCallId);
     if (!webhookUrl) {

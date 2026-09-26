@@ -68,9 +68,6 @@ function listenForChildStreamErrors(
   proc.stderr.on("error", (error) => onError("stderr", error));
 }
 
-/**
- * Tunnel configuration for exposing the webhook server.
- */
 interface TunnelConfig {
   /** Tunnel provider: ngrok, tailscale-serve, or tailscale-funnel */
   provider: "ngrok" | "tailscale-serve" | "tailscale-funnel" | "none";
@@ -88,9 +85,6 @@ interface TunnelConfig {
   ngrokDomain?: string;
 }
 
-/**
- * Result of starting a tunnel.
- */
 export interface TunnelResult {
   /** The public URL */
   publicUrl: string;
@@ -249,9 +243,6 @@ async function startNgrokTunnel(config: {
   });
 }
 
-/**
- * Start a Tailscale serve/funnel tunnel.
- */
 async function startTailscaleTunnel(config: {
   mode: "serve" | "funnel";
   port: number;
@@ -296,9 +287,6 @@ async function startTailscaleTunnel(config: {
   };
 }
 
-/**
- * Start a tunnel based on configuration.
- */
 export async function startTunnel(config: TunnelConfig): Promise<TunnelResult | null> {
   switch (config.provider) {
     case "ngrok":
@@ -310,17 +298,9 @@ export async function startTunnel(config: TunnelConfig): Promise<TunnelResult | 
       });
 
     case "tailscale-serve":
-      return startTailscaleTunnel({
-        mode: "serve",
-        port: config.port,
-        tailscalePort: config.tailscalePort ?? 443,
-        path: config.path,
-        streamPaths: config.streamPaths,
-      });
-
     case "tailscale-funnel":
       return startTailscaleTunnel({
-        mode: "funnel",
+        mode: config.provider === "tailscale-serve" ? "serve" : "funnel",
         port: config.port,
         tailscalePort: config.tailscalePort ?? 443,
         path: config.path,

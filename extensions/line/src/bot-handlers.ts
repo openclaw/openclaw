@@ -61,12 +61,9 @@ import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine
 import type { ResolvedLineAccount } from "./types.js";
 import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
 
-type FollowEvent = webhook.FollowEvent;
 type JoinEvent = webhook.JoinEvent;
-type LeaveEvent = webhook.LeaveEvent;
 type MessageEvent = webhook.MessageEvent;
 type PostbackEvent = webhook.PostbackEvent;
-type UnfollowEvent = webhook.UnfollowEvent;
 type WebhookEvent = webhook.Event;
 
 type MediaRef = Pick<ChannelInboundMediaInput, "contentType" | "fileName"> & { path: string };
@@ -567,19 +564,6 @@ async function handleMessageEvent(
   }
 }
 
-async function handleFollowEvent(event: FollowEvent, _context: LineHandlerContext): Promise<void> {
-  const { userId } = getLineSourceInfo(event.source);
-  logVerbose(`line: user ${userId ?? "unknown"} followed`);
-}
-
-async function handleUnfollowEvent(
-  event: UnfollowEvent,
-  _context: LineHandlerContext,
-): Promise<void> {
-  const { userId } = getLineSourceInfo(event.source);
-  logVerbose(`line: user ${userId ?? "unknown"} unfollowed`);
-}
-
 async function handleJoinEvent(event: JoinEvent, context: LineHandlerContext): Promise<void> {
   const { groupId, roomId, isGroup } = getLineSourceInfo(event.source);
   const conversationId = groupId ?? roomId;
@@ -615,11 +599,6 @@ async function handleJoinEvent(event: JoinEvent, context: LineHandlerContext): P
       return title ? { ...roomContext, title } : roomContext;
     },
   });
-}
-
-async function handleLeaveEvent(event: LeaveEvent, _context: LineHandlerContext): Promise<void> {
-  const { groupId, roomId } = getLineSourceInfo(event.source);
-  logVerbose(`line: bot left ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
 }
 
 /** What a tap that did not answer the question has to tell the person who tapped. */
@@ -741,21 +720,23 @@ async function handleLineWebhookEvent(
       );
       break;
     case "follow":
-      await handleFollowEvent(event, context);
+    case "unfollow": {
+      const { userId } = getLineSourceInfo(event.source);
+      logVerbose(`line: user ${userId ?? "unknown"} ${event.type}ed`);
       break;
-    case "unfollow":
-      await handleUnfollowEvent(event, context);
-      break;
+    }
     case "join":
       await handleJoinEvent(event, context);
       break;
-    case "leave":
-      await handleLeaveEvent(event, context);
+    case "leave": {
+      const { groupId, roomId } = getLineSourceInfo(event.source);
+      logVerbose(`line: bot left ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
       break;
+    }
     case "postback":
       await handlePostbackEvent(event, context);
       break;
     default:
-      logVerbose(`line: unhandled event type: ${(event as WebhookEvent).type}`);
+      logVerbose(`line: unhandled event type: ${event.type}`);
   }
 }

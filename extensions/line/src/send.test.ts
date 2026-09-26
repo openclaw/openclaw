@@ -424,12 +424,12 @@ describe("LINE send helpers", () => {
   });
 
   it("pushes images via normalized LINE target", async () => {
-    const result = await sendModule.pushImageMessage(
-      "line:user:U123",
-      "https://example.com/original.jpg",
-      undefined,
-      { cfg: LINE_TEST_CFG, verbose: true },
-    );
+    const result = await sendModule.sendMessageLine("line:user:U123", "", {
+      cfg: LINE_TEST_CFG,
+      verbose: true,
+      mediaUrl: "https://example.com/original.jpg",
+      mediaKind: "image",
+    });
 
     expect(pushMessageMock).toHaveBeenCalledWith({
       to: "U123",
@@ -446,7 +446,7 @@ describe("LINE send helpers", () => {
       accountId: "default",
       direction: "outbound",
     });
-    expect(logVerboseMock).toHaveBeenCalledWith("line: pushed image to U123");
+    expect(logVerboseMock).toHaveBeenCalledWith("line: pushed message to U123");
     expect(result).toEqual({
       chatId: "U123",
       messageId: "push",
@@ -960,10 +960,12 @@ describe("LINE send helpers", () => {
     expect(pushMessageMock).not.toHaveBeenCalled();
   });
 
-  it("keeps the image helper on the validated LINE media path", async () => {
+  it("validates image URLs before sending", async () => {
     await expect(
-      sendModule.pushImageMessage("line:user:U123", "http://example.com/private.jpg", undefined, {
+      sendModule.sendMessageLine("line:user:U123", "", {
         cfg: LINE_TEST_CFG,
+        mediaUrl: "http://example.com/private.jpg",
+        mediaKind: "image",
       }),
     ).rejects.toThrow("LINE outbound media URL must use HTTPS");
 

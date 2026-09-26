@@ -1,11 +1,6 @@
 // Line tests cover provider-valid carousel normalization and fallback behavior.
 import { describe, expect, it } from "vitest";
-import { messageAction } from "./actions.js";
-import {
-  buildTemplateMessageFromPayload,
-  createCarouselColumn,
-  createTemplateCarousel,
-} from "./template-messages.js";
+import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineTemplateMessagePayload } from "./types.js";
 
 type CarouselPayload = Extract<LineTemplateMessagePayload, { type: "carousel" }>;
@@ -80,40 +75,46 @@ describe("LINE carousel normalization", () => {
     ).toEqual({ type: "text", text: "A (Open)\nSecond: B (Open)" });
   });
 
-  it("normalizes empty titles in columns passed directly to the strict builder", () => {
-    const message = createTemplateCarousel([
-      { title: "", text: "A", actions: [messageAction("Open")] },
-      { text: "B", actions: [messageAction("Open")] },
-    ]);
-
-    expect(message).toMatchObject({
-      type: "template",
-      template: { type: "carousel", columns: [{ title: undefined }, { title: undefined }] },
-    });
-  });
-
-  it("leaves a provider-valid carousel byte shape unchanged", () => {
+  it("preserves a provider-valid carousel at the payload boundary", () => {
     const columns = [
-      createCarouselColumn({
+      column("A", {
         title: "First",
-        text: "A",
         thumbnailImageUrl: "https://example.com/a.jpg",
-        actions: [messageAction("One"), messageAction("Two")],
+        actions: ["One", "Two"],
       }),
-      createCarouselColumn({
+      column("B", {
         title: "Second",
-        text: "B",
         thumbnailImageUrl: "https://example.com/b.jpg",
-        actions: [messageAction("Three"), messageAction("Four")],
+        actions: ["Three", "Four"],
       }),
     ];
-
-    expect(createTemplateCarousel(columns, { altText: "Options" })).toEqual({
+    expect(
+      buildTemplateMessageFromPayload({ type: "carousel", columns, altText: "Options" }),
+    ).toEqual({
       type: "template",
       altText: "Options",
       template: {
         type: "carousel",
-        columns,
+        columns: [
+          {
+            title: "First",
+            text: "A",
+            thumbnailImageUrl: "https://example.com/a.jpg",
+            actions: [
+              { type: "message", label: "One", text: "One" },
+              { type: "message", label: "Two", text: "Two" },
+            ],
+          },
+          {
+            title: "Second",
+            text: "B",
+            thumbnailImageUrl: "https://example.com/b.jpg",
+            actions: [
+              { type: "message", label: "Three", text: "Three" },
+              { type: "message", label: "Four", text: "Four" },
+            ],
+          },
+        ],
         imageAspectRatio: "rectangle",
         imageSize: "cover",
       },
@@ -138,19 +139,6 @@ describe("LINE carousel normalization", () => {
         altText,
       }),
     ).toEqual({ type: "text", text: `${"a".repeat(1500)}\nA` });
-  });
-
-  it.each(invalidCases)("never emits an invalid carousel for $name", ({ columns }) => {
-    const built = columns.map((entry) =>
-      createCarouselColumn({
-        title: entry.title,
-        text: entry.text,
-        thumbnailImageUrl: entry.thumbnailImageUrl,
-        actions: entry.actions.map((item) => messageAction(item.label, item.data)),
-      }),
-    );
-
-    expect(() => createTemplateCarousel(built)).toThrow(/LINE carousel/);
   });
 
   // Columns that disagree only on their image are left as a carousel: outbound

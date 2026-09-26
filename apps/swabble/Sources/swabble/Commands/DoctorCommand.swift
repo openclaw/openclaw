@@ -4,7 +4,7 @@ import Speech
 import Swabble
 
 @MainActor
-struct DoctorCommand: ParsableCommand {
+struct DoctorCommand: CLICommand {
     static var commandDescription: CommandDescription {
         CommandDescription(commandName: "doctor", abstract: "Check Speech permission and config")
     }

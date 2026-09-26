@@ -4,7 +4,7 @@ import Foundation
 import Swabble
 
 @MainActor
-struct MicList: ParsableCommand {
+struct MicList: CLICommand {
     static var commandDescription: CommandDescription {
         CommandDescription(commandName: "list", abstract: "List input devices")
     }
@@ -26,7 +26,7 @@ struct MicList: ParsableCommand {
 }
 
 @MainActor
-struct MicSet: ParsableCommand {
+struct MicSet: CLICommand {
     @Argument(help: "Device index from list") var index: Int = 0
     @Option(name: .long("config"), help: "Path to config JSON") var configPath: String?
 

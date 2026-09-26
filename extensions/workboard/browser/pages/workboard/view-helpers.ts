@@ -22,7 +22,6 @@ import { isReservedSessionKey } from "../../lib/workboard/session-links.ts";
 import type { WorkboardSessionResolution } from "../../lib/workboard/session-resolution.ts";
 import { taskMatchesLifecycle } from "../../lib/workboard/session-state.ts";
 import { agentDisplayName, findCardAgent, type WorkboardAgentsList } from "./agent-filter.ts";
-export { taskMatchesLifecycle } from "../../lib/workboard/session-state.ts";
 
 export type BoardAutomationState = { jobId: string } & (
   | { status: "loading" }
@@ -41,7 +40,6 @@ export type WorkboardProps = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   canWrite?: boolean;
-  canGrant?: boolean;
   canModelOverride?: boolean;
   agentsList: WorkboardAgentsList | null;
   defaultAgentId?: string | null;

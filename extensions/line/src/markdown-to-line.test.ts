@@ -1,36 +1,11 @@
 // Line tests cover markdown to line plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import {
-  stripMarkdown,
-  processLineMessage,
-  convertCodeBlockToFlexBubble,
-  hasMarkdownToConvert,
-} from "./markdown-to-line.js";
+import { processLineMessage } from "./markdown-to-line.js";
 
 function requireEntry<T>(entries: readonly T[], index: number, context: string): T {
   return expectDefined(entries[index], context);
 }
-
-describe("stripMarkdown", () => {
-  it("handles complex markdown", () => {
-    const input = `# Title
-
-This is **bold** and *italic* text.
-
-> A quote
-
-Some ~~deleted~~ content.`;
-
-    expect(stripMarkdown(input)).toBe(`Title
-
-This is bold and italic text.
-
-A quote
-
-Some deleted content.`);
-  });
-});
 
 describe("processLineMessage table cards", () => {
   it("replaces empty cells with placeholders", () => {
@@ -96,54 +71,22 @@ describe("processLineMessage table cards", () => {
   });
 });
 
-describe("convertCodeBlockToFlexBubble", () => {
-  it("creates a code card with language label", () => {
-    const block = { language: "typescript", code: "const x = 1;" };
-
-    const bubble = convertCodeBlockToFlexBubble(block);
-
-    const body = bubble.body as { contents: Array<{ text: string }> };
-    expect(requireEntry(body.contents, 0, "first flex body content").text).toBe(
-      "Code (typescript)",
-    );
-  });
-
-  it("creates a code card without language", () => {
-    const block = { code: "plain code" };
-
-    const bubble = convertCodeBlockToFlexBubble(block);
-
-    const body = bubble.body as { contents: Array<{ text: string }> };
-    expect(requireEntry(body.contents, 0, "first flex body content").text).toBe("Code");
-  });
-
-  it("truncates very long code", () => {
-    const longCode = "x".repeat(3000);
-    const block = { code: longCode };
-
-    const bubble = convertCodeBlockToFlexBubble(block);
-
-    const body = bubble.body as { contents: Array<{ contents: Array<{ text: string }> }> };
-    const codeContent = requireEntry(body.contents, 1, "second flex body content");
-    const codeText = requireEntry(codeContent.contents, 0, "truncated code text").text;
-    expect(codeText.length).toBeLessThan(longCode.length);
-    expect(codeText).toContain("...");
-  });
-
-  it("does not split a surrogate pair at the truncation boundary", () => {
-    // The emoji's surrogate pair straddles the 2000-char cap; a raw slice
-    // would leave a lone high surrogate at the end of the code text.
-    const block = { code: `${"x".repeat(1999)}😀${"y".repeat(500)}` };
-
-    const bubble = convertCodeBlockToFlexBubble(block);
-
-    const body = bubble.body as { contents: Array<{ contents: Array<{ text: string }> }> };
-    const codeContent = requireEntry(body.contents, 1, "second flex body content");
-    const codeText = requireEntry(codeContent.contents, 0, "surrogate-safe code text").text;
-    expect(codeText.endsWith("\n...")).toBe(true);
-    expect(
-      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(codeText),
-    ).toBe(false);
+describe("processLineMessage code labels", () => {
+  it.each([
+    { language: "typescript", title: "Code (typescript)" },
+    { language: "", title: "Code" },
+  ])("labels a $language code card", ({ language, title }) => {
+    const result = processLineMessage(`\`\`\`${language}\nconst x = 1;\n\`\`\``);
+    const bubble = requireEntry(result.flexMessages, 0, "code card").contents;
+    expect(bubble).toMatchObject({
+      type: "bubble",
+      body: {
+        contents: [
+          { type: "text", text: title },
+          { type: "box", contents: [{ type: "text", text: "const x = 1;" }] },
+        ],
+      },
+    });
   });
 });
 
@@ -429,29 +372,6 @@ print("done")
 
     expect(result.text).toBe("Use **literal** and <u>x</u>.");
     expect(result.flexMessages).toHaveLength(0);
-  });
-});
-
-describe("hasMarkdownToConvert", () => {
-  it("detects supported markdown patterns", () => {
-    const cases = [
-      `| A | B |
-|---|---|
-| 1 | 2 |`,
-      "```js\ncode\n```",
-      "**bold**",
-      "~~deleted~~",
-      "# Title",
-      "> quote",
-    ];
-
-    for (const text of cases) {
-      expect(hasMarkdownToConvert(text)).toBe(true);
-    }
-  });
-
-  it("returns false for plain text", () => {
-    expect(hasMarkdownToConvert("Just plain text.")).toBe(false);
   });
 });
 

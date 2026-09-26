@@ -21,6 +21,7 @@ import {
   type WorkboardCard,
   type WorkboardUiState,
 } from "../../lib/workboard/index.ts";
+import { taskMatchesLifecycle } from "../../lib/workboard/session-state.ts";
 import { cardAgentLabel } from "./agent-filter.ts";
 import { automationDetailFields, renderBoardAutomation } from "./view-automation.ts";
 import {
@@ -48,7 +49,6 @@ import {
   formatStatusLabel,
   formatUpdatedTime,
   taskDetail,
-  taskMatchesLifecycle,
   type WorkboardProps,
 } from "./view-helpers.ts";
 import {
@@ -491,54 +491,25 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                                 ${t("workboard.detailExecutionOptions")}
                               </summary>
                               <div class="workboard-detail__engine-groups">
-                                ${
-                                  props.canModelOverride !== false
-                                    ? html`
-                                        <div class="workboard-detail__engine-group">
-                                          <span>${t("workboard.detailRunAutomatically")}</span>
-                                          <div class="workboard-detail__actions">
-                                            ${renderStartExecutionButton(
+                                ${(["autonomous", "manual"] as const).map((mode) =>
+                                  mode === "autonomous" && props.canModelOverride === false
+                                    ? nothing
+                                    : html`<div class="workboard-detail__engine-group">
+                                        <span
+                                          >${t(mode === "autonomous" ? "workboard.detailRunAutomatically" : "workboard.detailOpenManually")}</span
+                                        >
+                                        <div class="workboard-detail__actions">
+                                          ${(["codex", "claude"] as const).map((engine) =>
+                                            renderStartExecutionButton(
                                               actionProps,
                                               card,
-                                              "codex",
-                                              "autonomous",
-                                              { engineLabelOnly: true },
-                                            )}
-                                            ${renderStartExecutionButton(
-                                              actionProps,
-                                              card,
-                                              "claude",
-                                              "autonomous",
-                                              { engineLabelOnly: true },
-                                            )}
-                                          </div>
+                                              engine,
+                                              mode,
+                                            ),
+                                          )}
                                         </div>
-                                      `
-                                    : nothing
-                                }
-                                <div class="workboard-detail__engine-group">
-                                  <span>${t("workboard.detailOpenManually")}</span>
-                                  <div class="workboard-detail__actions">
-                                    ${renderStartExecutionButton(
-                                      actionProps,
-                                      card,
-                                      "codex",
-                                      "manual",
-                                      {
-                                        engineLabelOnly: true,
-                                      },
-                                    )}
-                                    ${renderStartExecutionButton(
-                                      actionProps,
-                                      card,
-                                      "claude",
-                                      "manual",
-                                      {
-                                        engineLabelOnly: true,
-                                      },
-                                    )}
-                                  </div>
-                                </div>
+                                      </div>`,
+                                )}
                               </div>
                             </details>
                           `

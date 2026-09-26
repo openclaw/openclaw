@@ -1,9 +1,7 @@
-import type { PickerOption } from "../../components/select-picker.ts";
+import type { ControlUiComponents } from "openclaw/plugin-sdk/control-ui";
 
-export type WorkboardSelectOption<Value extends string = string> = PickerOption & {
+export type WorkboardSelectOption<Value extends string = string> = Parameters<
+  ControlUiComponents["mountSelectPicker"]
+>[1]["options"][number] & {
   value: Value;
-  icon?: string;
-  color?: string;
-  boardId?: string;
-  disabled?: boolean;
 };

@@ -12,8 +12,6 @@ function strokeIcon(body: SVGTemplateResult) {
   </svg>`;
 }
 export const icons = {
-  link: strokeIcon(svg` <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />`),
   paperclip: strokeIcon(svg` <path
     d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"
   />`),
@@ -33,13 +31,10 @@ export const icons = {
   priorityNormal: strokeIcon(svg`<path d="M6 12h12" />`),
   priorityHigh: strokeIcon(svg`<path d="m6 15 6-5 6 5" />`),
   priorityUrgent: strokeIcon(svg`<path d="m6 10 6-5 6 5m-12 9 6-5 6 5" />`),
-  flag: strokeIcon(svg`<path d="M4 22V3c5-4 11 4 16 0v11c-5 4-11-4-16 0" />`),
   check: strokeIcon(svg`<path d="M20 6 9 17l-5-5" />`),
   chevronDown: strokeIcon(svg`<path d="M6 9l6 6 6-6" />`),
   chevronsUpDown: strokeIcon(svg`<path d="m7 15 5 5 5-5" />
     <path d="m7 9 5-5 5 5" />`),
-  chevronUp: strokeIcon(svg`<path d="m6 15 6-6 6 6" />`),
-  chevronLeft: strokeIcon(svg`<path d="m15 6-6 6 6 6" />`),
   chevronRight: strokeIcon(svg`<path d="m9 6 6 6-6 6" />`),
   maximize: strokeIcon(svg`<polyline points="15 3 21 3 21 9" />
     <polyline points="9 21 3 21 3 15" />
@@ -82,10 +77,6 @@ export const icons = {
     <path d="M3 10h5" />
     <path d="M17.5 17.5 16 16.3V14" />
     <circle cx="16" cy="16" r="6" />`),
-  clock: strokeIcon(svg` <circle cx="12" cy="12" r="10" />
-    <polyline points="12 6 12 12 16 14" />`),
-  cornerDownRight: strokeIcon(svg` <polyline points="15 10 20 15 15 20" />
-    <path d="M4 4v7a4 4 0 0 0 4 4h12" />`),
   edit: strokeIcon(
     svg`<path
       d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"
@@ -113,14 +104,6 @@ export const icons = {
   messageSquare: strokeIcon(svg` <path
     d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
   />`),
-  panelBottomClose: strokeIcon(svg` <rect x="3" y="3" width="18" height="18" rx="2" />
-    <path d="M3 15h18M10 11l2-3 2 3" />`),
-  panelBottomOpen: strokeIcon(svg` <rect x="3" y="3" width="18" height="18" rx="2" />
-    <path d="M3 15h18M10 8l2 3 2-3" />`),
-  panelRightClose: strokeIcon(svg` <rect x="3" y="3" width="18" height="18" rx="2" />
-    <path d="M15 3v18M8 10l3 2-3 2" />`),
-  panelRightOpen: strokeIcon(svg` <rect x="3" y="3" width="18" height="18" rx="2" />
-    <path d="M15 3v18M10 10l-3 2 3 2" />`),
   penLine: strokeIcon(
     svg`<path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />`,
   ),
@@ -138,5 +121,4 @@ export const icons = {
     <path d="M16 3.13a4 4 0 0 1 0 7.75" />`),
   x: strokeIcon(svg` <path d="M18 6 6 18" />
     <path d="m6 6 12 12" />`),
-  zap: strokeIcon(svg`<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />`),
 };

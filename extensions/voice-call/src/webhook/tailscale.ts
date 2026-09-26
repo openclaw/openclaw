@@ -60,11 +60,6 @@ export async function getTailscaleSelfInfo(): Promise<TailscaleSelfInfo | null> 
   }
 }
 
-async function getTailscaleDnsName(): Promise<string | null> {
-  const info = await getTailscaleSelfInfo();
-  return info?.dnsName ?? null;
-}
-
 export async function cleanupTailscaleExposureRoute(opts: {
   mode: "serve" | "funnel";
   port: number;
@@ -78,7 +73,7 @@ export async function setupTailscaleExposureRoutes(opts: {
   port: number;
   routes: Array<{ path: string; localUrl: string }>;
 }): Promise<string | null> {
-  const dnsName = await getTailscaleDnsName();
+  const dnsName = (await getTailscaleSelfInfo())?.dnsName;
   if (!dnsName) {
     console.warn("[voice-call] Could not get Tailscale DNS name");
     return null;

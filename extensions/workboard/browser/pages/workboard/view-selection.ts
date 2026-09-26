@@ -55,8 +55,7 @@ export function matchesWorkboardCardScope(props: WorkboardProps, card: Workboard
       props.agentsList?.defaultId ?? props.defaultAgentId,
       props.scopeAgentId,
     ) &&
-    (props.showAgentFilter === false ||
-      matchesAgentFilter(card, props.agentsList, state.agentFilter))
+    (props.showAgentFilter === false || matchesAgentFilter(card, state.agentFilter))
   );
 }
 

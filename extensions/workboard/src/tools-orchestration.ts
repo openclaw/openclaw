@@ -4,7 +4,7 @@ import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
-import { redactClaimToken } from "./card-redaction.js";
+import { redactClaimToken, redactDispatchResult } from "./card-redaction.js";
 import type { WorkboardStore } from "./store.js";
 import {
   cardIdField,
@@ -354,13 +354,7 @@ export function createWorkboardOrchestrationTools(params: {
       execute: async (_toolCallId, rawParams) => {
         const record = asNonArrayRecord(rawParams);
         const result = await store.dispatch({ boardId: record.boardId });
-        return jsonResult({
-          ...result,
-          promoted: result.promoted.map(redactClaimToken),
-          reclaimed: result.reclaimed.map(redactClaimToken),
-          blocked: result.blocked.map(redactClaimToken),
-          orchestrated: result.orchestrated.map(redactClaimToken),
-        });
+        return jsonResult(redactDispatchResult(result));
       },
     },
     {

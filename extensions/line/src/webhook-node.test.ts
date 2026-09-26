@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
-import { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./webhook-node.js";
+import { createLineNodeWebhookHandler } from "./webhook-node.js";
 
 const sign = (body: string, secret: string) =>
   crypto.createHmac("SHA256", secret).update(body).digest("base64");
@@ -331,18 +331,5 @@ describe("createLineNodeWebhookHandler", () => {
     expect(result.status).toBe(400);
     expect(result.body).toEqual({ error: "Invalid webhook payload" });
     expect(result.dispatched).not.toHaveBeenCalled();
-  });
-});
-
-describe("readLineWebhookRequestBody", () => {
-  it("reads body within limit", async () => {
-    const req = createMockIncomingRequest(['{"events":[{"type":"message"}]}']);
-    const body = await readLineWebhookRequestBody(req, 1024);
-    expect(body).toContain('"events"');
-  });
-
-  it("rejects oversized body", async () => {
-    const req = createMockIncomingRequest(["x".repeat(2048)]);
-    await expect(readLineWebhookRequestBody(req, 128)).rejects.toThrow("PayloadTooLarge");
   });
 });

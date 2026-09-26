@@ -94,7 +94,7 @@ public actor MLXTTSHelperService {
         do {
             model = try await self.model(repo: request.modelRepo)
         } catch is CancellationError {
-            await self.finishCanceled(id: request.id)
+            await self.finish(event: .canceled(id: request.id), id: request.id)
             return
         } catch {
             await self.finish(
@@ -148,7 +148,7 @@ public actor MLXTTSHelperService {
                 await self.finish(event: .audio(audio), id: request.id)
             }
         } catch is CancellationError {
-            await self.finishCanceled(id: request.id)
+            await self.finish(event: .canceled(id: request.id), id: request.id)
         } catch {
             await self.finish(
                 event: .error(MLXTTSErrorEvent(
@@ -170,10 +170,6 @@ public actor MLXTTSHelperService {
         let model = try await loadModel(repo)
         cachedModel = CachedModel(repo: repo, model: model)
         return model
-    }
-
-    private func finishCanceled(id: String) async {
-        await self.finish(event: .canceled(id: id), id: id)
     }
 
     private func finish(event: MLXTTSEvent, id: String) async {

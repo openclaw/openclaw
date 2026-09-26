@@ -1,14 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Line tests cover group keys plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  resolveExactLineGroupConfigKey,
-  resolveLineGroupConfigEntry,
-  resolveLineGroupLookupIds,
-  resolveLineGroupsConfig,
-} from "./group-keys.js";
+import { resolveLineGroupConfigEntry, resolveLineGroupLookupIds } from "./group-keys.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
-import type { LineGroupConfig } from "./types.js";
+import type { LineConfig } from "./types.js";
 
 describe("resolveLineGroupLookupIds", () => {
   it("expands raw ids to both prefixed candidates", () => {
@@ -60,7 +55,7 @@ describe("resolveLineGroupConfigEntry", () => {
     // The inbound gate reads this entry while `/status` and the turn's activation
     // directive read the scope tree. They answer the same question, so a room the
     // wildcard opened must not be gated by one and open to the other.
-    const groups: Record<string, LineGroupConfig> = {
+    const groups: NonNullable<LineConfig["groups"]> = {
       "*": { requireMention: false },
       C1: { systemPrompt: "team bot" },
     };
@@ -70,43 +65,6 @@ describe("resolveLineGroupConfigEntry", () => {
     expect(entry?.requireMention !== false).toBe(
       resolveLineGroupRequireMention({ cfg, accountId: null, groupId: "C1" }),
     );
-  });
-});
-
-describe("account-scoped LINE groups", () => {
-  it("resolves the effective account-scoped groups map", () => {
-    const cfg = {
-      channels: {
-        line: {
-          groups: {
-            "*": { requireMention: true },
-          },
-          accounts: {
-            work: {
-              groups: {
-                "group:g1": { requireMention: false },
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(resolveLineGroupsConfig(cfg, "work")).toEqual({
-      "group:g1": { requireMention: false },
-    });
-    expect(
-      resolveExactLineGroupConfigKey({
-        groups: resolveLineGroupsConfig(cfg, "work"),
-        groupId: "g1",
-      }),
-    ).toBe("group:g1");
-    expect(
-      resolveExactLineGroupConfigKey({
-        groups: resolveLineGroupsConfig(cfg, "default"),
-        groupId: "g1",
-      }),
-    ).toBe(undefined);
   });
 });
 

@@ -3,7 +3,7 @@ import Foundation
 import Swabble
 
 @MainActor
-struct StatusCommand: ParsableCommand {
+struct StatusCommand: CLICommand {
     static var commandDescription: CommandDescription {
         CommandDescription(commandName: "status", abstract: "Show daemon state")
     }

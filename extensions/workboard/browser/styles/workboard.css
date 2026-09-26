@@ -1124,11 +1124,6 @@
   overflow-wrap: anywhere;
 }
 
-.workboard-select {
-  width: 100%;
-  min-width: 0;
-}
-
 .workboard-filter-popover {
   position: fixed;
   inset: auto;
@@ -2535,20 +2530,6 @@
   font-size: 0.78rem;
 }
 
-.workboard-card__icon {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  padding: 0;
-  border-radius: 6px;
-  color: var(--muted);
-}
-
-.workboard-card__icon svg {
-  width: 15px;
-  height: 15px;
-}
-
 .workboard-card__move {
   position: relative;
   display: inline-flex;
@@ -2632,10 +2613,6 @@
   white-space: nowrap;
 }
 
-.workboard-card__start--icon {
-  color: var(--text);
-}
-
 .workboard-card__start--manual {
   color: var(--muted);
 }
@@ -2684,29 +2661,6 @@
   padding-inline: 0;
   background: transparent;
   color: var(--muted);
-}
-
-.workboard-engine-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 42px;
-  height: 18px;
-  border-radius: 5px;
-  padding: 0 5px;
-  font-size: 0.62rem;
-  font-weight: 800;
-  line-height: 1;
-}
-
-.workboard-engine-mark--codex {
-  background: color-mix(in srgb, var(--ok) 18%, var(--bg-hover));
-  color: color-mix(in srgb, var(--ok) 72%, var(--text));
-}
-
-.workboard-engine-mark--claude {
-  background: color-mix(in srgb, var(--warn) 20%, var(--bg-hover));
-  color: color-mix(in srgb, var(--warn) 76%, var(--text));
 }
 
 .workboard-board--compact .workboard-column__cards {

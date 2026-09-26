@@ -3,7 +3,6 @@ import {
   type WorkboardCard,
   type WorkboardStatus,
 } from "@openclaw/workboard-contract";
-// Workboard plugin module implements command behavior.
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
 import {
@@ -65,10 +64,6 @@ function formatCardDetails(card: WorkboardCard): string {
     lines.push("", card.notes);
   }
   return lines.join("\n");
-}
-
-function normalizeTitle(tokens: string[]): string {
-  return tokens.join(" ").trim();
 }
 
 function isWorkboardStatus(value: string): value is WorkboardStatus {
@@ -142,12 +137,14 @@ async function handleWorkboardCommand(params: {
     const { card, error } = resolveWorkboardCardByIdOrPrefix(cards, id);
     return card ? { text: formatCardDetails(card) } : { text: error, isError: true };
   }
-  if (action === "create") {
+  if (action === "create" || action === "move" || action === "dispatch") {
     const accessError = requireWriteAccess(params);
     if (accessError) {
       return accessError;
     }
-    const title = normalizeTitle(rest);
+  }
+  if (action === "create") {
+    const title = rest.join(" ").trim();
     if (!title) {
       return { text: "Usage: /workboard create <title>", isError: true };
     }
@@ -162,10 +159,6 @@ async function handleWorkboardCommand(params: {
     return { text: `Created ${card.id.slice(0, 8)} ${card.title}` };
   }
   if (action === "move") {
-    const accessError = requireWriteAccess(params);
-    if (accessError) {
-      return accessError;
-    }
     const id = rest[0];
     const statusIndex = rest.indexOf("--status");
     const status = statusIndex >= 0 ? rest[statusIndex + 1] : undefined;
@@ -195,10 +188,6 @@ async function handleWorkboardCommand(params: {
     };
   }
   if (action === "dispatch") {
-    const accessError = requireWriteAccess(params);
-    if (accessError) {
-      return accessError;
-    }
     const workspaceAccess = params.workspaceAccess ?? { unrestricted: true };
     const result = await dispatchAndStartWorkboardCards({
       store: params.store,

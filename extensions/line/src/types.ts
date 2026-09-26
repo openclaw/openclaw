@@ -3,11 +3,7 @@ import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
 import type { z } from "zod";
-import type {
-  LineAccountConfigSchema,
-  LineConfigSchema,
-  LineGroupConfigSchema,
-} from "./config-schema.js";
+import type { LineAccountConfigSchema, LineConfigSchema } from "./config-schema.js";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
 export type LineCredentialStatus = "available" | "configured_unavailable" | "missing";
@@ -18,7 +14,6 @@ export type LineCredentialUnavailableDiagnostic = Extract<
 
 export type LineConfig = z.input<typeof LineConfigSchema>;
 export type LineAccountConfig = z.input<typeof LineAccountConfigSchema>;
-export type LineGroupConfig = z.input<typeof LineGroupConfigSchema>;
 
 export interface ResolvedLineAccount {
   accountId: string;
@@ -108,6 +103,13 @@ export type LineQuickReplyItem = {
   action: { type: "command"; command: string } | { type: "callback"; value: string };
 };
 
+export type LineTemplateActionPayload = {
+  type: "message" | "uri" | "postback";
+  label: string;
+  data?: string;
+  uri?: string;
+};
+
 export type LineTemplateMessagePayload =
   | {
       type: "confirm";
@@ -122,12 +124,7 @@ export type LineTemplateMessagePayload =
       type: "buttons";
       title?: string;
       text: string;
-      actions: Array<{
-        type: "message" | "uri" | "postback";
-        label: string;
-        data?: string;
-        uri?: string;
-      }>;
+      actions: LineTemplateActionPayload[];
       thumbnailImageUrl?: string;
       altText?: string;
     }
@@ -137,12 +134,7 @@ export type LineTemplateMessagePayload =
         title?: string;
         text: string;
         thumbnailImageUrl?: string;
-        actions: Array<{
-          type: "message" | "uri" | "postback";
-          label: string;
-          data?: string;
-          uri?: string;
-        }>;
+        actions: LineTemplateActionPayload[];
       }>;
       altText?: string;
     };
