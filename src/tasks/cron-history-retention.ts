@@ -1,4 +1,5 @@
 /** Enforces the task-ledger retention bound for terminal cron history. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   cronRunRecordStoreKey,
   resolveCronRunRecordTimestamp,
@@ -18,6 +19,10 @@ type CronHistoryRetentionPartition = {
   quiet: TaskRecord[];
 };
 
+export function hasCronRunHistory(task: Pick<TaskRecord, "detail">): boolean {
+  return isRecord(task.detail) && task.detail.kind === "cron-run";
+}
+
 export function collectCronHistoryOverflowTaskIds(tasks: readonly TaskRecord[]): Set<string> {
   // Cron job ids are unique only within a configured store. Retention must
   // use the same storeKey/sourceId partition as history reads.
@@ -34,15 +39,9 @@ export function collectCronHistoryOverflowTaskIds(tasks: readonly TaskRecord[]):
     const storeKey = cronRunRecordStoreKey(task);
     const bySource = byStore.get(storeKey) ?? new Map<string, CronHistoryRetentionPartition>();
     const partition = bySource.get(task.sourceId) ?? { history: [], quiet: [] };
-    const detail = task.detail;
-    const hasHistory =
-      typeof detail === "object" &&
-      detail !== null &&
-      !Array.isArray(detail) &&
-      detail.kind === "cron-run";
     // Quiet watcher ticks have no history entry. Bound them separately so
     // ordinary non-firing evaluations cannot evict actual run history.
-    const rows = hasHistory ? partition.history : partition.quiet;
+    const rows = hasCronRunHistory(task) ? partition.history : partition.quiet;
     rows.push(task);
     bySource.set(task.sourceId, partition);
     byStore.set(storeKey, bySource);
@@ -70,7 +69,7 @@ export function collectCronHistoryOverflowTaskIds(tasks: readonly TaskRecord[]):
 export function shouldPruneTerminalTask(
   task: TaskRecord,
   now: number,
-  cronHistoryOverflowTaskIds: ReadonlySet<string>,
+  cronHistoryOverflowTaskIds: Pick<ReadonlySet<string>, "has">,
 ): boolean {
   if (!isTerminalTask(task)) {
     return false;

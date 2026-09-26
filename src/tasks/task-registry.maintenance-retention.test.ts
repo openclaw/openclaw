@@ -12,8 +12,12 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
+import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
+import { CRON_HISTORY_KEEP_PER_JOB } from "./cron-history-retention.js";
 import { loadTaskAcpSessionCloser } from "./task-registry-acp-cleanup.js";
 import { getTaskPreparedActivity, recordTaskActivityEvent } from "./task-registry-activity.js";
+import * as snapshots from "./task-registry-maintenance-snapshot.js";
+import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
 import { isTaskRegistryTaskSettled, prepareTaskRegistryRead } from "./task-registry-read.js";
 import {
   getTasksByRunId,
@@ -24,14 +28,20 @@ import {
   tasks,
 } from "./task-registry-state.js";
 import { runTaskRegistryMaintenance } from "./task-registry.maintenance.js";
-import { getTaskRegistryStore, onTaskRegistryChange } from "./task-registry.store.js";
+import {
+  configureTaskRegistryRuntime,
+  getTaskRegistryStore,
+  onTaskRegistryChange,
+} from "./task-registry.store.js";
 import { loadTaskRegistryStateFromSqliteReadOnly } from "./task-registry.store.sqlite.js";
 import type { TaskRegistryObserverEvent } from "./task-registry.store.types.js";
 import {
+  createStoredTask,
   createTaskFixture,
   prepareTaskFixtureRead,
   reloadTaskRegistryFromStoreAsync,
   resetTaskRegistryForTests,
+  withTaskRegistryTempDir,
 } from "./task-registry.test-support.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import { resetTaskFlowRegistryForTests } from "./task-runtime.test-helpers.js";
@@ -52,6 +62,67 @@ function taskMembership(task: TaskRecord) {
 }
 
 describe("task maintenance retention", () => {
+  it("preserves cron overflow rows whose partition or rank changed after the maintenance snapshot", async () => {
+    await withTaskRegistryTempDir(async () => {
+      await runTaskRegistryMaintenance();
+      const now = Date.now();
+      const storeKey = "original raw store ";
+      const records: TaskRecord[] = Array.from(
+        { length: CRON_HISTORY_KEEP_PER_JOB + 5 },
+        (_, index) => ({
+          ...createStoredTask(),
+          taskId: `cron-overflow-${index}`,
+          runtime: "cron",
+          sourceId: "retention-job ",
+          status: "succeeded",
+          createdAt: now + index,
+          endedAt: now + index,
+          lastEventAt: now + index,
+          cleanupAfter: now + 86_400_000,
+          notifyPolicy: "silent",
+          detail: { kind: "cron-run", storeKey },
+        }),
+      );
+      const changes: Partial<TaskRecord>[] = [
+        { detail: { kind: "cron-run", storeKey: " original raw store " } },
+        { sourceId: "retention-job" },
+        { detail: { kind: "quiet", storeKey } },
+        { endedAt: now + 60_000, lastEventAt: now + 60_000 },
+      ];
+      const replacements = changes.map((change, index) => ({
+        ...expectDefined(records[index], "selected cron overflow row"),
+        ...change,
+      }));
+      const control = expectDefined(records[changes.length], "unchanged cron overflow row");
+      const store = createInMemoryTaskRegistryStore({
+        tasks: new Map(records.map((task) => [task.taskId, task])),
+        deliveryStates: new Map(),
+      });
+      configureTaskRegistryRuntime({ store });
+      await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
+      const snapshot = snapshots.getTaskRegistryMaintenanceSnapshot;
+      vi.spyOn(snapshots, "getTaskRegistryMaintenanceSnapshot").mockImplementationOnce((read) => {
+        const selected = snapshot(read);
+        for (const replacement of replacements) {
+          store.upsertTaskWithDeliveryState({ task: replacement });
+          publishTaskRecordAfterAtomicStore(replacement);
+        }
+        return selected;
+      });
+
+      const summary = await runTaskRegistryMaintenance();
+
+      expect(summary.pruned).toBe(1);
+      expect(tasks.has(control.taskId)).toBe(false);
+      const stored = store.loadSnapshot().tasks;
+      expect(stored.has(control.taskId)).toBe(false);
+      for (const replacement of replacements) {
+        expect(tasks.get(replacement.taskId)).toEqual(replacement);
+        expect(stored.get(replacement.taskId)).toEqual(replacement);
+      }
+    });
+  });
+
   it.each(["prune", "stamp"] as const)(
     "keeps %s responsive and unpublished while foreign writer custody is held",
     async (operation) => {

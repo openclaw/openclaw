@@ -176,15 +176,19 @@ update behavior are unchanged.
 
 Task retention also runs in the shared-state worker. Maintenance keeps its existing
 task selection, sweep time, and cron-history limits, then rechecks each selected
-task inside the admitted transaction. The read worker prepares the exact row and a
+task inside the admitted transaction. Cron overflow selections retain their original
+partition and ranking facts across asynchronous preparation; changed rows wait for
+the next sweep. The read worker prepares the exact row and a
 fingerprint; the write worker verifies that source before mutation and rechecks
 live authority before commit. A compact native commit receipt preserves the known
 outcome if result delivery fails, without replaying the write or carrying task
 payloads through the commit channel. Deletes remove the task, delivery state, and
 execution-owner metadata together; cleanup-deadline stamps preserve delivery and
 activity timestamps. Committed receipts update resident indexes and activity before
-observer events, while newer task publications supersede stale replies. Shutdown
-joins accepted work. Retention policy, schema, and update behavior are unchanged.
+observer events, while newer task publications supersede stale replies. Deferred
+flow effects retain their existing bounded retries after a cleanup stamp. A known
+cancellation commit needs only projection repair; uncertain writes are not replayed.
+Shutdown joins accepted work. Retention policy, schema, and update behavior are unchanged.
 
 Warm profile ensures read existing email, provider, and Gateway-owner identities
 without writer admission. Missing identities and display-name changes recheck

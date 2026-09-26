@@ -778,7 +778,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
         getTaskRegistryMaintenanceSnapshot,
         getTaskRegistryMaintenanceTask,
       },
-      async (selected, now, cronHistoryOverflowTaskIds, assertOwnerCurrent) => {
+      async (selected, now, cronHistoryOverflowSelections, assertOwnerCurrent) => {
         let current = selected;
         const cronOptions = (markLost: boolean) => ({
           markLost,
@@ -875,13 +875,13 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
           assertOwnerCurrent();
         }
         if (
-          shouldPruneTerminalTask(current, now, cronHistoryOverflowTaskIds) ||
+          shouldPruneTerminalTask(current, now, cronHistoryOverflowSelections) ||
           shouldStampCleanupAfter(current)
         ) {
           const result = await applyTaskRegistryMaintenanceRetention(
             current,
             now,
-            cronHistoryOverflowTaskIds,
+            cronHistoryOverflowSelections,
             assertOwnerCurrent,
           );
           if (result === "pruned") {
