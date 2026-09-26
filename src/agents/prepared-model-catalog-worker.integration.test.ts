@@ -18,7 +18,7 @@ import { getRuntimeExternalCliProfileIds } from "./auth-profiles/runtime-externa
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
-import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
+import { expectRefOnlyAuthProfilesThroughWorker } from "./prepared-model-catalog-worker.ref-only-auth.test-support.js";
 import {
   DISCOVERED_HARNESS_ID,
   PROVIDER_ID,
@@ -27,9 +27,7 @@ import {
   SHARED_AUTH_PROVIDER_ID,
   PROFILE_ID,
   MATERIALIZED_SECRET,
-  REF_ONLY_API_PROVIDER_ID,
   REF_ONLY_API_ENV,
-  REF_ONLY_TOKEN_PROVIDER_ID,
   REF_ONLY_TOKEN_ENV,
   DURABLE_AUTH_PROVIDER_ID,
   DURABLE_AUTH_KEY,
@@ -47,13 +45,11 @@ import {
   loadPreparedModelRuntimeAuth,
 } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
-import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import {
   getPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
 import { withHeldCatalogOAuthRefresh } from "./test-helpers/prepared-model-catalog-oauth-fixture.js";
 import { createStaticCatalogSnapshotFixture } from "./test-helpers/prepared-model-catalog-static-fixture.js";
 import {
@@ -968,52 +964,7 @@ describe("prepared model catalog worker boundary", () => {
 
   it("preserves ref-only api-key and token profiles through the real worker", async () => {
     const fixture = await createStaticSnapshot(0);
-    const authStore = {
-      version: 1,
-      profiles: {
-        [`${REF_ONLY_API_PROVIDER_ID}:default`]: {
-          type: "api_key" as const,
-          provider: REF_ONLY_API_PROVIDER_ID,
-          keyRef: { source: "env" as const, provider: "default", id: REF_ONLY_API_ENV },
-        },
-        [`${REF_ONLY_TOKEN_PROVIDER_ID}:default`]: {
-          type: "token" as const,
-          provider: REF_ONLY_TOKEN_PROVIDER_ID,
-          tokenRef: { source: "env" as const, provider: "default", id: REF_ONLY_TOKEN_ENV },
-        },
-      },
-    };
-    const worker = createPreparedModelCatalogWorker({
-      agentFacts: {
-        input: {
-          agentId: "main",
-          agentDir: fixture.agentDir,
-          workspaceDir: fixture.workspaceDir,
-          config: fixture.config,
-          env: fixture.env,
-        },
-        env: fixture.env,
-        authStore,
-        credentials: {},
-        providerIds: [PROVIDER_ID],
-        configuredModelRefs: [],
-        configuredRuntimeModels: [],
-        runtimeCapabilityModels: [],
-        configuredGeneratedCatalogPluginIds: [],
-        templateAuthStorage: AuthStorage.inMemory({}),
-      } satisfies PreparedModelRuntimeAgentFacts,
-      pluginMetadataSnapshot: fixture.pluginMetadataSnapshot,
-      isCurrent: fixture.isCurrent,
-      retirementSignal: fixture.retirementSignal,
-    });
-    const { modelCatalog: catalog } = await worker.loadCatalog();
-
-    expect(catalog.entries).toContainEqual(
-      expect.objectContaining({
-        provider: PROVIDER_ID,
-        id: "ref-proof-api-true-token-true",
-      }),
-    );
+    await expectRefOnlyAuthProfilesThroughWorker(fixture);
   });
 });
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";

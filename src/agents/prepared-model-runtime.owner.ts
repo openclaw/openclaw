@@ -25,6 +25,10 @@ import {
   retirePreparedModelRuntimeGeneration,
 } from "./prepared-model-runtime.lifecycle.js";
 import {
+  registerPreparedModelRuntimeSnapshotOwner,
+  unregisterPreparedModelRuntimeSnapshotOwner,
+} from "./prepared-model-runtime.owner-registry.js";
+import {
   publishPreparedPluginGeneration,
   releasePreparedPluginPublication,
   discardPreparedPluginGeneration,
@@ -39,13 +43,7 @@ import type {
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
 
-const ownersBySnapshot = new WeakMap<PreparedModelRuntimeSnapshot, PreparedModelRuntimeOwner>();
-
-export function resolvePreparedModelRuntimeOwnerBySnapshot(
-  snapshot: PreparedModelRuntimeSnapshot,
-): PreparedModelRuntimeOwner | undefined {
-  return ownersBySnapshot.get(snapshot);
-}
+export { resolvePreparedModelRuntimeOwnerBySnapshot } from "./prepared-model-runtime.owner-registry.js";
 
 function publishPreparedModelRuntimeOwnerSnapshot(
   owner: PreparedModelRuntimeOwner,
@@ -53,10 +51,10 @@ function publishPreparedModelRuntimeOwnerSnapshot(
 ): PreparedModelRuntimeSnapshot {
   const published = stampPreparedModelRuntimeSnapshotConfig(snapshot, owner.input.config);
   if (owner.snapshot) {
-    ownersBySnapshot.delete(owner.snapshot);
+    unregisterPreparedModelRuntimeSnapshotOwner(owner.snapshot);
   }
   owner.snapshot = published;
-  ownersBySnapshot.set(published, owner);
+  registerPreparedModelRuntimeSnapshotOwner(published, owner);
   return published;
 }
 

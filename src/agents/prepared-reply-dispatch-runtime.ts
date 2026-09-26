@@ -133,6 +133,18 @@ export class PreparedReplyDispatchPublicationOwner {
     );
   }
 
+  replacePublished(owners: Iterable<PreparedModelRuntimeOwner>): void {
+    this.replace(
+      [...owners].filter(
+        (owner) =>
+          owner.provenance === "configured" &&
+          owner.snapshot &&
+          !owner.needsRefresh &&
+          !owner.pending,
+      ),
+    );
+  }
+
   readonly load = async ({
     agentId,
     abortSignal,

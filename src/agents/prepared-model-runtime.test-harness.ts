@@ -442,6 +442,7 @@ vi.mock("../logging/subsystem.js", () => ({
 
 type PreparedModelRuntimeTestApi = {
   getPreparedModelRuntimeOwnerCountForTest(): number;
+  hasPreparedPluginPublicationForTest(owner: object): boolean;
   resetPreparedModelRuntimeSnapshotsForTest(): Promise<void>;
   setModelRuntimeBuildTimeoutMsForTest(timeoutMs: number): void;
 };

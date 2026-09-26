@@ -109,6 +109,11 @@ export const TSGO_CORE_TEST_SHARDS = [
     group: "src",
     config: "test/tsconfig/tsconfig.core.test.services-cron.json",
   },
+  {
+    name: "agents-prepared-runtime",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.agents-prepared-runtime.json",
+  },
 ] as const;
 
 export const TSGO_CORE_GRAPHS = [

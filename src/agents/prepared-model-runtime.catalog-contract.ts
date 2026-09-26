@@ -51,5 +51,5 @@ export type PreparedModelRuntimeCatalogAccessParams = {
   isCurrent: () => boolean;
   retirementSignal: AbortSignal;
   inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttempt"> &
-    Partial<Pick<PreparedModelRuntimeOwner, "provenance">>;
+    Partial<Pick<PreparedModelRuntimeOwner, "provenance" | "snapshot">>;
 };

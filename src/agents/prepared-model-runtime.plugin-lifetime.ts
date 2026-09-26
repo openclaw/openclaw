@@ -306,6 +306,10 @@ export function releasePreparedPluginPublication(owner: object): void {
   void previous?.release()?.catch(() => {});
 }
 
+export function hasPreparedPluginPublicationForTest(owner: object): boolean {
+  return publications.has(owner);
+}
+
 /** Failed unpublished builds release only their own generations, never a sibling's cache. */
 export async function discardPreparedPluginGeneration(
   generation: PreparedModelRuntimePluginGeneration,
