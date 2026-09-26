@@ -6,8 +6,9 @@ import {
 } from "@google/genai";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
-// Google Vertex provider wires Google shared streaming through Vertex credentials.
 import { createAssistantOutput } from "../transports/assistant-output.js";
+// Google Vertex provider wires Google shared streaming through Vertex credentials.
+import { buildManagedModelFetch } from "../transports/host-policy.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
@@ -88,7 +89,7 @@ function createClientWithApiKey(
   apiKey: string,
   optionsHeaders?: Record<string, string>,
 ): GoogleGenAI {
-  // @google/genai exposes RequestInit options but no custom fetch; unwrap at construction.
+  // Authentication is resolved before construction; the SDK also retains the host fetch policy.
   const resolvedApiKey = getAiTransportHost().resolveSecretSentinel(apiKey);
   return new GoogleGenAI({
     vertexai: true,
@@ -103,6 +104,10 @@ function buildHttpOptions(
   optionsHeaders?: Record<string, string>,
 ): HttpOptions | undefined {
   const httpOptions: HttpOptions = {};
+  const fetcher = buildManagedModelFetch(model);
+  if (fetcher) {
+    httpOptions.fetch = fetcher;
+  }
   const baseUrl = resolveCustomBaseUrl(model.baseUrl);
   if (baseUrl) {
     httpOptions.baseUrl = baseUrl;

@@ -15,6 +15,7 @@ import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
+import { buildManagedModelFetch } from "../transports/host-policy.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   suppressOpenAIResponsesCompaction,
@@ -76,6 +77,8 @@ import { CodexApiError, mapCodexEvents } from "./openai-chatgpt-responses-events
 import {
   CodexProtocolError,
   parseOpenAIChatGptResponsesSse,
+  resolveCodexUrl,
+  resolveCodexWebSocketUrl,
 } from "./openai-chatgpt-responses-protocol.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { readOpenAIMisalignmentReview } from "./openai-provider-refusal.js";
@@ -115,7 +118,6 @@ const os = loadNodeOs();
 // Configuration
 // ============================================================================
 
-const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const REQUEST_COMPRESSION_ZSTD_LEVEL = 3;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
 const WEBSOCKET_TRANSPORT_ERROR_CODE = "ERR_WEBSOCKET_TRANSPORT";
@@ -468,12 +470,15 @@ export const streamOpenAICodexResponses: StreamFunction<
             activeSignal?.throwIfAborted();
             lifecycle.assertCurrent();
           }
-          attemptResponse = await fetch(resolveCodexUrl(model.baseUrl), {
-            method: "POST",
-            headers: sseHeaders,
-            body: sseBody,
-            signal: activeSignal,
-          });
+          attemptResponse = await (buildManagedModelFetch(model) ?? fetch)(
+            resolveCodexUrl(model.baseUrl),
+            {
+              method: "POST",
+              headers: sseHeaders,
+              body: sseBody,
+              signal: activeSignal,
+            },
+          );
         } catch (error) {
           if (error instanceof Error) {
             if (
@@ -753,29 +758,6 @@ function resolveCodexServiceTier(
     return requestServiceTier;
   }
   return responseServiceTier ?? requestServiceTier;
-}
-
-function resolveCodexUrl(baseUrl?: string): string {
-  const raw = baseUrl && baseUrl.trim().length > 0 ? baseUrl : DEFAULT_CODEX_BASE_URL;
-  const normalized = raw.replace(/\/+$/, "");
-  if (normalized.endsWith("/codex/responses")) {
-    return normalized;
-  }
-  if (normalized.endsWith("/codex")) {
-    return `${normalized}/responses`;
-  }
-  return `${normalized}/codex/responses`;
-}
-
-function resolveCodexWebSocketUrl(baseUrl?: string): string {
-  const url = new URL(resolveCodexUrl(baseUrl));
-  if (url.protocol === "https:") {
-    url.protocol = "wss:";
-  }
-  if (url.protocol === "http:") {
-    url.protocol = "ws:";
-  }
-  return url.toString();
 }
 
 // ============================================================================
