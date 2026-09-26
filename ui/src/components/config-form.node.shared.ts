@@ -255,7 +255,7 @@ export function renderFieldRow(params: {
                 params.errorId
                   ? html`<span
                       id=${params.errorId}
-                      class="cfg-field__error settings-control__sr-label"
+                      class="cfg-field__error"
                       role="alert"
                       hidden
                     ></span>`
