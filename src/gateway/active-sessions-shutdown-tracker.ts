@@ -3,18 +3,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 
-// Module-level tracker of sessions that have received `session_start` but not
-// yet a paired `session_end`. The close handler drains this set on gateway
-// shutdown / restart so downstream `session_end` plugins (e.g. claude-mem)
-// can finalize sessions that were active when the process stopped, instead
-// of leaving ghost rows in `active` state across restarts (see #57790).
-//
-// Membership is keyed by `sessionId`. The existing session lifecycle paths
-// (`emitGatewaySessionStartPluginHook` /
-// `emitGatewaySessionEndPluginHook` in `session-reset-service.ts`) call into
-// this tracker so a session that has already been finalized by replace /
-// reset / delete / compaction is forgotten before the shutdown drain ever
-// runs. That is what keeps the shutdown finalizer from double-firing.
+// Session lifecycle hooks track unmatched session_start events here. Reset,
+// replace, delete, and compaction forget finalized sessions before shutdown,
+// preventing the drain from emitting a second session_end.
 
 type ActiveSessionForShutdown = {
   cfg: OpenClawConfig;

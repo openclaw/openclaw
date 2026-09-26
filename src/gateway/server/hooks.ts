@@ -384,41 +384,50 @@ export function createGatewayHookDispatcher(params: {
       });
       return undefined;
     };
-    const reportHookFailure = (err: unknown) => {
-      completion.resolve(logHookRunTerminal({ status: "error", error: String(err) }));
-      const eventTarget =
-        hookEventTarget ??
-        resolveHookEventTarget({
-          cfg: getRuntimeConfig(),
-          resolvedAgentId: value.effectiveAgentId,
-        });
+    const announceHookEvent = (
+      eventTarget: HookEventTarget,
+      text: string,
+      status: string,
+      reason: string,
+    ) => {
       const eventSessionKey = eventTarget.eventSessionKey;
       const isGlobalEvent = isUnscopedSessionKeySentinel(eventSessionKey);
-      let heartbeatTarget: HookEventTarget["heartbeatTarget"];
+      let heartbeatTarget = eventTarget.heartbeatTarget;
       if (isGlobalEvent && hookEventTarget) {
-        const globalTerminalAgentId = resolveGlobalTerminalAgentId("error");
+        const globalTerminalAgentId = resolveGlobalTerminalAgentId(status);
         if (!globalTerminalAgentId) {
           return;
         }
         heartbeatTarget = { agentId: globalTerminalAgentId };
-      } else {
-        heartbeatTarget = eventTarget.heartbeatTarget;
       }
-      const failureEventOptions = { sessionKey: eventSessionKey };
+      const eventOptions = { sessionKey: eventSessionKey };
       enqueueSystemEvent(
-        `Hook ${safeName} (error): ${String(err)}`,
+        text,
         isGlobalEvent && heartbeatTarget.agentId
-          ? withSystemEventOwner(failureEventOptions, heartbeatTarget.agentId)
-          : failureEventOptions,
+          ? withSystemEventOwner(eventOptions, heartbeatTarget.agentId)
+          : eventOptions,
       );
       if (value.wakeMode === "now") {
         requestHeartbeat({
           source: "hook",
           intent: "immediate",
-          reason: `hook:${jobId}:error`,
+          reason,
           ...heartbeatTarget,
         });
       }
+    };
+    const reportHookFailure = (err: unknown) => {
+      completion.resolve(logHookRunTerminal({ status: "error", error: String(err) }));
+      announceHookEvent(
+        hookEventTarget ??
+          resolveHookEventTarget({
+            cfg: getRuntimeConfig(),
+            resolvedAgentId: value.effectiveAgentId,
+          }),
+        `Hook ${safeName} (error): ${String(err)}`,
+        "error",
+        `hook:${jobId}:error`,
+      );
     };
     let dispatchCfg: OpenClawConfig;
     try {
@@ -586,32 +595,12 @@ export function createGatewayHookDispatcher(params: {
             const shouldAnnounce = shouldAnnounceHookRunResult({ deliver: value.deliver, result });
             completion.resolve(logHookRunTerminal(result));
             if (shouldAnnounce) {
-              const eventSessionKey = eventTarget.eventSessionKey;
-              const isGlobalEvent = isUnscopedSessionKeySentinel(eventSessionKey);
-              let announceEventOptions = { sessionKey: eventSessionKey };
-              let heartbeatTarget: HookEventTarget["heartbeatTarget"];
-              if (isGlobalEvent) {
-                const globalTerminalAgentId = resolveGlobalTerminalAgentId(result.status);
-                if (!globalTerminalAgentId) {
-                  return;
-                }
-                announceEventOptions = withSystemEventOwner(
-                  announceEventOptions,
-                  globalTerminalAgentId,
-                );
-                heartbeatTarget = { agentId: globalTerminalAgentId };
-              } else {
-                heartbeatTarget = eventTarget.heartbeatTarget;
-              }
-              enqueueSystemEvent(`${prefix}: ${summary}`.trim(), announceEventOptions);
-              if (value.wakeMode === "now") {
-                requestHeartbeat({
-                  source: "hook",
-                  intent: "immediate",
-                  reason: `hook:${jobId}`,
-                  ...heartbeatTarget,
-                });
-              }
+              announceHookEvent(
+                eventTarget,
+                `${prefix}: ${summary}`.trim(),
+                result.status,
+                `hook:${jobId}`,
+              );
             }
           } catch (err) {
             if (admissionTimedOut) {

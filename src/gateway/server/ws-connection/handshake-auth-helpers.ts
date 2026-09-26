@@ -268,23 +268,6 @@ function resolveSignatureToken(connectParams: ConnectParams): string | null {
   );
 }
 
-function buildUnauthorizedHandshakeContext(params: {
-  authProvided: AuthProvidedKind;
-  canRetryWithDeviceToken: boolean;
-  recommendedNextStep:
-    | "retry_with_device_token"
-    | "update_auth_configuration"
-    | "update_auth_credentials"
-    | "wait_then_retry"
-    | "review_auth_configuration";
-}) {
-  return {
-    authProvided: params.authProvided,
-    canRetryWithDeviceToken: params.canRetryWithDeviceToken,
-    recommendedNextStep: params.recommendedNextStep,
-  };
-}
-
 export function resolveDeviceSignaturePayloadVersion(params: {
   device: {
     id: string;
@@ -357,12 +340,15 @@ export function resolveUnauthorizedHandshakeContext(params: {
     authProvided === "token" &&
     !params.connectAuth?.deviceToken;
   if (canRetryWithDeviceToken) {
-    return buildUnauthorizedHandshakeContext({
+    return {
       authProvided,
       canRetryWithDeviceToken,
       recommendedNextStep: "retry_with_device_token",
-    });
+    };
   }
+  let recommendedNextStep: ReturnType<
+    typeof resolveUnauthorizedHandshakeContext
+  >["recommendedNextStep"] = "review_auth_configuration";
   switch (params.failedAuth.reason) {
     case "token_missing":
     case "token_missing_config":
@@ -370,36 +356,16 @@ export function resolveUnauthorizedHandshakeContext(params: {
     case "password_redacted_config":
     case "password_missing":
     case "password_missing_config":
-      return buildUnauthorizedHandshakeContext({
-        authProvided,
-        canRetryWithDeviceToken,
-        recommendedNextStep: "update_auth_configuration",
-      });
+      recommendedNextStep = "update_auth_configuration";
+      break;
     case "token_mismatch":
     case "password_mismatch":
     case "device_token_mismatch":
-      return buildUnauthorizedHandshakeContext({
-        authProvided,
-        canRetryWithDeviceToken,
-        recommendedNextStep: "update_auth_credentials",
-      });
-    case "scope_mismatch":
-      return buildUnauthorizedHandshakeContext({
-        authProvided,
-        canRetryWithDeviceToken,
-        recommendedNextStep: "review_auth_configuration",
-      });
+      recommendedNextStep = "update_auth_credentials";
+      break;
     case "rate_limited":
-      return buildUnauthorizedHandshakeContext({
-        authProvided,
-        canRetryWithDeviceToken,
-        recommendedNextStep: "wait_then_retry",
-      });
-    default:
-      return buildUnauthorizedHandshakeContext({
-        authProvided,
-        canRetryWithDeviceToken,
-        recommendedNextStep: "review_auth_configuration",
-      });
+      recommendedNextStep = "wait_then_retry";
+      break;
   }
+  return { authProvided, canRetryWithDeviceToken, recommendedNextStep };
 }

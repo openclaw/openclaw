@@ -66,8 +66,6 @@ type CronStreamOutputParams = {
   logger: CronStreamLogger;
 };
 
-const clearTimer = (timer: NodeJS.Timeout | undefined): void => clearTimeout(timer);
-
 function appendBatch(left: string | undefined, right: string, maxBytes: number): string {
   return left === undefined ? right : truncateCronStreamBatch(`${left}\n${right}`, maxBytes);
 }
@@ -89,7 +87,7 @@ async function waitForInFlightBatch(
       }),
     ]);
   } finally {
-    clearTimer(timeout);
+    clearTimeout(timeout);
   }
 }
 
@@ -256,16 +254,11 @@ export class CronStreamOutput {
       this.discardUntilNewline[channel] = false;
       this.droppedChunkTail[channel] = false;
     }
-    clearTimer(this.quietTimer);
-    this.quietTimer = undefined;
-    const batch = this.takeOpenBatch();
-    if (batch !== undefined) {
-      await this.handleClosedBatch(batch, generation);
-    }
+    await this.flushBatch(generation);
   }
 
   async beginStop(): Promise<CronStreamOutputStopState> {
-    clearTimer(this.rateTimer);
+    clearTimeout(this.rateTimer);
     this.rateTimer = undefined;
     ++this.rateEpoch;
     const state = {
@@ -309,7 +302,7 @@ export class CronStreamOutput {
   }
 
   async dropPendingForTerminalStop(): Promise<void> {
-    clearTimer(this.rateTimer);
+    clearTimeout(this.rateTimer);
     this.rateTimer = undefined;
     ++this.rateEpoch;
     if (this.pendingBatch === undefined) {
@@ -326,7 +319,7 @@ export class CronStreamOutput {
   }
 
   private resetSourceBuffers(): void {
-    clearTimer(this.quietTimer);
+    clearTimeout(this.quietTimer);
     this.quietTimer = undefined;
     ++this.quietEpoch;
     this.partialLines = { stdout: "", stderr: "" };
@@ -475,12 +468,7 @@ export class CronStreamOutput {
     this.batchHasLines = true;
     ++this.quietEpoch;
     if (capped !== candidate || Buffer.byteLength(capped, "utf8") >= maxBatchBytes) {
-      clearTimer(this.quietTimer);
-      this.quietTimer = undefined;
-      const batch = this.takeOpenBatch();
-      if (batch !== undefined) {
-        await this.handleClosedBatch(batch, generation);
-      }
+      await this.flushBatch(generation);
       return true;
     }
     if (this.quietTimer) {
@@ -510,13 +498,17 @@ export class CronStreamOutput {
         }
         return;
       }
-      clearTimer(this.quietTimer);
-      this.quietTimer = undefined;
-      const batch = this.takeOpenBatch();
-      if (batch !== undefined) {
-        await this.handleClosedBatch(batch, generation);
-      }
+      await this.flushBatch(generation);
     });
+  }
+
+  private async flushBatch(generation: number): Promise<void> {
+    clearTimeout(this.quietTimer);
+    this.quietTimer = undefined;
+    const batch = this.takeOpenBatch();
+    if (batch !== undefined) {
+      await this.handleClosedBatch(batch, generation);
+    }
   }
 
   private takeOpenBatch(): string | undefined {
@@ -662,7 +654,7 @@ export class CronStreamOutput {
   }
 
   private schedulePendingFire(delayMs: number, generation: number): void {
-    clearTimer(this.rateTimer);
+    clearTimeout(this.rateTimer);
     const rateEpoch = ++this.rateEpoch;
     this.rateTimer = setTimeout(() => {
       void this.attemptPendingFire(generation, rateEpoch);

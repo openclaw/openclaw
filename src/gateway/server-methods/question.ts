@@ -45,7 +45,7 @@ import { isGatewayAdmin } from "../session-sharing.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import type { SecretStoreWriteService } from "./secrets.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const DEFAULT_QUESTION_TIMEOUT_MS = 15 * 60 * 1_000;
@@ -104,13 +104,31 @@ export function createQuestionHandlers(
   manager: QuestionManager,
   storeWriteService: SecretStoreWriteService,
 ): GatewayRequestHandlers {
+  const prepareSelectedQuestion = (
+    options: GatewayRequestHandlerOptions,
+    id: string,
+    access: "read" | "mutate",
+  ) => {
+    readGatewayRequestMutationAuthority(options).assertCurrent();
+    const question = canSelectQuestion(manager, id, options.client) ? manager.get(id) : null;
+    if (!question) {
+      options.respond(false, undefined, questionNotFound(id));
+      return undefined;
+    }
+    const observation = manager.observe(id, question);
+    return {
+      question,
+      observation,
+      authorize: prepareQuestionAuthorization(options, observation, id, access),
+    };
+  };
   return {
     "question.request": async (options) => {
       const { params, respond, context, client } = options;
       if (!assertValidParams(params, validateQuestionRequestParams, "question.request", respond)) {
         return;
       }
-      let request = params as QuestionRequestParams;
+      let request = params;
       const storeBound = request.questions.some((question) => question.secretStore);
       const authority = readGatewayRequestMutationAuthority(options);
       authority.assertCurrent();
@@ -422,16 +440,11 @@ export function createQuestionHandlers(
       }
       const request = params;
       try {
-        readGatewayRequestMutationAuthority(options).assertCurrent();
-        const question = canSelectQuestion(manager, request.id, options.client)
-          ? manager.get(request.id)
-          : null;
-        if (!question) {
-          respond(false, undefined, questionNotFound(request.id));
+        const selected = prepareSelectedQuestion(options, request.id, "read");
+        if (!selected) {
           return;
         }
-        const observation = question ? manager.observe(request.id, question) : null;
-        const authorize = prepareQuestionAuthorization(options, observation, request.id, "read");
+        const { authorize } = selected;
         const target = authorize.target;
         const waiting = await withPreparedQuestionSessions(
           options,
@@ -483,16 +496,11 @@ export function createQuestionHandlers(
       }
       const request = params;
       try {
-        readGatewayRequestMutationAuthority(options).assertCurrent();
-        const question = canSelectQuestion(manager, request.id, options.client)
-          ? manager.get(request.id)
-          : null;
-        if (!question) {
-          respond(false, undefined, questionNotFound(request.id));
+        const selected = prepareSelectedQuestion(options, request.id, "mutate");
+        if (!selected) {
           return;
         }
-        const observation = question ? manager.observe(request.id, question) : null;
-        const authorize = prepareQuestionAuthorization(options, observation, request.id, "mutate");
+        const { question, authorize } = selected;
         let reload: { name: string; result: ReturnType<QuestionManager["resolve"]> } | undefined;
         await withPreparedQuestionSessions(
           options,
@@ -507,9 +515,9 @@ export function createQuestionHandlers(
               respond(true, manager.cancel(request.id, request.resolvedBy), undefined);
               return;
             }
-            const secretQuestion = question?.questions[0];
+            const secretQuestion = question.questions[0];
             const binding = secretQuestion?.secretStore;
-            if (!binding || !question) {
+            if (!binding) {
               if (request.secretStoreAllowedHosts !== undefined) {
                 respond(
                   false,
@@ -628,15 +636,11 @@ export function createQuestionHandlers(
       if (!assertValidParams(params, validateQuestionGetParams, "question.get", respond)) {
         return;
       }
-      const id = (params as { id: string }).id;
-      readGatewayRequestMutationAuthority(options).assertCurrent();
-      const question = canSelectQuestion(manager, id, options.client) ? manager.get(id) : null;
-      if (!question) {
-        respond(false, undefined, questionNotFound(id));
+      const selected = prepareSelectedQuestion(options, params.id, "read");
+      if (!selected) {
         return;
       }
-      const observation = manager.observe(id, question);
-      const authorize = prepareQuestionAuthorization(options, observation, id, "read");
+      const { observation, authorize } = selected;
       await withPreparedQuestionSessions(
         options,
         [authorize.target],

@@ -24,7 +24,7 @@ import type {
   SystemAgentApprovalRequestPayload,
   SystemAgentApprovalResolved,
 } from "../../infra/system-agent-approvals.js";
-import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRuntimeCore } from "../../plugins/runtime/types-core.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
@@ -87,11 +87,6 @@ import type {
 import type { GatewayClient } from "./client-types.js";
 import type { RespondFn } from "./response-types.js";
 
-/**
- * Shared gateway request types used by every server-method module.
- */
-type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
-
 export type {
   GatewayAgentRunTaskOwner,
   GatewayClient,
@@ -112,7 +107,6 @@ export type PreparedSessionApprovalReplay = {
   release: () => void;
 };
 
-/** Minimal hosted OpenClaw contract retained by the gateway request router. */
 /**
  * Structural mirror of the engine's SystemAgentAssistantTurn. Kept local as a
  * leaf contract: importing the assistant module here closes a madge cycle
@@ -123,35 +117,24 @@ type SystemAgentHistoryTurn = {
   text: string;
 };
 
+type SystemAgentReply = {
+  text: string;
+  action: "none" | "exit" | "open-tui" | "open-setup";
+  sensitive?: boolean;
+  question?: SystemAgentChatQuestion;
+};
+
+/** Minimal hosted OpenClaw contract retained by the gateway request router. */
 export type GatewaySystemAgentSession = {
   engine: {
     handle: (
       message: string,
       options?: { uiContext?: { page: string } },
-    ) => Promise<{
-      text: string;
-      action: "none" | "exit" | "open-tui" | "open-setup";
-      sensitive?: boolean;
-      question?: SystemAgentChatQuestion;
-    }>;
-    answerWizard: (answer: WizardAnswer) => Promise<{
-      text: string;
-      action: "none" | "exit" | "open-tui" | "open-setup";
-      sensitive?: boolean;
-      question?: SystemAgentChatQuestion;
-    }>;
-    cancelWizard: (cancel: SystemAgentWizardCancel) => Promise<{
-      text: string;
-      action: "none" | "exit" | "open-tui" | "open-setup";
-      sensitive?: boolean;
-      question?: SystemAgentChatQuestion;
-    }>;
-    decorateRejoinReply: (reply: { text: string; action: "none" }) => {
-      text: string;
-      action: "none" | "exit" | "open-tui" | "open-setup";
-      sensitive?: boolean;
+    ) => Promise<SystemAgentReply>;
+    answerWizard: (answer: WizardAnswer) => Promise<SystemAgentReply>;
+    cancelWizard: (cancel: SystemAgentWizardCancel) => Promise<SystemAgentReply>;
+    decorateRejoinReply: (reply: { text: string; action: "none" }) => SystemAgentReply & {
       wizardInputPending?: boolean;
-      question?: SystemAgentChatQuestion;
       step?: import("../../wizard/session.js").WizardStep;
     };
     noteAssistantMessage: (text: string) => void;
@@ -502,21 +485,14 @@ export type SessionMutationAuthorization = {
 };
 
 /** Normalized method invocation options passed to registered handlers. */
-export type GatewayRequestHandlerOptions = {
-  req: RequestFrame;
+export type GatewayRequestHandlerOptions = Omit<
+  GatewayRequestOptions,
+  "methodRegistry" | "expectedProfileBinding"
+> & {
   params: Record<string, unknown>;
-  client: GatewayClient | null;
-  isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
-  respond: RespondFn;
-  context: GatewayRequestContext;
-  sessionMutationCommitGuard?: () => void;
   sessionMutationAuthorization?: SessionMutationAuthorization;
   /** Host-prepared session resource authority; services explicitly retain their own borrow. */
   sessionAccessAuthority?: import("../session-access-authority.js").GatewaySessionAccessAuthority;
-  /** In-process caller lifetime; absent for ordinary transport requests. */
-  signal?: AbortSignal;
-  /** Live transport authority; in-process only and never derived from request data. */
-  hasCurrentClientAuthority?: () => boolean;
 };
 
 /** Single gateway method implementation. */

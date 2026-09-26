@@ -9,10 +9,6 @@
 
 import { z } from "zod";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Content Parts
-// ─────────────────────────────────────────────────────────────────────────────
-
 const InputTextContentPartSchema = z
   .object({
     type: z.literal("input_text"),
@@ -27,7 +23,6 @@ const OutputTextContentPartSchema = z
   })
   .strict();
 
-// OpenResponses Image Content: Supports URL or base64 sources
 const InputImageSourceSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("url"),
@@ -43,7 +38,7 @@ const InputImageSourceSchema = z.discriminatedUnion("type", [
       "image/heic",
       "image/heif",
     ]),
-    data: z.string().min(1), // base64-encoded
+    data: z.string().min(1),
   }),
 ]);
 
@@ -54,7 +49,6 @@ const InputImageContentPartSchema = z
   })
   .strict();
 
-// OpenResponses File Content: Supports URL or base64 sources
 const InputFileSourceSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("url"),
@@ -62,8 +56,8 @@ const InputFileSourceSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("base64"),
-    media_type: z.string().min(1), // MIME type
-    data: z.string().min(1), // base64-encoded
+    media_type: z.string().min(1),
+    data: z.string().min(1),
     filename: z.string().optional(),
   }),
 ]);
@@ -83,10 +77,6 @@ const ContentPartSchema = z.discriminatedUnion("type", [
 ]);
 
 export type ContentPart = z.infer<typeof ContentPartSchema>;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Item Types (ItemParam)
-// ─────────────────────────────────────────────────────────────────────────────
 
 const MessageItemRoleSchema = z.enum(["system", "developer", "user", "assistant"]);
 
@@ -153,10 +143,6 @@ const ItemParamSchema = z.discriminatedUnion("type", [
 
 export type ItemParam = z.infer<typeof ItemParamSchema>;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Tool Definitions
-// ─────────────────────────────────────────────────────────────────────────────
-
 // Responses API tool definition uses a flat format (not the Chat Completions
 // wrapped-function format). Fields are at the top level alongside `type`.
 const FunctionToolDefinitionSchema = z
@@ -168,12 +154,6 @@ const FunctionToolDefinitionSchema = z
     strict: z.boolean().optional(),
   })
   .strict();
-
-const ToolDefinitionSchema = FunctionToolDefinitionSchema;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Request Body
-// ─────────────────────────────────────────────────────────────────────────────
 
 const ToolChoiceSchema = z.union([
   z.literal("auto"),
@@ -198,7 +178,7 @@ export const CreateResponseBodySchema = z
     model: z.string(),
     input: z.union([z.string(), z.array(ItemParamSchema)]),
     instructions: z.string().optional(),
-    tools: z.array(ToolDefinitionSchema).optional(),
+    tools: z.array(FunctionToolDefinitionSchema).optional(),
     tool_choice: ToolChoiceSchema.optional(),
     // The SDK sends its plain-text default explicitly; structured formats must
     // stay rejected until the runtime actually enforces their contracts.
@@ -230,10 +210,6 @@ export const CreateResponseBodySchema = z
   .strict();
 
 export type CreateResponseBody = z.infer<typeof CreateResponseBodySchema>;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Response Resource
-// ─────────────────────────────────────────────────────────────────────────────
 
 type OutputTextContentPart = Extract<ContentPart, { type: "output_text" }>;
 type OutputStatus = "in_progress" | "completed" | "incomplete";
@@ -272,10 +248,6 @@ export type ResponseResource = {
   // Provider content filters are failures, not incomplete output.
   incomplete_details?: { reason: "max_output_tokens" } | undefined;
 };
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Streaming Event Types
-// ─────────────────────────────────────────────────────────────────────────────
 
 type ContentEventPosition = {
   item_id: string;

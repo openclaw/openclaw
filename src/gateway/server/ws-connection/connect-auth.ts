@@ -274,7 +274,7 @@ async function authenticateGatewayConnectCore(
     sharedAuthOk,
     authMethod,
   });
-  let preserveLocalCliSharedAuthScopes = shouldPreserveLocalCliSharedAuthScopes({
+  const preserveLocalCliSharedAuthScopes = shouldPreserveLocalCliSharedAuthScopes({
     connectParams,
     locality: pairingLocality,
     hasBrowserOriginHeader,
@@ -380,21 +380,7 @@ async function authenticateGatewayConnectCore(
     requireBootstrapToken: startupBootstrapConnect,
     rateLimiter: authRateLimiter,
     clientIp: browserRateLimitClientIp,
-    async verifyBootstrapToken({
-      deviceId,
-      publicKey,
-      token,
-      role: roleLocal,
-      scopes: scopesLocal,
-    }) {
-      return await verifyDeviceBootstrapToken({
-        deviceId,
-        publicKey,
-        token,
-        role: roleLocal,
-        scopes: scopesLocal,
-      });
-    },
+    verifyBootstrapToken: verifyDeviceBootstrapToken,
     async verifyDeviceToken(paramsLocal) {
       return await verifyDeviceToken({
         ...paramsLocal,
@@ -417,13 +403,6 @@ async function authenticateGatewayConnectCore(
     authMethod,
   });
   skipLocalBackendSelfPairing = shouldSkipLocalBackendSelfPairing({
-    connectParams,
-    locality: pairingLocality,
-    hasBrowserOriginHeader,
-    sharedAuthOk,
-    authMethod,
-  });
-  preserveLocalCliSharedAuthScopes = shouldPreserveLocalCliSharedAuthScopes({
     connectParams,
     locality: pairingLocality,
     hasBrowserOriginHeader,

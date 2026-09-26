@@ -293,24 +293,11 @@ export async function startGatewayCoreRuntime(input: {
   );
 
   const {
-    execApprovalManager,
-    questionManager,
-    cancelRunBoundApprovals,
-    forwardPluginApprovalRequest,
-    forwardExecApprovalRequest,
-    forwardSystemAgentApprovalRequest,
-    forwardSystemAgentApprovalResolved,
-    execApprovalIosPushDelivery,
-    approvalWebPushDelivery,
-    pluginApprovalIosPushDelivery,
-    pluginApprovalManager,
-    placementStandingGrants,
-    systemAgentApprovalManager,
-    bindApprovalPublicationContext,
     beginCloseApprovalObservers,
     stopOperatorInteractions,
     extraHandlers,
     coreGatewayHandlers,
+    ...approvalRuntime
   } = await startupTrace.measure("gateway.handlers", async () => {
     const [{ createGatewayAuxHandlers }, { coreGatewayHandlers: coreGatewayHandlersLocal }] =
       await Promise.all([import("./server-aux-handlers.js"), import("./server-methods.js")]);
@@ -355,6 +342,8 @@ export async function startGatewayCoreRuntime(input: {
       coreGatewayHandlers: coreGatewayHandlersLocal,
     };
   });
+  const { execApprovalManager, pluginApprovalManager, systemAgentApprovalManager } =
+    approvalRuntime;
   const requestLifetime = runtime.connectionWork.signal;
   requestLifetime.addEventListener("abort", beginCloseApprovalObservers, { once: true });
   if (requestLifetime.aborted) {
@@ -534,20 +523,7 @@ export async function startGatewayCoreRuntime(input: {
     sessionActivitySummaries,
     channelAdmissionAudit,
     approvalSessionEvents,
-    execApprovalManager,
-    questionManager,
-    cancelRunBoundApprovals,
-    forwardPluginApprovalRequest,
-    forwardExecApprovalRequest,
-    forwardSystemAgentApprovalRequest,
-    forwardSystemAgentApprovalResolved,
-    execApprovalIosPushDelivery,
-    approvalWebPushDelivery,
-    pluginApprovalIosPushDelivery,
-    pluginApprovalManager,
-    placementStandingGrants,
-    systemAgentApprovalManager,
-    bindApprovalPublicationContext,
+    ...approvalRuntime,
     validateAgentRuntimeApprovalAuthority,
     attachedGatewayExtraHandlers,
     getAttachedGatewayMethodRegistry: () => attachedGatewayMethodRegistry,

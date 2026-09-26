@@ -32,10 +32,6 @@ export type TaskEventPayload =
   | { action: "deleted"; taskId: string }
   | { action: "restored" };
 
-function taskUpdatedAt(task: TaskRecord): number {
-  return task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt;
-}
-
 function sanitizeOptionalTaskText(
   value: unknown,
   opts?: { errorContext?: boolean },
@@ -87,7 +83,7 @@ export function mapTaskSummary(task: TaskRecord, opts?: { includePrompt?: boolea
     ...(task.parentTaskId ? { parentTaskId: task.parentTaskId } : {}),
     ...(task.sourceId ? { sourceId: task.sourceId } : {}),
     createdAt: task.createdAt,
-    updatedAt: taskUpdatedAt(task),
+    updatedAt: task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt,
     ...(task.startedAt !== undefined ? { startedAt: task.startedAt } : {}),
     ...(task.endedAt !== undefined ? { endedAt: task.endedAt } : {}),
     ...(toolUseCount !== undefined ? { toolUseCount } : {}),

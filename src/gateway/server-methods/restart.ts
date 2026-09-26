@@ -14,10 +14,6 @@ import {
 } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-function isRestartRequestParams(value: unknown): value is Record<string, unknown> {
-  return isRecord(value);
-}
-
 function normalizeReason(value: unknown): string | undefined {
   // Restart reasons are operator-visible log context, not payload storage.
   // Trim and cap them before passing through to the coordinator.
@@ -26,16 +22,10 @@ function normalizeReason(value: unknown): string | undefined {
     : undefined;
 }
 
-function normalizeSkipDeferral(value: unknown): boolean {
-  // Only an explicit boolean may bypass deferral; truthy strings from loose
-  // clients must not skip the safe-restart preflight queue.
-  return value === true;
-}
-
 /** Gateway request handlers for safe restart coordination. */
 export const restartHandlers: GatewayRequestHandlers = {
   "gateway.restart.request": async ({ respond, params }) => {
-    if (!isRestartRequestParams(params)) {
+    if (!isRecord(params)) {
       respond(
         false,
         undefined,
@@ -74,7 +64,7 @@ export const restartHandlers: GatewayRequestHandlers = {
         const result = scheduleSafeGatewayRestart({
           reason,
           delayMs: 0,
-          skipDeferral: normalizeSkipDeferral(params.skipDeferral),
+          skipDeferral: params.skipDeferral === true,
         });
         respond(true, result);
         return;
@@ -122,7 +112,7 @@ export const restartHandlers: GatewayRequestHandlers = {
     const result = scheduleSafeGatewayRestart({
       reason,
       delayMs: 0,
-      skipDeferral: normalizeSkipDeferral(params.skipDeferral),
+      skipDeferral: params.skipDeferral === true,
     });
     respond(true, result);
   },

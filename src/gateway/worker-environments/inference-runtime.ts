@@ -85,25 +85,17 @@ type WorkerInferenceUsageParams = {
   trace: DiagnosticTraceContext;
 };
 
-function copyTool(tool: NonNullable<WorkerInferenceContext["tools"]>[number]): Tool | undefined {
-  if (!isRecord(tool.parameters) || tool.parameters.type !== "object") {
-    return undefined;
-  }
-  return {
-    name: tool.name,
-    description: tool.description,
-    parameters: structuredClone(tool.parameters) as TSchema,
-  };
-}
-
 function buildContext(context: WorkerInferenceContext): Context | undefined {
   const tools: Tool[] = [];
   for (const tool of context.tools ?? []) {
-    const copied = copyTool(tool);
-    if (!copied) {
+    if (!isRecord(tool.parameters) || tool.parameters.type !== "object") {
       return undefined;
     }
-    tools.push(copied);
+    tools.push({
+      name: tool.name,
+      description: tool.description,
+      parameters: structuredClone(tool.parameters) as TSchema,
+    });
   }
   return {
     ...(context.systemPrompt !== undefined ? { systemPrompt: context.systemPrompt } : {}),

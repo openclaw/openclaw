@@ -46,7 +46,6 @@ export function resolveAgentRunAdmissionModel(params: PrepareAgentRunDispatchPar
     provider: activeModel.provider,
     model: activeModel.model,
   };
-  const activeModelProvider = activeModel.provider;
   const lifecycleStorePath = params.resolvedSessionKey
     ? loadSessionEntry(params.resolvedSessionKey, {
         ...(params.activeSessionAgentId ? { agentId: params.activeSessionAgentId } : {}),
@@ -62,7 +61,7 @@ export function resolveAgentRunAdmissionModel(params: PrepareAgentRunDispatchPar
     effectiveAllowModelOverride,
     activeModel,
     resolvedRuntime,
-    activeModelProvider,
+    activeModelProvider: activeModel.provider,
     lifecycleStorePath,
   };
 }

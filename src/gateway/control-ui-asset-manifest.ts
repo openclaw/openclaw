@@ -21,12 +21,7 @@ export function hashControlUiAssetManifestEntries(
 ): string {
   const hash = createHash("sha256");
   for (const entry of entries) {
-    hash.update(entry.path);
-    hash.update("\0");
-    hash.update(String(entry.size));
-    hash.update("\0");
-    hash.update(entry.sha256);
-    hash.update("\n");
+    hash.update(`${entry.path}\0${entry.size}\0${entry.sha256}\n`);
   }
   return hash.digest("hex");
 }

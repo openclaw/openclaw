@@ -18,9 +18,3 @@ export class HostDesktopCredentialsRequiredError extends DesktopCredentialsRequi
     this.name = "HostDesktopCredentialsRequiredError";
   }
 }
-
-export function isDesktopCredentialsRequiredError(
-  error: unknown,
-): error is DesktopCredentialsRequiredError {
-  return error instanceof DesktopCredentialsRequiredError;
-}

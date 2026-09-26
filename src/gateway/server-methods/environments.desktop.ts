@@ -3,13 +3,13 @@ import {
   ErrorCodes,
   errorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { isDesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
+import { DesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
 import { getNodeDesktopService } from "../desktop/node-source-context.js";
 import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 function respondDesktopObserveFailure(respond: RespondFn, error: unknown, fallback: string) {
-  if (isDesktopCredentialsRequiredError(error)) {
+  if (error instanceof DesktopCredentialsRequiredError) {
     respond(
       false,
       undefined,

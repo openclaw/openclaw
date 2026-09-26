@@ -9,9 +9,8 @@ export const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 export const MAX_QUEUED_GATEWAY_PREAUTH_FRAMES = 16;
 
 const DEFAULT_MAX_CHAT_HISTORY_MESSAGES_BYTES = 6 * 1024 * 1024; // keep history responses comfortably under client WS limits
-const maxChatHistoryMessagesBytes = DEFAULT_MAX_CHAT_HISTORY_MESSAGES_BYTES;
 
-export const getMaxChatHistoryMessagesBytes = () => maxChatHistoryMessagesBytes;
+export const getMaxChatHistoryMessagesBytes = () => DEFAULT_MAX_CHAT_HISTORY_MESSAGES_BYTES;
 export const TICK_INTERVAL_MS = 30_000;
 export const HEALTH_REFRESH_INTERVAL_MS = 60_000;
 export const DEDUPE_TTL_MS = 5 * 60_000;

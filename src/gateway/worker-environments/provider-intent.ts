@@ -107,11 +107,8 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     requireWorkerProfile,
     resumeProvision,
   } = options;
-  const resolveProfile = (
-    profileId: string,
-    createOptions: WorkerProviderIntentPreparationOptions,
-  ) => {
-    createOptions.signal?.throwIfAborted();
+  const requireProfileId = (profileId: string, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
     if (options.isStopping()) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
@@ -119,6 +116,13 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     if (!normalizedProfileId || normalizedProfileId !== profileId) {
       throw serviceError("invalid_profile", "Worker profile id must be non-empty and trimmed");
     }
+    return normalizedProfileId;
+  };
+  const resolveProfile = (
+    profileId: string,
+    createOptions: WorkerProviderIntentPreparationOptions,
+  ) => {
+    const normalizedProfileId = requireProfileId(profileId, createOptions.signal);
     const { inherited } = createOptions;
     let provider: WorkerProvider;
     let providerId: string;
@@ -419,27 +423,24 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         return false;
       }
       const current = resolveProfile(record.profileId, createOptions);
-      if (
-        current.provider !== provider ||
-        !isDeepStrictEqual(current.profileSnapshot, profileSnapshot) ||
-        !isDeepStrictEqual(
+      return (
+        current.provider === provider &&
+        isDeepStrictEqual(current.profileSnapshot, profileSnapshot) &&
+        isDeepStrictEqual(
           provider.resolvePreparationTarget?.(
             profile,
             createOptions.machineClass,
             createOptions.os,
           ),
           target,
-        ) ||
-        !provider.requiresNodeEnrollment ||
-        !provider.supportsProjectPreparation?.(
+        ) &&
+        !!provider.requiresNodeEnrollment &&
+        !!provider.supportsProjectPreparation?.(
           profile,
           createOptions.machineClass,
           createOptions.os,
         )
-      ) {
-        return false;
-      }
-      return true;
+      );
     };
     if (!isProfileCurrent()) {
       return undefined;
@@ -485,14 +486,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           ),
         }
       : undefined;
-    signal?.throwIfAborted();
-    if (options.isStopping()) {
-      throw serviceError("invalid_state", "Worker environment service is stopping");
-    }
-    const normalizedProfileId = profileId.trim();
-    if (!normalizedProfileId || normalizedProfileId !== profileId) {
-      throw serviceError("invalid_profile", "Worker profile id must be non-empty and trimmed");
-    }
+    const normalizedProfileId = requireProfileId(profileId, signal);
     const { environmentId, provisionOperationId } = deriveEnvironmentIntent(idempotencyKey);
     return withLock(environmentId, async () => {
       await store.ready();

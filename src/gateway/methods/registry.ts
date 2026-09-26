@@ -19,12 +19,8 @@ export {
 
 export type GatewayMethodRegistry = GatewayMethodRegistryView;
 
-function normalizeMethodName(name: string): string {
-  return name.trim();
-}
-
 function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethodDescriptor {
-  const name = normalizeMethodName(input.name);
+  const name = input.name.trim();
   if (!name) {
     throw new Error("gateway method descriptor name must not be empty");
   }
@@ -55,11 +51,6 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
     name,
     scope: normalizedScope,
     profileAccess,
-    ...(input.startup === "unavailable-until-sidecars"
-      ? { startup: "unavailable-until-sidecars" }
-      : {}),
-    ...(input.controlPlaneWrite === true ? { controlPlaneWrite: true } : {}),
-    ...(input.advertise === false ? { advertise: false } : {}),
   };
 }
 
@@ -107,13 +98,12 @@ export function createGatewayMethodDescriptorsFromHandlers(params: {
     if (!scope) {
       throw new Error(`gateway method is missing a scope: ${name}`);
     }
-    const descriptor: GatewayMethodDescriptorInput = {
+    return {
       name,
       handler,
       owner: params.owner,
       scope,
     };
-    return descriptor;
   });
 }
 

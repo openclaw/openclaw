@@ -44,7 +44,7 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
     identityResolverFor,
   } = options;
   const { ensurePendingCredential } = options.credentialBroker;
-  const refreshRuntime = async (
+  return async (
     record: WorkerEnvironmentRecord,
     provider: WorkerProvider,
     installation: WorkerInstallationArtifact | undefined,
@@ -137,6 +137,4 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
     assertCurrent();
     await ensurePendingCredential(refreshed, sessionId ?? null);
   };
-
-  return refreshRuntime;
 }

@@ -24,6 +24,7 @@ import {
   assertExpectedSharedGitHubPublisher,
   prepareCurrentGitHubPublicationIdentity,
   sameGitHubPublicationWorkspace,
+  type PublicationSessionIdentity as SessionIdentity,
 } from "./github-publication-availability.js";
 import {
   exactClaimForPlacement,
@@ -69,7 +70,6 @@ import {
   assertReceiptOwner,
   captureCheckpoint,
   type PreparedRepositoryPublicationSnapshot,
-  type RepositoryPublicationSessionIdentity as SessionIdentity,
 } from "./github-repository-publication-workspace.js";
 import type { RepositoryGitHubPublicationStatusRow } from "./github-repository-publication.kernel.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
