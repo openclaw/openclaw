@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const MAX_TRANSCRIPT_ITEM_BYTES = 4 * 1024 * 1024;
 const MAX_TRANSCRIPT_TEXT_LENGTH = 1_000_000;
+const MAX_TRANSCRIPT_CONTENT_DEPTH = 100;
 
 export type ClaudeTranscriptItem = {
   type: string;
@@ -35,26 +36,38 @@ function transcriptItemType(role: string, content: unknown): string {
 }
 
 export function collectTranscriptText(value: unknown, fragments: string[]): void {
-  if (typeof value === "string") {
-    if (value.trim()) {
-      fragments.push(value);
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (typeof current === "string") {
+      if (current.trim()) {
+        fragments.push(current);
+      }
+    } else if (Array.isArray(current)) {
+      for (let index = current.length - 1; index >= 0; index -= 1) {
+        pending.push(current[index]);
+      }
+    } else if (isRecord(current)) {
+      // Reverse the push order to preserve text, thinking, content, input order.
+      for (const key of ["input", "content", "thinking", "text"]) {
+        if (key in current) {
+          pending.push(current[key]);
+        }
+      }
     }
-    return;
   }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectTranscriptText(item, fragments);
-    }
-    return;
+}
+
+function exceedsTranscriptContentDepth(value: unknown, depth = 0): boolean {
+  if (value === null || typeof value !== "object") {
+    return false;
   }
-  if (!isRecord(value)) {
-    return;
+  if (depth >= MAX_TRANSCRIPT_CONTENT_DEPTH) {
+    return true;
   }
-  for (const key of ["text", "thinking", "content", "input"]) {
-    if (key in value) {
-      collectTranscriptText(value[key], fragments);
-    }
-  }
+  // Include fields the text collector ignores: the complete content is serialized
+  // again by page readers and node/Gateway transports.
+  return Object.values(value).some((child) => exceedsTranscriptContentDepth(child, depth + 1));
 }
 
 export function parseTranscriptLine(
@@ -93,12 +106,16 @@ export function parseTranscriptLine(
       : {}),
     ...(optionalString(raw.uuid, 256) ? { uuid: optionalString(raw.uuid, 256) } : {}),
   };
-  if (Buffer.byteLength(JSON.stringify(item), "utf8") <= MAX_TRANSCRIPT_ITEM_BYTES) {
+  const deeplyNested = exceedsTranscriptContentDepth(content);
+  if (
+    !deeplyNested &&
+    Buffer.byteLength(JSON.stringify(item), "utf8") <= MAX_TRANSCRIPT_ITEM_BYTES
+  ) {
     return item;
   }
   return {
     type: item.type,
-    text: `${truncateUtf16Safe(text, MAX_TRANSCRIPT_TEXT_LENGTH)}\n\n[oversized Claude item truncated]`,
+    text: `${truncateUtf16Safe(text, MAX_TRANSCRIPT_TEXT_LENGTH)}\n\n[${deeplyNested ? "deeply nested" : "oversized"} Claude item truncated]`,
     ...(item.timestamp ? { timestamp: item.timestamp } : {}),
     ...(item.model ? { model: item.model } : {}),
     ...(item.uuid ? { uuid: item.uuid } : {}),
