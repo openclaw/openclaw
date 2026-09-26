@@ -191,8 +191,9 @@ This behavior is shared by the roster, agent switcher, identity chips, settings,
 
 Activity and previews on the page and sidebar roster refresh on session events
 and Gateway reconnects. Reusing cached ancestry for the selected session does not
-trigger another list read. Events collect in a fixed five-second window before an
-automatic refresh. After an automatic read, the next waits three times its duration,
+trigger another list read. Events collect in a randomized four-to-five-second window
+that later events cannot postpone, spreading automatic reads across browsers.
+After an automatic read, the next waits three times its duration,
 bounded between five and 15 seconds. Navigation, reconnects, and explicit refreshes
 bypass that delay. When both are visible, they share one activity window and
 one refresh, so opening **Agents** while team mode is visible does not duplicate requests. Activity loading

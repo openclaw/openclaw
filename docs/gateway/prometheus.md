@@ -302,7 +302,8 @@ These values do not account for every native allocation or allocator arena.
 
 Worker totals sum completed native heap samples from live Workers created after
 the resource registry starts. On Node, this includes direct plugin Workers;
-nested Workers and V8's internal threads are outside the parent registry.
+nested Workers, native-library thread pools (such as Discord DAVE's Rayon pool),
+and V8's internal threads are outside the parent registry.
 The 30-second diagnostics heartbeat starts a nonblocking refresh, retaining at
 most one outstanding request per Worker. Samples expire after 60 seconds and
 are removed when the Worker exits. Compare `openclaw_worker_heap_sampled_count`
@@ -327,6 +328,14 @@ double-count. Counters survive exporter restarts and reset with the process.
 Use `60 * rate(openclaw_worker_started_total[5m])` for starts per minute by
 script. These counts share the registry coverage limits above; they do not
 measure resident memory released by an exit.
+
+`openclaw gateway call diagnostics.lanes --json` also reports `workerCount`,
+`workerPoolCount`, and `workerPools`. Each pool entry contains a process-local
+`poolId`, an allowlisted `script`, and its live `workerCount`. The response lists
+the 100 largest live pools; `workerPoolCount` includes all live pools. Counts
+include pending retirements until native exit and disappear when a pool has no
+live Workers. Direct Workers contribute to `workerCount` without a pool entry.
+These are JavaScript Worker counts, not an operating-system thread census.
 
 `openclaw_child_process_spawn_total{family="..."}` counts successful launches
 through OpenClaw's shared spawn and exec owners, including brokered launches.
