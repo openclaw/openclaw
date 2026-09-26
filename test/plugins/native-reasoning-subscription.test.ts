@@ -210,8 +210,9 @@ describe("runtime-context replay at prompt submission", () => {
   });
 
   it.each([
-    // The mocked stream shares one replay branch across Responses-family transports.
     "openai-responses",
+    "openai-chatgpt-responses",
+    "azure-openai-responses",
     "openai-completions",
   ] as const)("retains the previous tool turn's prefix only for Responses (%s)", async (api) => {
     const { buildOpenAIProvider } = await loadBundledPluginFacade<{
