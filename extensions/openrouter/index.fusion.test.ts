@@ -14,7 +14,7 @@ function createFusionModelConfig(modelKey: string, extraBody: Record<string, unk
   };
 }
 
-describe("OpenRouter Fusion system prompt", () => {
+describe("openrouter Fusion prompt hooks", () => {
   it("describes configured Fusion analysis models in the system prompt", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const contribution = provider.resolveSystemPromptContribution?.({
