@@ -2,6 +2,7 @@
 // shared module graphs. Keep the owned list explicit so full and focused runs agree.
 export const cliProcessTestFiles = [
   "src/worker/native-worker.integration.test.ts",
+  "src/worker/native-worker-grants.integration.test.ts",
   "src/worker/native-worker.bundle.integration.test.ts",
   "src/cli/directory-cli.test.ts",
   "src/cli/update-cli/update-command-candidate-exit.test.ts",

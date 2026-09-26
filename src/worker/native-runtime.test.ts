@@ -63,7 +63,7 @@ function configFor(workspace: string, baseUrl = "http://127.0.0.1:1/v1"): Native
         headers: { "x-startup": "startup" },
       },
     ],
-    workspaces: [{ id: "workspace", path: workspace }],
+    workspaces: [{ id: "workspace", path: workspace, models: ["openai/local-model"] }],
   };
 }
 async function start(
