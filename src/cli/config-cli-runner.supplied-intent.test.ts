@@ -128,11 +128,7 @@ function op(
     inputMode: "json",
   };
 }
-async function apply(
-  resolved: unknown,
-  operations: ConfigSetOperation[],
-  authored: unknown = resolved,
-) {
+function loadSnapshot(resolved: unknown, authored: unknown = resolved): void {
   state.snapshot = {
     path: "/test/openclaw.json",
     resolved: structuredClone(resolved),
@@ -141,6 +137,14 @@ async function apply(
     runtimeConfig: structuredClone(resolved),
     authoredConfig: structuredClone(authored),
   };
+}
+
+async function apply(
+  resolved: unknown,
+  operations: ConfigSetOperation[],
+  authored: unknown = resolved,
+) {
+  loadSnapshot(resolved, authored);
   await runConfigOperations({
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     operations,
@@ -365,5 +369,57 @@ describe("ordered writer policy after deletion", () => {
       modelConfig(rows),
     );
     expect(result.policyPaths).toBeUndefined();
+  });
+});
+
+describe("replacement guard advice per subcommand", () => {
+  async function refusal(successMode: "set" | "patch"): Promise<string> {
+    loadSnapshot(modelConfig(resolvedRows));
+    try {
+      await runConfigOperations({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        operations: [op(undefined, modelsPath, [{ id: "edited", name: "${TARGET}" }])],
+        options: {},
+        successMode,
+      });
+    } catch (err) {
+      return (err as Error).message;
+    }
+    throw new Error("expected the replacement guard to refuse");
+  }
+
+  // The advice has to name flags the running subcommand registers: `config patch` accepts
+  // neither --merge nor --replace, only --replace-path.
+  it.each([
+    {
+      successMode: "patch" as const,
+      advice: "Use --replace-path models.providers.example.models to replace intentionally.",
+    },
+    {
+      successMode: "set" as const,
+      advice: "Use --merge to merge by id or --replace to replace intentionally.",
+    },
+  ])(
+    "refuses a $successMode model list replacement naming its own flags",
+    async ({ successMode, advice }) => {
+      expect(await refusal(successMode)).toBe(
+        `Refusing to replace models.providers.example.models; it would remove existing entries: drop, untouched. ${advice}`,
+      );
+    },
+  );
+
+  it("recommends a shell-safe path for a dotted provider key", async () => {
+    const dottedPath = ["models", "providers", "local.service", "models"];
+    loadSnapshot({ models: { providers: { "local.service": { models: resolvedRows } } } });
+    await expect(
+      runConfigOperations({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        operations: [op(undefined, dottedPath, [{ id: "edited", name: "${TARGET}" }])],
+        options: {},
+        successMode: "patch",
+      }),
+    ).rejects.toThrow(
+      `Use --replace-path 'models.providers["local.service"].models' to replace intentionally.`,
+    );
   });
 });

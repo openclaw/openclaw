@@ -47,6 +47,26 @@ describe("readConfigPatchOperations", () => {
   });
 });
 
+// The replacement guard tells the user to retry with the path it printed; that retry has to
+// survive the shell and still match the leaf it named.
+describe("copied --replace-path retry", () => {
+  const patch = '{"models":{"providers":{"local]service":{"models":[{"id":"qwen3:8b"}]}}}}';
+  const leaf = ["models", "providers", "local]service", "models"];
+
+  it("replaces the leaf the refusal named", async () => {
+    await withPatchFile(patch, async (patchPath) => {
+      const operations = await readConfigPatchOperations({
+        file: patchPath,
+        replacePath: ['models.providers["local]service"].models'],
+      });
+
+      expect(operations).toHaveLength(1);
+      expect(operations[0]?.setPath).toEqual(leaf);
+      expect(operations[0]?.mutation).toBe("replace");
+    });
+  });
+});
+
 describe("exec provider config inputs", () => {
   it.each(["builder", "batch"] as const)("preserves NUL in %s config input", (mode) => {
     // Config permits NUL even though native process argv cannot carry it.
