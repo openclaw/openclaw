@@ -9,6 +9,7 @@ import {
   startAccountAndTrackLifecycle,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createPluginSetupWizardConfigure,
   createPluginSetupWizardStatus,
@@ -86,8 +87,16 @@ function buildAccount(): ResolvedGoogleChatAccount {
   };
 }
 
-async function waitForGoogleChatMonitorStarted() {
-  await vi.waitFor(() => expect(hoisted.startGoogleChatMonitor).toHaveBeenCalledOnce());
+function prepareGoogleChatMonitorStart(unregister = vi.fn()) {
+  const started = createDeferred<void>();
+  hoisted.startGoogleChatMonitor.mockImplementation(async () => {
+    started.resolve();
+    return unregister;
+  });
+  return async () => {
+    await started.promise;
+    expect(hoisted.startGoogleChatMonitor).toHaveBeenCalledOnce();
+  };
 }
 
 describe("googlechat setup", () => {
@@ -341,14 +350,14 @@ describe("googlechat setup", () => {
 
   it("keeps startAccount pending until abort, then unregisters", async () => {
     const unregister = vi.fn();
-    hoisted.startGoogleChatMonitor.mockResolvedValue(unregister);
+    const waitForStarted = prepareGoogleChatMonitorStart(unregister);
 
     const { abort, patches, task, isSettled } = startAccountAndTrackLifecycle({
       startAccount: startGoogleChatGatewayAccount,
       account: buildAccount(),
     });
     await expectPendingUntilAbort({
-      waitForStarted: waitForGoogleChatMonitorStarted,
+      waitForStarted,
       isSettled,
       abort,
       task,
@@ -369,7 +378,7 @@ describe("googlechat setup", () => {
   });
 
   it("reports a blocked lifecycle when the configured webhookUrl resolves to no path", async () => {
-    hoisted.startGoogleChatMonitor.mockResolvedValue(vi.fn());
+    const waitForStarted = prepareGoogleChatMonitorStart();
     const account = buildAccount();
 
     const { abort, patches, task, isSettled } = startAccountAndTrackLifecycle({
@@ -384,7 +393,7 @@ describe("googlechat setup", () => {
       },
     });
     await expectPendingUntilAbort({
-      waitForStarted: waitForGoogleChatMonitorStarted,
+      waitForStarted,
       isSettled,
       abort,
       task,
@@ -399,7 +408,7 @@ describe("googlechat setup", () => {
   });
 
   it("clears a previously published webhook path when a restart resolves none", async () => {
-    hoisted.startGoogleChatMonitor.mockResolvedValue(vi.fn());
+    const waitForFirstStart = prepareGoogleChatMonitorStart();
     const account = buildAccount();
     const resolvable = {
       ...account,
@@ -409,36 +418,41 @@ describe("googlechat setup", () => {
         webhookUrl: "https://chat.example.com/gc-inbound",
       },
     };
-    const firstAbort = new AbortController();
     // One context, so both starts write through the same status snapshot the way
     // the gateway's runtime store patch-merges successive plugin patches.
-    const ctx = createStartAccountContext({
-      account: resolvable,
-      abortSignal: firstAbort.signal,
+    const ctx = createStartAccountContext({ account: resolvable });
+    const startAccount = ({
+      account: nextAccount,
+      abortSignal,
+    }: Parameters<typeof startGoogleChatGatewayAccount>[0]) =>
+      startGoogleChatGatewayAccount({ ...ctx, account: nextAccount, abortSignal });
+    const first = startAccountAndTrackLifecycle({ startAccount, account: resolvable });
+    await expectPendingUntilAbort({
+      ...first,
+      waitForStarted: waitForFirstStart,
+      assertBeforeAbort: () => {
+        expect(ctx.getStatus().webhookPath).toBe("/gc-inbound");
+      },
     });
-    const firstRun = startGoogleChatGatewayAccount(ctx);
-    await waitForGoogleChatMonitorStarted();
-    expect(ctx.getStatus().webhookPath).toBe("/gc-inbound");
-    firstAbort.abort();
-    await firstRun;
 
     hoisted.startGoogleChatMonitor.mockClear();
-    const secondAbort = new AbortController();
-    const secondRun = startGoogleChatGatewayAccount({
-      ...ctx,
+    const waitForSecondStart = prepareGoogleChatMonitorStart();
+    const second = startAccountAndTrackLifecycle({
+      startAccount,
       account: {
         ...resolvable,
         config: { ...resolvable.config, webhookUrl: "chat.example.com/gc-inbound" },
       },
-      abortSignal: secondAbort.signal,
     });
-    await waitForGoogleChatMonitorStarted();
-
-    const restarted = ctx.getStatus();
-    expect(restarted.lifecycle).toBe("blocked");
-    expect(restarted.webhookPath).toBeUndefined();
-    secondAbort.abort();
-    await secondRun;
+    await expectPendingUntilAbort({
+      ...second,
+      waitForStarted: waitForSecondStart,
+      assertBeforeAbort: () => {
+        const restarted = ctx.getStatus();
+        expect(restarted.lifecycle).toBe("blocked");
+        expect(restarted.webhookPath).toBeUndefined();
+      },
+    });
   });
 
   it("clears running status when monitor startup fails", async () => {
