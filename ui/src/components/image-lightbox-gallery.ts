@@ -145,8 +145,8 @@ export class ImageLightboxGalleryController {
     }
   }
 
-  videoReady() {
-    this.videoStatus = "ready";
+  updateVideoStatus(status: "ready" | "unavailable") {
+    this.videoStatus = status;
     this.notify();
   }
 

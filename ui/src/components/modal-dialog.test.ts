@@ -197,20 +197,20 @@ describe("openclaw-modal-dialog", () => {
     async ({ interaction, reopened }) => {
       // oxlint-disable-next-line typescript/unbound-method -- The saved method is explicitly rebound with call(this) below.
       const showModal = HTMLDialogElement.prototype.showModal;
-      vi.spyOn(HTMLDialogElement.prototype, "showModal").mockImplementation(
-        function (this: HTMLDialogElement) {
-          showModal.call(this);
-          const video = container.querySelector<HTMLVideoElement>("video")!;
-          if (interaction === "pointer") {
-            video.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, composed: true }));
-          } else if (interaction === "keyboard") {
-            video.dispatchEvent(
-              new KeyboardEvent("keydown", { key: "Tab", bubbles: true, composed: true }),
-            );
-          }
-          video.focus();
-        },
-      );
+      vi.spyOn(HTMLDialogElement.prototype, "showModal").mockImplementation(function (
+        this: HTMLDialogElement,
+      ) {
+        showModal.call(this);
+        const video = container.querySelector<HTMLVideoElement>("video")!;
+        if (interaction === "pointer") {
+          video.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, composed: true }));
+        } else if (interaction === "keyboard") {
+          video.dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Tab", bubbles: true, composed: true }),
+          );
+        }
+        video.focus();
+      });
       render(
         html`<openclaw-modal-dialog label="Media"
           ><button autofocus>Close</button><video controls tabindex="0"></video

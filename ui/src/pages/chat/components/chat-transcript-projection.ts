@@ -21,7 +21,6 @@ import {
 import { agentRunFrameActiveStatusParts } from "../chat-agent-run-grouping.ts";
 import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
-import { buildChatItems } from "../chat-thread-build.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
@@ -310,8 +309,7 @@ export function projectChatTranscript(
     connectionEpoch: props.connectionEpoch,
     assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
     resolveArtifactDownload: props.resolveArtifactDownload,
-    getTurnVideoMessages: (key: string) =>
-      state.transcriptRenderContext.turnVideoMessages?.get(key),
+    getTurnVideoMessages: (key) => state.transcriptRenderContext.turnVideoMessages?.get(key),
     onRequestOpenImage: props.onRequestOpenImage,
     onOpenImage: props.onOpenImage,
     onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
@@ -702,9 +700,8 @@ export function projectChatTranscript(
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
   state.transcriptRenderContext.turnVideoMessages = projectTurnVideoMessages(
-    searchFiltering
-      ? buildChatItems({ ...chatItemsInput, searchOpen: false, searchQuery: "" })
-      : chatItems,
+    chatItems,
+    searchFiltering ? chatItemsInput : undefined,
   );
   state.transcriptRenderContext.onSetReply = props.onSetReply;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {

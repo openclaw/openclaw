@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
@@ -536,7 +535,7 @@ function renderMessageAttachmentContent(
               options.onRequestUpdate,
             );
           const membership = options.galleryVideos?.(item);
-          const overlayItem: ImageLightboxItem = {
+          const overlayItem = {
             ...videoItem(attachment),
             src,
             originalSrc: safeAttachmentUrl,
@@ -553,11 +552,7 @@ function renderMessageAttachmentContent(
                 }
               : {}),
           };
-          if (requestVersion === undefined) {
-            onOpenImage(overlayItem);
-          } else {
-            onOpenImage(overlayItem, requestVersion);
-          }
+          onOpenImage(overlayItem, requestVersion);
         }
       : undefined;
   const hasLiveSidebarSource =

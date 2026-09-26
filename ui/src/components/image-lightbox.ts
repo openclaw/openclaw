@@ -261,12 +261,9 @@ class OpenClawImageLightbox extends OpenClawLitElement {
               this.mediaKind === "video"
                 ? html`<video
                     class="video"
-                    @loadeddata=${() => this.galleryController.videoReady()}
-                    @playing=${() => this.galleryController.videoReady()}
-                    @error=${() => {
-                      this.galleryController.videoStatus = "unavailable";
-                      this.requestUpdate();
-                    }}
+                    @loadeddata=${() => this.galleryController.updateVideoStatus("ready")}
+                    @playing=${() => this.galleryController.updateVideoStatus("ready")}
+                    @error=${() => this.galleryController.updateVideoStatus("unavailable")}
                     aria-label=${title}
                     controls
                     autoplay
