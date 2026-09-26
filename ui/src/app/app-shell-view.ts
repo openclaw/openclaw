@@ -11,6 +11,7 @@ import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { resolveGatewayStatus } from "../lib/gateway-status.ts";
+import { takeGraphemes } from "../lib/graphemes.ts";
 import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
@@ -390,7 +391,7 @@ export function renderApplicationShell(host: ShellViewHost) {
                     aria-label=${t("nav.expand")}
                     aria-expanded="false"
                     data-env-avatar=${
-                      config.environment ? config.assistantIdentity.name.charAt(0) : nothing
+                      config.environment ? takeGraphemes(config.assistantIdentity.name, 1) : nothing
                     }
                     @click=${callbacks.toggleSidebar}
                   >
