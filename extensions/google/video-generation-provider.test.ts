@@ -713,4 +713,44 @@ describe("google video generation provider", () => {
     const config = recordField(request.config, "config");
     expect(config.durationSeconds).toBe(6);
   });
+
+  // Regression: credential preparation (OAuth refresh, profile lock) must share
+  // the request timeout budget. resolveApiKeyForProvider is called before the
+  // operation deadline and must receive an abort signal so a stalled credential
+  // lookup is cancelled within req.timeoutMs instead of hanging indefinitely.
+  it("aborts credential preparation when it exceeds the request timeout", async () => {
+    vi.useFakeTimers();
+    // Mirrors resolveApiKeyForProviderCore: honors the caller's signal by
+    // rejecting when aborted (the real impl calls throwIfAborted() across the
+    // OAuth refresh path). Without a signal (pre-fix), the wait is unbounded.
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockImplementation(
+      (params: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          const signal = params.signal;
+          if (!signal) {
+            return;
+          }
+          if (signal.aborted) {
+            reject(new Error("aborted"));
+            return;
+          }
+          signal.addEventListener("abort", () => {
+            reject(new Error("aborted"));
+          });
+        }),
+    );
+
+    // Fake timers: buildTimeoutAbortSignal schedules a setTimeout for the
+    // configured budget. Before the fix no signal is passed, so the credential
+    // lookup hangs and generateVideos is never reached; advancing the clock
+    // alone cannot settle it. After the fix, advancing past timeoutMs aborts
+    // the credential wait without wall-clock delay.
+    const promise = generateVideo({ timeoutMs: 200 });
+    // Attach the rejection handler before advancing the clock so the abort
+    // rejection is observed by this await rather than surfacing as unhandled.
+    const assertion = expect(promise).rejects.toThrow(/timed out|aborted/i);
+    await vi.advanceTimersByTimeAsync(200);
+    await assertion;
+    expect(generateVideosMock).not.toHaveBeenCalled();
+  });
 });

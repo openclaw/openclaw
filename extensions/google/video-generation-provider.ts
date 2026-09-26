@@ -1,4 +1,5 @@
 // Google provider module implements model/runtime integration.
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -439,16 +440,33 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
           "Google video generation does not support image and video inputs together.",
         );
       }
-      const auth = await resolveApiKeyForProvider({
-        provider: "google",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
+      // Credential preparation (OAuth refresh, profile lock) shares the request's
+      // timeout budget, so the abort signal must cover it — not only the HTTP call.
+      // Only requests that explicitly configure a timeout get this coverage; an
+      // omitted timeout keeps the existing behavior (no absolute deadline, only
+      // the per-request DEFAULT_TIMEOUT_MS fallback used by the HTTP layer).
+      const { signal, cleanup } = buildTimeoutAbortSignal({
+        timeoutMs: req.timeoutMs,
+        operation: "Google video generation",
       });
-      if (!auth.apiKey) {
-        throw new Error("Google API key missing");
+      let apiKey: string;
+      try {
+        signal?.throwIfAborted();
+        const auth = await resolveApiKeyForProvider({
+          provider: "google",
+          cfg: req.cfg,
+          agentDir: req.agentDir,
+          store: req.authStore,
+          ...(signal ? { signal } : {}),
+        });
+        signal?.throwIfAborted();
+        if (!auth.apiKey) {
+          throw new Error("Google API key missing");
+        }
+        apiKey = auth.apiKey;
+      } finally {
+        cleanup();
       }
-      const apiKey = auth.apiKey;
 
       const configuredUrl = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
       const configuredBaseUrl = configuredUrl
