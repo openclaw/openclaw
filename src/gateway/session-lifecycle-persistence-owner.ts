@@ -2,6 +2,7 @@ import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   isDefinitiveRunLifecycle,
 } from "../agents/agent-run-terminal-outcome.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { getAgentRunContextOwnerStatus } from "../infra/agent-run-registry.js";
@@ -109,7 +110,13 @@ export function createSessionLifecyclePersistenceOwner() {
             }
           : {}),
       });
-    const promise = params.writeContext ? params.writeContext.run(persist) : persist();
+    // Gateway terminal persistence carries its own authority and reads its fence from
+    // the committed status write. Agent events dispatch synchronously, so without an
+    // explicit detach this inherits whichever attempt context happened to be running
+    // and lets that stale fence replace the freshly read one.
+    const promise = runWithoutOwnedSessionTranscriptWrites(() =>
+      params.writeContext ? params.writeContext.run(persist) : persist(),
+    );
     inFlight.add(promise);
     let entry: PreparedPersistence | undefined;
     const settle = () => {
@@ -177,10 +184,12 @@ export function createSessionLifecyclePersistenceOwner() {
         return Promise.reject(createAgentRunStaleLifecycleError());
       }
       const authority = terminalEventAuthority(params.event);
-      return persistGatewaySessionLifecycleEvent({
-        ...params,
-        ...(authority ? { assertCommitAllowed: () => assertTerminalAuthority(authority) } : {}),
-      });
+      return runWithoutOwnedSessionTranscriptWrites(() =>
+        persistGatewaySessionLifecycleEvent({
+          ...params,
+          ...(authority ? { assertCommitAllowed: () => assertTerminalAuthority(authority) } : {}),
+        }),
+      );
     },
     async drain(): Promise<void> {
       await Promise.allSettled(inFlight);
