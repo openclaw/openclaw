@@ -15,7 +15,7 @@ describe("Microsoft Teams Gateway webhook migration", () => {
     expect(MSTeamsConfigSchema.safeParse(old).success).toBe(false);
     expect(legacyConfigRules.some((rule) => rule.match?.(old, {}))).toBe(true);
     const migrated = normalizeCompatibilityConfig({
-      cfg: { channels: { msteams: old } } as OpenClawConfig,
+      cfg: { channels: { msteams: old } },
     });
     const channel = MSTeamsConfigSchema.parse(migrated.config.channels?.msteams);
     expect(channel.webhook).toEqual({ path: "/teams/events" });
@@ -55,7 +55,7 @@ describe("Microsoft Teams Gateway webhook migration", () => {
   });
 
   it("keeps the canonical endpoint and removes an empty legacy webhook object", () => {
-    const cfg = {
+    const cfg: OpenClawConfig = {
       channels: {
         msteams: {
           legacyWebhook: { port: 44978, host: "127.0.0.1" },
@@ -63,7 +63,7 @@ describe("Microsoft Teams Gateway webhook migration", () => {
         },
       },
     };
-    const migrated = normalizeCompatibilityConfig({ cfg: cfg as OpenClawConfig });
+    const migrated = normalizeCompatibilityConfig({ cfg });
     expect(migrated.config.channels?.msteams).toEqual({
       legacyWebhook: { port: 44978, host: "127.0.0.1" },
     });

@@ -8,6 +8,8 @@ import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type MSTeamsWebhookConfig = {
+  /** @deprecated Type-only until the next SDK major; Doctor migrates this to legacyWebhook.port. */
+  port?: number;
   /** Path for the messages endpoint. Default: /api/messages. */
   path?: string;
 };

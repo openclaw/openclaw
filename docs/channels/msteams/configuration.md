@@ -89,6 +89,10 @@ through Doctor's normal config backup and write flow. Both implicit and explicit
 compatibility listeners forward into the same Gateway route and JWT validation;
 OpenClaw does not silently remove either listener.
 
+The deprecated TypeScript `webhook.port` input remains source-compatible until
+the next Plugin SDK major. Runtime config uses `legacyWebhook`; run
+`openclaw doctor --fix` to migrate the old key.
+
 After confirming a delivery through the Gateway port, set
 `channels.msteams.legacyWebhook: false` and remove any old firewall or Compose
 port mapping. Removing the setting restores the default compatibility listener,
