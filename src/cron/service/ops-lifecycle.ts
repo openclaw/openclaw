@@ -252,8 +252,16 @@ export async function start(state: CronServiceState): Promise<void> {
     // Catch-up releases its timer fence even when a terminal write fails.
     // Keep future jobs live without hiding that failure from the caller.
     if (!state.stopped && state.lifecycleGeneration === generation) {
-      armTimer(state);
-      resumeForeignReceiptMonitor(state);
+      state.schedulerStarted = true;
+      try {
+        armTimer(state);
+        resumeForeignReceiptMonitor(state);
+      } catch (armError) {
+        state.deps.log.warn(
+          { err: String(armError) },
+          "cron: failed to arm scheduling after startup catch-up failed",
+        );
+      }
     }
     throw err;
   }
