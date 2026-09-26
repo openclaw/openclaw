@@ -20,6 +20,12 @@ import {
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import type { AgentCoreStreamRuntimeDeps } from "./runtime-deps.js";
 import {
+  admittedEntryIds,
+  admittedIds,
+  createRejectedToolCallLauncher,
+  toToolBatchCalls,
+} from "./tool-batch-admission.js";
+import {
   type AgentToolExecutionContext,
   runWithAgentToolExecutionContext,
 } from "./tool-execution-context.js";
@@ -472,12 +478,7 @@ async function executeToolCalls(
       }
       batch.validated.set(toolCall, await validateToolCallForBatchAdmission(batch, toolCall));
     }
-    const calls = toolCalls.flatMap((toolCall) => {
-      const validation = batch.validated.get(toolCall);
-      return validation?.kind === "prepared"
-        ? [{ toolCall, args: validation.args, tool: validation.tool }]
-        : [];
-    });
+    const calls = toToolBatchCalls(toolCalls, batch.validated);
     if (calls.length > 0 && !signal?.aborted) {
       const admission = await config.beforeToolBatch(
         { assistantMessage, calls, context: currentContext },
@@ -545,12 +546,6 @@ function hidesToolCallFromChannelProgress(
   return tool?.hideFromChannelProgress === true;
 }
 
-function validatedToolCallIds(batch: ToolBatchContext, calls: AgentToolCall[]): string[] {
-  return calls
-    .filter((call) => batch.validated.get(call)?.kind === "prepared")
-    .map((call) => call.id);
-}
-
 async function executeToolCallGroups(
   batch: ToolBatchContext,
   toolCalls: AgentToolCall[],
@@ -568,7 +563,7 @@ async function executeToolCallGroups(
       steeringMessages = Array.isArray(steering) ? steering : await steering;
     }
     if (steeringMessages.length > 0) {
-      batch.lifecycle?.releaseSkippedCalls(validatedToolCallIds(batch, toolCalls.slice(cursor)));
+      batch.lifecycle?.releaseSkippedCalls(admittedIds(toolCalls.slice(cursor), batch.validated));
       break;
     }
 
@@ -621,8 +616,9 @@ async function executeToolCallGroups(
         }
       };
 
+      // Rejected calls also launch, so a sequential validation failure commits here too.
       const launched =
-        steeringMessages.length > 0 || (sequential && !hasReady)
+        steeringMessages.length > 0
           ? undefined
           : await launchParallelToolCalls(entries, batch.lifecycle);
       // Streamed batches serialize admission until source execution begins.
@@ -644,11 +640,10 @@ async function executeToolCallGroups(
         }
       }
       if (steeringMessages.length > 0 || fatal) {
+        // Unlaunched rejected calls are released with the prepared calls they accompany.
         const skippedIds = [
-          ...entries
-            .slice(skippedIndex)
-            .flatMap((entry) => ("kind" in entry ? [entry.toolCall.id] : [])),
-          ...validatedToolCallIds(batch, toolCalls.slice(cursor)),
+          ...admittedEntryIds(entries.slice(skippedIndex)),
+          ...admittedIds(toolCalls.slice(cursor), batch.validated),
         ];
         if (sequential || fatal || skippedIds.length > 0) {
           batch.lifecycle?.releaseSkippedCalls(skippedIds);
@@ -834,6 +829,7 @@ async function launchParallelToolCalls(
   batchLifecycle: InternalToolBatchLifecycle | undefined,
 ): Promise<ParallelToolCallLaunches> {
   const ready = entries.flatMap((entry, index) => ("kind" in entry ? [{ entry, index }] : []));
+  const launchRejectedBefore = createRejectedToolCallLauncher(entries, batchLifecycle);
   const result: ParallelToolCallLaunches = { started: [], completed: [] };
   let cursor = 0;
   let finish!: () => void;
@@ -848,7 +844,8 @@ async function launchParallelToolCalls(
   });
   const launchNext = () => {
     const current = ready[cursor++];
-    if (!current) {
+    result.rejected ??= launchRejectedBefore(current?.index ?? entries.length);
+    if (!current || result.rejected) {
       finish();
       return;
     }

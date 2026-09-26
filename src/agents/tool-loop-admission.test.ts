@@ -1,9 +1,15 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { Type } from "typebox";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runAgentLoop } from "../../packages/agent-core/src/agent-loop.js";
+import type { StreamFn } from "../../packages/agent-core/src/types.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import type { AssistantMessage, Message } from "../llm/types.js";
+import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
   getDiagnosticSessionState,
   resetDiagnosticSessionStateForTest,
 } from "../logging/diagnostic-session-state.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.policy.js";
 import {
   clearBatchAdmittedToolCallsForRun,
@@ -11,6 +17,8 @@ import {
   resetAdjustedParamsByToolCallIdForTests,
 } from "./agent-tools.before-tool-call.state.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
+import { createToolLoopBatchAdmission } from "./embedded-agent-runner/run/tool-loop-recovery.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import { admitToolCallBatch } from "./tool-loop-admission.js";
 import { recordToolCall, recordToolCallOutcome } from "./tool-loop-detection.js";
 
@@ -27,6 +35,121 @@ function call(id: string, name: string, args: Record<string, unknown>) {
     toolCall: { type: "toolCall" as const, id, name, arguments: args },
     args,
   };
+}
+
+function rejectedCall(id: string, name: string, args: Record<string, unknown>) {
+  return {
+    ...call(id, name, args),
+    validationFailure: {
+      content: [{ type: "text" as const, text: `Validation failed for tool "${name}"` }],
+      details: {},
+    },
+  };
+}
+
+const composedTurnCap = 40;
+const execFailure = {
+  content: [{ type: "text" as const, text: "Traceback: missing package" }],
+  details: { status: "completed", exitCode: 1, aggregated: "Traceback: missing package" },
+};
+
+type ToolCallContent = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
+
+/** Drive the real agent loop with real batch admission and wrapped read/exec tools. */
+async function runComposedLoop(runId: string, callsForTurn: (turn: number) => ToolCallContent[]) {
+  const hookCtx = { ...ctx, runId };
+  const readExecute = vi.fn(async () => ({
+    content: [{ type: "text" as const, text: "unchanged" }],
+    details: {},
+  }));
+  const execExecute = vi.fn(async (_toolCallId: string, _params: unknown) => execFailure);
+  const tools = [
+    wrapToolWithBeforeToolCallHook(
+      {
+        name: "read",
+        label: "read",
+        description: "read",
+        parameters: Type.Object({ path: Type.String() }),
+        execute: readExecute,
+      },
+      hookCtx,
+    ),
+    wrapToolWithBeforeToolCallHook(
+      {
+        name: "exec",
+        label: "exec",
+        description: "exec",
+        parameters: Type.Object({ command: Type.String() }),
+        execute: execExecute,
+      },
+      hookCtx,
+    ),
+  ];
+  let turns = 0;
+  const streamFn: StreamFn = () => {
+    turns += 1;
+    const calls = turns <= composedTurnCap ? callsForTurn(turns) : [];
+    const message: AssistantMessage = {
+      role: "assistant",
+      content: calls.length > 0 ? calls : [{ type: "text", text: "done" }],
+      api: "faux",
+      provider: "faux",
+      model: "faux-1",
+      usage: createZeroUsageFixture(),
+      stopReason: calls.length > 0 ? "toolUse" : "stop",
+      timestamp: turns,
+    };
+    const stream = createAssistantMessageEventStream();
+    queueMicrotask(() => {
+      stream.push({
+        type: "done",
+        reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+        message,
+      });
+      stream.end();
+    });
+    return stream;
+  };
+
+  const messages = await runAgentLoop(
+    [{ role: "user", content: "keep going", timestamp: 0 }],
+    { systemPrompt: "", messages: [], tools },
+    {
+      model: {
+        id: "faux-1",
+        name: "Faux",
+        api: "faux",
+        provider: "faux",
+        baseUrl: "https://example.test",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000,
+        maxTokens: 1_000,
+      },
+      convertToLlm: (entries) => entries as Message[],
+      beforeToolBatch: createToolLoopBatchAdmission(hookCtx),
+    },
+    () => {},
+    undefined,
+    streamFn,
+  );
+  return { messages, turns, execExecute };
+}
+
+function firstLoopBlock(messages: readonly { role: string; details?: unknown }[]) {
+  return messages.find(
+    (message) =>
+      message.role === "toolResult" &&
+      (message.details as { deniedReason?: string } | undefined)?.deniedReason === "tool-loop",
+  );
+}
+
+function expectRecoveryStop(messages: readonly unknown[]) {
+  expect(messages.at(-1)).toMatchObject({
+    role: "assistant",
+    content: [{ type: "text", text: expect.stringContaining("tool-loop recovery") }],
+  });
 }
 
 describe("whole-batch tool-loop admission", () => {
@@ -85,6 +208,126 @@ describe("whole-batch tool-loop admission", () => {
       }
     },
   );
+
+  it("records argument-validation failures at launch and escalates their repeats", async () => {
+    const state = getDiagnosticSessionState(ctx);
+    const skipped = rejectedCall("skipped", "exec", {});
+    const skippedAdmission = await admitToolCallBatch([skipped], ctx);
+    skippedAdmission.releaseSkippedCalls?.([skipped.toolCall.id]);
+    skippedAdmission.commitReadyCalls?.([{ toolCallId: skipped.toolCall.id, args: skipped.args }]);
+    // A released rejection is dropped, even if a stale launch commit follows.
+    expect(state.toolCallHistory ?? []).toEqual([]);
+
+    const warnings: unknown[] = [];
+    for (let index = 0; index < 20; index += 1) {
+      const candidate = rejectedCall(`invalid-${index}`, "exec", {});
+      const admission = await admitToolCallBatch([candidate], ctx);
+      expect(admission.intervention).toBeUndefined();
+      warnings.push(...(admission.warnings ?? []));
+      // Rejected calls never reach the tool wrapper, so admission reserves no marker.
+      expect(consumeBatchAdmittedToolCall(candidate.toolCall.id, ctx.runId)).toBe(false);
+      expect(state.toolCallHistory ?? []).toHaveLength(index);
+      admission.commitReadyCalls?.([{ toolCallId: candidate.toolCall.id, args: candidate.args }]);
+    }
+    expect(state.toolCallHistory).toHaveLength(20);
+    expect(state.toolCallHistory?.at(-1)).toMatchObject({
+      toolCallId: "invalid-19",
+      outcomeKind: "argument-validation",
+      resultHash: expect.any(String),
+    });
+    expect(warnings).toEqual([{ kind: "tool-loop-warning", toolCallId: "invalid-10", count: 10 }]);
+    await expect(
+      admitToolCallBatch([rejectedCall("critical", "exec", {})], ctx),
+    ).resolves.toMatchObject({
+      intervention: {
+        kind: "critical-tool-loop",
+        toolCallId: "critical",
+        detector: "generic_repeat",
+        count: 20,
+      },
+    });
+  });
+
+  it("keeps a terminal exec failure streak across rejected exec calls", async () => {
+    const state = getDiagnosticSessionState(ctx);
+    const failure = {
+      content: [{ type: "text" as const, text: "Traceback: missing package" }],
+      details: { status: "completed", exitCode: 1, aggregated: "Traceback: missing package" },
+    };
+    for (let index = 0; index < 20; index += 1) {
+      const job = call(`job-${index}`, "exec", { command: `python job-${index}.py` });
+      const batch = index % 4 === 0 ? [job, rejectedCall(`invalid-${index}`, "exec", {})] : [job];
+      const admission = await admitToolCallBatch(batch, ctx);
+      expect(admission.intervention).toBeUndefined();
+      admission.commitReadyCalls?.(
+        batch.map((entry) => ({ toolCallId: entry.toolCall.id, args: entry.args })),
+      );
+      recordToolCallOutcome(state, {
+        toolName: "exec",
+        toolParams: job.args,
+        toolCallId: job.toolCall.id,
+        result: failure,
+        runId: ctx.runId,
+      });
+    }
+
+    await expect(
+      admitToolCallBatch([call("next", "exec", { command: "python next.py" })], ctx),
+    ).resolves.toMatchObject({
+      intervention: { toolCallId: "next", detector: "generic_repeat", count: 20 },
+    });
+  });
+
+  it("blocks a repeated batch that mixes a valid call with a rejected one", async () => {
+    const { messages, turns, execExecute } = await runComposedLoop("run-mixed", (turn) => [
+      { type: "toolCall", id: `read-${turn}`, name: "read", arguments: { path: "a" } },
+      { type: "toolCall", id: `exec-${turn}`, name: "exec", arguments: {} },
+    ]);
+
+    // In assistant order the pair alternates, so ping-pong detection blocks it.
+    expect(firstLoopBlock(messages)).toMatchObject({ toolCallId: "read-11" });
+    expect(execExecute).not.toHaveBeenCalled();
+    expect(turns).toBeLessThan(composedTurnCap);
+    expectRecoveryStop(messages);
+  });
+
+  it("blocks changing exec failures across rejected calls to another tool", async () => {
+    const { messages, turns, execExecute } = await runComposedLoop("run-exec-tail", (turn) => [
+      {
+        type: "toolCall",
+        id: `exec-${turn}`,
+        name: "exec",
+        arguments: { command: `python job-${turn}.py` },
+      },
+      ...(turn % 4 === 0
+        ? [{ type: "toolCall" as const, id: `read-${turn}`, name: "read", arguments: {} }]
+        : []),
+    ]);
+
+    // Rejected reads never ran, so they must not end the exec failure tail.
+    expect(firstLoopBlock(messages)).toMatchObject({ toolCallId: "exec-21" });
+    expect(execExecute).toHaveBeenCalledTimes(20);
+    expect(turns).toBeLessThan(composedTurnCap);
+    expectRecoveryStop(messages);
+  });
+
+  it("runs a corrected call after repeated argument-validation failures", async () => {
+    const { messages, execExecute } = await runComposedLoop("run-corrected", (turn) =>
+      turn <= 12
+        ? [{ type: "toolCall", id: `exec-${turn}`, name: "exec", arguments: {} }]
+        : turn === 13
+          ? [{ type: "toolCall", id: "exec-fixed", name: "exec", arguments: { command: "ls" } }]
+          : [],
+    );
+
+    expect(firstLoopBlock(messages)).toBeUndefined();
+    expect(execExecute).toHaveBeenCalledTimes(1);
+    expect(execExecute.mock.calls[0]?.[1]).toEqual({ command: "ls" });
+    expect(messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "done" }],
+    });
+  });
 
   it("returns a typed critical intervention and records only veto evidence", async () => {
     const state = getDiagnosticSessionState({

@@ -1746,7 +1746,7 @@ describe("agentLoop tool termination", () => {
     const commitReadyCalls = vi.fn();
     const releaseSkippedCalls = vi.fn();
     setInternalBeforeToolBatch(agent, async ({ calls }) => {
-      expect(calls.map((call) => call.toolCall.id)).toEqual(["valid-tail"]);
+      expect(calls.map((call) => call.toolCall.id)).toEqual(["invalid-tail", "valid-tail"]);
       return attachInternalToolBatchLifecycle({}, { commitReadyCalls, releaseSkippedCalls });
     });
     agent.subscribe((event) => {
@@ -1763,7 +1763,7 @@ describe("agentLoop tool termination", () => {
 
     expect(execute).not.toHaveBeenCalled();
     expect(commitReadyCalls).not.toHaveBeenCalled();
-    expect(releaseSkippedCalls).toHaveBeenCalledExactlyOnceWith(["valid-tail"]);
+    expect(releaseSkippedCalls).toHaveBeenCalledExactlyOnceWith(["invalid-tail", "valid-tail"]);
   });
 
   it("checks steering once before launching a prepared parallel batch", async () => {
@@ -1808,7 +1808,7 @@ describe("agentLoop tool termination", () => {
     const commitReadyCalls = vi.fn();
     const releaseSkippedCalls = vi.fn();
     setInternalBeforeToolBatch(agent, async ({ calls }) => {
-      expect(calls.map((call) => call.toolCall.id)).toEqual(["prepared"]);
+      expect(calls.map((call) => call.toolCall.id)).toEqual(["invalid", "prepared"]);
       return attachInternalToolBatchLifecycle({}, { commitReadyCalls, releaseSkippedCalls });
     });
     const events: AgentEvent[] = [];
@@ -1825,7 +1825,7 @@ describe("agentLoop tool termination", () => {
 
     expect(execute).not.toHaveBeenCalled();
     expect(commitReadyCalls).not.toHaveBeenCalled();
-    expect(releaseSkippedCalls).toHaveBeenCalledExactlyOnceWith(["prepared"]);
+    expect(releaseSkippedCalls).toHaveBeenCalledExactlyOnceWith(["invalid", "prepared"]);
     expect(requestMessages[1]?.slice(-4)).toMatchObject([
       { role: "assistant", stopReason: "toolUse" },
       { role: "toolResult", toolCallId: "invalid", isError: true },

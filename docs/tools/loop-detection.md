@@ -90,6 +90,10 @@ are unchanged, so a requested refresh still receives a newer saved revision even
 when the card content is unchanged. Errors and results without the tool’s private
 semantic outcome keep full outcome comparison.
 
+Calls rejected by argument validation (for example `exec` without `command`) never
+run, but they are recorded as failed calls, so repeating one is detected like any
+other loop. They do not extend or end an `exec` failure streak.
+
 Outcome comparisons also ignore fresh external-content wrapper nonces, including
 wrapped errors and JSON results. Delivered security markers remain unchanged;
 payload text, status, timestamps, and durations still distinguish network results.
