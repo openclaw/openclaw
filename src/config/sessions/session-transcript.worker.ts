@@ -588,7 +588,8 @@ serveOwnedWorkerTasks(
           request.request.kind === "message-page" ||
           request.request.kind === "around-id" ||
           request.request.kind === "source-messages" ||
-          request.request.kind === "recent-page")
+          request.request.kind === "recent-page" ||
+          request.request.kind === "recovery-checkpoint")
       ) {
         return { ok: false, error: { kind: "syntax", message: error.message } };
       }

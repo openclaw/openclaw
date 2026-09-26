@@ -123,6 +123,7 @@ export function createSessionHistoryWorkerReaders(
           typeof value === "boolean" ||
           Array.isArray(value) ||
           (value.kind !== "transcript-binding" &&
+            value.kind !== "recovery-checkpoint" &&
             value.kind !== "artifacts" &&
             value.kind !== "message-page" &&
             value.kind !== "around-id" &&

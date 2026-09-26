@@ -16,6 +16,17 @@ export async function readSessionHistoryRequest(
     deferProfileDisplay: true,
     resolveCronJobName: () => undefined,
   };
+  if (request.kind === "recovery-checkpoint") {
+    const { readMainSessionRecoveryCheckpointFromReader } =
+      await import("../agents/main-session-recovery/main-session-restart-recovery-checkpoint-reader.js");
+    return {
+      kind: "recovery-checkpoint",
+      result: await readMainSessionRecoveryCheckpointFromReader(
+        request.params.target,
+        options.readers,
+      ),
+    };
+  }
   if (request.kind === "artifacts") {
     const { selectSessionArtifacts } = await import("./session-artifact-read.js");
     return {

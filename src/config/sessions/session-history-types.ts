@@ -1,3 +1,4 @@
+import type { MainSessionRecoveryCheckpoint } from "../../agents/main-session-recovery/main-session-restart-recovery-checkpoint-reader.js";
 import type {
   SessionArtifactReadQuery,
   SessionArtifactReadResult,
@@ -112,6 +113,7 @@ export type SessionHistoryDelta = {
 export type SessionHistoryTranscriptBinding = { sessionKey: string; sessionId: string };
 
 export type SessionHistoryWorkerRequest =
+  | { kind: "recovery-checkpoint"; params: { target: SessionTranscriptReadScope } }
   | {
       kind: "artifacts";
       params: { target: SessionTranscriptReadScope; query: SessionArtifactReadQuery };
@@ -177,6 +179,7 @@ export type SessionHistoryWorkerRequest =
   | { kind: "http"; params: SessionHistoryReadParams };
 
 export type SessionHistoryWorkerResult =
+  | { kind: "recovery-checkpoint"; result: MainSessionRecoveryCheckpoint }
   | { kind: "artifacts"; result: SessionArtifactReadResult }
   | { kind: "message-page" | "recent-page"; result: ReadRecentSessionMessagesResult }
   | { kind: "around-id"; result: ReadSessionMessagesAroundIdResult }

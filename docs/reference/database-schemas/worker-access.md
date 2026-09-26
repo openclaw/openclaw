@@ -174,6 +174,12 @@ pass until a newer completed checkpoint. Exact lifecycle removal and logical
 maintenance planning limit reference results to the generations they might
 delete. No new cache, index, schema, retention policy, or update step is required.
 
+Restart recovery classifies durable session checkpoints in the admitted history
+reader worker. It keeps the original turn source and replay-safe checkpoint from
+one incremental active-history snapshot, including checkpoints outside the display
+tail. Incognito history retains its process-held reader. This changes no stored
+transcript bytes, schema, recovery policy, or update step.
+
 ## Migrate a caller
 
 1. Trace the registered request, event, or timer through the store owner. Check

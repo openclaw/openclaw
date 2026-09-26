@@ -39,7 +39,7 @@ const sessionTranscriptReader = createSessionTranscriptReader({
 // Callback consumers retain their native snapshot; artifact selection uses the typed worker below.
 export const { visitSessionMessagesAsync } = sessionTranscriptReader;
 
-function usesProcessHeldTranscript(scope: SessionTranscriptReadScope): boolean {
+export function usesProcessHeldTranscript(scope: SessionTranscriptReadScope): boolean {
   // Incognito SQLite belongs to this process and cannot be reopened in a worker.
   return Boolean(
     isIncognitoSessionKey(scope.sessionKey) ||
@@ -51,7 +51,9 @@ function usesProcessHeldTranscript(scope: SessionTranscriptReadScope): boolean {
   );
 }
 
-function captureHistoryReadScope(scope: SessionTranscriptReadScope): SessionTranscriptReadScope {
+export function captureHistoryReadScope(
+  scope: SessionTranscriptReadScope,
+): SessionTranscriptReadScope {
   const target = bindSessionTranscriptStoreScope(scope);
   return {
     agentId: target.agentId,

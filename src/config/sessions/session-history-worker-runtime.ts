@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { MainSessionRecoveryCheckpoint } from "../../agents/main-session-recovery/main-session-restart-recovery-checkpoint-reader.js";
 import type { SessionArtifactReadResult } from "../../gateway/session-artifact-read.js";
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
 import type {
@@ -174,7 +175,7 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
         },
       };
     }
-    if (request.kind === "message-count") {
+    if (request.kind === "message-count" || request.kind === "recovery-checkpoint") {
       return { kind: request.kind, params: { target: capturedTarget } };
     }
     if (request.kind === "message-by-id") {
@@ -255,6 +256,10 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
 }
 
 export function readSessionHistoryPageInWorker(
+  request: Extract<SessionHistoryWorkerRequest, { kind: "recovery-checkpoint" }>,
+  signal?: AbortSignal,
+): Promise<MainSessionRecoveryCheckpoint>;
+export function readSessionHistoryPageInWorker(
   request: Extract<SessionHistoryWorkerRequest, { kind: "artifacts" }>,
   signal?: AbortSignal,
 ): Promise<SessionArtifactReadResult>;
@@ -303,6 +308,7 @@ export async function readSessionHistoryPageInWorker(
   signal?: AbortSignal,
 ): Promise<
   | SessionHistoryTranscriptBinding
+  | MainSessionRecoveryCheckpoint
   | SessionArtifactReadResult
   | ReadRecentSessionMessagesResult
   | ReadSessionMessagesAroundIdResult
