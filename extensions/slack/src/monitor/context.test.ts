@@ -1,5 +1,6 @@
 // Slack tests cover context plugin behavior.
 import type { App } from "@slack/bolt";
+import { WebAPIPlatformError, WebAPIRateLimitedError, WebAPIRequestError } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -301,6 +302,33 @@ describe("createSlackMonitorContext resolveSlackSystemEventRoute", () => {
 });
 
 describe("createSlackMonitorContext channel metadata cache", () => {
+  it.each([
+    [new WebAPIRateLimitedError(1), "rate_limited"],
+    [new WebAPIPlatformError({ ok: false, error: "channel_not_found" }), "not_found"],
+    [new WebAPIPlatformError({ ok: false, error: "missing_scope" }), "permission"],
+    [new WebAPIRequestError(new Error("private network payload")), "network"],
+    [
+      new WebAPIRequestError(
+        new Error(
+          "A rate limit was exceeded (url: https://slack.com/api/conversations.info, retry-after: 1)",
+        ),
+      ),
+      "rate_limited",
+    ],
+    [new Error("private provider payload"), "other"],
+  ])("returns only a closed lookup failure category for %s", async (error, category) => {
+    const info = vi.fn().mockRejectedValue(error);
+    const ctx = createTestContext({
+      appClient: { conversations: { info } } as unknown as App["client"],
+    });
+
+    const resolved = await ctx.resolveChannelName("C123");
+
+    expect(info).toHaveBeenCalledOnce();
+    expect(resolved).toEqual({ lookupFailureCategory: category });
+    expect(JSON.stringify(resolved)).not.toContain("private provider payload");
+  });
+
   it("fills metadata after an event stored only the authoritative type", async () => {
     const info = vi.fn().mockResolvedValue({
       channel: {
@@ -340,8 +368,12 @@ describe("createSlackMonitorContext channel metadata cache", () => {
     await expect(ctx.resolveChannelName("C0SHARED", firstTeam)).resolves.toMatchObject({
       type: "mpim",
     });
-    await expect(ctx.resolveChannelName("C0SHARED", secondTeam)).resolves.toEqual({});
-    await expect(ctx.resolveChannelName("C0SHARED")).resolves.toEqual({});
+    await expect(ctx.resolveChannelName("C0SHARED", secondTeam)).resolves.toEqual({
+      lookupFailureCategory: "other",
+    });
+    await expect(ctx.resolveChannelName("C0SHARED")).resolves.toEqual({
+      lookupFailureCategory: "other",
+    });
   });
 
   it("evicts the oldest authoritative type when the bounded cache fills", async () => {
@@ -354,7 +386,9 @@ describe("createSlackMonitorContext channel metadata cache", () => {
       ctx.rememberSlackChannelType(`C${index}`, "channel");
     }
 
-    await expect(ctx.resolveChannelName("C0OLDEST")).resolves.toEqual({});
+    await expect(ctx.resolveChannelName("C0OLDEST")).resolves.toEqual({
+      lookupFailureCategory: "other",
+    });
   });
 
   it("evicts the oldest user name when the bounded user cache fills", async () => {
