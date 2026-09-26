@@ -1210,7 +1210,9 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
         listAgentEntries({ agents: { list } } as OpenClawConfig),
       ) as Record<string, unknown>;
     }
-    return toAgentEntriesRecord(listAgentEntries(cfg)) as Record<string, unknown>;
+    // Same narrowing as the roster-diff helpers below: params configs are raw
+    // unknown values; listAgentEntries structurally reads the roster property.
+    return toAgentEntriesRecord(listAgentEntries(cfg as OpenClawConfig)) as Record<string, unknown>;
   };
   const nextEntries = readRosterEntries(params.nextConfig);
   const explicitRoster = (() => {
