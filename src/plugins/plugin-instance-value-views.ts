@@ -529,8 +529,14 @@ export function createPluginValueView(
       const descriptor = !types.isProxy(result) && Object.getOwnPropertyDescriptor(result, key);
       if (descriptor && "value" in descriptor) {
         const value: unknown = descriptor.value;
-        // Primitive data cannot execute plugin code or require thenable settlement.
-        if (value === null || (typeof value !== "object" && typeof value !== "function")) {
+        // Ordinary data reads need authority, but only executable Promise inspection needs scope.
+        if (
+          value === null ||
+          (typeof value !== "object" && typeof value !== "function") ||
+          (!types.isPromise(value) &&
+            !pluginMemberNeedsAdmission(value, "then") &&
+            typeof Reflect.get(value, "then") !== "function")
+        ) {
           return value;
         }
       }
