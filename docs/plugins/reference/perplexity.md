@@ -1,5 +1,5 @@
 ---
-summary: "Adds web search provider support."
+summary: "Adds agent-callable tools. Adds web search provider support."
 read_when:
   - You are installing, configuring, or auditing the perplexity plugin
 title: "Perplexity plugin reference"
@@ -10,7 +10,7 @@ Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
 between the openclaw-plugin-reference:manual-start and
 openclaw-plugin-reference:manual-end comment markers. -->
 
-Adds web search provider support.
+Adds agent-callable tools. Adds web search provider support.
 
 ## Distribution
 
@@ -19,7 +19,7 @@ Adds web search provider support.
 
 ## Surface
 
-- Contracts: `webSearchProviders`
+- Contracts: `tools`, `webSearchProviders`
 
 ## Related docs
 

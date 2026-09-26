@@ -33,6 +33,7 @@ import {
 } from "./perplexity-web-search-provider.shared.js";
 
 const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
+const DEFAULT_PERPLEXITY_RESEARCH_TIMEOUT_SECONDS = 300;
 
 type PerplexitySearchResponse = {
   choices?: Array<{
@@ -50,6 +51,28 @@ type PerplexitySearchResponse = {
   citations?: string[];
 };
 
+type PerplexityAgentResponse = {
+  error?: {
+    code?: string;
+    message?: string;
+    type?: string;
+  };
+  output?: Array<{
+    type?: string;
+    results?: Array<{ url?: string }>;
+    content?: Array<{
+      type?: string;
+      text?: string;
+      annotations?: Array<{
+        type?: string;
+        url?: string;
+        url_citation?: { url?: string };
+      }>;
+    }>;
+  }>;
+  status?: "completed" | "failed" | "incomplete" | "in_progress" | "queued" | "cancelled";
+};
+
 type PerplexitySearchApiResponse = {
   results?: Array<{
     title?: string;
@@ -58,6 +81,12 @@ type PerplexitySearchApiResponse = {
     date?: string;
   }>;
 };
+
+export type PerplexityResearchEffort = "low" | "medium" | "high" | "xhigh";
+
+const PERPLEXITY_RESEARCH_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
+
+type PerplexityAgentSelection = { preset: "fast" | PerplexityResearchEffort } | { model: string };
 
 function resolvePerplexityApiKey(perplexity?: PerplexityConfig): PerplexityAuth {
   const fromConfig = readConfiguredSecretString(
@@ -121,6 +150,74 @@ function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
     }
   }
   return uniqueStrings(citations);
+}
+
+function extractPerplexityAgentResult(data: PerplexityAgentResponse): {
+  content: string;
+  citations: string[];
+} {
+  if (data.status !== "completed") {
+    const detail = normalizeOptionalString(data.error?.message);
+    const status = normalizeOptionalString(data.status) ?? "missing";
+    throw new Error(
+      `Perplexity Agent API returned status ${JSON.stringify(status)}${detail ? `: ${detail}` : ""}. Retry the query or choose another search provider.`,
+    );
+  }
+  const content: string[] = [];
+  const citations: string[] = [];
+  for (const output of data.output ?? []) {
+    for (const result of output.results ?? []) {
+      const url = normalizeOptionalString(result.url);
+      if (url) {
+        citations.push(url);
+      }
+    }
+    if (output.type !== "message") {
+      continue;
+    }
+    for (const part of output.content ?? []) {
+      if (part.type === "output_text" && typeof part.text === "string") {
+        content.push(part.text);
+      }
+      for (const annotation of part.annotations ?? []) {
+        if (annotation.type !== "url_citation") {
+          continue;
+        }
+        const url = normalizeOptionalString(annotation.url_citation?.url ?? annotation.url);
+        if (url) {
+          citations.push(url);
+        }
+      }
+    }
+  }
+  const answer = content.join("\n");
+  if (!answer.trim()) {
+    throw new Error(
+      "Perplexity search returned no final answer. Retry the query or choose another search provider.",
+    );
+  }
+  return { content: answer, citations: uniqueStrings(citations) };
+}
+
+function resolvePerplexityAgentSelection(model: string): PerplexityAgentSelection {
+  const normalized = model.replace(/^perplexity\//u, "");
+  switch (normalized) {
+    case "sonar":
+      return { preset: "fast" };
+    case "sonar-pro":
+      return { preset: "low" };
+    case "sonar-reasoning-pro":
+      return { preset: "medium" };
+    case "sonar-deep-research":
+      return { preset: "high" };
+    default:
+      return { model: normalized };
+  }
+}
+
+function resolvePerplexityAgentEndpoint(baseUrl: string): string {
+  const normalized = baseUrl.trim().replace(/\/$/u, "");
+  return normalized.endsWith("/v1") ? `${normalized}/agent` : `${normalized}/v1/agent`;
 }
 
 async function runPerplexitySearchApi(params: {
@@ -246,6 +343,60 @@ async function runPerplexitySearch(params: {
         content,
         citations: extractPerplexityCitations(data),
       };
+    },
+  );
+}
+
+async function runPerplexityAgentSearch(params: {
+  query: string;
+  apiKey: string;
+  baseUrl: string;
+  selection: PerplexityAgentSelection;
+  timeoutSeconds: number;
+  signal?: AbortSignal;
+  freshness?: string;
+}): Promise<{ content: string; citations: string[] }> {
+  const body: Record<string, unknown> = {
+    ...params.selection,
+    input: params.query,
+  };
+  if ("model" in params.selection && params.selection.model.startsWith("anthropic/")) {
+    body.max_output_tokens = 4096;
+  }
+  if ("model" in params.selection) {
+    body.instructions =
+      "You must use the web_search tool before answering. Answer only from source-grounded search results.";
+  }
+  if (params.freshness || "model" in params.selection) {
+    body.tools = [
+      {
+        type: "web_search",
+        ...(params.freshness
+          ? { filters: { search_recency_filter: params.freshness } }
+          : undefined),
+      },
+    ];
+  }
+
+  const headers = buildPerplexityRequestHeaders(params.apiKey);
+  return withTrustedWebSearchEndpoint(
+    {
+      url: resolvePerplexityAgentEndpoint(params.baseUrl),
+      timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
+      init: {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        return await throwWebSearchApiError(res, "Perplexity", { headers, signal: params.signal });
+      }
+      return extractPerplexityAgentResult(
+        await readProviderJsonResponse<PerplexityAgentResponse>(res, "Perplexity"),
+      );
     },
   );
 }
@@ -391,17 +542,8 @@ export async function executePerplexitySearch(
   const start = Date.now();
   const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
   const result =
-    runtime.transport === "chat_completions"
-      ? await runPerplexitySearch({
-          query,
-          apiKey: runtime.apiKey,
-          baseUrl: runtime.baseUrl,
-          model: runtime.model,
-          timeoutSeconds,
-          signal,
-          freshness,
-        })
-      : await runPerplexitySearchApi({
+    runtime.transport === "search_api"
+      ? await runPerplexitySearchApi({
           query,
           apiKey: runtime.apiKey,
           count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
@@ -415,7 +557,26 @@ export async function executePerplexitySearch(
           searchBeforeDate: dateBefore ? isoToPerplexityDate(dateBefore) : undefined,
           maxTokens: maxTokens ?? undefined,
           maxTokensPerPage: maxTokensPerPage ?? undefined,
-        });
+        })
+      : runtime.transport === "agent_api"
+        ? await runPerplexityAgentSearch({
+            query,
+            apiKey: runtime.apiKey,
+            baseUrl: runtime.baseUrl,
+            selection: resolvePerplexityAgentSelection(runtime.model),
+            timeoutSeconds,
+            signal,
+            freshness,
+          })
+        : await runPerplexitySearch({
+            query,
+            apiKey: runtime.apiKey,
+            baseUrl: runtime.baseUrl,
+            model: runtime.model,
+            timeoutSeconds,
+            signal,
+            freshness,
+          });
   const resultFields = Array.isArray(result)
     ? { results: result }
     : {
@@ -439,4 +600,59 @@ export async function executePerplexitySearch(
   signal?.throwIfAborted();
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
+}
+
+export async function executePerplexityResearch(
+  args: Record<string, unknown>,
+  searchConfig?: SearchConfigRecord,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
+  const perplexityConfig = resolvePerplexityConfig(searchConfig);
+  const auth = resolvePerplexityApiKey(perplexityConfig);
+  if (!auth.apiKey || auth.source === "openrouter_env" || auth.apiKey.startsWith("sk-or-")) {
+    return {
+      error: "missing_perplexity_agent_api_key",
+      message:
+        "perplexity_research needs a direct Perplexity API key. Set PERPLEXITY_API_KEY or configure plugins.entries.perplexity.config.webSearch.apiKey with a Perplexity key.",
+      docs: "https://docs.openclaw.ai/tools/perplexity-search",
+    };
+  }
+
+  const query = readStringParam(args, "query", { required: true });
+  const rawEffort = readStringParam(args, "effort");
+  // SAFETY: membership in the readonly literal tuple is checked before the value is reused.
+  if (rawEffort && !PERPLEXITY_RESEARCH_EFFORTS.includes(rawEffort as PerplexityResearchEffort)) {
+    return {
+      error: "invalid_effort",
+      message: "effort must be low, medium, high, or xhigh.",
+    };
+  }
+  // SAFETY: absent input uses the valid default; present input passed the literal membership check.
+  const effort = (rawEffort ?? "high") as PerplexityResearchEffort;
+  const rawFreshness = readStringParam(args, "freshness");
+  const freshness = rawFreshness ? normalizeFreshness(rawFreshness, "perplexity") : undefined;
+  if (rawFreshness && !freshness) {
+    return {
+      error: "invalid_freshness",
+      message: "freshness must be day, week, month, or year.",
+    };
+  }
+
+  const result = await runPerplexityAgentSearch({
+    query,
+    apiKey: auth.apiKey,
+    baseUrl: "https://api.perplexity.ai",
+    selection: { preset: effort },
+    timeoutSeconds:
+      searchConfig?.timeoutSeconds === undefined
+        ? DEFAULT_PERPLEXITY_RESEARCH_TIMEOUT_SECONDS
+        : resolveSearchTimeoutSeconds(searchConfig),
+    signal,
+    freshness,
+  });
+  return {
+    effort,
+    content: wrapWebContent(result.content, "web_search"),
+    citations: result.citations,
+  };
 }
