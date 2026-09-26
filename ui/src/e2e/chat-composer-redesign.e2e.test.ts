@@ -144,7 +144,9 @@ suite.define(() => {
         sessionKey: "main",
         state: "error",
       });
-      await expect.poll(() => page.locator(".chat-error").textContent()).toContain(message);
+      await expect
+        .poll(() => page.locator(".chat-error").textContent())
+        .toContain("Your refresh token was already used. Sign in again.");
       await expect.poll(() => page.locator(".agent-chat__composer-status-band").count()).toBe(0);
       const textarea = page.locator(".agent-chat__input textarea");
       await expect.poll(() => textarea.isDisabled()).toBe(false);

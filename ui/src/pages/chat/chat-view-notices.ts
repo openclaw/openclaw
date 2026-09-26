@@ -2,13 +2,15 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { SessionPlacementDiskSpace } from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { renderCopyButton } from "../../components/copy-button.ts";
-import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
+import {
+  formatWebUiErrorNotice,
+  formatWebUiIconErrorText,
+} from "../../components/error-presentation.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
-import { clampText } from "../../lib/format.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
@@ -80,15 +82,10 @@ function renderErrorNotice(
   error: string,
   action: TemplateResult | typeof nothing = nothing,
   displayError = formatWebUiIconErrorText(error),
-  tone: "danger" | "warn" = "danger",
+  options: { tone?: "danger" | "warn"; authRefresh?: boolean } = {},
 ) {
-  const lines = displayError
-    .trim()
-    .split(/\r?\n/u)
-    .map((line) => line.replace(/\s+/gu, " ").trim());
-  const [firstLine = ""] = lines;
-  const summary = clampText(firstLine);
-  const hasDetails = lines.some((line) => line !== "" && line !== summary);
+  const { tone = "danger" } = options;
+  const { summary, details } = formatWebUiErrorNotice(displayError, options);
   // Keep the bounded summary readable without opening the technical details.
   return html`
     <div
@@ -99,16 +96,16 @@ function renderErrorNotice(
         >${icons.alertTriangle}</span
       >
       ${
-        hasDetails
+        details
           ? html`<details class="chat-error__content">
               <summary class="chat-error__summary">
                 <strong>${summary}</strong>
-                <span>${t("chat.details")}</span>
+                <span class="chat-error__details-label">${t("chat.errorMoreDetails")}</span>
                 <span class="chat-error__chevron" aria-hidden="true">${icons.chevronDown}</span>
                 ${renderCopyButton(error, t("chat.copyError"))}
               </summary>
               <pre class="chat-error__diagnostic" tabindex="0" aria-label=${t("chat.errorDetails")}>
-${displayError}</pre>
+${details}</pre>
             </details>`
           : html`<span class="chat-error__content"
               ><strong>${summary}</strong>${renderCopyButton(error, t("chat.copyError"))}</span
@@ -173,7 +170,7 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
   return html`
     ${props.providerReviewNotice ?? nothing}
     ${renderProviderPolicyNotice(props.providerPolicyNotice)}
-    ${props.runError ? renderErrorNotice(props.runError.summary, refresh, undefined, contention ? "warn" : "danger") : nothing}
+    ${props.runError ? renderErrorNotice(props.runError.summary, refresh, undefined, { tone: contention ? "warn" : "danger", authRefresh: props.runError.kind === "auth_refresh" }) : nothing}
     ${renderWorkspaceConflictNotice({
       conflict: props.workspaceConflict ?? undefined,
       onDismiss: props.onDismissWorkspaceConflict,

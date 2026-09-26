@@ -223,17 +223,17 @@ describe("handleAgentEnd", () => {
     const warnMeta = await handleAgentEndAndReadWarnMeta(ctx);
     expect(warnMeta.event).toBe("embedded_run_agent_end");
     expect(warnMeta.runId).toBe("run-1");
-    expect(warnMeta.error).toBe("LLM request failed: connection refused by the provider endpoint.");
+    expect(warnMeta.error).toBe("OpenClaw couldn't reach the AI service.");
     expect(warnMeta.providerRuntimeFailureKind).toBe("timeout");
     expect(warnMeta.rawErrorPreview).toBe("connection refused");
     expect(warnMeta.consoleMessage).toBe(
-      "embedded run agent end: runId=run-1 isError=true model=unknown provider=unknown error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
+      "embedded run agent end: runId=run-1 isError=true model=unknown provider=unknown error=OpenClaw couldn't reach the AI service. rawError=connection refused",
     );
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
       data: {
         phase: "error",
-        error: "LLM request failed: connection refused by the provider endpoint.",
+        error: "OpenClaw couldn't reach the AI service.",
         errorObservation: expect.objectContaining({ providerRuntimeFailureKind: "timeout" }),
         livenessState: "blocked",
       },
@@ -429,7 +429,7 @@ describe("handleAgentEnd", () => {
 
     const meta = firstWarnMeta(ctx);
     expect(meta.consoleMessage).toBe(
-      "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
+      "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=OpenClaw couldn't reach the AI service. rawError=connection refused",
     );
     for (const control of ["\n", "\r", "\t", "\u001b", "\u009b"]) {
       expect(meta?.consoleMessage).not.toContain(control);
@@ -933,7 +933,7 @@ describe("handleAgentEnd", () => {
       stream: "lifecycle",
       data: {
         phase: "error",
-        error: "LLM request failed: connection refused by the provider endpoint.",
+        error: "OpenClaw couldn't reach the AI service.",
         errorObservation: expect.objectContaining({ providerRuntimeFailureKind: "timeout" }),
       },
     });

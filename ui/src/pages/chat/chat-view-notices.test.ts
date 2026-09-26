@@ -128,7 +128,9 @@ it.each([true, false])(
     const details = notice?.querySelector("details");
     expect(details?.open).toBe(false);
     expect(details?.querySelector("strong")?.textContent).toBe(diagnostic.split("\n")[0]);
-    expect(details?.querySelector("pre")?.textContent).toBe(diagnostic);
+    expect(details?.querySelector("pre")?.textContent).toBe(
+      diagnostic.split("\n").slice(1).join("\n"),
+    );
     expect(notice?.querySelector("img")).toBeNull();
     const check = notice?.querySelector<HTMLButtonElement>(".chat-error__refresh");
     expect(check?.textContent?.trim()).toBe("Check status");
@@ -136,5 +138,98 @@ it.each([true, false])(
     check?.click();
     expect(onRefresh).toHaveBeenCalledTimes(connected ? 1 : 0);
     expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
+  },
+);
+
+it("explains a missing operator permission without exposing it as the headline", () => {
+  const container = document.body.appendChild(document.createElement("div"));
+  render(
+    renderChatComposerNotices({
+      messages: [],
+      runError: { summary: "Error: missing scope: operator.admin" },
+    }),
+    container,
+  );
+  const notice = container.querySelector(".chat-error");
+  expect(notice?.querySelector("strong")?.textContent).toBe(
+    "This connection doesn't have permission.",
+  );
+  expect(notice?.querySelector("pre")?.textContent).toBe("Required permission: operator.admin.");
+  expect(notice?.querySelector("summary")?.textContent).toContain("More details");
+});
+
+it("keeps unknown permission diagnostics and recovery instructions intact", () => {
+  const diagnostic =
+    "Permission check failed.\nThe request may have run. Check its status before retrying.";
+  const container = document.body.appendChild(document.createElement("div"));
+  render(renderChatComposerNotices({ messages: [], runError: { summary: diagnostic } }), container);
+  expect(container.querySelector("strong")?.textContent).toBe("Permission check failed.");
+  expect(container.querySelector("pre")?.textContent).toBe(
+    "The request may have run. Check its status before retrying.",
+  );
+});
+
+it.each([
+  [
+    "Reason: refresh_token_reused\nType: invalid_request_error",
+    "Reason: refresh_token_reused  ·  Type: invalid_request_error",
+  ],
+  ["Type: invalid_request_error", "Type: invalid_request_error"],
+  ["Reason: auth\nType: invalid_grant", "Reason: auth  ·  Type: invalid_grant"],
+])("keeps auth diagnostic labels and values for %s", (metadata, expected) => {
+  const container = document.body.appendChild(document.createElement("div"));
+  render(
+    renderChatComposerNotices({
+      messages: [],
+      runError: {
+        kind: "auth_refresh",
+        summary: `Sign-in failed.\nProvider: openai\nHTTP status: 401\n${metadata}`,
+      },
+    }),
+    container,
+  );
+  expect(container.querySelector("pre")?.textContent).toBe(
+    `Provider: openai  ·  HTTP 401  ·  ${expected}`,
+  );
+});
+
+it("keeps the reused-token cause visible even without technical metadata", () => {
+  const container = document.body.appendChild(document.createElement("div"));
+  render(
+    renderChatComposerNotices({
+      messages: [],
+      runError: {
+        kind: "auth_refresh",
+        summary:
+          "Your refresh token has already been used to generate a new access token. Please try signing in again.",
+      },
+    }),
+    container,
+  );
+  expect(container.querySelector("strong")?.textContent).toBe(
+    "Your refresh token was already used. Sign in again.",
+  );
+  expect(container.querySelector("pre")?.textContent).toBe(
+    "It was used to create a new access token.",
+  );
+});
+
+it.each([undefined, "auth_refresh"] as const)(
+  "keeps long recovery guidance visible with kind=%s",
+  (kind) => {
+    const reason =
+      "Reason: " +
+      "The operation is still being reconciled with the remote workspace. ".repeat(3) +
+      "Check its status before retrying.";
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderChatComposerNotices({
+        messages: [],
+        runError: { kind, summary: `Operation may have completed.\n${reason}` },
+      }),
+      container,
+    );
+    expect(container.querySelector("strong")?.textContent).toBe("Operation may have completed.");
+    expect(container.querySelector("pre")?.textContent).toBe(reason);
   },
 );

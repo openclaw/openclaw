@@ -889,12 +889,12 @@ describe("chat run error", () => {
     expect(preview).not.toContain("Final diagnostic line");
     expect(preview.length).toBeLessThanOrEqual(120);
     if (diagnostic.includes("\n")) {
-      expect(preview).toBe("Error: gateway disconnected");
+      expect(preview).toBe("gateway disconnected");
     } else {
       expect(preview).toMatch(/^Request failed: .+…$/u);
     }
     const fullDiagnostic = requireElement(details, "pre", "full diagnostic");
-    expect(fullDiagnostic.textContent).toBe(diagnostic);
+    expect(fullDiagnostic.textContent).toBe(diagnostic.replace(/^Error:[^\n]*\n/u, ""));
     expect(fullDiagnostic.getAttribute("tabindex")).toBe("0");
     expect(alert.querySelector("img")).toBeNull();
     expect(alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')).not.toBeNull();
@@ -907,14 +907,14 @@ describe("chat run error", () => {
   });
 
   it.each(["run", "request"])(
-    "strips only the decorative prefix from a %s error display and copies the raw diagnostic",
+    "omits duplicate headings from %s error details and copies the raw diagnostic",
     async (source) => {
       const writeText = vi.fn().mockResolvedValue(undefined);
       vi.stubGlobal("navigator", { clipboard: { writeText } });
       const diagnostic =
         "⚠️ 🛠️ Error:  gateway disconnected near 🧭\n  indented\tdetail\n<img src=x onerror=alert(1)>\nFinal diagnostic line  ";
       const renderedDiagnostic =
-        "  Error:  gateway disconnected near 🧭\n  indented\tdetail\n<img src=x onerror=alert(1)>\nFinal diagnostic line  ";
+        "  indented\tdetail\n<img src=x onerror=alert(1)>\nFinal diagnostic line";
       const onDismissError = vi.fn();
       const onRetrySessionPlacementStartup = vi.fn();
       const container = renderChatView({
@@ -934,7 +934,7 @@ describe("chat run error", () => {
       expect(alert.textContent).toContain("🧭");
       expect(alert.querySelector("img")).toBeNull();
       const summary = requireElement(details, "summary", "error header");
-      expect(summary.textContent).toContain("Details");
+      expect(summary.textContent).toContain("More details");
       expect(summary.textContent).not.toContain("Error details");
       expect(alert.querySelectorAll(".chat-copy-btn")).toHaveLength(1);
       const copy = summary.querySelector<HTMLButtonElement>('[aria-label="Copy error"]');
@@ -989,11 +989,11 @@ describe("chat run error", () => {
     });
     const alert = requireElement(container, ".chat-error", "startup error");
     expect(requireElement(alert, "pre", "startup diagnostic").textContent).toBe(
-      "The session was created, but startup needs attention:  Provisioning failed\n  Final diagnostic line  ",
+      "  Final diagnostic line",
     );
     expect(alert.textContent).not.toContain("⚠");
     const details = requireElement(alert, "details", "startup disclosure");
-    expect(requireElement(details, "summary", "startup header").textContent).toContain("Details");
+    expect(requireElement(details, "summary", "header").textContent).toContain("More details");
     expect(requireElement(details, "pre", "startup diagnostic").getAttribute("aria-label")).toBe(
       "Error details",
     );

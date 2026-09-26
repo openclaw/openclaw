@@ -550,24 +550,22 @@ describe("formatAssistantErrorText", () => {
   });
 
   it.each([
-    ["EAI_AGAIN", "LLM request failed: DNS lookup for the provider endpoint failed."],
-    ["ENOTFOUND", "LLM request failed: DNS lookup for the provider endpoint failed."],
-    ["ECONNREFUSED", "LLM request failed: connection refused by the provider endpoint."],
-    ["ECONNRESET", "LLM request failed: network connection was interrupted."],
-    ["ENETUNREACH", "LLM request failed: the provider endpoint is unreachable from this host."],
-    ["UNRECOGNIZED", "LLM request failed: network connection error."],
-    ["DNS_CONFIG_INVALID", "LLM request failed: network connection error."],
+    ["EAI_AGAIN", "OpenClaw couldn't reach the AI service."],
+    ["ENOTFOUND", "OpenClaw couldn't reach the AI service."],
+    ["ECONNREFUSED", "OpenClaw couldn't reach the AI service."],
+    ["ECONNRESET", "The connection to the AI service was interrupted."],
+    ["ENETUNREACH", "OpenClaw couldn't reach the AI service."],
+    ["UNRECOGNIZED", "OpenClaw couldn't reach the AI service."],
+    ["DNS_CONFIG_INVALID", "OpenClaw couldn't reach the AI service."],
   ])("uses structured transport code %s with a generic provider message", (errorCode, expected) => {
     const message = { ...makeAssistantError("Connection error."), errorCode };
     expect(formatAssistantErrorText(message)).toBe(expected);
     expect(formatUserFacingAssistantErrorText(message)).toBe(expected);
   });
 
-  it("returns a connection-refused message for ECONNREFUSED failures", () => {
+  it("reports an unreachable AI service for ECONNREFUSED failures", () => {
     const msg = makeAssistantError("connect ECONNREFUSED 127.0.0.1:443 during upstream call");
-    expect(formatAssistantErrorText(msg)).toBe(
-      "LLM request failed: connection refused by the provider endpoint.",
-    );
+    expect(formatAssistantErrorText(msg)).toBe("OpenClaw couldn't reach the AI service.");
   });
 
   it.each(["disk full", "ENOSPC: no space left on device, write"])(
@@ -580,18 +578,14 @@ describe("formatAssistantErrorText", () => {
     },
   );
 
-  it("returns a DNS-specific message for provider lookup failures", () => {
+  it("reports an unreachable AI service for provider lookup failures", () => {
     const msg = makeAssistantError("dial tcp: lookup api.example.com: no such host (ENOTFOUND)");
-    expect(formatAssistantErrorText(msg)).toBe(
-      "LLM request failed: DNS lookup for the provider endpoint failed.",
-    );
+    expect(formatAssistantErrorText(msg)).toBe("OpenClaw couldn't reach the AI service.");
   });
 
   it("returns an interrupted-connection message for socket hang ups", () => {
     const msg = makeAssistantError("socket hang up");
-    expect(formatAssistantErrorText(msg)).toBe(
-      "LLM request failed: network connection was interrupted.",
-    );
+    expect(formatAssistantErrorText(msg)).toBe("The connection to the AI service was interrupted.");
   });
 
   it("returns a contention-specific message for OAuth refresh lock timeouts", () => {

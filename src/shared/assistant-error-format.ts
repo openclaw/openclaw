@@ -295,7 +295,7 @@ export function formatTransportErrorCopy(raw: string): string | undefined {
     lower.includes("connection refused") ||
     lower.includes("actively refused")
   ) {
-    return "LLM request failed: connection refused by the provider endpoint.";
+    return "OpenClaw couldn't reach the AI service.";
   }
   if (
     INTERRUPTED_TRANSPORT_CODE_RE.test(raw) ||
@@ -303,7 +303,7 @@ export function formatTransportErrorCopy(raw: string): string | undefined {
     lower.includes("connection reset") ||
     lower.includes("connection aborted")
   ) {
-    return "LLM request failed: network connection was interrupted.";
+    return "The connection to the AI service was interrupted.";
   }
   if (
     DNS_TRANSPORT_CODE_RE.test(raw) ||
@@ -311,24 +311,24 @@ export function formatTransportErrorCopy(raw: string): string | undefined {
     lower.includes("no such host") ||
     lower.includes("dns")
   ) {
-    return "LLM request failed: DNS lookup for the provider endpoint failed.";
+    return "OpenClaw couldn't reach the AI service.";
   }
   if (
     UNREACHABLE_TRANSPORT_CODE_RE.test(raw) ||
     lower.includes("network is unreachable") ||
     lower.includes("host is unreachable")
   ) {
-    return "LLM request failed: the provider endpoint is unreachable from this host.";
+    return "OpenClaw couldn't reach the AI service.";
   }
   if (
     lower.includes("fetch failed") ||
     lower.includes("connection error") ||
     lower.includes("network request failed")
   ) {
-    return "LLM request failed: network connection error.";
+    return "OpenClaw couldn't reach the AI service.";
   }
   if (raw.includes("网络错误") || raw.includes("网络异常") || raw.includes("连接错误")) {
-    return "LLM request failed: provider reported a network error.";
+    return "The AI service reported a network error.";
   }
   return undefined;
 }

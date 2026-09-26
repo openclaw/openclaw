@@ -1046,7 +1046,7 @@ suite.define(() => {
 
     const alert = currentPage.getByRole("alert").filter({ hasText: diagnostic });
     await alert.waitFor();
-    expect((await alert.textContent())?.trim()).toContain(`Error: ${diagnostic}`);
+    expect((await alert.textContent())?.trim()).toContain(diagnostic);
     expect(await currentPage.getByLabel("Run status: Interrupted").count()).toBe(0);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
     if (captureProof) {
