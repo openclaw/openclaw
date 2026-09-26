@@ -15,7 +15,6 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import type { OpenClawStateWorkerOperationOptions } from "../state/openclaw-state-worker-contract.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { resolveUserPath } from "../utils.js";
 import { retireWorkspaceFileCache } from "./workspace-file-cache.js";
@@ -203,7 +202,7 @@ export async function replaceWorkspaceAttestation(
 function workspaceStateWorkerAdmission(
   context: OpenClawStateWorkerContext,
   assertCurrent?: () => void,
-): OpenClawStateWorkerOperationOptions {
+) {
   return {
     assertCurrent,
     createAdmission: () => ({
