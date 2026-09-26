@@ -3,10 +3,12 @@ import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contrac
 import {
   createChannelInboundEnvelopeBuilder,
   createChannelPartialDeliveryError,
+  formatInboundMediaUnavailableText,
   implicitMentionKindWhen,
   isChannelPartialDeliveryError,
   logInboundDrop,
   resolveInboundMentionDecision,
+  type InboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
@@ -154,6 +156,52 @@ function senderScopedZalouserGroupPolicy(params: {
     return "disabled";
   }
   return params.groupAllowFrom.length > 0 ? "allowlist" : "open";
+}
+
+// Bound CDN downloads so a stalled Zalo host cannot hold the inbound turn open.
+const ZALOUSER_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 30_000;
+const ZALOUSER_MEDIA_READ_IDLE_TIMEOUT_MS = 30_000;
+const ZALOUSER_MEDIA_TOTAL_TIMEOUT_MS = 120_000;
+
+async function resolveZalouserInboundMedia(params: {
+  message: ZaloInboundMessage;
+  account: ResolvedZalouserAccount;
+  core: ZalouserCoreRuntime;
+  runtime: RuntimeEnv;
+}): Promise<{ media?: InboundMediaFacts[]; unavailableNotice?: string }> {
+  const { message, account, core, runtime } = params;
+  const attachment = message.attachment;
+  if (!attachment) {
+    return {};
+  }
+  try {
+    const saved = await core.channel.media.saveRemoteMedia({
+      url: attachment.url,
+      maxBytes: account.mediaMaxBytes,
+      requireHttps: true,
+      responseHeaderTimeoutMs: ZALOUSER_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
+      readIdleTimeoutMs: ZALOUSER_MEDIA_READ_IDLE_TIMEOUT_MS,
+      timeoutMs: ZALOUSER_MEDIA_TOTAL_TIMEOUT_MS,
+      originalFilename: attachment.fileName,
+    });
+    return {
+      media: [
+        {
+          path: saved.path,
+          url: saved.path,
+          contentType: saved.contentType,
+          fileName: saved.fileName ?? attachment.fileName,
+          sizeBytes: saved.size,
+          kind: attachment.kind,
+        },
+      ],
+    };
+  } catch (err) {
+    runtime.error?.(
+      `[${account.accountId}] Failed to download Zalo ${attachment.kind} attachment: ${String(err)}`,
+    );
+    return { unavailableNotice: `[zalouser ${attachment.kind} attachment unavailable]` };
+  }
 }
 
 function logVerbose(core: ZalouserCoreRuntime, runtime: RuntimeEnv, message: string): void {
@@ -538,6 +586,12 @@ async function processMessage(
     return;
   }
 
+  // Download only after access and mention gating so dropped messages never fetch.
+  const inboundMedia = await resolveZalouserInboundMedia({ message, account, core, runtime });
+  const bodyForAgent = inboundMedia.unavailableNotice
+    ? formatInboundMediaUnavailableText({ body: rawBody, notice: inboundMedia.unavailableNotice })
+    : rawBody;
+
   const fromLabel = isGroup ? groupName || `group:${chatId}` : senderName || `user:${senderId}`;
   const buildEnvelope = createChannelInboundEnvelopeBuilder({ cfg: config, route });
   const body = buildEnvelope({
@@ -608,11 +662,12 @@ async function processMessage(
     },
     message: {
       body: combinedBody,
-      bodyForAgent: rawBody,
+      bodyForAgent,
       rawBody,
       commandBody,
       inboundHistory,
     },
+    media: inboundMedia.media,
     extra: {
       BodyForCommands: commandBody,
       GroupSubject: isGroup ? groupName || undefined : undefined,

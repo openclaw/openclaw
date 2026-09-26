@@ -40,6 +40,7 @@ import type {
   ZaloGroupContext,
   ZaloGroup,
   ZaloGroupMember,
+  ZaloInboundAttachment,
   ZaloInboundMessage,
   ZaloSendOptions,
   ZaloSendHandoff,
@@ -170,6 +171,43 @@ function normalizeMessageContent(content: unknown): string {
   } catch {
     return "";
   }
+}
+
+// zca-js forwards attachment payloads untyped: `href` is the Zalo CDN URL and, for
+// shared files, `title` is the original file name.
+const INBOUND_ATTACHMENT_KIND_BY_MSG_TYPE: Readonly<Record<string, ZaloInboundAttachment["kind"]>> =
+  {
+    "chat.photo": "image",
+    "chat.video.msg": "video",
+    "share.file": "document",
+  };
+
+export function extractZaloInboundAttachment(
+  msgType: unknown,
+  content: unknown,
+): ZaloInboundAttachment | undefined {
+  const kind =
+    typeof msgType === "string" ? INBOUND_ATTACHMENT_KIND_BY_MSG_TYPE[msgType] : undefined;
+  if (!kind || !content || typeof content !== "object") {
+    return undefined;
+  }
+  const record = content as Record<string, unknown>;
+  const href = typeof record.href === "string" ? record.href.trim() : "";
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== "https:") {
+    return undefined;
+  }
+  const title = typeof record.title === "string" ? record.title.trim() : "";
+  return {
+    kind,
+    url: url.toString(),
+    fileName: kind === "document" && title ? title : undefined,
+  };
 }
 
 function resolveInboundTimestamp(rawTs: unknown): number {
@@ -662,6 +700,7 @@ export function normalizeZaloInboundMessage(
     quotedOwnerId: quoteOwnerId || undefined,
     quotedBody: quotedBody || undefined,
     eventMessage,
+    attachment: extractZaloInboundAttachment(data.msgType, data.content),
     raw: message,
   };
 }

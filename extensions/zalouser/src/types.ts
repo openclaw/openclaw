@@ -41,6 +41,12 @@ export type ZaloEventMessage = {
   ts: string | number;
 };
 
+export type ZaloInboundAttachment = {
+  kind: "image" | "video" | "document";
+  url: string;
+  fileName?: string;
+};
+
 export type ZaloInboundMessage = {
   threadId: string;
   isGroup: boolean;
@@ -60,6 +66,7 @@ export type ZaloInboundMessage = {
   quotedOwnerId?: string;
   quotedBody?: string;
   eventMessage?: ZaloEventMessage;
+  attachment?: ZaloInboundAttachment;
   raw: unknown;
 };
 
