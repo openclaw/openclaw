@@ -38,6 +38,15 @@ import type { CallRecord, EndReason, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
 import { WebSocket, WebSocketServer } from "../websocket.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
+import {
+  captureNativeConsultTranscript,
+  consumeNativeConsultTranscript,
+  type NativeConsultState,
+  type NativeConsultTranscript,
+  type UserTranscriptState,
+  waitForNativeConsult,
+  waitForNativeConsultTranscriptSettle,
+} from "./realtime-native-consult.js";
 import type { StreamDisconnectLifecycle } from "./stream-disconnect-grace.js";
 import {
   type StreamFrameAdapter,
@@ -65,8 +74,6 @@ const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const FORCED_CONSULT_NATIVE_DEDUPE_MS = 2_000;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1800;
 const FORCED_CONSULT_REASON = "provider_final_transcript_without_openclaw_agent_consult";
-const CONSULT_TRANSCRIPT_SETTLE_MS = 350;
-const CONSULT_TRANSCRIPT_SETTLE_MAX_MS = 1_000;
 const MAX_PARTIAL_USER_TRANSCRIPT_CHARS = 1_200;
 const RECENT_FINAL_USER_TRANSCRIPT_TTL_MS = 2_000;
 const BARGE_IN_REQUIRED_LOUD_CHUNKS = 2;
@@ -293,26 +300,6 @@ type RealtimeConsultSession = {
   coordinator: RealtimeVoiceSessionHarness["forcedConsults"];
 };
 
-type NativeConsultState = {
-  owner: ActiveRealtimeVoiceBridge;
-  startedAt: number;
-  promise: Promise<unknown>;
-  cancellation: Promise<void>;
-  readonly cancelled: boolean;
-  cancel: () => void;
-  partialUserTranscript?: string;
-};
-
-type NativeConsultOutcome = { kind: "completed"; result: unknown } | { kind: "cancelled" };
-
-type UserTranscriptState = {
-  partial?: string;
-  rawPartial?: string;
-  partialUpdatedAt?: number;
-  recentFinal?: string;
-  recentFinalTimer?: ReturnType<typeof setTimeout>;
-};
-
 type UserTranscriptOwnerAdoption = {
   owner: UserTranscriptState;
   previous?: UserTranscriptState;
@@ -330,13 +317,6 @@ type RealtimeTelephonyBinding = {
   noteMediaActivity: () => void;
   retire: () => void;
 };
-
-async function waitForNativeConsult(state: NativeConsultState): Promise<NativeConsultOutcome> {
-  return await Promise.race([
-    state.promise.then((result) => ({ kind: "completed", result }) as const),
-    state.cancellation.then(() => ({ kind: "cancelled" }) as const),
-  ]);
-}
 
 function appendRecentTalkEventMetadata(
   metadata: CallRecord["metadata"],
@@ -1044,6 +1024,8 @@ export class RealtimeCallHandler {
               const owner = nativeConsultOwner.current;
               const generation = continuityGeneration;
               request.signal?.throwIfAborted();
+              const invocationId = randomUUID();
+              const transcript = captureNativeConsultTranscript(userTranscriptOwner, invocationId);
               await transcriptPersistence;
               if (
                 !owner ||
@@ -1059,12 +1041,13 @@ export class RealtimeCallHandler {
               const result = await this.executeToolCall(
                 owner,
                 callId,
-                randomUUID(),
+                invocationId,
                 REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
                 { question: request.prompt },
                 harness.ensureTurn(),
                 harness,
                 userTranscriptOwner,
+                transcript,
                 { signal: request.signal },
               );
               request.signal?.throwIfAborted();
@@ -1230,6 +1213,11 @@ export class RealtimeCallHandler {
       },
       onToolCall: async (toolEvent, sessionLocal) => {
         const generation = continuityGeneration;
+        const invocationId = toolEvent.callId || toolEvent.itemId;
+        const transcript =
+          toolEvent.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
+            ? captureNativeConsultTranscript(userTranscriptOwner, invocationId)
+            : undefined;
         await transcriptPersistence;
         if (
           sessionClosed ||
@@ -1252,12 +1240,13 @@ export class RealtimeCallHandler {
         await this.executeToolCall(
           sessionLocal,
           callId,
-          toolEvent.callId || toolEvent.itemId,
+          invocationId,
           toolEvent.name,
           toolEvent.args,
           turnId,
           harness,
           userTranscriptOwner,
+          transcript,
         );
       },
       onEvent: (event) => {
@@ -1661,15 +1650,14 @@ export class RealtimeCallHandler {
     this.clearRecentFinalUserTranscript(callId, owner);
     state.recentFinal = text;
     const timer = setTimeout(() => {
-      if (this.userTranscriptStatesByCallId.get(callId) !== state) {
+      if (
+        this.userTranscriptStatesByCallId.get(callId) !== state ||
+        state.recentFinalTimer !== timer
+      ) {
         return;
       }
-      if (state.recentFinal === text) {
-        state.recentFinal = undefined;
-      }
-      if (state.recentFinalTimer === timer) {
-        state.recentFinalTimer = undefined;
-      }
+      state.recentFinal = undefined;
+      state.recentFinalTimer = undefined;
     }, RECENT_FINAL_USER_TRANSCRIPT_TTL_MS);
     timer.unref?.();
     state.recentFinalTimer = timer;
@@ -1690,6 +1678,7 @@ export class RealtimeCallHandler {
   private resetUserTranscriptState(callId: string, owner: UserTranscriptState): void {
     this.clearPartialUserTranscript(callId, owner);
     this.clearRecentFinalUserTranscript(callId, owner);
+    owner.nativeConsultInvocation = undefined;
   }
 
   private clearUserTranscriptState(callId: string, owner: UserTranscriptState): void {
@@ -1822,28 +1811,6 @@ export class RealtimeCallHandler {
     }
     if (recent === text || recent.toLowerCase().startsWith(text.toLowerCase())) {
       this.clearRecentFinalUserTranscript(callId, owner);
-    }
-  }
-
-  private async waitForConsultTranscriptSettle(
-    callId: string,
-    owner: UserTranscriptState,
-    startedAt: number,
-  ): Promise<void> {
-    const deadline = startedAt + CONSULT_TRANSCRIPT_SETTLE_MAX_MS;
-    while (true) {
-      const updatedAt = this.getUserTranscriptState(callId, owner)?.partialUpdatedAt;
-      if (!updatedAt) {
-        return;
-      }
-      const now = Date.now();
-      const quietFor = now - updatedAt;
-      if (quietFor >= CONSULT_TRANSCRIPT_SETTLE_MS || now >= deadline) {
-        return;
-      }
-      await new Promise((resolve) => {
-        setTimeout(resolve, Math.min(CONSULT_TRANSCRIPT_SETTLE_MS - quietFor, deadline - now));
-      });
     }
   }
 
@@ -2105,6 +2072,7 @@ export class RealtimeCallHandler {
     turnId: string,
     harness: RealtimeVoiceSessionHarness,
     userTranscriptOwner: UserTranscriptState,
+    consultTranscript: NativeConsultTranscript | undefined,
     delegation?: { signal?: AbortSignal },
   ): Promise<unknown> {
     if (name === REALTIME_VOICE_END_CALL_TOOL_NAME) {
@@ -2203,7 +2171,17 @@ export class RealtimeCallHandler {
       }
 
       const existingNativeConsult = this.nativeConsultsInFlightByCallId.get(callId);
-      if (existingNativeConsult) {
+      if (existingNativeConsult?.owner === bridge && !existingNativeConsult.cancelled) {
+        // Identical arguments can refer to newer speech. Only an exact invocation replay shares work.
+        if (!bridgeCallId.trim() || existingNativeConsult.invocationId !== bridgeCallId) {
+          return await submitFinalToolResult({
+            status: "busy",
+            started: false,
+            retryable: true,
+            message:
+              "OpenClaw is still consulting on another invocation. This request has not started. Retry after the current consult finishes.",
+          });
+        }
         console.log(
           `[voice-call] realtime tool call sharing in-flight agent consult callId=${callId} ageMs=${Date.now() - existingNativeConsult.startedAt}`,
         );
@@ -2226,6 +2204,7 @@ export class RealtimeCallHandler {
       });
       const state: NativeConsultState = {
         owner: bridge,
+        invocationId: bridgeCallId,
         startedAt,
         promise: consult,
         cancellation,
@@ -2251,14 +2230,17 @@ export class RealtimeCallHandler {
             return undefined;
           }
           await Promise.race([
-            this.waitForConsultTranscriptSettle(callId, userTranscriptOwner, startedAt),
+            waitForNativeConsultTranscriptSettle(
+              () => this.getUserTranscriptState(callId, userTranscriptOwner)?.partialUpdatedAt,
+              startedAt,
+            ),
             state.cancellation,
           ]);
           if (state.cancelled || !this.isActiveBridgeOwner(callId, bridge)) {
             return undefined;
           }
           const context = {
-            partialUserTranscript: this.resolveUserTranscriptContext(callId, userTranscriptOwner),
+            partialUserTranscript: consultTranscript?.(),
             abortSignal: abortController.signal,
           };
           state.partialUserTranscript = context.partialUserTranscript;
@@ -2286,10 +2268,11 @@ export class RealtimeCallHandler {
         );
         await submitFinalToolResult(result);
         if (!failed) {
-          this.consumePartialUserTranscript(
-            callId,
-            userTranscriptOwner,
+          consumeNativeConsultTranscript(
+            this.getUserTranscriptState(callId, userTranscriptOwner),
             state.partialUserTranscript,
+            () => this.clearPartialUserTranscript(callId, userTranscriptOwner),
+            () => this.clearRecentFinalUserTranscript(callId, userTranscriptOwner),
           );
         }
         return result;

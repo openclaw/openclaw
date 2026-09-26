@@ -1651,17 +1651,7 @@ describe("RealtimeCallHandler path routing", () => {
   });
 
   it("submits continuing responses only for realtime agent consult calls", async () => {
-    let callbacks:
-      | {
-          onToolCall?: (event: {
-            itemId: string;
-            callId: string;
-            name: string;
-            args: unknown;
-          }) => void;
-          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
-        }
-      | undefined;
+    let callbacks: RealtimeBridgeRequest | undefined;
     let resolveConsult: ((value: unknown) => void) | undefined;
     let resolveWorkingSubmission: (() => void) | undefined;
     let rejectWorkingSubmission = false;
@@ -1680,6 +1670,7 @@ describe("RealtimeCallHandler path routing", () => {
         }
         if (
           _callId === "consult-call" &&
+          !resolveWorkingSubmission &&
           result &&
           typeof result === "object" &&
           "status" in result &&
@@ -1753,9 +1744,10 @@ describe("RealtimeCallHandler path routing", () => {
           name: "openclaw_agent_consult",
           args: { question: "Are the basement lights on?" },
         });
+        // Share a handler-level replay, not a different provider invocation.
         callbacks?.onToolCall?.({
-          itemId: "item-2",
-          callId: "consult-call-2",
+          itemId: "item-1",
+          callId: "consult-call",
           name: "openclaw_agent_consult",
           args: { question: "Are the basement lights on?" },
         });
@@ -1793,7 +1785,7 @@ describe("RealtimeCallHandler path routing", () => {
 
         await waitForRealtimeTest(() => {
           expect(submitToolResult).toHaveBeenLastCalledWith(
-            "consult-call-2",
+            "consult-call",
             {
               text: "The basement lights are on.",
             },
@@ -1897,7 +1889,7 @@ describe("RealtimeCallHandler path routing", () => {
           ? [asynchronous, { outcome, synchronous: true, label: `synchronous ${outcome.label}` }]
           : [asynchronous];
       }),
-    )("projects $label once per provider call while the phone stays open", async (testCase) => {
+    )("preserves $label outcomes and keeps the phone open", async (testCase) => {
       const { outcome, synchronous } = testCase;
       let callbacks: RealtimeBridgeRequest | undefined;
       const submitToolResult = vi.fn();
@@ -1950,7 +1942,10 @@ describe("RealtimeCallHandler path routing", () => {
           await vi.advanceTimersByTimeAsync(200);
           expect(hostTool).toHaveBeenCalledOnce();
         }
-        const callIds = path === "general" ? ["host-tool"] : ["host-tool", "shared-host-tool"];
+        const callIds =
+          path === "general"
+            ? ["host-tool"]
+            : ["host-tool", path === "native" ? "host-tool" : "shared-host-tool"];
         for (const callId of callIds) {
           provider.onToolCall?.({ itemId: callId, callId, name, args: { question } });
         }
