@@ -242,29 +242,8 @@ async function resolveLineEventAdmission(
   const groupAllowFrom = normalizeStringEntries(
     firstDefined(groupConfig?.allowFrom, account.config.groupAllowFrom),
   );
-  const preparedRoute =
-    isGroup && event.type === "message"
-      ? await prepareLineInboundRoute({ source: event.source, cfg, account })
-      : undefined;
-  const mentionFacts = (() => {
-    if (!preparedRoute || event.type !== "message") {
-      return undefined;
-    }
-    const mentionRegexes = buildMentionRegexes(cfg, preparedRoute.mentionAgentId);
-    const wasMentionedByNative = isLineBotMentioned(event.message);
-    const wasMentionedByPattern =
-      event.message.type === "text" ? matchesMentionPatterns(rawText, mentionRegexes) : false;
-    return {
-      canDetectMention: event.message.type === "text",
-      wasMentioned: wasMentionedByNative || wasMentionedByPattern,
-      explicitlyMentionedBot: wasMentionedByNative,
-      hasAnyMention: hasAnyLineMention(event.message),
-      implicitMentionKinds: implicitMentionKindWhen(
-        "quoted_bot",
-        quotesLineBotMessage(account.accountId, resolveLineQuotedMessageId(event.message)),
-      ),
-    };
-  })();
+  let preparedRoute: PreparedLineInboundRoute | undefined;
+  let mentionFacts: LineInboundMentionAccess | undefined;
   const resolveAccess = async (contextBinding?: ChannelIngressContextBinding) =>
     await getLineRuntime().channel.inbound.ingress.resolveStable({
       channelId: "line",
@@ -308,7 +287,27 @@ async function resolveLineEventAdmission(
         groupOwnerAllowFrom: "none",
       },
     });
-  const access = await resolveAccess();
+  let access = await resolveAccess();
+  if (isGroup && event.type === "message" && isLineEventAdmitted(access)) {
+    // Reject sender/group policy before consulting bindings. Reuse the same ingress
+    // owner for activation once the admitted message's bound mention owner is known.
+    preparedRoute = await prepareLineInboundRoute({ source: event.source, cfg, account });
+    const mentionRegexes = buildMentionRegexes(cfg, preparedRoute.mentionAgentId);
+    const wasMentionedByNative = isLineBotMentioned(event.message);
+    const wasMentionedByPattern =
+      event.message.type === "text" ? matchesMentionPatterns(rawText, mentionRegexes) : false;
+    mentionFacts = {
+      canDetectMention: event.message.type === "text",
+      wasMentioned: wasMentionedByNative || wasMentionedByPattern,
+      explicitlyMentionedBot: wasMentionedByNative,
+      hasAnyMention: hasAnyLineMention(event.message),
+      implicitMentionKinds: implicitMentionKindWhen(
+        "quoted_bot",
+        quotesLineBotMessage(account.accountId, resolveLineQuotedMessageId(event.message)),
+      ),
+    };
+    access = await resolveAccess();
+  }
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "line",

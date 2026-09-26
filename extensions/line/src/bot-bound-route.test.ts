@@ -24,14 +24,18 @@ vi.mock("./send.js", () => ({
 }));
 
 it.each([
-  { kind: "group", disabled: false },
-  { kind: "user", disabled: false },
-  { kind: "group", disabled: true },
-  { kind: "user", disabled: true },
+  { kind: "group", rejection: "none" },
+  { kind: "user", rejection: "none" },
+  { kind: "group", rejection: "disabled" },
+  { kind: "user", rejection: "disabled" },
+  { kind: "group", rejection: "policy" },
+  { kind: "group", rejection: "allowlist" },
 ] as const)(
-  "settles a signed $kind message (disabled=$disabled) with binding-first routing",
-  async ({ kind, disabled }) => {
+  "settles a signed $kind message (rejection=$rejection) with binding-first routing",
+  async ({ kind, rejection }) => {
     await withTempHome(async () => {
+      const rejected = rejection !== "none";
+      const disabled = rejection === "disabled";
       setLineRuntime(createPluginRuntimeMock());
       const account: ResolvedLineAccount = {
         accountId: "bound-route",
@@ -42,14 +46,14 @@ it.each([
         config: {
           dmPolicy: disabled ? "disabled" : "allowlist",
           allowFrom: ["sender"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: ["sender"],
+          groupPolicy: rejection === "policy" ? "disabled" : "allowlist",
+          groupAllowFrom: rejection === "allowlist" ? ["other-sender"] : ["sender"],
           groups: { "*": { requireMention: true, enabled: !disabled } },
         },
       };
       const cfg: OpenClawConfig = {
         agents: {
-          list: disabled
+          list: rejected
             ? [{ id: "main" }]
             : [
                 { id: "main", groupChat: { mentionPatterns: ["wrong-owner"] } },
@@ -76,7 +80,7 @@ it.each([
         listBySession: () => (current ? [current] : []),
         resolveByConversation: () => current,
         inspectByConversationAsync: async () => {
-          if (disabled) {
+          if (rejected) {
             throw new Error("binding owner unavailable");
           }
           const selected = current;
@@ -156,7 +160,7 @@ it.each([
         const response = await send();
         expect(response.status).toBe(200);
         await response.text();
-        if (disabled) {
+        if (rejected) {
           expect(processMessage).not.toHaveBeenCalled();
           expect(failures).toEqual([]);
           return;
