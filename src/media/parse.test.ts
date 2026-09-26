@@ -176,6 +176,22 @@ describe("splitMediaFromOutput", () => {
 
   it.each([
     ["MEDIA:/tmp/a.png /tmp/b.png", ["/tmp/a.png", "/tmp/b.png"]],
+    [
+      'MEDIA:"/tmp/first image.png" "/tmp/second image.png"',
+      ["/tmp/first image.png", "/tmp/second image.png"],
+    ],
+    [
+      "MEDIA:'/tmp/first image.png' '/tmp/second image.png'",
+      ["/tmp/first image.png", "/tmp/second image.png"],
+    ],
+    [
+      "MEDIA:`/tmp/first image.png` `/tmp/second image.png`",
+      ["/tmp/first image.png", "/tmp/second image.png"],
+    ],
+    [
+      'MEDIA:"/tmp/project /first image.png" /tmp/second.png',
+      ["/tmp/project /first image.png", "/tmp/second.png"],
+    ],
     ["MEDIA:media/a.png media/b.png", ["media/a.png", "media/b.png"]],
     ["MEDIA:/tmp/a.png media/b.png", ["/tmp/a.png", "media/b.png"]],
     ["MEDIA:./a.png ./b.png", ["./a.png", "./b.png"]],
@@ -196,6 +212,40 @@ describe("splitMediaFromOutput", () => {
     ["MEDIA:/tmp/project screenshots/../../.env /tmp/safe/second.png", ["/tmp/safe/second.png"]],
   ] as const)("keeps separate media items on one directive line: %s", (input, mediaUrls) => {
     expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });
+  });
+
+  it("separates quoted references without truncating a quoted signed URL", () => {
+    // Both payloads start and end with the same quote: the first one lists two references, the second
+    // is a single reference whose own value ends with that quote, which a signed URL can do.
+    expectParsedMediaOutputCase('MEDIA:"/tmp/ends" "/tmp/second.png"', {
+      mediaUrls: ["/tmp/ends", "/tmp/second.png"],
+    });
+    for (const quote of ['"', "'"]) {
+      const signedUrl = 'https://example.com/video.mp4?token=ends"';
+      expectAcceptedMediaPathCase(signedUrl, `MEDIA:${quote}${signedUrl}${quote}`);
+    }
+    const signedPath = "/tmp/signed?token=ends'";
+    expectAcceptedMediaPathCase(signedPath, `MEDIA:'${signedPath}'`);
+    // A quoted value that is too long is rejected outright rather than cleaned down to an accepted URL.
+    const prefix = "https://example.com/video.mp4?token=";
+    const tooLong = `${prefix}${"a".repeat(4096 - prefix.length)},`;
+    expectRejectedRemoteMediaUrlCase(`MEDIA:"${tooLong}"`);
+  });
+
+  it("keeps a trailing quote pair inside one quoted reference", () => {
+    // The two closing quotes pair up with nothing between them, so they are part of the single quoted
+    // value rather than a second, empty reference. Splitting there would cut the signed URL short and
+    // leak the quotes into the visible reply text.
+    expectParsedMediaOutputCase('MEDIA:"https://example.com/video.mp4?token=ends"""', {
+      mediaUrls: ['https://example.com/video.mp4?token=ends""'],
+    });
+    // Real whitespace still separates references, including when the second value is empty.
+    expectParsedMediaOutputCase(
+      'MEDIA:"https://example.com/video.mp4?token=ends" "/tmp/second.png"',
+      {
+        mediaUrls: ["https://example.com/video.mp4?token=ends", "/tmp/second.png"],
+      },
+    );
   });
 
   it.each([

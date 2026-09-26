@@ -16,7 +16,7 @@ import { findCodeRegions } from "../shared/text/code-regions.js";
 import { parseInlineDirectives } from "../utils/directive-tags.js";
 
 /** Captures legacy MEDIA: attachment directives from model/tool output. */
-const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
+const MEDIA_TOKEN_RE = /\bMEDIA:\s*([^\n]+)/gi;
 
 const RENDERABLE_ASSISTANT_MEDIA_PREFIX_RE =
   /^(?:https?:\/\/|data:(?:image|audio|video)\/|file:|~|\/|[a-z]:[\\/])/iu;
@@ -220,10 +220,10 @@ function beginsIndependentMediaSource(raw: string): boolean {
   return MEDIA_SOURCE_ROOT_RE.test(candidate) || SCHEME_RE.test(candidate);
 }
 
-function splitUnquotedMediaDirectiveParts(payload: string): string[] {
+function splitMediaDirectiveParts(payload: string): string[] {
   const parts: string[] = [];
   let previousEnd = 0;
-  for (const match of payload.matchAll(/\S+/g)) {
+  for (const match of payload.matchAll(/"[^"]*"|'[^']*'|`[^`]*`|\S+/g)) {
     const candidate = normalizeMediaSource(cleanCandidate(match[0]));
     const previous = parts.at(-1);
     const previousCandidate = previous ? normalizeMediaSource(cleanCandidate(previous)) : "";
@@ -240,6 +240,35 @@ function splitUnquotedMediaDirectiveParts(payload: string): string[] {
     previousEnd = match.index + match[0].length;
   }
   return parts;
+}
+
+// A directive can list several quoted references, as in
+// `MEDIA:"/tmp/first image.png" "/tmp/second image.png"`. Such a payload also starts and ends with the
+// same quote, so unwrapping it as one value would merge the references. They are only separate when
+// whitespace — at least one character of it — sits between them. A single quoted reference whose own
+// value ends with the enclosing quote, such as `MEDIA:"https://example.com/video.mp4?token=ends""`,
+// leaves that final quote outside every pair, so it still unwraps as one value. A value that ends with
+// a quote pair, such as `MEDIA:"https://example.com/video.mp4?token=ends"""`, pairs those two trailing
+// quotes with no gap between them, so it unwraps as one value as well and the URL keeps its tail.
+const QUOTED_REFERENCE_RE = /"[^"]*"|'[^']*'|`[^`]*`/g;
+
+function listsSeparateQuotedReferences(payload: string): boolean {
+  const references = [...payload.matchAll(QUOTED_REFERENCE_RE)];
+  if (references.length < 2) {
+    return false;
+  }
+  let cursor = 0;
+  for (const [position, reference] of references.entries()) {
+    const index = reference.index ?? 0;
+    const gap = payload.slice(cursor, index);
+    // Only real whitespace separates references. Touching quote pairs are siblings of one value, so
+    // an empty gap after the first reference keeps the payload whole instead of truncating it.
+    if (gap.trim() !== "" || (position > 0 && gap === "")) {
+      return false;
+    }
+    cursor = index + reference[0].length;
+  }
+  return payload.slice(cursor).trim() === "";
 }
 
 function unwrapQuoted(value: string): string | undefined {
@@ -548,9 +577,13 @@ export function splitMediaOutput(
       pieces.push(line.slice(cursor, start));
 
       const payload = expectDefined(match[1], "parse regex capture 1");
-      const unwrapped = unwrapQuoted(payload);
+      const quotedValue = unwrapQuoted(payload);
+      const unwrapped =
+        quotedValue !== undefined && !listsSeparateQuotedReferences(payload)
+          ? quotedValue
+          : undefined;
       const payloadValue = unwrapped ?? payload;
-      const parts = unwrapped ? [unwrapped] : splitUnquotedMediaDirectiveParts(payload);
+      const parts = unwrapped ? [unwrapped] : splitMediaDirectiveParts(payload);
       const mediaStartIndex = media.length;
       let validCount = 0;
       const invalidParts: string[] = [];
