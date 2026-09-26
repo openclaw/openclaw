@@ -46,6 +46,12 @@ describe("active-memory escalation", () => {
     "그 설정 기억나지요?",
     "그 설정 기억나죠?",
     "그 설정 기억나ㅋㅋ",
+    "Weißt du noch, was wir zu dem Upgrade entschieden haben?",
+    "Erinnerst du dich an das Codewort aus unserem anderen Gespräch?",
+    "Was haben wir gestern über das Backup besprochen?",
+    "Worüber haben wir letzte Woche gesprochen?",
+    "Wie war das nochmal mit dem Neustart neulich?",
+    "Hatten wir nicht schon mal entschieden, das Plugin zu sperren?",
   ])("recognizes recall intent in %j", (message) => {
     expect(hasRecallIntent(message)).toBe(true);
   });
@@ -159,6 +165,12 @@ describe("active-memory escalation", () => {
     "내일 기억나게 알려줘",
     "나중에 기억나도록 알림 설정해줘",
     "잊지 않게 내일 기억나게 해줘",
+    "Erinnere mich morgen an den Termin",
+    "Was machen wir morgen?",
+    "Entscheide bitte heute",
+    "Guten Morgen!",
+    "Wie richte ich SQLite ein?",
+    "Kannst du mir das Plugin sperren?",
   ])("does not mistake ordinary or future-facing %j for recall intent", (message) => {
     expect(hasRecallIntent(message)).toBe(false);
   });
@@ -199,6 +211,13 @@ describe("active-memory escalation", () => {
         hasStrongLaneOneHit: true,
       }),
     ).toBe("strong-lane-one-hit");
+    expect(
+      resolveRecallEscalationDecision({
+        mode: "escalate",
+        message: "Worüber haben wir letzte Woche gesprochen?",
+        hasStrongLaneOneHit: false,
+      }),
+    ).toBe("recall");
   });
 
   it("preserves always mode and disables escalation in off mode", () => {
