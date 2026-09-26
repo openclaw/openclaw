@@ -151,6 +151,7 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
     <div class=${groupClass} data-chat-row-key=${parts[0]?.key ?? nothing}>
       ${avatar}
       <div class="chat-group-messages">
+        ${workingOnly ? nothing : html`<h2 class="sr-only">${name}</h2>`}
         ${renderChatReplyAttribution(parts.find((part) => part.kind === "stream")?.replyToSender)}
         ${renderStreamGroupParts(parts, opts, "standalone")}
       </div>

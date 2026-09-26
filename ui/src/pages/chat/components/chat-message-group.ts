@@ -601,6 +601,11 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     >
       ${inlineUserAvatar ? nothing : avatar}
       <div class="chat-group-messages">
+        ${
+          normalizedRole === "user" || normalizedRole === "assistant"
+            ? html`<h2 class="sr-only">${who}</h2>`
+            : nothing
+        }
         ${forwardedSource ? renderForwardedAttribution(group, opts) : nothing}
         ${normalizedRole === "assistant" ? renderChatReplyAttribution(group.replyToSender) : nothing}
         ${
