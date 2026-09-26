@@ -1,12 +1,31 @@
 use crate::model::{attachments::AttachmentPayload, commands::Command};
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogScope {
-    pub session_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+}
+
+impl CatalogScope {
+    pub fn for_session(
+        session_key: String,
+        agent_id: Option<String>,
+        session_id: Option<&str>,
+    ) -> Self {
+        Self {
+            session_key: session_id.filter(|id| !id.is_empty()).map(|_| session_key),
+            agent_id,
+        }
+    }
+}
+
+pub fn commands_session_missing(error: &str) -> bool {
+    error.trim_end_matches('.')
+        == "Gateway rejected commands.list: INVALID_REQUEST: Session not found"
 }
 
 #[derive(Serialize)]
@@ -243,4 +262,59 @@ pub struct ChatSend {
     pub attachments: Vec<AttachmentPayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub queue_mode: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn commands_use_agent_scope_until_the_session_is_persisted() {
+        for session_id in [None, Some(""), Some("persisted-session")] {
+            let request = CommandsList {
+                context: CatalogScope::for_session(
+                    "agent:qa:main".into(),
+                    Some("qa".into()),
+                    session_id,
+                ),
+                scope: "text",
+                include_args: true,
+            };
+            let mut expected = json!({"agentId":"qa","scope":"text","includeArgs":true});
+            if session_id == Some("persisted-session") {
+                expected["sessionKey"] = "agent:qa:main".into();
+            }
+            assert_eq!(serde_json::to_value(request).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn only_missing_command_sessions_allow_an_agent_scope_retry() {
+        for (error, missing) in [
+            (
+                "Gateway rejected commands.list: INVALID_REQUEST: Session not found.",
+                true,
+            ),
+            (
+                "Gateway rejected commands.list: INVALID_REQUEST: Session not found",
+                true,
+            ),
+            (
+                "Gateway rejected commands.list: FORBIDDEN: Session not found.",
+                false,
+            ),
+            (
+                "Gateway rejected commands.list: INVALID_REQUEST: Unknown agent",
+                false,
+            ),
+            (
+                "Gateway rejected chat.send: INVALID_REQUEST: Session not found.",
+                false,
+            ),
+            ("Gateway disconnected", false),
+        ] {
+            assert_eq!(commands_session_missing(error), missing, "{error}");
+        }
+    }
 }

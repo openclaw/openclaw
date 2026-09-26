@@ -2,7 +2,9 @@ mod attachments;
 
 use super::{AppView, composer_state::PendingSend};
 use crate::{
-    gateway::composer_rpc::{CatalogScope, ChatSend, CommandsList, CommandsResult},
+    gateway::composer_rpc::{
+        CatalogScope, ChatSend, CommandsList, CommandsResult, commands_session_missing,
+    },
     model::{
         attachments::{Attachment, AttachmentLimits, AttachmentOrigin, large_paste},
         commands::matching,
@@ -172,35 +174,85 @@ impl AppView {
             },
             cx,
         );
+        self.load_composer_commands(cx);
+    }
+
+    pub(super) fn composer_commands_scope(&self) -> Option<CatalogScope> {
+        if self.new_session.active {
+            return None;
+        }
+        let scope = self.chat.scope()?;
+        Some(CatalogScope::for_session(
+            scope.session_key,
+            scope.agent_id,
+            self.chat.session_info.session_id.as_deref().or_else(|| {
+                self.selected_row()
+                    .filter(|row| row.agent() == self.chat.selected_agent.as_deref())
+                    .and_then(|row| row.session_id.as_deref())
+            }),
+        ))
+    }
+
+    pub(super) fn refresh_composer_commands(
+        &mut self,
+        previous: Option<CatalogScope>,
+        cx: &mut Context<Self>,
+    ) {
+        if previous != self.composer_commands_scope() {
+            self.load_composer_commands(cx);
+        }
+    }
+
+    fn load_composer_commands(&mut self, cx: &mut Context<Self>) {
+        let Some(context) = self.composer_commands_scope() else {
+            return;
+        };
         self.composer_state
             .catalog_cache
-            .retain(|(epoch, _, _), _| *epoch == self.epoch);
+            .retain(|(epoch, _), _| *epoch == self.epoch);
         self.composer_state.catalog_generation += 1;
         let generation = self.composer_state.catalog_generation;
-        let cache_key = (self.epoch, agent.clone(), scope.session_key.clone());
+        let cache_key = (self.epoch, context.clone());
         if let Some(commands) = self.composer_state.catalog_cache.get(&cache_key) {
             self.composer_state.commands = commands.clone();
             return;
         }
-        self.composer_state.commands.clear();
+        let agent_scope = CatalogScope {
+            session_key: None,
+            agent_id: context.agent_id.clone(),
+        };
+        self.composer_state.commands = self
+            .composer_state
+            .catalog_cache
+            .get(&(self.epoch, agent_scope))
+            .cloned()
+            .unwrap_or_default();
+        self.request_composer_commands(context, generation, cx);
+    }
+
+    fn request_composer_commands(
+        &mut self,
+        context: CatalogScope,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(command_scope) = self.chat.scope() else {
+            return;
+        };
         let params = CommandsList {
-            context: CatalogScope {
-                session_key: scope.session_key.clone(),
-                agent_id: agent.clone(),
-            },
+            context: context.clone(),
             scope: "text",
             include_args: true,
         };
-        let command_scope = scope.clone();
-        let command_agent = agent.clone();
-        let command_cache_key = cache_key.clone();
+        let command_cache_key = (self.epoch, context.clone());
         self.request(
             "commands.list",
             serde_json::to_value(params).expect("serialize command scope"),
             cx,
-            move |this, result, _| {
-                if !this.chat.is_current(&command_scope)
-                    || this.sidebar_state.selected_agent != command_agent
+            move |this, result, cx| {
+                if this.new_session.active
+                    || !this.chat.is_current(&command_scope)
+                    || this.sidebar_state.selected_agent != context.agent_id
                     || this.composer_state.catalog_generation != generation
                 {
                     return;
@@ -215,9 +267,20 @@ impl AppView {
                             .catalog_cache
                             .insert(command_cache_key, result.commands);
                     }
-                    Err(error) => {
-                        this.composer_state.error = Some(format!("Commands unavailable: {error}"))
+                    Err(error)
+                        if context.session_key.is_some() && commands_session_missing(&error) =>
+                    {
+                        this.request_composer_commands(
+                            CatalogScope {
+                                session_key: None,
+                                ..context
+                            },
+                            generation,
+                            cx,
+                        );
                     }
+                    // Like the web composer, retain available commands when metadata fails.
+                    Err(_) => {}
                 }
             },
         );

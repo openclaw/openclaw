@@ -83,6 +83,9 @@ transcripts through the Gateway. Opening a message match loads the conversation
 and, when the message ID can be resolved, pages backward and reveals that message.
 A message's Fork action is available when its history entry ID is present.
 
+Slash completion loads agent commands before a conversation is persisted, then
+refreshes session commands when history or the conversation list confirms it exists.
+Command metadata failures retain available commands without interrupting the draft.
 Slash commands are sent as ordinary chat text. While a run is active, Stop remains
 available beside Send. The button becomes Steer only when the Gateway reports an
 effective steering policy; otherwise the Gateway decides how to queue the send.
