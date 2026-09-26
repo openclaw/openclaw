@@ -598,7 +598,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
                   (decision) => html`
                     <button
                       type="button"
-                      class="btn approval-page__action approval-page__action--${decision}"
+                      class="btn ${decision === "allow-once" ? "primary " : ""}approval-page__action approval-page__action--${decision}"
                       data-decision=${decision}
                       ?disabled=${
                         this.resolving ||
