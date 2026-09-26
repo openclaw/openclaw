@@ -539,4 +539,168 @@ describe("Google image-generation provider", () => {
       }),
     ).toBe(false);
   });
+
+  // Regression: credential preparation (OAuth refresh, profile lock) must share
+  // the request timeout budget. resolveApiKeyForProvider is called before the
+  // operation deadline and must receive an abort signal so a stalled credential
+  // lookup is cancelled within req.timeoutMs instead of hanging indefinitely.
+  // Uses fake timers so the regression is deterministic and does not depend on
+  // the wall clock or the vitest per-test timeout.
+  it("aborts credential preparation when it exceeds the request timeout", async () => {
+    // Mirrors resolveApiKeyForProviderCore: honors the caller's signal by
+    // rejecting when aborted (the real impl calls throwIfAborted() across the
+    // OAuth refresh path). Without a signal (pre-fix), the wait is unbounded.
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockImplementation(
+      (params: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          const signal = params.signal;
+          if (!signal) {
+            return;
+          }
+          const rejectWithReason = () => {
+            const reason = signal.reason;
+            reject(reason instanceof Error ? reason : new Error("aborted"));
+          };
+          if (signal.aborted) {
+            rejectWithReason();
+            return;
+          }
+          signal.addEventListener("abort", rejectWithReason);
+        }),
+    );
+    const postSpy = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({
+      response: new Response("{}", { status: 200 }),
+      release: () => {},
+    } as never);
+
+    vi.useFakeTimers();
+    try {
+      // Before the fix no signal is passed, so the credential lookup hangs
+      // unbounded and this test times out. After the fix buildTimeoutAbortSignal
+      // aborts the credential wait within the budget.
+      const promise = generateImage({
+        timeoutMs: 200,
+        cfg: googleImageConfig({
+          apiKey: "ignored",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        }),
+      });
+
+      // Attach the rejection assertion before advancing the clock so the abort
+      // is observed deterministically.
+      const assertion = expect(promise).rejects.toThrow(/timed out|aborted/i);
+
+      await vi.advanceTimersByTimeAsync(200);
+
+      await assertion;
+      expect(postSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Regression: the operation timeout signal must cover the HTTP request too,
+  // not only credential preparation. Without forwarding the signal,
+  // postJsonRequest starts a fresh full operationTimeoutMs budget and can even
+  // return success after the operation signal already expired.
+  it("forwards the operation signal into the image HTTP request", async () => {
+    let receivedSignal: AbortSignal | undefined;
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    vi.spyOn(providerHttp, "postJsonRequest").mockImplementation(
+      (params: { signal?: AbortSignal }) => {
+        receivedSignal = params.signal;
+        // Stall past the operation budget; with the signal forwarded, the
+        // request rejects via abort instead of running for a second full budget.
+        return new Promise((_resolve, reject) => {
+          const signal = params.signal;
+          if (!signal) {
+            return;
+          }
+          const rejectWithReason = () => {
+            const reason = signal.reason;
+            reject(reason instanceof Error ? reason : new Error("aborted"));
+          };
+          if (signal.aborted) {
+            rejectWithReason();
+            return;
+          }
+          signal.addEventListener("abort", rejectWithReason);
+        });
+      },
+    );
+
+    vi.useFakeTimers();
+    try {
+      const promise = generateImage({
+        timeoutMs: 150,
+        cfg: googleImageConfig({
+          apiKey: "ignored",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        }),
+      });
+
+      const assertion = expect(promise).rejects.toThrow(/timed out|aborted/i);
+      await vi.advanceTimersByTimeAsync(150);
+      await assertion;
+
+      // The signal reached the HTTP layer, so the request did not get an
+      // independent second timeout budget.
+      expect(receivedSignal).toBeInstanceOf(AbortSignal);
+      expect(receivedSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Regression: an omitted timeout must preserve the existing behavior — no
+  // absolute deadline is imposed on credential preparation. buildTimeoutAbortSignal
+  // returns no signal when timeoutMs is undefined, so a slow OAuth refresh is not
+  // cancelled by the DEFAULT_IMAGE_TIMEOUT_MS fallback (only the HTTP layer keeps
+  // its per-request default). This guards the compatibility decision called out in
+  // review: the 180-second default must not silently extend into credential waits
+  // that previously remained unbounded.
+  it("does not apply an abort signal to credential preparation when timeout is omitted", async () => {
+    let receivedSignal: AbortSignal | undefined;
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockImplementation(
+      (params: { signal?: AbortSignal }) => {
+        receivedSignal = params.signal;
+        return new Promise(() => {
+          // Never resolves; the point is to observe whether a signal was attached,
+          // not to complete the request. Without a timeout, no abort fires.
+        });
+      },
+    );
+    vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({
+      response: new Response("{}", { status: 200 }),
+      release: () => {},
+    } as never);
+
+    vi.useFakeTimers();
+    try {
+      // No timeoutMs: credential preparation must run without an abort signal.
+      const promise = generateImage({
+        cfg: googleImageConfig({
+          apiKey: "ignored",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        }),
+      });
+
+      // Advance well past the DEFAULT_IMAGE_TIMEOUT_MS (180s). With the fix, no
+      // signal was created, so credential preparation is still pending (not
+      // aborted) and postJsonRequest was never reached.
+      await vi.advanceTimersByTimeAsync(360_000);
+
+      expect(receivedSignal).toBeUndefined();
+      expect(providerHttp.postJsonRequest).not.toHaveBeenCalled();
+
+      // Clean up the hanging promise to avoid unhandled rejection noise.
+      promise.catch(() => {});
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
