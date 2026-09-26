@@ -27,8 +27,8 @@ import {
   resolveUiSelectedSessionAgentId,
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
+import type { ChatHistoryCursor } from "./chat-history-pagination.ts";
 import { matchesCompactionOperation } from "./chat-progress.ts";
-import type { ChatHistoryCursor } from "./session-message-cache.ts";
 import type { CompactionStatus, ProviderPolicyNotice } from "./tool-stream-contract.ts";
 
 const chatSessionProjections = new WeakMap<

@@ -4,7 +4,7 @@ import {
   reduceSessionProjection,
 } from "@openclaw/gateway-client/browser";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
-import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import type { SessionSnapshotInvalidationReason } from "./session-snapshot-invalidation-events.ts";
@@ -26,13 +26,6 @@ export type ChatSessionSnapshot = {
   displayedLeafEntryId?: string | null;
   messages: unknown[];
   pagination: ChatHistoryPagination;
-  sessionId: string | null;
-};
-
-/** A delta cursor is usable only with the transcript already adopted by this pane. */
-export type ChatHistoryCursor = {
-  cursor: string;
-  snapshotKey: string;
   sessionId: string | null;
 };
 

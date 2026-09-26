@@ -10,10 +10,10 @@ import type {
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
-import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import type { ChatRunError, LocalTerminalReconcile } from "./run-lifecycle.ts";
-import type { ChatHistoryCursor, ChatMessageCache } from "./session-message-cache.ts";
+import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { StreamCausalBoundaryState } from "./stream-causal-boundary.ts";
 import type { ProviderPolicyNotice, RunOutputUsage } from "./tool-stream-contract.ts";
 
