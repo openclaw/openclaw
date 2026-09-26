@@ -197,11 +197,14 @@ describe("AgentSession model-visible tool-result redaction", () => {
     const fakeSecret = "fixture-registered-secret-0123456789";
     const vendorSecret = `sk-${"fixture".repeat(6)}`;
     const benignMarker = "VISIBLE_FILE_CONTENT";
+    const loginSecret = "synthetic_not_a_real_credential_1234567890abcdef";
+    const loginUrl = `https://example.test/login?key=${loginSecret}`;
+    const maskedLoginUrl = "https://example.test/login?key=REDACTED_SECRET_DO_NOT_USE";
     const sourceAssignment = "token = timeObserverToken";
     registerSecretValueForRedaction(fakeSecret);
     await fs.writeFile(
       path.join(cwd, filename),
-      `${benignMarker}\nVALUE=${fakeSecret}\n${vendorSecret}\n${sourceAssignment}\n`,
+      `${benignMarker}\nVALUE=${fakeSecret}\n${vendorSecret}\n${sourceAssignment}\n${loginUrl}\n`,
     );
     const readTool = createOpenClawReadTool(createReadTool(cwd), { cwd });
     const readControl = await readTool.execute("direct-read-control", { path: filename });
@@ -341,11 +344,14 @@ describe("AgentSession model-visible tool-result redaction", () => {
       expect(liveToolResult?.isError).toBe(false);
       expect(liveToolText.includes(benignMarker)).toBe(true);
       expect(JSON.stringify(providerPayload).includes(benignMarker)).toBe(true);
-      for (const secret of [fakeSecret, vendorSecret]) {
+      for (const secret of [fakeSecret, vendorSecret, loginSecret]) {
         expect(stored.includes(secret)).toBe(false);
         expect(liveToolText.includes(secret)).toBe(false);
         expect(JSON.stringify(providerPayload).includes(secret)).toBe(false);
       }
+      expect(liveToolText).toContain(maskedLoginUrl);
+      expect(JSON.stringify(providerPayload)).toContain(maskedLoginUrl);
+      expect(stored).toContain(maskedLoginUrl);
       if (filename !== ".env") {
         expect(liveToolText.includes(sourceAssignment)).toBe(true);
       }
