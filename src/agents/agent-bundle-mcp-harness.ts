@@ -430,13 +430,12 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     }
 
     const hasRequester = normalizeOptionalString(params.requesterSenderId) !== undefined;
-    const advertisedCatalog =
-      getAdvertisedScopedMcpCatalog(params.sessionId) ??
-      (liveCatalog
-        ? mergeMcpConnectCatalog(liveCatalog, scopedRuntime?.requesterConnect)
-        : hasRequester
-          ? undefined
-          : buildSenderlessConnectCatalog(params));
+    const baseAdvertisedCatalog = getAdvertisedScopedMcpCatalog(params.sessionId) ?? liveCatalog;
+    const advertisedCatalog = baseAdvertisedCatalog
+      ? mergeMcpConnectCatalog(baseAdvertisedCatalog, scopedRuntime?.requesterConnect)
+      : hasRequester
+        ? undefined
+        : buildSenderlessConnectCatalog(params);
     if (!advertisedCatalog || advertisedCatalog.tools.length === 0) {
       closed = true;
       await liveRuntime?.dispose();
