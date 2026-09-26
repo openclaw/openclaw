@@ -9,6 +9,9 @@ import type { SessionRowProjection } from "../session-row-projection.js";
 export const preparedTalkSessionProjection = Object.freeze({
   prepareMembership: async () => {},
   needsMembershipPreparation: () => false,
+  sharingTargetState: (): ReturnType<SessionRowProjection["sharingTargetState"]> => ({
+    status: "missing",
+  }),
 }) as SessionRowProjection;
 
 /** Minimal successful speech-provider response shape used by talk.speak tests. */
