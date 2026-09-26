@@ -187,7 +187,6 @@ describe("renderTable", () => {
       rows: [{ Item: "Dashboard", Value: "http://127.0.0.1:18789/" }],
     });
 
-    expect(out).toContain("Dashboard");
     expect(out).toMatch(/[│|] Dashboard\s+[│|]/);
   });
 
@@ -254,6 +253,7 @@ describe("renderTable", () => {
       ],
     });
 
+    expect(out).toContain("\x1b[33m");
     const ansiToken = new RegExp(String.raw`\u001b\[[0-9;]*m|\u001b\]8;;.*?\u001b\\`, "gs");
     let escapeIndex = out.indexOf("\u001b");
     while (escapeIndex >= 0) {
@@ -279,6 +279,7 @@ describe("renderTable", () => {
     });
 
     const lines = out.split("\n").filter((line) => line.includes("a"));
+    expect(lines.length).toBeGreaterThan(1);
     for (const line of lines) {
       const resetIndex = Math.max(line.lastIndexOf(globalReset), line.lastIndexOf(foregroundReset));
       const lastSep = Math.max(line.lastIndexOf("│"), line.lastIndexOf("|"));
@@ -447,6 +448,7 @@ describe("renderTable", () => {
       rows: [{ K: "X", V: `${open}OpenClaw${close}` }],
     });
 
+    expect(out).toContain(open);
     expectIntroducersToStartCompleteSequences(out, "\x1b", [open, close]);
   });
 
@@ -481,6 +483,7 @@ describe("renderTable", () => {
       rows: [{ K: "X", V: `${open}OpenClaw${close}` }],
     });
 
+    expect(out).toContain(open);
     expectIntroducersToStartCompleteSequences(out, "\x9d", [open, close]);
     expectIntroducersToStartCompleteSequences(out, "\x1b", [canonicalOpen, canonicalClose]);
   });
@@ -501,7 +504,6 @@ describe("renderTable", () => {
       expect(line).toContain(close);
     }
     const afterLine = out.split("\n").find((line) => line.includes("after"));
-    expect(afterLine).toBeDefined();
     const afterIndex = afterLine?.indexOf("after") ?? -1;
     const closeIndex = afterLine?.indexOf(close) ?? -1;
     expect(closeIndex).toBeGreaterThan(-1);
@@ -565,7 +567,6 @@ describe("renderTable", () => {
       }
       // The link itself stays intact on the OpenClaw line: open + close present.
       const linkLine = lines.find((line) => line.includes("OpenClaw"));
-      expect(linkLine).toBeDefined();
       expect(linkLine?.includes(openSeq)).toBe(true);
       expect(linkLine?.includes(closeSeq)).toBe(true);
     },

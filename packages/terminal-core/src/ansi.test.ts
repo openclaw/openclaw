@@ -360,7 +360,7 @@ describe("terminal ansi helpers", () => {
     expect(truncateToVisibleWidth("\uFFA0\uFF9E", 1)).toBe("");
     expect(truncateToVisibleWidth("\uD800".repeat(30), 5)).toBe("\uD800".repeat(5));
     expect(truncateToVisibleWidth("表\uDC00\t", 3)).toBe("表\uDC00");
-    expect(visibleWidth(truncateToVisibleWidth("📸📸", 1))).toBeLessThanOrEqual(1);
+    expect(truncateToVisibleWidth("📸📸", 1)).toBe("");
   });
 
   it("keeps complete graphemes and zero-width prefixes at either truncation edge", () => {

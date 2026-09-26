@@ -371,12 +371,12 @@ export async function createPackedSdkConsumer(): Promise<PackedSdkConsumer> {
       throw new Error("packed @openclaw/sdk tarball was not created");
     }
     const registry = await startOpenClawRegistry(packedPackages);
-    await fs.writeFile(
-      path.join(root, "package.json"),
-      JSON.stringify({ private: true, type: "module" }),
-    );
-    await fs.writeFile(path.join(root, ".npmrc"), `@openclaw:registry=${registry.registryUrl}`);
     try {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ private: true, type: "module" }),
+      );
+      await fs.writeFile(path.join(root, ".npmrc"), `@openclaw:registry=${registry.registryUrl}`);
       await runNpmCommand(["install", "--ignore-scripts", "--no-audit", "--no-fund", sdkTarball], {
         cwd: root,
       });

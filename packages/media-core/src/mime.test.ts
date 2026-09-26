@@ -379,10 +379,11 @@ describe("mime detection", () => {
 
   it("caps dependency sniffing to a bounded prefix", () => {
     const small = Buffer.alloc(32);
-    const large = Buffer.alloc(FILE_TYPE_SNIFF_MAX_BYTES + 16);
+    const prefix = Buffer.alloc(FILE_TYPE_SNIFF_MAX_BYTES, 0x61);
+    const large = Buffer.concat([prefix, Buffer.alloc(16, 0x62)]);
 
     expect(sliceMimeSniffBuffer(small)).toBe(small);
-    expect(sliceMimeSniffBuffer(large)).toHaveLength(FILE_TYPE_SNIFF_MAX_BYTES);
+    expect(sliceMimeSniffBuffer(large).equals(prefix)).toBe(true);
   });
 });
 

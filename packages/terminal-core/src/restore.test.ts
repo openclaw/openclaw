@@ -106,7 +106,6 @@ describe("restoreTerminalState", () => {
 
     restoreTerminalState("test");
 
-    expect(writeSpy).toHaveBeenCalled();
     const output = writeSpy.mock.calls.map(([chunk]) => String(chunk)).join("");
     expect(output).toContain("\x1b[<u");
     expect(output).toContain("\x1b[>4;0m");
