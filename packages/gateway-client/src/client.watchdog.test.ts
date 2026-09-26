@@ -1,7 +1,6 @@
 import { createServer } from "node:net";
 import type { EventFrame } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
 import { GatewayClient } from "./client.js";
 import {
   GatewayProtocolClient,
