@@ -51,12 +51,15 @@ suite.define(() => {
           data: { phase: "result", name: "read", toolCallId: id, result: { text: `${id} output` } },
         });
       const navigate = (route: "activity" | "config") =>
-        page.evaluate((route) => {
+        page.evaluate((routeId) => {
           const app = document.querySelector<ActivityApp>("openclaw-app");
           if (!app) {
             throw new Error("Control UI app is unavailable");
           }
-          app.runtime.context.navigate(route, route === "activity" ? { search: "?view=live" } : {});
+          app.runtime.context.navigate(
+            routeId,
+            routeId === "activity" ? { search: "?view=live" } : {},
+          );
         }, route);
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await waitForControlUiSettingsTakeover(page);

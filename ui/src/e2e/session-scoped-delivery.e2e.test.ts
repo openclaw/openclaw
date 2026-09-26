@@ -41,7 +41,7 @@ suite.define(() => {
       { locale: "en-US", viewport: { width: 1440, height: 900 }, serviceWorkers: "block" },
       async ({ page }) => {
         await page.addInitScript(
-          ({ settingsKey, first, second }) => {
+          ({ settingsKey, first: foregroundKey, second: splitKey }) => {
             localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
             localStorage.setItem(
               settingsKey,
@@ -49,10 +49,14 @@ suite.define(() => {
                 chatSplitLayout: {
                   activePaneId: "first",
                   columns: [
-                    { id: "left", panes: [{ id: "first", sessionKey: first }], paneWeights: [1] },
+                    {
+                      id: "left",
+                      panes: [{ id: "first", sessionKey: foregroundKey }],
+                      paneWeights: [1],
+                    },
                     {
                       id: "right",
-                      panes: [{ id: "second", sessionKey: second }],
+                      panes: [{ id: "second", sessionKey: splitKey }],
                       paneWeights: [1],
                     },
                   ],
@@ -170,11 +174,11 @@ suite.define(() => {
       const gateway = await installMockGateway(page, { sessionKey: first, historyMessages: [] });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, first));
       await page.evaluate(() => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
+        const mockGateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+        if (!mockGateway) {
           throw new Error("Mock Gateway is unavailable");
         }
-        gateway.setRequestHandler("chat.send", ({ params, respond, emit }) => {
+        mockGateway.setRequestHandler("chat.send", ({ params, respond, emit }) => {
           if (!params || typeof params !== "object" || !("idempotencyKey" in params)) {
             throw new Error("Missing chat send parameters");
           }

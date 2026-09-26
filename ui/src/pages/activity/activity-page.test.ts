@@ -526,7 +526,7 @@ describe("ActivityPage gateway lifecycle", () => {
     const page = bindActivity(source);
     const previous = current();
     const previousIdentity = source.snapshot.client;
-    const retired = createDeferred<void>();
+    const retired = createDeferred();
     const stop = source.subscribe((snapshot) => {
       if (snapshot.client !== previousIdentity) {
         retired.resolve();
