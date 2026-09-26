@@ -6113,6 +6113,10 @@ describe("ci workflow guards", () => {
       ),
     ).toEqual(["src/config/config-startup-corpus.test.ts"]);
     expect(manifest.outputs.run_checks_node_core_nondist).toBe("true");
+    expect(
+      JSON.parse(expectDefined(manifest.outputs.checks_fast_core_matrix, "fast checks matrix"))
+        .include,
+    ).not.toContainEqual(expect.objectContaining({ task: "startup-corpus" }));
     const step = readCiWorkflow().jobs["checks-fast-core"].steps.find(
       (entry: WorkflowStep) => entry.name === "Check startup corpus",
     );
@@ -6134,7 +6138,9 @@ describe("ci workflow guards", () => {
     }
   });
 
-  it.each<{ label: string } & Partial<Parameters<typeof runCiManifestFixture>[0]>>([
+  it.each<
+    { label: string; startupRow?: boolean } & Partial<Parameters<typeof runCiManifestFixture>[0]>
+  >([
     { label: "missing planner capability", startupCorpusCoverage: false },
     {
       label: "directly edited state wrapper missing from Node coverage",
@@ -6164,17 +6170,18 @@ describe("ci workflow guards", () => {
       scopeEnv: { OPENCLAW_CI_CHECKOUT_REVISION: "", OPENCLAW_CI_WORKFLOW_REVISION: "" },
     },
     { label: "fast-only PR", nodeFastOnly: true },
-    { label: "Node not admitted", runNode: false },
+    { label: "Node not admitted", runNode: false, startupRow: false },
     { label: "different repository", repository: "fixture/openclaw" },
     { label: "release merge", eventName: "workflow_dispatch", releaseGate: true },
     {
       label: "frozen target",
       eventName: "workflow_dispatch",
       scopeEnv: { OPENCLAW_CI_WORKFLOW_REVISION: "b".repeat(40) },
+      startupRow: false,
     },
   ])(
     "retains the startup corpus without a coverage receipt: $label",
-    ({ label: _label, ...options }) => {
+    ({ label: _label, startupRow = true, ...options }) => {
       const manifest = runCiManifestFixture({
         bundledPlanner: true,
         startupCorpusCoverage: true,
@@ -6203,6 +6210,11 @@ describe("ci workflow guards", () => {
       });
       expect(manifest.status, manifest.output).toBe(0);
       expect(manifest.outputs.startup_corpus_node_revision).toBe("");
+      expect(
+        JSON.parse(
+          expectDefined(manifest.outputs.checks_fast_core_matrix, "fast checks matrix"),
+        ).include.some((row: { task: string }) => row.task === "startup-corpus"),
+      ).toBe(startupRow);
     },
   );
 

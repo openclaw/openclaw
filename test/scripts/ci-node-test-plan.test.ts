@@ -4696,6 +4696,84 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
+  it("allocates sparse selections without reserving their full-suite rows", () => {
+    const targets = [
+      "src/config/allowed-values.test.ts",
+      "src/commands/doctor-heartbeat-cadence-migration.test.ts",
+      "src/infra/heartbeat-runner.ack-token-heartbeat-acks.test.ts",
+      "src/infra/runtime-guard.test.ts",
+      "src/cli/gateway-backed-exit-health.process.test.ts",
+      "src/cli/directory-cli.test.ts",
+      "src/config/config.backup-rotation.test.ts",
+      "src/config/commands.test.ts",
+    ];
+    const options = {
+      runnerBackend: "hybrid",
+      includeReleaseOnlyRuntimeTests: false,
+    } satisfies NonNullable<Parameters<typeof createSelectedNodeTestShardBundles>[1]>;
+    // Precise selections inherit templates before whole-plan runtime relocation.
+    const placement = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
+    let full: CompactNodeTestShard[];
+    try {
+      full = createNodeTestShardBundles({
+        ...options,
+        includeReleaseOnlyPluginShards: false,
+        compactMode: "pull-request",
+      });
+    } finally {
+      placement.mockRestore();
+    }
+    const owners = full.filter((job) =>
+      job.groups.some((group) => group.includePatterns?.some((file) => targets.includes(file))),
+    );
+    expect(owners.length).toBeGreaterThan(1);
+    const selected = createSelectedNodeTestShardBundles(targets, options)!;
+    expect(selected).not.toBeNull();
+    expect(selected.length).toBeLessThan(owners.length);
+    expect(
+      selected
+        .flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? []))
+        .toSorted(),
+    ).toEqual(targets.toSorted());
+    expect(
+      selected.every((job) => job.groups.every((group) => group.includePatterns!.length > 0)),
+    ).toBe(true);
+    expect(selected.reduce((sum, job) => sum + job.predictedSeconds!, 0)).toBeLessThan(
+      owners.reduce((sum, job) => sum + job.predictedSeconds!, 0),
+    );
+    const heavyCli = "src/cli/gateway-backed-exit-health.process.test.ts";
+    const heavyJob = selected.find((job) =>
+      job.groups.some((group) => group.includePatterns?.includes(heavyCli)),
+    )!;
+    expect(heavyJob.predictedSeconds).toBeGreaterThan(150);
+    expect(heavyJob.groups.flatMap((group) => group.includePatterns ?? [])).toEqual([heavyCli]);
+    for (const job of selected) {
+      if (job.planConcurrency === 2) {
+        expect(
+          job.groups.filter((group) => group.shard_name.startsWith("core-runtime-config-hosted-"))
+            .length,
+        ).toBeLessThanOrEqual(1);
+      }
+      for (const group of job.groups) {
+        const original = full.find((owner) =>
+          owner.groups.some((entry) => entry.shard_name === group.shard_name),
+        )!;
+        expect(job).toMatchObject({
+          runner: original.runner,
+          planConcurrency: original.planConcurrency,
+          requiresDist: original.requiresDist,
+        });
+        expect(job.pretestBuildMode).toBe(original.pretestBuildMode);
+        expect(job.timeoutMinutes).toBe(original.timeoutMinutes);
+        expect(job.env).toEqual(original.env);
+        const owner = original.groups.find((entry) => entry.shard_name === group.shard_name)!;
+        expect(group.env).toEqual(owner.env);
+        expect(group.fallbackMaxWorkers).toBe(owner.fallbackMaxWorkers);
+        expect(group.minTotalMemoryBytes).toBe(owner.minTotalMemoryBytes);
+      }
+    }
+  });
+
   it("packs serial groups within both the time and group-count budgets", () => {
     const groups = [34, 33, 33, 32, 32, 32, 10, 21, 17, 17, 15, 10, 8, 7, 7, 7, 6, 5, 5];
     const bins = packNodeTestGroups(

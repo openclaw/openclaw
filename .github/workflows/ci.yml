@@ -2190,6 +2190,11 @@ jobs:
             typeof nodeTestPlan.hasCompleteStartupCorpusCoverage === "function" &&
             nodeTestPlan.hasCompleteStartupCorpusCoverage(rawNodeTestShards, startupCorpusTestFiles)
               ? checkoutRevision : "";
+          if (startupCorpusNodeRevision) {
+            // The exact-tree Node receipt makes this row's only test step a no-op.
+            const startupTask = checksFastCoreTasks.findIndex(({ task }) => task === "startup-corpus");
+            if (startupTask >= 0) checksFastCoreTasks.splice(startupTask, 1);
+          }
           // Targeted jobs cannot discover repository-scanning boundary tests
           // through imports. Keep the full boundary gate inside build-artifacts
           // when that lane runs; test-only targeted plans carry their own
