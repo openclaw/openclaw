@@ -90,7 +90,7 @@ describe("createSlackBoltApp", () => {
     }
   }
 
-  const interop = {
+  const fakeInterop = {
     App: FakeApp as never,
     HTTPReceiver: FakeHTTPReceiver as never,
     SocketModeReceiver: FakeSocketModeReceiver as never,
@@ -99,7 +99,7 @@ describe("createSlackBoltApp", () => {
   it("uses SocketModeReceiver with native reconnects and shared client options", () => {
     const clientOptions = { teamId: "T1" };
     const { app, receiver } = createSlackBoltApp({
-      interop,
+      interop: fakeInterop,
       slackMode: "socket",
       token: "xoxb-test",
       appToken: "xapp-test",
@@ -137,7 +137,7 @@ describe("createSlackBoltApp", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const { receiver, socketModeLogger } = createSlackBoltApp({
-        interop,
+        interop: fakeInterop,
         slackMode: "socket",
         token: "xoxb-test",
         appToken: "xapp-test",
@@ -176,7 +176,7 @@ describe("createSlackBoltApp", () => {
 
   it("applies OpenClaw self-event filtering through installed Bolt middleware", async () => {
     const { app } = createSlackBoltApp({
-      interop,
+      interop: fakeInterop,
       slackMode: "socket",
       token: "xoxb-test",
       appToken: "xapp-test",
@@ -524,7 +524,7 @@ describe("createSlackBoltApp", () => {
   it("uses HTTPReceiver for webhook mode", () => {
     const clientOptions = { teamId: "T1" };
     const { app, receiver } = createSlackBoltApp({
-      interop,
+      interop: fakeInterop,
       slackMode: "http",
       token: "xoxb-test",
       signingSecret: "secret",
@@ -554,7 +554,7 @@ describe("createSlackBoltApp", () => {
       const wrappedReceiver = { durable: true };
       const wrapReceiver = vi.fn(() => wrappedReceiver as never);
       const { app, receiver } = createSlackBoltApp({
-        interop,
+        interop: fakeInterop,
         slackMode,
         token: "test-bot-token",
         ...(slackMode === "socket"

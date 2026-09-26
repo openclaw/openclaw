@@ -1990,7 +1990,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("delivers later warnings separately after replacing a preview", async () => {
-    const draftStream = useDraftStream();
+    useDraftStream();
     mockedDispatchSequence = [
       {
         kind: "final",
