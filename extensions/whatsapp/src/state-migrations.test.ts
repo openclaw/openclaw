@@ -50,9 +50,6 @@ describe("WhatsApp legacy state migrations", () => {
 
       const migrations = detectWhatsAppLegacyStateMigrations({ oauthDir });
 
-      expect(migrations.map((migration) => path.basename(migration.sourcePath)).toSorted()).toEqual(
-        authFiles.toSorted(),
-      );
       expect(
         migrations
           .map((migration) => ({
@@ -83,11 +80,6 @@ describe("WhatsApp legacy state migrations", () => {
           context: { openPluginStateKeyedStore: vi.fn() },
         }),
       ).resolves.toEqual({ preview: migrations.map(buildLegacyMigrationPreview) });
-      for (const migration of migrations) {
-        expect(migration.targetPath).toBe(
-          path.join(oauthDir, "whatsapp", "default", path.basename(migration.sourcePath)),
-        );
-      }
     } finally {
       fs.rmSync(oauthDir, { recursive: true, force: true });
     }

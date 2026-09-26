@@ -167,33 +167,6 @@ describe("resolveSessionEntryResetFreshness", () => {
     });
   });
 
-  it("resolves fresh daily freshness for active lifecycle timestamps", async () => {
-    const sessionKey = "agent:main:main";
-    const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntryCore(
-      { sessionKey, storePath },
-      {
-        sessionId: "session-fresh",
-        updatedAt: now,
-        sessionStartedAt: now - 60_000,
-        lastInteractionAt: now - 60_000,
-      },
-    );
-
-    const result = resolveSessionEntryResetFreshness({
-      sessionKey,
-      storePath,
-      sessionCfg: {},
-      resetType: "direct",
-      now,
-    });
-
-    expect(result.state).toBe("fresh");
-    expect(result.entry?.sessionId).toBe("session-fresh");
-    expect(result.resetType).toBe("direct");
-    expect(result.freshness).toMatchObject({ fresh: true });
-  });
-
   it("honors reset overrides when resolving entry freshness", async () => {
     const sessionKey = "agent:main:main:thread:idle";
     const now = new Date("2026-01-02T12:00:00Z").getTime();

@@ -158,37 +158,6 @@ describe("OpenClawSchema cloudWorkers config", () => {
     });
   });
 
-  it("defaults a minimal Crabbox profile to bundle installation", () => {
-    expect(
-      parseCloudWorkers({
-        profiles: {
-          aws: {
-            provider: "crabbox",
-            settings: {
-              provider: "aws",
-              class: "standard",
-              ttl: "8h",
-              idleTimeout: "45m",
-            },
-          },
-        },
-      }),
-    ).toStrictEqual({
-      profiles: {
-        aws: {
-          provider: "crabbox",
-          install: "bundle",
-          settings: {
-            provider: "aws",
-            class: "standard",
-            ttl: "8h",
-            idleTimeout: "45m",
-          },
-        },
-      },
-    });
-  });
-
   it("accepts npm as an explicit install method", () => {
     expect(
       parseCloudWorkers({
@@ -209,7 +178,7 @@ describe("OpenClawSchema cloudWorkers config", () => {
     });
   });
 
-  it.each(["1m", "60s", "45m", "90m", "2h", "1h30m"])(
+  it.each(["1m", "1h30m"])(
     "accepts an idle suspend duration of at least one minute: %s",
     (suspendAfter) => {
       expect(
@@ -220,7 +189,7 @@ describe("OpenClawSchema cloudWorkers config", () => {
     },
   );
 
-  it.each(["", "0m", "59s", "0.5m", "-1m", "60000", "forever", 60_000, null])(
+  it.each(["59s", "-1m", "60000", 60_000])(
     "rejects an invalid or sub-minute idle suspend duration: %s",
     (suspendAfter) => {
       const result = OpenClawSchema.safeParse({

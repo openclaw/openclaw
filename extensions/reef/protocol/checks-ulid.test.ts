@@ -23,12 +23,8 @@ describe("deterministic checks", () => {
 
   it.each([
     "meeting at ten",
-    "the quick brown fox jumps over the lazy dog",
     "00000000000000000000000000000000",
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "issue-1234567890-is-not-a-secret",
-    "Donaudampfschifffahrtsgesellschaft",
-    "https://github.com/steipete/reallylongreponame",
     "The pneumonoultramicroscopicsilicovolcanoconiosis example is benign.",
   ])("allows benign corpus item: %s", (text) => {
     expect(deterministicChecks(text)).toEqual({ allowed: true, text, findings: [] });

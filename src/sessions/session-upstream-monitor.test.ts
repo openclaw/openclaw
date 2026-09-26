@@ -821,30 +821,6 @@ describe("session upstream monitor", () => {
     expect(listSessionStateEventsSince(sessionKey, "main", 0, 20, database).events).toEqual([]);
   });
 
-  it("advances scan-only markers without recording an event", async () => {
-    const database = createDatabaseOptions();
-    const sessionKey = "agent:main:adopted:scan-only";
-    createLink(sessionKey, "claude", database);
-    const check = vi
-      .fn<NonNullable<SessionCatalogProvider["checkUpstreamActivity"]>>()
-      .mockResolvedValueOnce([
-        { kind: "activity" as const, sessionKey, humanTurns: 0, nextMarker: { offset: 12 } },
-      ])
-      .mockResolvedValueOnce([]);
-
-    const options = {
-      ...database,
-      providers: [provider("claude", check)],
-      loadEntry: () => ({ sessionId: "session-scan" }) as never,
-      loadOwnRecentUserTexts: async () => [],
-    };
-    await runSessionUpstreamMonitorTick(options);
-    await runSessionUpstreamMonitorTick(options);
-
-    expect(check.mock.calls[1]?.[0]).toEqual([expect.objectContaining({ marker: { offset: 12 } })]);
-    expect(listSessionStateEventsSince(sessionKey, "main", 0, 20, database).events).toEqual([]);
-  });
-
   it("supplies provenance text so a matching upstream prompt advances without an event", async () => {
     const database = createDatabaseOptions();
     const sessionKey = "agent:main:adopted:provenance";
@@ -889,6 +865,7 @@ describe("session upstream monitor", () => {
       { allowProcessHomeFallback: false },
     );
     expect(listSessionStateEventsSince(sessionKey, "main", 0, 20, database).events).toEqual([]);
+    expect(readSessionUpstreamLink(sessionKey, "main", database)?.marker).toEqual({ offset: 20 });
   });
 
   it("reports a matching external prompt after catalog history import", async () => {

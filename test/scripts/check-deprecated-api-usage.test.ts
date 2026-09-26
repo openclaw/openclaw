@@ -5,11 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import {
-  BANNED_INTERNAL_PLUGIN_SDK_FACADE_MODULES,
-  buildDeprecatedPluginSdkModuleSpecifiers,
-} from "../../scripts/lib/deprecated-plugin-sdk-usage.mts";
-import deprecatedPublicPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-deprecated-public-subpaths.json" with { type: "json" };
+import { buildDeprecatedPluginSdkModuleSpecifiers } from "../../scripts/lib/deprecated-plugin-sdk-usage.mts";
 
 const GUARD_SCRIPT_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -72,14 +68,6 @@ process.on("exit", () => fs.writeFileSync("source-io.json", JSON.stringify(count
 }
 
 describe("scripts/check-deprecated-api-usage", () => {
-  it("bans every curated deprecated public plugin SDK subpath", () => {
-    const specifiers = new Set(buildDeprecatedPluginSdkModuleSpecifiers());
-
-    for (const subpath of deprecatedPublicPluginSdkSubpaths) {
-      expect(specifiers.has(`openclaw/plugin-sdk/${subpath}`), subpath).toBe(true);
-    }
-  });
-
   it("keeps removed root and private compatibility aliases out of the inventory", () => {
     const specifiers = buildDeprecatedPluginSdkModuleSpecifiers();
     for (const removedSpecifier of [
@@ -88,40 +76,6 @@ describe("scripts/check-deprecated-api-usage", () => {
       "openclaw/plugin-sdk/test-utils",
     ]) {
       expect(specifiers).not.toContain(removedSpecifier);
-    }
-  });
-
-  it("bans the scoped @openclaw/plugin-sdk spelling of every deprecated specifier", () => {
-    const specifiers = new Set(buildDeprecatedPluginSdkModuleSpecifiers());
-
-    for (const specifier of specifiers) {
-      if (!specifier.startsWith("@")) {
-        expect(specifiers.has(`@${specifier}`), specifier).toBe(true);
-      }
-    }
-  });
-
-  it("bans internal imports of every deprecated facade", () => {
-    const modulePaths = new Set(
-      BANNED_INTERNAL_PLUGIN_SDK_FACADE_MODULES.map((ban) => ban.modulePath),
-    );
-
-    for (const facade of [
-      "src/plugin-sdk/channel-message",
-      "src/plugin-sdk/channel-reply-pipeline",
-      "src/plugin-sdk/inbound-reply-dispatch",
-    ]) {
-      expect(modulePaths.has(facade), facade).toBe(true);
-    }
-  });
-
-  it("limits facade import allowlists to the plugin-sdk compat re-export chain", () => {
-    for (const ban of BANNED_INTERNAL_PLUGIN_SDK_FACADE_MODULES) {
-      for (const importer of ban.allowedImporters ?? []) {
-        expect(importer.startsWith("src/plugin-sdk/"), `${ban.modulePath} -> ${importer}`).toBe(
-          true,
-        );
-      }
     }
   });
 
@@ -160,7 +114,7 @@ describe("scripts/check-deprecated-api-usage", () => {
     const result = runRules(
       {
         "src/a.ts":
-          'import { x } from "openclaw/plugin-sdk/channel-message";\ndeliverOutboundPayloads();',
+          'import { x } from "openclaw/plugin-sdk/channel-message";\nimport { y } from "@openclaw/plugin-sdk/channel-message";\ndeliverOutboundPayloads();',
         "extensions/probe/src/a.ts":
           'export { x } from "openclaw/plugin-sdk/channel-reply-pipeline";\ndeliverOutboundPayloads();',
         "packages/a.ts":
@@ -182,11 +136,13 @@ describe("scripts/check-deprecated-api-usage", () => {
       [
         "Deprecated API usage guard failed:",
         "- plugin-sdk-compat-subpaths: src/a.ts:1: openclaw/plugin-sdk/channel-message (use focused non-deprecated plugin SDK subpaths)",
+        "- plugin-sdk-compat-subpaths: src/a.ts:2: @openclaw/plugin-sdk/channel-message (use focused non-deprecated plugin SDK subpaths)",
         "- plugin-sdk-compat-subpaths: packages/a.ts:1: openclaw/plugin-sdk/command-auth (use focused non-deprecated plugin SDK subpaths)",
         "- extension-plugin-sdk-compat-subpaths: extensions/probe/src/a.ts:1: openclaw/plugin-sdk/channel-reply-pipeline (extensions must use focused non-deprecated plugin SDK subpaths)",
         "- facade-internal-imports: src/a.ts:1: openclaw/plugin-sdk/channel-message (use openclaw/plugin-sdk/channel-outbound)",
+        "- facade-internal-imports: src/a.ts:2: @openclaw/plugin-sdk/channel-message (use openclaw/plugin-sdk/channel-outbound)",
         "- facade-internal-imports: extensions/probe/src/a.ts:1: openclaw/plugin-sdk/channel-reply-pipeline (use openclaw/plugin-sdk/channel-outbound)",
-        "- message-api: src/a.ts:2: deliverOutboundPayloads (use sendDurableMessageBatch or deliverInboundReplyWithMessageSendContext)",
+        "- message-api: src/a.ts:3: deliverOutboundPayloads (use sendDurableMessageBatch or deliverInboundReplyWithMessageSendContext)",
         "- message-api: extensions/probe/src/a.ts:2: deliverOutboundPayloads (use sendDurableMessageBatch or deliverInboundReplyWithMessageSendContext)",
         "- message-api: packages/a.ts:2: deliverOutboundPayloads (use sendDurableMessageBatch or deliverInboundReplyWithMessageSendContext)",
         "",

@@ -14,7 +14,11 @@ import {
   createRuntimeEnv,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi, type Mock } from "vitest";
 import type { ResolvedZaloAccount } from "../types.js";
@@ -34,6 +38,7 @@ type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 const cachedMonitorModules = new Map<string, Promise<MonitorModule>>();
 let lifecycleStateDir: string | undefined;
 let previousLifecycleStateDir: string | undefined;
+let waitForLifecycleIngressIdle: (() => Promise<void>) | undefined;
 
 type ZaloLifecycleMocks = {
   setWebhookMock: AsyncUnknownMock;
@@ -67,6 +72,21 @@ export const sendPhotoMock = lifecycleMocks.sendPhotoMock;
 export const getZaloRuntimeMock: UnknownMock = lifecycleMocks.getZaloRuntimeMock;
 
 function installLifecycleModuleMocks() {
+  vi.doMock("openclaw/plugin-sdk/channel-outbound", async () => {
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-outbound")>(
+      "openclaw/plugin-sdk/channel-outbound",
+    );
+    return {
+      ...actual,
+      createChannelIngressMonitor: (
+        ...args: Parameters<typeof actual.createChannelIngressMonitor>
+      ) => {
+        const monitor = actual.createChannelIngressMonitor(...args);
+        waitForLifecycleIngressIdle = monitor.waitForIdle;
+        return monitor;
+      },
+    };
+  });
   vi.doMock(apiModuleId, async () => {
     const actual = await vi.importActual<object>(apiModuleId);
     return {
@@ -114,9 +134,12 @@ const importCachedWebhookModule = createLazyRuntimeModule(
 );
 
 export async function resetLifecycleTestState() {
+  waitForLifecycleIngressIdle = undefined;
   // Agent close releases leases through shared state; closing shared state first
   // can reopen it during teardown and leave Windows handles under the state dir.
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   if (lifecycleStateDir) {
     await fs.rm(lifecycleStateDir, {
@@ -236,6 +259,9 @@ export async function startWebhookLifecycleMonitor(params: {
   if (!route) {
     throw new Error("missing plugin HTTP route");
   }
+  if (!waitForLifecycleIngressIdle) {
+    throw new Error("missing Zalo webhook ingress monitor");
+  }
 
   return {
     abort,
@@ -243,6 +269,7 @@ export async function startWebhookLifecycleMonitor(params: {
     route,
     run,
     runtime,
+    waitForIdle: waitForLifecycleIngressIdle,
     stop: async () => {
       abort.abort();
       await run;

@@ -35,25 +35,12 @@ type AgentMenuInteractionState = "closed" | "hover-pending" | "open-hover" | "op
 type MenuPosition = { x: number; y: number };
 type CatalogMenuPosition = MenuPosition & { catalogId: string };
 
-interface SidebarMenusControllerState {
-  customizeMenuPosition: { x: number; y: number } | null;
-  moreMenuPosition: { x: number; y: number } | null;
-  sessionMenu: SidebarSessionMenuState | null;
-  sessionMenuWork: SessionMenuWork | null;
-  sessionGroupMenu: SidebarSessionGroupMenuState | null;
-  sessionSortMenuPosition: MenuPosition | null;
-  catalogViewMenuPosition: CatalogMenuPosition | null;
-  agentMenuPosition: { x: number; top: number } | null;
-  agentMenuInteractionState: AgentMenuInteractionState;
-  identityMenuPosition: { x: number; bottom: number; width: number } | null;
-}
-
 export type SidebarFilterMenuView = "root" | "specific-owner" | "empty-groups";
 
 type SidebarMenusRenderer = typeof import("./sidebar-menus-render.ts");
 
 /** Popup ownership and stateless menu-renderer wiring. */
-export class SidebarMenusController implements ReactiveController, SidebarMenusControllerState {
+export class SidebarMenusController implements ReactiveController {
   customizeMenuPosition: { x: number; y: number } | null = null;
   moreMenuPosition: { x: number; y: number } | null = null;
   sessionMenu: SidebarSessionMenuState | null = null;
@@ -122,11 +109,12 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     this.routePreloadTimers.clear();
   }
 
-  private updateState<Key extends keyof SidebarMenusControllerState>(
+  private updateState<Key extends keyof SidebarMenusController>(
+    this: SidebarMenusController,
     key: Key,
-    value: SidebarMenusControllerState[Key],
+    value: SidebarMenusController[Key],
   ): void {
-    Object.assign(this, { [key]: value });
+    this[key] = value;
     this.host.requestUpdate();
   }
 

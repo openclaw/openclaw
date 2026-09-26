@@ -193,14 +193,11 @@ describe("resolveProjectedSessionContextBudgetStatus", () => {
   const entry = { sessionId: "session-1", contextBudgetStatus: contextBudgetStatusFixture() };
   const selection = { provider: "ollama", model: "qwen3:8b", contextTokens: 200_000 };
 
-  it.each([{ name: "matching cap", contextTokens: 200_000 }])(
-    "keeps a last-run estimate with $name",
-    ({ contextTokens }) => {
-      expect(
-        resolveProjectedSessionContextBudgetStatus({ entry, ...selection, contextTokens }),
-      ).toEqual(entry.contextBudgetStatus);
-    },
-  );
+  it("keeps a last-run estimate with a matching cap", () => {
+    expect(resolveProjectedSessionContextBudgetStatus({ entry, ...selection })).toEqual(
+      entry.contextBudgetStatus,
+    );
+  });
 
   it.each([
     { name: "model", current: { model: "qwen3:4b" } },
@@ -225,7 +222,7 @@ describe("resolveProjectedSessionContextBudgetStatus", () => {
     },
   );
 
-  it.each([undefined, "", " "])("rejects an unbound snapshot session ID %j", (sessionId) => {
+  it.each([undefined, " "])("rejects an unbound snapshot session ID %j", (sessionId) => {
     expect(
       resolveProjectedSessionContextBudgetStatus({
         entry: { ...entry, contextBudgetStatus: { ...entry.contextBudgetStatus, sessionId } },

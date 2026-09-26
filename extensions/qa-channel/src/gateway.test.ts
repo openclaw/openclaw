@@ -1,6 +1,6 @@
-// Qa Channel tests cover gateway lifecycle behavior.
 import { createServer } from "node:http";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
+import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import { startQaGatewayAccount } from "./gateway.js";
@@ -10,6 +10,32 @@ import type { ResolvedQaChannelAccount } from "./types.js";
 vi.mock("./inbound.js", () => ({
   handleQaInbound: vi.fn(async () => undefined),
 }));
+
+function startGateway(
+  baseUrl: string,
+  options: {
+    abortSignal?: AbortSignal;
+    pollTimeoutMs?: number;
+    setStatus?: ChannelGatewayContext<ResolvedQaChannelAccount>["setStatus"];
+  } = {},
+) {
+  return startQaGatewayAccount("qa-channel", "QA Channel", {
+    ...createStartAccountContext({
+      account: {
+        accountId: "default",
+        baseUrl,
+        botDisplayName: "QA Bot",
+        botUserId: "qa-bot",
+        config: {},
+        configured: true,
+        enabled: true,
+        pollTimeoutMs: options.pollTimeoutMs ?? 1,
+      },
+      abortSignal: options.abortSignal,
+    }),
+    setStatus: options.setStatus ?? vi.fn(),
+  });
+}
 
 async function startJsonServer(
   handler: (req: { url?: string | undefined }) => { statusCode?: number; body: string },
@@ -100,23 +126,8 @@ describe("qa-channel gateway", () => {
         controller.abort();
       }
     });
-    const account: ResolvedQaChannelAccount = {
-      accountId: "default",
-      baseUrl: server.baseUrl,
-      botDisplayName: "QA Bot",
-      botUserId: "qa-bot",
-      config: {},
-      configured: true,
-      enabled: true,
-      pollTimeoutMs: 1,
-    };
 
-    const gateway = startQaGatewayAccount("qa-channel", "QA Channel", {
-      abortSignal: controller.signal,
-      account,
-      cfg: {},
-      setStatus: vi.fn(),
-    } as unknown as ChannelGatewayContext<ResolvedQaChannelAccount>);
+    const gateway = startGateway(server.baseUrl, { abortSignal: controller.signal });
 
     await vi.waitFor(() => {
       const handled = vi.mocked(handleQaInbound).mock.calls.map(([params]) => params.message.text);
@@ -138,26 +149,9 @@ describe("qa-channel gateway", () => {
       body: JSON.stringify({ error: "qa bus unavailable" }),
     }));
     stops.push(() => server.stop());
-    const account: ResolvedQaChannelAccount = {
-      accountId: "default",
-      baseUrl: server.baseUrl,
-      botDisplayName: "QA Bot",
-      botUserId: "qa-bot",
-      config: {},
-      configured: true,
-      enabled: true,
-      pollTimeoutMs: 1,
-    };
     const setStatus = vi.fn();
 
-    await expect(
-      startQaGatewayAccount("qa-channel", "QA Channel", {
-        abortSignal: new AbortController().signal,
-        account,
-        cfg: {},
-        setStatus,
-      } as unknown as ChannelGatewayContext<ResolvedQaChannelAccount>),
-    ).rejects.toThrow("qa bus unavailable");
+    await expect(startGateway(server.baseUrl, { setStatus })).rejects.toThrow("qa bus unavailable");
 
     expect(setStatus.mock.calls.map(([status]) => status)).toEqual([
       {
@@ -191,21 +185,7 @@ describe("qa-channel gateway", () => {
     stops.push(() => server.stop());
     const setStatus = vi.fn();
 
-    const run = startQaGatewayAccount("qa-channel", "QA Channel", {
-      abortSignal: controller.signal,
-      account: {
-        accountId: "default",
-        baseUrl: server.baseUrl,
-        botDisplayName: "QA Bot",
-        botUserId: "qa-bot",
-        config: {},
-        configured: true,
-        enabled: true,
-        pollTimeoutMs: 1,
-      },
-      cfg: {},
-      setStatus,
-    } as unknown as ChannelGatewayContext<ResolvedQaChannelAccount>);
+    const run = startGateway(server.baseUrl, { abortSignal: controller.signal, setStatus });
 
     await vi.waitFor(() =>
       expect(setStatus).toHaveBeenCalledWith({
@@ -253,25 +233,10 @@ describe("qa-channel gateway", () => {
       controller.abort();
       throw new Error("inbound failed");
     });
-    const account: ResolvedQaChannelAccount = {
-      accountId: "default",
-      baseUrl: server.baseUrl,
-      botDisplayName: "QA Bot",
-      botUserId: "qa-bot",
-      config: {},
-      configured: true,
-      enabled: true,
-      pollTimeoutMs: 1,
-    };
 
-    await expect(
-      startQaGatewayAccount("qa-channel", "QA Channel", {
-        abortSignal: controller.signal,
-        account,
-        cfg: {},
-        setStatus: vi.fn(),
-      } as unknown as ChannelGatewayContext<ResolvedQaChannelAccount>),
-    ).rejects.toThrow("inbound failed");
+    await expect(startGateway(server.baseUrl, { abortSignal: controller.signal })).rejects.toThrow(
+      "inbound failed",
+    );
     expect(handleQaInbound).toHaveBeenCalledTimes(1);
   });
 
@@ -325,22 +290,10 @@ describe("qa-channel gateway", () => {
         }
       }
     });
-    const account: ResolvedQaChannelAccount = {
-      accountId: "default",
-      baseUrl: bus.baseUrl,
-      botDisplayName: "QA Bot",
-      botUserId: "qa-bot",
-      config: {},
-      configured: true,
-      enabled: true,
-      pollTimeoutMs: 10,
-    };
-    const firstGateway = startQaGatewayAccount("qa-channel", "QA Channel", {
+    const firstGateway = startGateway(bus.baseUrl, {
       abortSignal: new AbortController().signal,
-      account,
-      cfg: {},
-      setStatus: vi.fn(),
-    } as unknown as ChannelGatewayContext<ResolvedQaChannelAccount>);
+      pollTimeoutMs: 10,
+    });
 
     await vi.waitFor(() => {
       expect(pollCount).toBeGreaterThanOrEqual(2);
@@ -353,12 +306,10 @@ describe("qa-channel gateway", () => {
     expect(state.getAcknowledgedPollCursor("default")).toBe(1);
 
     restarting = true;
-    const restartedGateway = startQaGatewayAccount("qa-channel", "QA Channel", {
+    const restartedGateway = startGateway(bus.baseUrl, {
       abortSignal: restartedController.signal,
-      account,
-      cfg: {},
-      setStatus: vi.fn(),
-    } as unknown as ChannelGatewayContext<ResolvedQaChannelAccount>);
+      pollTimeoutMs: 10,
+    });
     try {
       await vi.waitFor(() => {
         expect(new Set(recoveredMessageIds)).toEqual(
@@ -388,21 +339,7 @@ describe("qa-channel gateway", () => {
       }
     });
 
-    await startQaGatewayAccount("qa-channel", "QA Channel", {
-      abortSignal: controller.signal,
-      account: {
-        accountId: "default",
-        baseUrl: bus.baseUrl,
-        botDisplayName: "QA Bot",
-        botUserId: "qa-bot",
-        config: {},
-        configured: true,
-        enabled: true,
-        pollTimeoutMs: 10,
-      },
-      cfg: {},
-      setStatus: vi.fn(),
-    } as unknown as ChannelGatewayContext<ResolvedQaChannelAccount>);
+    await startGateway(bus.baseUrl, { abortSignal: controller.signal, pollTimeoutMs: 10 });
 
     expect(state.getAcknowledgedPollCursor("default")).toBe(1);
   });

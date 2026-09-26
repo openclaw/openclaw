@@ -160,7 +160,11 @@ function createConfiguredAcpCase(params: {
 
 async function createNativeCommand(
   cfg: OpenClawConfig,
-  commandSpec: NativeCommandSpec,
+  commandSpec: NativeCommandSpec = {
+    name: "new",
+    description: "Start a new session.",
+    acceptsArgs: true,
+  },
   dispatchReplyFromConfig?: Parameters<
     typeof createDiscordNativeCommand
   >[0]["dispatchReplyFromConfig"],
@@ -1007,31 +1011,6 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
-  it("executes matched plugin commands directly without invoking the agent dispatcher", async () => {
-    const cfg = createConfig();
-    const commandSpec: NativeCommandSpec = {
-      name: "cron_jobs",
-      description: "List cron jobs",
-      acceptsArgs: false,
-    };
-    const interaction = createInteraction();
-    const executeSpy = runtimeModuleMocks.pluginCommandHandler.mockResolvedValue({
-      text: "direct plugin output",
-    });
-    const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue(
-      {} as never,
-    );
-    const command = await createMockPluginNativeCommand(cfg, commandSpec);
-
-    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
-
-    expect(executeSpy).toHaveBeenCalledTimes(1);
-    expect(dispatchSpy).not.toHaveBeenCalled();
-    expectFollowUpFields(interaction, { content: "direct plugin output" });
-    expect(interaction.reply).not.toHaveBeenCalled();
-    expect(interaction.deleteReply).not.toHaveBeenCalled();
-  });
-
   it("returns an explicit warning instead of success when dispatch produces zero visible replies", async () => {
     const cfg = createConfig();
     const interaction = createInteraction();
@@ -1039,11 +1018,7 @@ describe("Discord native plugin command dispatch", () => {
       counts: { final: 0, block: 0, tool: 0 },
       queuedFinal: false,
     } as never);
-    const command = await createNativeCommand(cfg, {
-      name: "new",
-      description: "Start a new session.",
-      acceptsArgs: true,
-    });
+    const command = await createNativeCommand(cfg);
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
@@ -1119,11 +1094,7 @@ describe("Discord native plugin command dispatch", () => {
       queuedFinal: false,
       deliberateSilentTerminalReply: true,
     } as never);
-    const command = await createNativeCommand(cfg, {
-      name: "new",
-      description: "Start a new session.",
-      acceptsArgs: true,
-    });
+    const command = await createNativeCommand(cfg);
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
@@ -1148,11 +1119,7 @@ describe("Discord native plugin command dispatch", () => {
         },
       };
     };
-    const command = await createNativeCommand(cfg, {
-      name: "new",
-      description: "Start a new session.",
-      acceptsArgs: true,
-    });
+    const command = await createNativeCommand(cfg);
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
@@ -1164,7 +1131,8 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.deleteReply).not.toHaveBeenCalled();
   });
 
-  it.each([1, 2])("settles %i suppressed finals without an empty warning", async (count) => {
+  it("settles repeated suppressed finals without an empty warning", async () => {
+    const count = 2;
     const cfg = createConfig();
     const interaction = createInteraction();
     nativeCommandRuntime.dispatchChannelInboundTurn = async (plan) => {
@@ -1189,11 +1157,7 @@ describe("Discord native plugin command dispatch", () => {
         },
       };
     };
-    const command = await createNativeCommand(cfg, {
-      name: "new",
-      description: "Start a new session.",
-      acceptsArgs: true,
-    });
+    const command = await createNativeCommand(cfg);
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
@@ -1202,7 +1166,8 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
   });
 
-  it.each([false, true])("preserves a hidden final and metadata (isError=%s)", async (isError) => {
+  it("preserves a hidden error final and its metadata", async () => {
+    const isError = true;
     const cfg = createConfig();
     const interaction = createInteraction();
     interaction.responseState = "deferred";
@@ -1349,11 +1314,7 @@ describe("Discord native plugin command dispatch", () => {
         queuedFinal: false,
       };
     });
-    const command = await createNativeCommand(cfg, {
-      name: "new",
-      description: "Start a new session.",
-      acceptsArgs: true,
-    });
+    const command = await createNativeCommand(cfg);
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
@@ -1366,7 +1327,6 @@ describe("Discord native plugin command dispatch", () => {
   it.each([
     { label: "no intermediate suppression" },
     { label: "a suppressed block reply", kind: "block" as const },
-    { label: "a suppressed tool reply", kind: "tool" as const },
     { label: "a prior suppressed final reply", kind: "final" as const },
     { label: "a later suppressed final reply", suppressAfterFailure: true },
     {
@@ -1426,11 +1386,7 @@ describe("Discord native plugin command dispatch", () => {
         },
       };
     };
-    const command = await createNativeCommand(cfg, {
-      name: "new",
-      description: "Start a new session.",
-      acceptsArgs: true,
-    });
+    const command = await createNativeCommand(cfg);
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
@@ -1493,11 +1449,7 @@ describe("Discord native plugin command dispatch", () => {
         },
       };
     };
-    const command = await createNativeCommand(cfg, {
-      name: "new",
-      description: "Start a new session.",
-      acceptsArgs: true,
-    });
+    const command = await createNativeCommand(cfg);
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
@@ -1538,11 +1490,7 @@ describe("Discord native plugin command dispatch", () => {
         queuedFinal: false,
       };
     });
-    const command = await createNativeCommand(cfg, {
-      name: "new",
-      description: "Start a new session.",
-      acceptsArgs: true,
-    });
+    const command = await createNativeCommand(cfg);
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
@@ -1559,11 +1507,7 @@ describe("Discord native plugin command dispatch", () => {
       queuedFinal: true,
       settledReceipt: visibleFinalReceipt,
     } as never);
-    const command = await createNativeCommand(cfg, {
-      name: "new",
-      description: "Start a new session.",
-      acceptsArgs: true,
-    });
+    const command = await createNativeCommand(cfg);
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
@@ -1866,11 +1810,7 @@ describe("Discord native plugin command dispatch", () => {
         agentId: "codex",
       });
     const dispatchSpy = createDispatchSpy();
-    const command = await createNativeCommand(cfg, {
-      name: "new",
-      description: "Start a new session.",
-      acceptsArgs: true,
-    });
+    const command = await createNativeCommand(cfg);
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 

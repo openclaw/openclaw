@@ -8,28 +8,25 @@ import {
   watchChannelRuntimeContexts,
 } from "./channel-runtime-context.js";
 
+const slack = { channelId: "slack", accountId: "default", capability: "approval.native" };
+const matrix = { ...slack, channelId: "matrix" };
+
 describe("channel runtime context helpers", () => {
   it("returns inert helpers when no channel runtime exists", () => {
     expect(
       registerChannelRuntimeContext({
-        channelId: "slack",
-        accountId: "default",
-        capability: "approval.native",
+        ...slack,
         context: { ok: true },
       }),
     ).toBeNull();
     expect(
       getChannelRuntimeContext({
-        channelId: "slack",
-        accountId: "default",
-        capability: "approval.native",
+        ...slack,
       }),
     ).toBeUndefined();
     expect(
       watchChannelRuntimeContexts({
-        channelId: "slack",
-        accountId: "default",
-        capability: "approval.native",
+        ...slack,
         onEvent: vi.fn(),
       }),
     ).toBeNull();
@@ -74,42 +71,32 @@ describe("channel runtime context helpers", () => {
     const onEvent = vi.fn();
     const unsubscribe = watchChannelRuntimeContexts({
       channelRuntime,
-      channelId: "slack",
-      accountId: "default",
-      capability: "approval.native",
+      ...slack,
       onEvent,
     });
     const persistentLease = registerChannelRuntimeContext({
       channelRuntime,
-      channelId: "matrix",
-      accountId: "default",
-      capability: "approval.native",
+      ...matrix,
       context: { client: "matrix" },
     });
     const scoped = createTaskScopedChannelRuntime({ channelRuntime });
 
     registerChannelRuntimeContext({
       channelRuntime: scoped.channelRuntime,
-      channelId: "slack",
-      accountId: "default",
-      capability: "approval.native",
+      ...slack,
       context: { app: "slack" },
     });
 
     expect(
       getChannelRuntimeContext({
         channelRuntime,
-        channelId: "slack",
-        accountId: "default",
-        capability: "approval.native",
+        ...slack,
       }),
     ).toEqual({ app: "slack" });
     expect(
       getChannelRuntimeContext({
         channelRuntime,
-        channelId: "matrix",
-        accountId: "default",
-        capability: "approval.native",
+        ...matrix,
       }),
     ).toEqual({ client: "matrix" });
 
@@ -118,39 +105,27 @@ describe("channel runtime context helpers", () => {
     expect(
       getChannelRuntimeContext({
         channelRuntime,
-        channelId: "slack",
-        accountId: "default",
-        capability: "approval.native",
+        ...slack,
       }),
     ).toBeUndefined();
     expect(
       getChannelRuntimeContext({
         channelRuntime,
-        channelId: "matrix",
-        accountId: "default",
-        capability: "approval.native",
+        ...matrix,
       }),
     ).toEqual({ client: "matrix" });
     expect(onEvent.mock.calls).toEqual([
       [
         {
           type: "registered",
-          key: {
-            channelId: "slack",
-            accountId: "default",
-            capability: "approval.native",
-          },
+          key: slack,
           context: { app: "slack" },
         },
       ],
       [
         {
           type: "unregistered",
-          key: {
-            channelId: "slack",
-            accountId: "default",
-            capability: "approval.native",
-          },
+          key: slack,
         },
       ],
     ]);

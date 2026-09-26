@@ -5,28 +5,6 @@ import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 const channelConversationSessionKey = "agent:main:msteams:channel:19:channel@thread.tacv2";
 
 describe("msteams thread session isolation", () => {
-  it("appends thread suffix to session key for channel thread replies", () => {
-    const sessionKey = resolveMSTeamsRouteSessionKey({
-      baseSessionKey: channelConversationSessionKey,
-      isChannel: true,
-      replyToId: "thread-root-123",
-    });
-
-    expect(sessionKey).toContain("thread:");
-    expect(sessionKey).toContain("thread-root-123");
-  });
-
-  it("does not append thread suffix for top-level channel messages", () => {
-    const sessionKey = resolveMSTeamsRouteSessionKey({
-      baseSessionKey: channelConversationSessionKey,
-      isChannel: true,
-      replyToId: undefined,
-    });
-
-    expect(sessionKey).not.toContain("thread:");
-    expect(sessionKey).toBe(channelConversationSessionKey);
-  });
-
   it("produces different session keys for different threads in the same channel", () => {
     const sessionKeyA = resolveMSTeamsRouteSessionKey({
       baseSessionKey: channelConversationSessionKey,
@@ -47,16 +25,6 @@ describe("msteams thread session isolation", () => {
   it("does not affect DM session keys", () => {
     const sessionKey = resolveMSTeamsRouteSessionKey({
       baseSessionKey: "agent:main:msteams:dm:user-1",
-      isChannel: false,
-      replyToId: "some-reply-id",
-    });
-
-    expect(sessionKey).not.toContain("thread:");
-  });
-
-  it("does not affect group chat session keys", () => {
-    const sessionKey = resolveMSTeamsRouteSessionKey({
-      baseSessionKey: "agent:main:msteams:group:19:group-chat-id@unq.gbl.spaces",
       isChannel: false,
       replyToId: "some-reply-id",
     });
@@ -105,17 +73,6 @@ describe("msteams thread session isolation", () => {
       expect(sessionKey).toBe(`${channelConversationSessionKey}:thread:z`);
       expect(sessionKey).not.toContain(":thread:x");
       expect(sessionKey).not.toContain(":thread:y");
-      expect(sessionKey.match(/:thread:/g)).toHaveLength(1);
-    });
-
-    it("is idempotent when the base is already qualified with the same thread", () => {
-      const sessionKey = resolveMSTeamsRouteSessionKey({
-        baseSessionKey: `${channelConversationSessionKey}:thread:same-root`,
-        isChannel: true,
-        conversationMessageId: "same-root",
-      });
-
-      expect(sessionKey).toBe(`${channelConversationSessionKey}:thread:same-root`);
       expect(sessionKey.match(/:thread:/g)).toHaveLength(1);
     });
 

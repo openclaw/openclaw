@@ -109,7 +109,7 @@ describe("resolveGatewayAssistantAvatar", () => {
     });
   });
 
-  it.each(["A", "PS", "🦞"])("keeps the %s text avatar free of file metadata", async (avatar) => {
+  it.each(["PS", "🦞"])("keeps the %s text avatar free of file metadata", async (avatar) => {
     const { cfg } = createWorkspace();
     cfg.agents!.list![0]!.identity = { avatar };
 

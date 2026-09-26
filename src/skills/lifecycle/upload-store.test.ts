@@ -44,6 +44,22 @@ async function makeStore(options?: {
   };
 }
 
+async function commitUploadFixture(
+  store: ReturnType<typeof createSkillUploadStore>,
+  databasePath: string,
+  slug: string,
+) {
+  const archive = Buffer.from("abc");
+  const upload = await store.begin({ kind: "skill-archive", slug, sizeBytes: archive.length });
+  await store.chunk({
+    uploadId: upload.uploadId,
+    offset: 0,
+    dataBase64: archive.toString("base64"),
+  });
+  commitStagedFixture(databasePath, upload.uploadId);
+  return upload;
+}
+
 function stateDatabase(databasePath: string) {
   return openOpenClawStateDatabase({ path: databasePath }).db;
 }
@@ -540,18 +556,7 @@ describe("skill upload store", () => {
 
   it("does not sweep an upload while an install holds its lease", async () => {
     const { databasePath, store } = await makeStore();
-    const archive = Buffer.from("abc");
-    const committed = await store.begin({
-      kind: "skill-archive",
-      slug: "pinned-skill",
-      sizeBytes: archive.length,
-    });
-    await store.chunk({
-      uploadId: committed.uploadId,
-      offset: 0,
-      dataBase64: archive.toString("base64"),
-    });
-    commitStagedFixture(databasePath, committed.uploadId);
+    const committed = await commitUploadFixture(store, databasePath, "pinned-skill");
 
     const entered = deferred();
     const release = deferred();
@@ -630,18 +635,7 @@ describe("skill upload store", () => {
       installLeaseHeartbeatMs: 10,
       installLeaseMs: 60_000,
     });
-    const archive = Buffer.from("abc");
-    const committed = await store.begin({
-      kind: "skill-archive",
-      slug: "heartbeat-skill",
-      sizeBytes: archive.length,
-    });
-    await store.chunk({
-      uploadId: committed.uploadId,
-      offset: 0,
-      dataBase64: archive.toString("base64"),
-    });
-    commitStagedFixture(databasePath, committed.uploadId);
+    const committed = await commitUploadFixture(store, databasePath, "heartbeat-skill");
 
     const entered = deferred();
     const release = deferred();
@@ -701,18 +695,7 @@ describe("skill upload store", () => {
       installLeaseHeartbeatMs: 60_000,
       installLeaseMs: 60_000,
     });
-    const archive = Buffer.from("abc");
-    const committed = await store.begin({
-      kind: "skill-archive",
-      slug: "bounded-lease-skill",
-      sizeBytes: archive.length,
-    });
-    await store.chunk({
-      uploadId: committed.uploadId,
-      offset: 0,
-      dataBase64: archive.toString("base64"),
-    });
-    commitStagedFixture(databasePath, committed.uploadId);
+    const committed = await commitUploadFixture(store, databasePath, "bounded-lease-skill");
 
     const entered = deferred();
     const release = deferred();

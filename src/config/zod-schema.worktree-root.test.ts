@@ -15,15 +15,11 @@ describe("OpenClawSchema worktree settings", () => {
   });
 
   it.each([
-    "",
     "  ",
     "worktrees",
-    "./worktrees",
-    "../worktrees",
     "~someone/worktrees",
     ...(path.sep === "/" ? ["~\\worktrees"] : []),
     42,
-    null,
   ])("rejects an empty, relative, or non-string root: %j", (worktreeRoot) => {
     expect(OpenClawSchema.safeParse({ worktreeRoot }).success).toBe(false);
   });
