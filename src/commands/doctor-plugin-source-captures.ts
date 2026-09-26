@@ -7,6 +7,7 @@ import { inspectOtherOpenClawProcesses } from "../infra/openclaw-process-census.
 import {
   inspectLegacyPluginSourceCaptureRoots,
   pruneLegacyPluginSourceCaptures,
+  pruneUnreferencedPluginNativeCaptures,
 } from "../plugins/plugin-source-capture-report.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { formatBytes } from "./doctor-disk-space.js";
@@ -54,6 +55,23 @@ export async function noteLegacyPluginSourceCaptures(
   );
   warnings.push(...report.warnings);
   const lines: string[] = [];
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  const assertCurrent = () => {
+    if (!maintenance?.ownsSchemaMaintenance) {
+      throw new Error("Doctor does not hold Gateway maintenance; captures were preserved.");
+    }
+    maintenance.assertAdmission();
+    const census = inspectOtherOpenClawProcesses();
+    if ("error" in census) {
+      throw new Error(census.error);
+    }
+    if (census.pids.length > 0) {
+      throw new Error(
+        `Other OpenClaw processes are still running (PIDs: ${census.pids.join(", ")}).`,
+      );
+    }
+    maintenance.assertAdmission();
+  };
   if (report.roots.length > 0) {
     lines.push(
       `${report.roots.length} legacy plugin capture root(s), ${formatBytes(report.totalBytes)} in known regular files.`,
@@ -61,25 +79,7 @@ export async function noteLegacyPluginSourceCaptures(
       "They will be reclaimed at the next maintenance.",
     );
     if (shouldRepair) {
-      const maintenance = getOpenClawDatabaseMaintenanceScope();
-      const result = await pruneLegacyPluginSourceCaptures(report, () => {
-        if (!maintenance?.ownsSchemaMaintenance) {
-          throw new Error(
-            "Doctor does not hold Gateway maintenance; legacy captures were preserved.",
-          );
-        }
-        maintenance.assertAdmission();
-        const census = inspectOtherOpenClawProcesses();
-        if ("error" in census) {
-          throw new Error(census.error);
-        }
-        if (census.pids.length > 0) {
-          throw new Error(
-            `Other OpenClaw processes are still running (PIDs: ${census.pids.join(", ")}).`,
-          );
-        }
-        maintenance.assertAdmission();
-      });
+      const result = await pruneLegacyPluginSourceCaptures(report, assertCurrent);
       if (result.removed.length > 0) {
         lines.push(
           `Removed ${result.removed.length} legacy plugin capture root(s), ${formatBytes(result.removed.reduce((bytes, root) => bytes + root.bytes, 0))}.`,
@@ -96,6 +96,17 @@ export async function noteLegacyPluginSourceCaptures(
       );
       warnings.push(...result.warnings);
     }
+  }
+  if (shouldRepair) {
+    const native = await pruneUnreferencedPluginNativeCaptures(
+      resolveStateDir(env),
+      assertCurrent,
+      env,
+    );
+    if (native.removed.length > 0) {
+      lines.push(`Removed ${native.removed.length} unreferenced native plugin capture root(s).`);
+    }
+    warnings.push(...native.warnings);
   }
   if (warnings.length > 0) {
     lines.push(

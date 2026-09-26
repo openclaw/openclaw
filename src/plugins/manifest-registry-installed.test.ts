@@ -230,7 +230,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(second).toBe(first);
   });
 
-  it("recomputes installed-index fingerprints for mutable index objects", () => {
+  it("fingerprints mutable inventory changes independently of native admission receipts", () => {
     const rootDir = makeTempDir();
     writePlugin(rootDir, "installed", "installed-");
     const index = createIndexWithFileSignatures(rootDir);
@@ -239,6 +239,15 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     if (!record) {
       throw new Error("expected index record");
     }
+    record.sourceAdmissions = {
+      [`${rootDir}\0`]: {
+        signature: "a".repeat(64),
+        sourceDigest: "b".repeat(64),
+        nativeArtifacts: {},
+        nativeNamespaces: {},
+      },
+    };
+    expect(resolveInstalledManifestRegistryIndexFingerprint(index)).toBe(first);
     record.manifestHash = "changed";
     const second = resolveInstalledManifestRegistryIndexFingerprint(index);
 

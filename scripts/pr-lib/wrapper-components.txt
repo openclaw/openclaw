@@ -680,6 +680,7 @@ src/infra/prototype-keys.ts
 src/infra/regular-file.ts
 src/infra/replace-file.ts
 src/infra/restart-stale-pids.ts
+src/infra/root-walk.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-url.ts
 src/infra/runtime-worker-generation.ts
@@ -888,6 +889,7 @@ src/plugins/config-normalization-shared.ts
 src/plugins/config-policy.ts
 src/plugins/config-state.ts
 src/plugins/control-plane-workspace.ts
+src/plugins/control-ui-assets.ts
 src/plugins/current-plugin-metadata-snapshot.ts
 src/plugins/current-plugin-metadata-state.ts
 src/plugins/default-enablement.ts
@@ -924,6 +926,7 @@ src/plugins/installed-plugin-index-record-cache.ts
 src/plugins/installed-plugin-index-record-reader.ts
 src/plugins/installed-plugin-index-record-state.ts
 src/plugins/installed-plugin-index-row.ts
+src/plugins/installed-plugin-index-source-admissions.ts
 src/plugins/installed-plugin-index-store-path.ts
 src/plugins/installed-plugin-index-store.ts
 src/plugins/installed-plugin-index-types.ts
@@ -980,6 +983,8 @@ src/plugins/plugin-cache.ts
 src/plugins/plugin-config-trust.ts
 src/plugins/plugin-control-plane-context.ts
 src/plugins/plugin-generation-artifact.ts
+src/plugins/plugin-generation-file-capture.ts
+src/plugins/plugin-generation-receipt.ts
 src/plugins/plugin-generation-source-lookup.ts
 src/plugins/plugin-install-default-choice.ts
 src/plugins/plugin-instance-argument-views.ts
@@ -1004,7 +1009,11 @@ src/plugins/plugin-metadata-snapshot.ts
 src/plugins/plugin-metadata-state-worker.ts
 src/plugins/plugin-module-loader-cache.ts
 src/plugins/plugin-module-loader-recovery.ts
+src/plugins/plugin-native-admission-state.ts
+src/plugins/plugin-native-admission.ts
 src/plugins/plugin-native-module-loader.ts
+src/plugins/plugin-native-namespace.ts
+src/plugins/plugin-native-reference.ts
 src/plugins/plugin-package-metadata-capture.ts
 src/plugins/plugin-peer-link.ts
 src/plugins/plugin-policy-id.ts
@@ -1015,14 +1024,18 @@ src/plugins/plugin-registry-snapshot.ts
 src/plugins/plugin-registry.ts
 src/plugins/plugin-return-value.ts
 src/plugins/plugin-runtime-artifact-selection.ts
+src/plugins/plugin-safety-inspected-files.ts
 src/plugins/plugin-scope.ts
 src/plugins/plugin-sdk-native-resolver.ts
 src/plugins/plugin-setup-module.ts
+src/plugins/plugin-source-admission-store.ts
 src/plugins/plugin-source-build.ts
 src/plugins/plugin-source-capture-context.ts
 src/plugins/plugin-source-capture-directory.ts
 src/plugins/plugin-source-capture-path.ts
+src/plugins/plugin-source-file.ts
 src/plugins/plugin-source-references.ts
+src/plugins/plugin-source-verification.ts
 src/plugins/portable-icon-paths.ts
 src/plugins/provider-config-owner.ts
 src/plugins/provider-model-routes.ts

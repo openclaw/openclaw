@@ -27,6 +27,7 @@ import {
 import {
   executeCronStateCommand,
   isCronStateWorkerCommand,
+  prepareCronStateWorkerCommand,
 } from "../cron/store/dispatch.worker.js";
 import { executeFleetRegistryCommand } from "../fleet/registry.worker.js";
 import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
@@ -91,6 +92,10 @@ import {
 } from "../plugins/official-external-plugin-catalog-snapshot-store.kernel.js";
 import { HostedCatalogSignedFeedMonotonicityError } from "../plugins/official-external-plugin-catalog-source.js";
 import {
+  executePluginSourceAdmissionCommand,
+  preparePluginSourceAdmissionCommand,
+} from "../plugins/plugin-source-admission.worker.js";
+import {
   ensureProjectRegistrySchema,
   insertProjectRegistryInDatabase,
   listProjectRegistryInDatabase,
@@ -149,7 +154,9 @@ type Operations = OpenClawStateWorkerOperations &
 
 const log = createSubsystemLogger("state/worker");
 
-export { prepareCronStateWorkerCommand as prepareSharedStateCommand } from "../cron/store/dispatch.worker.js";
+export function prepareSharedStateCommand(type: PropertyKey): Promise<void> | undefined {
+  return preparePluginSourceAdmissionCommand(type) ?? prepareCronStateWorkerCommand(type);
+}
 
 export function executeSharedStateCommand(
   command: OpenClawStateWorkerRuntimeCommand,
@@ -592,6 +599,9 @@ export function executeSharedStateCommand(
       }
       throw error;
     }
+  }
+  if (command.type === "plugins.metadata.sourceAdmission.publish") {
+    return executePluginSourceAdmissionCommand(command.input, writeOptions);
   }
   if (command.type === "subagents.persistChanges") {
     const { writeId, values, deleteRunIds } = command.input;
