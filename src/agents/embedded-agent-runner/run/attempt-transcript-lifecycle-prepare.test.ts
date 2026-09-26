@@ -12,6 +12,7 @@ import {
 } from "../../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { getAgentRunLifecycleGeneration } from "../../../infra/agent-run-registry.js";
+import { mirrorDeliveredPayloads } from "../../../infra/outbound/deliver-transcript.js";
 import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
@@ -296,6 +297,69 @@ describe("admitted lazy session writer", () => {
       );
     },
   );
+
+  it("adopts a pre-persisted keyed wake after a direct completion mirror lands behind it", async () => {
+    await withInitialWriter(
+      async ({ openManager, runParams, target }) => {
+        const message = { ...userMessage, idempotencyKey: `${runParams.runId}:user` };
+        const recorder = createUserTurnTranscriptRecorder({
+          message,
+          target: { ...target, sessionEntry: undefined },
+        });
+        const wakeUserId = openManager().appendMessage(message);
+        await runWithoutOwnedSessionTranscriptWrites(() =>
+          mirrorDeliveredPayloads({
+            delivery: {
+              cfg: {},
+              channel: "discord",
+              to: "dm:U123",
+              payloads: [],
+              mirror: {
+                agentId: target.agentId,
+                sessionKey: target.sessionKey,
+                idempotencyKey: "announce:v1:child:text-direct",
+                deliveryMirror: { kind: "subagent-completion-direct" },
+              },
+            },
+            payloads: [{ text: "child result", mediaUrls: [] }],
+            channel: "discord",
+            to: "dm:U123",
+          }),
+        );
+        const attemptManager = openManager();
+        expect(attemptManager.getAppendParentId()).not.toBe(wakeUserId);
+        await preparePersistedCurrentUserTurn({
+          sessionManager: attemptManager,
+          message,
+          recorder,
+          runId: runParams.runId,
+        });
+
+        expect(attemptManager.appendMessage(message)).toBe(wakeUserId);
+        attemptManager.appendMessage(
+          makeAgentAssistantMessage({ content: [{ type: "text", text: "wake reply" }] }),
+        );
+        expect(
+          SessionManager.open(target)
+            .getBranch()
+            .flatMap((entry) =>
+              entry.type === "message"
+                ? [
+                    entry.message.role === "assistant"
+                      ? `${entry.message.model}:${JSON.stringify(entry.message.content)}`
+                      : entry.message.role,
+                  ]
+                : [],
+            ),
+        ).toEqual([
+          "user",
+          'delivery-mirror:[{"type":"text","text":"child result"}]',
+          expect.stringContaining("wake reply"),
+        ]);
+      },
+      { existing: true },
+    );
+  });
 
   it.each(
     [false, true].flatMap((existing) => initialWriteKinds.map((kind) => ({ existing, kind }))),

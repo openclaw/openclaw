@@ -18,7 +18,7 @@ import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
 import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
-import { isTalkRealtimeVoiceEntry } from "./session-manager-codec.js";
+import { isOutOfTurnHistoryEntry } from "./session-manager-codec.js";
 import {
   prepareCurrentTurnReplayWitness,
   resolveCurrentTurnEntryId,
@@ -210,9 +210,10 @@ export class SessionManagerEntries extends SessionManagerSuffixPersistence {
       this.reloadPersistedTranscript();
       // Context-excluded users have no payload in byId. The exact SQLite replay
       // anchors their identity; physical ancestry still closes older turns.
-      // Final Talk speech records history without consuming the consult's keyed input.
+      // Final Talk speech and direct child-result mirrors record history
+      // without consuming the open turn's keyed input.
       if (
-        this.resolveCurrentTurnEntryId(isTalkRealtimeVoiceEntry) !==
+        this.resolveCurrentTurnEntryId(isOutOfTurnHistoryEntry) !==
         persistenceResult.adoptedMessageId
       ) {
         throw new Error(

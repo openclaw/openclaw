@@ -16,6 +16,7 @@ import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-deliv
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js";
+import { SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND } from "../../../shared/transcript-only-openclaw-assistant.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { sanitizeAgentRunTerminalReplyText } from "../../agent-run-terminal-reply.js";
@@ -361,6 +362,7 @@ export async function deliverCompletionDirect(params: {
         sessionKey: params.requesterSessionKey,
         agentId,
         idempotencyKey,
+        deliveryMirror: { kind: SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND },
       },
     });
     if (committedDelivery) {

@@ -8,6 +8,7 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
@@ -125,6 +126,61 @@ describe("SessionManager user idempotency", () => {
               userMessage.idempotencyKey,
         ),
       ).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    { kind: "subagent-completion-direct", adopts: true },
+    { kind: "channel-final", adopts: false },
+  ] as const)(
+    "keyed wake user behind a $kind mirror (adopts: $adopts)",
+    async ({ kind, adopts }) => {
+      const dir = tempDirs.make("openclaw-session-manager-user-idempotency-");
+      const scope = {
+        agentId: "main",
+        sessionId: `sqlite-runtime-user-${kind}-mirror`,
+        sessionKey: `agent:main:dashboard:sqlite-runtime-user-${kind}-mirror`,
+        storePath: path.join(dir, "sessions.json"),
+      };
+      const wakeUser = {
+        role: "user" as const,
+        content: "subagent finished",
+        idempotencyKey: "wake-run:user",
+        timestamp: 1,
+      };
+      await upsertSessionEntryCore(scope, {
+        sessionFile: formatSqliteSessionFileMarker(scope),
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+      });
+      await appendTranscriptMessage(scope, {
+        cwd: dir,
+        eventId: "wake-user",
+        message: wakeUser,
+        now: 1,
+      });
+      const mirror = await appendAssistantMessageToSessionTranscript({
+        agentId: scope.agentId,
+        sessionKey: scope.sessionKey,
+        storePath: scope.storePath,
+        text: "subagent result",
+        idempotencyKey: `announce:v1:child:${kind}`,
+        deliveryMirror: { kind },
+      });
+      expect(mirror.ok).toBe(true);
+      const sessionManager = SessionManager.openBounded(scope, {
+        cwd: dir,
+        maxBytes: 100_000,
+        maxEvents: 100,
+      });
+
+      if (adopts) {
+        expect(sessionManager.appendMessage(wakeUser)).toBe("wake-user");
+      } else {
+        expect(() => sessionManager.appendMessage(wakeUser)).toThrow(
+          "Session transcript keyed user is outside the current turn",
+        );
+      }
     },
   );
 

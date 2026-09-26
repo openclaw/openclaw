@@ -1744,6 +1744,25 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     }
   });
 
+  it("tags the direct completion mirror as out-of-turn requester history", async () => {
+    const sendMessage = createSendMessageMock();
+
+    await deliverDiscordDirectMessageCompletion({
+      callGateway: createGatewayMock({ result: { payloads: [{ text: "NO_REPLY" }] } }),
+      sendMessage,
+      internalEvents: taskCompletionEvents({}),
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mirror: expect.objectContaining({
+          idempotencyKey: "announce-dm-fallback-empty:text-direct",
+          deliveryMirror: { kind: "subagent-completion-direct" },
+        }),
+      }),
+    );
+  });
+
   it.each(privateCompletionCases)(
     "preserves private parent consumption and final evidence: $name",
     async (testCase) => {

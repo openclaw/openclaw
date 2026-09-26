@@ -5,6 +5,7 @@ export const OPENCLAW_TRANSCRIPT_ARTIFACT_API = "openclaw-transcript" as const;
 export const OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER = "openclaw" as const;
 export const OPENCLAW_DELIVERY_MIRROR_MODEL = "delivery-mirror" as const;
 export const CRON_DIRECT_DELIVERY_CONTEXT_KIND = "cron-direct-delivery-context" as const;
+export const SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND = "subagent-completion-direct" as const;
 const OPENCLAW_GATEWAY_INJECTED_MODEL = "gateway-injected" as const;
 
 const TRANSCRIPT_ONLY_OPENCLAW_ASSISTANT_MODELS = new Set<string>([
@@ -16,6 +17,7 @@ const OPENCLAW_DELIVERY_MIRROR_KINDS = new Set([
   "channel-final-suppressed",
   "message-tool-source-reply",
   CRON_DIRECT_DELIVERY_CONTEXT_KIND,
+  SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND,
 ]);
 
 function isOpenClawDeliveryMirrorMarker(value: unknown): boolean {
@@ -78,5 +80,23 @@ export function isOpenClawDeliveryMirrorAssistantMessage(message: unknown): bool
     entry.role === "assistant" &&
     entry.provider === OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER &&
     entry.model === OPENCLAW_DELIVERY_MIRROR_MODEL
+  );
+}
+
+export function isOpenClawSubagentCompletionMirrorAssistantMessage(message: unknown): boolean {
+  if (
+    !isOpenClawDeliveryMirrorAssistantMessage(message) ||
+    typeof message !== "object" ||
+    message === null ||
+    !("openclawDeliveryMirror" in message)
+  ) {
+    return false;
+  }
+  const marker = message.openclawDeliveryMirror;
+  return (
+    typeof marker === "object" &&
+    marker !== null &&
+    "kind" in marker &&
+    marker.kind === SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND
   );
 }
