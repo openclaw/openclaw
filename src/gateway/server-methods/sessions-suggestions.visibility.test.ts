@@ -11,7 +11,6 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { sessionSuggestionHandlers } from "./sessions-suggestions.js";
 import { getSessionSuggestionTestMocks } from "./sessions-suggestions.test-mocks.js";
 import {
   call,
@@ -24,6 +23,8 @@ import {
 
 const mocks = getSessionSuggestionTestMocks();
 registerSessionSuggestionTestLifecycle(mocks);
+// Register shared mocks before the handlers capture their presence dependency.
+const { sessionSuggestionHandlers } = await import("./sessions-suggestions.js");
 
 describe("session suggestion visibility and role ceilings", () => {
   it("retains committed suggestion visibility through a tentative role relaxation", async () => {
