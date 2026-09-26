@@ -199,9 +199,20 @@ function createWebhookHandler(
         // Send the rejection before closing an incomplete upload.
         destroyOnLimit: false,
       });
-      const match = resolveSingleWebhookTarget(targets, (entry) =>
-        verifyNextcloudTalkSignature({ ...headers, body, secret: entry.secret }),
+      const matchesSignature = (entry: RegisteredNextcloudTalkWebhookTarget) =>
+        verifyNextcloudTalkSignature({ ...headers, body, secret: entry.secret });
+      const match = resolveSingleWebhookTarget(
+        targets,
+        (entry) => servingTargets.includes(entry) && matchesSignature(entry),
       );
+      if (
+        match.kind === "none" &&
+        targets.some((entry) => !servingTargets.includes(entry) && matchesSignature(entry))
+      ) {
+        res.writeHead(503, { "Retry-After": "1" });
+        res.end();
+        return;
+      }
       if (match.kind !== "single") {
         webhookAuthRateLimiter.recordFailure(clientIp, WEBHOOK_AUTH_RATE_LIMIT_SCOPE);
         writeWebhookError(res, 401, WEBHOOK_ERRORS.invalidSignature);
@@ -213,8 +224,7 @@ function createWebhookHandler(
           release();
         }
       }
-      // A stopping account's valid signature remains retryable without charging siblings' quota.
-      if (!servingTargets.includes(target) || !getTargets().includes(target)) {
+      if (!getTargets().includes(target)) {
         res.writeHead(503, { "Retry-After": "1" });
         res.end();
         return;

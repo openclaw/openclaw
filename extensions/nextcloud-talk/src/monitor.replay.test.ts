@@ -466,6 +466,12 @@ describe("Nextcloud Talk accounts sharing a Gateway route", () => {
       });
       expect(sibling.status).toBe(200);
       expect(second).toHaveBeenCalledOnce();
+      const successor = vi.fn();
+      await startWebhookServer({ path, onMessage: successor });
+      const transferred = await fetch(first.webhookUrl, { method: "POST", headers, body });
+      expect(transferred.status).toBe(200);
+      expect(successor).toHaveBeenCalledOnce();
+      expect(second).toHaveBeenCalledOnce();
       release.resolve();
       expect((await pending).status).toBe(200);
       await stopping;
