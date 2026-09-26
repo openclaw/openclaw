@@ -94,10 +94,15 @@ export function resolveCheckoutChip(params: {
   destination: "local" | "remote" | "cloud";
   worktree: boolean;
   worktreeAvailable: boolean;
+  worktreeName: string;
   headBranch?: string;
   baseRef: string;
   repository?: boolean;
 }): CheckoutChipState | null {
+  const worktreeName = params.worktreeName.trim();
+  if (params.worktree && !params.repository && worktreeName) {
+    return { label: `openclaw/${worktreeName}` };
+  }
   if (params.destination === "cloud") {
     return {
       label: params.baseRef
@@ -337,7 +342,7 @@ export function renderCheckoutChip(params: {
         class="new-session-page__trigger ${
           params.popoverHiding ? "new-session-page__trigger--hiding" : ""
         }"
-        title=${t("newSession.checkout")}
+        title="${t("newSession.checkout")}: ${params.state.label}"
         aria-label="${t("newSession.checkout")}: ${params.state.label}"
         data-worktree=${String(params.worktree)}
         aria-haspopup="dialog"
