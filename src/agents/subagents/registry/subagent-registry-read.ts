@@ -140,6 +140,7 @@ export function hasDescendantRunAwaitingSettle(
   requesterAgentId?: string,
   requesterStorePath?: string | null,
   settledBefore?: number,
+  rootRunIds?: ReadonlySet<string>,
 ): boolean {
   return hasDescendantRunAwaitingSettleFromRuns(
     getSubagentRunsSnapshotForSessions(subagentRuns, [rootSessionKey]),
@@ -148,6 +149,7 @@ export function hasDescendantRunAwaitingSettle(
     requesterAgentId,
     requesterStorePath,
     settledBefore,
+    rootRunIds,
   );
 }
 

@@ -243,17 +243,17 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     ...new Set(settledBatch.map((entry) => entry.childSessionKey)),
   ].toSorted();
   const batchCreatedAt = Math.min(...settledBatch.map((entry) => entry.createdAt));
-  // Frozen cohorts own their members' descendants, not unrelated sibling cohorts.
+  // Keep the batch members themselves in the settle check, including paused work.
+  const rootRunIds = frozenBatchRunIds?.length ? new Set(frozenBatchRunIds) : undefined;
   const settleRoots = frozenBatchRunIds?.length ? batchSessionKeys : [requesterSessionKey];
   const requesterHasUnsettledDescendants = () =>
-    settleRoots.some((root) =>
-      hasDescendantRunAwaitingSettle(
-        root,
-        currentSettledEntry.runId,
-        requesterAgentId,
-        requesterStorePath,
-        batchCreatedAt,
-      ),
+    hasDescendantRunAwaitingSettle(
+      requesterSessionKey,
+      currentSettledEntry.runId,
+      requesterAgentId,
+      requesterStorePath,
+      batchCreatedAt,
+      rootRunIds,
     );
   const hasUnsettledDescendants = requesterHasUnsettledDescendants();
   if ((!frozenBatchRunIds || frozenBatchRunIds.length === 0) && hasUnsettledDescendants) {
