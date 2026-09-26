@@ -19,6 +19,7 @@ import { hashStableJson } from "../../../plugins/installed-plugin-index-hash.js"
 import { resolveInstalledPluginIndexPolicyHash } from "../../../plugins/installed-plugin-index-policy.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "../../../plugins/installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndexSync } from "../../../plugins/installed-plugin-index-store.js";
+import { RETAINED_MANAGED_NPM_DOCTOR_MISSING_DEPENDENCIES_REASON } from "../../../plugins/managed-npm-retention-contract.js";
 import {
   clearRetainedManagedNpmInstallMarker,
   hasRetainedManagedNpmInstallMarker,
@@ -456,7 +457,7 @@ async function repairMissingPluginInstallsWithLease(
           await markRetainedManagedNpmInstall({
             packageDir: missingDependencies.rootDir,
             pluginId,
-            reason: "doctor-missing-required-dependencies",
+            reason: RETAINED_MANAGED_NPM_DOCTOR_MISSING_DEPENDENCIES_REASON,
             assertCurrent,
           });
         }

@@ -8,6 +8,7 @@ import { registerSecretValueForRedaction } from "../logging/secret-redaction-reg
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
 import { enablePluginWithCapabilityConsent } from "../plugins/enable.js";
 import { stripPendingPluginInstallRecords } from "../plugins/install-record-commit.js";
+import { RETAINED_MANAGED_NPM_INFERENCE_ACTIVATION_REASON } from "../plugins/managed-npm-retention-contract.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
@@ -66,7 +67,7 @@ export async function stageCodexCandidate(
         !(await markRetained({
           packageDir: install.installPath,
           pluginId: "codex",
-          reason: "openclaw-inference-activation-not-committed",
+          reason: RETAINED_MANAGED_NPM_INFERENCE_ACTIVATION_REASON,
         }))
       ) {
         throw new SetupInferenceActivationIndeterminateError(
