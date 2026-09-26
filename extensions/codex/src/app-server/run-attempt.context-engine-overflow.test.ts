@@ -3,6 +3,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { HarnessContextEngine as ContextEngine } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import {
@@ -25,6 +26,7 @@ import {
   runCodexAppServerAttempt,
   writeCodexAppServerBinding,
 } from "./run-attempt.context-engine.test-support.js";
+import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 import {
   createCodexAppServerBindingStore,
   createCodexTestBindingStateStore,
@@ -51,157 +53,240 @@ function toolResultMessage(payload: unknown, timestamp: number): AgentMessage {
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
-  it.each([false, true])(
-    "retries resumed context overflow only with host model ownership (expected native: %s)",
-    async (nativeOwned) => {
-      const sessionFile = path.join(tempDir, "session.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
-      openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
-        assistantMessage("pre-compaction context", Date.now()) as never,
-      );
-      const nativeModel = threadStartResult("thread-old");
-      await writeCodexAppServerBinding(sessionFile, {
-        threadId: "thread-old",
-        cwd: workspaceDir,
-        dynamicToolsFingerprint: "[]",
-        ...(nativeOwned
-          ? {
-              preserveNativeModel: true,
-              model: nativeModel.model,
-              modelProvider: nativeModel.modelProvider,
-            }
-          : {}),
-        contextEngine: {
-          schemaVersion: 1,
-          engineId: "lossless-claw",
-          policyFingerprint:
-            '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
-          projection: {
-            schemaVersion: 1,
-            mode: "thread_bootstrap",
-            epoch: "epoch-before",
-          },
-        },
-      });
-      const compact = vi.fn(async () => {
-        return {
-          ok: true,
-          compacted: true,
-          result: {
-            summary: "summary",
-            firstKeptEntryId: "entry-1",
-            tokensBefore: 10,
-            sessionId: "session-1-compacted",
-          },
-        };
-      });
-      const assemble = vi.fn(
-        async ({ messages, prompt }: Parameters<ContextEngine["assemble"]>[0]) => ({
-          messages: [
-            ...messages,
-            assistantMessage("context epoch-before", 10),
-            userMessage(prompt ?? "", 11),
-          ],
-          estimatedTokens: 42,
-          systemPromptAddition: "context-engine system",
-          contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-before" },
-        }),
-      );
-      const contextEngine = createContextEngine({ assemble, compact });
-      const freshTurnStarted = createDeferred<void>();
-      const harness = createStartedThreadHarness(
-        async (method, requestParams) => {
-          if (method === "thread/resume") {
-            return threadStartResult("thread-old");
-          }
-          if (method === "thread/start") {
-            return threadStartResult("thread-fresh");
-          }
-          if (method === "turn/start") {
-            const request = requireRecord(requestParams, `${method} params`);
-            if (request.threadId === "thread-old") {
-              throw new Error("Codex ran out of room in the model's context window");
-            }
-            if (request.threadId === "thread-fresh") {
-              freshTurnStarted.resolve();
-              return turnStartResult("turn-fresh");
-            }
-          }
-          return undefined;
-        },
-        { persistedThreads: ["thread-old"] },
-      );
-      const params = createParams(sessionFile, workspaceDir);
-      params.contextEngine = contextEngine;
-      params.contextTokenBudget = 400_000;
-      if (nativeOwned) {
-        params.expectedSessionRuntimeOwnership = {
-          model: "native",
-          auth: "host",
-          modelRef: { model: nativeModel.model, provider: nativeModel.modelProvider },
-        };
-      }
-
-      const run = runCodexAppServerAttempt(params);
-      if (nativeOwned) {
-        await expect(run).rejects.toMatchObject({ name: "AgentHarnessPreflightError" });
-        expect(harness.requests.some(({ method }) => method === "thread/start")).toBe(false);
-        await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-          threadId: "thread-old",
-          preserveNativeModel: true,
-        });
-        expect(compact).not.toHaveBeenCalled();
-        return;
-      }
-      try {
-        await Promise.race([
-          freshTurnStarted.promise,
-          run.then((result) => {
-            throw new Error("Codex attempt settled before fresh turn/start", {
-              cause: readAttemptTerminal(result),
-            });
-          }),
-        ]);
-        expect(harness.requests.map((request) => request.method)).toEqual([
-          "config/read",
-          "configRequirements/read",
-          "thread/read",
-          "thread/resume",
-          "thread/inject_items",
-          "turn/start",
-          "config/read",
-          "configRequirements/read",
-          "thread/start",
-          "turn/start",
-        ]);
-        await harness.notify({
-          method: "turn/completed",
-          params: {
-            threadId: "thread-fresh",
-            turnId: "turn-fresh",
-            turn: {
-              id: "turn-fresh",
-              status: "completed",
-              items: [{ type: "agentMessage", id: "msg-1", text: "fresh answer" }],
+  it.each([
+    { nativeOwned: false, revokeAfterBirth: false },
+    { nativeOwned: true, revokeAfterBirth: false },
+    { nativeOwned: false, revokeAfterBirth: true },
+  ])(
+    "retries resumed context overflow only with host model ownership (expected native: $nativeOwned, revoked after birth: $revokeAfterBirth)",
+    async ({ nativeOwned, revokeAfterBirth }) => {
+      await withOpenClawTestState(
+        { label: "codex-overflow-binding-birth", layout: "state-only", applyEnv: false },
+        async (fixture) => {
+          const sessionFile = path.join(tempDir, "session.jsonl");
+          const workspaceDir = path.join(tempDir, "workspace");
+          openFileBackedSessionManagerForTest(sessionFile, {
+            sessionId: "session-1",
+          }).appendMessage(assistantMessage("pre-compaction context", 10) as never);
+          const params = createParams(sessionFile, workspaceDir);
+          const identity = {
+            kind: "session" as const,
+            agentId: "main",
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+          };
+          const stateStore = createCodexSqliteTestBindingStateStore({
+            namespace: "overflow-context-bootstrap",
+            maxEntries: 10,
+            overflowPolicy: "reject-new",
+            env: fixture.env,
+          });
+          const bindingStore = createCodexAppServerBindingStore(stateStore);
+          const nativeModel = threadStartResult("thread-old");
+          const contextEnginePolicyFingerprint =
+            '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}';
+          await bindingStore.mutate(identity, {
+            kind: "set",
+            binding: {
+              threadId: "thread-old",
+              cwd: workspaceDir,
+              dynamicToolsFingerprint: "[]",
+              webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
+              ...(nativeOwned
+                ? {
+                    preserveNativeModel: true,
+                    model: nativeModel.model,
+                    modelProvider: nativeModel.modelProvider,
+                  }
+                : {}),
+              contextEngine: {
+                schemaVersion: 1,
+                engineId: "lossless-claw",
+                policyFingerprint: contextEnginePolicyFingerprint,
+                projection: {
+                  schemaVersion: 1,
+                  mode: "thread_bootstrap",
+                  epoch: "epoch-before",
+                },
+              },
             },
-          },
-        });
-        const result = await run;
-
-        expect(result.assistantTexts).toContain("fresh answer");
-        expect(compact).not.toHaveBeenCalled();
-        expect(assemble).toHaveBeenCalledTimes(1);
-        const retryInputText = getRequestInputTextAt(harness, -1);
-        expect(retryInputText).toBe("hello");
-        expect(retryInputText).not.toContain("successor compacted context");
-        const savedBinding = await readCodexAppServerBinding(sessionFile);
-        expect(savedBinding?.threadId).toBe("thread-fresh");
-        expect(savedBinding?.contextEngine?.engineId).toBe("lossless-claw");
-        expect(savedBinding?.contextEngine?.projection).toBeUndefined();
-      } finally {
-        await harness.client.closeAndWait();
-        await run.catch(() => undefined);
-      }
+          });
+          const compact = vi.fn(async () => ({
+            ok: true,
+            compacted: true,
+            result: {
+              summary: "summary",
+              firstKeptEntryId: "entry-1",
+              tokensBefore: 10,
+              sessionId: "session-1-compacted",
+            },
+          }));
+          const assemble = vi.fn(
+            async ({ messages, prompt }: Parameters<ContextEngine["assemble"]>[0]) => ({
+              messages: [
+                ...messages,
+                assistantMessage("context epoch-before", 10),
+                userMessage(prompt ?? "", 11),
+              ],
+              estimatedTokens: 42,
+              systemPromptAddition: "context-engine system",
+              contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-before" },
+            }),
+          );
+          params.contextEngine = createContextEngine({ assemble, compact });
+          params.contextTokenBudget = 400_000;
+          const revoked = new Error("overflow host authority revoked after fresh binding commit");
+          const originalAssertActive = params.hostCapabilities.assertActive;
+          let hostActive = true;
+          params.hostCapabilities = {
+            ...params.hostCapabilities,
+            assertActive() {
+              originalAssertActive();
+              if (!hostActive) {
+                throw revoked;
+              }
+            },
+          };
+          if (nativeOwned) {
+            params.expectedSessionRuntimeOwnership = {
+              model: "native",
+              auth: "host",
+              modelRef: { model: nativeModel.model, provider: nativeModel.modelProvider },
+            };
+          }
+          const bornBindings: NonNullable<ReturnType<typeof bindingStore.read>>[] = [];
+          const mutationsAfterBirth: Parameters<typeof bindingStore.mutate>[1][] = [];
+          const observedMutate: typeof bindingStore.mutate = async (...args) => {
+            if (bornBindings.length > 0) {
+              mutationsAfterBirth.push(structuredClone(args[1]));
+            }
+            const changed = await bindingStore.mutate(...args);
+            const stored = bindingStore.read(identity);
+            if (changed && bornBindings.length === 0 && stored?.threadId === "thread-fresh") {
+              // Observe the real committed row before lifecycle publication or later repair.
+              bornBindings.push(structuredClone(stored));
+              if (revokeAfterBirth) {
+                hostActive = false;
+              }
+            }
+            return changed;
+          };
+          const freshTurnStarted = createDeferred<void>();
+          const harness = createStartedThreadHarness(
+            async (method, requestParams) => {
+              if (method === "thread/resume") {
+                return threadStartResult("thread-old");
+              }
+              if (method === "thread/start") {
+                return threadStartResult("thread-fresh");
+              }
+              if (method === "turn/start") {
+                const request = requireRecord(requestParams, `${method} params`);
+                if (request.threadId === "thread-old") {
+                  throw new Error("Codex ran out of room in the model's context window");
+                }
+                if (request.threadId === "thread-fresh") {
+                  freshTurnStarted.resolve();
+                  return turnStartResult("turn-fresh");
+                }
+              }
+              return undefined;
+            },
+            { persistedThreads: ["thread-old"] },
+          );
+          const run = runCodexAppServerAttempt(params, {
+            bindingStore: { ...bindingStore, mutate: observedMutate },
+          });
+          try {
+            if (nativeOwned) {
+              await expect(run).rejects.toMatchObject({ name: "AgentHarnessPreflightError" });
+              expect(harness.requests.some(({ method }) => method === "thread/start")).toBe(false);
+              expect(bindingStore.read(identity)).toMatchObject({
+                threadId: "thread-old",
+                preserveNativeModel: true,
+              });
+              expect(bornBindings).toEqual([]);
+              expect(compact).not.toHaveBeenCalled();
+              return;
+            }
+            if (revokeAfterBirth) {
+              await expect(run).rejects.toBe(revoked);
+              expect(
+                harness.requests.filter(({ method }) => method === "thread/start"),
+              ).toHaveLength(1);
+              expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(
+                1,
+              );
+              expect(getRequestInputTextAt(harness, -1)).toBe("hello");
+            } else {
+              await Promise.race([
+                freshTurnStarted.promise,
+                run.then((result) => {
+                  throw new Error("Codex attempt settled before fresh turn/start", {
+                    cause: readAttemptTerminal(result),
+                  });
+                }),
+              ]);
+              expect(harness.requests.map((request) => request.method)).toEqual([
+                "config/read",
+                "configRequirements/read",
+                "thread/read",
+                "thread/resume",
+                "thread/inject_items",
+                "turn/start",
+                "config/read",
+                "configRequirements/read",
+                "thread/start",
+                "turn/start",
+              ]);
+              await harness.notify({
+                method: "turn/completed",
+                params: {
+                  threadId: "thread-fresh",
+                  turnId: "turn-fresh",
+                  turn: {
+                    id: "turn-fresh",
+                    status: "completed",
+                    items: [{ type: "agentMessage", id: "msg-1", text: "fresh answer" }],
+                  },
+                },
+              });
+              const result = await run;
+              expect(result.assistantTexts).toContain("fresh answer");
+              expect(getRequestInputTextAt(harness, -1)).toBe("hello");
+            }
+            expect(compact).not.toHaveBeenCalled();
+            expect(assemble).toHaveBeenCalledTimes(1);
+            expect(bornBindings).toHaveLength(1);
+            expect(bornBindings[0]).toMatchObject({
+              threadId: "thread-fresh",
+              contextEngine: {
+                engineId: "lossless-claw",
+                policyFingerprint: contextEnginePolicyFingerprint,
+              },
+            });
+            expect(bornBindings[0]?.contextEngine?.projection).toBeUndefined();
+            expect(mutationsAfterBirth).toEqual(
+              revokeAfterBirth
+                ? []
+                : [
+                    {
+                      kind: "patch",
+                      threadId: "thread-fresh",
+                      patch: { historyCoveredThrough: expect.any(String) },
+                    },
+                  ],
+            );
+            const savedBinding = bindingStore.read(identity);
+            expect(savedBinding?.threadId).toBe("thread-fresh");
+            expect(savedBinding?.contextEngine?.engineId).toBe("lossless-claw");
+            expect(savedBinding?.contextEngine?.projection).toBeUndefined();
+          } finally {
+            await harness.client.closeAndWait();
+            await run.catch(() => undefined);
+          }
+        },
+      );
     },
   );
 
