@@ -22,7 +22,7 @@ import {
   type OpenClawStateDatabase,
 } from "./openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.capture.js";
 
 /** Bind periodic maintenance and its observations to the cache's exact native owner. */
 export function createStateDatabaseWalOwner(
@@ -34,7 +34,10 @@ export function createStateDatabaseWalOwner(
       if (!isMainThread) {
         return;
       }
-      const context = captureOpenClawStateWorkerContext({ path: database.path });
+      const context = captureOpenClawStateWorkerContext(
+        { path: database.path },
+        asyncResources.capture,
+      );
       const controller = new AbortController();
       let pending: Promise<SqliteWalPeriodicResult | undefined> | undefined;
       const assertCurrent = () => {
