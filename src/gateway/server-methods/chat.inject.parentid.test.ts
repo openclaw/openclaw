@@ -30,11 +30,24 @@ async function createSqliteTranscriptFixture(params: {
   const sessionKey = "main";
   const agentId = "main";
   const storePath = path.join(dir, "sessions.json");
-  await replaceSessionEntry(
-    { agentId, sessionKey, storePath },
-    { sessionId: params.sessionId, updatedAt: Date.now() },
-  );
-  return { agentId, dir, sessionKey, sessionId: params.sessionId, storePath };
+  try {
+    await replaceSessionEntry(
+      { agentId, sessionKey, storePath },
+      { sessionId: params.sessionId, updatedAt: Date.now() },
+    );
+    return { agentId, dir, sessionKey, sessionId: params.sessionId, storePath };
+  } catch (setupError) {
+    try {
+      await cleanupFixture({ dir });
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [setupError, cleanupError],
+        "Transcript fixture setup and cleanup failed",
+        { cause: setupError },
+      );
+    }
+    throw setupError;
+  }
 }
 
 async function cleanupFixture(fixture: { dir: string }) {
@@ -213,7 +226,6 @@ describe("gateway chat.inject transcript writes", () => {
       const last = (await readLastTranscriptRecord(fixture)) as { message?: unknown };
       expect(JSON.stringify(last.message)).not.toContain(fakeApiKey);
       expect(updates[0]?.message).toEqual(last.message);
-      expect(JSON.stringify(updates[0]?.message)).not.toContain(fakeApiKey);
     } finally {
       unsubscribe();
       await cleanupFixture(fixture);
