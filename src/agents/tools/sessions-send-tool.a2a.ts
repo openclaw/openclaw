@@ -110,6 +110,7 @@ export async function runSessionsSendA2AFlow(params: {
   announceTimeoutMs: number;
   maxPingPongTurns: number;
   replyMode?: "peer" | "one-way";
+  requesterName?: string;
   requesterSessionKey?: string;
   requesterAgentId?: string;
   requesterSession?: AgentStepSession;
@@ -307,6 +308,7 @@ export async function runSessionsSendA2AFlow(params: {
         const current = turn % 2 === 1 ? requester : target;
         const source = turn % 2 === 1 ? target : requester;
         const replyPrompt = buildAgentToAgentReplyContext({
+          requesterName: params.requesterName,
           requesterSessionKey: params.requesterSessionKey,
           requesterChannel: params.requesterChannel,
           targetSessionKey: params.displayKey,
@@ -341,6 +343,7 @@ export async function runSessionsSendA2AFlow(params: {
     }
 
     const announcePrompt = buildAgentToAgentAnnounceContext({
+      requesterName: params.requesterName,
       requesterSessionKey: params.requesterSessionKey,
       requesterChannel: params.requesterChannel,
       targetSessionKey: params.displayKey,
