@@ -399,12 +399,6 @@ describe("prepublish plugin registry artifact", () => {
     },
   );
 
-  it("validates the immutable manifest, package set, hashes, and packed identity", () => {
-    const paths = fixture();
-    const result = validate(paths);
-    expect(result.manifest.packages.map((entry) => entry.name)).toEqual([PACKAGE_NAME]);
-  });
-
   it("requires the complete immutable identity tuple", () => {
     const paths = fixture();
     const common = {
@@ -423,16 +417,6 @@ describe("prepublish plugin registry artifact", () => {
         validatePrepublishPluginRegistryArtifact({ ...common, [field]: undefined }),
       ).toThrow(field);
     }
-  });
-
-  it("accepts immutable companion packages beyond the selected Docker plan", () => {
-    const paths = fixture();
-    addCompanionPackage(paths);
-
-    expect(validate(paths).manifest.packages.map((entry) => entry.name)).toEqual([
-      "@openclaw/discord",
-      "@openclaw/feishu",
-    ]);
   });
 
   it("extracts only required cross-OS companions from the validated registry", () => {

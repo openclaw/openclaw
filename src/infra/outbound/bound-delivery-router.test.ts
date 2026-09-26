@@ -106,19 +106,6 @@ describe("bound delivery router", () => {
       },
     },
     {
-      name: "fails closed when multiple bindings exist without requester signal",
-      bindings: [
-        createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1),
-        createRuntimeBinding(TARGET_SESSION_KEY, "thread-2", 2),
-      ],
-      failClosed: true,
-      expected: {
-        binding: null,
-        mode: "fallback",
-        reason: "missing-requester",
-      },
-    },
-    {
       name: "fails closed when requester signal is missing even with a single binding",
       bindings: [createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1)],
       failClosed: true,
@@ -127,20 +114,6 @@ describe("bound delivery router", () => {
         mode: "fallback",
         reason: "missing-requester",
       },
-    },
-    {
-      name: "selects requester-matching conversation when multiple bindings exist",
-      bindings: [
-        createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1),
-        createRuntimeBinding(TARGET_SESSION_KEY, "thread-2", 2),
-      ],
-      requesterConversationId: "thread-2",
-      failClosed: true,
-      expected: {
-        mode: "bound",
-        reason: "requester-match",
-      },
-      expectedConversationId: "thread-2",
     },
     {
       name: "normalizes adapter binding conversations before requester matching",

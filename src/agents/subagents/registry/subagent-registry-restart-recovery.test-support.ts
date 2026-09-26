@@ -10,6 +10,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const mocks = vi.hoisted(() => ({
   entries: {} as Record<string, SessionEntry>,
+  storePath: "/tmp/openclaw-subagent-recovery/agents/main/sessions/sessions.json",
   loadSessionEntry: vi.fn(),
   patchSessionEntryCore: vi.fn(),
 }));
@@ -19,7 +20,7 @@ vi.mock("../../../config/config.js", () => ({
 }));
 vi.mock("../../../config/sessions.js", () => ({
   resolveAgentIdFromSessionKey: () => "main",
-  resolveSessionStorePathCore: () => "/tmp/subagent-recovery.sqlite",
+  resolveSessionStorePathCore: () => mocks.storePath,
 }));
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,
@@ -75,6 +76,7 @@ export const restartRecoveryTestHarness = {
   recover,
   reset() {
     vi.clearAllMocks();
+    mocks.storePath = "/tmp/openclaw-subagent-recovery/agents/main/sessions/sessions.json";
     mocks.entries = {
       [childSessionKey]: {
         sessionId: "session-id",

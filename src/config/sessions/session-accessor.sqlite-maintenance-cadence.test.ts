@@ -21,8 +21,13 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import * as ageFacts from "./session-accessor.sqlite-maintenance-age.js";
 import * as candidates from "./session-accessor.sqlite-maintenance-candidates.js";
+import {
+  prepareSessionMaintenanceInWorker,
+  reclaimSessionMaintenanceInTransaction,
+} from "./session-accessor.sqlite-maintenance-transaction.js";
 import { applySessionEntryMaintenance } from "./session-accessor.sqlite-maintenance.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
+import { createSessionMaintenancePlanningOperation } from "./session-accessor.sqlite-reclamation.js";
 import { commitSessionEntryReplacementsInDatabase } from "./session-accessor.sqlite-replacement-state.js";
 import { captureSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import * as maintenanceRuntime from "./store-maintenance-runtime.js";
@@ -334,7 +339,7 @@ it("keeps an age boundary due when it passes between planning and recording the 
   const record = ageFacts.recordSessionEntryMaintenanceAgeFact;
   vi.spyOn(ageFacts, "recordSessionEntryMaintenanceAgeFact").mockImplementationOnce((...args) => {
     vi.setSystemTime(now + 1_001);
-    record(...args);
+    return record(...args);
   });
   renameEntry(storePath, 0, "boundary passed during planning");
   expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.archivedAt).toBeUndefined();
@@ -516,3 +521,59 @@ it.each([
     Math.min(expected[scenario], now + ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS),
   );
 });
+
+it.each([false, true])(
+  "discards a prepared maintenance snapshot after a write (foreign: %s)",
+  (foreign) => {
+    const { database, options, storePath } = createStore(1, Date.now() - 31 * DAY_MS);
+    const operation = createSessionMaintenancePlanningOperation({
+      databaseOptions: options,
+      input: {
+        maintenance: resolveMaintenanceConfigFromInput(),
+        storePath,
+        archiveDirectory: path.join(path.dirname(storePath), "archives"),
+        preservation: captureSessionMaintenancePreservation(storePath),
+      },
+    });
+    const prepared = prepareSessionMaintenanceInWorker(operation);
+    const writer = foreign ? new DatabaseSync(database.path) : database.db;
+    try {
+      expect(database.db.isTransaction).toBe(false);
+      // A write can finish after preparation and before maintenance enters its writer.
+      if (foreign) {
+        writer.exec("CREATE TABLE maintenance_revision_noise (value INTEGER)");
+      } else {
+        writeSessionEntry(database, key(0), {
+          sessionId: "cadence-0",
+          updatedAt: Date.now() - 31 * DAY_MS,
+          label: "newer",
+        });
+      }
+      expect(reclaimSessionMaintenanceInTransaction(operation, {}, prepared)).toEqual({
+        kind: "maintenance-plan-stale",
+      });
+      expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.label).toBe(
+        foreign ? undefined : "newer",
+      );
+      expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.archivedAt).toBeUndefined();
+    } finally {
+      prepared.release();
+      if (foreign) {
+        writer.close();
+      }
+    }
+    const fresh = prepareSessionMaintenanceInWorker(operation);
+    try {
+      expect(reclaimSessionMaintenanceInTransaction(operation, {}, fresh)).toMatchObject({
+        kind: "maintenance-plan",
+        value: { archived: 1 },
+      });
+      expect(loadSessionEntry({ storePath, sessionKey: key(0) })).toMatchObject({
+        ...(foreign ? {} : { label: "newer" }),
+        archiveReason: "age-retention",
+      });
+    } finally {
+      fresh.release();
+    }
+  },
+);

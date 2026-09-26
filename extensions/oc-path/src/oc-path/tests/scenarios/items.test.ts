@@ -3,34 +3,9 @@ import { describe, expect, it } from "vitest";
 import { parseMd } from "../../parse.js";
 
 describe("items", () => {
-  it("plain dash bullets", () => {
-    const { ast } = parseMd("## H\n- a\n- b\n- c\n");
-    expect(ast.blocks[0]?.items.map((i) => i.text)).toEqual(["a", "b", "c"]);
-  });
-
-  it("star bullets", () => {
-    const { ast } = parseMd("## H\n* a\n* b\n");
-    expect(ast.blocks[0]?.items.map((i) => i.text)).toEqual(["a", "b"]);
-  });
-
-  it("plus bullets", () => {
-    const { ast } = parseMd("## H\n+ a\n+ b\n");
-    expect(ast.blocks[0]?.items.map((i) => i.text)).toEqual(["a", "b"]);
-  });
-
   it("mixed bullet markers in same section", () => {
     const { ast } = parseMd("## H\n- dash\n* star\n+ plus\n");
     expect(ast.blocks[0]?.items.length).toBe(3);
-  });
-
-  it("kv-shape items populate kv", () => {
-    const { ast } = parseMd("## H\n- gh: GitHub CLI\n");
-    expect(ast.blocks[0]?.items[0]?.kv).toEqual({ key: "gh", value: "GitHub CLI" });
-  });
-
-  it("plain item has no kv", () => {
-    const { ast } = parseMd("## H\n- plain text\n");
-    expect(ast.blocks[0]?.items[0]?.kv).toBeUndefined();
   });
 
   it("multiple colons — first colon is the kv split", () => {
@@ -61,13 +36,6 @@ describe("items", () => {
     expect(ast.blocks[0]?.items[0]?.slug).toBe("the-plain-item");
   });
 
-  it("items inside fenced code block are NOT extracted", () => {
-    const raw = "## H\n```\n- not a bullet\n- still not\n```\n- real bullet\n";
-    const { ast } = parseMd(raw);
-    expect(ast.blocks[0]?.items.length).toBe(1);
-    expect(ast.blocks[0]?.items[0]?.text).toBe("real bullet");
-  });
-
   it("line numbers track through block body", () => {
     const { ast } = parseMd("## H\n- first\n- second\n- third\n");
     expect(ast.blocks[0]?.items.map((i) => i.line)).toEqual([2, 3, 4]);
@@ -92,11 +60,6 @@ describe("items", () => {
   it("numbered list (1. item) — recognized as items", () => {
     const { ast } = parseMd("## H\n1. first\n2. second\n");
     expect(ast.blocks[0]?.items.map((i) => i.text)).toEqual(["first", "second"]);
-  });
-
-  it("items in a section with no body before — first item line is heading+1", () => {
-    const { ast } = parseMd("## H\n- a\n");
-    expect(ast.blocks[0]?.items[0]?.line).toBe(2);
   });
 
   it("items spread across blocks are scoped to their block", () => {

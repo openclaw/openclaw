@@ -266,6 +266,12 @@ async function runPendingMaintenance(
       );
       result = await runPlanning();
     }
+    if (result.kind === "maintenance-plan-stale") {
+      planningChanged = true;
+      throw new SqliteReclamationInputsChangedError(
+        "SQLite maintenance snapshot changed before commit",
+      );
+    }
     if (result.kind !== "maintenance-plan") {
       throw new Error("SQLite automatic maintenance returned another operation's result");
     }

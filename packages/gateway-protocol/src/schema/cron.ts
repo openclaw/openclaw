@@ -465,6 +465,9 @@ export const CronJobStateSchema = closedObject({
   lastErrorReason: Type.Optional(FailoverReasonSchema),
   lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
   consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
+  // Report-only schedule-computation error counter behind auto-disable;
+  // callers cannot patch this field.
+  scheduleErrorCount: Type.Optional(Type.Integer({ minimum: 0 })),
   // Report-only scheduler ownership fact; callers cannot patch this field.
   autoDisabled: Type.Optional(CronAutoDisabledSchema),
   consecutiveSkipped: Type.Optional(Type.Integer({ minimum: 0 })),

@@ -219,10 +219,6 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
         self.statusHandler?(snapshot)
     }
 
-    private func emitExecApprovalResolve(_ event: WatchExecApprovalResolveEvent) {
-        self.execApprovalResolveHandler?(event)
-    }
-
     private func emitExecApprovalSnapshotRequest(_ event: WatchExecApprovalSnapshotRequestEvent) {
         GatewayDiagnostics.log(
             "watch messaging: snapshot request "
@@ -288,7 +284,7 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
         case .chatDeliveryCommand, .chatDeliveryReceiptAck, .legacyChat:
             preconditionFailure("Durable Watch delivery must not enter the startup buffer")
         case let .execApprovalResolve(event):
-            self.emitExecApprovalResolve(event)
+            self.execApprovalResolveHandler?(event)
         case let .execApprovalSnapshotRequest(event):
             self.emitExecApprovalSnapshotRequest(event)
         case let .appSnapshotRequest(event):

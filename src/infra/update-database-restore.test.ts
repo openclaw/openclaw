@@ -26,9 +26,20 @@ import { createUpdateDatabaseBackupInProcess } from "./update-database-backup.js
 import { restoreUpdateDatabaseBackup } from "./update-database-restore.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunPhase } from "./update-run-ledger.js";
 
-async function createRestoreFixture(state: OpenClawTestState, linked = false) {
+async function createRestoreFixture(
+  state: OpenClawTestState,
+  linked: boolean | "existing" = false,
+) {
   const shared = openOpenClawStateDatabase({ env: state.env });
   let agentDirectory = state.agentDir();
+  const canonicalAgent =
+    linked === "existing"
+      ? openOpenClawAgentDatabase({
+          agentId: "main",
+          path: path.join(agentDirectory, "openclaw-agent.sqlite"),
+          env: state.env,
+        })
+      : undefined;
   if (linked) {
     await fs.mkdir(agentDirectory, { recursive: true });
     const alias = state.path("linked-agent");
@@ -69,6 +80,7 @@ async function createRestoreFixture(state: OpenClawTestState, linked = false) {
     state,
     shared,
     agent,
+    canonicalAgent,
     run,
     backup,
     restore: (assertCurrent: () => void = () => undefined) =>
@@ -82,7 +94,10 @@ async function createRestoreFixture(state: OpenClawTestState, linked = false) {
 
 type RestoreFixture = Awaited<ReturnType<typeof createRestoreFixture>>;
 
-function withFixture(run: (fixture: RestoreFixture) => Promise<void>, linked = false) {
+function withFixture(
+  run: (fixture: RestoreFixture) => Promise<void>,
+  linked: boolean | "existing" = false,
+) {
   return withOpenClawTestState(
     { layout: "state-only", prefix: "update-database-restore-", scenario: "minimal" },
     async (state) => run(await createRestoreFixture(state, linked)),
@@ -112,7 +127,7 @@ async function unchangedFiles(fixture: RestoreFixture) {
   };
 }
 
-it.each([false, true])(
+it.each([false, true, "existing"] as const)(
   "retires cached and worker owners before restoring data (linked=%s)",
   async (linked) => {
     await withFixture(async (fixture) => {
@@ -127,6 +142,9 @@ it.each([false, true])(
       const displaced = await fixture.restore();
       expect(fixture.shared.db.isOpen).toBe(false);
       expect(fixture.agent.db.isOpen).toBe(false);
+      if (fixture.canonicalAgent) {
+        expect(fixture.canonicalAgent.db.isOpen).toBe(false);
+      }
       expect(displaced).toEqual(
         expect.arrayContaining(
           fixture.backup.databases.map(

@@ -280,27 +280,6 @@ struct TailscaleIntegrationSection: View {
         }
     }
 
-    @MainActor
-    private static func buildAndSaveTailscaleConfig(
-        tailscaleMode: GatewayTailscaleMode,
-        requireCredentialsForServe: Bool,
-        password: String) async -> (Bool, String?)
-    {
-        let settings = GatewayTailscaleSettingsSnapshot(
-            mode: tailscaleMode,
-            requireCredentialsForServe: requireCredentialsForServe,
-            password: password)
-        var document = await ConfigStore.load()
-        document.root = self.buildTailscaleConfigRoot(root: document.root, settings: settings)
-
-        do {
-            try await ConfigStore.save(document, allowGatewayAuthMutation: true)
-            return (true, nil)
-        } catch {
-            return (false, error.localizedDescription)
-        }
-    }
-
     private static func buildTailscaleConfigRoot(
         root originalRoot: [String: Any],
         settings: GatewayTailscaleSettingsSnapshot) -> [String: Any]
@@ -329,18 +308,10 @@ struct TailscaleIntegrationSection: View {
                 auth["password"] = settings.password
             }
 
-            if auth.isEmpty {
-                gateway.removeValue(forKey: "auth")
-            } else {
-                gateway["auth"] = auth
-            }
+            gateway["auth"] = auth
         }
 
-        if gateway.isEmpty {
-            root.removeValue(forKey: "gateway")
-        } else {
-            root["gateway"] = gateway
-        }
+        root["gateway"] = gateway
 
         return root
     }
@@ -354,7 +325,7 @@ struct TailscaleIntegrationSection: View {
         GatewayTailscaleSettingsSnapshot(
             mode: self.tailscaleMode,
             requireCredentialsForServe: self.requireCredentialsForServe,
-            password: self.password.trimmingCharacters(in: .whitespacesAndNewlines))
+            password: self.password)
     }
 
     private static func loadedSettings(from root: [String: Any]) -> GatewayTailscaleLoadedSettings {
@@ -471,10 +442,14 @@ struct TailscaleIntegrationSection: View {
         guard connectionMode == .local, AppStateStore.shared.connectionMode == .local else {
             return (false, "Local mode required. Update settings on the gateway host.")
         }
-        return await self.buildAndSaveTailscaleConfig(
-            tailscaleMode: settings.mode,
-            requireCredentialsForServe: settings.requireCredentialsForServe,
-            password: settings.password)
+        var document = await ConfigStore.load()
+        document.root = self.buildTailscaleConfigRoot(root: document.root, settings: settings)
+        do {
+            try await ConfigStore.save(document, allowGatewayAuthMutation: true)
+            return (true, nil)
+        } catch {
+            return (false, error.localizedDescription)
+        }
     }
 }
 

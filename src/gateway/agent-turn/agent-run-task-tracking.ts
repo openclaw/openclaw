@@ -1,6 +1,15 @@
 /** Prepares Gateway task tracking without competing with the registry's task owner. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import {
+  readFollowupRequest,
+  readFollowupSuccessor,
+  SessionFollowupCompletion,
+} from "../../agents/subagents/completion/session-followup-completion.js";
+import type {
+  FollowupCompletionOwner,
+  FollowupSuccessor,
+} from "../../agents/subagents/completion/session-followup-completion.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -15,14 +24,9 @@ import {
 } from "../../tasks/detached-task-runtime.js";
 import { findTaskViewByRunIdAsync } from "../../tasks/runtime-internal.js";
 import {
-  readFollowupRequest,
-  readFollowupSuccessor,
-  TaskFollowupCompletion,
-} from "../../tasks/task-followup-completion.js";
-import type {
-  FollowupCompletionOwner,
-  FollowupSuccessor,
-} from "../../tasks/task-followup-completion.types.js";
+  bindFollowupTaskProjection,
+  projectFollowupTaskTerminal,
+} from "../../tasks/task-followup-projection.js";
 import { mapAgentRunTerminalOutcomeToTaskStatus } from "../../tasks/task-registry-common.js";
 import { isTerminalTaskStatus, type TaskRecord } from "../../tasks/task-registry.types.js";
 import { getTaskRunOwner } from "../../tasks/task-run-owner.js";
@@ -103,11 +107,14 @@ export async function registerSessionFollowupTask(params: {
       }
       try {
         params.assertCurrent();
-        const completion = await TaskFollowupCompletion.bind(
-          request,
-          receipt,
-          params.assertCurrent,
-        );
+        const completion = SessionFollowupCompletion.bind(request, params.assertCurrent);
+        try {
+          await bindFollowupTaskProjection(completion, receipt, params.assertCurrent);
+        } catch (error) {
+          completion.close(error);
+          throw error;
+        }
+        request.completion = completion;
         return { kind: "receipt", ...receipt, completion };
       } catch (error) {
         await receipt.settleUnstarted(
@@ -153,19 +160,27 @@ export async function settleUnstartedGatewayAgentTask(params: {
       // synchronously adopted at final admission owns this outcome.
       if (tracking.completion.ownsExecution(params.runId)) {
         tracking.completion.assertCurrent();
-        await tracking.completion.settle(
+        const assertAdmissionCurrent = () => {
+          const current = params.context.chatAbortControllers.get(params.runId);
+          if (current && current !== params.admittedRunEntry) {
+            throw new Error("Follow-up admission was replaced before cleanup.");
+          }
+        };
+        const decision = await tracking.completion.settle(
           params.runId,
           {
             ...params.outcome,
             endedAt: terminal.endedAt,
           },
-          () => {
-            const current = params.context.chatAbortControllers.get(params.runId);
-            if (current && current !== params.admittedRunEntry) {
-              throw new Error("Follow-up admission was replaced before cleanup.");
-            }
-          },
+          assertAdmissionCurrent,
         );
+        if (decision.kind === "terminal") {
+          await projectFollowupTaskTerminal(
+            tracking.completion,
+            decision.reply,
+            assertAdmissionCurrent,
+          );
+        }
       } else if (
         !tracking.completion.accepted &&
         tracking.completion.request.runId === params.runId
@@ -187,6 +202,9 @@ export async function settleUnstartedGatewayAgentTask(params: {
       });
     }
   } catch (error) {
+    if (tracking.kind === "receipt") {
+      tracking.completion?.close(error);
+    }
     params.context.logGateway.warn(
       `failed to settle unstarted follow-up task ${tracking.task.taskId}: ${formatForLog(error)}`,
     );

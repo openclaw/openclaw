@@ -133,21 +133,12 @@ export async function consumeGoogleGenerateContentStream(params: {
     if (!currentBlock) {
       return;
     }
-    if (currentBlock.type === "text") {
-      params.stream.push({
-        type: "text_end",
-        contentIndex: blockIndex(),
-        content: currentBlock.text,
-        partial: params.output,
-      });
-    } else {
-      params.stream.push({
-        type: "thinking_end",
-        contentIndex: blockIndex(),
-        content: currentBlock.thinking,
-        partial: params.output,
-      });
-    }
+    params.stream.push({
+      type: currentBlock.type === "text" ? "text_end" : "thinking_end",
+      contentIndex: blockIndex(),
+      content: currentBlock.type === "text" ? currentBlock.text : currentBlock.thinking,
+      partial: params.output,
+    });
     currentBlock = null;
   };
 
@@ -271,27 +262,19 @@ export async function consumeGoogleGenerateContentStream(params: {
             (!isThinking && currentBlock.type !== "text")
           ) {
             endCurrentBlock();
-            if (isThinking) {
-              currentBlock = {
-                type: "thinking",
-                thinking: "",
-                ...(preserveParts ? { thinkingSignature: undefined } : {}),
-              };
-              params.output.content.push(currentBlock);
-              params.stream.push({
-                type: "thinking_start",
-                contentIndex: blockIndex(),
-                partial: params.output,
-              });
-            } else {
-              currentBlock = { type: "text", text: "" };
-              params.output.content.push(currentBlock);
-              params.stream.push({
-                type: "text_start",
-                contentIndex: blockIndex(),
-                partial: params.output,
-              });
-            }
+            currentBlock = isThinking
+              ? {
+                  type: "thinking",
+                  thinking: "",
+                  ...(preserveParts ? { thinkingSignature: undefined } : {}),
+                }
+              : { type: "text", text: "" };
+            params.output.content.push(currentBlock);
+            params.stream.push({
+              type: isThinking ? "thinking_start" : "text_start",
+              contentIndex: blockIndex(),
+              partial: params.output,
+            });
           }
           const delta = hasText ? text : "";
           if (currentBlock.type === "thinking") {
@@ -300,25 +283,19 @@ export async function consumeGoogleGenerateContentStream(params: {
               currentBlock.thinkingSignature,
               part.thoughtSignature,
             );
-            params.stream.push({
-              type: "thinking_delta",
-              contentIndex: blockIndex(),
-              delta,
-              partial: params.output,
-            });
           } else {
             currentBlock.text += delta;
             currentBlock.textSignature = retainThoughtSignature(
               currentBlock.textSignature,
               part.thoughtSignature,
             );
-            params.stream.push({
-              type: "text_delta",
-              contentIndex: blockIndex(),
-              delta,
-              partial: params.output,
-            });
           }
+          params.stream.push({
+            type: currentBlock.type === "thinking" ? "thinking_delta" : "text_delta",
+            contentIndex: blockIndex(),
+            delta,
+            partial: params.output,
+          });
           if (signatureOnly) {
             endCurrentBlock();
           }

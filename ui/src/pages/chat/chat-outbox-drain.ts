@@ -1,10 +1,5 @@
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
-import type {
-  ChatAttachment,
-  ChatGoalDraftMode,
-  ChatQueueItem,
-  ChatReplyTarget,
-} from "../../lib/chat/chat-types.ts";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import {
   listStoredChatOutboxes,
@@ -44,6 +39,7 @@ import {
   readQueuedMessageById,
   updateQueuedMessage,
 } from "./chat-queue.ts";
+import type { PendingComposerSnapshot } from "./chat-send-composer.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
   chatSendHoldReason,
@@ -56,7 +52,7 @@ import { isChatBusy } from "./run-lifecycle.ts";
 
 export type QueuedChatSendResult = "sent" | "pending" | "failed";
 export type QueuedChatStorageMode = "durable" | "memory";
-export type QueuedChatSendOptions = {
+export type QueuedChatSendOptions = PendingComposerSnapshot & {
   /** Fresh selected-session sends may let the Gateway resolve its effective active-run mode. */
   allowActiveRunSend?: boolean;
   /** Confirmation-triggered sends retain their UI owner across preparation waits. */
@@ -64,11 +60,6 @@ export type QueuedChatSendOptions = {
   /** Exact submit-time leaf; restored drains omit it so intervening advances park the draft. */
   expectedLeafEntryId?: string | null;
   pendingSettings?: Promise<boolean>;
-  previousAttachments?: ChatAttachment[];
-  previousDraft?: string;
-  previousMentions?: ChatQueueItem["mentions"];
-  previousReplyTarget?: ChatReplyTarget | null;
-  previousGoalDraftMode?: ChatGoalDraftMode | null;
   restoreAttachments?: boolean;
   restoreDraft?: boolean;
   /** Recognized remote commands remain editable when the Gateway rejects them. */

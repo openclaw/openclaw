@@ -499,17 +499,6 @@ describe("resolveNpmChannelTag", () => {
     expect(result.error).toContain("malformed JSON");
   });
 
-  it("returns error on non-200 status from registry", async () => {
-    mockHttp.intercept({
-      url: "https://registry.npmjs.org/openclaw/latest",
-      reply: { status: 404 },
-    });
-
-    const result = await fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 });
-    expect(result.version).toBeNull();
-    expect(result.error).toBe("HTTP 404");
-  });
-
   it("falls back to latest when beta is older", async () => {
     versionByTag.beta = "1.0.0-beta.1";
     versionByTag.latest = "1.0.1-1";

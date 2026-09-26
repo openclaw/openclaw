@@ -19,6 +19,7 @@ import {
 import { buildCodexAppApprovalOverrides } from "./plugin-app-approval-overrides.js";
 import {
   readCodexPluginInventory,
+  toCodexPluginOwnedAccountApp,
   type CodexPluginInventory,
   type CodexPluginInventoryDiagnostic,
   type CodexPluginRuntimeRequest,
@@ -33,9 +34,7 @@ import {
   resolveCodexPluginThreadAppCacheKey,
   resolveCodexExplicitAppEnablement,
   resolveCodexPluginAppThreadAdmission,
-  resolveCodexThreadConfigAppsForRecord,
   shouldForceRefreshCodexNotReadyPluginApps,
-  toCodexPluginOwnedAccountApp,
   type CodexPluginThreadAppAdmissionConfig,
   type CodexPluginThreadAppAdmissionDiagnostic,
 } from "./plugin-thread-app-admission.js";
@@ -338,7 +337,7 @@ export async function buildCodexPluginThreadConfig(
       continue;
     }
     pluginAppIds[record.policy.configKey] = [...record.ownedAppIds].toSorted();
-    for (const app of resolveCodexThreadConfigAppsForRecord({ record, inventory })) {
+    for (const app of inventory.appInventory?.state === "missing" ? [] : record.apps) {
       const admission = resolveCodexPluginAppThreadAdmission(app, inventory);
       const admissionConfig = admission === "blocked" ? undefined : await getAdmissionConfig();
       if (

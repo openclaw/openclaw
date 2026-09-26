@@ -3231,9 +3231,6 @@ class NodeRuntime private constructor(
     }
   }
 
-  /** Persists onboarding state; callers decide whether runtime startup is needed first. */
-  fun setOnboardingCompleted(value: Boolean) = prefs.setOnboardingCompleted(value)
-
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val pairedGateways: StateFlow<List<GatewayRegistryEntry>> = prefs.gatewayRegistry.entries
   val activeGatewayStableId: StateFlow<String?> = prefs.gatewayRegistry.activeStableId
@@ -3919,22 +3916,6 @@ class NodeRuntime private constructor(
     if (prefs.locationMode.value == mode) return
     prefs.setLocationMode(mode)
     refreshAcceptedGatewayConnection(refreshOperator = false)
-  }
-
-  fun setManualEnabled(value: Boolean) {
-    prefs.setManualEnabled(value)
-  }
-
-  fun setManualHost(value: String) {
-    prefs.setManualHost(value)
-  }
-
-  fun setManualPort(value: Int) {
-    prefs.setManualPort(value)
-  }
-
-  fun setManualTls(value: Boolean) {
-    prefs.setManualTls(value)
   }
 
   fun grantInstalledAppsDisclosureConsent() {
@@ -9348,7 +9329,7 @@ class NodeRuntime private constructor(
       GatewayChannelsSummary(
         updatedAtMs = root.long("ts"),
         partial = root.boolean("partial"),
-        warnings = parseStringArray(root?.get("warnings") as? JsonArray),
+        warnings = parseGatewayStringArray(root?.get("warnings") as? JsonArray),
         channels = parseChannelSummaries(root),
       )
     }
@@ -9568,20 +9549,20 @@ class NodeRuntime private constructor(
     val parsed =
       proposals?.mapNotNull { item ->
         val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val id = obj.skillWorkshopString("id") ?: return@mapNotNull null
+        val id = obj.nonBlankString("id") ?: return@mapNotNull null
         val previous = previousById[id]
-        val updatedAt = obj.skillWorkshopString("updatedAt").orEmpty()
+        val updatedAt = obj.nonBlankString("updatedAt").orEmpty()
         GatewaySkillWorkshopProposal(
           id = id,
-          kind = obj.skillWorkshopString("kind") ?: "proposal",
-          status = obj.skillWorkshopString("status") ?: "pending",
-          title = obj.skillWorkshopString("title") ?: obj.skillWorkshopString("skillName") ?: id,
-          description = obj.skillWorkshopString("description"),
-          skillName = obj.skillWorkshopString("skillName") ?: id,
-          skillKey = obj.skillWorkshopString("skillKey") ?: id,
-          createdAt = obj.skillWorkshopString("createdAt").orEmpty(),
+          kind = obj.nonBlankString("kind") ?: "proposal",
+          status = obj.nonBlankString("status") ?: "pending",
+          title = obj.nonBlankString("title") ?: obj.nonBlankString("skillName") ?: id,
+          description = obj.nonBlankString("description"),
+          skillName = obj.nonBlankString("skillName") ?: id,
+          skillKey = obj.nonBlankString("skillKey") ?: id,
+          createdAt = obj.nonBlankString("createdAt").orEmpty(),
           updatedAt = updatedAt,
-          scanState = obj.skillWorkshopString("scanState"),
+          scanState = obj.nonBlankString("scanState"),
           content = previous?.content?.takeIf { previous.updatedAt == updatedAt },
           supportFiles = previous?.supportFiles?.takeIf { previous.updatedAt == updatedAt }.orEmpty(),
         )
@@ -9595,20 +9576,7 @@ class NodeRuntime private constructor(
   ): GatewaySkillWorkshopProposal? {
     val source = root ?: return null
     val record = source["record"].asObjectOrNull() ?: return null
-    val id = record.skillWorkshopString("id") ?: previous?.id ?: return null
-    val target = record["target"].asObjectOrNull()
-    val updatedAt = record.skillWorkshopString("updatedAt").orEmpty()
-    return GatewaySkillWorkshopProposal(
-      id = id,
-      kind = record.skillWorkshopString("kind") ?: previous?.kind ?: "proposal",
-      status = record.skillWorkshopString("status") ?: previous?.status ?: "pending",
-      title = record.skillWorkshopString("title") ?: target?.skillWorkshopString("skillName") ?: previous?.title ?: id,
-      description = record.skillWorkshopString("description") ?: previous?.description,
-      skillName = target?.skillWorkshopString("skillName") ?: previous?.skillName ?: id,
-      skillKey = target?.skillWorkshopString("skillKey") ?: previous?.skillKey ?: id,
-      createdAt = record.skillWorkshopString("createdAt") ?: previous?.createdAt.orEmpty(),
-      updatedAt = updatedAt.ifEmpty { previous?.updatedAt.orEmpty() },
-      scanState = record.skillWorkshopString("scanState") ?: previous?.scanState,
+    return parseSkillWorkshopProposalRecord(record, previous)?.copy(
       content = stripSkillWorkshopFrontmatter(source["content"].asStringOrNull().orEmpty()),
       supportFiles = parseSkillWorkshopSupportFiles(source["supportFiles"] as? JsonArray),
     )
@@ -9620,25 +9588,30 @@ class NodeRuntime private constructor(
   ): GatewaySkillWorkshopProposal? {
     val record =
       root?.get("record").asObjectOrNull()
-        ?: root?.takeIf { it.skillWorkshopString("status") != null }
+        ?: root?.takeIf { it.nonBlankString("status") != null }
         ?: return null
-    val id = record.skillWorkshopString("id") ?: previous?.id ?: return null
+    val proposal = parseSkillWorkshopProposalRecord(record, previous) ?: return null
+    return proposal.copy(scanState = record["scan"].asObjectOrNull().nonBlankString("state") ?: proposal.scanState)
+  }
+
+  private fun parseSkillWorkshopProposalRecord(
+    record: JsonObject,
+    previous: GatewaySkillWorkshopProposal?,
+  ): GatewaySkillWorkshopProposal? {
+    val id = record.nonBlankString("id") ?: previous?.id ?: return null
     val target = record["target"].asObjectOrNull()
-    val updatedAt = record.skillWorkshopString("updatedAt").orEmpty()
+    val updatedAt = record.nonBlankString("updatedAt").orEmpty()
     return GatewaySkillWorkshopProposal(
       id = id,
-      kind = record.skillWorkshopString("kind") ?: previous?.kind ?: "proposal",
-      status = record.skillWorkshopString("status") ?: previous?.status ?: "pending",
-      title = record.skillWorkshopString("title") ?: target?.skillWorkshopString("skillName") ?: previous?.title ?: id,
-      description = record.skillWorkshopString("description") ?: previous?.description,
-      skillName = target?.skillWorkshopString("skillName") ?: previous?.skillName ?: id,
-      skillKey = target?.skillWorkshopString("skillKey") ?: previous?.skillKey ?: id,
-      createdAt = record.skillWorkshopString("createdAt") ?: previous?.createdAt.orEmpty(),
+      kind = record.nonBlankString("kind") ?: previous?.kind ?: "proposal",
+      status = record.nonBlankString("status") ?: previous?.status ?: "pending",
+      title = record.nonBlankString("title") ?: target?.nonBlankString("skillName") ?: previous?.title ?: id,
+      description = record.nonBlankString("description") ?: previous?.description,
+      skillName = target?.nonBlankString("skillName") ?: previous?.skillName ?: id,
+      skillKey = target?.nonBlankString("skillKey") ?: previous?.skillKey ?: id,
+      createdAt = record.nonBlankString("createdAt") ?: previous?.createdAt.orEmpty(),
       updatedAt = updatedAt.ifEmpty { previous?.updatedAt.orEmpty() },
-      scanState =
-        record["scan"].asObjectOrNull()?.skillWorkshopString("state")
-          ?: record.skillWorkshopString("scanState")
-          ?: previous?.scanState,
+      scanState = record.nonBlankString("scanState") ?: previous?.scanState,
       content = previous?.content,
       supportFiles = previous?.supportFiles.orEmpty(),
     )
@@ -9648,7 +9621,7 @@ class NodeRuntime private constructor(
     val parsed =
       files?.mapNotNull { item ->
         val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val path = obj.skillWorkshopString("path") ?: return@mapNotNull null
+        val path = obj.nonBlankString("path") ?: return@mapNotNull null
         GatewaySkillWorkshopSupportFile(
           path = path,
           content = obj["content"].asStringOrNull()?.takeIf { it.isNotEmpty() },
@@ -9661,12 +9634,6 @@ class NodeRuntime private constructor(
     val withoutFrontmatter = content.replace(Regex("(?s)^---\\r?\\n.*?\\r?\\n---\\r?\\n?"), "")
     return withoutFrontmatter.trim()
   }
-
-  private fun JsonObject.skillWorkshopString(key: String): String? =
-    get(key)
-      .asStringOrNull()
-      ?.trim()
-      ?.takeIf { it.isNotEmpty() }
 
   private fun skillMissingCount(missing: JsonObject?): Int = listOf("bins", "env", "config", "os").sumOf { key -> (missing?.get(key) as? JsonArray)?.size ?: 0 }
 
@@ -9689,7 +9656,7 @@ class NodeRuntime private constructor(
           browserOrigin = obj["browserOrigin"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
           remoteIp = obj["remoteIp"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
           roles = parseDeviceRoles(obj),
-          scopes = parseStringArray(obj["scopes"] as? JsonArray),
+          scopes = parseGatewayStringArray(obj["scopes"] as? JsonArray),
           requestedAtMs = obj.long("ts"),
           repair = obj.boolean("isRepair"),
         )
@@ -9706,14 +9673,14 @@ class NodeRuntime private constructor(
           displayName = obj["displayName"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
           remoteIp = obj["remoteIp"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
           roles = parseDeviceRoles(obj),
-          scopes = parseStringArray(obj["scopes"] as? JsonArray),
+          scopes = parseGatewayStringArray(obj["scopes"] as? JsonArray),
           tokens = parseDeviceTokens(obj["tokens"] as? JsonArray),
           approvedAtMs = obj.long("approvedAtMs"),
         )
       }.orEmpty()
 
   private fun parseDeviceRoles(device: JsonObject): List<String> {
-    val roles = parseStringArray(device["roles"] as? JsonArray)
+    val roles = parseGatewayStringArray(device["roles"] as? JsonArray)
     if (roles.isNotEmpty()) return roles
     return listOfNotNull(device["role"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() })
   }
@@ -9726,14 +9693,14 @@ class NodeRuntime private constructor(
         if (role.isEmpty()) return@mapNotNull null
         GatewayDeviceTokenSummary(
           role = role,
-          scopes = parseStringArray(obj["scopes"] as? JsonArray),
+          scopes = parseGatewayStringArray(obj["scopes"] as? JsonArray),
           revoked = obj.long("revokedAtMs") != null,
           updatedAtMs = obj.long("rotatedAtMs") ?: obj.long("createdAtMs") ?: obj.long("lastUsedAtMs"),
         )
       }.orEmpty()
 
   private fun parseChannelSummaries(root: JsonObject?): List<GatewayChannelSummary> {
-    val order = parseStringArray(root?.get("channelOrder") as? JsonArray)
+    val order = parseGatewayStringArray(root?.get("channelOrder") as? JsonArray)
     val labels = parseStringMap(root?.get("channelLabels").asObjectOrNull())
     val channels = root?.get("channels").asObjectOrNull()
     val accounts = root?.get("channelAccounts").asObjectOrNull()
@@ -9852,11 +9819,6 @@ class NodeRuntime private constructor(
       .take(4)
   }
 
-  private fun parseStringArray(items: JsonArray?): List<String> =
-    items
-      ?.mapNotNull { item -> item.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } }
-      .orEmpty()
-
   private fun cronScheduleLabel(schedule: JsonObject?): NativeText =
     when (schedule?.get("kind").asStringOrNull()) {
       "at" -> {
@@ -9904,11 +9866,6 @@ class NodeRuntime private constructor(
       if (agentId.isNotEmpty()) return agentId
     }
     return gatewayDefaultAgentId.value?.trim().orEmpty()
-  }
-
-  private fun normalized(value: String?): String? {
-    val trimmed = value?.trim().orEmpty()
-    return trimmed.ifEmpty { null }
   }
 }
 
@@ -10512,32 +10469,14 @@ internal fun sanitizeGatewayLogText(value: String): String =
     .replace(gatewayEscapedAnsiControlPattern, "")
     .replace(gatewayVisibleSgrPattern, "")
 
-private fun JsonObject?.long(key: String): Long? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toLongOrNull()
-
 private fun JsonObject?.double(key: String): Double? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toDoubleOrNull()
 
 private fun JsonObject?.boolean(key: String): Boolean = (this?.get(key) as? JsonPrimitive)?.content?.trim() == "true"
 
-private fun JsonObject?.optionalBoolean(key: String): Boolean? =
-  (this?.get(key) as? JsonPrimitive)?.content?.trim()?.lowercase()?.let { value ->
-    when (value) {
-      "true" -> true
-      "false" -> false
-      else -> null
-    }
-  }
-
 internal fun cronJobLastRunStatus(state: JsonObject?): String? =
   state
-    .cronStatus("lastStatus")
-    ?: state.cronStatus("lastRunStatus")
-
-private fun JsonObject?.cronStatus(key: String): String? =
-  this
-    ?.get(key)
-    .asStringOrNull()
-    ?.trim()
-    ?.takeIf { it.isNotEmpty() }
+    .nonBlankString("lastStatus")
+    ?: state.nonBlankString("lastRunStatus")
 
 private fun parseGatewayStringArray(items: JsonArray?): List<String> =
   items

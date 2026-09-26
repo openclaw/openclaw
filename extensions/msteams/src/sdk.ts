@@ -1,5 +1,6 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
+import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { normalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import type { MSTeamsCloudName } from "./cloud.js";
 import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
@@ -64,14 +65,6 @@ export type MSTeamsApp = {
       };
     };
   };
-};
-
-/**
- * Token provider compatible with the existing codebase, wrapping the Teams
- * SDK App's public token provider.
- */
-type MSTeamsTokenProvider = {
-  getAccessToken: (scope: string) => Promise<string>;
 };
 
 type AzureAccessToken = {
@@ -290,7 +283,7 @@ function createCertificateApp(
  */
 export function createMSTeamsTokenProvider(
   app: Pick<MSTeamsApp, "tokenProvider" | "credentials" | "cloud">,
-): MSTeamsTokenProvider {
+): MSTeamsAccessTokenProvider {
   return {
     async getAccessToken(scope: string): Promise<string> {
       if (

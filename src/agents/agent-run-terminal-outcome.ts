@@ -168,6 +168,25 @@ function hasAgentRunAttemptTimeoutAbort(terminal: AgentRunAttemptTerminal): bool
   );
 }
 
+function mergeAgentRunAttemptTimeoutInterruption(
+  timeout: Extract<AgentRunAttemptTerminal, { kind: "timeout" }>,
+  interruption: Extract<AgentRunAttemptTerminal, { kind: "aborted" | "failed" }>,
+): AgentRunAttemptTerminal {
+  if (timeout.source === "observation") {
+    return withAgentRunAttemptTimeoutObservation(interruption, timeout.phase);
+  }
+  return {
+    ...timeout,
+    phase: mergeAgentRunAttemptTimeoutPhase(timeout.phase, interruption.timeoutObservation),
+    source:
+      interruption.kind === "aborted" && interruption.source === "external"
+        ? "external"
+        : timeout.source,
+    ...(((interruption.kind === "aborted" && interruption.source !== "yield_cleanup") ||
+      timeout.aborted === true) && { aborted: true as const }),
+  };
+}
+
 /** Replaces attempt failure detail without changing a stronger interruption. */
 export function setAgentRunAttemptTerminalFailure(
   terminal: AgentRunAttemptTerminal,
@@ -244,44 +263,14 @@ export function mergeAgentRunAttemptTerminal(
     );
   }
   if ((current.kind === "aborted" || current.kind === "failed") && incoming.kind === "timeout") {
-    if (incoming.source === "observation") {
-      return withAgentRunAttemptFailure(
-        withAgentRunAttemptTimeoutObservation(current, incoming.phase),
-        failure,
-      );
-    }
-    const source =
-      current.kind === "aborted" && current.source === "external" ? "external" : incoming.source;
-    const phase = mergeAgentRunAttemptTimeoutPhase(incoming.phase, current.timeoutObservation);
     return withAgentRunAttemptFailure(
-      {
-        ...incoming,
-        phase,
-        source,
-        ...(((current.kind === "aborted" && current.source !== "yield_cleanup") ||
-          incoming.aborted === true) && { aborted: true as const }),
-      },
+      mergeAgentRunAttemptTimeoutInterruption(incoming, current),
       failure,
     );
   }
   if (current.kind === "timeout" && (incoming.kind === "aborted" || incoming.kind === "failed")) {
-    if (current.source === "observation") {
-      return withAgentRunAttemptFailure(
-        withAgentRunAttemptTimeoutObservation(incoming, current.phase),
-        failure,
-      );
-    }
-    const source =
-      incoming.kind === "aborted" && incoming.source === "external" ? "external" : current.source;
-    const phase = mergeAgentRunAttemptTimeoutPhase(current.phase, incoming.timeoutObservation);
     return withAgentRunAttemptFailure(
-      {
-        ...current,
-        phase,
-        source,
-        ...(((incoming.kind === "aborted" && incoming.source !== "yield_cleanup") ||
-          current.aborted === true) && { aborted: true as const }),
-      },
+      mergeAgentRunAttemptTimeoutInterruption(current, incoming),
       failure,
     );
   }

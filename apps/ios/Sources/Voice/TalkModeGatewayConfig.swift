@@ -75,11 +75,6 @@ struct TalkRuntimeIssue: Equatable {
 struct TalkVoiceModeDescriptor: Equatable {
     let title: String
     let subtitle: String?
-    let providerId: String?
-    let modelId: String?
-    let voiceId: String?
-    let transport: String?
-    let isRealtime: Bool
 
     var accessibilityValue: String {
         if let subtitle, !subtitle.isEmpty {
@@ -130,12 +125,7 @@ enum TalkVoiceModeDescriptorBuilder {
 
         return TalkVoiceModeDescriptor(
             title: title,
-            subtitle: details.isEmpty ? nil : details.joined(separator: " • "),
-            providerId: normalizedProvider.isEmpty ? nil : normalizedProvider,
-            modelId: trimmedModel,
-            voiceId: trimmedVoice,
-            transport: trimmedTransport,
-            isRealtime: isRealtime)
+            subtitle: details.isEmpty ? nil : details.joined(separator: " • "))
     }
 
     private static func trimmed(_ value: String?) -> String? {
@@ -220,21 +210,10 @@ enum TalkModeRoutingResolver {
 
         return TalkModeResolvedRouting(
             activeProvider: parsed.snapshot.activeProvider,
-            executionMode: Self.executionMode(for: route),
+            executionMode: parsed.executionMode,
             realtimeProvider: parsed.snapshot.realtime.provider,
             realtimeModelId: parsed.realtimeModelId,
             route: route)
-    }
-
-    private static func executionMode(for route: TalkModeRuntimeRoute) -> TalkModeExecutionMode {
-        switch route {
-        case .localElevenLabs, .gatewayTalkSpeak:
-            .native
-        case .realtimeWebRTC:
-            .realtimeWebRTC
-        case .realtimeRelay:
-            .realtimeRelay
-        }
     }
 
     private static func normalized(_ value: String) -> String {
@@ -270,7 +249,7 @@ enum TalkModeGatewayConfigParser {
             allowLegacyFallback: false)
         let activeConfig = snapshot.providerConfig
         let model = TalkConfigParsing.firstNonEmptyString(activeConfig, keys: ["modelId", "model"])
-        let defaultModelId = (model?.isEmpty == false) ? model! : defaultModelIdFallback
+        let defaultModelId = model ?? defaultModelIdFallback
         let defaultVoiceId = TalkConfigParsing.firstNonEmptyString(activeConfig, keys: ["voiceId", "voice"])
         let defaultOutputFormat = TalkConfigParsing.firstNonEmptyString(activeConfig, keys: ["outputFormat"])
         let realtime = snapshot.realtime
@@ -319,15 +298,7 @@ enum TalkModeGatewayConfigParser {
         switch realtime.transport {
         case "managed-room":
             return .native
-        case "gateway-relay":
-            return .realtimeRelay
-        case "provider-websocket":
-            return .realtimeRelay
-        case "webrtc":
-            if realtime.provider?.lowercased() != "openai" {
-                return .realtimeRelay
-            }
-        case nil:
+        case "webrtc", nil:
             if realtime.provider?.lowercased() != "openai" {
                 return .realtimeRelay
             }

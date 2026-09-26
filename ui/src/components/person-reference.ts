@@ -254,6 +254,7 @@ class PersonReference extends OpenClawLightDomContentsElement {
                 });
                 this.close();
                 runSessionNavigationIntent(this, {
+                  agentId,
                   face,
                   sessionKey: row.key,
                   commit: () => {

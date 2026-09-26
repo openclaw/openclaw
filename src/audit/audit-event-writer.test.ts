@@ -10,6 +10,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { listAuditEvents, recordAuditEventInDatabase } from "./audit-event-store.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
 import {
@@ -59,7 +60,11 @@ describe("audit event writer", () => {
     const write = async (runId: string, supervisorMode: string | undefined) => {
       const errors: string[] = [];
       await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: supervisorMode }, async () => {
-        const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+        const writer = createAuditEventWriter({
+          scheduler: createTestGatewayScheduler(),
+          stateDir,
+          onError: (error) => errors.push(error),
+        });
         await writer.ready;
         expect(writer.record({ ...input(), sourceId: `${runId}:1:started`, runId })).toBe(true);
         await writer.stop();
@@ -90,8 +95,9 @@ describe("audit event writer", () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
     let config: OpenClawConfig = { logging: { audit: { enabled: false, messages: "all" } } };
-    const writer = createAuditEventWriter({ stateDir });
+    const writer = createAuditEventWriter({ scheduler: createTestGatewayScheduler(), stateDir });
     const recorder = createAuditEventRecorder({
+      scheduler: createTestGatewayScheduler(),
       getConfig: () => config,
       writer,
     });
@@ -136,7 +142,11 @@ describe("audit event writer", () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir,
+      onError: (error) => errors.push(error),
+    });
 
     await writer.ready;
     expect(
@@ -185,7 +195,11 @@ describe("audit event writer", () => {
     const contender = new DatabaseSync(path);
     contender.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
     const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir,
+      onError: (error) => errors.push(error),
+    });
 
     try {
       await writer.ready;
@@ -213,7 +227,11 @@ describe("audit event writer", () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir,
+      onError: (error) => errors.push(error),
+    });
 
     await writer.ready;
     const receipt = decisionReceipt();
@@ -256,6 +274,7 @@ describe("audit event writer", () => {
     closeOpenClawStateDatabaseForTest();
     const errors: string[] = [];
     const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
       stateDir,
       maxPending: 3,
       onError: (error) => errors.push(error),
@@ -408,6 +427,7 @@ describe("audit event writer", () => {
     const contentions: string[] = [];
     const errors: string[] = [];
     const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
       stateDir,
       onContention: (message) => contentions.push(message),
       onError: (error) => errors.push(error),
@@ -450,7 +470,11 @@ describe("audit event writer", () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir,
+      onError: (error) => errors.push(error),
+    });
     const clearSink = configureExecutionIdentityAdmissionSink(writer.recordExecutionIdentity);
     const admittedAt = Date.now();
     const inheritedRefs = {
@@ -641,7 +665,11 @@ describe("audit event writer", () => {
     closeOpenClawStateDatabaseForTest();
 
     const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir,
+      onError: (error) => errors.push(error),
+    });
     await writer.ready;
     expect(
       openOpenClawStateDatabase(database)
@@ -757,6 +785,7 @@ describe("audit event writer", () => {
     closeOpenClawStateDatabaseForTest();
     const schemaErrors: string[] = [];
     const schemaWriter = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
       stateDir: schemaStateDir,
       onError: (error) => schemaErrors.push(error),
     });
@@ -791,6 +820,7 @@ describe("audit event writer", () => {
     `);
     const insertErrors: string[] = [];
     const insertWriter = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
       stateDir: insertStateDir,
       onError: (error) => insertErrors.push(error),
     });
@@ -828,6 +858,7 @@ describe("audit event writer", () => {
     closeOpenClawStateDatabaseForTest();
     const errors: string[] = [];
     const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
       stateDir,
       onError: (error) => errors.push(error),
     });

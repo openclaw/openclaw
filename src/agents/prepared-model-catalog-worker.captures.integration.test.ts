@@ -4,7 +4,7 @@ import path from "node:path";
 import { threadId, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { sweepPluginSourceCaptureDirectories } from "../plugins/plugin-source-capture-directory.js";
+import { sweepPluginSourceCapturesForTest } from "../plugins/plugin-source-capture-directory.test-support.js";
 import { getPreparedModelCatalogWorkerPoolSnapshot } from "./prepared-model-catalog-worker.js";
 import {
   EXTERNAL_AUTH_PROFILE_ID,
@@ -124,7 +124,7 @@ describe("Gateway catalog worker captures", () => {
       expect(fs.existsSync(path.join(instanceRoot, "owner.sqlite"))).toBe(true);
       const old = new Date(Date.now() - 2 * 60 * 60 * 1_000);
       fs.utimesSync(instanceRoot, old, old);
-      await sweepPluginSourceCaptureDirectories(fixture.env.OPENCLAW_STATE_DIR!);
+      await sweepPluginSourceCapturesForTest(fixture.env.OPENCLAW_STATE_DIR!);
       expect(fs.existsSync(filename)).toBe(true);
       const inventory = () => fs.readdirSync(captureRoot).toSorted();
       const retained = inventory();

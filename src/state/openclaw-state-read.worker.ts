@@ -1,5 +1,8 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { selectAcpSessionRowForRead } from "../acp/runtime/session-meta-keys.js";
+import {
+  selectAcpSessionRowForRead,
+  selectAcpSessionRows,
+} from "../acp/runtime/session-meta-keys.js";
 import {
   countMcpOAuthPrincipalsInDatabase,
   listMcpOAuthStoreKeysInDatabase,
@@ -65,6 +68,8 @@ import {
   readTaskRegistryMutationSnapshotInDatabase,
   readTaskRegistrySnapshot,
 } from "../tasks/task-registry.store.kernel.js";
+import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
+import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
 import {
   readAgentDatabaseDeletionSnapshotInDatabase,
   readAgentDeletionJournalStatusInDatabase,
@@ -217,6 +222,14 @@ serveOwnedWorkerTasks(
                     type: command.type,
                     sourceAdmitted,
                     entries: readOutboundDeliveriesInDatabase({ db }, command),
+                  };
+                }
+                if (command.type === "acpSessions.list") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    rows: selectAcpSessionRows(db),
                   };
                 }
                 if (command.type === "acpSessions.metadata") {
@@ -665,7 +678,9 @@ serveOwnedWorkerTasks(
                     ),
                   };
                 }
-                return readStateRegistryCommand(db, command);
+                return isTuiLastSessionReadCommand(command)
+                  ? readTuiLastSessionCommand(db, command)
+                  : readStateRegistryCommand(db, command);
               },
               ...locationArgs,
             );

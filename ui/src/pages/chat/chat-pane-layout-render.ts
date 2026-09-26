@@ -127,7 +127,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         storedChatOutboxScopeKey(resolveUiConversationIdentity(state, state.sessionKey)),
       ])}
       @outbox-restored=${() => {
-        this.chatState.restoreComposer();
+        this.chatState.composerPersistence.restore();
         state.requestUpdate?.();
       }}
     ></openclaw-chat-outbox-recovery>`;

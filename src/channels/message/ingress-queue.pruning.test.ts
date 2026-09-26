@@ -3,8 +3,12 @@ import { describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import { createTestIngressQueue, withTempState } from "./ingress-drain.test-helpers.js";
+import { pruneChannelIngressInDatabase } from "./ingress-queue.kernel.js";
 
 type ChannelIngressTestDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
 
@@ -35,7 +39,7 @@ describe("channel ingress pruning", () => {
       await queue.enqueue("z", { text: "first" });
       await queue.enqueue("a", { text: "second" });
 
-      expect(await queue.prune({ pendingMaxEntries: 1, protectIds: ["a"] })).toBe(0);
+      expect(await queue.prune({ pendingMaxEntries: 1, protectIds: [" a ", "", "   "] })).toBe(0);
       expect(
         (await queue.listPending({ limit: "all", orderBy: "id" })).map((row) => row.id),
       ).toEqual(["a", "z"]);
@@ -46,30 +50,42 @@ describe("channel ingress pruning", () => {
     "prunes %s overflow without materializing the retained prefix",
     async (status) => {
       await withTempState(async (stateDir) => {
-        let clock = 1;
-        const queue = createTestIngressQueue(stateDir, { now: () => clock++ });
-
-        for (let index = 0; index < 520; index += 1) {
-          const id = String(index).padStart(4, "0");
-          await queue.enqueue(id, { text: String(index) });
-          if (status === "completed") {
-            await queue.complete(id);
-          } else if (status === "failed") {
-            await queue.fail(id, { reason: "fixture" });
-          }
-        }
-
-        const { db } = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+        const env = { OPENCLAW_STATE_DIR: stateDir };
+        const { db } = openOpenClawStateDatabase({ env });
+        const queueName = JSON.stringify(["test", "a"]);
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
+            .insertInto("channel_ingress_events")
+            .values(
+              Array.from({ length: 520 }, (_, index) => ({
+                queue_name: queueName,
+                event_id: String(index).padStart(4, "0"),
+                channel_id: "test",
+                account_id: "a",
+                status,
+                payload_json: JSON.stringify({ text: String(index) }),
+                received_at: index,
+                updated_at: index,
+              })),
+            ),
+        );
         const reads = trackSqliteStatementExecutions(db, ["candidates"], (sql) =>
           sql.startsWith("select") && sql.includes('from "channel_ingress_events"')
             ? "candidates"
             : null,
         );
         try {
-          const pruneOptions = { [`${status}MaxEntries`]: 2 };
-          expect(await queue.prune(pruneOptions)).toBe(518);
+          const options = { [`${status}MaxEntries`]: 2 };
+          // Instrument the worker-owned kernel's native row materialization.
+          const prune = () =>
+            runOpenClawStateWriteTransaction(
+              (tx) => pruneChannelIngressInDatabase(tx.db, { queueName, options, now: 600 }),
+              { env },
+            );
+          expect(prune()).toBe(518);
           expect(reads.rowCounts.candidates).toBe(518);
-          expect(await queue.prune(pruneOptions)).toBe(0);
+          expect(prune()).toBe(0);
           expect(reads.rowCounts.candidates).toBe(518);
         } finally {
           reads.restore();

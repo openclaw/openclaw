@@ -8,6 +8,7 @@ import {
   SqliteWorkerError,
   type SqliteWorkerOperations,
   type SqliteWorkerStore,
+  type SqliteWorkerStateLifecycle,
 } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-admission.js";
 import {
@@ -22,7 +23,7 @@ export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOp
   track: (pending: Promise<void>) => () => void,
   assertCurrent?: (commandType: PropertyKey) => void,
   createAdmission?: SqliteWorkerAdmissionFactory,
-  requireStateLifecycle = false,
+  requireStateLifecycle: SqliteWorkerStateLifecycle = false,
 ): Promise<T> {
   if (!client || client.sealed) {
     return Promise.reject(new SqliteWorkerError("SQLite worker store is closed", "closed"));

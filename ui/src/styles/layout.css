@@ -120,7 +120,7 @@
    native macOS hosts without the full strip, they sit below the drag region. */
 .shell-chrome-controls {
   position: fixed;
-  top: 10px;
+  top: calc((var(--rail-header-height) - var(--shell-chrome-control-size)) / 2);
   left: calc(var(--shell-nav-width) + var(--shell-chrome-controls-inset));
   z-index: 45;
   display: flex;
@@ -1129,9 +1129,6 @@ openclaw-settings-save-indicator:empty {
   flex-direction: column;
   min-height: 0;
   flex: 1;
-  /* 9px top pad centers the brand row's 30px icons on the app's shared
-     24px chrome centerline (pane-header actions, floating toggles). The
-     macOS app overrides this with its 50px titlebar clearance. */
   padding: 9px var(--sidebar-pad-x) var(--sidebar-pad-bottom);
   border: none;
   border-radius: 0;
@@ -1148,6 +1145,20 @@ openclaw-settings-save-indicator:empty {
   min-height: 34px;
   padding: 0 2px 10px 0;
   flex-shrink: 0;
+}
+
+/* Desktop web shares the pane centerline. Drawers and native windows keep
+   the identity row below their own chrome and retain its separate clearance. */
+:where(html:not(.openclaw-native-macos, .openclaw-native-desktop)) .shell:not(.shell--mobile-nav) {
+  .sidebar-shell {
+    padding-top: 0;
+  }
+
+  .sidebar-brand {
+    min-height: var(--rail-header-height);
+    padding-bottom: 0;
+    margin-bottom: 9px;
+  }
 }
 
 .sidebar-brand__actions {
@@ -4604,8 +4615,8 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
    window title, trailing actions at the right edge, intro text below. The
    row matches the Mac app titlebar (52px injected by DashboardWindowController;
    50px mirrors .macos-titlebar-controls for older builds) so the traffic lights
-   and hosted buttons share its centerline; the collapsed-sidebar web cluster in
-   browsers (top: 10px, 32px buttons) lands on the same centerline. The side
+   and hosted buttons share its centerline; browser rows use the shared rail
+   height below to align with sidebar and collapsed-navigation controls. The side
    columns reserve that cluster on the left and the trailing cell on the right,
    so the centered cell stays exact at normal widths and merely shifts, never
    overlaps, in narrow columns. Older Mac builds drop the web cluster below the
@@ -4680,6 +4691,12 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
       gap: 10px;
     }
   }
+}
+
+:where(html:not(.openclaw-native-macos, .openclaw-native-desktop))
+  .shell:not(.shell--mobile-nav):not(.shell--settings)
+  .content:not(.content--chat) {
+  --page-toolbar-height: var(--rail-header-height);
 }
 
 html.openclaw-native-macos

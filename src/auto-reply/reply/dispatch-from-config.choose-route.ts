@@ -29,6 +29,7 @@ import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
 } from "./dispatch-from-config.abort.js";
+import { admittedSessionSettingsRestrictRuntime } from "./dispatch-from-config.events.js";
 import {
   hasExecApprovalPayload,
   requiresDurableToolResultDelivery,
@@ -36,10 +37,7 @@ import {
 import { suppressPendingFinalDelivery } from "./dispatch-from-config.pending-final.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
 import { runReplyDispatchTakeover } from "./dispatch-from-config.reply-dispatch-hook.js";
-import {
-  maybeRefuseRestrictedRuntimeTakeover,
-  runtimeTakeoverHooksAllowed,
-} from "./dispatch-from-config.restricted-runtime.js";
+import { maybeRefuseRestrictedRuntimeTakeover } from "./dispatch-from-config.restricted-runtime.js";
 import { createSessionMetadataChangeNotifier } from "./dispatch-from-config.session-metadata.js";
 import {
   captureDeliveredTranscriptMirror,
@@ -100,8 +98,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     (state.suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
   const shouldSuppressDefaultToolProgressMessages = () =>
     params.replyOptions?.suppressToolProgressMessages === true || !shouldEmitVerboseProgress();
-  const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();
-  const shouldSendToolSummaries = shouldSendVerboseProgressMessages;
+  const shouldSendToolSummaries = () => !shouldSuppressDefaultToolProgressMessages();
   const { notifySessionMetadataChanges, routeState } = createSessionMetadataChangeNotifier(
     params.onSessionMetadataChanges,
   );
@@ -111,7 +108,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     ctx.InboundEventKind !== "room_event" &&
     !state.sendPolicyDenied &&
     shouldEmitVerboseProgress() &&
-    shouldSendVerboseProgressMessages();
+    shouldSendToolSummaries();
   const shouldDeliverForcedToolProgressDespiteSourceSuppression = () =>
     state.suppressAutomaticSourceDelivery &&
     state.sourceReplyDeliveryMode === "message_tool_only" &&
@@ -563,7 +560,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
   if (
     state.allowInboundHandlers &&
-    runtimeTakeoverHooksAllowed(params.replyOptions?.admittedSessionSettings) &&
+    !admittedSessionSettingsRestrictRuntime(params.replyOptions?.admittedSessionSettings) &&
     hookRunner?.hasHooks("before_dispatch")
   ) {
     // This outer lookup key is resolved from the routed context; fields inside
@@ -680,7 +677,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   const nextState = Object.assign(state, {
     shouldSuppressProgressDelivery,
     shouldSuppressDefaultToolProgressMessages,
-    shouldSendVerboseProgressMessages,
     shouldSendToolSummaries,
     notifySessionMetadataChanges,
     shouldDeliverVerboseProgressDespiteSourceSuppression,

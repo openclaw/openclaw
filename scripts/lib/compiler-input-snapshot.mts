@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { CompilerOptions } from "typescript/unstable/sync";
 import {
   ARTIFACT_CACHE_VERSION,
   portableRelativePath,
@@ -202,7 +203,7 @@ export class CompilerInputSnapshot {
   private sealedInputs?: ReadonlyMap<string, CapturedInput>;
   private readonly configs = new Map<
     string,
-    { files: string[]; roots: string[]; options: Record<string, unknown> }
+    { files: string[]; roots: string[]; options: CompilerOptions }
   >();
   private topology?: TopologyEntry[];
   private readonly namespaceDigests = new Map<string | undefined, string>();
@@ -291,6 +292,7 @@ export class CompilerInputSnapshot {
           cwd: this.rootDir,
           configFileName: this.inputPath(file),
           readFile: (name) => this.read(name).bytes.toString("utf8"),
+          assertInput: this.policy.assertInput,
         });
         result = {
           files: parsed.configFiles,

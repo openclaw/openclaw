@@ -8,6 +8,10 @@ import type { CodexThreadListResponse } from "./app-server/protocol.js";
 import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 import { observeCodexCatalogClient } from "./session-catalog-events.js";
 import {
+  createNativeCatalogPerformanceFixture,
+  startNativeCatalogPerformanceClient,
+} from "./session-catalog-native-performance.test-support.js";
+import {
   commandRpcMocks,
   createCodexSessionCatalogControlFactory,
 } from "./session-catalog.test-helpers.js";
@@ -129,6 +133,49 @@ it("keeps exact-millisecond ties resident and applies real native title notifica
     );
     expect(batches).toEqual([]);
   } finally {
+    await client.closeAndWait();
+  }
+}, 30_000);
+
+it("keeps a real native catalog idle until resident demand starts the due full walk", async () => {
+  const root = await fs.realpath(process.env.OPENCLAW_STATE_DIR!);
+  const state = await createNativeCatalogPerformanceFixture(path.join(root, "idle-safety"), {
+    count: 128,
+    previewBytes: 64,
+  });
+  const client = await startNativeCatalogPerformanceClient(state);
+  const requests: Array<{ cursor?: string; useStateDbOnly?: boolean }> = [];
+  commandRpcMocks.codexControlRequest.mockImplementation(
+    async (_plugin, method, request, options) => {
+      expect(method).toBe("thread/list");
+      requests.push(request);
+      return await client.request<CodexThreadListResponse>(method, request, {
+        catalogPreview: options.catalogPreview,
+        timeoutMs: 10_000,
+      });
+    },
+  );
+  const factory = createCodexSessionCatalogControlFactory({
+    env: state.env,
+    getPluginConfig: () => ({ supervision: { enabled: true } }),
+    getRuntimeConfig: () => undefined,
+  });
+  const source = (await factory.homesForAgent("main"))[0]!;
+  const control = factory.forRequest("main", { ...source, localSessionsRoot: undefined });
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  try {
+    await control.initialize();
+    expect(requests).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+    expect(requests).toHaveLength(2);
+
+    const cached = await control.listPage({ limit: 64 });
+    expect(cached.sessions).toHaveLength(64);
+    await vi.waitFor(() => expect(requests).toHaveLength(4));
+    expect(requests.slice(2).every((request) => request.useStateDbOnly)).toBe(true);
+  } finally {
+    vi.useRealTimers();
+    await factory.stop();
     await client.closeAndWait();
   }
 }, 30_000);

@@ -95,6 +95,7 @@ export function executeTaskRegistryCommand(
   }
   if (
     command.type === "tasks.applyRetention" ||
+    command.type === "tasks.maintainCron" ||
     command.type === "tasks.bindRunOwner" ||
     command.type === "tasks.transitionRunRow" ||
     command.type === "tasks.updateNotificationDelivery" ||

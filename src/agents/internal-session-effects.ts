@@ -11,9 +11,7 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import type { AgentRunSessionTarget } from "./run-session-target.types.js";
 
-export type InternalSessionEffectsTarget = Required<
-  Pick<AgentRunSessionTarget, "agentId" | "sessionId" | "sessionKey" | "storePath">
-> & {
+export type InternalSessionEffectsTarget = InternalSessionEffectsSource & {
   sessionEntry: InternalSessionEntry;
   sessionFile: string;
 };
@@ -27,7 +25,7 @@ function resolveInternalSessionEffectsTarget(params: {
   agentId: string;
   runId: string;
   storePath: string;
-}): Required<Pick<AgentRunSessionTarget, "agentId" | "sessionId" | "sessionKey" | "storePath">> {
+}): InternalSessionEffectsSource {
   const incognito = isIncognitoOpenClawAgentSqlitePath(params.storePath, {
     agentId: params.agentId,
   });

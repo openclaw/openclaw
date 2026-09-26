@@ -6,8 +6,6 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import {
   projectPluginSessionEntry,
   projectPluginSessionEntryPatch,
-  projectPluginSessionStore,
-  reconcilePluginSessionStore,
 } from "./session-store-runtime-internal.js";
 import {
   patchSessionEntry,
@@ -250,23 +248,5 @@ describe("plugin session writer claim projection", () => {
     const entry = loadSessionEntry({ sessionKey, storePath }) as InternalSessionEntry | undefined;
     expect(entry).toMatchObject({ lifecycleRevision: "generation-2", sessionId: "session-1" });
     expectGenerationPrivateFieldsCleared(entry);
-  });
-
-  it("clears private generation fields when whole-store reconciliation rotates lifecycle revision", () => {
-    const sessionKey = "agent:main:reconcile-rotate-generation";
-    const internalStore = { [sessionKey]: privateGenerationEntry() };
-    const publicStore = projectPluginSessionStore(internalStore);
-    publicStore[sessionKey] = {
-      ...publicStore[sessionKey]!,
-      lifecycleRevision: "generation-2",
-    };
-
-    reconcilePluginSessionStore({ internalStore, publicStore });
-
-    expect(internalStore[sessionKey]).toMatchObject({
-      lifecycleRevision: "generation-2",
-      sessionId: "session-1",
-    });
-    expectGenerationPrivateFieldsCleared(internalStore[sessionKey]);
   });
 });

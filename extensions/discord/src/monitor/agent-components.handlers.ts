@@ -1,5 +1,4 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Discord plugin module implements agent components.handlers behavior.
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import {
   resolveDiscordComponentEntryWithPersistence,

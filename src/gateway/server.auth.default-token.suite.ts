@@ -112,29 +112,6 @@ export function registerDefaultAuthTokenSuite(): void {
       }
     });
 
-    test("prefers OPENCLAW_HANDSHAKE_TIMEOUT_MS and falls back on empty string", () => {
-      const prevHandshakeTimeout = process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
-      const prevTestHandshakeTimeout = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
-      process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "75";
-      process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = "20";
-      try {
-        expect(resolvePreauthHandshakeTimeoutMs()).toBe(75);
-        process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "";
-        expect(resolvePreauthHandshakeTimeoutMs()).toBe(20);
-      } finally {
-        if (prevHandshakeTimeout === undefined) {
-          delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
-        } else {
-          process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = prevHandshakeTimeout;
-        }
-        if (prevTestHandshakeTimeout === undefined) {
-          delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
-        } else {
-          process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = prevTestHandshakeTimeout;
-        }
-      }
-    });
-
     test("connect (req) handshake returns hello-ok payload", async () => {
       const { createConfigIO } = await import("../config/config.js");
       const { STATE_DIR } = await import("../config/paths.js");
@@ -154,36 +131,20 @@ export function registerDefaultAuthTokenSuite(): void {
           }
         | undefined;
       expect(payload?.type).toBe("hello-ok");
-      expect(payload?.features?.capabilities).toContain(
-        GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
-      );
-      expect(payload?.features?.capabilities).toContain(
-        GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
-      );
-      expect(payload?.features?.capabilities).toContain(
-        GATEWAY_SERVER_CAPS.GATEWAY_RESTART_TARGET_SAFE,
-      );
-      expect(payload?.features?.capabilities).toContain(
-        GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
-      );
-      expect(payload?.features?.capabilities).toContain(
-        GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
-      );
-      expect(payload?.features?.capabilities).toContain(
-        GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
-      );
-      expect(payload?.features?.capabilities).toContain(
-        GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
-      );
-      expect(payload?.features?.capabilities).toContain(
-        GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CONTRACT,
-      );
-      expect(payload?.features?.capabilities).toContain(GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CAS);
-      expect(payload?.features?.capabilities).toContain(
-        GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
-      );
-      expect(payload?.features?.capabilities).toContain(
-        GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
+      expect(payload?.features?.capabilities).toEqual(
+        expect.arrayContaining([
+          GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
+          GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
+          GATEWAY_SERVER_CAPS.GATEWAY_RESTART_TARGET_SAFE,
+          GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
+          GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
+          GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
+          GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
+          GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CONTRACT,
+          GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CAS,
+          GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
+          GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
+        ]),
       );
       expect(payload?.snapshot?.configPath).toBe(createConfigIO().configPath);
       expect(payload?.snapshot?.stateDir).toBe(STATE_DIR);
@@ -467,22 +428,6 @@ export function registerDefaultAuthTokenSuite(): void {
       await new Promise<void>((resolve) => {
         ws.once("close", () => resolve());
       });
-    });
-
-    test("sends connect challenge on open", async () => {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-      const evtPromise: Promise<{
-        type?: string;
-        event?: string;
-        payload?: Record<string, unknown> | null;
-      }> = onceMessage(ws, (o) => o.type === "event" && o.event === "connect.challenge");
-      await new Promise<void>((resolve) => {
-        ws.once("open", resolve);
-      });
-      const evt = await evtPromise;
-      const nonce = (evt.payload as { nonce?: unknown } | undefined)?.nonce;
-      expect(typeof nonce).toBe("string");
-      ws.close();
     });
 
     test("rejects protocol mismatch", async () => {

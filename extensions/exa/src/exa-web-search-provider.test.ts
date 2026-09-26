@@ -45,9 +45,9 @@ describe("exa web search provider", () => {
       if (typeof requestBody !== "string") {
         throw new Error("Expected Exa request body to be a JSON string");
       }
-      expect(JSON.parse(requestBody)).toMatchObject({
-        numResults: 1,
-      });
+      expect(requestBody).toBe(
+        '{"query":"exa result count owner","numResults":1,"type":"auto","contents":{"highlights":true}}',
+      );
       expect(first).toMatchObject({
         provider: "exa",
         count: 1,
@@ -248,18 +248,27 @@ describe("exa web search provider", () => {
       expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
         "x-api-key": "exa-config-key",
       });
-      const bodyAt = (index: number) => {
+      const rawBodyAt = (index: number) => {
         const body = fetchMock.mock.calls[index]?.[1]?.body;
         if (typeof body !== "string") {
           throw new Error("Expected Exa JSON request body");
         }
-        return JSON.parse(body);
+        return body;
       };
+      const bodyAt = (index: number) => JSON.parse(rawBodyAt(index));
       expect(bodyAt(0)).toMatchObject({
         query: "Exa boundary",
         numResults: 100,
         contents: args.contents,
       });
+      expect(
+        rawBodyAt(0).replace(
+          /"startPublishedDate":"[^"]*"/,
+          '"startPublishedDate":"<dynamic-date>"',
+        ),
+      ).toBe(
+        '{"query":"Exa boundary","numResults":100,"type":"auto","contents":{"text":{"maxCharacters":1200},"highlights":{"maxCharacters":4000,"query":"latest model launches","numSentences":4,"highlightsPerUrl":2},"summary":{"query":"launch details"}},"startPublishedDate":"<dynamic-date>"}',
+      );
       expect(Date.parse(bodyAt(0).startPublishedDate)).not.toBeNaN();
 
       await tool.execute({ query: "cache partitions" });

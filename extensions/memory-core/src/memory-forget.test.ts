@@ -324,85 +324,79 @@ describe("memory forget", () => {
     expect(await fs.readFile(memoryPath, "utf8")).not.toContain("Archived secret");
   });
 
-  it.each([
-    { label: "LF", content: "# Long-Term Memory\nKeep this.\n" },
-    { label: "CRLF", content: "# Long-Term Memory\r\nKeep this.\r\n" },
-    { label: "mixed newlines", content: "# Long-Term Memory\r\nKeep this.\n" },
-  ])(
-    "durably tombstones an unresolved explicit session without changing $label artifacts",
-    async ({ content }) => {
-      const memoryPath = path.join(workspaceDir, "MEMORY.md");
-      await fs.writeFile(memoryPath, content);
-      const backup = {
-        key: "unrelated-backup",
-        value: {
-          createdAt: "2026-08-25T00:00:00.000Z",
-          content,
-          contentHash: createHash("sha256").update(content).digest("hex"),
-        },
-      };
-      await writeMemoryCoreWorkspaceEntries({
-        namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
-        workspaceDir,
-        entries: [backup],
-      });
-      const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-      db.prepare(
-        `INSERT INTO memory_index_chunks
+  it("durably tombstones an unresolved explicit session without changing mixed-newline artifacts", async () => {
+    const content = "# Long-Term Memory\r\nKeep this.\n";
+    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    await fs.writeFile(memoryPath, content);
+    const backup = {
+      key: "unrelated-backup",
+      value: {
+        createdAt: "2026-08-25T00:00:00.000Z",
+        content,
+        contentHash: createHash("sha256").update(content).digest("hex"),
+      },
+    };
+    await writeMemoryCoreWorkspaceEntries({
+      namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
+      workspaceDir,
+      entries: [backup],
+    });
+    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    db.prepare(
+      `INSERT INTO memory_index_chunks
         (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
        VALUES ('unrelated', 'MEMORY.md', 'memory', 1, 2,
          'unrelated-hash', 'test', 'Keep this.', ?, 1)`,
-      ).run(encodeMemoryEmbedding([1, 0]));
-      db.prepare(
-        `INSERT INTO memory_embedding_cache
+    ).run(encodeMemoryEmbedding([1, 0]));
+    db.prepare(
+      `INSERT INTO memory_embedding_cache
         (provider, model, provider_key, hash, embedding, dims, updated_at)
        VALUES ('test', 'test', 'test', 'unrelated-hash', ?, 2, 1)`,
-      ).run(encodeMemoryEmbedding([1, 0]));
+    ).run(encodeMemoryEmbedding([1, 0]));
 
-      const preview = await forgetMemoryEntries({
-        cfg,
-        agentId: "main",
-        sessionIds: ["unknown-session"],
-        dryRun: true,
-      });
-      expect(preview).toMatchObject({
-        sessionIds: ["unknown-session"],
-        sessionResolutions: [{ sessionId: "unknown-session", source: "unresolved" }],
-        artifacts: { embeddingCacheRows: 1 },
-      });
-      expect(
-        Object.entries(preview.artifacts)
-          .filter(([name]) => name !== "embeddingCacheRows")
-          .every(([, count]) => count === 0),
-      ).toBe(true);
-      expect(listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
+    const preview = await forgetMemoryEntries({
+      cfg,
+      agentId: "main",
+      sessionIds: ["unknown-session"],
+      dryRun: true,
+    });
+    expect(preview).toMatchObject({
+      sessionIds: ["unknown-session"],
+      sessionResolutions: [{ sessionId: "unknown-session", source: "unresolved" }],
+      artifacts: { embeddingCacheRows: 1 },
+    });
+    expect(
+      Object.entries(preview.artifacts)
+        .filter(([name]) => name !== "embeddingCacheRows")
+        .every(([, count]) => count === 0),
+    ).toBe(true);
+    expect(listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
 
-      const report = await forgetMemoryEntries({
-        cfg,
-        agentId: "main",
-        sessionIds: ["unknown-session"],
-      });
-      expect(report).toEqual({ ...preview, dryRun: false });
-      const tombstones = listMemorySessionTombstones({ agentId: "main" });
-      expect(tombstones).toMatchObject([{ sessionId: "unknown-session", reason: "forgotten" }]);
-      expect(
-        await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["unknown-session"] }),
-      ).toEqual({
-        ...report,
-        artifacts: { ...report.artifacts, embeddingCacheRows: 0 },
-      });
-      expect(listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
-      expect(await fs.readFile(memoryPath, "utf8")).toBe(content);
-      expect(db.prepare("SELECT id FROM memory_index_chunks").all()).toEqual([{ id: "unrelated" }]);
-      expect(db.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
-      expect(
-        await readMemoryCoreWorkspaceEntries({
-          namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
-          workspaceDir,
-        }),
-      ).toEqual([backup]);
-    },
-  );
+    const report = await forgetMemoryEntries({
+      cfg,
+      agentId: "main",
+      sessionIds: ["unknown-session"],
+    });
+    expect(report).toEqual({ ...preview, dryRun: false });
+    const tombstones = listMemorySessionTombstones({ agentId: "main" });
+    expect(tombstones).toMatchObject([{ sessionId: "unknown-session", reason: "forgotten" }]);
+    expect(
+      await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["unknown-session"] }),
+    ).toEqual({
+      ...report,
+      artifacts: { ...report.artifacts, embeddingCacheRows: 0 },
+    });
+    expect(listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
+    expect(await fs.readFile(memoryPath, "utf8")).toBe(content);
+    expect(db.prepare("SELECT id FROM memory_index_chunks").all()).toEqual([{ id: "unrelated" }]);
+    expect(db.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
+    expect(
+      await readMemoryCoreWorkspaceEntries({
+        namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
+        workspaceDir,
+      }),
+    ).toEqual([backup]);
+  });
 
   it.each([
     { label: "LF", targetEnding: "\n", survivorEnding: "\n" },

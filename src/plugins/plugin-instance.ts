@@ -217,9 +217,15 @@ export class PluginInstance {
 
   /** Observe host settlement without closing the callbacks that retained runs still need. */
   async waitForRetainedWork(signal: AbortSignal, includeConsumers = true): Promise<void> {
+    await this.waitForSettlement(
+      () => (includeConsumers ? this.retainedWorkCount : this.retainedWork.size) === 0,
+      signal,
+    );
+  }
+
+  private async waitForSettlement(settled: () => boolean, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
-    const pending = () => (includeConsumers ? this.retainedWorkCount : this.retainedWork.size);
-    if (!pending()) {
+    if (settled()) {
       return;
     }
     await new Promise<void>((resolve, reject) => {
@@ -228,14 +234,14 @@ export class PluginInstance {
         signal.removeEventListener("abort", abort);
       };
       const wake = () => {
-        if (!pending()) {
+        if (settled()) {
           cleanup();
           resolve();
         }
       };
       const abort = () => {
         cleanup();
-        reject(toErrorObject(signal.reason, `Plugin ${this.pluginId} retained work drain aborted`));
+        reject(toErrorObject(signal.reason, `Plugin ${this.pluginId} work drain aborted`));
       };
       this.waiters.add(wake);
       signal.addEventListener("abort", abort, { once: true });
@@ -526,46 +532,44 @@ export class PluginInstance {
     return accepting;
   }
 
-  async drain(options?: { includeConsumers?: boolean }): Promise<PluginInstanceDisposalResult> {
+  async drain(options?: {
+    includeConsumers?: boolean;
+    signal?: AbortSignal;
+  }): Promise<PluginInstanceDisposalResult> {
     this.quiesce();
     const ownToken = this.activeCall()?.token;
     try {
-      await this.waitForCalls(ownToken);
+      await this.waitForCalls(ownToken, options?.signal);
       if (options?.includeConsumers) {
-        while (this.consumers.size > 0) {
-          await Promise.all([...this.consumers.values()].map(({ completion }) => completion));
-        }
+        await this.waitForSettlement(
+          () => this.consumers.size === 0,
+          options.signal ?? new AbortController().signal,
+        );
       }
       return { errors: [] };
     } catch (error) {
-      // waitForCalls rejects only its own bounded drain deadline.
+      // A cancelled observation leaves admitted work and physical resources owned.
       return { errors: [error] };
     }
   }
 
-  private async waitForCalls(ownToken?: object): Promise<void> {
+  private async waitForCalls(ownToken?: object, signal?: AbortSignal): Promise<void> {
     const settled = () => [...this.calls.keys()].every((token) => token === ownToken);
-    if (settled()) {
-      return;
+    if (signal) {
+      // Reload owns its observation budget; disposal keeps its independent deadline.
+      return this.waitForSettlement(settled, signal);
     }
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.waiters.delete(wake);
-        reject(
-          new Error(
-            `Plugin ${this.pluginId} still has active calls after ${SHUTDOWN_TIMEOUT_MS}ms`,
-          ),
-        );
-      }, SHUTDOWN_TIMEOUT_MS);
-      const wake = () => {
-        if (settled()) {
-          clearTimeout(timer);
-          this.waiters.delete(wake);
-          resolve();
-        }
-      };
-      this.waiters.add(wake);
-    });
+    const deadline = new AbortController();
+    const timer = setTimeout(() => {
+      deadline.abort(
+        new Error(`Plugin ${this.pluginId} still has active calls after ${SHUTDOWN_TIMEOUT_MS}ms`),
+      );
+    }, SHUTDOWN_TIMEOUT_MS);
+    try {
+      await this.waitForSettlement(settled, deadline.signal);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   get disposing(): boolean {

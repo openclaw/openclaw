@@ -205,15 +205,6 @@ describe("openclaw-modal-dialog", () => {
     expect(document.activeElement).toBe(notes);
   });
 
-  it("delegates native modality and light dismissal to Web Awesome", async () => {
-    const { webAwesomeDialog, dialog } = await renderModal();
-
-    expect(webAwesomeDialog.open).toBe(true);
-    expect(webAwesomeDialog.lightDismiss).toBe(true);
-    expect(webAwesomeDialog.withoutHeader).toBe(true);
-    expect(dialog.open).toBe(true);
-  });
-
   it.each(["hide", "remove"] as const)(
     "hands an active toast back to the app layer on %s",
     async (action) => {

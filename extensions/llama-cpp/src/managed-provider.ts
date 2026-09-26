@@ -1,7 +1,6 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type {
   OpenClawPluginApi,
-  ProviderAuthMethodNonInteractiveContext,
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
@@ -103,8 +102,7 @@ export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
         },
         run: runLlamaServerSetup,
         validateNonInteractive: validateLlamaServerNonInteractive,
-        runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) =>
-          await configureLlamaServerNonInteractive(ctx),
+        runNonInteractive: configureLlamaServerNonInteractive,
       },
     ],
     catalog: {

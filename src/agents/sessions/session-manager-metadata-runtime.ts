@@ -34,14 +34,13 @@ export async function withSessionMetadataWorker<T>(
   let result: Result<T, unknown>;
   try {
     const value = await operation({
-      execute: (command, commandOptions) =>
-        worker.run(async (scope) => {
-          const reply = await scope.execute(command, commandOptions);
-          if (!reply.ok) {
-            throw new SessionTranscriptWriterClaimReboundError(reply.refusal);
-          }
-          return reply.value;
-        }, assertCurrent),
+      execute: async (command, commandOptions) => {
+        const reply = await worker.execute(command, assertCurrent, commandOptions);
+        if (!reply.ok) {
+          throw new SessionTranscriptWriterClaimReboundError(reply.refusal);
+        }
+        return reply.value;
+      },
     });
     result = { ok: true, value };
   } catch (error) {

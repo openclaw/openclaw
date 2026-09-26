@@ -27,15 +27,9 @@ const MSTeamsChannelSchema = z
   })
   .strict();
 
-const MSTeamsTeamSchema = z
-  .object({
-    requireMention: z.boolean().optional(),
-    tools: ToolPolicySchema,
-    toolsBySender: ToolPolicyBySenderSchema,
-    replyStyle: MSTeamsReplyStyleSchema.optional(),
-    channels: z.record(z.string(), MSTeamsChannelSchema.optional()).optional(),
-  })
-  .strict();
+const MSTeamsTeamSchema = MSTeamsChannelSchema.extend({
+  channels: z.record(z.string(), MSTeamsChannelSchema.optional()).optional(),
+});
 
 const MSTEAMS_SERVICE_URL_HOST_ALLOWLIST = [
   "smba.trafficmanager.net",

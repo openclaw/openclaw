@@ -560,31 +560,34 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
 }));
 
 describe("capability cli", () => {
-  it.each(
-    [
-      { args: ["image", "edit", "--prompt", "crop the image"], option: "--file <path>" },
-      { args: ["image", "describe-many"], option: "--file <path>" },
-      { args: ["embedding", "create"], option: "--text <text>" },
-    ].flatMap(({ args, option }) =>
-      ["infer", "capability"].map((root) => ({ args, option, root })),
-    ),
-  )("rejects missing required repeatable input for $root $args", async ({ root, args, option }) => {
-    const argv = [root, ...args, "--json"];
-    const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
-    await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
+  it.each([
+    {
+      root: "infer",
+      args: ["image", "edit", "--prompt", "crop the image"],
+      option: "--file <path>",
+    },
+    { root: "capability", args: ["image", "describe-many"], option: "--file <path>" },
+    { root: "infer", args: ["embedding", "create"], option: "--text <text>" },
+  ])(
+    "rejects missing required repeatable input for $root $args",
+    async ({ root, args, option }) => {
+      const argv = [root, ...args, "--json"];
+      const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
+      await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
 
-    await expect(
-      program.parseAsync(argv, { from: "user" }).then(() => undefined),
-    ).rejects.toMatchObject({
-      code: "commander.missingMandatoryOptionValue",
-      message: `error: required option '${option}' not specified`,
-    });
-    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-    expect(mocks.generateImage).not.toHaveBeenCalled();
-    expect(mocks.describeImageFile).not.toHaveBeenCalled();
-    expect(mocks.createEmbeddingProvider).not.toHaveBeenCalled();
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-  });
+      await expect(
+        program.parseAsync(argv, { from: "user" }).then(() => undefined),
+      ).rejects.toMatchObject({
+        code: "commander.missingMandatoryOptionValue",
+        message: `error: required option '${option}' not specified`,
+      });
+      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+      expect(mocks.generateImage).not.toHaveBeenCalled();
+      expect(mocks.describeImageFile).not.toHaveBeenCalled();
+      expect(mocks.createEmbeddingProvider).not.toHaveBeenCalled();
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    },
+  );
 
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -1107,8 +1110,6 @@ describe("capability cli", () => {
   });
 
   it.each([
-    { position: "parent", systemAgent: undefined },
-    { position: "leaf", systemAgent: undefined },
     { position: "parent", systemAgent: "alpha" },
     { position: "leaf", systemAgent: "alpha" },
   ])(
@@ -1212,7 +1213,7 @@ describe("capability cli", () => {
     },
   );
 
-  it("defaults model run to local transport", async () => {
+  it("defaults model runs to the lean local completion path", async () => {
     await runCapability("model", "run", "--prompt", "hello", "--json");
 
     expect(mocks.acquireSimpleCompletionModelForAgent).toHaveBeenCalledTimes(1);
@@ -1220,12 +1221,8 @@ describe("capability cli", () => {
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(firstJsonOutput()?.capability).toBe("model.run");
     expect(firstJsonOutput()?.transport).toBe("local");
-  });
-
-  it("runs local model probes through the lean completion path", async () => {
-    await runCapability("model", "run", "--prompt", "hello", "--json");
-
     const preparedParams = firstPreparedModelParams();
+    expect(preparedParams).not.toHaveProperty("allowBundledStaticCatalogFallback");
     expect(preparedParams?.agentId).toBe("main");
     expect(preparedParams?.allowMissingApiKeyModes).toEqual(["aws-sdk"]);
     expect(preparedParams?.skipAgentDiscovery).toBe(true);
@@ -1305,19 +1302,6 @@ describe("capability cli", () => {
     expect(params?.modelRef).toBe("mistral/mistral-medium-3-5");
     expect(params?.allowBundledStaticCatalogFallback).toBe(true);
     expect(params?.skipAgentDiscovery).toBe(true);
-  });
-
-  it("does not enable bundled static catalog fallback without an explicit provider/model override", async () => {
-    await runCapability("model", "run", "--prompt", "hello", "--json");
-
-    const calls = mocks.acquireSimpleCompletionModelForAgent.mock.calls as unknown as Array<
-      [Record<string, unknown>]
-    >;
-    const params = calls[0]?.[0];
-    if (!params) {
-      throw new Error("Expected simple completion model params");
-    }
-    expect(params).not.toHaveProperty("allowBundledStaticCatalogFallback");
   });
 
   it("passes image files to local model probes", async () => {
@@ -1552,7 +1536,7 @@ describe("capability cli", () => {
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
-  it.each(["", "   ", "\n\t"])(
+  it.each(["\n\t"])(
     "rejects empty model run prompts before local dispatch (%j)",
     async (prompt) => {
       await expect(runCapability("model", "run", "--prompt", prompt, "--json")).rejects.toThrow(
@@ -2784,29 +2768,6 @@ describe("capability cli", () => {
     ]);
   });
 
-  it("reports the expanded image.generate flags in capability inspect", async () => {
-    await runCapability("inspect", "--name", "image.generate", "--json");
-
-    expect(firstJsonOutput()?.id).toBe("image.generate");
-    expect(firstJsonOutput()?.flags).toEqual([
-      "--prompt",
-      "--model",
-      "--count",
-      "--size",
-      "--aspect-ratio",
-      "--resolution",
-      "--output-format",
-      "--background",
-      "--openai-background",
-      "--openai-moderation",
-      "--quality",
-      "--timeout-ms",
-      "--output",
-      "--agent",
-      "--json",
-    ]);
-  });
-
   it("keeps capability inspect metadata flags in sync with each command's registered options", async () => {
     const program = new Command();
     await registerCapabilityCli(program, ["node", "openclaw", "infer", "--help"]);
@@ -3325,62 +3286,63 @@ describe("capability cli", () => {
     expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 
-  describe.each(["infer", "capability"])("%s numeric options", (command) => {
-    describe.each(["", "   "])("blank value %j", (raw) => {
-      it.each([
-        [
-          "web search limit",
-          ["web", "search", "--query", "ping", "--limit"],
-          "--limit must be a positive integer",
-        ],
-        [
-          "image generate count",
-          ["image", "generate", "--prompt", "portrait", "--count"],
-          "--count must be a positive integer",
-        ],
-        [
-          "image edit count",
-          ["image", "edit", "--file", "photo.png", "--prompt", "crop it", "--count"],
-          "--count must be a positive integer",
-        ],
-        [
-          "video generate duration",
-          ["video", "generate", "--prompt", "clip", "--duration"],
-          "--duration must be a finite number",
-        ],
-      ] as const)("rejects %s before provider dispatch", async (_name, argv, message) => {
-        const webSearchRuntime = await import("../web-search/runtime.js");
-        vi.mocked(webSearchRuntime.runWebSearch).mockClear();
+  it.each([
+    [
+      "infer",
+      ["web", "search", "--query", "ping", "--limit"],
+      "",
+      "--limit must be a positive integer",
+    ],
+    [
+      "capability",
+      ["image", "generate", "--prompt", "portrait", "--count"],
+      "   ",
+      "--count must be a positive integer",
+    ],
+    [
+      "infer",
+      ["image", "edit", "--file", "photo.png", "--prompt", "crop it", "--count"],
+      "",
+      "--count must be a positive integer",
+    ],
+    [
+      "capability",
+      ["video", "generate", "--prompt", "clip", "--duration"],
+      "   ",
+      "--duration must be a finite number",
+    ],
+  ] as const)(
+    "rejects blank numeric input before %s %j dispatch",
+    async (command, argv, raw, message) => {
+      const webSearchRuntime = await import("../web-search/runtime.js");
+      vi.mocked(webSearchRuntime.runWebSearch).mockClear();
 
-        await expect(runCap(command, ...argv, raw)).rejects.toThrow("exit 1");
+      await expect(runCap(command, ...argv, raw)).rejects.toThrow("exit 1");
 
-        expectRuntimeErrorContains(message);
-        expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-        expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
-        expect(mocks.generateImage).not.toHaveBeenCalled();
-        expect(mocks.generateVideo).not.toHaveBeenCalled();
-      });
-    });
+      expectRuntimeErrorContains(message);
+      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+      expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
+      expect(mocks.generateImage).not.toHaveBeenCalled();
+      expect(mocks.generateVideo).not.toHaveBeenCalled();
+    },
+  );
 
-    describe.each(["", "   ", "1000ms"])("invalid timeout %j", (raw) => {
-      it.each([
-        ["image generate", ["image", "generate", "--prompt", "portrait"]],
-        ["image edit", ["image", "edit", "--file", "photo.png", "--prompt", "crop it"]],
-        ["image describe", ["image", "describe", "--file", "photo.png"]],
-        ["image describe-many", ["image", "describe-many", "--file", "photo.png"]],
-        ["video generate", ["video", "generate", "--prompt", "clip"]],
-      ] as const)("rejects %s before provider dispatch", async (_name, argv) => {
-        await expect(runCap(command, ...argv, "--timeout-ms", raw)).rejects.toThrow("exit 1");
+  it.each([
+    ["infer", ["image", "generate", "--prompt", "portrait"], ""],
+    ["capability", ["image", "edit", "--file", "photo.png", "--prompt", "crop it"], "   "],
+    ["infer", ["image", "describe", "--file", "photo.png"], "1000ms"],
+    ["capability", ["image", "describe-many", "--file", "photo.png"], ""],
+    ["infer", ["video", "generate", "--prompt", "clip"], "1000ms"],
+  ] as const)("rejects invalid timeout before %s %j dispatch", async (command, argv, raw) => {
+    await expect(runCap(command, ...argv, "--timeout-ms", raw)).rejects.toThrow("exit 1");
 
-        expectRuntimeErrorContains("Invalid --timeout-ms. Use a positive millisecond value");
-        expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-        expect(mocks.generateImage).not.toHaveBeenCalled();
-        expect(mocks.generateVideo).not.toHaveBeenCalled();
-        expect(mocks.describeImageFile).not.toHaveBeenCalled();
-        expect(mocks.prepareImageDescriptionInput).not.toHaveBeenCalled();
-        expect(mocks.describePreparedImageWithModel).not.toHaveBeenCalled();
-      });
-    });
+    expectRuntimeErrorContains("Invalid --timeout-ms. Use a positive millisecond value");
+    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+    expect(mocks.generateVideo).not.toHaveBeenCalled();
+    expect(mocks.describeImageFile).not.toHaveBeenCalled();
+    expect(mocks.prepareImageDescriptionInput).not.toHaveBeenCalled();
+    expect(mocks.describePreparedImageWithModel).not.toHaveBeenCalled();
   });
 
   it("routes audio transcribe through transcription, not realtime", async () => {

@@ -7,9 +7,9 @@ import type {
 } from "baileys";
 import { resolveWhatsAppDocumentFileName } from "../document-filename.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
-import { isWhatsAppNewsletterJid } from "../normalize.js";
+import { isWhatsAppNewsletterJid } from "../normalize-target.js";
 import { buildQuotedMessageOptions } from "../quoted-message.js";
-import { toWhatsappJid, toWhatsappJidWithLid } from "../text-runtime.js";
+import { toWhatsappJid, toWhatsappJidWithLid } from "../targets-runtime.js";
 import {
   addWhatsAppOutboundMentionsToContent,
   type WhatsAppOutboundMentionResolution,

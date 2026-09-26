@@ -6,19 +6,12 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/terminal.ts";
 import { t } from "../../i18n/index.ts";
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
+import type { TerminalGatewayClient } from "./terminal-connection.ts";
 
 type TerminalUploadFile = { name: string; contentBase64: string };
 
-type TerminalUploadClient = {
-  request<T = unknown>(
-    method: string,
-    params?: unknown,
-    options?: { signal?: AbortSignal },
-  ): Promise<T>;
-};
-
 export async function uploadTerminalFile(
-  client: TerminalUploadClient,
+  client: Pick<TerminalGatewayClient, "request">,
   sessionId: string,
   file: TerminalUploadFile,
   signal?: AbortSignal,

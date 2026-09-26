@@ -1,7 +1,6 @@
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
-// Mattermost plugin module implements send behavior.
 import {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
@@ -108,8 +107,6 @@ function cacheOutboundEntry<K, V>(cache: Map<K, V>, key: K, value: V, maxEntries
   pruneMapToMaxSize(cache, maxEntries);
 }
 
-const getCore = () => getMattermostRuntime();
-
 function createMattermostSendReceipt(params: {
   messageId: string;
   channelId: string;
@@ -145,7 +142,7 @@ function resolveMattermostReceiptKind(params: {
 
 function recordMattermostOutboundActivity(accountId: string): void {
   try {
-    getCore().channel.activity.record({
+    getMattermostRuntime().channel.activity.record({
       channel: "mattermost",
       accountId,
       direction: "outbound",
@@ -248,17 +245,7 @@ function mergeDmRetryOptions(
     onRetry: override?.onRetry,
   };
 
-  if (
-    merged.maxRetries === undefined &&
-    merged.initialDelayMs === undefined &&
-    merged.maxDelayMs === undefined &&
-    merged.timeoutMs === undefined &&
-    merged.onRetry === undefined
-  ) {
-    return undefined;
-  }
-
-  return merged;
+  return Object.values(merged).some((value) => value !== undefined) ? merged : undefined;
 }
 
 async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Promise<string> {
@@ -317,7 +304,7 @@ async function resolveMattermostSendContext(
   to: string,
   opts: MattermostSendOpts,
 ): Promise<MattermostSendContext> {
-  const core = getCore();
+  const core = getMattermostRuntime();
   const logger = core.logging.getChildLogger({ module: "mattermost" });
   if (!opts?.cfg) {
     throw new Error(
@@ -390,7 +377,7 @@ export async function sendMessageMattermost(
   text: string,
   opts: MattermostSendOpts,
 ): Promise<MattermostSendResult> {
-  const core = getCore();
+  const core = getMattermostRuntime();
   const logger = core.logging.getChildLogger({ module: "mattermost" });
   const { cfg, accountId, client, channelId, mediaMaxBytes } = await resolveMattermostSendContext(
     to,

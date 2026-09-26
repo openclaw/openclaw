@@ -259,7 +259,7 @@ async function withFixture(
             sessionId,
             ownerEpoch: 7,
           });
-          let placement = placements.startDispatch(target);
+          let placement = await placements.startDispatch(target);
           placement = placements.transition({
             sessionId,
             from: "requested",

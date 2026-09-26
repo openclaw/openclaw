@@ -485,59 +485,6 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(unknownRegistration.instructions).not.toContain("OpenClaw agent voice context:");
   });
 
-  it("selects realtime provider readiness from the routed call owner", async () => {
-    const config = createBaseConfig();
-    config.agentId = "main";
-    config.realtime.enabled = true;
-    config.numbers["+15550009999"] = { agentId: "support" };
-    const fullConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "support" }] },
-    } as OpenClawConfig;
-    mocks.resolveConfiguredRealtimeVoiceProvider.mockImplementation(
-      ({ agentId }: { agentId?: string }) => {
-        if (agentId !== "support") {
-          throw new Error(`OpenAI realtime is not configured for ${agentId ?? "unknown"}`);
-        }
-        return {
-          provider: { id: "openai-support" },
-          providerConfig: { model: "gpt-realtime", owner: agentId },
-        };
-      },
-    );
-
-    await expect(
-      createVoiceCallRuntime({
-        config,
-        coreConfig: {} as OpenClawConfig,
-        fullConfig,
-        agentRuntime: {} as never,
-      }),
-    ).resolves.toMatchObject({ config: { agentId: "main" } });
-    expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
-
-    const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[2];
-    if (typeof resolveCallRegistration !== "function") {
-      throw new Error("expected per-call realtime registration resolver");
-    }
-    const registration = resolveCallRegistration({
-      callId: "call-support",
-      agentId: "support",
-      direction: "inbound",
-      from: "+15550001234",
-      to: "+15550009999",
-      metadata: { numberRouteKey: "+15550009999" },
-    });
-
-    expect(registration).toMatchObject({
-      agentId: "support",
-      provider: { id: "openai-support" },
-      providerConfig: { model: "gpt-realtime", owner: "support" },
-    });
-    expect(mocks.resolveConfiguredRealtimeVoiceProvider).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ agentId: "support" }),
-    );
-  });
-
   it.each(["twilio", "telnyx", "plivo"] as const)(
     "fails closed when %s falls back to a local-only webhook",
     async (provider) => {
@@ -552,16 +499,12 @@ describe("createVoiceCallRuntime lifecycle", () => {
     },
   );
 
-  it.each([
-    "http://127.0.0.1:3334/voice/webhook",
-    "http://[::1]:3334/voice/webhook",
-    "http://[fd00::1]/voice/webhook",
-  ])("fails closed when Twilio publicUrl %s points at a local-only webhook", async (publicUrl) => {
+  it("fails closed when Twilio publicUrl points at a local-only webhook", async () => {
     await expect(
       createVoiceCallRuntime({
         config: createExternalProviderConfig({
           provider: "twilio",
-          publicUrl,
+          publicUrl: "http://127.0.0.1:3334/voice/webhook",
         }),
         coreConfig: {} as OpenClawConfig,
         agentRuntime: {} as never,

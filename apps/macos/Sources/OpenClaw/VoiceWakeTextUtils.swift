@@ -98,18 +98,6 @@ enum VoiceWakeTextUtils {
                 bestMatch = (range, normalizedTokens.joined(separator: " "), tokenCount)
                 break
             }
-
-            if let bestMatch,
-               bestMatch.range.lowerBound == transcript.startIndex,
-               bestMatch.tokenCount >= tokenCount
-            {
-                // Earlier matches take precedence, so once we match from the
-                // start there is no need to scan later triggers with fewer
-                // tokens at the same offset.
-                if bestMatch.tokenCount > tokenCount {
-                    continue
-                }
-            }
         }
 
         return bestMatch.map { (range: $0.range, normalizedTrigger: $0.normalizedTrigger) }

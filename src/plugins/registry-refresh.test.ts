@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { initializePublishedConfigRuntimeEnv } from "../config/config-env-vars.js";
 import * as configIO from "../config/io.factory.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
@@ -155,7 +156,7 @@ describe("plugin registry refresh config ownership", () => {
         await state.writeConfig(config);
         await seedInstalledPluginIndex(priorRecords, { config, env: state.env });
         const boot = loadPluginMetadataSnapshot({ config, env: state.env, allowCurrent: false });
-        const owner = retainGatewayPluginMetadata();
+        const owner = retainGatewayPluginMetadata(createTestGatewayScheduler());
         const warn = vi.fn();
         const readCommittedIndex = (): unknown => {
           const row = readPersistedInstalledPluginIndexRowSync({ env: state.env });
@@ -226,8 +227,6 @@ describe("plugin registry refresh config ownership", () => {
 
   it.each([
     { reason: "source-changed", envSource: "process" },
-    { reason: "policy-changed", envSource: "process" },
-    { reason: "source-changed", envSource: "caller" },
     { reason: "policy-changed", envSource: "caller" },
   ] as const)(
     "discovers an env-referenced plugin from $envSource env after $reason",

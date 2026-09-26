@@ -417,6 +417,9 @@ describe("parallel web search provider", () => {
       search_queries: ["openclaw github", "openclaw repository"],
       advanced_settings: { max_results: 3 },
     });
+    expect(call.init.body).toBe(
+      '{"search_queries":["openclaw github","openclaw repository"],"advanced_settings":{"max_results":3},"objective":"Find the OpenClaw repository on GitHub"}',
+    );
     const headers = (call.init.headers ?? {}) as Record<string, string>;
     expect(headers["x-api-key"]).toBe("par-secret");
     expect(headers["User-Agent"]).toMatch(/^openclaw-parallel\/\d+\.\d+\.\d+/);
@@ -676,6 +679,7 @@ describe("runParallelMcpSearch", () => {
       searchQueries: ["example query"],
       maxResults: 1,
       modelName: "claude-opus-4-8",
+      sessionId: "fixture-session",
     });
     expect(endpointMockState.calls.map((call) => readBody(call).method)).toEqual([
       "initialize",
@@ -686,6 +690,25 @@ describe("runParallelMcpSearch", () => {
     expect(headerOf(endpointCall(2), "Mcp-Session-Id")).toBe("server-session-1");
     expect(headerOf(endpointCall(2), "MCP-Protocol-Version")).toBe("2025-06-18");
     expect(headerOf(endpointCall(0), "Authorization")).toBeUndefined();
+    expect(endpointCall(1).init.body).toBe(
+      '{"jsonrpc":"2.0","method":"notifications/initialized"}',
+    );
+    expect(endpointCall(2).init.body).toBe(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: readBody(endpointCall(2)).id,
+        method: "tools/call",
+        params: {
+          name: "web_search",
+          arguments: {
+            objective: "find examples",
+            search_queries: ["example query"],
+            session_id: "fixture-session",
+            model_name: "claude-opus-4-8",
+          },
+        },
+      }),
+    );
     for (const call of endpointMockState.calls) {
       expect(headerOf(call, "User-Agent")).toMatch(/^openclaw-parallel\//);
     }

@@ -653,7 +653,7 @@ async function runAdmittedOpenClawStateWorkerOperation<T>(
         operation,
         options?.assertCurrent,
         options?.createAdmission,
-        options?.requireStateLifecycle === true,
+        options?.requireStateLifecycle ?? false,
       );
     } finally {
       releaseOperation();

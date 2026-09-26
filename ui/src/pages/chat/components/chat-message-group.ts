@@ -203,12 +203,18 @@ export function renderActivityGroup(
     return nothing;
   }
   const entries = groups.flatMap((group) => group.messages);
-  const cards = entries.flatMap((entry) => extractToolCardsCached(entry.message));
+  const cards: ToolCard[] = [];
+  const toolContexts = new Map<ToolCard, { messageKey: string; disclosureId: string }>();
   const preparedByCard = new Map<ToolCard, ReturnType<typeof readPreparedActivity>[number]>();
   const activity = entries.flatMap((entry) => {
     const prepared = readPreparedActivity(entry.message);
     const byCallId = new Map(prepared.map((item) => [item.toolCallId, item]));
-    for (const card of extractToolCardsCached(entry.message)) {
+    for (const [index, card] of extractToolCardsCached(entry.message).entries()) {
+      cards.push(card);
+      toolContexts.set(card, {
+        messageKey: entry.key,
+        disclosureId: `${entry.key}:toolcard:${index}`,
+      });
       const item = card.callId ? byCallId.get(card.callId) : undefined;
       if (item) {
         preparedByCard.set(card, item);
@@ -252,22 +258,6 @@ export function renderActivityGroup(
     ? `${runningOperation.title}…`
     : summarizeToolGroup(visibleActivity, { includeFailureCount: activityExpanded });
   const toolCardOverrides = new Map<ToolCard, unknown>();
-  const toolContexts = new Map(
-    groups.flatMap((group) =>
-      group.messages.flatMap((item) =>
-        extractToolCardsCached(item.message).map(
-          (card, index) =>
-            [
-              card,
-              {
-                messageKey: item.key,
-                disclosureId: `${item.key}:toolcard:${index}`,
-              },
-            ] as const,
-        ),
-      ),
-    ),
-  );
   function renderOperation(group: ToolCallGroup<ToolCard>): unknown {
     const { card, children } = group;
     const context = toolContexts.get(card)!;
@@ -502,7 +492,6 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         : "other";
   const avatarPlacement = opts.avatarPlacement ?? "gutter";
 
-  // Aggregate usage/cost/model across all messages in the group
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
 
   if (normalizedRole === "tool" && opts.showToolCalls === false) {
@@ -636,7 +625,6 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                   actionDetails &&
                   (actionDetails.markdown || (actionDetails.replyTarget && opts.onReply)) &&
                   index < lastMessageIndex &&
-                  !ownsRunFrame &&
                   !isTurnBlock
                     ? html`
                         <div class="chat-message-actions-row" data-message-actions-for=${item.key}>

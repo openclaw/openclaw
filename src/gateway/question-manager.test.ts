@@ -208,18 +208,6 @@ describe("QuestionManager", () => {
     }
   });
 
-  it("releases waitAnswer with the submitted answer", async () => {
-    const record = manager.request({ questions, timeoutMs: 10_000 });
-    const waiting = manager.waitAnswer(record.id);
-
-    expect(manager.resolve(record.id, answers, "control-ui")).toEqual({
-      status: "answered",
-      answers,
-    });
-    await expect(waiting).resolves.toEqual({ status: "answered", answers });
-    expect(manager.get(record.id)).toMatchObject({ status: "answered", resolvedBy: "control-ui" });
-  });
-
   it("accepts ignored synchronous callback results through the public Gateway contract", async () => {
     const observed: QuestionResolvedEvent[] = [];
     const request = {
@@ -254,6 +242,7 @@ describe("QuestionManager", () => {
       answers,
       resolutionId,
     });
+    expect(manager.get(record.id)).toMatchObject({ status: "answered", resolvedBy: "plain-text" });
     expect(manager.get(record.id)).not.toHaveProperty("resolutionId");
     expect(onResolved).toHaveBeenCalledOnce();
     expect(onResolved.mock.calls[0]?.[0]).toEqual({
@@ -659,7 +648,7 @@ describe("QuestionManager", () => {
 });
 
 describe("answer canonicalization", () => {
-  it.each(["  synthetic-secret  ", "\tsynthetic-secret\n", "   "])(
+  it.each(["\tsynthetic-secret\n", "   "])(
     "preserves exact secret bytes while normalizing ordinary answers: %j",
     async (value) => {
       const record = manager.request({

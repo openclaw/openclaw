@@ -10,10 +10,9 @@ import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { backupCreateCommand } from "../backup.js";
 import { buildMigrationContext, buildMigrationReportDir } from "./context.js";
-import { applyMigrationItemSelection } from "./item-selection.js";
 import { assertApplySucceeded, assertConflictFreePlan, writeApplyResult } from "./output.js";
 import { buildMigrationProviderOptions } from "./providers.js";
-import { applyMigrationPluginSelection, applyMigrationSkillSelection } from "./selection.js";
+import { applyMigrationSelections } from "./selection.js";
 import type { MigrateApplyOptions } from "./types.js";
 
 function shouldTreatMissingBackupAsEmptyState(error: unknown): boolean {
@@ -71,27 +70,15 @@ export async function runMigrationApply(params: {
       params.opts.preflightPlan ??
       (await params.provider.plan(
         buildMigrationContext({
-          source: params.opts.source,
-          targetAgentId: params.opts.targetAgentId,
-          itemKinds: params.opts.itemKinds,
-          includeSecrets: params.opts.includeSecrets,
-          overwrite: params.opts.overwrite,
-          configOverride: params.opts.configOverride,
+          ...params.opts,
           providerOptions: buildMigrationProviderOptions(params.opts, params.providerId),
           runtime: params.runtime,
-          json: params.opts.json,
         }),
       ));
     if (!params.opts.preflightPlan) {
       tick();
     }
-    const selectedPlan = applyMigrationItemSelection(
-      applyMigrationPluginSelection(
-        applyMigrationSkillSelection(preflightPlan, params.opts.skills),
-        params.opts.plugins,
-      ),
-      params.opts.itemIds,
-    );
+    const selectedPlan = applyMigrationSelections(preflightPlan, params.opts);
     // Selection is applied before conflict checks so deselected conflicting items
     // cannot block an otherwise safe migration.
     assertConflictFreePlan(selectedPlan, params.providerId);
@@ -111,17 +98,11 @@ export async function runMigrationApply(params: {
       }
       await fs.mkdir(reportDir, { recursive: true });
       const ctx = buildMigrationContext({
-        source: params.opts.source,
-        targetAgentId: params.opts.targetAgentId,
-        itemKinds: params.opts.itemKinds,
-        includeSecrets: params.opts.includeSecrets,
-        overwrite: params.opts.overwrite,
-        configOverride: params.opts.configOverride,
+        ...params.opts,
         providerOptions: buildMigrationProviderOptions(params.opts, params.providerId),
         runtime: params.runtime,
         backupPath,
         reportDir,
-        json: params.opts.json,
       });
       progress?.setLabel("Applying migration…");
       const result = await withCommandProcessScope(async () => {

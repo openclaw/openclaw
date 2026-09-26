@@ -1002,7 +1002,7 @@ struct ChatViewModelSessionActionTests {
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         viewModel.sessionBranches = staleBranches
 
-        await viewModel.refreshSessionBranchesForMenuPresentation()
+        await viewModel.refreshSessionBranches()
 
         #expect(viewModel.sessionBranches == freshBranches)
         #expect(await transport.branchListSessionKeys() == ["main"])
@@ -1038,7 +1038,7 @@ struct ChatViewModelSessionActionTests {
             outbox: store)
         viewModel.reconciledOutboxBranchScopes.insert(scope)
 
-        await viewModel.refreshSessionBranchesForMenuPresentation()
+        await viewModel.refreshSessionBranches()
 
         #expect(viewModel.reconciledOutboxBranchScopes.contains(scope))
         #expect(await store.branchState(for: scope)?.switchPendingSince == nil)

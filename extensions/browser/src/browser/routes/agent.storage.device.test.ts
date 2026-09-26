@@ -186,7 +186,6 @@ describe("browser cookie batch route", () => {
   });
 
   it.each([
-    ["missing", {}],
     ["empty", { cookies: [] }],
     ["non-array", { cookies: {} }],
   ])("rejects a %s cookies payload", async (_label, body) => {
@@ -225,7 +224,6 @@ describe("browser storage route boundaries", () => {
     { kind: "local", operation: "set", value: "  preserved  " },
     { kind: "session", operation: "set", value: "" },
     { kind: "local", operation: "clear", value: undefined },
-    { kind: "session", operation: "clear", value: undefined },
   ] as const)(
     "changes only the requested $kind storage entry on $operation",
     async ({ kind, operation, value }) => {

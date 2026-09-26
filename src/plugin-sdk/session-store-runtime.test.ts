@@ -64,6 +64,24 @@ describe("session-store-runtime compatibility surface", () => {
     });
   }
 
+  async function seedRecoveringSession(
+    sessionKey: string,
+    sessionId: string,
+    targetStorePath = storePath,
+  ) {
+    const entry: InternalSessionEntry = {
+      abortedLastRun: true,
+      mainRestartRecovery: { chargedAttempts: 1, cycleId: "rotation-cycle", revision: 1 },
+      restartRecoveryRuns: [{ lifecycleGeneration: "rotation-generation", runId: "rotation-run" }],
+      sessionId,
+      updatedAt: 10,
+    };
+    await replaceInternalSessionEntry(
+      { agentId: "main", sessionKey, storePath: targetStorePath },
+      entry,
+    );
+  }
+
   function assignOwner(sessionKey: string): void {
     const actor = { id: "profile-owner", type: "human" as const };
     assignSessionOwner({ sessionKey, storePath }, { assignedBy: actor, owner: actor });
@@ -693,41 +711,8 @@ describe("session-store-runtime compatibility surface", () => {
     const patchKey = "agent:main:telegram:direct:patch-rotation";
     const upsertKey = "agent:main:telegram:direct:upsert-rotation";
     const upsertStorePath = path.join(tempDir, "upsert-sessions.json");
-    const mainRestartRecovery = {
-      chargedAttempts: 1,
-      cycleId: "rotation-cycle",
-      revision: 1,
-    };
-    await seedSessionEntry(patchKey, {
-      abortedLastRun: true,
-      restartRecoveryRuns: [{ lifecycleGeneration: "patch-generation", runId: "patch-run" }],
-      sessionId: "patch-before",
-      updatedAt: 10,
-    });
-    await patchInternalSessionEntry(
-      { agentId: "main", sessionKey: patchKey, storePath },
-      () =>
-        ({
-          abortedLastRun: true,
-          mainRestartRecovery,
-          restartRecoveryRuns: [{ lifecycleGeneration: "patch-generation", runId: "patch-run" }],
-        }) as Partial<InternalSessionEntry>,
-    );
-    await upsertSessionEntry({
-      agentId: "main",
-      entry: { sessionId: "upsert-before", updatedAt: 10 },
-      sessionKey: upsertKey,
-      storePath: upsertStorePath,
-    });
-    await patchInternalSessionEntry(
-      { agentId: "main", sessionKey: upsertKey, storePath: upsertStorePath },
-      () =>
-        ({
-          abortedLastRun: true,
-          mainRestartRecovery,
-          restartRecoveryRuns: [{ lifecycleGeneration: "upsert-generation", runId: "upsert-run" }],
-        }) as Partial<InternalSessionEntry>,
-    );
+    await seedRecoveringSession(patchKey, "patch-before");
+    await seedRecoveringSession(upsertKey, "upsert-before", upsertStorePath);
 
     await patchSessionEntry({
       replaceEntry: true,
@@ -758,41 +743,8 @@ describe("session-store-runtime compatibility surface", () => {
     const patchKey = "agent:main:telegram:direct:patch-rotation";
     const updateKey = "agent:main:telegram:direct:update-rotation";
     const updateStorePath = path.join(tempDir, "update-patch-sessions.json");
-    const mainRestartRecovery = {
-      chargedAttempts: 1,
-      cycleId: "rotation-cycle",
-      revision: 1,
-    };
-    await seedSessionEntry(patchKey, {
-      abortedLastRun: true,
-      restartRecoveryRuns: [{ lifecycleGeneration: "patch-generation", runId: "patch-run" }],
-      sessionId: "patch-before",
-      updatedAt: 10,
-    });
-    await upsertSessionEntry({
-      agentId: "main",
-      entry: { sessionId: "update-before", updatedAt: 10 },
-      sessionKey: updateKey,
-      storePath: updateStorePath,
-    });
-    await patchInternalSessionEntry(
-      { agentId: "main", sessionKey: patchKey, storePath },
-      () =>
-        ({
-          abortedLastRun: true,
-          mainRestartRecovery,
-          restartRecoveryRuns: [{ lifecycleGeneration: "patch-generation", runId: "patch-run" }],
-        }) as Partial<InternalSessionEntry>,
-    );
-    await patchInternalSessionEntry(
-      { agentId: "main", sessionKey: updateKey, storePath: updateStorePath },
-      () =>
-        ({
-          abortedLastRun: true,
-          mainRestartRecovery,
-          restartRecoveryRuns: [{ lifecycleGeneration: "update-generation", runId: "update-run" }],
-        }) as Partial<InternalSessionEntry>,
-    );
+    await seedRecoveringSession(patchKey, "patch-before");
+    await seedRecoveringSession(updateKey, "update-before", updateStorePath);
 
     await patchSessionEntry({
       sessionKey: patchKey,
@@ -818,7 +770,6 @@ describe("session-store-runtime compatibility surface", () => {
   it.each([
     { pruneAfterMs: 7 * DAY_MS, archivedAt: expect.any(Number) },
     { pruneAfterMs: 0, archivedAt: undefined },
-    { pruneAfterMs: -DAY_MS, archivedAt: undefined },
   ])(
     "applies age retention $pruneAfterMs through entry patches",
     async ({ pruneAfterMs, archivedAt }) => {

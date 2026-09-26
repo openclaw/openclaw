@@ -122,12 +122,7 @@ function normalizeCost(pricing?: VercelPricingShape): ModelDefinitionConfig["cos
 
 function buildStaticModelDefinition(model: StaticVercelGatewayModel): ModelDefinitionConfig {
   return {
-    id: model.id,
-    name: model.name,
-    reasoning: model.reasoning,
-    input: model.input,
-    contextWindow: model.contextWindow,
-    maxTokens: model.maxTokens,
+    ...model,
     cost: {
       ...VERCEL_AI_GATEWAY_DEFAULT_COST,
       ...model.cost,

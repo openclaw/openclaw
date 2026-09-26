@@ -27,7 +27,6 @@ import {
 } from "../infra/sqlite-transaction.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
-import { registerSqliteWalWriteAdmission } from "../infra/sqlite-wal-write-admission.js";
 import {
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
@@ -112,7 +111,7 @@ import {
   isSameOpenClawAgentDatabasePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
-import { runOpenClawAgentWriteAdmission } from "./openclaw-agent-write-admission.js";
+import { registerOpenClawAgentWalMaintenance } from "./openclaw-agent-db.wal.js";
 import { requestOpenClawAgentDatabaseQuickCheck } from "./openclaw-database-verify.js";
 import {
   clearOpenClawDatabaseQuarantine,
@@ -480,14 +479,7 @@ function* openOpenClawAgentDatabaseSteps(
     }
     refreshAgentDatabaseIdleTimer(database);
     if (isMainThread) {
-      const writeOptions = { agentId, path: pathname, env: leaseEnvironment };
-      registerSqliteWalWriteAdmission(db, (operation) =>
-        runOpenClawAgentWriteAdmission(writeOptions, () => {
-          if (findOpenClawAgentDatabaseIfOpen(writeOptions) === database) {
-            operation();
-          }
-        }),
-      );
+      registerOpenClawAgentWalMaintenance(database, leaseEnvironment);
     }
     getOpenClawDatabaseMaintenanceScope()?.own(database.db, "agent-handles", () =>
       closeMaintenanceAgentDatabase(database),

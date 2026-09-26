@@ -14,9 +14,8 @@ import {
   waitForPluginCacheRetirement,
   withPluginCache,
 } from "./plugin-cache.js";
+import { PLUGIN_LIFECYCLE_LEASE_IDENTITY } from "./plugin-lifecycle-lease-identity.js";
 
-const PLUGIN_LIFECYCLE_LEASE_SCOPE = "core:plugin-lifecycle";
-const PLUGIN_LIFECYCLE_LEASE_KEY = "global";
 const DEFAULT_PLUGIN_LIFECYCLE_LEASE_MS = 5 * 60_000;
 const DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS = 10 * 60_000;
 
@@ -144,8 +143,7 @@ export async function withPluginLifecycleLease<T>(
 
   return await withOpenClawStateLease(
     {
-      scope: PLUGIN_LIFECYCLE_LEASE_SCOPE,
-      key: PLUGIN_LIFECYCLE_LEASE_KEY,
+      ...PLUGIN_LIFECYCLE_LEASE_IDENTITY,
       database: {
         scope: "shared",
         schemaPolicy: options.schemaPolicy,

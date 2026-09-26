@@ -886,23 +886,13 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(compactCalls).toHaveLength(1);
   });
 
-  it.each([
-    {
-      name: "a normal failed result",
-      compacted: false,
-      reason: "timed out waiting for codex app-server compaction",
-    },
-    {
-      name: "a contradictory compacted failure",
-      compacted: true,
-      reason: "contradictory native result",
-    },
-  ])("surfaces nonrecoverable native harness CLI compaction failures for $name", async (result) => {
+  it("surfaces a contradictory compacted native harness failure", async () => {
+    const reason = "contradictory native result";
     const ensureSelectedAgentHarnessPlugin = vi.fn(async () => undefined);
     const compactAgentHarnessSession = vi.fn(async () => ({
       ok: false,
-      compacted: result.compacted,
-      reason: result.reason,
+      compacted: true,
+      reason,
     }));
     const scenario = await prepareCompactionScenario({
       suffix: "codex-native-failure",
@@ -918,7 +908,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     const { compactCalls, recordCliCompactionInStore } = scenario;
 
     await expect(scenario.run()).rejects.toThrow(
-      `CLI native harness compaction failed for codex/gpt-5.5: ${result.reason}`,
+      `CLI native harness compaction failed for codex/gpt-5.5: ${reason}`,
     );
 
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);

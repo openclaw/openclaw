@@ -264,37 +264,19 @@ function collectReleaseConfiguredPluginIds(params: {
   })) {
     addEligiblePluginId(params.cfg, pluginIds, candidate.pluginId);
   }
-  for (const pluginId of collectMaterialPluginEntryIds(params.cfg)) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectSlotPluginIds(params.cfg)) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectConfiguredProviderPluginIds({ cfg: params.cfg, env })) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectAgentHarnessRuntimePluginIds(params.cfg, env)) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectWebSearchPluginIds(params.cfg)) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectEnvWebSearchPluginIds(params.cfg, env)) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectWebFetchPluginIds(params.cfg)) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectEnvWebFetchPluginIds(params.cfg, env)) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectSpeechPluginIds(params.cfg)) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectAcpRuntimePluginIds(params.cfg)) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectAllowOnlyOfficialPluginIds(params.cfg)) {
+  for (const pluginId of [
+    ...collectMaterialPluginEntryIds(params.cfg),
+    ...collectSlotPluginIds(params.cfg),
+    ...collectConfiguredProviderPluginIds({ cfg: params.cfg, env }),
+    ...collectAgentHarnessRuntimePluginIds(params.cfg, env),
+    ...collectWebSearchPluginIds(params.cfg),
+    ...collectEnvWebSearchPluginIds(params.cfg, env),
+    ...collectWebFetchPluginIds(params.cfg),
+    ...collectEnvWebFetchPluginIds(params.cfg, env),
+    ...collectSpeechPluginIds(params.cfg),
+    ...collectAcpRuntimePluginIds(params.cfg),
+    ...collectAllowOnlyOfficialPluginIds(params.cfg),
+  ]) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
   for (const channelId of collectConfiguredChannelIds(params.cfg, env)) {
@@ -334,37 +316,11 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     currentVersion: params.currentVersion,
     touchedVersion: params.touchedVersion,
   });
-  if (!shouldRunReleaseStep) {
-    if (configured.pluginIds.length === 0 && configured.channelIds.length === 0) {
-      return { changes: [], warnings: [], completed: false, touchedConfig: false };
-    }
-    const repaired = await repairMissingPluginInstallsForIds({
-      cfg: params.cfg,
-      pluginIds: configured.pluginIds,
-      channelIds: configured.channelIds,
-      blockedPluginIds: collectBlockedPluginIds(params.cfg),
-      env,
-    });
-    const warnings = [...repaired.warnings, ...(repaired.notices ?? [])];
-    const postInstallDoctorResult = createPostInstallDoctorResultForDeferredRepair({
-      updateInProgress,
-      details: repaired.deferredRepairDetails ?? [],
-      warnings: repaired.warnings,
-    });
-    return {
-      changes: repaired.changes,
-      warnings,
-      completed: repaired.warnings.length === 0,
-      touchedConfig: false,
-      ...(repaired.pluginInventoryChanged ? { pluginInventoryChanged: true as const } : {}),
-      ...(postInstallDoctorResult ? { postInstallDoctorResult } : {}),
-    };
-  }
   if (configured.pluginIds.length === 0 && configured.channelIds.length === 0) {
     // No configured plugins or channels means no backfill happened, so there is nothing to stamp.
     // The Doctor state runner persists config whenever touchedConfig is true, which would rewrite
     // an operator's authored file - or create one that never existed - for zero repair work.
-    return { changes: [], warnings: [], completed: true, touchedConfig: false };
+    return { changes: [], warnings: [], completed: shouldRunReleaseStep, touchedConfig: false };
   }
   const repaired = await repairMissingPluginInstallsForIds({
     cfg: params.cfg,
@@ -373,7 +329,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     blockedPluginIds: collectBlockedPluginIds(params.cfg),
     env,
   });
-  const completed = repaired.warnings.length === 0 && !updateInProgress;
+  const completed = repaired.warnings.length === 0 && (!shouldRunReleaseStep || !updateInProgress);
   const warnings = [...repaired.warnings, ...(repaired.notices ?? [])];
   const postInstallDoctorResult = createPostInstallDoctorResultForDeferredRepair({
     updateInProgress,
@@ -384,7 +340,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     changes: repaired.changes,
     warnings,
     completed,
-    touchedConfig: completed,
+    touchedConfig: shouldRunReleaseStep && completed,
     ...(repaired.pluginInventoryChanged ? { pluginInventoryChanged: true as const } : {}),
     ...(postInstallDoctorResult ? { postInstallDoctorResult } : {}),
   };

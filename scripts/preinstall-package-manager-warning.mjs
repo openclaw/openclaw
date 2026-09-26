@@ -368,7 +368,7 @@ export function detectLifecyclePackageManager(env = process.env) {
  * @param {unknown} packageManager
  * @returns {string | null}
  */
-export function createPackageManagerWarningMessage(packageManager) {
+function createPackageManagerWarningMessage(packageManager) {
   const normalizedPackageManager = normalizeEnvValue(packageManager);
   if (!normalizedPackageManager || normalizedPackageManager === "pnpm") {
     return null;

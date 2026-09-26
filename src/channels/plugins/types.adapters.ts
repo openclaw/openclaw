@@ -460,6 +460,7 @@ export type ChannelDoctorLegacyConfigRule = LegacyConfigRule;
 
 export type ChannelDoctorSequenceResult = {
   changeNotes: string[];
+  infoNotes?: string[];
   warningNotes: string[];
 };
 

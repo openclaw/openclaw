@@ -7,7 +7,6 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
-import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
@@ -93,7 +92,10 @@ describe("session transcript reader facade", () => {
 
     await expect(
       readSessionMessagesAsync(scope, { mode: "full", reason: "facade active branch test" }),
-    ).resolves.toMatchObject([{ content: "root prompt" }, { content: "active answer" }]);
+    ).resolves.toMatchObject([
+      { content: "root prompt", __openclaw: { id: "root", seq: 1 } },
+      { content: "active answer", __openclaw: { id: "active", seq: 2 } },
+    ]);
     const visited: Array<{ message: unknown; seq: number }> = [];
     await expect(
       visitSessionMessagesAsync(scope, (message, seq) => visited.push({ message, seq })),
@@ -524,54 +526,6 @@ describe("session transcript reader facade", () => {
       visitSessionMessagesAsync(scope, (message) => visited.push(message)),
     ).rejects.toBeInstanceOf(SessionTranscriptProjectionUnavailableError);
     expect(visited).toEqual([]);
-    await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
-  });
-
-  test("projects SQLite transcript reads to the active branch", async () => {
-    const sessionId = "reader-sqlite-branch";
-    const scope = {
-      agentId: "main",
-      sessionId,
-      sessionKey: `agent:main:${sessionId}`,
-      storePath,
-    };
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        {
-          eventId: "root",
-          parentId: null,
-          message: { role: "user", content: "branch prompt" },
-        },
-        {
-          eventId: "inactive",
-          parentId: "root",
-          message: { role: "assistant", content: "stale branch" },
-        },
-        {
-          eventId: "active",
-          parentId: "root",
-          message: { role: "assistant", content: "active branch" },
-        },
-      ],
-      touchSessionEntry: false,
-    });
-    await waitForSessionTranscriptIndexReconcile({
-      agentId: "main",
-      path: path.join(tempDir, "openclaw-agent.sqlite"),
-    });
-
-    const messages = await readSessionMessagesAsync(scope, {
-      mode: "full",
-      reason: "sqlite branch facade test",
-    });
-
-    expect(messages).toMatchObject([{ content: "branch prompt" }, { content: "active branch" }]);
-    expect(
-      messages.map((message) => (message as { __openclaw?: { id?: string } })["__openclaw"]?.id),
-    ).toEqual(["root", "active"]);
-    expect(
-      messages.map((message) => (message as { __openclaw?: { seq?: number } })["__openclaw"]?.seq),
-    ).toEqual([1, 2]);
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
   });
 

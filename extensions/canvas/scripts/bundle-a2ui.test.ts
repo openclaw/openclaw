@@ -8,7 +8,6 @@ import {
   compareNormalizedPaths,
   getBundleHashRepoInputPaths,
   getLocalRolldownCliCandidates,
-  isBundleHashInputPath,
   listTrackedInputFiles,
 } from "./bundle-a2ui.mjs";
 
@@ -23,7 +22,6 @@ describe("scripts/bundle-a2ui.mjs", () => {
       path.join(repoRoot, "extensions", "canvas", "src", "host", "a2ui-app"),
     );
     expect(inputPaths).not.toContain(path.join(repoRoot, "vendor", "a2ui", "renderers", "lit"));
-    expect(isBundleHashInputPath(path.join(repoRoot, "package.json"), repoRoot)).toBe(true);
   });
 
   it("prefers the installed rolldown CLI over a network dlx fallback", () => {

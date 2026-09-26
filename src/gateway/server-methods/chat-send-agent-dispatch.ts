@@ -703,7 +703,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     context,
     request,
     sessionKey,
-    sessionLoadOptions: session.sessionLoadOptions,
     storePath: session.storePath,
   });
 }

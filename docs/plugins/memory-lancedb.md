@@ -268,6 +268,11 @@ openclaw ltm search <query> [--agent <id>] [--limit <n>]
 openclaw ltm stats [--agent <id>]
 ```
 
+`ltm stats` gives its database read 60 seconds after plugin registration. It
+stops the isolated reader before reporting a timeout, without creating a memory
+table or changing existing memory data. A database with no memory table reports
+zero. Plugin discovery and source capture happen before this deadline starts.
+
 `ltm query` runs a non-vector query directly against the LanceDB table:
 
 ```bash

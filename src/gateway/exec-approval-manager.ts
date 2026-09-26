@@ -68,7 +68,7 @@ export class ExecApprovalManager<
   TPayload = ExecApprovalRequestPayload,
 > extends ExecApprovalExpiry<TPayload> {
   constructor(protected readonly options: ExecApprovalManagerOptions<TPayload>) {
-    super();
+    super(options.scheduler);
   }
 
   override get approvalKind(): OperatorApprovalKind {

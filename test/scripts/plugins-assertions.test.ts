@@ -187,6 +187,35 @@ function requestFixtureRegistry(
   });
 }
 
+function startFixtureRegistry(
+  portFile: string,
+  tarballPath: string,
+  env: NodeJS.ProcessEnv = {},
+  preload?: string,
+) {
+  return spawn(
+    process.execPath,
+    [
+      ...(preload ? ["--import", pathToFileURL(preload).href] : []),
+      "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+      portFile,
+      "@openclaw/demo-plugin-npm",
+      "1.0.0",
+      tarballPath,
+    ],
+    { cwd: process.cwd(), env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] },
+  );
+}
+
+async function stopFixtureRegistry(child: ReturnType<typeof startFixtureRegistry>) {
+  if (child.exitCode === null) {
+    child.kill();
+    await new Promise((resolve) => {
+      child.once("close", resolve);
+    });
+  }
+}
+
 describe("plugins Docker assertions", () => {
   it("rejects loose ClawHub preflight limits instead of parsing prefixes", () => {
     const timeoutResult = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "clawhub-preflight"], {
@@ -869,20 +898,7 @@ fs.renameSync = (source, destination) => {
     const tarballPath = path.join(root, "demo-plugin.tgz");
     writeFileSync(tarballPath, "fixture package archive", "utf8");
 
-    const child = spawn(
-      process.execPath,
-      [
-        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
-        portFile,
-        "@openclaw/demo-plugin-npm",
-        "1.0.0",
-        tarballPath,
-      ],
-      {
-        cwd: process.cwd(),
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    const child = startFixtureRegistry(portFile, tarballPath);
     const stderr = createBoundedChildOutput();
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {
@@ -905,12 +921,7 @@ fs.renameSync = (source, destination) => {
         "dist-tags": { latest: "1.0.0" },
       });
     } finally {
-      if (child.exitCode === null) {
-        child.kill();
-        await new Promise((resolve) => {
-          child.once("close", resolve);
-        });
-      }
+      await stopFixtureRegistry(child);
     }
   });
 
@@ -1030,12 +1041,7 @@ fs.renameSync = (source, destination) => {
         `http://192.0.2.2:${port}/openclaw/-/openclaw.tgz`,
       );
     } finally {
-      if (child.exitCode === null) {
-        child.kill();
-        await new Promise((resolve) => {
-          child.once("close", resolve);
-        });
-      }
+      await stopFixtureRegistry(child);
     }
   });
 
@@ -1087,25 +1093,10 @@ fs.renameSync = (source, destination) => {
         throw new Error("expected upstream registry address");
       }
 
-      const child = spawn(
-        process.execPath,
-        [
-          "scripts/e2e/lib/plugins/npm-registry-server.mjs",
-          portFile,
-          "@openclaw/demo-plugin-npm",
-          "1.0.0",
-          tarballPath,
-        ],
-        {
-          cwd: process.cwd(),
-          env: {
-            ...process.env,
-            OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
-            OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM: merged ? "1" : "",
-          },
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
+      const child = startFixtureRegistry(portFile, tarballPath, {
+        OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+        OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM: merged ? "1" : "",
+      });
 
       try {
         const port = await waitForPortFile(portFile);
@@ -1131,12 +1122,7 @@ fs.renameSync = (source, destination) => {
         }
         expect(upstreamRequests).toBe(merged ? 1 : 2);
       } finally {
-        if (child.exitCode === null) {
-          child.kill();
-          await new Promise((resolve) => {
-            child.once("close", resolve);
-          });
-        }
+        await stopFixtureRegistry(child);
         await new Promise<void>((resolve) => {
           upstream.close(() => resolve());
         });
@@ -1164,24 +1150,9 @@ fs.renameSync = (source, destination) => {
       throw new Error("expected upstream registry address");
     }
 
-    const child = spawn(
-      process.execPath,
-      [
-        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
-        portFile,
-        "@openclaw/demo-plugin-npm",
-        "1.0.0",
-        tarballPath,
-      ],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    const child = startFixtureRegistry(portFile, tarballPath, {
+      OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+    });
 
     try {
       const port = await waitForPortFile(portFile);
@@ -1194,12 +1165,7 @@ fs.renameSync = (source, destination) => {
       expect(response.contentLength).toBeUndefined();
       expect(response.body).toBe(upstreamBody);
     } finally {
-      if (child.exitCode === null) {
-        child.kill();
-        await new Promise((resolve) => {
-          child.once("close", resolve);
-        });
-      }
+      await stopFixtureRegistry(child);
       await new Promise<void>((resolve) => {
         upstream.close(() => resolve());
       });
@@ -1227,24 +1193,9 @@ fs.renameSync = (source, destination) => {
       throw new Error("expected upstream registry address");
     }
 
-    const child = spawn(
-      process.execPath,
-      [
-        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
-        portFile,
-        "@openclaw/demo-plugin-npm",
-        "1.0.0",
-        tarballPath,
-      ],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    const child = startFixtureRegistry(portFile, tarballPath, {
+      OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+    });
     const stderr = createBoundedChildOutput();
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {
@@ -1265,12 +1216,7 @@ fs.renameSync = (source, destination) => {
       expect(local.statusCode, stderr.text()).toBe(200);
       expect(child.exitCode, stderr.text()).toBeNull();
     } finally {
-      if (child.exitCode === null) {
-        child.kill();
-        await new Promise((resolve) => {
-          child.once("close", resolve);
-        });
-      }
+      await stopFixtureRegistry(child);
       upstream.closeAllConnections();
       await new Promise<void>((resolve) => {
         upstream.close(() => resolve());
@@ -1335,25 +1281,13 @@ fs.renameSync = (source, destination) => {
       throw new Error("expected upstream registry address");
     }
 
-    const child = spawn(
-      process.execPath,
-      [
-        "--import",
-        pathToFileURL(preloadPath).href,
-        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
-        portFile,
-        "@openclaw/demo-plugin-npm",
-        "1.0.0",
-        tarballPath,
-      ],
+    const child = startFixtureRegistry(
+      portFile,
+      tarballPath,
       {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
+        OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
       },
+      preloadPath,
     );
     const stderr = createBoundedChildOutput();
     child.stderr.setEncoding("utf8");
@@ -1374,12 +1308,7 @@ fs.renameSync = (source, destination) => {
       expect(local.statusCode, stderr.text()).toBe(200);
       expect(child.exitCode, stderr.text()).toBeNull();
     } finally {
-      if (child.exitCode === null) {
-        child.kill();
-        await new Promise((resolve) => {
-          child.once("close", resolve);
-        });
-      }
+      await stopFixtureRegistry(child);
       upstream.closeAllConnections();
       await new Promise<void>((resolve) => {
         upstream.close(() => resolve());
@@ -1426,24 +1355,9 @@ fs.renameSync = (source, destination) => {
       throw new Error("expected upstream registry addresses");
     }
 
-    const child = spawn(
-      process.execPath,
-      [
-        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
-        portFile,
-        "@openclaw/demo-plugin-npm",
-        "1.0.0",
-        tarballPath,
-      ],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${configuredAddress.port}`,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    const child = startFixtureRegistry(portFile, tarballPath, {
+      OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${configuredAddress.port}`,
+    });
 
     try {
       const port = await waitForPortFile(portFile);
@@ -1465,12 +1379,7 @@ fs.renameSync = (source, destination) => {
       expect(configuredUpstreamTarget).toBe("/pkg?x=1");
       expect(escapeServerHits).toBe(0);
     } finally {
-      if (child.exitCode === null) {
-        child.kill();
-        await new Promise((resolve) => {
-          child.once("close", resolve);
-        });
-      }
+      await stopFixtureRegistry(child);
       await Promise.all([
         new Promise<void>((resolve) => {
           configuredUpstream.close(() => resolve());

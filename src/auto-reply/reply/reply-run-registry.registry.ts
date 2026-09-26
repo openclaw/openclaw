@@ -6,6 +6,7 @@ import {
   isAgentEventLifecycleGenerationCurrent,
   registerAgentEventLifecycleRotationHandler,
 } from "../../infra/agent-events.js";
+import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
 import { hasGatewayContextOwner } from "../../plugins/runtime/gateway-request-scope.js";
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
 import {
@@ -27,13 +28,13 @@ import {
   isReplyOperationPreBackendPhase,
   isReplyRunCompacting,
   isReplyRunEvidenceStale,
-  markReplyRunDiagnosticProgress,
   mergeReplyRunAdmissionSource,
   replyRunState,
   resolveReplyRunForCurrentSessionId,
   resolveReplyRunWaitKey,
   type ReplyRunAdmissionBarrier,
   type ReplyRunAdmissionSource,
+  type ReplyRunWaiter,
 } from "./reply-run-registry.state.js";
 
 type ReplyOperationStaleReason = replyRunSettle.ReplyOperationStaleReason;
@@ -41,11 +42,6 @@ type ReplyOperationStaleReason = replyRunSettle.ReplyOperationStaleReason;
 type ReplyRunAdmissionSettlement = {
   settled: boolean;
   sources?: ReplyRunAdmissionSource[];
-};
-
-type ReplyRunWaiter = {
-  finish: (ended: boolean) => void;
-  timer?: NodeJS.Timeout;
 };
 
 export async function waitForReplyOperationOwnerSettlement(
@@ -80,13 +76,11 @@ export function expireStaleReplyRunBySessionId(
   return operation ? expireStaleReplyOperation(operation, reason, options) : false;
 }
 
-// lastActivityAtMs is refreshed by agent events only; timers and user-message
-
 export function markReplyOperationGlobalLaneWaitProgress(operation: ReplyOperation): void {
   if (operation.result || operation.phase !== "waiting_for_global_lane") {
     return;
   }
-  markReplyRunDiagnosticProgress({
+  markDiagnosticRunProgress({
     sessionKey: operation.key,
     sessionId: operation.sessionId,
     reason: "global_lane:waiting",
@@ -542,7 +536,7 @@ registerAgentEventLifecycleRotationHandler("reply-runs", evictPriorLifecycleRepl
 const replyRunRegistryTestApi = {
   resetReplyRunRegistry(): void {
     for (const [sessionKey, sessionId] of replyRunState.activeSessionIdsByKey) {
-      markReplyRunDiagnosticProgress({
+      markDiagnosticRunProgress({
         sessionKey,
         sessionId,
         reason: "reply_operation:registry_reset",

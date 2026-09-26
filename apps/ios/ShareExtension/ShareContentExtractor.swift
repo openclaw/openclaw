@@ -115,8 +115,6 @@ enum ShareContentExtractor {
                     continuation.resume(returning: url)
                 } else if let value = item as? String, let url = URL(string: value) {
                     continuation.resume(returning: url)
-                } else if let value = item as? NSString, let url = URL(string: value as String) {
-                    continuation.resume(returning: url)
                 } else {
                     continuation.resume(returning: nil)
                 }
@@ -129,8 +127,6 @@ enum ShareContentExtractor {
             provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, _ in
                 if let text = item as? String {
                     continuation.resume(returning: text)
-                } else if let text = item as? NSString {
-                    continuation.resume(returning: text as String)
                 } else if let text = item as? NSAttributedString {
                     continuation.resume(returning: text.string)
                 } else {

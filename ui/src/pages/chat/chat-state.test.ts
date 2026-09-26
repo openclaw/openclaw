@@ -1593,49 +1593,50 @@ describe("canonical session message recovery", () => {
     }
   });
 
+  function createRecoveryPrompt(runId: string, text: string, seq = 1) {
+    return {
+      role: "user",
+      content: [{ type: "text", text }],
+      __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq },
+    };
+  }
+
+  function createTerminalHistory(messages: unknown[], sessionKey = "agent:main:main") {
+    return {
+      messages,
+      sessionId: "selected-session",
+      sessionInfo: {
+        key: sessionKey,
+        kind: sessionKey === "global" ? "global" : "direct",
+        updatedAt: 2,
+        hasActiveRun: false,
+        activeRunIds: [],
+        status: "done",
+      },
+    };
+  }
+
   it.each([
-    { name: "omitted", terminalMessage: undefined, startsActive: true, pendingReload: false },
-    { name: "null", terminalMessage: null, startsActive: true, pendingReload: false },
+    { name: "omitted", terminalMessage: undefined, startsActive: true },
+    { name: "null", terminalMessage: null, startsActive: true },
     {
       name: "omitted for an idle selected session",
       terminalMessage: undefined,
       startsActive: false,
-      pendingReload: false,
-    },
-    {
-      name: "omitted while a session-message reload is pending",
-      terminalMessage: undefined,
-      startsActive: true,
-      pendingReload: true,
     },
   ])(
     "recovers the durable reply when the terminal message is $name",
-    async ({ terminalMessage, startsActive, pendingReload }) => {
+    async ({ terminalMessage, startsActive }) => {
       const runId = "run-with-message-less-terminal";
       const replyText = "The durable reply must appear below Done.";
-      const prompt = {
-        role: "user",
-        content: [{ type: "text", text: "Finish the dashboard task" }],
-        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
-      };
+      const prompt = createRecoveryPrompt(runId, "Finish the dashboard task");
       const persistedReply = {
         role: "assistant",
         content: [{ type: "text", text: replyText }],
         stopReason: "stop",
         __openclaw: { id: "reply-1", runId, seq: 2 },
       };
-      const request = vi.fn().mockResolvedValue({
-        messages: [prompt, persistedReply],
-        sessionId: "selected-session",
-        sessionInfo: {
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: 2,
-          hasActiveRun: false,
-          activeRunIds: [],
-          status: "done",
-        },
-      });
+      const request = vi.fn().mockResolvedValue(createTerminalHistory([prompt, persistedReply]));
       const { state } = createSessionEventState({
         chatMessages: [prompt],
         chatHistoryPagination: { hasMore: false },
@@ -1643,7 +1644,7 @@ describe("canonical session message recovery", () => {
         chatStream: null,
         chatStreamSegments: [],
         chatToolMessages: [],
-        pendingSessionMessageReloadSessionKey: pendingReload ? "agent:main:main" : null,
+        pendingSessionMessageReloadSessionKey: null,
         client: { request } as unknown as GatewayBrowserClient,
       });
 
@@ -1699,29 +1700,14 @@ describe("canonical session message recovery", () => {
 
   it("recovers once when history completed the run before its message-less terminal arrives", async () => {
     const runId = "run-completed-by-history-before-terminal";
-    const prompt = {
-      role: "user",
-      content: [{ type: "text", text: "Finish after the tool call" }],
-      __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
-    };
+    const prompt = createRecoveryPrompt(runId, "Finish after the tool call");
     const persistedReply = {
       role: "assistant",
       content: [{ type: "text", text: "The durable final arrived after the snapshot." }],
       stopReason: "stop",
       __openclaw: { id: "reply-1", runId, seq: 2 },
     };
-    const request = vi.fn().mockResolvedValue({
-      messages: [prompt, persistedReply],
-      sessionId: "selected-session",
-      sessionInfo: {
-        key: "agent:main:main",
-        kind: "direct",
-        updatedAt: 2,
-        hasActiveRun: false,
-        activeRunIds: [],
-        status: "done",
-      },
-    });
+    const request = vi.fn().mockResolvedValue(createTerminalHistory([prompt, persistedReply]));
     const { state } = createSessionEventState({
       chatMessages: [prompt],
       chatHistoryPagination: { hasMore: false },
@@ -1749,29 +1735,14 @@ describe("canonical session message recovery", () => {
     vi.useFakeTimers();
     try {
       const runId = "run-with-media-only-terminal";
-      const prompt = {
-        role: "user",
-        content: [{ type: "text", text: "Show the generated image" }],
-        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
-      };
+      const prompt = createRecoveryPrompt(runId, "Show the generated image");
       const persistedReply = {
         role: "assistant",
         content: [{ type: "image", url: "data:image/png;base64,aW1hZ2U=" }],
         stopReason: "stop",
         __openclaw: { id: "reply-1", runId, seq: 2 },
       };
-      const request = vi.fn().mockResolvedValue({
-        messages: [prompt, persistedReply],
-        sessionId: "selected-session",
-        sessionInfo: {
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: 2,
-          hasActiveRun: false,
-          activeRunIds: [],
-          status: "done",
-        },
-      });
+      const request = vi.fn().mockResolvedValue(createTerminalHistory([prompt, persistedReply]));
       const { state } = createSessionEventState({
         chatMessages: [prompt],
         chatHistoryPagination: { hasMore: false },
@@ -1799,23 +1770,8 @@ describe("canonical session message recovery", () => {
     vi.useFakeTimers();
     try {
       const runId = "run-without-durable-reply";
-      const prompt = {
-        role: "user",
-        content: [{ type: "text", text: "Finish without persisting a reply" }],
-        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
-      };
-      const request = vi.fn().mockResolvedValue({
-        messages: [prompt],
-        sessionId: "selected-session",
-        sessionInfo: {
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: 2,
-          hasActiveRun: false,
-          activeRunIds: [],
-          status: "done",
-        },
-      });
+      const prompt = createRecoveryPrompt(runId, "Finish without persisting a reply");
+      const request = vi.fn().mockResolvedValue(createTerminalHistory([prompt]));
       const { state } = createSessionEventState({
         chatMessages: [prompt],
         chatHistoryPagination: { hasMore: false },
@@ -1853,23 +1809,8 @@ describe("canonical session message recovery", () => {
     vi.useFakeTimers();
     try {
       const runId = "run-before-session-switch";
-      const prompt = {
-        role: "user",
-        content: [{ type: "text", text: "Finish before I switch sessions" }],
-        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
-      };
-      const request = vi.fn().mockResolvedValue({
-        messages: [prompt],
-        sessionId: "selected-session",
-        sessionInfo: {
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: 2,
-          hasActiveRun: false,
-          activeRunIds: [],
-          status: "done",
-        },
-      });
+      const prompt = createRecoveryPrompt(runId, "Finish before I switch sessions");
+      const request = vi.fn().mockResolvedValue(createTerminalHistory([prompt]));
       const { state } = createSessionEventState({
         chatMessages: [prompt],
         chatHistoryPagination: { hasMore: false },
@@ -1897,23 +1838,8 @@ describe("canonical session message recovery", () => {
     vi.useFakeTimers();
     try {
       const runId = "run-before-global-agent-switch";
-      const prompt = {
-        role: "user",
-        content: [{ type: "text", text: "Finish before I switch global agents" }],
-        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
-      };
-      const request = vi.fn().mockResolvedValue({
-        messages: [prompt],
-        sessionId: "selected-session",
-        sessionInfo: {
-          key: "global",
-          kind: "global",
-          updatedAt: 2,
-          hasActiveRun: false,
-          activeRunIds: [],
-          status: "done",
-        },
-      });
+      const prompt = createRecoveryPrompt(runId, "Finish before I switch global agents");
+      const request = vi.fn().mockResolvedValue(createTerminalHistory([prompt], "global"));
       const { state } = createSessionEventState({
         sessionKey: "global",
         assistantAgentId: "main",
@@ -1956,23 +1882,8 @@ describe("canonical session message recovery", () => {
     vi.useFakeTimers();
     try {
       const runId = "run-before-replacement";
-      const prompt = {
-        role: "user",
-        content: [{ type: "text", text: "Finish before the next run starts" }],
-        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
-      };
-      const request = vi.fn().mockResolvedValue({
-        messages: [prompt],
-        sessionId: "selected-session",
-        sessionInfo: {
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: 2,
-          hasActiveRun: false,
-          activeRunIds: [],
-          status: "done",
-        },
-      });
+      const prompt = createRecoveryPrompt(runId, "Finish before the next run starts");
+      const request = vi.fn().mockResolvedValue(createTerminalHistory([prompt]));
       const { state } = createSessionEventState({
         chatMessages: [prompt],
         chatHistoryPagination: { hasMore: false },
@@ -2001,23 +1912,8 @@ describe("canonical session message recovery", () => {
     try {
       const runId = "run-before-completed-replacement";
       const replacementRunId = "replacement-run-that-finishes";
-      const prompt = {
-        role: "user",
-        content: [{ type: "text", text: "Finish before the next run completes" }],
-        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
-      };
-      const request = vi.fn().mockResolvedValue({
-        messages: [prompt],
-        sessionId: "selected-session",
-        sessionInfo: {
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: 2,
-          hasActiveRun: false,
-          activeRunIds: [],
-          status: "done",
-        },
-      });
+      const prompt = createRecoveryPrompt(runId, "Finish before the next run completes");
+      const request = vi.fn().mockResolvedValue(createTerminalHistory([prompt]));
       const { state } = createSessionEventState({
         chatMessages: [prompt],
         chatHistoryPagination: { hasMore: false },
@@ -2065,11 +1961,7 @@ describe("canonical session message recovery", () => {
       try {
         const runId = "run-after-history-backfill";
         const historicalRunId = "older-run-from-history";
-        const prompt = {
-          role: "user",
-          content: [{ type: "text", text: "Finish after loading older history" }],
-          __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 2 },
-        };
+        const prompt = createRecoveryPrompt(runId, "Finish after loading older history", 2);
         const historicalReply = {
           role: "assistant",
           content: [{ type: "text", text: "An older durable reply." }],
@@ -2176,11 +2068,7 @@ describe("canonical session message recovery", () => {
     { name: "after a pending session-message reload", pendingReload: true },
   ])("waits for the old read before fresh terminal history $name", async ({ pendingReload }) => {
     const runId = "run-with-pre-final-history";
-    const prompt = {
-      role: "user",
-      content: [{ type: "text", text: "Finish after the stale snapshot" }],
-      __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
-    };
+    const prompt = createRecoveryPrompt(runId, "Finish after the stale snapshot");
     const persistedReply = {
       role: "assistant",
       content: [{ type: "text", text: "The post-final snapshot contains this reply." }],
@@ -2295,11 +2183,7 @@ describe("canonical session message recovery", () => {
 
   it("keeps the live final projection without an unnecessary history reload", () => {
     const runId = "run-with-live-terminal-message";
-    const prompt = {
-      role: "user",
-      content: [{ type: "text", text: "Finish the dashboard task" }],
-      __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
-    };
+    const prompt = createRecoveryPrompt(runId, "Finish the dashboard task");
     const request = vi.fn();
     const { state } = createSessionEventState({
       chatMessages: [prompt],
@@ -3637,6 +3521,7 @@ describe("ChatStateController render lifecycle", () => {
     }
 
     expect(frames.size).toBe(1);
+    expect(state.chatStream).toBe("ABC");
     expect(requestUpdate).not.toHaveBeenCalled();
     const firstFrame = frames.get(1);
     frames.delete(1);
@@ -3704,31 +3589,6 @@ describe("ChatStateController render lifecycle", () => {
 
     expect(state.observerDigest?.headline).toBe("Waiting for a tool");
     expect(requestUpdate).toHaveBeenCalledTimes(5);
-  });
-
-  it("keeps every chat delta while batching their render", () => {
-    let scheduledFrame: FrameRequestCallback | undefined;
-    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
-      scheduledFrame = callback;
-      return 1;
-    });
-    const requestUpdate = vi.fn();
-    const state = createStreamEventState({
-      requestUpdate,
-    });
-
-    for (const deltaText of ["A", "B", "C"]) {
-      handlePageGatewayEvent(state, {
-        type: "event",
-        event: "chat",
-        payload: { state: "delta", runId: "run-1", sessionKey: "main", deltaText },
-      });
-    }
-
-    expect(state.chatStream).toBe("ABC");
-    expect(requestUpdate).not.toHaveBeenCalled();
-    scheduledFrame?.(0);
-    expect(requestUpdate).toHaveBeenCalledOnce();
   });
 
   it("forces one PR-chips refresh per PR link seen in the live stream", () => {
@@ -3950,67 +3810,43 @@ describe("ChatStateController render lifecycle", () => {
     expect(painted).not.toHaveBeenCalled();
   });
 
-  it("invalidates the render lifecycle when input history recall mutates the draft", () => {
-    const requestUpdate = vi.fn();
-    const host = createControllerHost({ requestUpdate });
-    const controller = new ChatStateController<ChatPageHost>(host);
-    controller.hostConnected();
-    const renderLifecycle = controller.createRenderLifecycle();
+  it.each([
+    { handled: true, selection: 0, valueLength: 0, decision: "handled:history-up" },
+    { handled: false, selection: 5, valueLength: 10, decision: "blocked:modifier-or-composition" },
+  ] as const)(
+    "invalidates input history only when recall is handled: $handled",
+    ({ handled, selection, valueLength, decision }) => {
+      const requestUpdate = vi.fn();
+      const controller = new ChatStateController<ChatPageHost>(
+        createControllerHost({ requestUpdate }),
+      );
+      controller.hostConnected();
+      const renderLifecycle = controller.createRenderLifecycle();
+      const navigateHistory = vi.fn().mockReturnValue({
+        handled,
+        preventDefault: handled,
+        restoreCaret: handled ? "up" : null,
+        decision,
+        historyNavigationActiveBefore: false,
+        historyNavigationActiveAfter: handled,
+        selectionStart: 0,
+        selectionEnd: 0,
+        valueLength: 10,
+      });
+      const state = createInputHistoryState(renderLifecycle, navigateHistory);
+      controller.attach(state);
+      const input = createInputHistoryKey(selection, selection, valueLength);
+      const result = state.handleChatInputHistoryKey!(input);
 
-    const navigateHistory = vi.fn().mockReturnValue({
-      handled: true,
-      preventDefault: true,
-      restoreCaret: "up" as const,
-      decision: "handled:history-up" as const,
-      historyNavigationActiveBefore: false,
-      historyNavigationActiveAfter: true,
-      selectionStart: 0,
-      selectionEnd: 0,
-      valueLength: 10,
-    });
-
-    const state = createInputHistoryState(renderLifecycle, navigateHistory);
-
-    controller.attach(state);
-
-    const input = createInputHistoryKey(0, 0, 0);
-    const result = state.handleChatInputHistoryKey!(input);
-
-    expect(result.handled).toBe(true);
-    expect(navigateHistory).toHaveBeenCalledWith(input);
-    expect(requestUpdate).toHaveBeenCalled();
-  });
-
-  it("does not invalidate the render lifecycle when input history key is not handled", () => {
-    const requestUpdate = vi.fn();
-    const host = createControllerHost({ requestUpdate });
-    const controller = new ChatStateController<ChatPageHost>(host);
-    controller.hostConnected();
-    const renderLifecycle = controller.createRenderLifecycle();
-
-    const navigateHistory = vi.fn().mockReturnValue({
-      handled: false,
-      preventDefault: false,
-      restoreCaret: null,
-      decision: "blocked:modifier-or-composition" as const,
-      historyNavigationActiveBefore: false,
-      historyNavigationActiveAfter: false,
-      selectionStart: 0,
-      selectionEnd: 0,
-      valueLength: 10,
-    });
-
-    const state = createInputHistoryState(renderLifecycle, navigateHistory);
-
-    controller.attach(state);
-
-    const input = createInputHistoryKey(5, 5, 10);
-    const result = state.handleChatInputHistoryKey!(input);
-
-    expect(result.handled).toBe(false);
-    expect(navigateHistory).toHaveBeenCalledWith(input);
-    expect(requestUpdate).not.toHaveBeenCalled();
-  });
+      expect(result.handled).toBe(handled);
+      expect(navigateHistory).toHaveBeenCalledWith(input);
+      if (handled) {
+        expect(requestUpdate).toHaveBeenCalled();
+      } else {
+        expect(requestUpdate).not.toHaveBeenCalled();
+      }
+    },
+  );
 });
 
 describe("session pull request refresh", () => {

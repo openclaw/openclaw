@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService, type CronEvent } from "./service.js";
 import { createFinishedBarrier, setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
-import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite();
 
@@ -13,6 +17,7 @@ describe("CronService persists delivery suppression", () => {
     "persists %s delivery suppression in job state, history, and the finished event",
     async (mode) => {
       const { storePath } = await makeStorePath();
+      const schedulerClock = createGatewaySchedulerClock(Date.now());
       const events: CronEvent[] = [];
       const finished = createFinishedBarrier();
       const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>();
@@ -23,6 +28,7 @@ describe("CronService persists delivery suppression", () => {
         deliverySuppressionReason: "channel_transform",
       });
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(schedulerClock.clock),
         storePath,
         cronEnabled: true,
         log: logger,
@@ -49,7 +55,7 @@ describe("CronService persists delivery suppression", () => {
         });
         if (mode === "scheduled") {
           const done = finished.waitForOk(job.id);
-          await vi.advanceTimersByTimeAsync(job.state.nextRunAtMs! - Date.now());
+          await schedulerClock.advanceTo(job.state.nextRunAtMs!);
           await done;
         } else {
           await cron.run(job.id, "force");
@@ -67,7 +73,7 @@ describe("CronService persists delivery suppression", () => {
         expect
           .soft(events)
           .toEqual([expect.objectContaining({ deliverySuppressionReason: "channel_transform" })]);
-        const history = readCronTaskRunHistoryPage({
+        const history = readCronRunHistoryPageForTests({
           storeKey: cronStoreKey(storePath),
           jobId: job.id,
         });
@@ -76,14 +82,14 @@ describe("CronService persists delivery suppression", () => {
           .toEqual([expect.objectContaining({ deliverySuppressionReason: "channel_transform" })]);
 
         runIsolatedAgentJob.mockResolvedValue({ status: "ok", delivered: true });
-        vi.setSystemTime(Date.now() + 1);
+        schedulerClock.setTime(schedulerClock.clock.now() + 1);
         await cron.run(job.id, "force");
         expect(
           (await loadCronStore(storePath)).jobs[0]?.state.deliverySuppressionReason,
         ).toBeUndefined();
         expect(events.at(-1)?.deliverySuppressionReason).toBeUndefined();
         expect(
-          readCronTaskRunHistoryPage({ storeKey: cronStoreKey(storePath), jobId: job.id })
+          readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
             .entries[0]?.deliverySuppressionReason,
         ).toBeUndefined();
       } finally {

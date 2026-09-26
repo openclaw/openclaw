@@ -210,13 +210,10 @@ async function reconcilePreparedTranscriptIndexes(
       publicationClient = client;
       publication = {
         execute: (command) =>
-          client.run(
-            (scope) => scope.execute(command),
-            () => {
-              operation.signal.throwIfAborted();
-              execution.assertCurrent();
-            },
-          ),
+          client.execute(command, () => {
+            operation.signal.throwIfAborted();
+            execution.assertCurrent();
+          }),
       };
       if (!(await publication.execute({ type: "preflight", input: undefined }))) {
         return { reconciledSessions: 0 };

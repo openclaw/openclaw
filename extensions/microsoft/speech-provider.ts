@@ -1,4 +1,3 @@
-// Microsoft provider module implements model/runtime integration.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
@@ -15,6 +14,7 @@ import {
   asBoolean,
   asFiniteNumber,
   asOptionalRecord,
+  filterStringRecord,
   normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { edgeTTS, inferEdgeExtension } from "./tts.js";
@@ -189,40 +189,25 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
       return {
         ...base,
         enabled: true,
-        ...(trimToUndefined(talkProviderConfig.voiceId) == null
-          ? {}
-          : { voice: trimToUndefined(talkProviderConfig.voiceId) }),
-        ...(trimToUndefined(talkProviderConfig.languageCode) == null
-          ? {}
-          : { lang: trimToUndefined(talkProviderConfig.languageCode) }),
-        ...(trimToUndefined(talkProviderConfig.outputFormat) == null
-          ? {}
-          : { outputFormat: trimToUndefined(talkProviderConfig.outputFormat) }),
-        ...(trimToUndefined(talkProviderConfig.pitch) == null
-          ? {}
-          : { pitch: trimToUndefined(talkProviderConfig.pitch) }),
-        ...(trimToUndefined(talkProviderConfig.rate) == null
-          ? {}
-          : { rate: trimToUndefined(talkProviderConfig.rate) }),
-        ...(trimToUndefined(talkProviderConfig.volume) == null
-          ? {}
-          : { volume: trimToUndefined(talkProviderConfig.volume) }),
-        ...(trimToUndefined(talkProviderConfig.proxy) == null
-          ? {}
-          : { proxy: trimToUndefined(talkProviderConfig.proxy) }),
+        ...filterStringRecord({
+          voice: trimToUndefined(talkProviderConfig.voiceId),
+          lang: trimToUndefined(talkProviderConfig.languageCode),
+          outputFormat: trimToUndefined(talkProviderConfig.outputFormat),
+          pitch: trimToUndefined(talkProviderConfig.pitch),
+          rate: trimToUndefined(talkProviderConfig.rate),
+          volume: trimToUndefined(talkProviderConfig.volume),
+          proxy: trimToUndefined(talkProviderConfig.proxy),
+        }),
         ...(asFiniteNumber(talkProviderConfig.timeoutMs) == null
           ? {}
           : { timeoutMs: asFiniteNumber(talkProviderConfig.timeoutMs) }),
       };
     },
-    resolveTalkOverrides: ({ params }) => ({
-      ...(trimToUndefined(params.voiceId) == null
-        ? {}
-        : { voice: trimToUndefined(params.voiceId) }),
-      ...(trimToUndefined(params.outputFormat) == null
-        ? {}
-        : { outputFormat: trimToUndefined(params.outputFormat) }),
-    }),
+    resolveTalkOverrides: ({ params }) =>
+      filterStringRecord({
+        voice: trimToUndefined(params.voiceId),
+        outputFormat: trimToUndefined(params.outputFormat),
+      }) ?? {},
     listVoices: async (req) => {
       const config = readMicrosoftProviderConfig(req.providerConfig ?? {});
       return await listMicrosoftVoices(config.timeoutMs ?? req.timeoutMs);

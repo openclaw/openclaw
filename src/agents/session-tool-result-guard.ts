@@ -49,7 +49,6 @@ import {
 } from "./transcript-code-mode-source.js";
 
 type UserAgentMessage = Extract<AgentMessage, { role: "user" }>;
-type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
 type AsyncMessageCallback<T extends AgentMessage> = (message: T) => void | Promise<void>;
 type UserMessagePersistedCallback = (
   message: UserAgentMessage,
@@ -77,8 +76,8 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage): boolea
   if (!message || message.role !== "assistant") {
     return false;
   }
-  const provider = normalizeOptionalString((message as { provider?: unknown }).provider) ?? "";
-  const model = normalizeOptionalString((message as { model?: unknown }).model) ?? "";
+  const provider = normalizeOptionalString(message.provider) ?? "";
+  const model = normalizeOptionalString(message.model) ?? "";
   return isTranscriptOnlyOpenClawAssistantModel(provider, model);
 }
 
@@ -464,8 +463,7 @@ export function installSessionToolResultGuard(
   ): Generator<AppendRequest, string | undefined, AppendReceipt> {
     const callerInvalidatesCache = callerOptions?.invalidateSerializedPrefixCache === true;
     let nextMessage = message;
-    const role = (message as { role?: unknown }).role;
-    if (role === "assistant") {
+    if (message.role === "assistant") {
       const sanitized = sanitizeToolCallInputs([message], {
         allowedToolNames: opts?.allowedToolNames,
       });
@@ -475,17 +473,11 @@ export function installSessionToolResultGuard(
         }
         return undefined;
       }
-      const sanitizedMessage = sanitized.at(0);
-      if (!sanitizedMessage) {
-        return undefined;
-      }
-      nextMessage = sanitizedMessage;
+      nextMessage = sanitized[0]!;
       copyCodeModeSourceAppend(message, nextMessage, sourceAppend);
     }
-    const nextRole = (nextMessage as { role?: unknown }).role;
-
-    if (nextRole === "toolResult") {
-      const id = extractToolResultId(nextMessage as Extract<AgentMessage, { role: "toolResult" }>);
+    if (nextMessage.role === "toolResult") {
+      const id = extractToolResultId(nextMessage);
       const toolName = id ? pending.get(id) : undefined;
       const normalizedToolResult = normalizePersistedToolResultName(
         nextMessage,
@@ -559,26 +551,21 @@ export function installSessionToolResultGuard(
       return undefined;
     }
     let finalMessage = finalWrite.message;
-    const finalRole = (finalMessage as { role?: unknown }).role;
     if (
-      finalRole === "assistant" &&
+      finalMessage.role === "assistant" &&
       toolCalls.length === 0 &&
       opts?.suppressTranscriptOnlyAssistantPersistence === true
     ) {
       return undefined;
     }
     if (
-      finalRole === "assistant" &&
+      finalMessage.role === "assistant" &&
       assistantErrorTranscript &&
-      (finalMessage as { stopReason?: string }).stopReason === "error"
+      finalMessage.stopReason === "error"
     ) {
       const target = sessionManager.getSessionTarget();
       if (target) {
-        const replayMessage = assistantErrorTranscript.record(
-          finalMessage as AssistantAgentMessage,
-          target,
-          message,
-        );
+        const replayMessage = assistantErrorTranscript.record(finalMessage, target, message);
         if (!replayMessage) {
           return undefined;
         }

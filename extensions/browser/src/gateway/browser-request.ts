@@ -1,7 +1,3 @@
-/**
- * Gateway handler for browser.request, including optional node-host proxy
- * dispatch and local Browser control route dispatch.
- */
 import crypto from "node:crypto";
 import {
   ErrorCodes,
@@ -39,7 +35,6 @@ import {
   BROWSER_PROXY_ERROR_ENVELOPE,
   parseBrowserProxyFailure,
   type BrowserProxyEnvelope,
-  type BrowserProxySuccess,
 } from "../browser-proxy-envelope.js";
 import { resolveBrowserProxyTimeouts } from "../browser-proxy-timeouts.js";
 import {
@@ -79,7 +74,6 @@ type BrowserRequestParams = {
   dashboard?: unknown;
 };
 
-/** Handles one browser.request gateway call and streams a success/error response. */
 export async function handleBrowserGatewayRequest({
   params,
   respond,
@@ -413,9 +407,8 @@ export async function handleBrowserGatewayRequest({
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser proxy failed"));
         return;
       }
-      const success = proxy as BrowserProxySuccess;
       try {
-        const result = await persistBrowserProxyResultFiles(success.result, success.files);
+        const result = await persistBrowserProxyResultFiles(proxy.result, proxy.files);
         assertRequesterCurrent();
         respond(true, result);
       } catch {
@@ -505,7 +498,6 @@ export async function handleBrowserGatewayRequest({
   respond(true, result.body);
 }
 
-/** Gateway request handler map contributed by the Browser plugin. */
 export const browserHandlers: GatewayRequestHandlers = {
   "browser.request": handleBrowserGatewayRequest,
 };

@@ -5,10 +5,16 @@ import {
   buildTaskStatusSnapshot,
   formatTaskStatusDetail,
   formatTaskStatusTitle,
-  sanitizeTaskStatusText,
 } from "./task-status.js";
 
 const NOW = 1_000_000_000_000;
+const INTERNAL_CONTEXT = [
+  "OpenClaw runtime context (internal):",
+  "This context is runtime-generated, not user-authored. Keep internal details private.",
+  "",
+  "[Internal task completion event]",
+  "source: subagent",
+].join("\n");
 
 function makeTask(overrides: Partial<TaskRecord>): TaskRecord {
   return {
@@ -183,13 +189,7 @@ describe("task status formatting", () => {
   it("strips leaked internal runtime context from task details", () => {
     const task = makeTask({
       status: "failed",
-      error: [
-        "OpenClaw runtime context (internal):",
-        "This context is runtime-generated, not user-authored. Keep internal details private.",
-        "",
-        "[Internal task completion event]",
-        "source: subagent",
-      ].join("\n"),
+      error: INTERNAL_CONTEXT,
     });
 
     expect(formatTaskStatusDetail(task)).toBeUndefined();
@@ -197,13 +197,7 @@ describe("task status formatting", () => {
 
   it("sanitizes task titles before truncation", () => {
     const task = makeTask({
-      task: [
-        "OpenClaw runtime context (internal):",
-        "This context is runtime-generated, not user-authored. Keep internal details private.",
-        "",
-        "[Internal task completion event]",
-        "source: subagent",
-      ].join("\n"),
+      task: INTERNAL_CONTEXT,
     });
 
     expect(formatTaskStatusTitle(task)).toBe("Background task");
@@ -212,13 +206,7 @@ describe("task status formatting", () => {
   it("falls back to sanitized terminal summary when the error strips empty", () => {
     const task = makeTask({
       status: "failed",
-      error: [
-        "OpenClaw runtime context (internal):",
-        "This context is runtime-generated, not user-authored. Keep internal details private.",
-        "",
-        "[Internal task completion event]",
-        "source: subagent",
-      ].join("\n"),
+      error: INTERNAL_CONTEXT,
       terminalSummary: "Needs login approval.",
     });
 
@@ -233,19 +221,5 @@ describe("task status formatting", () => {
     });
 
     expect(formatTaskStatusDetail(task)).toBe("Command did not run: approval timed out.");
-  });
-
-  it("sanitizes free-form task status text for reuse in other surfaces", () => {
-    expect(
-      sanitizeTaskStatusText(
-        [
-          "OpenClaw runtime context (internal):",
-          "This context is runtime-generated, not user-authored. Keep internal details private.",
-          "",
-          "[Internal task completion event]",
-          "source: subagent",
-        ].join("\n"),
-      ),
-    ).toBe("");
   });
 });

@@ -34,6 +34,7 @@ import { createDoctorPrompter } from "./doctor-prompter.js";
 
 const mocks = vi.hoisted(() => ({
   service: vi.fn<() => GatewayService>(),
+  gatewayPid: 4200,
   resident: vi.fn<() => { pid: number } | undefined>(),
   activeRoot: "",
   runtimeDirectory: "",
@@ -45,6 +46,11 @@ const mocks = vi.hoisted(() => ({
   health: vi.fn(async () => ({ healthy: true })),
   suspend: vi.fn<typeof import("../daemon/schtasks.js").suspendScheduledTaskAutoStartForUpdate>(),
   resume: vi.fn<typeof import("../daemon/schtasks.js").resumeScheduledTaskAutoStartAfterUpdate>(),
+}));
+vi.mock("../daemon/service-process-membership.js", () => ({
+  // This in-memory service places Doctor outside its synthetic process scope.
+  inspectServiceProcessMembershipSync: (pid: number) =>
+    pid === mocks.gatewayPid ? "outside" : "unknown",
 }));
 vi.mock("../gateway/call.js", async (original) => {
   const { gatewayMaintenanceResponse } = await import("../gateway/health-response.test-support.js");
@@ -270,7 +276,7 @@ async function runInstallationCase(params: {
       };
       const originalCommand = structuredClone(command);
       let running = !initiallyStopped;
-      const pid = 4200;
+      const pid = mocks.gatewayPid;
       mocks.resident.mockImplementation(() => (running ? { pid } : undefined));
       let nativeInspectionReads = 0;
       let inspectionClock = 0;

@@ -4,7 +4,9 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { loseFirstCronMutationReply } from "../../../test/helpers/cron/runtime-mutation.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { captureTaskDeliveryWork } from "../../tasks/task-registry-delivery.test-support.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
@@ -17,7 +19,6 @@ import {
   inspectActiveCronRunReceipt,
   makeCronRecoveryJob,
 } from "../store/run-receipt-store.test-support.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import { stop } from "./ops-lifecycle.js";
 import { ensureLoadedForRead } from "./ops-shared.js";
 import { makeCronRecoveryState, observeCronTimerAdmissions } from "./run-recovery.test-support.js";
@@ -43,6 +44,7 @@ it("publishes a committed repair once after reply loss and leaves the remaining 
   const onEvent = vi.fn<(event: CronEvent) => void>();
   const runner = vi.fn(async () => ({ status: "ok" as const }));
   const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
     defaultAgentId: "alpha",
@@ -70,7 +72,7 @@ it("publishes a committed repair once after reply loss and leaves the remaining 
   }
   await writeCronStoreSnapshot({ storePath, jobs });
   const history = (jobId: string) =>
-    readCronTaskRunHistoryPage({ storeKey: cronStoreKey(storePath), jobId }).entries;
+    readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId }).entries;
   const finishedIds = () =>
     onEvent.mock.calls.flatMap(([event]) => (event.action === "finished" ? [event.jobId] : []));
   const notificationKeys = () =>

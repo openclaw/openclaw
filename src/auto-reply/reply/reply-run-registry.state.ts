@@ -2,10 +2,8 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveActiveEmbeddedRunRecoveryBlocker } from "../../agents/embedded-agent-runner/run-state.js";
 import { isEmbeddedRunHandleCompacting } from "../../agents/embedded-agent-runner/runs.probes.js";
-import { createAbortError } from "../../infra/abort-signal.js";
 import {
   getDiagnosticSessionActivitySnapshot,
-  markDiagnosticRunProgress,
   resolveRunStaleThresholdMs,
 } from "../../logging/diagnostic-run-activity.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -25,7 +23,7 @@ import {
   type ReplyOperationPhase,
 } from "./reply-run-registry.contracts.js";
 
-type ReplyRunWaiter = {
+export type ReplyRunWaiter = {
   finish: (ended: boolean) => void;
   timer?: NodeJS.Timeout;
 };
@@ -152,14 +150,6 @@ export const clearReplyOperationByOperation = (replyRunState.clearOperationByOpe
 export const evictReplyOperationByOperation =
   replyRunState.evictOperationByOperation ??
   (replyRunState.evictOperationByOperation = new WeakMap<ReplyOperation, () => void>());
-
-export function createUserAbortError(): Error {
-  return createAbortError("Reply operation aborted by user");
-}
-
-export function registerWaitSessionId(sessionKey: string, sessionId: string): void {
-  replyRunState.waitKeysBySessionId.set(sessionId, sessionKey);
-}
 
 function clearWaitSessionIds(sessionKey: string): void {
   for (const [sessionId, mappedKey] of replyRunState.waitKeysBySessionId) {
@@ -366,8 +356,6 @@ export function resolveActiveReplyRunOwnerForSignal(signal: AbortSignal):
 export function retainReplyOperationUntilComplete(operation: ReplyOperation): void {
   retainStateUntilCompleteOperations.add(operation);
 }
-
-/** Queue-first compatibility adapter for shipped Plugin SDK/embedded handles. */
 
 export function runAfterReplyOperationClear(
   operation: ReplyOperation,
@@ -687,18 +675,6 @@ export function clearReplyRunState(params: {
   }
   clearWaitSessionIds(params.sessionKey);
   notifyReplyRunEnded(params.sessionKey);
-}
-
-export function markReplyRunDiagnosticProgress(params: {
-  sessionKey: string;
-  sessionId: string;
-  reason: string;
-}): void {
-  markDiagnosticRunProgress({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    reason: params.reason,
-  });
 }
 
 function isReplyRunRecoveryBlocked(operation: ReplyOperation): boolean {

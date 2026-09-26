@@ -56,7 +56,7 @@ describe("concurrent worker workspace results", () => {
   )(
     "revalidates $change settlement after $phase transcript hydration",
     async ({ phase, change }) => {
-      seedActivePlacement("remote-exec");
+      await seedActivePlacement("remote-exec");
       const placement = placements.get(SESSION_ID);
       if (placement?.state !== "active") {
         throw new Error("expected active placement");
@@ -191,7 +191,7 @@ describe("concurrent worker workspace results", () => {
       path.join(source, "skills", "synthetic", "SKILL.md"),
       "---\ndescription: Synthetic resource\n---\n# Resource\n",
     );
-    seedActivePlacement("remote-exec", remote);
+    await seedActivePlacement("remote-exec", remote);
     const placement = placements.get(SESSION_ID);
     if (placement?.state !== "active") {
       throw new Error("expected active placement");
@@ -368,7 +368,7 @@ describe("concurrent worker workspace results", () => {
           sessionId,
           ownerEpoch: 1,
         });
-        let placement = placements.startDispatch(identity);
+        let placement = await placements.startDispatch(identity);
         for (const transition of [
           { from: "requested", to: "provisioning", patch: { environmentId } },
           { from: "provisioning", to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },

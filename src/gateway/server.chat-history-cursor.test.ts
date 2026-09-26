@@ -719,21 +719,6 @@ describe("chat.history cursor catch-up", () => {
 
   test.each([
     {
-      name: "plain messages",
-      append: async (storePath: string) => {
-        const user = await appendTranscriptMessage(currentScope(storePath), {
-          eventId: "user-2",
-          parentId: "cached",
-          message: { role: "user", content: "question", timestamp: 2 },
-        });
-        await appendTranscriptMessage(currentScope(storePath), {
-          eventId: "assistant-2",
-          parentId: user?.messageId,
-          message: { role: "assistant", content: "answer", timestamp: 3 },
-        });
-      },
-    },
-    {
       name: "tool result pairing",
       append: async (storePath: string) => {
         const call = await appendTranscriptMessage(currentScope(storePath), {

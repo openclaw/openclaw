@@ -559,7 +559,7 @@ describe("legacy restart sentinel migration", () => {
       await gatewayLock.release();
     }
 
-    expect(result.warnings[0]).toContain("Gateway or another SQLite maintenance command");
+    expect(result.warnings[0]).toContain("gateway already running");
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(receipt(env)).toBeUndefined();
   });

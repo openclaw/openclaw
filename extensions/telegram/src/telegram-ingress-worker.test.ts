@@ -37,7 +37,6 @@ function createWorker(): {
     token: "123456:test",
     accountId: "default",
     initialUpdateId: null,
-    spoolDir: "/tmp/openclaw-telegram-worker-test",
   });
   const worker = workerHarness.instances.at(-1) as FakeWorker | undefined;
   if (!worker) {

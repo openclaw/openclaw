@@ -408,11 +408,7 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
         }
         const message = err instanceof Error ? err.message : String(err);
         log.warn(`memory ${label} parent watcher error on ${path.dirname(dir)}: ${message}`);
-        try {
-          attachedParent.close();
-        } catch {
-          // ignore
-        }
+        this.closeNativeMemoryWatcher(attachedParent);
         pair.parent = null;
         if (!pair.main) {
           this.closeNativeMemoryWatchPair(pair);
@@ -490,11 +486,7 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
         if (entryDir !== watchDir && !entryDir.startsWith(watchDirPrefix)) {
           continue;
         }
-        try {
-          entry.watcher.close();
-        } catch {
-          // ignore close failures
-        }
+        this.closeNativeMemoryWatcher(entry.watcher);
         treeWatchers.delete(entryDir);
       }
     };

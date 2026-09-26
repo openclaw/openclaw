@@ -176,28 +176,7 @@ export async function removePath(
   runtime: RuntimeEnv,
   opts?: RemovalOptions,
 ): Promise<RemovalResult> {
-  if (!target?.trim()) {
-    return { ok: false };
-  }
-  const resolved = path.resolve(target);
-  const label = opts?.label ?? resolved;
-  const displayLabel = shortenHomeInString(label);
-  if (isUnsafeRemovalTarget(resolved)) {
-    runtime.error(`Refusing to remove unsafe path: ${displayLabel}`);
-    return { ok: false };
-  }
-  if (opts?.dryRun) {
-    runtime.log(`[dry-run] remove ${displayLabel}`);
-    return { ok: true };
-  }
-  try {
-    await fs.rm(resolved, { recursive: true, force: true });
-    runtime.log(`Removed ${displayLabel}`);
-    return { ok: true };
-  } catch (err) {
-    runtime.error(`Failed to remove ${displayLabel}: ${String(err)}`);
-    return { ok: false };
-  }
+  return removePathPreserving(target, [], runtime, opts);
 }
 
 async function pathExists(target: string): Promise<boolean> {
@@ -262,14 +241,6 @@ async function acquireStateCleanupOwnership(cleanup: CleanupResolvedPaths) {
   return lock;
 }
 
-function shouldPreservePath(target: string, preservePaths: readonly string[]): boolean {
-  return preservePaths.some((preservePath) => isPathInside(preservePath, target));
-}
-
-function pathContainsPreservedPath(target: string, preservePaths: readonly string[]): boolean {
-  return preservePaths.some((preservePath) => isPathInside(target, preservePath));
-}
-
 async function removePathPreserving(
   target: string,
   preservePaths: readonly string[],
@@ -286,33 +257,36 @@ async function removePathPreserving(
     runtime.error(`Refusing to remove unsafe path: ${displayLabel}`);
     return { ok: false };
   }
-  if (shouldPreservePath(resolved, preservePaths)) {
+  if (preservePaths.some((preservePath) => isPathInside(preservePath, resolved))) {
     return { ok: true };
   }
-  if (!pathContainsPreservedPath(resolved, preservePaths)) {
-    return removePath(resolved, runtime, opts);
-  }
+  const nestedPreservedPaths = preservePaths.filter((preservePath) =>
+    isPathInside(resolved, preservePath),
+  );
   if (opts?.dryRun) {
-    const preserved = preservePaths
-      .filter((preservePath) => isPathInside(resolved, preservePath))
-      .map((preservePath) => shortenHomeInString(preservePath))
-      .join(", ");
-    runtime.log(`[dry-run] remove ${displayLabel} preserving ${preserved}`);
+    const suffix = nestedPreservedPaths.length
+      ? ` preserving ${nestedPreservedPaths.map((preservePath) => shortenHomeInString(preservePath)).join(", ")}`
+      : "";
+    runtime.log(`[dry-run] remove ${displayLabel}${suffix}`);
     return { ok: true };
   }
   try {
-    const stat = await fs.lstat(resolved);
-    if (!stat.isDirectory()) {
-      return removePath(resolved, runtime, opts);
-    }
-    const entries = await fs.readdir(resolved);
-    for (const entry of entries) {
-      const result = await removePathPreserving(path.join(resolved, entry), preservePaths, runtime);
-      if (!result.ok) {
-        return result;
+    if (nestedPreservedPaths.length > 0 && (await fs.lstat(resolved)).isDirectory()) {
+      for (const entry of await fs.readdir(resolved)) {
+        const result = await removePathPreserving(
+          path.join(resolved, entry),
+          preservePaths,
+          runtime,
+        );
+        if (!result.ok) {
+          return result;
+        }
       }
+      runtime.log(`Removed contents of ${displayLabel}`);
+    } else {
+      await fs.rm(resolved, { recursive: true, force: true });
+      runtime.log(`Removed ${displayLabel}`);
     }
-    runtime.log(`Removed contents of ${displayLabel}`);
     return { ok: true };
   } catch (err) {
     runtime.error(`Failed to remove ${displayLabel}: ${String(err)}`);

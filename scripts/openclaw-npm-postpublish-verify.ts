@@ -959,7 +959,7 @@ function collectBundledExtensionRuntimeDependencyOwners(
   return ownersByDependency;
 }
 
-export function resolveInstalledBinaryPath(prefixDir: string, platform = process.platform): string {
+function resolveInstalledBinaryPath(prefixDir: string, platform = process.platform): string {
   return platform === "win32"
     ? pathWin32.join(prefixDir, "openclaw.cmd")
     : pathPosix.join(prefixDir, "bin", "openclaw");

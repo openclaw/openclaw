@@ -529,28 +529,15 @@ private struct WatchControlSurfaceView: View {
         if record.isResolving {
             return String(localized: "Sending")
         }
-        if let risk = approvalRiskText(record.approval.risk) {
+        if let risk = WatchExecApprovalDisplay.riskText(record.approval.risk) {
             return risk
         }
         return String(localized: "Review")
     }
 
-    private func approvalRiskText(_ risk: WatchRiskLevel?) -> String? {
-        switch risk {
-        case .high:
-            String(localized: "High risk")
-        case .medium:
-            String(localized: "Medium risk")
-        case .low:
-            String(localized: "Low risk")
-        case nil:
-            nil
-        }
-    }
-
     private var chatPreviewTitle: String {
         guard let item = chatItems.last else { return String(localized: "No chat synced") }
-        return self.roleTitle(item.role)
+        return item.localizedRoleTitle
     }
 
     private var chatPreviewSubtitle: String {
@@ -599,17 +586,6 @@ private struct WatchControlSurfaceView: View {
     private var updatedText: String {
         guard let updatedAt = store.updatedAt else { return String(localized: "Just now") }
         return updatedAt.formatted(date: .omitted, time: .shortened)
-    }
-
-    private func roleTitle(_ role: String) -> String {
-        switch role.lowercased() {
-        case "user":
-            String(localized: "You")
-        case "system":
-            String(localized: "System")
-        default:
-            "OpenClaw"
-        }
     }
 
     private func actionSubtitle(_ action: WatchPromptAction) -> String {
@@ -1089,6 +1065,19 @@ private struct WatchApprovalCommandReview: View {
 }
 
 private enum WatchExecApprovalDisplay {
+    static func riskText(_ risk: WatchRiskLevel?) -> String? {
+        switch risk {
+        case .high:
+            String(localized: "High risk")
+        case .medium:
+            String(localized: "Medium risk")
+        case .low:
+            String(localized: "Low risk")
+        case nil:
+            nil
+        }
+    }
+
     static func warningText(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
@@ -1121,7 +1110,7 @@ private struct WatchChatBubble: View {
             }
 
             VStack(alignment: self.isUser ? .trailing : .leading, spacing: 3) {
-                Text(self.roleTitle)
+                Text(self.item.localizedRoleTitle)
                     .font(WatchClawType.label(size: 9, weight: .bold))
                     .foregroundStyle(self.isUser ? .secondary : WatchClawStyle.accent)
                 Text(self.item.text)
@@ -1148,9 +1137,11 @@ private struct WatchChatBubble: View {
     private var isUser: Bool {
         self.item.role.lowercased() == "user"
     }
+}
 
-    private var roleTitle: String {
-        switch self.item.role.lowercased() {
+extension WatchChatItem {
+    fileprivate var localizedRoleTitle: String {
+        switch self.role.lowercased() {
         case "user":
             String(localized: "You")
         case "system":
@@ -1528,7 +1519,7 @@ private struct WatchExecApprovalDetailView: View {
         WatchDetailScroll(title: "Review Command") {
             WatchHeroCard(
                 label: .verbatim(
-                    self.riskText(self.currentRecord?.approval.risk ?? self.record.approval.risk)
+                    WatchExecApprovalDisplay.riskText(self.currentRecord?.approval.risk ?? self.record.approval.risk)
                         ?? String(localized: "Review")),
                 title: .localized("Command execution"),
                 subtitle: .verbatim(self.metadataSummary),
@@ -1608,19 +1599,6 @@ private struct WatchExecApprovalDetailView: View {
         return parts.isEmpty
             ? String(localized: "Review command below")
             : parts.joined(separator: " · ")
-    }
-
-    private func riskText(_ risk: WatchRiskLevel?) -> String? {
-        switch risk {
-        case .high:
-            String(localized: "High risk")
-        case .medium:
-            String(localized: "Medium risk")
-        case .low:
-            String(localized: "Low risk")
-        case nil:
-            nil
-        }
     }
 
     private static func expiresText(_ expiresAtMs: Int64?) -> String? {

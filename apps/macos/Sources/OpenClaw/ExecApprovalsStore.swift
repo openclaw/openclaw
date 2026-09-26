@@ -684,60 +684,28 @@ extension ExecApprovalsStore {
     }
 
     private static func migrateLegacyPattern(_ entry: ExecAllowlistEntry) -> ExecAllowlistEntry {
+        var migrated = entry
         let trimmedPattern = entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedResolved = entry.lastResolvedPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let normalizedResolved = trimmedResolved.isEmpty ? nil : trimmedResolved
+        migrated.lastResolvedPath = trimmedResolved.isEmpty ? nil : trimmedResolved
 
         if !ExecApprovalHelpers.patternHasPathSelector(trimmedPattern),
            !trimmedResolved.isEmpty,
-           case let .valid(migratedPattern) = ExecApprovalHelpers.validateAllowlistPattern(trimmedResolved)
+           case let .valid(pattern) = ExecApprovalHelpers.validateAllowlistPattern(trimmedResolved)
         {
-            return ExecAllowlistEntry(
-                id: entry.id,
-                pattern: migratedPattern,
-                source: entry.source,
-                commandText: entry.commandText,
-                argPattern: entry.argPattern,
-                lastUsedAt: entry.lastUsedAt,
-                lastUsedCommand: entry.lastUsedCommand,
-                lastResolvedPath: normalizedResolved)
-        }
-
-        switch ExecApprovalHelpers.validateAllowlistPattern(trimmedPattern) {
-        case let .valid(pattern):
-            return ExecAllowlistEntry(
-                id: entry.id,
-                pattern: pattern,
-                source: entry.source,
-                commandText: entry.commandText,
-                argPattern: entry.argPattern,
-                lastUsedAt: entry.lastUsedAt,
-                lastUsedCommand: entry.lastUsedCommand,
-                lastResolvedPath: normalizedResolved)
-        case .invalid:
-            switch ExecApprovalHelpers.validateAllowlistPattern(trimmedResolved) {
-            case let .valid(migratedPattern):
-                return ExecAllowlistEntry(
-                    id: entry.id,
-                    pattern: migratedPattern,
-                    source: entry.source,
-                    commandText: entry.commandText,
-                    argPattern: entry.argPattern,
-                    lastUsedAt: entry.lastUsedAt,
-                    lastUsedCommand: entry.lastUsedCommand,
-                    lastResolvedPath: normalizedResolved)
+            migrated.pattern = pattern
+        } else {
+            switch ExecApprovalHelpers.validateAllowlistPattern(trimmedPattern) {
+            case let .valid(pattern):
+                migrated.pattern = pattern
             case .invalid:
-                return ExecAllowlistEntry(
-                    id: entry.id,
-                    pattern: trimmedPattern,
-                    source: entry.source,
-                    commandText: entry.commandText,
-                    argPattern: entry.argPattern,
-                    lastUsedAt: entry.lastUsedAt,
-                    lastUsedCommand: entry.lastUsedCommand,
-                    lastResolvedPath: normalizedResolved)
+                switch ExecApprovalHelpers.validateAllowlistPattern(trimmedResolved) {
+                case let .valid(pattern): migrated.pattern = pattern
+                case .invalid: migrated.pattern = trimmedPattern
+                }
             }
         }
+        return migrated
     }
 
     private static func normalizeAllowlistEntries(_ entries: [ExecAllowlistEntry]) -> [ExecAllowlistEntry] {
@@ -749,26 +717,16 @@ extension ExecApprovalsStore {
             // Command text can contain secrets; it is accepted only for legacy decode.
             migrated.commandText = nil
             // Regex whitespace and Unicode normalization are semantic policy bytes.
-            let normalizedArgPattern = self.normalizeArgPattern(migrated.argPattern)
+            migrated.argPattern = self.normalizeArgPattern(migrated.argPattern)
             let trimmedPattern = migrated.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
             let trimmedResolvedPath = migrated.lastResolvedPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let normalizedResolvedPath = trimmedResolvedPath.isEmpty ? nil : trimmedResolvedPath
+            migrated.lastResolvedPath = trimmedResolvedPath.isEmpty ? nil : trimmedResolvedPath
 
-            switch ExecApprovalHelpers.validateAllowlistPattern(trimmedPattern) {
-            case let .valid(pattern):
-                normalized.append(
-                    ExecAllowlistEntry(
-                        id: migrated.id,
-                        pattern: pattern,
-                        source: migrated.source,
-                        commandText: migrated.commandText,
-                        argPattern: normalizedArgPattern,
-                        lastUsedAt: migrated.lastUsedAt,
-                        lastUsedCommand: migrated.lastUsedCommand,
-                        lastResolvedPath: normalizedResolvedPath))
-            case .invalid:
+            guard case let .valid(pattern) = ExecApprovalHelpers.validateAllowlistPattern(trimmedPattern) else {
                 continue
             }
+            migrated.pattern = pattern
+            normalized.append(migrated)
         }
 
         return normalized

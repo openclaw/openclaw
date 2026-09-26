@@ -1,11 +1,20 @@
+import pLimit from "p-limit";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import { getExistingOpenClawStateSchemaPath } from "./openclaw-state-db-schema-policy.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
-import { readUserProfileVersion } from "./user-profile-events.js";
+import {
+  captureOpenClawStateReadContext,
+  captureOpenClawStateWorkerContext,
+} from "./openclaw-state-worker-context.js";
+import { onUserProfilesChanged, readUserProfileVersion } from "./user-profile-events.js";
 import { profileCatalogPath } from "./user-profile-identity.read.js";
-import { retainUserProfilePublication } from "./user-profile-list.js";
+import {
+  readResidentUserProfileRevision,
+  retainUserProfilePublication,
+} from "./user-profile-list.js";
 import {
   isUserProfileAvatarAdmission,
   type UserProfileAvatar,
@@ -16,7 +25,7 @@ import {
   fetchTailscaleAvatar,
   type TailscaleAvatarFetchOptions,
 } from "./user-profiles-tailscale-avatar.js";
-import type { UserProfile } from "./user-profiles.types.js";
+import type { ProfileDisplayRow, UserProfile } from "./user-profiles.types.js";
 
 type PreparedProfileAvatar = UserProfileAvatarInspection & {
   isCurrent(): boolean;
@@ -25,6 +34,68 @@ type PreparedProfileAvatar = UserProfileAvatarInspection & {
 
 type ProfileAvatarReader = { inspect(): Promise<PreparedProfileAvatar> };
 const pendingReaders = new Map<string, ProfileAvatarReader>();
+const avatarReads = pLimit(4);
+const avatarCache = new Map<ProfileDisplayRow, PreparedProfileAvatar>();
+let avatarCacheBytes = 0;
+
+function evictAvatar(revision: ProfileDisplayRow, avatar: PreparedProfileAvatar) {
+  avatarCache.delete(revision);
+  avatarCacheBytes -= avatar.avatar?.byteLength ?? 0;
+}
+
+function currentAvatar(avatar: PreparedProfileAvatar) {
+  try {
+    return avatar.isCurrent();
+  } catch {
+    // Database retirement ends the admission captured by the cached read.
+    return false;
+  }
+}
+
+onUserProfilesChanged(() => {
+  for (const [revision, avatar] of avatarCache) {
+    if (!currentAvatar(avatar)) {
+      evictAvatar(revision, avatar);
+    }
+  }
+});
+
+function cacheAvatar(revision: ProfileDisplayRow, avatar: PreparedProfileAvatar) {
+  const previous = avatarCache.get(revision);
+  if (previous) {
+    evictAvatar(revision, previous);
+  }
+  avatarCache.set(revision, avatar);
+  // Reserve the advertised bytes even for HEAD/304 so later materialization stays bounded.
+  avatarCacheBytes += avatar.avatar?.byteLength ?? 0;
+  for (const [oldest, value] of avatarCache) {
+    if (avatarCache.size <= 128 && avatarCacheBytes <= 16 * 1024 * 1024) {
+      break;
+    }
+    evictAvatar(oldest, value);
+  }
+}
+
+async function readAvatar<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  if (avatarReads.pendingCount >= 128) {
+    throw new WorkerTaskError("Profile avatar read queue is full", "overloaded");
+  }
+  const signal = AbortSignal.timeout(5_000);
+  try {
+    return await racePromiseWithAbortSignal(
+      avatarReads(() => {
+        signal.throwIfAborted();
+        return operation(signal);
+      }),
+      signal,
+    );
+  } catch (error) {
+    if (signal.aborted) {
+      throw new WorkerTaskError("Profile avatar read budget expired", "timeout");
+    }
+    throw error;
+  }
+}
 
 /** Keep every refresh and materialization bound to the original physical store. */
 export function createProfileAvatarReader(
@@ -32,25 +103,47 @@ export function createProfileAvatarReader(
   options: OpenClawStateDatabaseOptions = {},
 ): ProfileAvatarReader {
   // Explicit environments and maintenance/schema scopes retain their caller's admission.
-  const key =
+  const pathname = profileCatalogPath(options);
+  const share = !(
     options.env ||
     options.database ||
     getOpenClawDatabaseMaintenanceScope() ||
     getExistingOpenClawStateSchemaPath()
-      ? undefined
-      : JSON.stringify([profileCatalogPath(options), profileId]);
+  );
+  const residentRevision = () =>
+    share ? readResidentUserProfileRevision(profileId, pathname) : undefined;
+  const key = share ? JSON.stringify([pathname, profileId]) : undefined;
   const pending = key && pendingReaders.get(key);
   if (pending) {
     return pending;
   }
-  const context = captureOpenClawStateWorkerContext({
-    ...options,
-    path: options.database?.path ?? options.path,
-  });
-  const location = { path: context.admission.databasePath, env: context.environment };
+  let context = share
+    ? undefined
+    : captureOpenClawStateWorkerContext({
+        ...options,
+        path: options.database?.path ?? pathname,
+      });
+  const readContext = context ?? captureOpenClawStateReadContext(pathname);
   let inspection: Promise<PreparedProfileAvatar> | undefined;
   const reader: ProfileAvatarReader = {
     inspect() {
+      readContext.admission.assertCurrent();
+      const revision = residentRevision();
+      const cached = revision && avatarCache.get(revision);
+      if (cached) {
+        if (currentAvatar(cached)) {
+          avatarCache.delete(revision);
+          avatarCache.set(revision, cached);
+          return Promise.resolve({
+            ...cached,
+            isCurrent() {
+              readContext.admission.assertCurrent();
+              return cached.isCurrent() && revision === residentRevision();
+            },
+          });
+        }
+        evictAvatar(revision, cached);
+      }
       if (!inspection) {
         if (key) {
           pendingReaders.set(key, reader);
@@ -66,14 +159,22 @@ export function createProfileAvatarReader(
     },
   };
   async function inspect(): Promise<PreparedProfileAvatar> {
+    const captured = (context ??= {
+      ...captureOpenClawStateWorkerContext({ path: pathname }),
+      ...readContext,
+    });
+    const location = { path: captured.admission.databasePath, env: captured.environment };
     for (;;) {
       const revision = readUserProfileVersion();
-      const reply = await executeExistingOpenClawStateRead(
-        location,
-        { type: "userProfiles.avatar.inspect", profileId },
-        { context, current: true },
+      const row = residentRevision();
+      const reply = await readAvatar((signal) =>
+        executeExistingOpenClawStateRead(
+          location,
+          { type: "userProfiles.avatar.inspect", profileId },
+          { context: captured, current: true, signal },
+        ),
       );
-      context.admission.assertCurrent();
+      captured.admission.assertCurrent();
       if (reply && (!reply.ok || reply.type !== "userProfiles.avatar.inspect")) {
         throw new Error("Unexpected profile avatar inspection result");
       }
@@ -86,8 +187,8 @@ export function createProfileAvatarReader(
         emails: [],
       };
       const isCurrent = () => {
-        context.admission.assertCurrent();
-        return revision === readUserProfileVersion();
+        captured.admission.assertCurrent();
+        return row ? row === residentRevision() : revision === readUserProfileVersion();
       };
       let bytes: Promise<UserProfileAvatar | undefined> | undefined;
       const readBytes = async () => {
@@ -95,28 +196,60 @@ export function createProfileAvatarReader(
         if (!profile || !avatar || !isCurrent()) {
           return undefined;
         }
-        const result = await executeExistingOpenClawStateRead(
-          location,
-          {
-            type: "userProfiles.avatar.read",
-            profileId,
-            expected: { canonicalProfileId: profile.id, sha256: avatar.sha256, mime: avatar.mime },
-          },
-          { context, current: true },
+        const result = await readAvatar((signal) =>
+          executeExistingOpenClawStateRead(
+            location,
+            {
+              type: "userProfiles.avatar.read",
+              profileId,
+              expected: {
+                canonicalProfileId: profile.id,
+                sha256: avatar.sha256,
+                mime: avatar.mime,
+              },
+            },
+            { context: captured, current: true, signal },
+          ),
         );
         if (result && (!result.ok || result.type !== "userProfiles.avatar.read")) {
           throw new Error("Unexpected profile avatar materialization result");
         }
         return isCurrent() ? result?.avatar : undefined;
       };
-      return {
+      const prepared: PreparedProfileAvatar = {
         ...snapshot,
         isCurrent,
-        loadBytes: () =>
-          (bytes ??= readBytes().finally(() => {
-            bytes = undefined;
-          })),
+        loadBytes() {
+          if (!isCurrent()) {
+            return Promise.resolve(undefined);
+          }
+          return (bytes ??= readBytes().then(
+            (avatar) => {
+              if (!avatar && row && avatarCache.get(row) === prepared) {
+                evictAvatar(row, prepared);
+              }
+              if (!avatar || !row || avatarCache.get(row) !== prepared) {
+                bytes = undefined;
+              }
+              return avatar;
+            },
+            (error: unknown) => {
+              bytes = undefined;
+              throw error;
+            },
+          ));
+        },
       };
+      if (
+        row &&
+        snapshot.avatar &&
+        snapshot.profile?.id === row.id &&
+        snapshot.avatar.sha256 === row.avatar_sha256 &&
+        snapshot.avatar.mime === row.avatar_mime
+      ) {
+        cacheAvatar(row, prepared);
+      }
+      return prepared;
     }
   }
   return reader;

@@ -16,6 +16,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { rm } from "node:fs/promises";
 import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
@@ -592,23 +593,25 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   const persistentCacheRoot =
     baseEnv[FS_MODULE_CACHE_ROOT_ENV_KEY]?.trim() || baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
   const nodeCompileCacheRoot = baseEnv[NODE_COMPILE_CACHE_PATH_ENV_KEY]?.trim();
-  const clonedCacheSlots = clonePersistentCacheSlots(persistentCacheRoot, concurrency);
-  if (clonedCacheSlots > 0) {
-    process.stdout.write(
-      `[shard:cache] cloned restored Vitest seed into ${clonedCacheSlots} isolated lane(s)\n`,
-    );
-  }
-
-  const context = await createWorkerContext(baseEnv, admittedPlans);
+  let context: Awaited<ReturnType<typeof createWorkerContext>>;
+  let unverifiedChild = false;
+  let scratchCleanupPending = options.scratchDir === undefined;
   let interrupted: NodeJS.Signals | undefined;
   const onSignal = (signal: NodeJS.Signals) => {
     interrupted ??= signal;
   };
-  if (context) {
-    process.on("SIGINT", onSignal);
-    process.on("SIGTERM", onSignal);
-  }
   try {
+    const clonedCacheSlots = clonePersistentCacheSlots(persistentCacheRoot, concurrency);
+    if (clonedCacheSlots > 0) {
+      process.stdout.write(
+        `[shard:cache] cloned restored Vitest seed into ${clonedCacheSlots} isolated lane(s)\n`,
+      );
+    }
+    context = await createWorkerContext(baseEnv, admittedPlans);
+    if (context) {
+      process.on("SIGINT", onSignal);
+      process.on("SIGTERM", onSignal);
+    }
     const runner: typeof runChild =
       options.runChild ??
       ((args, childEnv, label, timingKey) => runChild(args, childEnv, label, timingKey, context));
@@ -748,6 +751,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
                 : selection.configs || selection.includePatterns
                   ? "node-subset:"
                   : "";
+            unverifiedChild ||= !context;
             const code = await runner(
               args,
               childEnv,
@@ -815,7 +819,22 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   } finally {
     try {
       await context?.workerRun.dispose();
+      if (scratchCleanupPending && !unverifiedChild) {
+        // Disposal proves compiler, borrower, and nested-resource settlement.
+        // Portable close-only launches cannot authorize deleting shared scratch.
+        try {
+          await rm(scratchDir, { recursive: true, force: true, maxRetries: 3 });
+          scratchCleanupPending = false;
+        } catch {
+          // Report retained scratch below without replacing the shard's result.
+        }
+      }
     } finally {
+      if (scratchCleanupPending) {
+        console.warn(
+          `[shard:cache] retained ${scratchDir}: descendant or scratch cleanup is unverified`,
+        );
+      }
       if (hostResources) {
         reportCiResourceSnapshot("end");
       }

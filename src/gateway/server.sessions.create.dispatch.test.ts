@@ -300,30 +300,27 @@ test.each(mentionCreationOwners)(
     }),
 );
 
-test.each(mentionCreationOwners)(
-  "sessions.create rejects stale mention spans before creating a session for %s under %s scope",
-  (agentId, scope) =>
-    withFixedOwnerSessionStore(createSessionStoreDir, scope, async () => {
-      const sender = identifiedClient(
-        ensureProfileForEmail("alice@invalid-mentions.example.test").id,
-      );
-      const created = await directSessionReq(
-        "sessions.create",
-        {
-          agentId,
-          message: "token was removed",
-          mentions: [{ profileId: "bob", start: 0, end: 4 }],
-        },
-        { client: sender },
-      );
-      expect(created).toMatchObject({
-        ok: false,
-        error: { message: expect.stringContaining("Select the people again") },
-      });
-      const listed = await directSessionReq<{ sessions: unknown[] }>("sessions.list", {});
-      expect(listed.payload?.sessions).toEqual([]);
-    }),
-);
+test("sessions.create rejects stale mention spans before creating a selected-agent global session", () =>
+  withFixedOwnerSessionStore(createSessionStoreDir, "global", async () => {
+    const sender = identifiedClient(
+      ensureProfileForEmail("alice@invalid-mentions.example.test").id,
+    );
+    const created = await directSessionReq(
+      "sessions.create",
+      {
+        agentId: "ops",
+        message: "token was removed",
+        mentions: [{ profileId: "bob", start: 0, end: 4 }],
+      },
+      { client: sender },
+    );
+    expect(created).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("Select the people again") },
+    });
+    const listed = await directSessionReq<{ sessions: unknown[] }>("sessions.list", {});
+    expect(listed.payload?.sessions).toEqual([]);
+  }));
 
 test("sessions.create forwards an attachment-only first turn", async () => {
   await createSessionStoreDir();

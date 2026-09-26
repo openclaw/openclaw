@@ -170,6 +170,9 @@ describe("runway video generation provider", () => {
       expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
       const createRequest = firstPostJsonRequest();
       expect(createRequest.url).toBe("https://api.dev.runwayml.com/v1/text_to_video");
+      expect(JSON.stringify(createRequest.body)).toBe(
+        '{"model":"gen4.5","promptText":"a tiny lobster DJ under neon lights","ratio":"1280:720","duration":4}',
+      );
       expect(createRequest.body).toEqual({
         model: "gen4.5",
         promptText: "a tiny lobster DJ under neon lights",

@@ -290,48 +290,6 @@ describe("task-executor", () => {
     });
   });
 
-  it("cancels active tasks linked to a managed TaskFlow", async () => {
-    await withTaskExecutorStateDir(async () => {
-      hoisted.cancelSessionMock.mockResolvedValue(undefined);
-
-      const flow = createManagedTaskFlow({
-        ownerKey: "agent:main:main",
-        controllerId: "tests/managed-flow",
-        goal: "Inspect PR batch",
-        requesterOrigin: {
-          channel: "notifychat",
-          to: "notifychat:123",
-        },
-      });
-      createRunningAcpChildTaskRun({ runId: "run-linear-cancel" });
-      const child = requireCreatedFlowTask(
-        runTaskInFlow({
-          flowId: flow.flowId,
-          runtime: "acp",
-          childSessionKey: "agent:codex:acp:child",
-          runId: "run-linear-cancel",
-          task: "Inspect a PR",
-          status: "running",
-          startedAt: 10,
-        }),
-      );
-
-      const cancelled = await cancelFlowById({
-        cfg: {} as never,
-        flowId: flow.flowId,
-      });
-
-      expect(cancelled.found).toBe(true);
-      expect(cancelled.cancelled).toBe(true);
-      const task = getTaskById(child.taskId);
-      expect(task?.taskId).toBe(child.taskId);
-      expect(task?.status).toBe("cancelled");
-      const cancelledFlow = getTaskFlowById(flow.flowId);
-      expect(cancelledFlow?.flowId).toBe(flow.flowId);
-      expect(cancelledFlow?.status).toBe("cancelled");
-    });
-  });
-
   it("promotes provisional subagent kills before cancelling a managed TaskFlow", async () => {
     await withTaskExecutorStateDir(async () => {
       const flow = createManagedTaskFlow({
@@ -606,30 +564,6 @@ describe("task-executor", () => {
       expect(created.created).toBe(false);
       expect(created.reason).toBe("Flow not found.");
       expect(listTasksForFlowId(flow.flowId)[0]).toBeUndefined();
-    });
-  });
-
-  it("dispatches detached task cancellation through the registered runtime", async () => {
-    await withTaskExecutorStateDir(async () => {
-      hoisted.cancelSessionMock.mockResolvedValue(undefined);
-
-      const child = createRunningAcpChildTaskRun({
-        runId: "run-external-cancel",
-      });
-
-      const cancelDetachedTaskRunByIdSpy = spyOnRuntimeCancel();
-
-      const cancelled = await cancelDetachedTaskRunById({
-        cfg: {} as never,
-        taskId: child.taskId,
-      });
-
-      expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith({
-        cfg: {} as never,
-        taskId: child.taskId,
-      });
-      expect(cancelled.found).toBe(true);
-      expect(cancelled.cancelled).toBe(true);
     });
   });
 
@@ -949,6 +883,8 @@ describe("task-executor", () => {
       expect(cancelled.cancelled).toBe(true);
       expect(cancelled.flow?.flowId).toBe(flow.flowId);
       expect(cancelled.flow?.status).toBe("cancelled");
+      expect(getTaskById(childTask.taskId)?.status).toBe("cancelled");
+      expect(getTaskFlowById(flow.flowId)?.status).toBe("cancelled");
     });
   });
 
@@ -1146,4 +1082,3 @@ describe("task-executor", () => {
     });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

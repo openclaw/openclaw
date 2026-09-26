@@ -193,7 +193,7 @@ function stageChange(db: DatabaseSync, change: ClaimChange): void {
 export function stagePlacementTurnClaimWorkerPublication(
   identity: DatabasePathIdentity,
   facts: WorkerSessionTurnClaimFacts,
-): { commit: () => void; rollback: () => void } {
+): { commit: () => void; rollback: () => void; invalidate: () => void } {
   const owner = ownerFor(identity);
   const sequence = ++owner.sequence;
   const change: ClaimChange = {
@@ -221,6 +221,19 @@ export function stagePlacementTurnClaimWorkerPublication(
       settled = true;
       owner.pending.delete(change);
       prunePublication(owner, change.sessionId);
+    },
+    invalidate() {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      // An uncertain dispatch may preserve the predecessor's claim bytes. Revoke
+      // that incarnation without retaining a fence or touching a later sequence.
+      change.facts = undefined;
+      commitChange(owner, change, sequence);
+      for (const retained of Array.from(owner.claims.get(change.sessionId) ?? [])) {
+        notifyRevoked(retained);
+      }
     },
   };
 }

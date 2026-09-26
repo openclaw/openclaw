@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import WebKit
 
 extension DashboardWindowController {
@@ -43,7 +44,7 @@ extension DashboardWindowController {
             if (document.getElementById("openclaw-native-macos-chrome")) return;
             const style = document.createElement("style");
             style.id = "openclaw-native-macos-chrome";
-            style.textContent = \(Self.jsStringLiteral(css));
+            style.textContent = \(WebViewJavaScriptSupport.jsValue(css));
             document.documentElement.classList.add("openclaw-native-macos", "openclaw-native-web-chrome");
             document.head.appendChild(style);
           } catch {}
@@ -101,8 +102,8 @@ extension DashboardWindowController {
         """
         (() => {
           if (location.protocol !== "http:" && location.protocol !== "https:") return;
-          if (location.origin !== \(self.jsStringLiteral(self.originString(for: url)))) return;
-          const allowedPath = \(self.jsStringLiteral(self.allowedPath(for: url)));
+          if (location.origin !== \(WebViewJavaScriptSupport.jsValue(self.originString(for: url)))) return;
+          const allowedPath = \(WebViewJavaScriptSupport.jsValue(self.allowedPath(for: url)));
           if (allowedPath !== "/" && !location.pathname.startsWith(allowedPath)) return;
           \(script)
         })();
@@ -125,16 +126,5 @@ extension DashboardWindowController {
         let path = url.path(percentEncoded: true).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty else { return "/" }
         return path.hasSuffix("/") ? path : path + "/"
-    }
-
-    static func jsStringLiteral(_ value: String) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: [value]),
-              let raw = String(data: data, encoding: .utf8),
-              raw.hasPrefix("["),
-              raw.hasSuffix("]")
-        else {
-            return "\"\""
-        }
-        return String(raw.dropFirst().dropLast())
     }
 }

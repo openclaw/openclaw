@@ -14,14 +14,11 @@ enum VoiceWakeTestState: Equatable {
 }
 
 final class VoiceWakeTester {
-    private let recognizer: SFSpeechRecognizer?
     private var audioEngine: AVAudioEngine?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var isStopping = false
     private var isFinalizing = false
-    private var detectionStart: Date?
-    private var lastHeard: Date?
     private var lastLoggedText: String?
     private var lastLoggedAt: Date?
     private var lastTranscript: String?
@@ -29,13 +26,8 @@ final class VoiceWakeTester {
     private var silenceTask: Task<Void, Never>?
     private var currentTriggers: [String] = []
     private var holdingAfterDetect = false
-    private var detectedText: String?
     private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake")
     private let silenceWindow: TimeInterval = 1.0
-
-    init(locale: Locale = .current) {
-        self.recognizer = SFSpeechRecognizer(locale: locale)
-    }
 
     func start(
         triggers: [String],
@@ -47,8 +39,6 @@ final class VoiceWakeTester {
         self.isStopping = false
         self.isFinalizing = false
         self.holdingAfterDetect = false
-        self.detectedText = nil
-        self.lastHeard = nil
         self.lastLoggedText = nil
         self.lastLoggedAt = nil
         self.lastTranscript = nil
@@ -92,7 +82,6 @@ final class VoiceWakeTester {
         }
 
         self.logInputSelection(preferredMicID: micID)
-        self.configureSession(preferredMicID: micID)
 
         guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
             self.audioEngine = nil
@@ -133,9 +122,6 @@ final class VoiceWakeTester {
             onUpdate(.listening)
         }
 
-        self.detectionStart = Date()
-        self.lastHeard = self.detectionStart
-
         guard let request = recognitionRequest else { return }
 
         self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
@@ -174,13 +160,9 @@ final class VoiceWakeTester {
         }
     }
 
-    func stop() {
-        self.stop(force: true)
-    }
-
     func finalize(timeout: TimeInterval = 1.5) {
         guard self.recognitionTask != nil else {
-            self.stop(force: true)
+            self.stop()
             return
         }
         self.isFinalizing = true
@@ -193,13 +175,13 @@ final class VoiceWakeTester {
             guard let self else { return }
             try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
             if !self.isStopping {
-                self.stop(force: true)
+                self.stop()
             }
         }
     }
 
-    private func stop(force: Bool) {
-        if force { self.isStopping = true }
+    func stop() {
+        self.isStopping = true
         self.isFinalizing = false
         self.recognitionRequest?.endAudio()
         self.recognitionTask?.cancel()
@@ -211,9 +193,6 @@ final class VoiceWakeTester {
         }
         self.audioEngine = nil
         self.holdingAfterDetect = false
-        self.detectedText = nil
-        self.lastHeard = nil
-        self.detectionStart = nil
         self.lastLoggedText = nil
         self.lastLoggedAt = nil
         self.lastTranscript = nil
@@ -231,7 +210,6 @@ final class VoiceWakeTester {
         onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void) async
     {
         if !text.isEmpty {
-            self.lastHeard = Date()
             self.lastTranscript = text
             self.lastTranscriptAt = Date()
         }
@@ -248,7 +226,6 @@ final class VoiceWakeTester {
         if let match = acceptedMatch {
             self.holdingAfterDetect = true
             let detectedText = match.command.isEmpty ? (match.trigger ?? text) : match.command
-            self.detectedText = detectedText
             self.logger.info("voice wake detected (test) (len=\(detectedText.count))")
             await MainActor.run { AppStateStore.shared.startVoiceEars() }
             self.stop()
@@ -267,12 +244,12 @@ final class VoiceWakeTester {
             Task { @MainActor in onUpdate(.finalizing) }
         }
         if let errorMessage {
-            self.stop(force: true)
+            self.stop()
             Task { @MainActor in onUpdate(.failed(errorMessage)) }
             return
         }
         if isFinal {
-            self.stop(force: true)
+            self.stop()
             let state: VoiceWakeTestState = text.isEmpty
                 ? .failed("No speech detected")
                 : .failed("No trigger heard: “\(text)”")
@@ -395,7 +372,6 @@ final class VoiceWakeTester {
             guard let match else { return }
             self.holdingAfterDetect = true
             let detectedText = match.command.isEmpty ? (match.trigger ?? lastText) : match.command
-            self.detectedText = detectedText
             self.logger.info("voice wake detected (test, silence) (len=\(detectedText.count))")
             await MainActor.run { AppStateStore.shared.startVoiceEars() }
             self.stop()
@@ -404,10 +380,6 @@ final class VoiceWakeTester {
                 onUpdate(.detected(detectedText))
             }
         }
-    }
-
-    private func configureSession(preferredMicID: String?) {
-        _ = preferredMicID
     }
 
     private func logInputSelection(preferredMicID: String?) {

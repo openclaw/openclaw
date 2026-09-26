@@ -7,7 +7,7 @@ import type { lookup as dnsLookupCb } from "node:dns";
  */
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
-import { axValue, type RawAXNode } from "./cdp-ax.js";
+import { axValue, type AriaSnapshotNode, type RawAXNode } from "./cdp-ax.js";
 import {
   prepareCdpPageSession,
   prepareCdpTargetSession,
@@ -29,7 +29,7 @@ import {
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
 
 export { appendCdpPath, normalizeCdpWsUrl } from "./cdp.helpers.js";
-export type { RawAXNode } from "./cdp-ax.js";
+export type { AriaSnapshotNode, RawAXNode } from "./cdp-ax.js";
 export { snapshotRoleViaCdp } from "./cdp-role-snapshot.js";
 export { type CdpActionTimeouts, waitForCdpCommittedNavigationUrl } from "./cdp-page-session.js";
 
@@ -205,17 +205,6 @@ export async function createTargetViaCdp(opts: {
   }
   throw new Error("CDP Target.createTarget failed");
 }
-
-/** Normalized accessibility tree node returned by ARIA snapshots. */
-export type AriaSnapshotNode = {
-  ref: string;
-  role: string;
-  name: string;
-  value?: string;
-  description?: string;
-  backendDOMNodeId?: number;
-  depth: number;
-};
 
 /** Prefix assigned to generated accessibility-node refs. */
 const AX_REF_PREFIX = "ax";

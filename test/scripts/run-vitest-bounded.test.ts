@@ -38,13 +38,16 @@ afterAll(() => preparedCli.cleanup());
 describe("Vitest CLI final outcome ownership", () => {
   it.for(
     entrypoints.flatMap((entry) =>
-      [
-        "failure",
-        "startup",
-        "success",
-        "help",
-        ...(process.platform === "win32" ? [] : ["signal"]),
-      ].map((outcome) => Object.assign({}, entry, { outcome })),
+      (entry.script.startsWith("test-projects-")
+        ? ["failure"]
+        : [
+            "failure",
+            "startup",
+            "success",
+            "help",
+            ...(process.platform === "win32" ? [] : ["signal"]),
+          ]
+      ).map((outcome) => Object.assign({}, entry, { outcome })),
     ),
   )(
     "$script (direct=$direct) reports $outcome after its owners settle",

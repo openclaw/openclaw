@@ -33,7 +33,6 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "\$currentPosition/\${steps.size}" to R.string.native_7c84cb98332a6036,
     "\$devices paired" to R.string.native_8a20f46d5276b474,
     "\$held held" to R.string.native_614b8348a2dbe46b,
-    "\$index." to R.string.native_ac07bf982425811c,
     "\$issueCount issues" to R.string.native_a79bcff159841b0f,
     "\$it tools" to R.string.native_bfa5272988932130,
     "\$label · \$recommendation" to R.string.native_1cea287c3ba01d1d,

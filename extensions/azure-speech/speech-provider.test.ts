@@ -117,6 +117,21 @@ describe("buildAzureSpeechProvider", () => {
     });
   });
 
+  it("preserves inherited Talk settings when overrides are blank", () => {
+    const provider = buildAzureSpeechProvider();
+    const params = { voiceId: " ", languageCode: " fr-FR ", outputFormat: " " };
+    const talk = provider.resolveTalkConfig?.({
+      cfg: {},
+      baseTtsConfig: { providers: { "azure-speech": { apiKey: "base-key", voice: "base-voice" } } },
+      talkProviderConfig: { ...params, apiKey: " " },
+      timeoutMs: 1000,
+    });
+    expect(talk).toMatchObject({ apiKey: "base-key", voice: "base-voice", lang: "fr-FR" });
+    expect(provider.resolveTalkOverrides?.({ talkProviderConfig: {}, params })).toStrictEqual({
+      lang: "fr-FR",
+    });
+  });
+
   it("parses provider-specific TTS directives", () => {
     const provider = buildAzureSpeechProvider();
     const policy = {

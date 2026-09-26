@@ -255,7 +255,7 @@ async function createRecoveryFixture(workspacePath: string, options: { archived?
     ownerEpoch: 1,
     sessionId: REQUEST.sessionId,
   });
-  const active = seedActivePlacement(placements, {
+  const active = await seedActivePlacement(placements, {
     environmentId,
     ownerEpoch: attached.ownerEpoch,
     executionMode: "remote-exec",

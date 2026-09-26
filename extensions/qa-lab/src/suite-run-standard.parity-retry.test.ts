@@ -196,12 +196,6 @@ describe("QA suite Control UI ownership", () => {
       enabled: false,
     },
     {
-      label: "an explicitly disabled non-Control UI scenario",
-      surface: "channel",
-      explicit: false,
-      enabled: false,
-    },
-    {
       label: "an explicitly enabled non-Control UI scenario",
       surface: "channel",
       explicit: true,

@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { AgentToolParam } from "openai/resources/beta/agents/agents";
 import {
   buildCredentialSafetyPrompt,
   buildDelegationGuidanceSection,
@@ -14,12 +15,11 @@ import {
   type AgentHarnessAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
-import type { AgentsApiFunctionDeclaration } from "./agentsapi-client.js";
 
 /** The native session owns this snapshot until OpenClaw resets its binding. */
 export async function buildAgentsApiInstructions(
   params: AgentHarnessAttemptParamsV2,
-  tools: readonly AgentsApiFunctionDeclaration[],
+  tools: readonly AgentToolParam.AgentToolConfigParamFunction[],
 ): Promise<string> {
   const toolNames = new Set(tools.map((tool) => tool.name));
   const workspaceDir = params.bootstrapWorkspaceDir ?? params.workspaceDir;
@@ -116,7 +116,7 @@ export async function buildAgentsApiInstructions(
 /** Current facts use the existing input carrier, not immutable session instructions. */
 export function buildAgentsApiTurnContext(
   params: AgentHarnessAttemptParamsV2,
-  tools: readonly AgentsApiFunctionDeclaration[],
+  tools: readonly AgentToolParam.AgentToolConfigParamFunction[],
 ): string | undefined {
   if (!shouldIncludeRuntimeContext(params)) {
     return undefined;

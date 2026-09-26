@@ -1,7 +1,8 @@
 import { html, nothing, svg, type TemplateResult } from "lit";
-import "./install-action.ts";
 import { ref } from "lit/directives/ref.js";
+import "./install-action.ts";
 import { repeat } from "lit/directives/repeat.js";
+import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
 import { strokeIcon } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
 import { renderPanelEmptyState } from "../../components/panel-empty-state.ts";
@@ -84,6 +85,7 @@ const CATEGORY_ICONS: Readonly<Record<string, TemplateResult>> = {
   "message-circle": icons.messageSquare,
   "message-square": icons.messageSquare,
   mic: icons.mic,
+  monitor: icons.monitor,
   package: icons.box,
   palette: icons.palette,
   shield: icons.shield,
@@ -149,6 +151,7 @@ function renderCatalogIcon(
   );
   return renderArtTile(plugin.local.pluginId ?? plugin.id, plugin.catalog.name, {
     iconUrl: iconUrl ?? undefined,
+    whiteBackground: plugin.catalog.official && Boolean(iconUrl),
     loading: Boolean(
       (plugin.local.pluginId && props.pluginIconLoading?.(plugin.local.pluginId)) ||
       (plugin.catalog.imageUrl && props.iconLoading?.(plugin.catalog.imageUrl)),
@@ -232,7 +235,13 @@ function renderCatalogCard(
       </div>
     </div>
     ${renderPluginCardSummary(plugin.catalog.summary || t("pluginsPage.optionalCapability"))}
-    ${renderPluginRowMessage(props.messages?.[`install:${plugin.id}`], { busy, onContinue: props.canInstall && props.onContinueInstall ? (request) => props.onContinueInstall?.(plugin.id, request) : undefined })}
+    ${renderPluginRowMessage(props.messages?.[`install:${plugin.id}`], {
+      busy,
+      onContinue:
+        props.canInstall && props.onContinueInstall
+          ? (request) => props.onContinueInstall?.(plugin.id, request)
+          : undefined,
+    })}
   </article>`;
 }
 
@@ -376,7 +385,9 @@ function renderCategoryChips(props: PluginCatalogResultsProps): TemplateResult {
         : nothing
     }
     ${repeat(
-      props.categories.toSorted((left, right) => left.order - right.order),
+      props.categories
+        .filter((category) => category.slug !== "other")
+        .toSorted((left, right) => left.order - right.order),
       (item) => item.slug,
       (item) => html`<button
         type="button"
@@ -458,12 +469,15 @@ function renderRawResults(props: PluginCatalogResultsProps): TemplateResult {
 
 function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult {
   const items = props.result?.items ?? [];
-  const categories = props.categories.toSorted((left, right) => left.order - right.order);
-  const categorySlugs = new Set(categories.map((category) => category.slug));
-  const uncategorized = items.filter(
-    (plugin) => !plugin.catalog.categories.some((category) => categorySlugs.has(category)),
-  );
-  const hasAnySection = props.featured.length > 0 || props.trending.length > 0 || items.length > 0;
+  const categories = props.categories
+    .filter((category) => category.slug !== "other")
+    .toSorted((left, right) => left.order - right.order);
+  const hasAnySection =
+    props.featured.length > 0 ||
+    props.trending.length > 0 ||
+    items.some((plugin) =>
+      categories.some((category) => plugin.catalog.categories.includes(category.slug)),
+    );
   if (
     !hasAnySection &&
     !props.loading &&
@@ -503,17 +517,13 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
         renderSection({
           id: category.slug,
           title: category.label,
-          items: items.filter((plugin) => plugin.catalog.categories.includes(category.slug)),
+          items: items
+            .filter((plugin) => plugin.catalog.categories.includes(category.slug))
+            .toSorted((left, right) => comparePluginCatalogEntries(left, right, category.slug)),
           onViewAll: () => props.onCategoryChange(category.slug),
           props,
         }),
     )}
-    ${renderSection({
-      id: "uncategorized",
-      title: t("pluginsPage.categoryUncategorized"),
-      items: uncategorized,
-      props,
-    })}
   `;
 }
 

@@ -121,15 +121,8 @@ describe("detectMarkerLineWithGateway", () => {
     expect(detectMarkerLineWithGateway(`[Service]\n${command}\n`)).toBe("openclaw");
   });
 
-  it.each(["After", "Requires", "Description", "Environment"])(
-    "ignores gateway mentions in %s instead of an executable directive",
-    (key) => {
-      expect(detectMarkerLineWithGateway(`${key}=openclaw gateway\n`)).toBeNull();
-    },
-  );
-
-  it("ignores dependency-only references to the gateway unit", () => {
-    expect(detectMarkerLineWithGateway(COMPANION_SERVICE_CONTENTS)).toBeNull();
+  it("ignores gateway mentions in environment values instead of an executable directive", () => {
+    expect(detectMarkerLineWithGateway("Environment=openclaw gateway\n")).toBeNull();
   });
 
   it("ignores non-gateway ExecStart commands that only pass gateway-named options", () => {

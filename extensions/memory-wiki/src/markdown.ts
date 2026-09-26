@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements markdown behavior.
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {
@@ -212,10 +211,6 @@ function extractTitleFromMarkdown(body: string): string | undefined {
   return normalizeOptionalString(match?.[1]);
 }
 
-export function normalizeSourceIds(value: unknown): string[] {
-  return normalizeSingleOrTrimmedStringList(value);
-}
-
 function normalizeOptionalStringFields<K extends string>(
   record: Record<string, unknown>,
   keys: readonly K[],
@@ -266,16 +261,14 @@ export function normalizeWikiClaims(value: unknown): WikiClaim[] {
         })
       : [];
     const confidence = asFiniteNumber(record.confidence);
-    const status = normalizeOptionalString(record.status);
-    const updatedAt = normalizeOptionalString(record.updatedAt);
     return [
       {
-        ...(normalizeOptionalString(record.id) ? { id: normalizeOptionalString(record.id) } : {}),
+        ...normalizeOptionalStringFields(record, ["id"]),
         text,
-        ...(status ? { status } : {}),
+        ...normalizeOptionalStringFields(record, ["status"]),
         ...(confidence !== undefined ? { confidence } : {}),
         evidence,
-        ...(updatedAt ? { updatedAt } : {}),
+        ...normalizeOptionalStringFields(record, ["updatedAt"]),
       },
     ];
   });
@@ -286,25 +279,19 @@ function normalizeWikiPersonCard(value: unknown): WikiPersonCard | undefined {
   if (!record) {
     return undefined;
   }
-  const canonicalId = normalizeOptionalString(record.canonicalId);
-  const timezone = normalizeOptionalString(record.timezone);
   const confidence = asFiniteNumber(record.confidence);
-  const privacyTier = normalizeOptionalString(record.privacyTier);
-  const lastRefreshedAt = normalizeOptionalString(record.lastRefreshedAt);
   const card: WikiPersonCard = {
-    ...(canonicalId ? { canonicalId } : {}),
+    ...normalizeOptionalStringFields(record, ["canonicalId"]),
     handles: normalizeSingleOrTrimmedStringList(record.handles),
     socials: normalizeSingleOrTrimmedStringList(record.socials),
     emails: normalizeSingleOrTrimmedStringList(record.emails ?? record.email),
-    ...(timezone ? { timezone } : {}),
-    ...(normalizeOptionalString(record.lane) ? { lane: normalizeOptionalString(record.lane) } : {}),
+    ...normalizeOptionalStringFields(record, ["timezone", "lane"]),
     askFor: normalizeSingleOrTrimmedStringList(record.askFor),
     avoidAskingFor: normalizeSingleOrTrimmedStringList(record.avoidAskingFor),
     bestUsedFor: normalizeSingleOrTrimmedStringList(record.bestUsedFor),
     notEnoughFor: normalizeSingleOrTrimmedStringList(record.notEnoughFor),
     ...(confidence !== undefined ? { confidence } : {}),
-    ...(privacyTier ? { privacyTier } : {}),
-    ...(lastRefreshedAt ? { lastRefreshedAt } : {}),
+    ...normalizeOptionalStringFields(record, ["privacyTier", "lastRefreshedAt"]),
   };
   const hasAnyValue =
     Boolean(
@@ -343,8 +330,7 @@ function normalizeWikiRelationships(value: unknown): WikiRelationship[] {
         "updatedAt",
       ]),
     };
-    const hasAnyValue = Object.keys(relationship).length > 0;
-    return hasAnyValue ? [relationship] : [];
+    return Object.keys(relationship).length > 0 ? [relationship] : [];
   });
 }
 
@@ -608,7 +594,7 @@ export function scanWikiPageSummary(params: {
       entityType: normalizeOptionalString(parsed.frontmatter.entityType),
       canonicalId: normalizeOptionalString(parsed.frontmatter.canonicalId),
       aliases: normalizeSingleOrTrimmedStringList(parsed.frontmatter.aliases),
-      sourceIds: normalizeSourceIds(parsed.frontmatter.sourceIds),
+      sourceIds: normalizeSingleOrTrimmedStringList(parsed.frontmatter.sourceIds),
       linkTargets:
         params.includeLinks === false
           ? []

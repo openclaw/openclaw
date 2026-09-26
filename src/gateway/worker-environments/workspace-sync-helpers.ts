@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isMissingPathError } from "../../infra/errno.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
@@ -435,6 +436,11 @@ export async function runBoundedInboundRsync(params: {
       await assertInboundDirectoryQuota(params.destinationRoot, {
         bytes: params.totalByteLimit,
         entries: params.entryLimit,
+      }).catch((error: unknown) => {
+        // Rsync renames temporary files during active scans; the final scan stays strict.
+        if (!isMissingPathError(error)) {
+          throw error;
+        }
       });
       pollIntervalMs = Math.min(pollIntervalMs * 2, INBOUND_QUOTA_MAX_POLL_MS);
     }

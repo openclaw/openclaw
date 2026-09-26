@@ -47,10 +47,7 @@ import {
   buildPersistedUserTurnMediaInputsFromFields,
   buildPersistedUserTurnMessage,
 } from "../sessions/user-turn-transcript.message.js";
-import {
-  resolveChatAttachmentMaxBytes,
-  resolveChatAttachmentPolicy,
-} from "./chat-attachment-policy.js";
+import { resolveChatAttachmentPolicy } from "./chat-attachment-policy.js";
 import {
   type ChatAttachment,
   discardPreparedInboundMedia,
@@ -99,10 +96,6 @@ function pngBase64OfBytes(bytes: number): string {
   let base64Length = Math.ceil((bytes * 4) / 3);
   base64Length += (4 - (base64Length % 4)) % 4;
   return `${pngHeader}${"A".repeat(base64Length - pngHeader.length)}`;
-}
-
-function oversizedPngBase64(): string {
-  return pngBase64OfBytes(MAX_IMAGE_BYTES + 1);
 }
 
 async function parseWithWarnings(
@@ -161,6 +154,7 @@ async function expectUnsupportedAttachmentReason(
     caught = err;
   }
   expect(caught).toBeInstanceOf(UnsupportedAttachmentError);
+  expect((caught as UnsupportedAttachmentError).name).toBe("UnsupportedAttachmentError");
   expect((caught as UnsupportedAttachmentError).reason).toBe(reason);
   expect(saveMediaBufferMock).not.toHaveBeenCalled();
 }
@@ -383,16 +377,6 @@ describe("persistInboundImagesForTranscript", () => {
 });
 
 describe("parseMessageWithAttachments", () => {
-  it("strips data URL prefix", async () => {
-    const parsed = await parseMessageWithAttachments(
-      "see this",
-      [pngAttachment({ content: `data:image/png;base64,${PNG_1x1}` })],
-      { log: { warn: () => {} } },
-    );
-    expectSingleInlinePng(parsed);
-    expect(parsed.images[0]?.data).toBe(PNG_1x1);
-  });
-
   it("offloads a multi-megabyte PDF data URL with the exact decoded bytes", async () => {
     const bytes = Buffer.alloc(9 * 1024 * 1024);
     bytes.write("%PDF-1.4\n");
@@ -442,6 +426,7 @@ describe("parseMessageWithAttachments", () => {
   it("accepts non-image payloads and offloads them via the media store", async () => {
     const { parsed, logs } = await parseWithWarnings("read this", [pdfAttachment()]);
     expect(parsed.images).toHaveLength(0);
+    expect(parsed.imageOrder).toStrictEqual([]);
     expect(parsed.offloadedRefs).toHaveLength(1);
     const ref = expectDefined(parsed.offloadedRefs[0], "parsed.offloadedRefs[0] test invariant");
     expect(ref.mimeType).toBe("application/pdf");
@@ -480,16 +465,6 @@ describe("parseMessageWithAttachments", () => {
     expect(logs[0]).toMatch(/mime mismatch/i);
   });
 
-  it("keeps image inline and offloads non-image side by side", async () => {
-    const { parsed } = await parseWithWarnings("x", [pngAttachment(), pdfAttachment()]);
-    expectSingleInlinePng(parsed);
-    expect(parsed.images[0]?.sourceIndex).toBe(0);
-    expect(parsed.offloadedRefs).toHaveLength(1);
-    expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/pdf");
-    expect(parsed.offloadedRefs[0]?.sourceIndex).toBe(1);
-    expect(parsed.imageOrder).toEqual(["inline"]);
-  });
-
   it("keeps mixed image/PDF markers in normal and image-stripped routing order", async () => {
     // Regression: a prior revision pushed "offloaded" for every offload,
     // including non-image files. In a [non-image, inline, offloaded-image]
@@ -510,6 +485,8 @@ describe("parseMessageWithAttachments", () => {
       "image/png",
     ]);
     expect(parsed.imageOrder).toEqual(["inline", "offloaded"]);
+    expect(parsed.images[0]?.sourceIndex).toBe(1);
+    expect(parsed.offloadedRefs.map((ref) => ref.sourceIndex)).toEqual([0, 2]);
     const pdfRef = expectDefined(parsed.offloadedRefs[0], "offloaded PDF ref");
     const imageRef = expectDefined(parsed.offloadedRefs[1], "offloaded image ref");
     expect(parsed.message).toBe(
@@ -522,19 +499,6 @@ describe("parseMessageWithAttachments", () => {
       .split("\n")
       .filter((line) => line.trim().startsWith("[media attached: media://inbound/"));
     expect(trailingMediaLines).toHaveLength(2);
-  });
-
-  it("rejects oversized images before offload", async () => {
-    const big = oversizedPngBase64();
-
-    await expect(
-      parseMessageWithAttachments(
-        "x",
-        [{ type: "image", mimeType: "image/png", fileName: "huge.png", content: big }],
-        { maxBytes: resolveChatAttachmentMaxBytes({} as OpenClawConfig), log: { warn: () => {} } },
-      ),
-    ).rejects.toThrow(/image exceeds size limit/i);
-    expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 
   it("preserves specific OOXML mime when sniff returns generic zip (docx)", async () => {
@@ -604,23 +568,6 @@ describe("parseMessageWithAttachments", () => {
 });
 
 describe("parseMessageWithAttachments validation errors", () => {
-  it("throws UnsupportedAttachmentError on empty payload", async () => {
-    let caught: unknown;
-    try {
-      await parseMessageWithAttachments(
-        "x",
-        [{ type: "file", mimeType: "application/pdf", fileName: "empty.pdf", content: "" }],
-        { log: { warn: () => {} } },
-      );
-    } catch (err) {
-      caught = err;
-    }
-    expect(caught).toBeInstanceOf(UnsupportedAttachmentError);
-    expect((caught as UnsupportedAttachmentError).name).toBe("UnsupportedAttachmentError");
-    expect((caught as UnsupportedAttachmentError).reason).toBe("empty-payload");
-    expect(saveMediaBufferMock).not.toHaveBeenCalled();
-  });
-
   it.each([
     { name: "an empty string", attachment: { content: "" } },
     { name: "an empty typed array", attachment: { content: new Uint8Array(0) } },
@@ -773,35 +720,6 @@ describe("parseMessageWithAttachments validation errors", () => {
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 
-  it("persists non-image file attachments as media refs", async () => {
-    const parsed = await parseMessageWithAttachments(
-      "read this",
-      [
-        {
-          type: "file",
-          mimeType: "application/pdf",
-          fileName: "brief.pdf",
-          content: Buffer.from("%PDF-1.4\n").toString("base64"),
-        },
-      ],
-      { log: { warn: () => {} } },
-    );
-
-    try {
-      expect(parsed.images).toHaveLength(0);
-      expect(parsed.imageOrder).toStrictEqual([]);
-      expect(parsed.offloadedRefs).toHaveLength(1);
-      expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/pdf");
-      expect(parsed.offloadedRefs[0]?.label).toBe("brief.pdf");
-      expect(parsed.message).toBe(
-        `read this\n[media attached: ${parsed.offloadedRefs[0]?.mediaRef}]`,
-      );
-      expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe(parsed.message);
-    } finally {
-      await cleanupOffloadedRefs(parsed.offloadedRefs);
-    }
-  });
-
   it.each([
     {
       kind: "audio",
@@ -817,7 +735,7 @@ describe("parseMessageWithAttachments validation errors", () => {
       fileName: "clip.mp4",
       content: GENERIC_MP4,
     },
-    ...["audio/mp4", "audio/x-m4a", "audio/m4a", undefined].map((mimeType) => ({
+    ...["audio/mp4", undefined].map((mimeType) => ({
       kind: "audio",
       mimeType,
       expectedMimeType: mimeType ?? "audio/x-m4a",
@@ -979,6 +897,7 @@ describe("advertised attachment policy matches enforcement", () => {
     );
     expect(policy.maxImageBytes).toBe(MAX_IMAGE_BYTES);
     await expect(parse).rejects.toThrow(/image exceeds size limit/i);
+    expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 });
 

@@ -1,5 +1,4 @@
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
-// Signal plugin module implements channel behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
@@ -59,14 +58,14 @@ import {
   signalSetupWizard,
 } from "./shared.js";
 
-type SignalSendFn = typeof import("./send.runtime.js").sendMessageSignal;
+type SignalSendFn = typeof import("./send.js").sendMessageSignal;
 type SignalProbe = import("./probe.js").SignalProbe;
 
 const loadSignalMonitorModule = createLazyRuntimeModule(() => import("./monitor.js"));
 
 const loadSignalProbeModule = createLazyRuntimeModule(() => import("./probe.js"));
 
-const loadSignalSendRuntime = createLazyRuntimeModule(() => import("./send.runtime.js"));
+const loadSignalSendRuntime = createLazyRuntimeModule(() => import("./send.js"));
 
 const loadSignalApprovalReactionsModule = createLazyRuntimeModule(
   () => import("./approval-reactions.js"),
@@ -274,10 +273,9 @@ async function sendFormattedSignalText(
     channel: "signal",
     accountId: ctx.accountId ?? undefined,
   });
-  let chunks =
-    limit === undefined
-      ? markdownToSignalTextChunks(ctx.text, Number.POSITIVE_INFINITY, { tableMode })
-      : markdownToSignalTextChunks(ctx.text, limit, { tableMode });
+  let chunks = markdownToSignalTextChunks(ctx.text, limit ?? Number.POSITIVE_INFINITY, {
+    tableMode,
+  });
   if (chunks.length === 0 && ctx.text) {
     chunks = [{ text: ctx.text, styles: [] }];
   }
@@ -457,7 +455,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
         targetPrefixes: ["signal"],
         normalizeTarget: normalizeSignalMessagingTarget,
         inferTargetChatType: ({ to }) => inferSignalTargetChatType(to),
-        resolveOutboundSessionRoute: (params) => resolveSignalOutboundSessionRoute(params),
+        resolveOutboundSessionRoute: resolveSignalOutboundSessionRoute,
         targetResolver: {
           looksLikeId: looksLikeSignalTargetId,
           hint: "<E.164|uuid:ID|group:ID|signal:group:ID|signal:+E.164>",
@@ -589,7 +587,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
     },
     security: signalSecurityAdapter,
     threading: {
-      resolveReplyToMode: (params) => resolveSignalReplyToMode(params),
+      resolveReplyToMode: resolveSignalReplyToMode,
       matchesToolContextTarget: ({ target, toolContext }) => {
         const normalizedTarget = normalizeSignalMessagingTarget(target);
         if (!normalizedTarget) {

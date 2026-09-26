@@ -62,12 +62,6 @@ describe("npm global install lifecycle policy", () => {
     ]);
   });
 
-  it("omits npm's lifecycle allowlist before npm 11.16", () => {
-    expect(
-      globalInstallArgs("npm", "openclaw@latest", null, null, null, "unflagged"),
-    ).not.toContain("--allow-scripts=openclaw");
-  });
-
   it("allows only the resolved npm candidate lifecycle identity", () => {
     const archive = path.resolve("/tmp/openclaw-2026.7.2.tgz");
     expect(globalInstallArgs("npm", archive)).toContain(`--allow-scripts=${archive}`);

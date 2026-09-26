@@ -572,7 +572,11 @@ const markdownParser = createMarkdownParser();
 // Uncached render core shared by the static and streaming paths. The streaming
 // tail changes on every delta, so routing it through here (instead of the cached
 // wrapper) keeps per-message churn out of the LRU cache.
-function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRenderEnv): string {
+function renderSanitizedMarkdown(
+  renderInput: string,
+  renderOptions: MarkdownRenderEnv,
+  blockArt?: boolean,
+): string {
   installHooks();
   const activeSanitizeOptions = renderOptions.progressBars
     ? progressSanitizeOptions
@@ -584,7 +588,7 @@ function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRen
   const input = renderOptions.progressBars
     ? stripProgressCardRawContentBlocks(appendMarkdownTruncationNotice(truncated))
     : appendMarkdownTruncationNotice(truncated);
-  if (isMarkdownBlockArtText(truncated.text)) {
+  if (blockArt ?? isMarkdownBlockArtText(truncated.text)) {
     return DOMPurify.sanitize(
       renderMarkdownCodeBlock(input, "", renderOptions, { blockArt: true }),
       activeSanitizeOptions,
@@ -705,7 +709,7 @@ export function toStreamingMarkdownParts(
     (previous.markdown === stableMarkdown ||
       (previous.markdown.endsWith("\n") &&
         !/^(?: {4}| {0,3}[\t>])/mu.test(stableMarkdown) &&
-        !/^ {0,3}(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)/mu.test(stableMarkdown) &&
+        !/^ {0,3}(?:[-+*]|\d{1,9}[.)])$/mu.test(stableMarkdown) &&
         !stableMarkdown.includes("<") &&
         !isMarkdownBlockArtText(stableMarkdown) &&
         !previous.html.includes('class="markdown-block-art"') &&
@@ -729,12 +733,18 @@ export function toStreamingMarkdownParts(
   if (!streamingTail.trim()) {
     return [stableHtml, ""];
   }
+  // The whole input was classified above; an isolated tail is not block art.
   const tailHtml =
     tailRepairStart === null
-      ? renderSanitizedMarkdown(streamingTail, { ...renderOptions, streamingOpenFence: true })
+      ? renderSanitizedMarkdown(
+          streamingTail,
+          { ...renderOptions, streamingOpenFence: true },
+          false,
+        )
       : renderSanitizedMarkdown(
           repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
           renderOptions,
+          false,
         );
   return [stableHtml, tailHtml];
 }

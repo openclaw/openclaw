@@ -134,6 +134,7 @@ export async function prepareGatewayKernelState(params: {
     ? await startupTrace.measure("worker-environments.runtime-imports", async () => {
         const workerModule = await loadWorkerEnvironmentStartupModule();
         return await workerModule.createGatewayWorkerEnvironmentRuntime({
+          scheduler,
           getPluginRegistry: () => pluginRuntime.registry,
           getPortalRuntime: () => pluginGatewayContext.current,
           resolveGatewayContext: resolvePluginGatewayContext,

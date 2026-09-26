@@ -21,6 +21,15 @@ const contractFallbackOverride = [
   `${OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider}/${OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel}`,
 ];
 
+const contractRunOptions = {
+  cfg: undefined,
+  provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
+  model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+  fallbacksOverride: contractFallbackOverride,
+  classifyResult: classifyEmbeddedAgentRunResultForModelFallback,
+  skipAuthProfileRuntime: true,
+};
+
 describe("Outcome/fallback runtime contract - embedded runtime fallback classifier", () => {
   beforeAll(async () => {
     await runWithModelFallback({
@@ -129,19 +138,10 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     });
 
     const result = await runWithModelFallback<ReturnType<typeof createContractRunResult>>({
-      cfg: undefined,
-      provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-      model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+      ...contractRunOptions,
       fallbacksOverride: [],
       run: vi.fn().mockResolvedValue(incomplete),
-      classifyResult: ({ provider, model, result: resultValue }) =>
-        classifyEmbeddedAgentRunResultForModelFallback({
-          provider,
-          model,
-          result: resultValue,
-        }),
       mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
-      skipAuthProfileRuntime: true,
     });
 
     expect(result.outcome).toBe("exhausted");
@@ -183,19 +183,9 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     const run = vi.fn().mockResolvedValueOnce(primary).mockResolvedValueOnce(fallback);
 
     const result = await runWithModelFallback({
-      cfg: undefined,
-      provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-      model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
-      fallbacksOverride: contractFallbackOverride,
+      ...contractRunOptions,
       run,
-      classifyResult: ({ provider, model, result: resultValue }) =>
-        classifyEmbeddedAgentRunResultForModelFallback({
-          provider,
-          model,
-          result: resultValue,
-        }),
       mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
-      skipAuthProfileRuntime: true,
     });
 
     expect(result.outcome).toBe("exhausted");
@@ -257,19 +247,9 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     const run = vi.fn().mockResolvedValueOnce(primary).mockResolvedValueOnce(fallback);
 
     const result = await runWithModelFallback<ReturnType<typeof createContractRunResult>>({
-      cfg: undefined,
-      provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-      model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
-      fallbacksOverride: contractFallbackOverride,
+      ...contractRunOptions,
       run,
-      classifyResult: ({ provider, model, result: resultValue }) =>
-        classifyEmbeddedAgentRunResultForModelFallback({
-          provider,
-          model,
-          result: resultValue,
-        }),
       mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
-      skipAuthProfileRuntime: true,
     });
 
     expect(result.outcome).toBe("exhausted");
@@ -305,18 +285,8 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
 
     await expect(
       runWithModelFallback<ReturnType<typeof createContractRunResult>>({
-        cfg: undefined,
-        provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-        model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
-        fallbacksOverride: contractFallbackOverride,
+        ...contractRunOptions,
         run,
-        classifyResult: ({ provider, model, result: resultValue }) =>
-          classifyEmbeddedAgentRunResultForModelFallback({
-            provider,
-            model,
-            result: resultValue,
-          }),
-        skipAuthProfileRuntime: true,
       }),
     ).rejects.toBe(finalError);
     expect(run).toHaveBeenCalledTimes(2);
@@ -415,10 +385,7 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     const contractCase = expectDefined(nonFallbackCases[0], "nonFallbackCases[0] test invariant");
     const run = vi.fn().mockResolvedValue(contractCase.result);
     const result = await runWithModelFallback({
-      cfg: undefined,
-      provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-      model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
-      fallbacksOverride: contractFallbackOverride,
+      ...contractRunOptions,
       run,
       classifyResult: ({ provider, model, result: resultLocal }) =>
         classifyEmbeddedAgentRunResultForModelFallback({
@@ -428,7 +395,6 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
           hasDirectlySentBlockReply: contractCase.hasDirectlySentBlockReply,
           hasBlockReplyPipelineOutput: contractCase.hasBlockReplyPipelineOutput,
         }),
-      skipAuthProfileRuntime: true,
     });
 
     expect(result.outcome).toBe("completed");

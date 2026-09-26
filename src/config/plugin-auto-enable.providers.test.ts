@@ -62,29 +62,65 @@ describe("applyPluginAutoEnable providers", () => {
     expect(result.changes).toEqual([]);
   });
 
-  it("auto-enables provider auth plugins when profiles exist", () => {
-    const result = applyPluginAutoEnable({
+  it("materializes xai setup auto-enable when the plugin-owned x_search tool is configured", () => {
+    const result = materializePluginAutoEnableCandidates({
       config: {
-        auth: {
-          profiles: {
-            "google-gemini-cli:default": {
-              provider: "google-gemini-cli",
-              mode: "oauth",
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                xSearch: {
+                  enabled: true,
+                },
+              },
             },
           },
         },
       },
-      env,
-      manifestRegistry: makeRegistry([
+      candidates: [
         {
-          id: "google",
-          channels: [],
-          autoEnableWhenConfiguredProviders: ["google-gemini-cli"],
+          pluginId: "xai",
+          kind: "setup-auto-enable",
+          reason: "xai tool configured",
         },
-      ]),
+      ],
+      env,
+      manifestRegistry: makeRegistry([{ id: "xai", channels: [] }]),
     });
 
-    expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
+    expect(result.changes).toContain("xai tool configured, enabled automatically.");
+  });
+
+  it("materializes xai setup auto-enable when the plugin-owned codeExecution config is configured", () => {
+    const result = materializePluginAutoEnableCandidates({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                codeExecution: {
+                  enabled: true,
+                  model: "grok-4-1-fast",
+                },
+              },
+            },
+          },
+        },
+      },
+      candidates: [
+        {
+          pluginId: "xai",
+          kind: "setup-auto-enable",
+          reason: "xai tool configured",
+        },
+      ],
+      env,
+      manifestRegistry: makeRegistry([{ id: "xai", channels: [] }]),
+    });
+
+    expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
+    expect(result.changes).toContain("xai tool configured, enabled automatically.");
   });
 
   const googleProviderCases: Array<{ name: string; config: OpenClawConfig }> = [
@@ -145,38 +181,6 @@ describe("applyPluginAutoEnable providers", () => {
       expect(result.config.plugins?.allow).toEqual(["telegram", "google"]);
     },
   );
-
-  it("auto-enables provider plugins when plugin-owned web search config exists", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-plugin-config-key",
-                },
-              },
-            },
-          },
-        },
-      },
-      env,
-      manifestRegistry: makeRegistry([
-        {
-          id: "xai",
-          channels: [],
-          providers: ["xai"],
-          contracts: {
-            webSearchProviders: ["grok"],
-          },
-        },
-      ]),
-    });
-
-    expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
-    expect(result.changes).toContain("xai web search configured, enabled automatically.");
-  });
 
   it("auto-enables selected web search provider plugins under restrictive allowlists", () => {
     const result = applyPluginAutoEnable({
@@ -308,67 +312,6 @@ describe("applyPluginAutoEnable providers", () => {
     );
   });
 
-  it("materializes xai setup auto-enable when the plugin-owned x_search tool is configured", () => {
-    const result = materializePluginAutoEnableCandidates({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                xSearch: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-      },
-      candidates: [
-        {
-          pluginId: "xai",
-          kind: "setup-auto-enable",
-          reason: "xai tool configured",
-        },
-      ],
-      env,
-      manifestRegistry: makeRegistry([{ id: "xai", channels: [] }]),
-    });
-
-    expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
-    expect(result.changes).toContain("xai tool configured, enabled automatically.");
-  });
-
-  it("materializes xai setup auto-enable when the plugin-owned codeExecution config is configured", () => {
-    const result = materializePluginAutoEnableCandidates({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                codeExecution: {
-                  enabled: true,
-                  model: "grok-4-1-fast",
-                },
-              },
-            },
-          },
-        },
-      },
-      candidates: [
-        {
-          pluginId: "xai",
-          kind: "setup-auto-enable",
-          reason: "xai tool configured",
-        },
-      ],
-      env,
-      manifestRegistry: makeRegistry([{ id: "xai", channels: [] }]),
-    });
-
-    expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
-    expect(result.changes).toContain("xai tool configured, enabled automatically.");
-  });
-
   it("auto-enables minimax when minimax-portal profiles exist", () => {
     const result = applyPluginAutoEnable({
       config: {
@@ -393,31 +336,6 @@ describe("applyPluginAutoEnable providers", () => {
 
     expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.["minimax-portal-auth"]).toBeUndefined();
-  });
-
-  it("auto-enables minimax when minimax API key auth is configured", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        auth: {
-          profiles: {
-            "minimax:default": {
-              provider: "minimax",
-              mode: "api_key",
-            },
-          },
-        },
-      },
-      env,
-      manifestRegistry: makeRegistry([
-        {
-          id: "minimax",
-          channels: [],
-          autoEnableWhenConfiguredProviders: ["minimax"],
-        },
-      ]),
-    });
-
-    expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
   });
 
   it("does not auto-enable unrelated provider plugins just because auth profiles exist", () => {

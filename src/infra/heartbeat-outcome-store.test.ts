@@ -326,45 +326,19 @@ describe("heartbeat outcome store", () => {
       ...base,
       response: { outcome: "progress", notify: false, summary: "First outcome" },
     });
+    const claim = (runId: string) =>
+      claimHeartbeatOutcomeForRun({ agentId: "main", sessionKey: "agent:main:main", runId, env });
 
-    expect(
-      await claimHeartbeatOutcomeForRun({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        runId: "user-run-1",
-        env,
-      }),
-    ).toMatchObject({ summary: "First outcome" });
-    expect(
-      await claimHeartbeatOutcomeForRun({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        runId: "user-run-1",
-        env,
-      }),
-    ).toMatchObject({ summary: "First outcome" });
-    expect(
-      await claimHeartbeatOutcomeForRun({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        runId: "user-run-2",
-        env,
-      }),
-    ).toBeUndefined();
+    expect(await claim("user-run-1")).toMatchObject({ summary: "First outcome" });
+    expect(await claim("user-run-1")).toMatchObject({ summary: "First outcome" });
+    expect(await claim("user-run-2")).toBeUndefined();
 
     await persistHeartbeatOutcome({
       ...base,
       occurredAt: 200,
       response: { outcome: "done", notify: false, summary: "Second outcome" },
     });
-    expect(
-      await claimHeartbeatOutcomeForRun({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        runId: "user-run-2",
-        env,
-      }),
-    ).toMatchObject({ summary: "Second outcome" });
+    expect(await claim("user-run-2")).toMatchObject({ summary: "Second outcome" });
   });
 });
 

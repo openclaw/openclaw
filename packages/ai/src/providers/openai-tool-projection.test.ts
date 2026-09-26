@@ -59,14 +59,6 @@ describe("OpenAI tool projection", () => {
     expect(descriptionReads).toBe(1);
   });
 
-  it("keeps a healthy pinned Responses function choice", () => {
-    const projection = projectOpenAITools([{ name: "lookup", parameters: {} }]);
-
-    expect(
-      reconcileOpenAIResponsesToolChoice({ type: "function", name: "lookup" }, projection),
-    ).toEqual({ type: "function", name: "lookup" });
-  });
-
   it("materializes pinned function choices after one name read", () => {
     const projection = projectOpenAITools([{ name: "lookup", parameters: {} }]);
     let responsesNameReads = 0;

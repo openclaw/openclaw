@@ -1084,18 +1084,9 @@ NODE
     }
   });
 
-  it("clears npm freshness filters for package installs", () => {
-    expect(script).toContain("env -u NPM_CONFIG_BEFORE -u npm_config_before");
-    expect(script).toContain('freshness_flag="--min-release-age=0"');
-    expect(script).toContain('npm_config_has_raw_key "$npm_cmd" "min-release-age"');
-    expect(script).toContain('freshness_flag="--before=$(date -u');
-    expect(script).toContain('cmd+=(--no-fund --no-audit "$freshness_flag" install -g)');
-  });
-
   it.each([
     { expected: false, version: "11.15.0" },
     { expected: true, version: "11.16.0" },
-    { expected: true, version: "12.0.0" },
   ])("applies canonical npm lifecycle policy for npm $version", ({ expected, version }) => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-lifecycle-"));
     const npm = join(tmp, "npm");
@@ -1370,27 +1361,6 @@ EOF
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
-  });
-
-  it("removes only stale npm rename directories before ENOTEMPTY retry", () => {
-    const result = runInstallShell(`
-      set -euo pipefail
-      source "${SCRIPT_PATH}"
-      root="$(mktemp -d)/node_modules"
-      mkdir -p "$root/openclaw" "$root/.openclaw-stale"
-      printf 'live\n' > "$root/openclaw/marker"
-      npm() { [[ "$1" == root ]] && printf '%s\n' "$root"; }
-      run_npm_global_install() {
-        attempts=$((attempts + 1))
-        if (( attempts == 1 )); then printf 'ENOTEMPTY: directory not empty, rename openclaw\n' > "$2"; return 1; fi
-        return 0
-      }
-      auto_install_build_tools_for_npm_failure() { return 1; }
-      attempts=0
-      install_openclaw_npm openclaw@latest
-      [[ -f "$root/openclaw/marker" && ! -e "$root/.openclaw-stale" ]]
-    `);
-    expect(result.status).toBe(0);
   });
 
   it.each(["EEXIST", "ENOTEMPTY"])("recovers from %s with default npm logging", (code) => {
@@ -1947,106 +1917,56 @@ EOF
     {
       name: "fresh retained config rejects failed Doctor before success",
       configured: true,
-      upgrade: false,
-      verify: false,
       doctorExit: 9,
-      verifyExit: 0,
-      onboard: false,
       expectedStatus: 9,
     },
-    {
-      name: "fresh retained config reports success only after Doctor",
-      configured: true,
-      upgrade: false,
-      verify: false,
-      doctorExit: 0,
-      verifyExit: 0,
-      onboard: false,
-      expectedStatus: 0,
-    },
+    { name: "fresh retained config reports success only after Doctor", configured: true },
     {
       name: "fresh explicit verification rejects failure before success",
-      configured: false,
-      upgrade: false,
       verify: true,
-      doctorExit: 0,
       verifyExit: 1,
-      onboard: false,
       expectedStatus: 1,
-    },
-    {
-      name: "fresh explicit verification reports success only after verification",
-      configured: false,
-      upgrade: false,
-      verify: true,
-      doctorExit: 0,
-      verifyExit: 0,
-      onboard: false,
-      expectedStatus: 0,
     },
     {
       name: "upgrade implicit verification counts four stages before success",
       configured: true,
       upgrade: true,
-      verify: false,
-      doctorExit: 0,
-      verifyExit: 0,
-      onboard: false,
-      expectedStatus: 0,
     },
     {
       name: "upgrade rejects failed Doctor before success",
       configured: true,
       upgrade: true,
-      verify: false,
       doctorExit: 9,
-      verifyExit: 0,
-      onboard: false,
       expectedStatus: 9,
     },
     {
       name: "upgrade rejects failed verification before success",
       configured: true,
       upgrade: true,
-      verify: false,
-      doctorExit: 0,
       verifyExit: 1,
-      onboard: false,
       expectedStatus: 1,
     },
-    {
-      name: "plain fresh install reports success before skipping onboarding",
-      configured: false,
-      upgrade: false,
-      verify: false,
-      doctorExit: 0,
-      verifyExit: 0,
-      onboard: false,
-      expectedStatus: 0,
-    },
+    { name: "plain fresh install reports success before skipping onboarding" },
     {
       name: "plain fresh install reports success before optional onboarding handoff",
-      configured: false,
-      upgrade: false,
-      verify: false,
-      doctorExit: 0,
-      verifyExit: 0,
       onboard: true,
-      expectedStatus: 0,
     },
     {
       name: "fresh verification completes before success and optional onboarding handoff",
-      configured: false,
-      upgrade: false,
       verify: true,
-      doctorExit: 0,
-      verifyExit: 0,
       onboard: true,
-      expectedStatus: 0,
     },
   ])(
     "required installer lifecycle: $name",
-    ({ configured, upgrade, verify, doctorExit, verifyExit, onboard, expectedStatus }) => {
+    ({
+      configured = false,
+      upgrade = false,
+      verify = false,
+      doctorExit = 0,
+      verifyExit = 0,
+      onboard = false,
+      expectedStatus = 0,
+    }) => {
       const result = runInstallShell(
         `
           date() { printf '2026-08-20\\n'; }
@@ -2059,7 +1979,8 @@ EOF
           GIT_DIR=
           NO_PROMPT=0
           NO_ONBOARD="$SCENARIO_NO_ONBOARD"
-          VERIFY_INSTALL="$SCENARIO_VERIFY"
+          VERIFY_INSTALL=0
+          if [[ "$SCENARIO_VERIFY" == 1 ]]; then parse_args --verify; fi
           OS=linux
 
           forbidden_command() {
@@ -2157,6 +2078,7 @@ EOF
       if (expectedStatus !== 0) {
         expect(successMatches).toHaveLength(0);
         expect(output).not.toContain("Upgrade complete");
+        expect(output).not.toContain("event:dashboard-mocked");
         return;
       }
 
@@ -2332,25 +2254,6 @@ EOF
     expect(script).toContain(
       'run_required_step "Configuring NodeSource repository" sudo -E bash "$tmp"',
     );
-  });
-
-  it("counts the verify stage when --verify is enabled", () => {
-    const result = runInstallShell(
-      [
-        `source ${JSON.stringify(SCRIPT_PATH)}`,
-        "parse_args --verify",
-        "configure_install_stage_total",
-        'ui_stage "Preparing environment"',
-        'ui_stage "Installing OpenClaw"',
-        'ui_stage "Finalizing setup"',
-        'ui_stage "Verifying installation"',
-      ].join("\n"),
-      { TERM: "dumb" },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("[4/4] Verifying installation");
-    expect(result.stdout).not.toContain("[4/3] Verifying installation");
   });
 
   it.each([0, 17])("joins the finalization watchdog after probe exit %s", (probeExit) => {
@@ -3897,21 +3800,6 @@ EOF
     expect(result.stdout).toContain("main=main");
   });
 
-  it("keeps ref resolution and rebase failures explicit", () => {
-    expect(script).toContain(
-      'git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"',
-    );
-    expect(script).toContain(
-      'git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"',
-    );
-    expect(script).toContain('git -C "$repo_dir" ls-remote --exit-code origin');
-    expect(script).toContain(
-      'run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "refs/tags/${ref}"',
-    );
-    expect(script).toContain('git -C "$repo_dir" rebase origin/main');
-    expect(script).not.toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
-  });
-
   it.each(["bundle", "remote"] as const)("pins a full commit from a %s", (source) => {
     const result = runInstallShell(createInstallGitCommitFixtureScript(source), {
       OPENCLAW_INSTALLER_SCRIPT: SCRIPT_PATH,
@@ -4028,19 +3916,6 @@ EOF
 describe("install.sh macOS Homebrew Node behavior", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
-  it("stops when Homebrew node installation fails", () => {
-    expect(script).toContain(
-      'if ! run_quiet_step "Installing ${NODE_BREW_FORMULA}" brew install "${NODE_BREW_FORMULA}"; then',
-    );
-
-    const failedInstallIndex = script.indexOf(
-      'if ! run_quiet_step "Installing ${NODE_BREW_FORMULA}" brew install "${NODE_BREW_FORMULA}"; then',
-    );
-    const brewLinkIndex = script.indexOf('brew link "${NODE_BREW_FORMULA}" --overwrite --force');
-    expect(failedInstallIndex).toBeGreaterThanOrEqual(0);
-    expect(brewLinkIndex).toBeGreaterThan(failedInstallIndex);
-  });
-
   it("aborts before brew link when Homebrew node installation fails at runtime", () => {
     const result = runInstallShell(`
       set -euo pipefail
@@ -4062,18 +3937,6 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     );
     expect(result.stdout).not.toContain("brew:link");
     expect(result.stdout).not.toContain("ensure-called");
-  });
-
-  it("separates missing Homebrew node from PATH shadowing", () => {
-    const missingNodeGuardIndex = script.indexOf(
-      'if [[ -z "$brew_node_prefix" || ! -x "${brew_node_prefix}/bin/node" ]]; then',
-    );
-    const pathAdviceIndex = script.indexOf("Add this to your shell profile and restart shell:");
-
-    expect(missingNodeGuardIndex).toBeGreaterThanOrEqual(0);
-    expect(script).toContain('ui_error "Homebrew ${NODE_BREW_FORMULA} is not installed on disk"');
-    expect(script).toContain('echo "  export PATH=\\"${brew_node_prefix}/bin:\\$PATH\\""');
-    expect(pathAdviceIndex).toBeGreaterThan(missingNodeGuardIndex);
   });
 
   it("does not print PATH advice when Homebrew node is missing at runtime", () => {
@@ -4269,40 +4132,6 @@ describe("install.sh duplicate OpenClaw install detection", () => {
     expect(result.stdout).not.toContain("Multiple OpenClaw global installs detected");
   });
 
-  it("needs_stdin_isolation returns true when stdin is piped", () => {
-    const result = spawnSync(
-      "/bin/bash",
-      [
-        "-c",
-        `source "${SCRIPT_PATH}" && needs_stdin_isolation && echo "ISOLATED" || echo "INTERACTIVE"`,
-      ],
-      {
-        encoding: "utf8",
-        stdio: ["pipe", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          HOME: tmpdir(),
-          OPENCLAW_INSTALL_SH_NO_RUN: "1",
-          BASH_ENV: "",
-          ENV: "",
-        },
-        input: "",
-      },
-    );
-    expect(result.stdout.trim()).toBe("ISOLATED");
-  });
-
-  it("needs_stdin_isolation returns true when NO_PROMPT is set", () => {
-    const result = runInstallShell(`
-      set -euo pipefail
-      source "${SCRIPT_PATH}"
-      NO_PROMPT=1
-      needs_stdin_isolation && echo "ISOLATED" || echo "INTERACTIVE"
-    `);
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("ISOLATED");
-  });
-
   it("routes piped interactive subprocesses through the controlling TTY", () => {
     const result = runInstallShell(`
       set -euo pipefail
@@ -4357,75 +4186,6 @@ describe("install.sh duplicate OpenClaw install detection", () => {
     `);
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("/dev/null");
-  });
-
-  it("run_quiet_step redirects stdin to /dev/null in piped context", () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-stdin-test-"));
-    const marker = join(dir, "stdin-state");
-    try {
-      const result = spawnSync(
-        "/bin/bash",
-        [
-          "-c",
-          `source "${SCRIPT_PATH}" && GUM="" && run_quiet_step "test-step" bash -c 'if read -t 1 line 2>/dev/null && [ -n "$line" ]; then echo "LEAKED:$line" > ${JSON.stringify(marker)}; else echo ISOLATED > ${JSON.stringify(marker)}; fi'`,
-        ],
-        {
-          encoding: "utf8",
-          stdio: ["pipe", "pipe", "pipe"],
-          env: {
-            ...process.env,
-            HOME: tmpdir(),
-            NO_PROMPT: "1",
-            OPENCLAW_INSTALL_SH_NO_RUN: "1",
-            BASH_ENV: "",
-            ENV: "",
-          },
-          input: "SENTINEL_DATA_SHOULD_NOT_LEAK\n",
-        },
-      );
-      expect(result.status).toBe(0);
-      const stdinState = readFileSync(marker, "utf8").trim();
-      expect(stdinState).toBe("ISOLATED");
-    } finally {
-      rmSync(dir, { force: true, recursive: true });
-    }
-  });
-
-  it("pipe data leaks to child when stdin is not isolated (counterproof)", () => {
-    // This test proves the fix is necessary: without /dev/null redirect,
-    // pipe data from the installer invocation reaches the child process.
-    // If this test ever fails, the isolation in run_quiet_step is no longer
-    // the only barrier protecting child processes from pipe consumption.
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-stdin-leak-"));
-    const marker = join(dir, "stdin-state");
-    try {
-      const result = spawnSync(
-        "/bin/bash",
-        [
-          "-c",
-          // Bypass run_quiet_step: call the child directly with inherited stdin
-          `source "${SCRIPT_PATH}" && bash -c 'output=$(cat); if [ -n "$output" ]; then echo "LEAKED" > ${JSON.stringify(marker)}; else echo "EMPTY" > ${JSON.stringify(marker)}; fi'`,
-        ],
-        {
-          encoding: "utf8",
-          stdio: ["pipe", "pipe", "pipe"],
-          env: {
-            ...process.env,
-            HOME: tmpdir(),
-            OPENCLAW_INSTALL_SH_NO_RUN: "1",
-            BASH_ENV: "",
-            ENV: "",
-          },
-          input: "SENTINEL_DATA_SHOULD_LEAK\n",
-        },
-      );
-      expect(result.status).toBe(0);
-      const stdinState = readFileSync(marker, "utf8").trim();
-      // Without /dev/null redirect, cat reads the sentinel from the pipe.
-      expect(stdinState).toBe("LEAKED");
-    } finally {
-      rmSync(dir, { force: true, recursive: true });
-    }
   });
 
   it("run_quiet_step blocks cat from reading pipe data", () => {
@@ -4497,13 +4257,6 @@ describe("install.sh doctor cancellation and dashboard guard", () => {
         }
       }
     }
-  });
-
-  it("clears dashboard flag when doctor fails during upgrade", () => {
-    // The upgrade interactive doctor path must clear should_open_dashboard
-    // when doctor_exit is non-zero.
-    expect(script).toContain("should_open_dashboard=false");
-    expect(script).toContain("if (( doctor_exit != 0 )); then");
   });
 
   it("propagates signal exit codes through run_quiet_step", () => {

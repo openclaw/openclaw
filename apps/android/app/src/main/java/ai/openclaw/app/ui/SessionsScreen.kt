@@ -83,7 +83,6 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** Session browser for active, current, and archived chat sessions. */
 @Composable
 internal fun SessionsScreen(
   viewModel: MainViewModel,
@@ -531,49 +530,26 @@ internal fun SessionsScreen(
   }
 
   deleteGroupName?.let { group ->
-    AppAlertDialog(
-      onDismissRequest = { deleteGroupName = null },
-      containerColor = ClawTheme.colors.surfaceRaised,
-      title = { Text(nativeString("Delete group?"), style = ClawTheme.type.section, color = ClawTheme.colors.text) },
-      text = { Text(nativeString("Threads in \"\$group\" are kept and move back to Ungrouped.", group), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
-      confirmButton = {
-        TextButton(
-          onClick = {
-            deleteGroupName = null
-            coroutineScope.launch { viewModel.deleteChatSessionGroup(group) }
-          },
-        ) {
-          Text(nativeString("Delete"), color = ClawTheme.colors.danger)
-        }
-      },
-      dismissButton = {
-        TextButton(onClick = { deleteGroupName = null }) {
-          Text(nativeString("Cancel"))
-        }
+    SessionDeleteDialog(
+      title = nativeString("Delete group?"),
+      text = nativeString("Threads in \"\$group\" are kept and move back to Ungrouped.", group),
+      onDismiss = { deleteGroupName = null },
+      onConfirm = {
+        deleteGroupName = null
+        coroutineScope.launch { viewModel.deleteChatSessionGroup(group) }
       },
     )
   }
 
   deleteSessionTarget?.let { session ->
-    AppAlertDialog(
-      onDismissRequest = { deleteSessionTarget = null },
-      containerColor = ClawTheme.colors.surfaceRaised,
-      title = { Text(nativeString("Delete thread?"), style = ClawTheme.type.section, color = ClawTheme.colors.text) },
-      text = { Text(nativeString("This permanently deletes the thread and its transcript."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
-      confirmButton = {
-        TextButton(
-          onClick = {
-            deleteSessionTarget = null
-            if (!session.matchesGateway(activeGatewayStableId)) return@TextButton
-            coroutineScope.launch { viewModel.deleteChatSession(session.key, session.ownerAgentId) }
-          },
-        ) {
-          Text(nativeString("Delete"), color = ClawTheme.colors.danger)
-        }
-      },
-      dismissButton = {
-        TextButton(onClick = { deleteSessionTarget = null }) {
-          Text(nativeString("Cancel"))
+    SessionDeleteDialog(
+      title = nativeString("Delete thread?"),
+      text = nativeString("This permanently deletes the thread and its transcript."),
+      onDismiss = { deleteSessionTarget = null },
+      onConfirm = {
+        deleteSessionTarget = null
+        if (session.matchesGateway(activeGatewayStableId)) {
+          coroutineScope.launch { viewModel.deleteChatSession(session.key, session.ownerAgentId) }
         }
       },
     )
@@ -581,17 +557,38 @@ internal fun SessionsScreen(
 }
 
 @Composable
+private fun SessionDeleteDialog(
+  title: String,
+  text: String,
+  onDismiss: () -> Unit,
+  onConfirm: () -> Unit,
+) {
+  AppAlertDialog(
+    onDismissRequest = onDismiss,
+    containerColor = ClawTheme.colors.surfaceRaised,
+    title = { Text(title, style = ClawTheme.type.section, color = ClawTheme.colors.text) },
+    text = { Text(text, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
+    confirmButton = {
+      TextButton(onClick = onConfirm) {
+        Text(nativeString("Delete"), color = ClawTheme.colors.danger)
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) { Text(nativeString("Cancel")) }
+    },
+  )
+}
+
+@Composable
 private fun FilterPill(
   text: String,
-  icon: ImageVector? = null,
-  active: Boolean = false,
+  icon: ImageVector,
+  active: Boolean,
   showDot: Boolean = false,
-  dropdown: Boolean = false,
-  onClick: (() -> Unit)? = null,
+  onClick: () -> Unit,
 ) {
   Surface(
-    onClick = onClick ?: {},
-    enabled = onClick != null,
+    onClick = onClick,
     shape = RoundedCornerShape(7.dp),
     color = if (active) ClawTheme.colors.surfaceRaised else Color.Transparent,
     contentColor = ClawTheme.colors.text,
@@ -602,13 +599,10 @@ private fun FilterPill(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-      icon?.let { Icon(imageVector = it, contentDescription = null, modifier = Modifier.size(12.dp), tint = ClawTheme.colors.text) }
+      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(12.dp), tint = ClawTheme.colors.text)
       Text(text = text, style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 1)
       if (showDot) {
         Box(modifier = Modifier.size(4.dp).clip(CircleShape).background(ClawTheme.colors.success))
-      }
-      if (dropdown) {
-        Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(11.dp), tint = ClawTheme.colors.textMuted)
       }
     }
   }
@@ -866,7 +860,6 @@ private fun sessionColorLabel(name: String?): String =
     else -> nativeString("Default")
   }
 
-/** Category section header; long-press opens the group management menu. */
 @Composable
 private fun SessionGroupHeader(
   title: String,
@@ -995,7 +988,6 @@ internal data class SessionBrowserSearchState(
   val loading: Boolean,
 )
 
-/** Canonical debounced, gateway-backed search state shared by session browser surfaces. */
 @Composable
 internal fun rememberSessionBrowserSearchState(
   viewModel: MainViewModel,
@@ -1037,7 +1029,6 @@ internal fun rememberSessionBrowserSearchState(
   )
 }
 
-/** Applies the canonical active/current/archived filter and chronological ordering. */
 internal fun resolveSessionBrowserEntries(
   entries: List<ChatSessionEntry>,
   currentSessionKey: String,
@@ -1213,7 +1204,6 @@ private val CollapsedSessionKeysSaver =
     restore = { keys -> keys.toSet() },
   )
 
-/** Projects a flat visible snapshot into section roots and expandable descendants. */
 internal fun buildSessionTreeSections(
   entries: List<ChatSessionEntry>,
   knownGroups: List<String> = emptyList(),
@@ -1362,7 +1352,6 @@ internal fun ChatSessionEntry.toActionTarget(gatewayStableId: String?): SessionA
     displayName = displayName,
   )
 
-/** Groups pinned sessions once, followed by alphabetical categories and remaining sessions. */
 internal fun groupSessionEntries(
   entries: List<ChatSessionEntry>,
   knownGroups: List<String> = emptyList(),
@@ -1396,7 +1385,6 @@ internal enum class SessionEmptyMode {
   SearchNoMatches,
 }
 
-/** Keeps transient search loading distinct from both filter-empty and settled no-match states. */
 internal fun sessionEmptyMode(
   query: String,
   loading: Boolean,
@@ -1407,7 +1395,6 @@ internal fun sessionEmptyMode(
     else -> SessionEmptyMode.SearchNoMatches
   }
 
-/** Empty-state title selected by the active session browser filter. */
 private fun emptySessionTitle(filter: SessionFilter): String =
   when (filter) {
     SessionFilter.Recent -> nativeString("No threads yet")
@@ -1415,7 +1402,6 @@ private fun emptySessionTitle(filter: SessionFilter): String =
     SessionFilter.Archived -> nativeString("No archived threads")
   }
 
-/** Empty-state body selected by the active session browser filter. */
 private fun emptySessionBody(filter: SessionFilter): String =
   when (filter) {
     SessionFilter.Recent -> nativeString("Start a new conversation and it will show up here.")
@@ -1423,7 +1409,6 @@ private fun emptySessionBody(filter: SessionFilter): String =
     SessionFilter.Archived -> nativeString("Archived threads will show up here.")
   }
 
-/** Formats session timestamps for compact mobile metadata. */
 internal fun relativeSessionTime(
   updatedAtMs: Long,
   nowMs: Long = System.currentTimeMillis(),

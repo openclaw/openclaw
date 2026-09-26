@@ -14,7 +14,6 @@ const STRUCTURED_AUTH_HEADER_RE = new RegExp(
   String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}(?:Proxy-)?Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(${HTTP_AUTH_SCHEME_PATTERN})${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}`,
   "giu",
 );
-const AUTH_PARAM_NAME_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+/u;
 const AUTH_PARAM_TOKEN_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+/u;
 const AWS_SCOPE_VALUE_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~:/-]+/u;
 
@@ -91,7 +90,7 @@ function skipAuthWhitespace(value: string, start: number): number {
 }
 
 function readAuthParamName(value: string, start: number): { name: string; end: number } | null {
-  const match = AUTH_PARAM_NAME_RE.exec(value.slice(start));
+  const match = AUTH_PARAM_TOKEN_RE.exec(value.slice(start));
   return match ? { name: match[0].toLowerCase(), end: start + match[0].length } : null;
 }
 
@@ -187,6 +186,20 @@ function usesAuthParams(scheme: string): boolean {
   return scheme === "digest" || scheme === "hawk" || scheme.startsWith("aws4-");
 }
 
+function isAuthFieldEnd(char: string | undefined): boolean {
+  return (
+    char === undefined ||
+    char === "\r" ||
+    char === "\n" ||
+    char === ";" ||
+    char === "\\" ||
+    char === '"' ||
+    char === "'" ||
+    char === "}" ||
+    char === "]"
+  );
+}
+
 function findAuthFieldEnd(value: string, start: number): number {
   let cursor = start;
   while (cursor < value.length) {
@@ -198,17 +211,7 @@ function findAuthFieldEnd(value: string, start: number): number {
     if (cursor > start && isAuthHeaderStart(value, cursor)) {
       break;
     }
-    const char = value[cursor];
-    if (
-      char === "\r" ||
-      char === "\n" ||
-      char === ";" ||
-      char === "\\" ||
-      char === '"' ||
-      char === "'" ||
-      char === "}" ||
-      char === "]"
-    ) {
+    if (isAuthFieldEnd(value[cursor])) {
       break;
     }
     cursor += 1;
@@ -348,17 +351,7 @@ export function findStructuredAuthParamRanges(value: string): StructuredAuthPara
 
       const separator = skipAuthWhitespace(value, valueEnd);
       if (value[separator] !== ",") {
-        if (
-          value[separator] !== undefined &&
-          value[separator] !== "\r" &&
-          value[separator] !== "\n" &&
-          value[separator] !== ";" &&
-          value[separator] !== "\\" &&
-          value[separator] !== '"' &&
-          value[separator] !== "'" &&
-          value[separator] !== "}" &&
-          value[separator] !== "]"
-        ) {
+        if (!isAuthFieldEnd(value[separator])) {
           const nextParamStart = findNextAuthParamStart(value, separator);
           if (nextParamStart !== null) {
             cursor = nextParamStart;

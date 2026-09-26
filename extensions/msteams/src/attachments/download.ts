@@ -1,5 +1,7 @@
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isHttpsUrlAllowedByHostnameSuffixAllowlist as isUrlAllowed } from "openclaw/plugin-sdk/ssrf-policy";
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -16,8 +18,6 @@ import {
   extractInlineImageReferences,
   isAdvertisedFileAttachment,
   isDownloadableAttachment,
-  isRecord,
-  isUrlAllowed,
   isRedirectStatus,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,

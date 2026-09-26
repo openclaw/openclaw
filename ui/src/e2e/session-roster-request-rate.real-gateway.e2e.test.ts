@@ -129,6 +129,9 @@ suite.define(() => {
         });
         await page.clock.install();
         await pauseVirtualClock(page);
+        await page.evaluate(() => {
+          Math.random = () => 0;
+        });
         // Browser time is controlled; the real server still owns mutation, projection,
         // event delivery, and list responses. Await the delivered row, not patch's ACK.
         const patch = async (sessionKey: string, label: string) => {

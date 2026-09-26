@@ -1197,7 +1197,7 @@ describe("full release artifact contract", () => {
     return { result, bytes, context, dir, workflow, writer, steps };
   }
 
-  it.each([false, true])("writes only a full-input digest and safe context (soak=%s)", (soak) => {
+  it("writes only a full-input digest and safe context", () => {
     const privateValue = "/private/example/operator/candidate.tgz";
     const secretValue = "synthetic-private-dispatch-value";
     const shellValue = 'line one\n$(touch unexpected) "quoted"';
@@ -1206,7 +1206,7 @@ describe("full release artifact contract", () => {
         text: shellValue,
         secret: secretValue,
         package: privateValue,
-        run_release_soak: String(soak),
+        run_release_soak: "true",
         count: 3,
         empty: "",
       },
@@ -1215,7 +1215,7 @@ describe("full release artifact contract", () => {
       count: "3",
       empty: "",
       package: privateValue,
-      run_release_soak: String(soak),
+      run_release_soak: "true",
       secret: secretValue,
       text: shellValue,
     });

@@ -246,32 +246,29 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     });
   });
 
-  it.each(["--runtime codex -s", "-s --runtime codex"])(
-    "applies native /model runtime and session options from %s",
-    async (options) => {
-      const storePath = path.join(tempDirs.make("openclaw-native-model-options-"), "sessions.json");
-      const { result } = await resolveNativeDirectiveCommand(
-        `/model openai/gpt-5.5 ${options}`,
-        {
-          session: { store: storePath },
-          agents: { defaults: { models: { "openai/gpt-5.5": {} } } },
-        },
-        { shouldContinue: true },
-      );
+  it("applies native /model runtime and session options", async () => {
+    const storePath = path.join(tempDirs.make("openclaw-native-model-options-"), "sessions.json");
+    const { result } = await resolveNativeDirectiveCommand(
+      `/model openai/gpt-5.5 --runtime codex -s`,
+      {
+        session: { store: storePath },
+        agents: { defaults: { models: { "openai/gpt-5.5": {} } } },
+      },
+      { shouldContinue: true },
+    );
 
-      expect(result).toMatchObject({
-        handled: true,
-        reply: {
-          text: "Session model reset to configured default (openai/gpt-5.5). Runtime set to codex for this session.",
-        },
-      });
-      const sessionEntry = loadExactSessionEntry({
-        sessionKey: "agent:main:telegram:123",
-        storePath,
-      })?.entry;
-      expect(sessionEntry).toMatchObject({ agentRuntimeOverride: "codex" });
-    },
-  );
+    expect(result).toMatchObject({
+      handled: true,
+      reply: {
+        text: "Session model reset to configured default (openai/gpt-5.5). Runtime set to codex for this session.",
+      },
+    });
+    const sessionEntry = loadExactSessionEntry({
+      sessionKey: "agent:main:telegram:123",
+      storePath,
+    })?.entry;
+    expect(sessionEntry).toMatchObject({ agentRuntimeOverride: "codex" });
+  });
 
   it("applies native model selections using the admitted catalog without rediscovery", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "0");
@@ -845,33 +842,23 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     }
   });
 
-  it.each([
-    { failure: "was deleted", deliver: true },
-    { failure: "changed", deliver: false },
-  ])(
-    "rejects session initialization when it $failure during persistence",
-    async ({ failure, deliver }) => {
-      vi.spyOn(sessionPersistence, "persistReplySessionEntry").mockResolvedValueOnce({
-        status: "lifecycle-invalidated",
-        error: `Session "agent:main:main" ${failure} while starting work. Retry.`,
-      });
-      const { result } = await resolveNativeDirectiveCommand("/compact");
+  it("rejects session initialization invalidated during persistence", async () => {
+    vi.spyOn(sessionPersistence, "persistReplySessionEntry").mockResolvedValueOnce({
+      status: "lifecycle-invalidated",
+      error: 'Session "agent:main:main" was deleted while starting work. Retry.',
+    });
+    const { result } = await resolveNativeDirectiveCommand("/compact");
 
-      expect(result).toEqual({
-        handled: true,
-        reply: expect.objectContaining({ text: expect.stringContaining(failure) }),
-      });
-      if (deliver) {
-        if (!result.handled || !result.reply || Array.isArray(result.reply)) {
-          throw new Error("expected single handled reply");
-        }
-        expect(getReplyPayloadMetadata(result.reply)?.deliverDespiteSourceReplySuppression).toBe(
-          true,
-        );
-      }
-      expect(handleCommandsMock).not.toHaveBeenCalled();
-    },
-  );
+    expect(result).toEqual({
+      handled: true,
+      reply: expect.objectContaining({ text: expect.stringContaining("was deleted") }),
+    });
+    if (!result.handled || !result.reply || Array.isArray(result.reply)) {
+      throw new Error("expected single handled reply");
+    }
+    expect(getReplyPayloadMetadata(result.reply)?.deliverDespiteSourceReplySuppression).toBe(true);
+    expect(handleCommandsMock).not.toHaveBeenCalled();
+  });
 
   it("adopts a supported legacy alias before native command initialization", async () => {
     const storePath = path.join(tempDirs.make("openclaw-native-slash-alias-"), "sessions.json");

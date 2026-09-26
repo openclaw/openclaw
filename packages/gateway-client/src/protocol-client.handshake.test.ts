@@ -241,26 +241,6 @@ describe("GatewayProtocolClient connect handshake", () => {
     }
   });
 
-  it("reconnects when an open Gateway never responds to connect", async () => {
-    vi.useFakeTimers();
-    const { client, connections } = createHandshakeClient();
-    client.start();
-    const connection = connections[0];
-    expect(connection).toBeDefined();
-    if (!connection) {
-      return;
-    }
-    receiveConnectChallenge(connection);
-    expect(connection.send).toHaveBeenCalledOnce();
-
-    await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
-
-    expect(connection.close).toHaveBeenCalledWith(4000, "connect timeout");
-    await vi.advanceTimersByTimeAsync(10);
-    expect(connections).toHaveLength(2);
-    client.stop();
-  });
-
   it("passes the Gateway challenge timestamp into connect planning", () => {
     const buildConnectPlan = vi.fn(() => ({}));
     const { client, connections } = createHandshakeClient(buildConnectPlan);

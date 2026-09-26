@@ -127,6 +127,9 @@ describe("pixverse video generation provider", () => {
     expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
     const createRequest = firstPostJsonRequest();
     expect(createRequest.url).toBe("https://app-api.pixverse.ai/openapi/v2/video/text/generate");
+    expect(JSON.stringify(createRequest.body)).toBe(
+      '{"duration":4,"model":"v6","prompt":"a tiny lobster DJ under neon lights","quality":"720p","aspect_ratio":"21:9","negative_prompt":"blur","camera_movement":"zoom_in","seed":42,"generate_audio_switch":true}',
+    );
     expect(createRequest.body).toEqual({
       duration: 4,
       model: "v6",

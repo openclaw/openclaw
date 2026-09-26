@@ -1,3 +1,7 @@
+import {
+  capturePluginRegistration,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 // Qwen tests cover media understanding provider plugin behavior.
 import {
@@ -5,11 +9,13 @@ import {
   installPinnedHostnameTestHooks,
 } from "openclaw/plugin-sdk/test-media-understanding";
 import { describe, expect, it } from "vitest";
-import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import qwenPlugin from "./index.js";
 
 installPinnedHostnameTestHooks();
 
-const qwenProvider = buildQwenMediaUnderstandingProvider();
+// Initialize the host metadata readers through plugin registration before timed requests.
+const { mediaUnderstandingProviders } = capturePluginRegistration(qwenPlugin);
+const qwenProvider = requireRegisteredProvider(mediaUnderstandingProviders, "qwen");
 const describeQwenVideo = qwenProvider.describeVideo;
 if (!describeQwenVideo) {
   throw new Error("expected Qwen video description capability");

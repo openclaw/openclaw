@@ -394,18 +394,11 @@ final class QuickChatModel {
     }
 
     var canCaptureTextContext: Bool {
-        self.canCaptureWindow && !self.isCapturingTextContext
+        self.canCaptureWindow
     }
 
     var canSelectRecentSession: Bool {
-        !self.sessionKey.isEmpty &&
-            self.connectionGate == .available &&
-            !self.isGrantingPermissions &&
-            !self.isCapturingTextContext &&
-            !self.isStartingDictation &&
-            !self.isDictating &&
-            !self.isUpdatingModel &&
-            self.sendState != .sending
+        self.canCaptureWindow
     }
 
     var canToggleDictation: Bool {

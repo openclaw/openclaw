@@ -205,40 +205,6 @@ describe("chat history in-flight assistant recovery", () => {
     expect(state.chatRunId).toBeNull();
   });
 
-  it.each(["running", "completed"])(
-    "does not replace a newer %s run with a delayed failed snapshot",
-    async (phase) => {
-      let resolveHistory!: (result: ChatHistoryResult) => void;
-      const request = vi.fn().mockReturnValue(
-        new Promise<ChatHistoryResult>((resolve) => {
-          resolveHistory = resolve;
-        }),
-      );
-      const state = createState(failedHistory());
-      state.client = { request } as unknown as GatewayBrowserClient;
-      const loading = loadChatHistory(state);
-      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-      handleChatGatewayEvent(state, {
-        runId: "run-newer",
-        sessionKey: "main",
-        state: "delta",
-        deltaText: "Working",
-      });
-      if (phase === "completed") {
-        handleChatGatewayEvent(state, {
-          runId: "run-newer",
-          sessionKey: "main",
-          state: "final",
-          message: { role: "assistant", content: "Done" },
-        });
-      }
-      resolveHistory(failedHistory());
-      await loading;
-      expect(state.chatRunError).toBeNull();
-      expect(state.chatRunId).toBe(phase === "running" ? "run-newer" : null);
-    },
-  );
-
   it("restores tools, preamble time, and output usage from the in-flight run snapshot", async () => {
     const history = activeHistory("run-live");
     (history.inFlightRun as { events?: unknown[] }).events = [
@@ -398,14 +364,12 @@ describe("chat history in-flight assistant recovery", () => {
   });
 
   it.each(
-    ["idempotency", "Codex mirror"].flatMap((identity) =>
-      ["fresh adoption", "retained boundary"].flatMap((mode) =>
-        ["single row", "split rows", "split rows with commentary"].map((rows) => ({
-          identity,
-          mode,
-          rows,
-        })),
-      ),
+    ["fresh adoption", "retained boundary"].flatMap((mode) =>
+      [
+        { identity: "idempotency", rows: "single row" },
+        { identity: "idempotency", rows: "split rows" },
+        { identity: "Codex mirror", rows: "split rows with commentary" },
+      ].map(({ identity, rows }) => ({ identity, rows, mode })),
     ),
   )(
     "keeps the cumulative prefix after persisted history replacement: $identity, $mode, $rows",

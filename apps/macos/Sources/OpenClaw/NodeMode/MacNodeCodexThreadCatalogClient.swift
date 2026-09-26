@@ -325,7 +325,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
               connection.cleanupTask == nil
         else { return }
         guard started, let process = connection.process else {
-            self.discardUnstartedConnection(connection)
+            self.retireConnection(connection)
             self.finishActive(
                 .failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable),
                 restartConnection: false)
@@ -552,33 +552,24 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
     }
 
     private func timeout(token: UUID) {
-        if let index = self.pending.firstIndex(where: { $0.token == token }) {
-            let request = self.pending.remove(at: index)
-            self.complete(
-                request,
-                with: .failure(MacNodeCodexThreadCatalog.CatalogError.timedOut))
-            if self.active == nil {
-                self.stopConnection(abortive: true)
-            }
-            return
-        }
-        guard self.active?.token == token else { return }
-        self.finishActive(
-            .failure(MacNodeCodexThreadCatalog.CatalogError.timedOut),
-            restartConnection: true)
+        self.failRequest(token: token, error: MacNodeCodexThreadCatalog.CatalogError.timedOut)
     }
 
     private func cancel(token: UUID) {
+        self.failRequest(token: token, error: CancellationError())
+    }
+
+    private func failRequest(token: UUID, error: Error) {
         if let index = self.pending.firstIndex(where: { $0.token == token }) {
             let request = self.pending.remove(at: index)
-            self.complete(request, with: .failure(CancellationError()))
+            self.complete(request, with: .failure(error))
             if self.active == nil {
                 self.stopConnection(abortive: true)
             }
             return
         }
         guard self.active?.token == token else { return }
-        self.finishActive(.failure(CancellationError()), restartConnection: true)
+        self.finishActive(.failure(error), restartConnection: true)
     }
 
     private func finishActive(
@@ -658,12 +649,6 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         }
         connection.cleanupTask = cleanupTask
         return cleanupTask
-    }
-
-    private func discardUnstartedConnection(_ connection: Connection) {
-        guard self.connection?.generation == connection.generation else { return }
-        self.connection = nil
-        self.closeLocalPipeHandles(connection)
     }
 
     private func retireConnection(_ connection: Connection) {

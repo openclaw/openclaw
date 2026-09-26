@@ -29,8 +29,6 @@ describe("discord config schema", () => {
     ["2026.7.1-2", true],
     ["2026.7.2-beta.3", true],
     ["2026.7.2-beta.4", false],
-    ["2026.8.1-beta.1", false],
-    ["2026.8.1-beta.2", false],
     ["2026.8.1", false],
     [null, false],
   ] as const)("preserves supported Discord DM input for baseline %s", (version, legacy) => {

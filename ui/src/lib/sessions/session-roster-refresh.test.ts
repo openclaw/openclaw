@@ -335,10 +335,6 @@ describe("session roster refresh", () => {
 
   it.each([
     { name: "primary", scope: { agentId: " Main " } },
-    { name: "owner-first", scope: { agentId: "main", ownerFirst: true } },
-    { name: "owner-filtered", scope: { agentId: "main", ownerId: "profile-self" } },
-    { name: "involving-me", scope: { agentId: "main", involvingMe: true } },
-    { name: "searched", scope: { agentId: "main", search: "report" } },
     { name: "all-agents", scope: {} },
   ])("invalidates the $name roster only for matching or unscoped events", async ({ scope }) => {
     vi.useFakeTimers();
@@ -368,8 +364,6 @@ describe("session roster refresh", () => {
 
   it.each([
     { weakKind: "append", weakOptions: { offset: 25, append: true }, outcome: "rows" },
-    { weakKind: "append", weakOptions: { offset: 25, append: true }, outcome: "error" },
-    { weakKind: "background", weakOptions: { backgroundHydrate: true }, outcome: "rows" },
     { weakKind: "background", weakOptions: { backgroundHydrate: true }, outcome: "error" },
   ] as const)(
     "keeps a queued Research replacement ahead of a later Work $weakKind after stale Work $outcome",

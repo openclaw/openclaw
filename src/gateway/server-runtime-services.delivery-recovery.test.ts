@@ -28,7 +28,10 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import * as lifecycleNotices from "./server-restart-sentinel-notice.js";
 import { activateGatewayScheduledServices } from "./server-runtime-services.js";
@@ -53,11 +56,14 @@ vi.mock("./server-restart-sentinel.js", () => ({
 
 let services: ReturnType<typeof activateGatewayScheduledServices> | undefined;
 let watcher: ReturnType<typeof startUpdateRunWatcher> | undefined;
+let scheduler: ReturnType<typeof createTestGatewayScheduler> | undefined;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
     await watcher?.stop();
     await services?.stopDeliveryRecovery();
     services?.heartbeatRunner.stop();
+    await scheduler?.stop();
+    scheduler = undefined;
     watcher = undefined;
     services = undefined;
     await closeOpenClawStateDatabaseAsync();
@@ -77,6 +83,8 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
   vi.useFakeTimers({
     toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
+  const clock = createGatewaySchedulerClock(Date.now());
+  scheduler = createTestGatewayScheduler(clock.clock);
   resetGatewayWorkAdmission();
   const rootA = tempDirs.make("openclaw-runtime-recovery-a-");
   const rootB = tempDirs.make("openclaw-runtime-recovery-b-");
@@ -129,7 +137,7 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
   const admittedWork = vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission");
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   services = activateGatewayScheduledServices({
-    scheduler: createTestGatewayScheduler(),
+    scheduler,
     minimalTestGateway: false,
     cfgAtStart: cfg,
     deps: {},
@@ -153,6 +161,7 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
   );
   finishUpdateRun(run.runId, { status: "succeeded", after: { version: "2026.9.5" } });
   await vi.advanceTimersByTimeAsync(2_000);
+  clock.setTime(Date.now());
   await vi.dynamicImportSettled();
   // Import settlement does not join the notifier's worker reads or durable handoff.
   expect(notifyPhase).toHaveBeenCalledOnce();
@@ -172,6 +181,7 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
 
   // The first five-second tick can precede the failed send's backoff deadline.
   await vi.advanceTimersByTimeAsync(10_000);
+  await clock.advanceBy(10_000);
   await vi.dynamicImportSettled();
   await Promise.all(admittedWork.mock.results.map((result) => result.value));
   expect(attempts).toHaveLength(2);
@@ -189,6 +199,7 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
   });
   expect(await findDeliveryIntentOwner(queueId, rootB)).toBeNull();
   await vi.advanceTimersByTimeAsync(5_000);
+  await clock.advanceBy(5_000);
   await vi.dynamicImportSettled();
   await Promise.all(admittedWork.mock.results.map((result) => result.value));
   expect(attempts).toHaveLength(2);

@@ -24,6 +24,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
@@ -251,6 +252,7 @@ export function createService(
       | "generateWorkerCredential"
       | "liveEvents"
       | "maintainProviders"
+      | "scheduler"
       | "logger"
       | "now"
       | "nodeTunnelManager"
@@ -262,6 +264,7 @@ export function createService(
   > = {},
 ) {
   testState.service = createWorkerEnvironmentService({
+    scheduler: createTestGatewayScheduler(),
     store: testState.store,
     getConfig: () => testState.config,
     resolveProvider: (providerId) =>

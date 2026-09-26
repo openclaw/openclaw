@@ -29,11 +29,9 @@ import * as cliOutputLifecycle from "./cli-output-lifecycle.js";
 import {
   decodeCliRecords,
   isClaudeStreamJsonDialect,
-  isClaudeStreamJsonResult,
   isClaudeSyntheticNoResponse,
   isClaudeSubagentRecord,
   isGeminiStreamJsonDialect,
-  isStreamJsonDialect,
   missingMessageBoundarySeparator,
   parseClaudeCliJsonlResult,
   parseClaudeCliStreamingDelta,
@@ -302,7 +300,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (
       parsed.type === "result" &&
       parsed.openclaw_interim_result !== true &&
-      isStreamJsonDialect(params)
+      supportsCliJsonlToolEvents(params)
     ) {
       sawTerminalResult = true;
     }
@@ -320,11 +318,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       params.onUsage?.(nextUsage, isClaudeTerminalResult);
     }
     const shouldUseUsage =
-      !isClaudeStreamJsonResult({
-        backend: params.backend,
-        providerId: params.providerId,
-        parsed,
-      }) || !usage;
+      !supportsCliJsonlToolEvents(params) || parsed.type !== "result" || !usage;
     if (shouldUseUsage) {
       usage = nextUsage ?? usage;
     }
@@ -369,11 +363,11 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       return;
     }
 
-    if (classifyClaudeCommentary && parsed.type === "result") {
+    if (parsed.type === "result") {
       finishTaggedReasoningMessage();
-      flushPendingClaudeAssistantText();
-    } else if (parsed.type === "result") {
-      finishTaggedReasoningMessage();
+      if (classifyClaudeCommentary) {
+        flushPendingClaudeAssistantText();
+      }
     }
 
     let result = parseClaudeCliJsonlResult({
@@ -706,7 +700,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       if (sawCustomJsonlEvent) {
         return { text: texts.join("\n").trim() || assistantText.trim(), sessionId, usage };
       }
-      if (isStreamJsonDialect(params) && assistantText.trim()) {
+      if (supportsCliJsonlToolEvents(params) && assistantText.trim()) {
         return {
           text: assistantText.trim(),
           sessionId,
@@ -717,7 +711,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       if (isGeminiStreamJsonDialect(params) && sawGeminiStructuredOutput) {
         return { text: "", sessionId, usage };
       }
-      if (isStreamJsonDialect(params)) {
+      if (supportsCliJsonlToolEvents(params)) {
         return {
           text: "",
           sessionId,

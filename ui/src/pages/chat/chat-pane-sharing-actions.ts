@@ -404,7 +404,9 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     return this.isConnectionScopeCurrent(scope) ? scope : null;
   }
 
-  protected isConnectionScopeCurrent(scope: ChatPaneConnectionScope): boolean {
+  protected isConnectionScopeCurrent(
+    scope: Pick<ChatPaneConnectionScope, "context" | "state" | "client" | "generation">,
+  ): boolean {
     return (
       this.isConnected &&
       this.context === scope.context &&

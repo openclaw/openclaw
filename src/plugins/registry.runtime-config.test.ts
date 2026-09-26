@@ -4,11 +4,12 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
+import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { withCliCommandCleanup, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -75,11 +76,17 @@ describe("plugin registration runtime admission", () => {
         revokePluginRecord(builder.registry, record);
 
         await expect(purge()).rejects.toThrow("runtime is no longer active");
-        expect(await queue.listPending()).toEqual(pending);
-        expect(await queue.listClaims()).toEqual(claims);
+        const inspector = createChannelIngressQueue({
+          channelId: record.id,
+          accountId: "default",
+          stateDir,
+          access: "read-only",
+        });
+        expect(await inspector.listPending()).toEqual(pending);
+        expect(await inspector.listClaims()).toEqual(claims);
       } finally {
         await owner.dispose();
-        closeOpenClawStateDatabaseForTest();
+        await closeOpenClawStateDatabaseAsync();
       }
     });
   });
@@ -238,16 +245,24 @@ describe("plugin registration runtime admission", () => {
   );
 });
 
+function createRecord(
+  id: string,
+  overrides: Partial<Parameters<typeof createPluginRecord>[0]> = {},
+) {
+  return createPluginRecord({
+    id,
+    source: `/plugins/${id}/index.js`,
+    origin: "global",
+    enabled: true,
+    configSchema: false,
+    ...overrides,
+  });
+}
+
 describe("plugin registry runtime config scope", () => {
   it("rejects a plugin harness that claims the built-in runtime id", () => {
     const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
-    const record = createPluginRecord({
-      id: "untrusted-plugin",
-      source: "/plugins/untrusted-plugin/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
+    const record = createRecord("untrusted-plugin");
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
     api.registerAgentHarness({
@@ -369,13 +384,7 @@ describe("plugin registry runtime config scope", () => {
 
   it("rejects native compaction from a foreign harness owner", () => {
     const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
-    const record = createPluginRecord({
-      id: "copilot",
-      source: "/plugins/copilot/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
+    const record = createRecord("copilot");
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
     api.registerAgentHarness(
@@ -429,14 +438,7 @@ describe("plugin registry runtime config scope", () => {
       },
     });
     const pluginRegistry = createRuntimeTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "diagnostic-plugin",
-      name: "Diagnostic Plugin",
-      source: "/plugins/diagnostic-plugin/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
+    const record = createRecord("diagnostic-plugin", { name: "Diagnostic Plugin" });
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
     let thrown: unknown;
@@ -491,14 +493,7 @@ describe("plugin registry runtime config scope", () => {
     const runtime = createPluginRuntime();
     runtime.config = configRuntime;
     const pluginRegistry = createRuntimeTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "legacy-plugin",
-      name: "Legacy Plugin",
-      source: "/plugins/legacy-plugin/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
+    const record = createRecord("legacy-plugin", { name: "Legacy Plugin" });
     const api = pluginRegistry.createApi(record, { config });
 
     expect(api.runtime.config.current()).toBe(config);
@@ -533,14 +528,7 @@ describe("plugin registry runtime config scope", () => {
       return undefined;
     });
     const pluginRegistry = createRuntimeTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "memory-provider",
-      name: "Memory Provider",
-      source: "/plugins/memory-provider/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
+    const record = createRecord("memory-provider", { name: "Memory Provider", origin: "bundled" });
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
     await api.runtime.llm.acquireLocalService({
@@ -586,14 +574,7 @@ describe("plugin registry runtime config scope", () => {
           ? createLazyPluginRuntime({ runtimeOptions: { nodes } })
           : createPluginRuntime({ nodes });
       const pluginRegistry = createRuntimeTestRegistry(runtime);
-      const record = createPluginRecord({
-        id: "google-meet",
-        name: "Google Meet",
-        source: "/plugins/google-meet/index.js",
-        origin: "bundled",
-        enabled: true,
-        configSchema: false,
-      });
+      const record = createRecord("google-meet", { name: "Google Meet", origin: "bundled" });
       const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
       await api.runtime.nodes.list({ connected: true });
@@ -632,14 +613,7 @@ describe("plugin registry runtime config scope", () => {
       },
     };
     const pluginRegistry = createRuntimeTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "google-meet",
-      name: "Google Meet",
-      source: "/plugins/google-meet/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
+    const record = createRecord("google-meet", { name: "Google Meet", origin: "bundled" });
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
     await api.runtime.gateway.request("voicecall.start", { to: "+15550001234" });
@@ -672,20 +646,8 @@ describe("plugin registry runtime config scope", () => {
     );
     runtime.agent.session.createSessionEntry = createSessionEntry;
     const pluginRegistry = createRuntimeTestRegistry(runtime);
-    const ownerRecord = createPluginRecord({
-      id: "codex-owner",
-      source: "/plugins/codex-owner/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
-    const otherRecord = createPluginRecord({
-      id: "other-plugin",
-      source: "/plugins/other-plugin/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
+    const ownerRecord = createRecord("codex-owner", { origin: "bundled" });
+    const otherRecord = createRecord("other-plugin", { origin: "bundled" });
     const ownerApi = pluginRegistry.createApi(ownerRecord, { config: {} as OpenClawConfig });
     const otherApi = pluginRegistry.createApi(otherRecord, { config: {} as OpenClawConfig });
     ownerApi.registerAgentHarness({
@@ -741,13 +703,7 @@ describe("plugin registry runtime config scope", () => {
     }));
     runtime.agent.session.createSessionEntry = createSessionEntry;
     const pluginRegistry = createRuntimeTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "anthropic",
-      source: "/plugins/anthropic/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
+    const record = createRecord("anthropic", { origin: "bundled" });
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
     api.registerCliBackend({ id: "claude-cli", config: { command: "claude" } });
     api.registerAgentHarness({
@@ -806,13 +762,7 @@ describe("plugin registry runtime config scope", () => {
     }));
     runtime.agent.session.createSessionEntry = createSessionEntry;
     const pluginRegistry = createRuntimeTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "opencode",
-      source: "/plugins/opencode/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
+    const record = createRecord("opencode", { origin: "bundled" });
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
     const initialEntry = {
       acpBackendId: "acpx",

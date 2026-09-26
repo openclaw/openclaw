@@ -496,6 +496,20 @@ describe("nvidia provider catalog", () => {
           context: 10_000_001,
           "max-output": 8192,
         },
+        ...["\u0000", "\u001f", "\u007f"].flatMap((control) => [
+          {
+            model: `invalid${control}id`,
+            "model-name": "Control in ID",
+            context: 1000,
+            "max-output": 1000,
+          },
+          {
+            model: `invalid-name-${control.charCodeAt(0)}`,
+            "model-name": `Control${control}in name`,
+            context: 1000,
+            "max-output": 1000,
+          },
+        ]),
       ],
     });
 

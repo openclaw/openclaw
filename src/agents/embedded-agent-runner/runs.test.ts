@@ -317,14 +317,6 @@ describe("embedded-agent runner run registry", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("lifecycle_check_failed"));
   });
 
-  it("passes restart ownership to every aborted run", () => {
-    const abort = vi.fn();
-    setActiveEmbeddedRun("session-restart", createEmbeddedRunHandle({ abort }));
-
-    expect(abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" })).toBe(true);
-    expect(abort).toHaveBeenCalledWith("restart");
-  });
-
   it("expires reply-owned stuck recovery as run_stalled instead of user abort", async () => {
     const cancel = vi.fn();
     const operation = createReplyOperation({

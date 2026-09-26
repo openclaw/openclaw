@@ -4,7 +4,7 @@ import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "./docker-e2e-scenarios.
 type PrereleaseSurfaceEntry = { surfaces: readonly string[] };
 
 /** Required behavioral surfaces that plugin prerelease validation must cover. */
-export const PLUGIN_PRERELEASE_REQUIRED_SURFACES = Object.freeze([
+const PLUGIN_PRERELEASE_REQUIRED_SURFACES = Object.freeze([
   "package-artifact",
   "bundled-lifecycle",
   "external-plugins",

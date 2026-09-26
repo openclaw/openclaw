@@ -20,7 +20,7 @@ export async function claimWorkerPlacement(params: {
     agentId: "main",
     sessionKey: `agent:main:${params.sessionId}`,
   };
-  let placement = store.startDispatch(identity);
+  let placement = await store.startDispatch(identity);
   placement = store.transition({
     sessionId: params.sessionId,
     from: "requested",

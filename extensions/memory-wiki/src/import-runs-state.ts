@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements import run state behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

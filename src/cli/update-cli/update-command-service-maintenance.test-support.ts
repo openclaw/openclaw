@@ -24,6 +24,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 export { mocks };
+export const fixtureGatewayPid = Math.max(process.pid, process.ppid) + 1;
+
+vi.mock("../../daemon/service-process-membership.js", () => ({
+  inspectServiceProcessMembershipSync: vi.fn(() => "outside"),
+}));
 
 type NativeOfflineCase = {
   platform: NodeJS.Platform;

@@ -27,7 +27,6 @@ import {
   updateExecApprovals,
   type ExecApprovalsFile,
   type ExecAsk,
-  type ExecMode,
   type ExecSecurity,
   type ExecTarget,
 } from "../infra/exec-approvals.js";
@@ -84,33 +83,21 @@ type ExecPolicyShowPayload = {
   };
 };
 
-type ExecPolicyShowSecurity = ExecSecurity | "unknown";
-type ExecPolicyShowAsk = ExecAsk | "unknown";
-
 type ExecPolicyShowScope = Omit<
   ExecPolicyScopeSnapshot,
   "security" | "ask" | "askFallback" | "allowedDecisions"
 > & {
   runtimeApprovalsSource: "local-file" | "node-runtime";
-  security: {
-    requested: ExecSecurity;
-    requestedSource: string;
-    host: ExecPolicyShowSecurity;
-    hostSource: string;
-    effective: ExecPolicyShowSecurity;
-    note: string;
+  security: Omit<ExecPolicyScopeSnapshot["security"], "host" | "effective"> & {
+    host: ExecSecurity | "unknown";
+    effective: ExecSecurity | "unknown";
   };
-  ask: {
-    requested: ExecAsk;
-    requestedSource: string;
-    host: ExecPolicyShowAsk;
-    hostSource: string;
-    effective: ExecPolicyShowAsk;
-    note: string;
+  ask: Omit<ExecPolicyScopeSnapshot["ask"], "host" | "effective"> & {
+    host: ExecAsk | "unknown";
+    effective: ExecAsk | "unknown";
   };
-  askFallback: {
-    effective: ExecPolicyShowSecurity;
-    source: string;
+  askFallback: Omit<ExecPolicyScopeSnapshot["askFallback"], "effective"> & {
+    effective: ExecSecurity | "unknown";
   };
 };
 
@@ -177,17 +164,7 @@ function resolveExecPolicyInput(params: {
   return resolved;
 }
 
-function applyConfigExecPolicy(draft: Record<string, unknown>, policy: ExecPolicyResolved): void {
-  const root = draft as {
-    tools?: {
-      exec?: {
-        host?: ExecTarget;
-        mode?: ExecMode;
-        security?: ExecSecurity;
-        ask?: ExecAsk;
-      };
-    };
-  };
+function applyConfigExecPolicy(root: OpenClawConfig, policy: ExecPolicyResolved): void {
   root.tools ??= {};
   root.tools.exec ??= {};
   if (policy.host !== undefined) {
@@ -268,15 +245,6 @@ function buildExecPolicyApprovalsRollback(params: {
     }
   }
   return changed ? next : null;
-}
-
-function buildNextExecPolicyConfig(
-  config: OpenClawConfig,
-  policy: ExecPolicyResolved,
-): OpenClawConfig {
-  const draft = structuredClone(config);
-  applyConfigExecPolicy(draft as Record<string, unknown>, policy);
-  return draft;
 }
 
 async function buildLocalExecPolicyShowPayload(
@@ -420,7 +388,8 @@ function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
 
 async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPolicyShowPayload> {
   const configSnapshot = await readConfigFileSnapshot();
-  const nextConfig = buildNextExecPolicyConfig(configSnapshot.config ?? {}, policy);
+  const nextConfig = structuredClone(configSnapshot.config ?? {});
+  applyConfigExecPolicy(nextConfig, policy);
   if (nextConfig.tools?.exec?.host === "node") {
     failExecPolicy(
       "Local exec-policy cannot synchronize host=node. Node approvals are fetched from the node at runtime.",

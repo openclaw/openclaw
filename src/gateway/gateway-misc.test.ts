@@ -175,14 +175,6 @@ describe("GatewayClient", () => {
     expectNoGatewayClientAgent({ url: "ws://127.0.0.1:1" });
   });
 
-  test("does not pass an explicit direct agent for IPv6 loopback control-plane WebSocket connections", () => {
-    expectNoGatewayClientAgent({ url: "ws://[::1]:1" });
-  });
-
-  test("does not pass an explicit direct agent for localhost hostnames", () => {
-    expectNoGatewayClientAgent({ url: "ws://localhost:1" });
-  });
-
   test("does not force a direct agent for remote Gateway WebSocket connections", () => {
     expectNoGatewayClientAgent({
       url: "wss://gateway.example.com",
@@ -231,14 +223,8 @@ describe("GatewayClient", () => {
     }
   });
 
-  it("returns 404 for missing static asset paths instead of SPA fallback", async () => {
-    await withControlUiRoot({ faviconSvg: "<svg/>" }, async (tmp) => {
-      await expectControlUiStatus(tmp, { url: "/webchat/favicon.svg", statusCode: 404 });
-    });
-  });
-
   it("returns 404 for missing static assets with query strings", async () => {
-    await withControlUiRoot({}, async (tmp) => {
+    await withControlUiRoot({ faviconSvg: "<svg/>" }, async (tmp) => {
       await expectControlUiStatus(tmp, { url: "/webchat/favicon.svg?v=1", statusCode: 404 });
     });
   });

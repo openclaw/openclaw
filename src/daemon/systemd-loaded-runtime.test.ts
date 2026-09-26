@@ -39,6 +39,7 @@ const properties = {
   KillMode: { type: "s", data: "control-group" },
   TasksCurrent: { type: "t", data: 8 },
   MemoryCurrent: { type: "t", data: 2048 },
+  ControlGroup: { type: "s", data: "/user.slice/openclaw-owned.service" },
 };
 
 function success(stdout: string): ExecResult {
@@ -126,6 +127,7 @@ describe("loaded-only systemd runtime", () => {
         nRestarts: 2,
         tasksCurrent: 8,
         memoryCurrent: 2048,
+        controlGroup: "/user.slice/openclaw-owned.service",
       },
     });
     expect(systemctl).not.toHaveBeenCalled();

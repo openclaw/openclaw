@@ -1,6 +1,3 @@
-/**
- * Browser CLI batch command: runs nested act requests in one /act call.
- */
 import type { Command } from "commander";
 import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -12,7 +9,6 @@ import {
 } from "../browser-cli-shared.js";
 import { runBrowserAction, readActionsPayload } from "./shared.js";
 
-/** Registers the Browser CLI batch command. */
 export function registerBrowserBatchCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,

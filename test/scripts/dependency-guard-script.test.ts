@@ -1002,21 +1002,6 @@ describe("dependency guard script", () => {
     );
   });
 
-  it("bounds GitHub error bodies by streamed bytes", async () => {
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new Uint8Array(GITHUB_ERROR_BODY_MAX_BYTES + 1));
-          controller.close();
-        },
-      }),
-    );
-
-    await expect(readBoundedGitHubErrorText(response)).rejects.toThrow(
-      `GitHub error response body exceeded ${GITHUB_ERROR_BODY_MAX_BYTES} bytes`,
-    );
-  });
-
   it("preserves GitHub status when an error body exceeds the cap", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (() =>

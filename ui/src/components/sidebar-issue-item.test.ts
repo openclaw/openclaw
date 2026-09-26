@@ -231,7 +231,6 @@ describe("renderSidebarUpdateSurface", () => {
             context,
             onDismiss: () => dismiss(dismissal),
             onNavigate: vi.fn(),
-            visible: true,
             watchUpdateProgress: undefined,
           }),
           container,

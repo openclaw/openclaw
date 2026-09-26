@@ -8,6 +8,7 @@ import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js
 import { listRecoveredManagedNpmInstallCandidates } from "./installed-plugin-index-record-reader.js";
 import { readPersistedInstalledPluginIndexRowSync } from "./installed-plugin-index-record-state.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import {
   cleanupRetainedManagedNpmInstallGenerations,
   hasRetainedManagedNpmInstallMarker,
@@ -15,6 +16,7 @@ import {
   resolveRetainedManagedNpmInstallMarkerPath,
 } from "./managed-npm-retention.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { publishPluginSourceAdmission } from "./plugin-source-admission-store.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
@@ -23,6 +25,87 @@ function npmRecord(packageName: string, installPath: string): PluginInstallRecor
 }
 
 describe("retained managed npm record commits", () => {
+  it("defers native receipts until install rollback has restored its index and markers", async () => {
+    await withOpenClawTestState({ label: "native-receipt-install-rollback" }, async (state) => {
+      const config = { plugins: { enabled: false } };
+      await state.writeConfig(config);
+      const records: Record<string, PluginInstallRecord> = {};
+      for (const pluginId of ["unchanged", "removed"]) {
+        const packageName = `@openclaw/${pluginId}`;
+        records[pluginId] = npmRecord(
+          packageName,
+          writeManagedNpmPlugin({
+            stateDir: state.stateDir,
+            packageName,
+            pluginId,
+            version: "1.0.0",
+          }),
+        );
+      }
+      await seedInstalledPluginIndex(records, { config, env: state.env });
+      const initial = await readPersistedInstalledPluginIndex({ env: state.env });
+      const unchanged = initial?.plugins.find((plugin) => plugin.pluginId === "unchanged");
+      if (!unchanged) {
+        throw new Error("Expected the unchanged installed plugin");
+      }
+      const removedPath = records.removed!.installPath!;
+      const configBefore = fs.readFileSync(state.configPath, "utf8");
+      const publication = {
+        env: state.env,
+        pluginId: unchanged.pluginId,
+        rootDir: unchanged.rootDir,
+        installRecordHash: unchanged.installRecordHash,
+        key: unchanged.rootDir,
+        receipt: {
+          signature: "native-receipt",
+          sourceDigest: "a".repeat(64),
+          nativeArtifacts: {},
+          nativeNamespaces: {},
+        },
+      };
+      const failure = new Error("config commit failed after plugin retirement");
+      let published: boolean | undefined;
+      let publicationRewroteIndex: boolean | undefined;
+      await expect(
+        commitPluginInstallRecordsWithConfig({
+          previousInstallRecords: records,
+          nextInstallRecords: { unchanged: records.unchanged! },
+          nextConfig: { ...config, gateway: { port: 18792 } },
+          writeOptions: {
+            beforeCommit: async () => {
+              expect(hasRetainedManagedNpmInstallMarker(removedPath)).toBe(true);
+              const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
+              published = await publishPluginSourceAdmission(publication);
+              publicationRewroteIndex =
+                readPersistedInstalledPluginIndexRowSync({ env: state.env })?.value_json !==
+                before?.value_json;
+              throw failure;
+            },
+          },
+        }),
+      ).rejects.toBe(failure);
+      expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(records);
+      expect(hasRetainedManagedNpmInstallMarker(removedPath)).toBe(false);
+      expect(fs.readFileSync(state.configPath, "utf8")).toBe(configBefore);
+      expect(published).toBe(false);
+      expect(publicationRewroteIndex).toBe(false);
+
+      expect(await publishPluginSourceAdmission(publication)).toBe(true);
+      expect(
+        JSON.parse(readPersistedInstalledPluginIndexRowSync({ env: state.env })!.value_json),
+      ).toMatchObject({
+        index: {
+          plugins: expect.arrayContaining([
+            {
+              ...unchanged,
+              sourceAdmissions: { [publication.key]: publication.receipt },
+            },
+          ]),
+        },
+      });
+    });
+  });
+
   it("does not compensate after a transient lease read failure following marker removal", async () => {
     await withOpenClawTestState({ label: "retained-marker-read-refusal" }, async (state) => {
       const config = { plugins: { enabled: false } };

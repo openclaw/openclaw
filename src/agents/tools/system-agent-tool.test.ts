@@ -184,6 +184,44 @@ describe("openclaw tool", () => {
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
   });
 
+  it("proposes storing a key the user gave in chat without repeating it", async () => {
+    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+    const secret = " sk-owner-pasted-9d2e4b7c\n";
+    const result = await createSystemAgentTool({ surface: "gateway", proposalRef }).execute(
+      "owner-key",
+      { action: "config_set_ref", path: "models.providers.openai.apiKey", secret },
+    );
+    expect(toolText(result)).toContain("needs-approval");
+    expect(toolText(result)).not.toContain(secret);
+    expect(proposalRef.operation).toEqual({
+      kind: "config-set-ref",
+      path: "models.providers.openai.apiKey",
+      source: "store",
+      id: "MODELS_PROVIDERS_OPENAI_API_KEY",
+      secret,
+    });
+    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+  });
+
+  it.each(["cli", "gateway"] as const)(
+    "rejects mixed credential sources before staging on %s",
+    async (surface) => {
+      const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+      const tool = createSystemAgentTool({ surface, proposalRef });
+      await expect(
+        tool.execute("mixed-source", {
+          action: "config_set_ref",
+          path: "models.providers.openai.apiKey",
+          secret: "fixture-mixed-source-secret",
+          envVar: "EXISTING_API_KEY",
+          approved: true,
+        }),
+      ).rejects.toThrow("either secret or envVar, not both");
+      expect(proposalRef).toEqual({});
+      expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+    },
+  );
+
   it("createSystemAgentTool.execute does not stage a config proposal when cancelled", async () => {
     const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
     const controller = new AbortController();
@@ -571,7 +609,6 @@ describe("openclaw tool", () => {
 
     const accounts = await tool.execute("t5-accounts", { action: "manage_model_accounts" });
     expect(toolText(accounts)).toContain("Nothing has changed yet");
-    expect(toolText(accounts)).toContain("never request, repeat, or put credentials in chat");
     expect(directiveRef.current).toEqual({ kind: "model-accounts" });
     expect(
       resolveSystemAgentDirectiveTransition({

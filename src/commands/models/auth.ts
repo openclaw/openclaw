@@ -171,10 +171,6 @@ async function readPastedSecret(params: {
   return normalized;
 }
 
-function isOpenAIProvider(provider: string): boolean {
-  return normalizeManualAuthProvider(provider) === "openai";
-}
-
 type ResolvedModelsAuthContext = {
   config: OpenClawConfig;
   configSnapshot: ConfigFileSnapshot;
@@ -804,7 +800,7 @@ export async function modelsAuthPasteTokenCommand(
     if (provider === "anthropic") {
       return validateAnthropicSetupToken(trimmed.replaceAll(/\s+/g, ""));
     }
-    if (isOpenAIProvider(provider) && looksLikeOpenAIApiKey(trimmed)) {
+    if (provider === "openai" && looksLikeOpenAIApiKey(trimmed)) {
       return `That looks like an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-api-key --provider openai")} for API-key auth.`;
     }
     return undefined;
@@ -872,7 +868,7 @@ export async function modelsAuthPasteApiKeyCommand(
       if (!trimmed) {
         return "Required";
       }
-      if (isOpenAIProvider(provider)) {
+      if (provider === "openai") {
         return validateOpenAICodexApiKeyInput(trimmed);
       }
       return undefined;

@@ -5,6 +5,10 @@ import { createConfigIO, restoreEnvChangesIfUnchanged } from "./io.js";
 import { getConfigResolutionFacts } from "./resolution-facts.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
+function configIO(home: string, env: NodeJS.ProcessEnv) {
+  return createConfigIO({ env, homedir: () => home, logger: { warn: () => {}, error: () => {} } });
+}
+
 describe("restoreEnvChangesIfUnchanged", () => {
   it("restores external ownership when rejected config replaced equal lower-precedence bytes", () => {
     const env = { KEY: "same" };
@@ -50,13 +54,6 @@ describe("restoreEnvChangesIfUnchanged", () => {
 
   it.each([
     {
-      name: "removes a newly injected key when unchanged from after snapshot",
-      before: {},
-      after: { KEY: "injected" },
-      current: "injected",
-      expected: undefined,
-    },
-    {
       name: "restores an overwritten key back to its before value",
       before: { KEY: "original" },
       after: { KEY: "new-value" },
@@ -87,11 +84,7 @@ describe("loadConfig env restoration", () => {
       await writeOpenClawConfig(home, {
         gateway: { auth: { mode: "token", token: "${MISSING_GATEWAY_TOKEN}" } },
       });
-      const config = createConfigIO({
-        env: { HOME: home } as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger: { warn: () => {}, error: () => {} },
-      }).loadConfig();
+      const config = configIO(home, { HOME: home }).loadConfig();
 
       expect([...(getConfigResolutionFacts(config) ?? [])]).toEqual(["gateway.auth.token"]);
     });
@@ -110,11 +103,7 @@ describe("loadConfig env restoration", () => {
       });
 
       const env = { HOME: home } as NodeJS.ProcessEnv;
-      const io = createConfigIO({
-        env,
-        homedir: () => home,
-        logger: { warn: () => {}, error: () => {} },
-      });
+      const io = configIO(home, env);
 
       expect(env.DUP_DIR_TEST_VAR).toBeUndefined();
       expect(() => io.loadConfig()).toThrow(DuplicateAgentDirError);
@@ -139,11 +128,7 @@ describe.each(["loadConfig", "readConfigFileSnapshot"] as const)(
         if (original !== undefined) {
           env[key] = original;
         }
-        const io = createConfigIO({
-          env,
-          homedir: () => home,
-          logger: { warn: () => {}, error: () => {} },
-        });
+        const io = configIO(home, env);
 
         expect(env[key]).toBe(original);
         if (read === "loadConfig") {

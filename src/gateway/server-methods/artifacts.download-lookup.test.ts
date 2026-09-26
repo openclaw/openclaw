@@ -114,6 +114,8 @@ describe("artifact download lookup", () => {
     const download = await downloadArtifact({
       sessionKey: "agent:main:main",
       artifactId: secondArtifactId,
+      // Internal callers without a live connection retain the inline fallback.
+      transport: "http",
     });
     const downloadPayload = expectOkPayload(download.calls) as {
       artifact?: Record<string, unknown>;

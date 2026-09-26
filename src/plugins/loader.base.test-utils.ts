@@ -261,41 +261,6 @@ describe("loadOpenClawPlugins", () => {
     expect(registerFailMetrics.loadAndRegisterMs).toEqual(expect.any(Number));
   });
 
-  it("rolls back trusted policies when plugin register fails", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "trusted-policy-register-fail",
-      filename: "trusted-policy-register-fail.cjs",
-      registration: `api.registerTrustedToolPolicy({
-        id: "failed-policy",
-        description: "Must be removed after register failure",
-        evaluate: () => ({ block: true, blockReason: "stale failed policy" })
-      });
-      throw new Error("register boom");`,
-    });
-    updatePluginManifest(plugin, {
-      contracts: { trustedToolPolicies: ["failed-policy"] },
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["trusted-policy-register-fail"],
-      },
-    });
-
-    expect(registry.trustedToolPolicies).toHaveLength(0);
-    const loaded = registry.plugins.find((entry) => entry.id === "trusted-policy-register-fail");
-    expect(loaded?.status).toBe("error");
-    expect(loaded?.error).toContain("register boom");
-    expectDiagnosticContaining({
-      registry,
-      level: "error",
-      pluginId: "trusted-policy-register-fail",
-      message: "plugin failed during register: Error: register boom",
-    });
-  });
-
   it("rolls back worker providers when plugin register fails", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -1231,33 +1196,6 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
-      label: "can build a manifest-only snapshot without importing plugin modules",
-      run: () => {
-        useNoBundledPlugins();
-        const importedMarker = path.join(makePluginLoaderTempDir(), "manifest-only-imported.txt");
-        const plugin = writePlugin({
-          id: "manifest-only-plugin",
-          filename: "manifest-only-plugin.cjs",
-          body: `require("node:fs").writeFileSync(${JSON.stringify(importedMarker)}, "loaded", "utf-8");
-  module.exports = { id: "manifest-only-plugin", register() { throw new Error("manifest-only snapshot should not register"); } };`,
-        });
-
-        const registry = loadRegistryFromSinglePlugin({
-          plugin,
-          includeWorkspaceDir: false,
-          pluginConfig: {
-            allow: ["manifest-only-plugin"],
-            entries: { "manifest-only-plugin": { enabled: true } },
-          },
-          options: { activate: false, loadModules: false },
-        });
-
-        expect(fs.existsSync(importedMarker)).toBe(false);
-        const record = registry.plugins.find((entry) => entry.id === "manifest-only-plugin");
-        expect(record?.status).toBe("loaded");
-      },
-    },
-    {
       label: "includes manifest-owned surfaces in manifest-only snapshots",
       run: () => {
         useNoBundledPlugins();
@@ -1291,6 +1229,7 @@ describe("loadOpenClawPlugins", () => {
 
         const record = registry.plugins.find((entry) => entry.id === "manifest-surfaces-plugin");
         expect(fs.existsSync(importedMarker)).toBe(false);
+        expect(record?.status).toBe("loaded");
         expect(record?.channelIds).toEqual(["manifest-surfaces-channel"]);
         expect(record?.providerIds).toEqual(["manifest-surfaces-provider"]);
         expect(record?.cliBackendIds).toEqual([
@@ -1526,34 +1465,6 @@ describe("loadOpenClawPlugins", () => {
     },
   ] as const)("handles config-path and scoped plugin loads: $label", async ({ run }) => {
     await run();
-  });
-
-  it("treats an explicit empty plugin scope as scoped-empty instead of unscoped", () => {
-    useNoBundledPlugins();
-    const allowed = writePlugin({
-      id: "allowed-empty-scope",
-      filename: "allowed-empty-scope.cjs",
-      body: `module.exports = { id: "allowed-empty-scope", register() {} };`,
-    });
-    const extra = writePlugin({
-      id: "extra-empty-scope",
-      filename: "extra-empty-scope.cjs",
-      body: `module.exports = { id: "extra-empty-scope", register() {} };`,
-    });
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      activate: false,
-      config: {
-        plugins: {
-          load: { paths: [allowed.file, extra.file] },
-          allow: ["allowed-empty-scope", "extra-empty-scope"],
-        },
-      },
-      onlyPluginIds: [],
-    });
-
-    expect(registry.plugins).toStrictEqual([]);
   });
 
   it("skips discovery and manifest registry loading entirely when onlyPluginIds is an explicit empty array", async () => {

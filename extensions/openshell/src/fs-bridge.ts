@@ -1,4 +1,3 @@
-// Openshell plugin module implements fs bridge behavior.
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import {
@@ -25,6 +24,7 @@ import {
 } from "./workspace-roots.js";
 
 type ResolvedMountPath = SandboxResolvedPath & {
+  hostPath: string;
   mountHostRoot: string;
   writable: boolean;
 };
@@ -60,7 +60,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
   async readFile(params: Parameters<SandboxFsBridge["readFile"]>[0]): Promise<Buffer> {
     const target = this.resolveTarget(params);
-    const hostPath = this.requireHostPath(target);
+    const hostPath = target.hostPath;
     try {
       const root = await fsRoot(target.mountHostRoot);
       return (
@@ -81,7 +81,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
     params: Parameters<NonNullable<SandboxFsBridge["readDirectory"]>>[0],
   ): Promise<DirectoryEntry[]> {
     const target = this.resolveTarget(params);
-    const hostPath = this.requireHostPath(target);
+    const hostPath = target.hostPath;
     const root = await fsRoot(target.mountHostRoot);
     const entries: DirectoryEntry[] = [];
     for await (const { name, isDirectory } of root.entries(relativeToRoot(target, hostPath), {
@@ -94,7 +94,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
   async writeFile(params: Parameters<SandboxFsBridge["writeFile"]>[0]): Promise<void> {
     const target = this.resolveTarget(params);
-    const hostPath = this.requireHostPath(target);
+    const hostPath = target.hostPath;
     this.ensureWritable(target, "write files");
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
@@ -111,7 +111,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
     params: Parameters<NonNullable<SandboxFsBridge["createFileExclusive"]>>[0],
   ): Promise<"created" | "exists"> {
     const target = this.resolveTarget(params);
-    const hostPath = this.requireHostPath(target);
+    const hostPath = target.hostPath;
     this.ensureWritable(target, "create files");
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
@@ -136,7 +136,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
     const target = this.resolveTarget(params);
-    const hostPath = this.requireHostPath(target);
+    const hostPath = target.hostPath;
     this.ensureWritable(target, "create directories");
     await assertLocalPathSafety({
       target,
@@ -148,7 +148,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
   async remove(params: Parameters<SandboxFsBridge["remove"]>[0]): Promise<void> {
     const target = this.resolveTarget(params);
-    const hostPath = this.requireHostPath(target);
+    const hostPath = target.hostPath;
     this.ensureWritable(target, "remove files", params.recursive);
     await assertLocalPathSafety({
       target,
@@ -169,8 +169,8 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
   async rename(params: Parameters<SandboxFsBridge["rename"]>[0]): Promise<void> {
     const { from, to } = this.resolveRenameTargets(params);
-    const fromHostPath = this.requireHostPath(from);
-    const toHostPath = this.requireHostPath(to);
+    const fromHostPath = from.hostPath;
+    const toHostPath = to.hostPath;
     await assertLocalPathSafety({
       target: from,
       allowFinalSymlinkForUnlink: true,
@@ -194,7 +194,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
   async stat(params: Parameters<SandboxFsBridge["stat"]>[0]): Promise<SandboxFsStat | null> {
     const target = this.resolveTarget(params);
-    const hostPath = this.requireHostPath(target);
+    const hostPath = target.hostPath;
     const stats = await fsPromises.lstat(hostPath).catch(() => null);
     if (!stats) {
       return null;
@@ -237,15 +237,6 @@ class OpenShellFsBridge implements SandboxFsBridge {
       ),
       ...(this.sandbox.readOnlyResourceMounts ?? []),
     ];
-  }
-
-  private requireHostPath(target: ResolvedMountPath): string {
-    if (!target.hostPath) {
-      throw new Error(
-        `OpenShell mirror bridge requires a local host path: ${target.containerPath}`,
-      );
-    }
-    return target.hostPath;
   }
 
   private containerMounts(readOnlyMounts = this.readOnlyMounts()) {
@@ -555,9 +546,6 @@ async function assertLocalPathSafety(params: {
   allowFinalSymlinkForUnlink: boolean;
 }): Promise<void> {
   const { hostPath, mountHostRoot } = params.target;
-  if (!hostPath) {
-    throw new Error(`Missing local host path for ${params.target.containerPath}`);
-  }
   const unlinkSymlink =
     params.allowFinalSymlinkForUnlink &&
     hostPath !== mountHostRoot &&

@@ -195,6 +195,7 @@ describe("session branch diff stats", () => {
           branch: layout === "detached" ? null : "feature",
           defaultBranch: "main",
         });
+        expect(reads.mock.calls).toHaveLength(1);
         expect(reads.mock.calls.filter(([, args]) => args[0] === "rev-parse")).toHaveLength(0);
         await runGitReadOperation(
           {
@@ -205,11 +206,59 @@ describe("session branch diff stats", () => {
         );
         expect(reads.mock.calls.filter(([, args]) => args[0] === "rev-parse")).toHaveLength(0);
         expect(reads.mock.calls.filter(([, args]) => args[0] === "for-each-ref")).toHaveLength(0);
+        await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/release");
+        reads.mockClear();
+        expect(
+          await runGitReadOperation(
+            { type: "checkout.context", input: { root: cwd } },
+            { refresh: true },
+          ),
+        ).toMatchObject({ defaultBranch: "release" });
+        expect(reads.mock.calls).toHaveLength(1);
+        await git("symbolic-ref", "--delete", "refs/remotes/origin/HEAD");
+        reads.mockClear();
+        expect(
+          await runGitReadOperation(
+            { type: "checkout.context", input: { root: cwd } },
+            { refresh: true },
+          ),
+        ).not.toHaveProperty("defaultBranch");
+        expect(reads.mock.calls).toHaveLength(1);
       } finally {
         reads.mockRestore();
       }
     },
   );
+
+  it.each([
+    "symbolic chain",
+    "ambiguous name",
+    ...(process.platform === "win32" ? [] : ["symlink"]),
+  ])("preserves Git's default branch discovery with a %s", async (layout) => {
+    await initializeRepo();
+    await git("remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
+    await trackRemote("main");
+    await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    if (layout === "symbolic chain") {
+      await git("symbolic-ref", "refs/remotes/origin/main", "refs/heads/main");
+    } else if (layout === "ambiguous name") {
+      await git("tag", "origin/main");
+    } else {
+      await git(
+        "-c",
+        "core.preferSymlinkRefs=true",
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/main",
+      );
+    }
+    const defaultRef = (
+      await git("symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    ).stdout.trim();
+    expect(
+      await runGitReadOperation({ type: "checkout.context", input: { root } }, { refresh: true }),
+    ).toMatchObject({ defaultBranch: defaultRef.replace(/^origin\//, "") });
+  });
 
   it.each(["loose", "packed", "symbolic", ...(process.platform === "win32" ? [] : ["symlink"])])(
     "refreshes branch stats after %s remote refs advance and disappear",

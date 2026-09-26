@@ -41,7 +41,7 @@ describe("forced worker environment destruction", () => {
       ownerEpoch: harness.ready.ownerEpoch,
       sessionId: REQUEST.sessionId,
     });
-    const active = harness.placements.seedActive(harness.attached.ownerEpoch);
+    const active = await harness.placements.seedActive(harness.attached.ownerEpoch);
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
@@ -110,7 +110,7 @@ describe("forced worker environment destruction", () => {
       destroyFailureState: state,
       workspacePath: root,
     });
-    harness.placements.seedActive(harness.attached.ownerEpoch);
+    await harness.placements.seedActive(harness.attached.ownerEpoch);
     const onCleanupError = vi.fn();
 
     await expect(
@@ -132,7 +132,7 @@ describe("forced worker environment destruction", () => {
       destroyFailureState: "destroying",
       failAt: "workspace",
     });
-    const active = harness.placements.seedActive(harness.attached.ownerEpoch);
+    const active = await harness.placements.seedActive(harness.attached.ownerEpoch);
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }

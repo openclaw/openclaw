@@ -105,7 +105,6 @@ extension GatewayConnectOptions {
     }
 
     /// Additive connect-frame fields, sent only when this node declares them.
-    /// Lives here so `GatewayChannel.sendConnect` stays within its body budget.
     func applyOptionalConnectParams(to params: inout [String: OpenClawProtocol.AnyCodable]) {
         if !self.commands.isEmpty {
             params["commands"] = OpenClawProtocol.AnyCodable(self.commands)

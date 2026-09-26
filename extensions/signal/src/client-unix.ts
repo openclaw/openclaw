@@ -4,18 +4,13 @@ import net from "node:net";
 import { fileURLToPath } from "node:url";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { SignalRpcOptions } from "./client-types.js";
 import { assertSignalSocketEndpoint } from "./socket-path.js";
 
 const MAX_FRAME_BYTES = 1_048_576;
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 type RpcMessage = Record<string, unknown>;
-type UnixOptions = {
-  baseUrl: string;
-  timeoutMs?: number;
-  maxResponseBytes?: number;
-  assertDirectAdapterHandoff?: () => void;
-};
 
 function socketPath(baseUrl: string): string {
   const url = new URL(baseUrl.trim());
@@ -36,7 +31,7 @@ function abortError(): Error {
   return Object.assign(new Error("Signal UNIX stream aborted"), { name: "AbortError" });
 }
 
-async function openSocket(options: UnixOptions, abortSignal?: AbortSignal) {
+async function openSocket(options: SignalRpcOptions, abortSignal?: AbortSignal) {
   if (abortSignal?.aborted) {
     throw abortError();
   }
@@ -149,7 +144,7 @@ function result(message: RpcMessage): unknown {
 export async function signalUnixRpcRequest<T>(
   method: string,
   params: Record<string, unknown> | undefined,
-  options: UnixOptions,
+  options: SignalRpcOptions,
 ): Promise<T> {
   const connection = await openSocket(options);
   const id = randomUUID();

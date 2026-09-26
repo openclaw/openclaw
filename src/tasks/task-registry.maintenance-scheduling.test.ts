@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as gatewayWork from "../process/gateway-work-admission.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createManagedTaskFlow, getTaskFlowById } from "./task-flow-registry.js";
 import * as flowMaintenance from "./task-flow-registry.maintenance.js";
 import {
@@ -41,7 +42,7 @@ describe("task-registry maintenance scheduling", () => {
       }
       let stopped: Promise<void> | undefined;
       try {
-        startTaskRegistryMaintenance();
+        startTaskRegistryMaintenance(createTestGatewayScheduler("fake-timers"));
         await vi.advanceTimersByTimeAsync(5_000);
         expect(loadCloseAcpSession).not.toHaveBeenCalled();
         let settled = false;
@@ -111,7 +112,7 @@ describe("task-registry maintenance scheduling", () => {
         }
         let completedStops = 0;
         try {
-          startTaskRegistryMaintenance();
+          startTaskRegistryMaintenance(createTestGatewayScheduler("fake-timers"));
           await vi.advanceTimersByTimeAsync(5_000);
           await vi.advanceTimersByTimeAsync(60_000);
           expect(loadCloseAcpSession).toHaveBeenCalledOnce();
@@ -168,13 +169,13 @@ describe("task-registry maintenance scheduling", () => {
         loadCloseAcpSession,
       });
       try {
-        startTaskRegistryMaintenance();
-        startTaskRegistryMaintenance();
+        startTaskRegistryMaintenance(createTestGatewayScheduler("fake-timers"));
+        startTaskRegistryMaintenance(createTestGatewayScheduler("fake-timers"));
         await stopTaskRegistryMaintenance();
         await vi.advanceTimersByTimeAsync(60_000);
         expect(loadCloseAcpSession).not.toHaveBeenCalled();
 
-        startTaskRegistryMaintenance();
+        startTaskRegistryMaintenance(createTestGatewayScheduler("fake-timers"));
         await vi.advanceTimersByTimeAsync(5_000);
         await stopTaskRegistryMaintenance();
         expect(loadCloseAcpSession).toHaveBeenCalledOnce();
@@ -207,7 +208,7 @@ describe("task-registry maintenance scheduling", () => {
       });
 
       try {
-        startTaskRegistryMaintenance();
+        startTaskRegistryMaintenance(createTestGatewayScheduler("fake-timers"));
         await vi.advanceTimersByTimeAsync(5_000);
         await flushAsyncWork();
         expect(unhandled).toStrictEqual([]);

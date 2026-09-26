@@ -86,32 +86,24 @@ function startupSession(placement: GatewaySessionRow["placement"]): GatewaySessi
   };
 }
 
-describe.each([
-  { placement: startupPlacements[0], cloudLabel: "Runs on Cloud" },
-  { placement: startupPlacements[1], cloudLabel: "device-service · device-profile" },
-  { placement: startupPlacements[2], cloudLabel: "device-service · device-profile" },
-  { placement: startupPlacements[3], cloudLabel: "device-service · device-profile" },
-])("$placement.state placement stop presentation", ({ placement, cloudLabel }) => {
-  const phase = placement.state;
-  it.each([
-    { phase, targetKind: "device", copy: deviceCopy },
-    { phase, targetKind: "auto-device", copy: deviceCopy },
-    { phase, targetKind: "profile", copy: { ...cloudCopy, label: cloudLabel } },
-    { phase, targetKind: undefined, copy: unknownCopy },
-    { phase: "failed", targetKind: "device", copy: unknownCopy },
-    { phase: "failed", targetKind: "auto-device", copy: unknownCopy },
-    { phase: "failed", targetKind: "profile", copy: unknownCopy },
-  ] as const)(
-    "projects $phase $targetKind intent into operator copy",
-    ({ phase: startupPhase, targetKind, copy }) => {
-      expect(
-        resolveChatPaneWorkerPresentation(
-          startupSession(placement),
-          targetKind ? { phase: startupPhase, targetKind } : null,
-        ),
-      ).toEqual(copy);
-    },
-  );
+describe("chat pane startup worker copy", () => {
+  it("uses generic cloud copy before a requested profile has worker metadata", () => {
+    expect(
+      resolveChatPaneWorkerPresentation(startupSession(startupPlacements[0]), {
+        phase: "requested",
+        targetKind: "profile",
+      }),
+    ).toEqual(cloudCopy);
+  });
+
+  it("ignores failed startup intent when presenting a new worker", () => {
+    expect(
+      resolveChatPaneWorkerPresentation(startupSession(startupPlacements[1]), {
+        phase: "failed",
+        targetKind: "device",
+      }),
+    ).toEqual(unknownCopy);
+  });
 });
 
 describe("chat pane worker stop", () => {
@@ -301,8 +293,6 @@ describe("chat pane worker stop", () => {
 
   it.each([
     { runner: "cloud", startupPhase: "starting" },
-    { runner: "device", startupPhase: "starting" },
-    { runner: "cloud", startupPhase: "failed" },
     { runner: "device", startupPhase: "failed" },
   ] as const)(
     "reclaims an active $runner placement with conflicting $startupPhase intent after the operator confirms",

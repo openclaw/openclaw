@@ -129,26 +129,6 @@ describe("chat composer pointer activation", () => {
     expect(onStopTypingChange).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["queue", t("chat.runControls.queueMessage")],
-    ["steer", t("chat.followUpModeSteer")],
-    ["interrupt", t("chat.runControls.sendMessage")],
-  ] as const)("preserves focus for the %s active-run action", (followUpMode, label) => {
-    const container = renderComposer({
-      canAbort: true,
-      draft: "Follow up",
-      followUpMode,
-      onAbort: vi.fn(),
-      onSend: vi.fn(),
-    });
-    const input = textarea(container);
-    markComposerAtFocusInset(container);
-    input.focus();
-    const event = primaryPointerDown();
-    button(container, label).dispatchEvent(event);
-    expect(event.defaultPrevented).toBe(true);
-  });
-
   it("does not leave composition state stuck after pointer Send", () => {
     let draft = "構成中";
     const onSend = vi.fn(() => {

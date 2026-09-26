@@ -37,7 +37,7 @@ type TaskFlowSyncRetrySelection =
   | {
       kind: "live";
       owner: TaskFlowSyncLiveOwner;
-      afterSync?: (context: OpenClawStateWorkerContext) => Promise<void>;
+      afterSync?: (context: OpenClawStateWorkerContext) => Promise<boolean>;
     };
 type TaskFlowSyncRetryTimer = {
   timer: ReturnType<typeof setTimeout>;
@@ -180,8 +180,11 @@ function scheduleTaskFlowSyncRetry(
             scheduleTaskFlowSyncRetry(current, store, id, operation, retrySelection, attempt + 1);
           } else {
             retrySelection.owner.assertCurrent(current, store);
-            await retrySelection.afterSync?.(current);
+            const settled = await retrySelection.afterSync?.(current);
             retrySelection.owner.assertCurrent(current, store);
+            if (settled === false) {
+              scheduleTaskFlowSyncRetry(current, store, id, operation, retrySelection, attempt + 1);
+            }
           }
         } catch (error) {
           if (isSqliteWorkerError(error, "overloaded")) {
@@ -351,7 +354,7 @@ export function retainCommittedTaskFlowEffects(
   task: TaskRecord,
   operation: string,
   owner: TaskFlowSyncLiveOwner,
-  afterSync?: (context: OpenClawStateWorkerContext) => Promise<void>,
+  afterSync?: (context: OpenClawStateWorkerContext) => Promise<boolean>,
 ): void {
   if (!task.parentFlowId?.trim()) {
     return;

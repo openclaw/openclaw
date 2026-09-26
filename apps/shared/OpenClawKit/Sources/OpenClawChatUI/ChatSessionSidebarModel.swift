@@ -210,8 +210,8 @@ public enum ChatSessionSidebarModel {
 
     static func tree(from sessions: [OpenClawChatSessionEntry]) -> [Node] {
         let hierarchyPresent = sessions.contains { session in
-            self.normalizedKey(session.spawnedBy) != nil ||
-                self.normalizedKey(session.parentSessionKey) != nil ||
+            self.normalized(session.spawnedBy) != nil ||
+                self.normalized(session.parentSessionKey) != nil ||
                 session.childSessions != nil
         }
         guard hierarchyPresent else {
@@ -298,25 +298,11 @@ public enum ChatSessionSidebarModel {
                 hasUnread: session.unread == true || children.contains { $0.badges.hasUnread }))
     }
 
-    private static func normalizedKey(_ key: String?) -> String? {
-        let trimmed = key?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed?.isEmpty == false ? trimmed : nil
-    }
-
     public static func displayName(for session: OpenClawChatSessionEntry) -> String {
-        let label = session.label?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let generated = session.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let autoLabel = session.autoLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let label, !label.isEmpty {
-            return label
-        }
-        if let generated, !generated.isEmpty {
-            return generated
-        }
-        if let autoLabel, !autoLabel.isEmpty {
-            return autoLabel
-        }
-        return self.displayName(forKey: session.key)
+        self.normalized(session.label) ??
+            self.normalized(session.displayName) ??
+            self.normalized(session.autoLabel) ??
+            self.displayName(forKey: session.key)
     }
 
     /// Compact "repo \u{2387} branch" line for worktree/work sessions; mirrors the

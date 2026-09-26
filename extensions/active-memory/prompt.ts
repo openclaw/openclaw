@@ -5,8 +5,9 @@ import {
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { extractTextContentParts } from "./query.js";
 import {
-  ACTIVE_MEMORY_PLUGIN_TAG,
+  ACTIVE_MEMORY_CLOSE_TAG,
   ACTIVE_MEMORY_CONTEXT_HEADER,
+  ACTIVE_MEMORY_OPEN_TAG,
   NO_RECALL_VALUES,
   STRUCTURED_MEMORY_EMPTY_STATUSES,
   STRUCTURED_MEMORY_FAILURE_STATUSES,
@@ -157,10 +158,6 @@ function escapeXml(str: string): string {
     .replace(/'/g, "&apos;");
 }
 
-function normalizeNoRecallValue(value: string): boolean {
-  return NO_RECALL_VALUES.has(value.trim().toLowerCase());
-}
-
 function readExplicitMemoryEvidence(source: Record<string, unknown>): boolean | undefined {
   const status = normalizeOptionalString(source.status)
     ?.toLowerCase()
@@ -255,10 +252,6 @@ function readStructuredMemoryEvidenceFromContent(content: unknown): boolean | un
   return readStructuredContentState(content, readStructuredMemoryEvidence, false);
 }
 
-function isTimeoutBoilerplateSummary(value: string): boolean {
-  return TIMEOUT_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(value));
-}
-
 const ASSISTANT_CHITCHAT_PATTERNS = [
   /^(?:hello|hi|hey|greetings)\b(?=.{0,120}(?:\b(?:help|assist|message|question|need)\b|\b(?:how|what)\s+(?:can|may|do)\b|cut off|come through))/i,
   /^(?:hello|hi|hey|greetings)[!.,?]?\s*$/i,
@@ -271,15 +264,10 @@ const ASSISTANT_CHITCHAT_PATTERNS = [
 ];
 
 function normalizeActiveSummary(rawReply: string): string | null {
-  const trimmed = rawReply.trim();
-  if (normalizeNoRecallValue(trimmed)) {
-    return null;
-  }
-  const singleLine = trimmed.replace(/\s+/g, " ").trim();
+  const singleLine = rawReply.replace(/\s+/g, " ").trim();
   if (
-    !singleLine ||
-    normalizeNoRecallValue(singleLine) ||
-    isTimeoutBoilerplateSummary(singleLine) ||
+    NO_RECALL_VALUES.has(singleLine.toLowerCase()) ||
+    TIMEOUT_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(singleLine)) ||
     ASSISTANT_CHITCHAT_PATTERNS.some((pattern) => pattern.test(singleLine))
   ) {
     return null;
@@ -313,17 +301,13 @@ function truncateSummary(summary: string, maxSummaryChars: number): string {
   return `${bounded}${ellipsis}`;
 }
 
-function buildMetadata(summary: string): string {
-  return [
-    `<${ACTIVE_MEMORY_PLUGIN_TAG}>`,
-    escapeXml(summary),
-    `</${ACTIVE_MEMORY_PLUGIN_TAG}>`,
-  ].join("\n");
-}
-
 function buildPromptPrefix(summary: string): string {
-  const metadata = buildMetadata(summary);
-  return [ACTIVE_MEMORY_CONTEXT_HEADER, metadata].join("\n");
+  return [
+    ACTIVE_MEMORY_CONTEXT_HEADER,
+    ACTIVE_MEMORY_OPEN_TAG,
+    escapeXml(summary),
+    ACTIVE_MEMORY_CLOSE_TAG,
+  ].join("\n");
 }
 
 function buildRecallOutcomePrefix(outcome: ActiveMemoryRecallOutcome): string {
@@ -331,7 +315,6 @@ function buildRecallOutcomePrefix(outcome: ActiveMemoryRecallOutcome): string {
 }
 
 export {
-  buildMetadata,
   buildPromptPrefix,
   buildRecallOutcomePrefix,
   buildRecallPrompt,

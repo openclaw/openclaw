@@ -2,14 +2,12 @@ import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtim
 
 installDiscordIngressTestRuntime();
 // Discord tests cover durable retry recovery through full handler replacement.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { APIMessage } from "discord-api-types/v10";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
-  closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
+  observeChannelIngressQueueWrite,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import {
   type ChannelIngressQueue,
@@ -18,6 +16,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveIngressRetryDelayMs } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDiscordIngressMonitor, type DiscordIngressLifecycle } from "./ingress.js";
 import { createDiscordMessageHandler } from "./message-handler.js";
@@ -65,19 +64,18 @@ function rawMessage(id: string, channelId = "lane-a", timestamp = 0): APIMessage
 async function withQueue(
   run: (queue: DiscordQueue, stateDir: string) => Promise<void>,
 ): Promise<void> {
-  const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-recovery-"));
-  const stateDir = await fs.realpath(created);
-  const queue = createChannelIngressQueueForTests<DiscordIngressPayload>({
-    channelId: "discord",
-    accountId: "default",
-    stateDir,
-  });
-  try {
-    await run(queue, stateDir);
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
+  await withOpenClawTestState(
+    { layout: "state-only", prefix: "openclaw-discord-recovery-", applyEnv: false },
+    ({ stateDir }) =>
+      run(
+        createChannelIngressQueueForTests<DiscordIngressPayload>({
+          channelId: "discord",
+          accountId: "default",
+          stateDir,
+        }),
+        stateDir,
+      ),
+  );
 }
 
 async function seedPendingFailure(params: {
@@ -157,6 +155,7 @@ describe("Discord durable ingress replacement recovery", () => {
         { laneKey: "channel:lane-a", receivedAt: 2 },
       );
       const dispatched: string[] = [];
+      const followerCompleted = observeChannelIngressQueueWrite(queue, "complete", "follower");
       const handler = createHandler({
         queue,
         preflight: vi.fn(async ({ data }) => {
@@ -169,14 +168,16 @@ describe("Discord durable ingress replacement recovery", () => {
         }),
       });
       try {
-        await vi.waitFor(async () => {
-          await expect(queue.enqueue("poison", {} as DiscordIngressPayload)).resolves.toMatchObject(
-            { kind: "failed", record: { reason: "retry-limit-exceeded" } },
-          );
-          await expect(
-            queue.enqueue("follower", {} as DiscordIngressPayload),
-          ).resolves.toMatchObject({ kind: "completed" });
+        await expect(followerCompleted).resolves.toBe(true);
+        await expect(queue.enqueue("poison", {} as DiscordIngressPayload)).resolves.toMatchObject({
+          kind: "failed",
+          record: { reason: "retry-limit-exceeded" },
         });
+        await expect(queue.enqueue("follower", {} as DiscordIngressPayload)).resolves.toMatchObject(
+          {
+            kind: "completed",
+          },
+        );
         expect(dispatched).toEqual(["poison", "follower"]);
         expect(await queue.listPending({ limit: "all" })).toEqual([]);
         expect(await queue.listClaims()).toEqual([]);
@@ -248,6 +249,7 @@ describe("Discord durable ingress replacement recovery", () => {
       expect(await retryFacts(queue, "poison")).toEqual(expectedFacts);
 
       const finalDispatches: string[] = [];
+      const followerCompleted = observeChannelIngressQueueWrite(queue, "complete", "follower");
       const replacement = createHandler({
         queue,
         preflight: vi.fn(async ({ data }) => {
@@ -260,14 +262,16 @@ describe("Discord durable ingress replacement recovery", () => {
         }),
       });
       try {
-        await vi.waitFor(async () => {
-          await expect(queue.enqueue("poison", {} as DiscordIngressPayload)).resolves.toMatchObject(
-            { kind: "failed", record: { reason: "retry-limit-exceeded" } },
-          );
-          await expect(
-            queue.enqueue("follower", {} as DiscordIngressPayload),
-          ).resolves.toMatchObject({ kind: "completed" });
+        await expect(followerCompleted).resolves.toBe(true);
+        await expect(queue.enqueue("poison", {} as DiscordIngressPayload)).resolves.toMatchObject({
+          kind: "failed",
+          record: { reason: "retry-limit-exceeded" },
         });
+        await expect(queue.enqueue("follower", {} as DiscordIngressPayload)).resolves.toMatchObject(
+          {
+            kind: "completed",
+          },
+        );
         expect(finalDispatches).toEqual(["poison", "follower"]);
       } finally {
         await replacement.deactivate();
@@ -317,6 +321,32 @@ describe("Discord durable ingress settlement", () => {
     try {
       await withQueue(async (queue) => {
         const attempted: string[] = [];
+        const dispositions = Array.from({ length: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS }, () =>
+          createDeferred<boolean>(),
+        );
+        const followerCompleted = observeChannelIngressQueueWrite(queue, "complete", "follower");
+        void followerCompleted.catch(() => {});
+        for (const disposition of dispositions) {
+          void disposition.promise.catch(() => {});
+        }
+        let dispositionCount = 0;
+        const observePoisonDisposition = (
+          ref: Parameters<DiscordQueue["release"]>[0],
+          promise: Promise<boolean>,
+        ) => {
+          if ((typeof ref === "string" ? ref : ref.id) === "poison") {
+            const disposition = dispositions[dispositionCount++];
+            if (disposition) {
+              void promise.then(disposition.resolve, disposition.reject);
+            }
+          }
+          return promise;
+        };
+        const observedQueue: DiscordQueue = {
+          ...queue,
+          release: (ref, options) => observePoisonDisposition(ref, queue.release(ref, options)),
+          fail: (ref, options) => observePoisonDisposition(ref, queue.fail(ref, options)),
+        };
         const preflight = vi.fn(async (params: { data: { message?: { id?: string } } }) => {
           const id = params.data.message?.id ?? "unknown";
           attempted.push(id);
@@ -332,7 +362,7 @@ describe("Discord durable ingress settlement", () => {
           testing: {
             preflightDiscordMessage: preflight as never,
             createIngressMonitor: (monitorParams) =>
-              createDiscordIngressMonitor({ ...monitorParams, queue }),
+              createDiscordIngressMonitor({ ...monitorParams, queue: observedQueue }),
           },
         });
         try {
@@ -345,10 +375,19 @@ describe("Discord durable ingress settlement", () => {
           await handler(rawMessage("independent", "lane-b", Date.now()) as never, {} as never);
 
           for (let attempt = 0; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
-            await vi.advanceTimersByTimeAsync(3 * 60_000);
+            await expect(dispositions[attempt]!.promise).resolves.toBe(true);
+            if (attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1) {
+              const pending = (await queue.listPending()).find((event) => event.id === "poison");
+              expect(pending).toMatchObject({ attempts: attempt + 1 });
+              const retryDelay = resolveIngressRetryDelayMs(pending!, undefined, Date.now());
+              expect(retryDelay).toBeGreaterThan(0);
+              vi.setSystemTime(Date.now() + retryDelay);
+              await vi.advanceTimersByTimeAsync(1_000);
+            }
           }
 
-          await vi.waitFor(() => expect(attempted).toContain("follower"));
+          await expect(followerCompleted).resolves.toBe(true);
+          expect(attempted).toContain("follower");
           expect(attempted.indexOf("independent")).toBeGreaterThanOrEqual(0);
           expect(attempted.indexOf("independent")).toBeLessThan(attempted.indexOf("follower"));
           expect(attempted.filter((id) => id === "poison")).toHaveLength(
@@ -716,9 +755,8 @@ describe("Discord durable ingress settlement", () => {
         { laneKey: "channel:lane-a", receivedAt: 10 },
       );
       const failedClaim = await queue.claim("cancelled", { ownerId: "failed-owner" });
-      expect(failedClaim).not.toBeNull();
       if (!failedClaim) {
-        return;
+        throw new Error("Expected the cancellation fixture claim");
       }
       await queue.release(failedClaim, {
         lastError: "previous genuine failure",
@@ -785,9 +823,8 @@ describe("Discord durable ingress settlement", () => {
           { laneKey: "channel:lane-a", receivedAt: 10 },
         );
         const failedClaim = await queue.claim(id, { ownerId: "failed-owner" });
-        expect(failedClaim).not.toBeNull();
         if (!failedClaim) {
-          return;
+          throw new Error("Expected the started-job fixture claim");
         }
         await queue.release(failedClaim, {
           lastError: "previous genuine failure",
@@ -872,9 +909,8 @@ describe("Discord durable ingress settlement", () => {
         { laneKey: "channel:lane-a", receivedAt: 10 },
       );
       const failedClaim = await queue.claim("queued-cancelled", { ownerId: "failed-owner" });
-      expect(failedClaim).not.toBeNull();
       if (!failedClaim) {
-        return;
+        throw new Error("Expected the queued-job fixture claim");
       }
       await queue.release(failedClaim, {
         lastError: "previous genuine failure",
