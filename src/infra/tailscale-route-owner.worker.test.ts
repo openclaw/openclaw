@@ -10,8 +10,8 @@ import {
 } from "./tailscale-route-owner-protocol.js";
 import { runTailscaleRouteOwner } from "./tailscale-route-owner.worker.js";
 
-function spawnRouteOwnerFixture(waitForReady: boolean, signal: AbortSignal) {
-  signal.throwIfAborted();
+function spawnRouteOwnerFixture(waitForReady: boolean, abortSignal: AbortSignal) {
+  abortSignal.throwIfAborted();
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.tailscaleRouteOwner);
   const workerPath = fileURLToPath(workerUrl);
   const fixturePath = fileURLToPath(
@@ -36,7 +36,7 @@ function spawnRouteOwnerFixture(waitForReady: boolean, signal: AbortSignal) {
           worker.off("message", onMessage);
           worker.off("error", onError);
           worker.off("exit", onExit);
-          signal.removeEventListener("abort", onAbort);
+          abortSignal.removeEventListener("abort", onAbort);
         };
         const onMessage = (message: TailscaleRouteOwnerMessage) => {
           if (message.type === "ready") {
@@ -51,7 +51,7 @@ function spawnRouteOwnerFixture(waitForReady: boolean, signal: AbortSignal) {
           reject(error);
         };
         const onAbort = () => {
-          onError(new Error("route owner readiness canceled", { cause: signal.reason }));
+          onError(new Error("route owner readiness canceled", { cause: abortSignal.reason }));
         };
         const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
           onError(
@@ -63,7 +63,7 @@ function spawnRouteOwnerFixture(waitForReady: boolean, signal: AbortSignal) {
         worker.on("message", onMessage);
         worker.once("error", onError);
         worker.once("exit", onExit);
-        signal.addEventListener("abort", onAbort, { once: true });
+        abortSignal.addEventListener("abort", onAbort, { once: true });
       })
     : undefined;
   return { messages, ready, worker };
@@ -109,8 +109,8 @@ describe("Tailscale route owner", () => {
 
   it.runIf(process.platform !== "win32").for([false, true])(
     "terminates the claim when the Gateway IPC owner disappears (ready=%s)",
-    async (waitForReady, { signal }) => {
-      const { ready, worker } = spawnRouteOwnerFixture(waitForReady, signal);
+    async (waitForReady, { signal: abortSignal }) => {
+      const { ready, worker } = spawnRouteOwnerFixture(waitForReady, abortSignal);
       try {
         if (waitForReady) {
           await ready;
@@ -133,8 +133,8 @@ describe("Tailscale route owner", () => {
 
   it.runIf(process.platform !== "win32")(
     "terminates the claim before exiting on an interactive interrupt",
-    async ({ signal }) => {
-      const { messages, ready, worker } = spawnRouteOwnerFixture(true, signal);
+    async ({ signal: abortSignal }) => {
+      const { messages, ready, worker } = spawnRouteOwnerFixture(true, abortSignal);
       let routePid: number | undefined;
       try {
         await ready;
