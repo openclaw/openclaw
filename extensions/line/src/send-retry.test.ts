@@ -144,7 +144,7 @@ describe("LINE push retries", () => {
     };
 
     await expect(
-      sendModule.pushFlexMessage(LINE_TARGET, "card", contents, {
+      sendModule.pushMessagesLine(LINE_TARGET, [{ type: "flex", altText: "card", contents }], {
         cfg: LINE_TEST_CFG,
         authorize: () => active,
       }),

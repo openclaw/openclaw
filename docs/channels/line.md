@@ -136,6 +136,34 @@ Dead-lettered events stay inspectable and, depending on the failure reason,
 recoverable. See [Inbound dead letters](/cli/channels#inbound-dead-letters) and
 [Troubleshooting](#troubleshooting) below.
 
+## Outbound durability
+
+Queued LINE sends that the delivery queue gives an id — `openclaw message send`, the
+`message` tool, cron and task notifications, and agent replies sent after the reply
+token is spent — record every push they will make, with its `X-Line-Retry-Key`, before
+the first one goes out. If the Gateway stops before the send settles, recovery reissues
+the recorded requests under the same keys: a push LINE already accepted answers 409
+with its original message id, and one that never landed is sent now, so the recipient
+sees the reply once. Replies sent with a reply token, and replies carrying media or
+LINE rich content, keep the inline path and are not recorded.
+
+When recovery cannot replay safely it stops instead of guessing and `openclaw logs`
+gives the reason. These mean the delivery is **unknown**, not failed; check the
+conversation before sending anything again by hand:
+
+- `LINE retry key expired before the queued send could be reconciled`: LINE forgets a
+  retry key after 24 hours, so a replay after a longer outage could arrive twice.
+- `LINE delivery carried no durable record, so a replay could not be deduplicated`:
+  the send was not recorded, for example a reply shape listed above.
+- `LINE ambiguous delivery is missing recorded parts: ...`: a multi-part reply was
+  interrupted between parts.
+- Other `LINE durable send plan ...` messages: the stored record could not be trusted.
+
+Records live in the LINE plugin's `outbound-send-plans` state namespace and are deleted
+when the send settles, or 25 hours after they were written. The namespace holds at most
+10,000 records and never evicts one; a send whose record cannot be stored fails as not
+sent, before anything reaches LINE, and can be retried safely.
+
 ## Configure
 
 Minimal config:
@@ -587,6 +615,8 @@ link-local, and private-network targets.
   eventually exhausts the retry limit, so an event that stalls its way to a dead
   letter lands under `retry-limit-exceeded`, not under a timeout reason. Check
   `openclaw logs --follow` around the affected event id.
+- **A reply that could not be reconciled after a restart:** see
+  [Outbound durability](#outbound-durability).
 
 ## Related
 

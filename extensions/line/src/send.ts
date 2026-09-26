@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { HTTPFetchError, messagingApi } from "@line/bot-sdk";
 import lineBotSdkPackage from "@line/bot-sdk/package.json" with { type: "json" };
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
@@ -20,14 +19,17 @@ import { buildLineMediaMessage } from "./outbound-media.js";
 import { recordLineSentMessages } from "./outbound-message-log.js";
 import { applyLineQuoteToken, withoutLineQuoteTokens } from "./quote-tokens.js";
 import { createLineSendReceipt } from "./send-receipt.js";
-import { findLineHttpError, runLinePushWithRetries } from "./send-retry.js";
+import {
+  findLineHttpError,
+  LineRetryKeyExpiredError,
+  resolveLinePushRetryKey,
+  runLinePushWithRetries,
+} from "./send-retry.js";
 import type { LineChannelData, LineOutboundMediaKind, LineSendResult } from "./types.js";
 
 type Message = messagingApi.Message;
 type TextMessage = messagingApi.TextMessage;
 type LocationMessage = messagingApi.LocationMessage;
-type FlexContainer = messagingApi.FlexContainer;
-type TemplateMessage = messagingApi.TemplateMessage;
 type QuickReply = messagingApi.QuickReply;
 type QuickReplyItem = messagingApi.QuickReplyItem;
 type LineLocation = NonNullable<LineChannelData["location"]>;
@@ -109,6 +111,11 @@ interface LineSendOpts {
   durationMs?: number;
   trackingId?: string;
   replyToken?: string;
+  /** A recorded push's key; its messages were normalized when recorded and leave as given. */
+  durableRetryKey?: string;
+  /** When LINE stops deduplicating the key; checked before every request, retries included. */
+  retryKeyExpiresAtMs?: number;
+  onPlatformSendDispatch?: () => Promise<void>;
   quoteToken?: string;
   /** Revalidate immediately before every provider attempt, including retries. */
   authorize?: () => boolean | Promise<boolean>;
@@ -117,7 +124,15 @@ interface LineSendOpts {
 type LineClientOpts = Pick<LineSendOpts, "cfg" | "channelAccessToken" | "accountId">;
 type LinePushOpts = Pick<
   LineSendOpts,
-  "cfg" | "channelAccessToken" | "accountId" | "verbose" | "quoteToken" | "authorize"
+  | "cfg"
+  | "channelAccessToken"
+  | "accountId"
+  | "verbose"
+  | "quoteToken"
+  | "authorize"
+  | "durableRetryKey"
+  | "onPlatformSendDispatch"
+  | "retryKeyExpiresAtMs"
 >;
 
 interface LinePushBehavior {
@@ -410,21 +425,31 @@ async function pushLineMessages(
   }
 
   const { account, token, chatId } = createLinePushContext(to, opts);
-  const normalizedMessages = applyLineQuoteToken(messages, opts.quoteToken).map(
-    normalizeLineMessage,
-  );
+  const quotedMessages = applyLineQuoteToken(messages, opts.quoteToken);
+  const wireMessages = opts.durableRetryKey
+    ? quotedMessages
+    : quotedMessages.map(normalizeLineMessage);
   // One retry key per logical push: every attempt reuses it so LINE deduplicates
   // an attempt that was accepted before its outcome reached us.
-  const retryKey = randomUUID();
+  const retryKey = opts.durableRetryKey ?? resolveLinePushRetryKey({});
 
+  await opts.onPlatformSendDispatch?.();
+
+  const { retryKeyExpiresAtMs } = opts;
+  const revalidate = () => {
+    if (retryKeyExpiresAtMs !== undefined && Date.now() >= retryKeyExpiresAtMs) {
+      throw new LineRetryKeyExpiredError();
+    }
+    return opts.authorize ? opts.authorize() : true;
+  };
   const response = await runLinePushWithRetries(async () => {
     try {
       return await sendLineProviderMessages(
         "push",
         token,
-        { to: chatId, messages: normalizedMessages },
+        { to: chatId, messages: wireMessages },
         retryKey,
-        opts.authorize,
+        revalidate,
       );
     } catch (err) {
       if (behavior.errorContext) {
@@ -597,68 +622,12 @@ export async function pushImageMessage(
   });
 }
 
-export async function pushLocationMessage(
-  to: string,
-  location: LineLocation,
-  opts: LinePushOpts,
-): Promise<LineSendResult> {
-  return pushLineMessages(to, [createLocationMessage(location)], opts, {
-    verboseMessage: (chatId) => `line: pushed location to ${chatId}`,
-  });
-}
-
-export async function pushFlexMessage(
-  to: string,
-  altText: string,
-  contents: FlexContainer,
-  opts: LinePushOpts,
-): Promise<LineSendResult> {
-  return pushLineMessages(to, [createFlexMessage(altText, contents)], opts, {
-    errorContext: "push flex message",
-    verboseMessage: (chatId) => `line: pushed flex message to ${chatId}`,
-  });
-}
-
-export async function pushTemplateMessage(
-  to: string,
-  template: TemplateMessage,
-  opts: LinePushOpts,
-): Promise<LineSendResult> {
-  return pushLineMessages(to, [template], opts, {
-    verboseMessage: (chatId) => `line: pushed template message to ${chatId}`,
-  });
-}
-
-export async function pushTextMessageWithQuickReplies(
-  to: string,
-  text: string,
-  quickReplyLabels: string[],
-  opts: LinePushOpts,
-): Promise<LineSendResult> {
-  const message = createTextMessageWithQuickReplies(text, quickReplyLabels);
-
-  return pushLineMessages(to, [message], opts, {
-    verboseMessage: (chatId) => `line: pushed message with quick replies to ${chatId}`,
-  });
-}
-
 export function createQuickReplyItems(labels: string[]): QuickReply {
   const items: QuickReplyItem[] = labels.slice(0, 13).map((label) => ({
     type: "action",
     action: messageAction(label, label),
   }));
   return { items };
-}
-
-export function createTextMessageWithQuickReplies(
-  text: string,
-  quickReplyLabels: string[],
-): TextMessage & { quickReply: QuickReply } {
-  return {
-    type: "text",
-    text,
-    quickReply: createQuickReplyItems(quickReplyLabels),
-  };
 }
 
 export async function showLoadingAnimation(

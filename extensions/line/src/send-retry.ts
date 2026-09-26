@@ -1,4 +1,5 @@
 // Line plugin module implements push retry policy behavior.
+import { createHash, randomUUID } from "node:crypto";
 import { HTTPFetchError } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
@@ -8,11 +9,54 @@ import {
 } from "openclaw/plugin-sdk/retry-runtime";
 import { readLineAccountMessageQuota } from "./probe.js";
 
+/** LINE keeps a retry key for 24 hours; past that a replay delivers a second copy. */
+export const LINE_RETRY_KEY_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** A replay past its retry key's window; never retryable. */
+export class LineRetryKeyExpiredError extends Error {
+  constructor() {
+    super("LINE retry key expired before the queued send could be reconciled");
+    this.name = "LineRetryKeyExpiredError";
+  }
+}
+
+/** Same key in every process for one queued push, so recovery can replay it; else random. */
+export function resolveLinePushRetryKey(params: {
+  deliveryQueueId?: string | null;
+  partIndex?: number;
+  pushIndex?: number;
+}): string {
+  const durableId = params.deliveryQueueId?.trim();
+  if (!durableId) {
+    return randomUUID();
+  }
+  const digest = createHash("sha256")
+    .update(`line:push-retry-key:${durableId}:${params.partIndex ?? 0}:${params.pushIndex ?? 0}`)
+    .digest("hex");
+  return [
+    digest.slice(0, 8),
+    digest.slice(8, 12),
+    digest.slice(12, 16),
+    digest.slice(16, 20),
+    digest.slice(20, 32),
+  ].join("-");
+}
+
+export function isLineRetryKeyExpiredError(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, (candidate) => [candidate.cause, candidate.error]).some(
+    (candidate) => candidate instanceof LineRetryKeyExpiredError,
+  );
+}
+
 /** The LINE HTTP response carried by an error graph, when the request reached LINE. */
 export function findLineHttpError(error: unknown): HTTPFetchError | undefined {
   return collectErrorGraphCandidates(error, (candidate) => [candidate.cause, candidate.error]).find(
     (candidate): candidate is HTTPFetchError => candidate instanceof HTTPFetchError,
   );
+}
+
+export function isLineRequestRejection(error: unknown): boolean {
+  return findLineHttpError(error)?.status === 400;
 }
 
 /**

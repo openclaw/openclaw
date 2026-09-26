@@ -11,7 +11,7 @@ import {
   LINE_TEST_CFG,
   type LineAutoReplyDeps,
 } from "./auto-reply-delivery.test-helpers.js";
-import { lineResult } from "./channel.sendPayload.test-support.js";
+import { lineResult } from "./outbound-harness.test-support.js";
 import {
   createPendingLineResponse,
   LINE_QUOTA_ACCOUNT,

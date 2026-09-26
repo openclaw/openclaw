@@ -2,8 +2,8 @@
 import type { messagingApi } from "@line/bot-sdk";
 import * as replyRuntime from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, vi, type Mock, type MockInstance } from "vitest";
-import { lineResult } from "./channel.sendPayload.test-support.js";
 import * as markdown from "./markdown-to-line.js";
+import { lineResult } from "./outbound-harness.test-support.js";
 import * as media from "./outbound-media.js";
 import * as send from "./send.js";
 import * as templates from "./template-messages.js";

@@ -12,9 +12,9 @@ describe("resolveLineDurableReplyOptions", () => {
         replyToken: "reply-token",
         replyTokenUsed: true,
       }),
-    ).toEqual({
-      to: "U123",
-    });
+      // No requiredCapabilities or reply-to: core derives both from the payload and
+      // the turn context, and naming them again would mirror that from fewer inputs.
+    ).toEqual({ to: "U123" });
   });
 
   it("keeps unused reply-token delivery on the legacy path", () => {
@@ -29,7 +29,20 @@ describe("resolveLineDurableReplyOptions", () => {
     ).toBe(false);
   });
 
-  it("keeps rich, media, and non-final replies on the legacy path", () => {
+  it("keeps a reply that answers a message on the durable path", () => {
+    // The adapter declares replyTo and quotes the answered message, so answering one
+    // must not push the reply inline, where a crash cannot be recovered.
+    expect(
+      resolveLineDurableReplyOptions({
+        payload: { text: "hello", replyToId: "630776817589944423" },
+        infoKind: "final",
+        to: "U123",
+        replyTokenUsed: true,
+      }),
+    ).toEqual({ to: "U123" });
+  });
+
+  it("keeps rich and media replies on the legacy path", () => {
     expect(
       resolveLineDurableReplyOptions({
         payload: { text: "hello", channelData: { line: { quickReplies: ["One"] } } },
@@ -46,10 +59,21 @@ describe("resolveLineDurableReplyOptions", () => {
         replyTokenUsed: true,
       }),
     ).toBe(false);
+  });
+
+  it("keeps non-final and empty replies on the legacy path", () => {
     expect(
       resolveLineDurableReplyOptions({
         payload: { text: "hello" },
         infoKind: "block",
+        to: "U123",
+        replyTokenUsed: true,
+      }),
+    ).toBe(false);
+    expect(
+      resolveLineDurableReplyOptions({
+        payload: { text: "" },
+        infoKind: "final",
         to: "U123",
         replyTokenUsed: true,
       }),
