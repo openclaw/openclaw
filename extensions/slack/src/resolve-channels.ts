@@ -32,7 +32,11 @@ function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
     return { id, name };
   }
   const prefixed = trimmed.replace(/^(slack:|channel:)/i, "");
-  if (/^[CG][A-Z0-9]+$/i.test(prefixed)) {
+  // Slack channel ids are 9+ characters. Keep every C/G-leading token of that length an id, in any
+  // case, so an existing folded id never resolves to a namesake room and inherits its policy.
+  // Shorter bare names such as "general" fall through to name lookup (#155820); use "#name" to
+  // force name lookup for longer ones.
+  if (/^[CG][A-Z0-9]{8,}$/i.test(prefixed)) {
     return { id: prefixed.toUpperCase() };
   }
   const name = prefixed.replace(/^#/, "").trim();
