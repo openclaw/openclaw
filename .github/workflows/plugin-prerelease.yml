@@ -244,6 +244,7 @@ jobs:
           const phase = process.env.PHASE ?? "all";
 
           let pluginPrereleasePlan = { staticChecks: [], dockerLanes: [] };
+          let resolveExtensionRuntime = () => ({ test_runtime_policy: "node", requires_bun: false });
           let extensionShards = [];
           let nodeShards = [];
 
@@ -258,10 +259,13 @@ jobs:
           };
 
           try {
-            const { assertPluginPrereleaseTestPlanComplete } = await import(
+            const planner = await import(
               targetPlanPath("plugin-prerelease-test-plan")
             );
-            pluginPrereleasePlan = assertPluginPrereleaseTestPlanComplete();
+            pluginPrereleasePlan = planner.assertPluginPrereleaseTestPlanComplete();
+            if (typeof planner.resolvePluginPrereleaseExtensionRuntime === "function") {
+              resolveExtensionRuntime = planner.resolvePluginPrereleaseExtensionRuntime;
+            }
           } catch (error) {
             const errorCode =
               error && typeof error === "object" && "code" in error ? error.code : "";
@@ -282,6 +286,9 @@ jobs:
 
           try {
             const planner = await import(targetPlanPath("extension-test-plan"));
+            const extensionVitestArgs = JSON.parse(
+              process.env.EXTENSION_TEST_EXCLUDE_PATTERNS_JSON || "[]",
+            ).map((file) => `--exclude=${file}`);
             const allExtensionShards = planner.createExtensionTestShards({
               shardCount: planner.DEFAULT_EXTENSION_TEST_SHARD_COUNT,
             });
@@ -322,6 +329,11 @@ jobs:
                     : "blacksmith-4vcpu-ubuntu-2404",
               shard_index: shard.index + 1,
               task: "extensions-batch",
+              ...resolveExtensionRuntime({
+                planGroups: shard.planGroups,
+                fullReleaseValidation,
+                vitestArgs: extensionVitestArgs,
+              }),
             }));
             const telegramShards = [];
             for (const group of telegramPlanGroups) {
@@ -758,6 +770,10 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
+      - name: Setup pinned Bun test runtime
+        if: matrix.requires_bun == true
+        uses: ./.github/actions/setup-test-bun
+
       - *checkout_exclusion_tooling
 
       - name: Run extension shard
@@ -768,6 +784,7 @@ jobs:
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
           OPENCLAW_EXTENSION_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_EXTENSION_TASK: ${{ matrix.task }}
+          OPENCLAW_CI_TEST_RUNTIME_POLICY: ${{ matrix.test_runtime_policy || 'node' }}
           FRV_TEST_EXCLUDE_PATHS_JSON: ${{ needs.preflight.outputs.extension_test_exclude_patterns_json }}
           FRV_TEST_EXCLUDE_SCOPE: extensions
           FRV_TEST_CONFIGS_JSON: ${{ toJson(matrix.exclusion_configs) }}
