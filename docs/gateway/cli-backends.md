@@ -320,6 +320,11 @@ OpenClaw writes base64 images to temp files. If `imageArg` is set, those paths a
 JSON examples inside double-quoted banner text are not treated as response or error records.
 For JSONL, banner scanning starts fresh on each line.
 
+Claude streaming limits discount recognized partial-message envelopes while
+counting their text, thinking, and tool-input payloads. Cumulative snapshots and
+tool results still count toward the output budget. Single-line limits and bounded
+frame counts remain active, including for empty or unrecognized events.
+
 Input modes:
 
 - `input: "arg"` (default) passes the prompt as the last CLI arg.
