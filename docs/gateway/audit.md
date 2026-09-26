@@ -407,9 +407,9 @@ only as installation-local keyed pseudonyms
   the Gateway fails closed and drops new message records instead of silently
   rotating to a new key, which would split correlation.
 
-Run and tool records retain `sessionKey` and `sessionId` for correlation;
-canonical session keys can themselves contain platform account or peer ids.
-Message records intentionally omit both.
+Run, tool, and skill-selection records retain `sessionKey` and `sessionId` for
+correlation; canonical session keys can themselves contain platform account or
+peer ids. Message records intentionally omit both.
 
 Execution identity contexts use the same installation-local key owner with a
 separate HMAC domain. Raw runtime, invoker, ingress-source, assurance, grant,
@@ -473,6 +473,22 @@ Exact terminal linkage lives in the lazy
 released `audit_events` shape. It is created only for a host-validated exact
 binding; run-only terminal writes leave it absent. Compatible older Gateways
 ignore this additive table as well.
+
+Observed runtime skill selections live in the additive
+`audit_skill_selection_events` companion table. Collection follows the master
+`logging.audit.enabled` switch: disabling the ledger stops new rows after a
+Gateway restart, while retained rows remain queryable until expiry. Each row
+contains only the skill name, observed status, timestamp, and run attribution
+(agent, optional session, and run ids); it does not retain skill contents,
+paths, prompts, arguments, results, or raw errors. The table uses the same
+30-day cutoff as the activity ledger and has its own 100,000-row cap. Expiry
+maintenance removes at most 1,024 rows per write or maintenance tick. When an
+insert exceeds the cap, the oldest rows are trimmed to 98,976 retained rows so
+later writes have bounded headroom. Compatible older Gateways ignore the
+additive table. Upgrade compatibility is verified by
+opening a database created by the published `v2026.9.4` release in the
+candidate, writing a skill-selection row, reopening and using that database
+with `v2026.9.4`, and reopening it again in the candidate.
 
 Upgrading from a Gateway with the earlier run/tool-only ledger migrates the
 schema automatically at startup (or via `openclaw doctor --fix`); existing

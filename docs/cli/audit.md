@@ -13,8 +13,9 @@ Query the Gateway's metadata-only activity ledger, discover executions that
 share a run correlation, or inspect immutable identity context for one exact
 agent execution.
 
-Run and tool activity records are on by default. Execution identity is
-separately off by default on fresh installs and upgrades. Enable it explicitly:
+Run, tool, and observed skill-selection activity records are on by default.
+Execution identity is separately off by default on fresh installs and upgrades.
+Enable it explicitly:
 
 ```bash
 openclaw config set logging.audit.executionIdentity true
@@ -33,11 +34,11 @@ Use `agent exec --state-dir <dir>` when the run state must remain available,
 and inspect it through a Gateway using that same state directory.
 
 The ledger is separate from conversation transcripts: it records identity,
-ordering, provenance, action, status, and normalized outcome codes, but never
-stores content, and message identifiers appear only as installation-local
-keyed pseudonyms. [Audit history](/gateway/audit) owns the full data model,
-privacy semantics, storage/retention bounds, and coverage limits; this page
-covers the command surface.
+ordering, provenance, action, status, tool or observed skill names, and
+normalized outcome codes, but never stores content, and message identifiers
+appear only as installation-local keyed pseudonyms. [Audit history](/gateway/audit)
+owns the full data model, privacy semantics, storage/retention bounds, and
+coverage limits; this page covers the command surface.
 
 ```bash
 openclaw audit
@@ -49,6 +50,7 @@ openclaw audit --execution 5da4c4c3-e1c9-4c95-a17d-6e5c10fd45cf --explain
 openclaw audit --execution 5da4c4c3-e1c9-4c95-a17d-6e5c10fd45cf --explain --json
 openclaw audit --run 8c69f72e-8b11-4c54-98d5-1a3dd67450c3 --explain --json
 openclaw audit --kind tool_action --limit 50 --json
+openclaw audit --kind skill_selection --session "agent:main:main" --json
 openclaw audit --kind message --direction outbound --channel telegram --json
 ```
 
@@ -58,9 +60,9 @@ openclaw audit --kind message --direction outbound --channel telegram --json
 - `--session <key>`: exact session key
 - `--run <id>`: exact run id; filters activity unless `--explain` is also set
 - `--execution <id>`: exact execution id; requires `--explain`
-- `--kind <kind>`: `agent_run`, `tool_action`, or `message`
+- `--kind <kind>`: `agent_run`, `tool_action`, `skill_selection`, or `message`
 - `--status <status>`: `started`, `succeeded`, `failed`, `cancelled`,
-  `timed_out`, `blocked`, or `unknown`
+  `timed_out`, `blocked`, `unknown`, or `observed`
 - `--direction <direction>`: message direction, `inbound` or `outbound`
 - `--channel <channel>`: exact message channel
 - `--after <timestamp>` / `--before <timestamp>`: inclusive ISO timestamp or
@@ -75,12 +77,14 @@ openclaw audit --kind message --direction outbound --channel telegram --json
   `--cursor`, and `--json`
 - `--json`: print the bounded page as JSON
 
-The CLI queries the versioned activity RPC so one command shows the complete
-configured ledger. Text output shows time, kind, direction, channel, status,
-agent, run, and action. Missing message provenance renders as `-`; OpenClaw
-does not invent agent or run ids. Tool actions also show the tool name. JSON
-output includes `nextCursor` when another page exists. Pass that value to
-`--cursor` to continue without reordering records that arrive during paging.
+The CLI queries the versioned activity RPC. An unfiltered query preserves the
+legacy run, tool, and configured message view; request observed skill records
+with `--kind skill_selection` or `--status observed`. Text output shows time,
+kind, direction, channel, status, agent, run, and action. Missing message
+provenance renders as `-`; OpenClaw does not invent agent or run ids. Tool and
+skill-selection rows also show their tool or skill name. JSON output includes
+`nextCursor` when another page exists. Pass that value to `--cursor` to
+continue without reordering records that arrive during paging.
 
 These exports remain sensitive operational metadata even though message bodies
 and raw message identity fields are absent. Agent, session, and run ids, timing,

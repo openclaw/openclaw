@@ -4979,7 +4979,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       expect(repairOpenClawStateDatabaseSchema(options)).toEqual(refusal);
       const reads = get.mock.calls.length + all.mock.calls.length + iterate.mock.calls.length;
       expect.soft(reads).toBeGreaterThan(0);
-      expect.soft(reads).toBeLessThanOrEqual(850);
+      expect.soft(reads).toBeLessThanOrEqual(860);
     } finally {
       get.mockRestore();
       all.mockRestore();

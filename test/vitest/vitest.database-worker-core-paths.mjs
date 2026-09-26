@@ -351,6 +351,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt-session-boundary.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
   "src/audit/audit-events.test.ts",
+  "src/audit/audit-events.skill-selection.test.ts",
+  "src/audit/audit-events.skill-selection-hidden.test.ts",
   "src/audit/audit-event-store.message.test.ts",
   "src/audit/audit-event-writer.test.ts",
   "src/audit/audit-event-writer.worker.test.ts",
