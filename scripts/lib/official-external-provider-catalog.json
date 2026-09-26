@@ -2479,6 +2479,17 @@
           "id": "stepfun",
           "label": "StepFun"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "stepfun-native",
+            "baseUrls": [
+              "https://api.stepfun.com/v1",
+              "https://api.stepfun.ai/v1",
+              "https://api.stepfun.com/step_plan/v1",
+              "https://api.stepfun.ai/step_plan/v1"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "stepfun",

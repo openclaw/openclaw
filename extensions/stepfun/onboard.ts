@@ -5,6 +5,7 @@ import {
   type OpenClawConfig,
   type ProviderOnboardPresetAppliers,
 } from "openclaw/plugin-sdk/provider-onboard";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildStepFunPlanProvider,
   buildStepFunProvider,
@@ -29,6 +30,12 @@ function createStepFunPresetAppliers(params: {
     resolveParams: (cfg: OpenClawConfig, baseUrl: string) => {
       const provider = params.buildProvider(baseUrl);
       const models = provider.models ?? [];
+      // A changed default must not redirect aliases saved by earlier setup runs.
+      const aliasExists = Object.values(cfg.agents?.defaults?.models ?? {}).some(
+        (model) =>
+          normalizeLowercaseStringOrEmpty(model.alias) ===
+          normalizeLowercaseStringOrEmpty(params.alias),
+      );
       return {
         providerId: params.providerId,
         api: provider.api ?? "openai-completions",
@@ -36,7 +43,7 @@ function createStepFunPresetAppliers(params: {
         catalogModels: cfg.models?.mode === "replace" ? models : [],
         aliases: [
           ...models.map((model) => `${params.providerId}/${model.id}`),
-          { modelRef: params.primaryModelRef, alias: params.alias },
+          { modelRef: params.primaryModelRef, alias: aliasExists ? undefined : params.alias },
         ],
       };
     },

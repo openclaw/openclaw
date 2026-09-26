@@ -1,5 +1,7 @@
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
 import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
 import { planEffectiveModelCatalogRows } from "./index.js";
 
@@ -134,6 +136,60 @@ describe("provider endpoint catalog eligibility", () => {
           },
         }),
       ).toBe(true);
+    },
+  );
+});
+
+describe("StepFun regional catalog pricing", () => {
+  const loaded = loadPluginManifest(
+    fileURLToPath(new URL("../../extensions/stepfun", import.meta.url)),
+  );
+  if (!loaded.ok) {
+    throw new Error(loaded.error);
+  }
+  const stepfunRegistry = { plugins: [loaded.manifest] };
+
+  it.each([
+    { provider: "stepfun", baseUrl: "https://api.stepfun.com/v1" },
+    { provider: "stepfun", baseUrl: "https://api.stepfun.ai/v1" },
+    { provider: "stepfun-plan", baseUrl: "https://api.stepfun.com/step_plan/v1" },
+    { provider: "stepfun-plan", baseUrl: "https://api.stepfun.ai/step_plan/v1" },
+  ])(
+    "retains catalog capabilities and prices for $provider at $baseUrl",
+    ({ provider, baseUrl }) => {
+      const { rows } = planEffectiveModelCatalogRows({
+        registry: stepfunRegistry,
+        config: { models: { providers: { [provider]: { baseUrl, models: [] } } } },
+        providerFilter: provider,
+      });
+      expect(rows.map((row) => row.id)).toEqual(
+        expect.arrayContaining(["step-5-preview", "step-3.7-flash", "step-3.5-flash"]),
+      );
+      expect(rows.find((row) => row.id === "step-5-preview")).toMatchObject({
+        contextWindow: 1048576,
+        maxTokens: 65536,
+        cost:
+          provider === "stepfun"
+            ? { input: 1, output: 2.7, cacheRead: 0.05, cacheWrite: 0 }
+            : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      });
+    },
+  );
+
+  it.each(["stepfun", "stepfun-plan"])(
+    "excludes native prices for a custom %s proxy",
+    (provider) => {
+      expect(
+        planEffectiveModelCatalogRows({
+          registry: stepfunRegistry,
+          config: {
+            models: {
+              providers: { [provider]: { baseUrl: "https://proxy.example/v1", models: [] } },
+            },
+          },
+          providerFilter: provider,
+        }).rows,
+      ).toEqual([]);
     },
   );
 });
