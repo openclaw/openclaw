@@ -12,7 +12,9 @@ import { isPathInside } from "../infra/path-guards.js";
 import {
   moveMigrationArtifact,
   readMigrationArtifactIdentity,
+  sameMigrationArtifact,
   statMigrationPath,
+  type MigrationArtifactIdentity,
 } from "../infra/session-sqlite-migration-artifact.js";
 import {
   assertSafeSessionSqliteMigrationMove,
@@ -135,7 +137,7 @@ async function reconcileRestorePublications(
         await moveMigrationArtifact(
           move.archivePath,
           move.sourcePath,
-          move.artifact.identity,
+          readRestoreArchiveIdentity(move, 2n),
           () => {
             assertSafeSessionSqliteMigrationMove(move, target);
             recordRestoredMigrationMove(context.manifest, context.manifestPath, move);
@@ -579,6 +581,21 @@ async function restoreSessionSqliteMigrationManifest(
   };
 }
 
+function readRestoreArchiveIdentity(
+  move: SessionSqliteMigrationMove,
+  expectedLinks = 1n,
+): MigrationArtifactIdentity {
+  const identity = readMigrationArtifactIdentity(move.archivePath, expectedLinks);
+  // A retained receipt can predate an APFS remount; publication must bind to the live device.
+  if (
+    move.artifact &&
+    !sameMigrationArtifact(identity, move.artifact.identity, { ignoreDevice: true })
+  ) {
+    throw new Error("archive identity or contents changed; refusing restore");
+  }
+  return identity;
+}
+
 async function restoreMigrationMove(params: {
   manifest: SessionSqliteMigrationManifest;
   manifestPath: string;
@@ -625,7 +642,7 @@ async function restoreMigrationMove(params: {
     assertRestoreDirectories(move);
     fs.mkdirSync(path.dirname(move.sourcePath), { recursive: true, mode: 0o700 });
     assertRestoreDirectories(move);
-    const identity = move.artifact?.identity ?? readMigrationArtifactIdentity(move.archivePath);
+    const identity = readRestoreArchiveIdentity(move);
     // Publication rechecks these exact bytes; matching the plan also preserves its index count.
     if (
       planned.action === "restore" &&
@@ -655,7 +672,7 @@ async function restoreMigrationMove(params: {
       }
       writeSessionSqliteMigrationManifest({ manifest, manifestPath });
     }
-    await moveMigrationArtifact(move.archivePath, move.sourcePath, move.artifact.identity, () => {
+    await moveMigrationArtifact(move.archivePath, move.sourcePath, identity, () => {
       assertRestoreDirectories(move);
       recordRestoredMigrationMove(manifest, manifestPath, move);
     });
