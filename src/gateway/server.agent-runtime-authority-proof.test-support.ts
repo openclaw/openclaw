@@ -60,7 +60,16 @@ type ProofPhase =
   | "delivery"
   | "delivery-retry";
 type ProofObservation = {
-  mode?: "live" | "revoked" | "accepted custody";
+  mode?:
+    | "live"
+    | "revoked"
+    | "accepted custody"
+    | "replaced after reset"
+    | "stopped"
+    | "replaced"
+    | "strict"
+    | "best effort"
+    | "ambiguous";
   followUpPending?: boolean;
   deliveryAttempts?: number;
   resetCalls?: number;
@@ -80,6 +89,7 @@ type ProofObservation = {
   sessionPreserved?: boolean;
   transcriptChanged?: boolean;
   pendingCount?: number;
+  inputRecorded?: boolean;
   executionCalls?: number;
   mediaExists?: boolean;
   mediaBytesMatch?: boolean;
@@ -330,6 +340,16 @@ export function installAgentAuthorityProofFixture() {
         );
         return fresh;
       },
+      stop: () =>
+        dispatchGatewayMethodInProcessRaw(
+          "chat.abort",
+          { sessionKey, runId },
+          {
+            forceSyntheticClient: true,
+            syntheticScopes: ["operator.admin"],
+            resolveGatewayContext: () => context,
+          },
+        ),
       // Raw dispatch goes through the registered RPC handler, not the internal
       // agent facade. No test-supplied commit guard can mask the production fix.
       // A null source omits the private identity for ordinary-call compatibility.
@@ -409,7 +429,7 @@ export async function holdExecution(signal: AbortSignal) {
 
 export async function createResetDeliveryFixture(
   fixture: ReturnType<typeof installAgentAuthorityProofFixture>,
-  options: { beforeSendAttempt?: () => Promise<void>; failSend?: boolean } = {},
+  options: { beforeSendAttempt?: () => Promise<void>; failSend?: boolean | "after write" } = {},
 ) {
   let deliveryAttempts = 0;
   const plugin: ChannelPlugin = {
@@ -435,13 +455,16 @@ export async function createResetDeliveryFixture(
         text: async ({ text, onPlatformSendDispatch, assertDirectAdapterHandoff }) => {
           await onPlatformSendDispatch?.();
           assertDirectAdapterHandoff?.();
-          if (options.failSend) {
+          if (options.failSend === true) {
             throw new Error("proof strict reset delivery failure");
           }
           if (!sink) {
             throw new Error("recording sink not prepared");
           }
           await fs.appendFile(sink, text + "\n");
+          if (options.failSend === "after write") {
+            throw new Error("proof strict reset delivery failure after write");
+          }
           return {
             messageId: "proof-reset",
             receipt: createMessageReceiptFromOutboundResults({

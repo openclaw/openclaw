@@ -210,17 +210,31 @@ export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAge
     "newer terminal",
     "accepted run",
     "missing reservation",
+    "failed reply",
+    "failed reply after rotation",
+    "failed reply after stop",
+    "failed reply after replacement",
+    "failed reply after stop and rotation",
+    "failed reply after replacement and rotation",
+    "failed reply with replaced alias",
+    "failed reply with replaced alias and rotation",
   ] as const)("preserves reset cleanup ownership for %s", (state) => {
     const context = makeContext();
     const runId = "reset-cleanup-ownership";
     const key = `agent:${runId}`;
+    const alias = `agent:exec-approval-followup:${runId}`;
+    const hasAlias = state.includes("alias");
+    const rotates = state.includes("rotation");
     const emit = vi.fn();
+    const replyError = state.startsWith("failed reply")
+      ? { code: "INVALID_REQUEST", message: "confirmation failed" }
+      : undefined;
     const lifecycle = createAgentDedupeLifecycle({
       cfg: {},
       request: { message: "/reset follow up", idempotencyKey: runId },
       runId,
-      lifecycleGeneration: "test-generation",
-      agentDedupeKeys: [key],
+      lifecycleGeneration: mocks.lifecycleGeneration,
+      agentDedupeKeys: hasAlias ? [key, alias] : [key],
       suppressVisibleSessionEffects: false,
       context,
       io: { emitAcceptance: emit, emitFinal: emit },
@@ -232,15 +246,16 @@ export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAge
       reason: "reset",
       sessionId: "reset-session-id",
       sessionKey: "agent:main:main",
-      followUpPending: true,
+      followUpPending: !replyError,
+      replyError,
     });
-    if (state === "stop") {
+    if (state === "stop" || state.includes("after stop")) {
       context.dedupe.set(key, {
         ts: Date.now(),
         ok: true,
         payload: { runId, status: "timeout", stopReason: "rpc" },
       });
-    } else if (state === "newer reservation") {
+    } else if (state === "newer reservation" || state.includes("after replacement")) {
       context.dedupe.set(key, {
         ts: Date.now(),
         ok: true,
@@ -253,7 +268,19 @@ export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAge
     } else if (state === "missing reservation") {
       context.dedupe.delete(key);
     }
+    if (hasAlias) {
+      context.dedupe.set(alias, {
+        ts: Date.now(),
+        ok: true,
+        payload: { runId, status: "accepted", reservationId: "new-alias-owner" },
+      });
+    }
     const before = context.dedupe.get(key);
+    const aliasBefore = context.dedupe.get(alias);
+    if (rotates) {
+      mocks.lifecycleGeneration = "rotated-reset-reply";
+      expect(lifecycle.abortForLifecycleRotation()).toBe(true);
+    }
     lifecycle.clearUnaccepted();
     lifecycle.clearUnaccepted();
     if (state === "owned reservation") {
@@ -266,9 +293,37 @@ export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAge
           result: { meta: { agentMeta: { sessionId: "reset-session-id" } } },
         },
       });
+    } else if (state === "failed reply" || state === "failed reply after rotation" || hasAlias) {
+      expect(context.dedupe.get(key)).toMatchObject({
+        ok: false,
+        error: replyError,
+        requestIdentity: "original-request-fingerprint",
+      });
+      expect(context.dedupe.get(key)?.payload).toBeUndefined();
     } else {
       expect(context.dedupe.get(key)).toBe(before);
     }
-    expect(emit).not.toHaveBeenCalled();
+    if (hasAlias) {
+      expect(context.dedupe.get(alias)).toBe(aliasBefore);
+    }
+    if (state === "failed reply after rotation") {
+      expect(emit).toHaveBeenCalledExactlyOnceWith([false, undefined, replyError], { runId });
+    } else if (rotates) {
+      expect(emit).toHaveBeenCalledOnce();
+      expect(mockCallArg(emit, 0, 1)).toMatchObject({ cached: true });
+      expect(mockCallArg(emit)).toEqual(
+        hasAlias
+          ? [false, undefined, replyError]
+          : [
+              true,
+              state.includes("after stop")
+                ? before?.payload
+                : { runId, status: "in_flight", admissionPending: true },
+              undefined,
+            ],
+      );
+    } else {
+      expect(emit).not.toHaveBeenCalled();
+    }
   });
 }

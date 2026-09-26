@@ -11,7 +11,13 @@ import {
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { validateAgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
+import { startSessionWorkAdmissionInterruption } from "../sessions/session-lifecycle-admission.js";
+import { createAgentAdmissionController } from "./agent-turn/agent-admission-controller.js";
+import { createAgentDedupeLifecycle } from "./agent-turn/agent-dedupe-lifecycle.js";
+import { createAgentRunAdmissionRevalidator } from "./agent-turn/agent-run-admission-revalidation.js";
+import { registerChatAbortController } from "./chat-abort.js";
 import * as attachments from "./chat-attachments.js";
 import {
   createResetDeliveryFixture,
@@ -182,7 +188,7 @@ describe("agent RPC real delegated-authority effects", () => {
     }
   });
 
-  it.for(["live", "revoked", "accepted custody"] as const)(
+  it.for(["live", "revoked", "accepted custody", "replaced after reset"] as const)(
     "real pending-input transaction: %s",
     async (mode, { signal }) => {
       const f = await fixture();
@@ -195,6 +201,8 @@ describe("agent RPC real delegated-authority effects", () => {
         unblock();
       }
       let writer: Promise<unknown> | undefined;
+      let replacement: ReturnType<typeof createAgentDedupeLifecycle> | undefined;
+      let inputRecorded = false;
       const stage = sessionAccessor.stageSessionPendingInput;
       const observer = vi
         .spyOn(sessionAccessor, "stageSessionPendingInput")
@@ -211,31 +219,54 @@ describe("agent RPC real delegated-authority effects", () => {
           await writerEntered.promise;
           const pending = stage(...args);
           entered.resolve();
-          return await pending;
+          const result = await pending;
+          inputRecorded = listSessionPendingInputs(f.scope).total > 0;
+          return result;
         });
       let request: Promise<Response> | undefined;
       try {
-        const params = { message: "real pending-input custody proof" };
+        const params = {
+          message:
+            mode === "replaced after reset"
+              ? "/reset do not persist this suffix"
+              : "real pending-input custody proof",
+        };
         request = f.dispatch(params);
         await reach(entered.promise, request);
         expect(listSessionPendingInputs(f.scope).total).toBe(0);
+        const beforeInput = sessionAccessor.loadTranscriptEventsSync(f.scope);
         if (mode === "revoked") {
           f.owner.revoke();
+        } else if (mode === "replaced after reset") {
+          expect(beforeInput).not.toEqual(f.before);
+          replacement = createAgentDedupeLifecycle({
+            cfg: f.context.getRuntimeConfig(),
+            request: { message: params.message, idempotencyKey: f.runId },
+            runId: f.runId,
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            agentDedupeKeys: [`agent:${f.runId}`],
+            suppressVisibleSessionEffects: false,
+            context: f.context,
+            io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
+          });
+          replacement.reserve(f.sessionKey, "main");
         }
         release.resolve();
         const result = await request;
         observe("pending-input", {
           mode,
+          inputRecorded,
           ...f.effects(),
           ...rpcObservation(result),
           executionCalls: execution.observer.mock.calls.length,
         });
-        if (mode === "revoked") {
+        if (mode === "revoked" || mode === "replaced after reset") {
           expect(result.ok).toBe(false);
-          expect(result.error?.message).toContain("authority is no longer active");
+          expect(result.error?.message).toContain("is no longer active");
+          expect(inputRecorded).toBe(false);
           expect(execution.observer).not.toHaveBeenCalled();
           expect(listSessionPendingInputs(f.scope).total).toBe(0);
-          expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(f.before);
+          expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(beforeInput);
           expect(agentCommandMock).not.toHaveBeenCalled();
         } else {
           expect(result).toMatchObject({ ok: true, payload: { status: "accepted" } });
@@ -283,6 +314,7 @@ describe("agent RPC real delegated-authority effects", () => {
         release.resolve();
         await execution.cleanup();
         await Promise.allSettled([writer, request]);
+        replacement?.clearUnaccepted();
         await f.cleanup();
         observer.mockRestore();
         signal.removeEventListener("abort", unblock);
@@ -373,7 +405,7 @@ describe("agent RPC real delegated-authority effects", () => {
     },
   );
 
-  it.for(["live", "revoked"] as const)(
+  it.for(["live", "revoked", "stopped", "replaced"] as const)(
     "delayed reset final delivery: %s caller",
     async (mode, { signal }) => {
       const entered = createDeferred();
@@ -392,6 +424,7 @@ describe("agent RPC real delegated-authority effects", () => {
       observe("delivery-setup", { mode, ...f.owner.observation(), recordingAdapterRetained });
       const before = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
       let request: Promise<Response> | undefined;
+      let replacement: ReturnType<typeof createAgentDedupeLifecycle> | undefined;
       try {
         expect(recordingAdapterRetained).toBe(true);
         const params = {
@@ -409,7 +442,22 @@ describe("agent RPC real delegated-authority effects", () => {
         await expect(fs.stat(sink)).rejects.toMatchObject({ code: "ENOENT" });
         if (mode === "revoked") {
           f.owner.revoke();
+        } else if (mode === "stopped") {
+          expect(await f.stop()).toMatchObject({ ok: true, payload: { aborted: true } });
+        } else if (mode === "replaced") {
+          replacement = createAgentDedupeLifecycle({
+            cfg: f.context.getRuntimeConfig(),
+            request: { message: "/reset", idempotencyKey: f.runId },
+            runId: f.runId,
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            agentDedupeKeys: [`agent:${f.runId}`],
+            suppressVisibleSessionEffects: false,
+            context: f.context,
+            io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
+          });
+          replacement.reserve(f.sessionKey, "main");
         }
+        const retained = f.context.dedupe.get(`agent:${f.runId}`);
         release.resolve();
         const result = await request;
         await f.drain();
@@ -422,9 +470,9 @@ describe("agent RPC real delegated-authority effects", () => {
           sessionPreserved: committed?.sessionId === f.sessionId,
           deliveryCount: delivered?.toString("utf8").split("\n").filter(Boolean).length ?? 0,
         });
-        if (mode === "revoked") {
+        if (mode !== "live") {
           expect(result.ok).toBe(false);
-          expect(result.error?.message).toContain("authority is no longer active");
+          expect(result.error?.message).toContain("is no longer active");
           await expect(fs.stat(sink)).rejects.toMatchObject({ code: "ENOENT" });
         } else {
           expect(result.ok).toBe(true);
@@ -439,17 +487,26 @@ describe("agent RPC real delegated-authority effects", () => {
           ...rpcObservation(retry),
           deliveryCount: afterRetry?.toString("utf8").split("\n").filter(Boolean).length ?? 0,
         });
-        expect(retry).toMatchObject({
-          ok: true,
-          meta: { cached: true },
-          payload: { status: "ok" },
-        });
+        if (mode === "stopped" || mode === "replaced") {
+          expect(f.context.dedupe.get(`agent:${f.runId}`)).toBe(retained);
+          expect(retry).toMatchObject({
+            ok: true,
+            meta: { cached: true },
+            payload: { status: mode === "stopped" ? "timeout" : "in_flight" },
+          });
+        } else {
+          expect(retry).toMatchObject({ ok: result.ok, meta: { cached: true } });
+          expect(retry.payload).toEqual(result.payload);
+          expect(retry.error).toEqual(result.error);
+        }
         expect(loadSessionEntry(f.sessionKey, { agentId: "main" }).entry?.lifecycleRevision).toBe(
           committed?.lifecycleRevision,
         );
-        if (mode === "revoked") {
+        if (mode !== "live") {
           await expect(fs.stat(sink)).rejects.toMatchObject({ code: "ENOENT" });
-          expect(validateAgentRunDelegatedAuthority(f.owner.authority)).toBe(false);
+          if (mode === "revoked") {
+            expect(validateAgentRunDelegatedAuthority(f.owner.authority)).toBe(false);
+          }
         } else {
           expect(await fs.readFile(sink, "utf8")).toBe("✅ Session reset.\n");
         }
@@ -457,6 +514,7 @@ describe("agent RPC real delegated-authority effects", () => {
       } finally {
         release.resolve();
         await Promise.allSettled([request]);
+        replacement?.clearUnaccepted();
         await f.cleanup();
         signal.removeEventListener("abort", unblock);
       }
@@ -631,76 +689,205 @@ describe("agent RPC real delegated-authority effects", () => {
     },
   );
 
-  it("retries ordinary strict reset delivery failure as a reset-only receipt", async () => {
-    const { f, sink, recordingAdapterRetained, attempts } = await createResetDeliveryFixture(
-      fixture,
-      { failSend: true },
-    );
-    const before = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
-    const resetObserver = vi.spyOn(resets, "performGatewaySessionReset");
-    try {
-      expect(recordingAdapterRetained).toBe(true);
-      const params = {
-        message: "/reset",
-        deliver: true,
-        bestEffortDeliver: false,
-        channel: "matrix",
-        to: "!proof:example.test",
-      };
-      const response = await f.dispatch(params, null);
-      await f.drain();
-      const committed = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
-      const transcript = sessionAccessor.loadTranscriptEventsSync(f.scope);
-      observe("strict-delivery-failure", {
-        ...rpcObservation(response),
-        ...f.effects(),
-        rowChanged: !isDeepStrictEqual(committed, before),
-        sessionPreserved: committed?.sessionId === f.sessionId,
-        deliveryAttempts: attempts(),
-      });
-      expect(response).toMatchObject({
-        ok: false,
-        error: { message: expect.stringContaining("proof strict reset delivery failure") },
-      });
-      expect(committed?.sessionId).toBe(f.sessionId);
-      expect(committed?.lifecycleRevision).not.toBe(before?.lifecycleRevision);
-      expect(transcript).not.toEqual(f.before);
-      expect(attempts()).toBe(1);
-      await expect(fs.stat(sink)).rejects.toMatchObject({ code: "ENOENT" });
-      const retry = await f.dispatch(params, null);
-      await f.drain();
-      observe("strict-delivery-retry", {
-        ...rpcObservation(retry),
-        ...f.effects(),
-        resetCalls: resetObserver.mock.calls.length,
-        rowChanged: !isDeepStrictEqual(
-          loadSessionEntry(f.sessionKey, { agentId: "main" }).entry,
-          committed,
-        ),
-        deliveryAttempts: attempts(),
-      });
-      expect(retry).toMatchObject({ ok: true, meta: { cached: true } });
-      // Exact projection: completed reset, not successful channel delivery. No
-      // deliveryStatus, deliverySucceeded, message identity, or delivery receipt.
-      expect(retry.payload).toEqual({
+  it.for([
+    { phase: "pre-registration", replaceAlias: false },
+    { phase: "pre-registration", replaceAlias: true },
+    { phase: "preaccept revalidation", replaceAlias: false },
+    { phase: "preaccept revalidation", replaceAlias: true },
+  ] as const)(
+    "keeps alias ownership during $phase (replacement=$replaceAlias)",
+    async ({ phase, replaceAlias }) => {
+      const f = await fixture();
+      const alias = "agent:exec-approval-followup:" + f.runId;
+      const keys = ["agent:" + f.runId, alias];
+      const io = { emitAcceptance: vi.fn(), emitFinal: vi.fn() };
+      const lifecycle = createAgentDedupeLifecycle({
+        cfg: f.context.getRuntimeConfig(),
+        request: { message: "work", idempotencyKey: f.runId },
         runId: f.runId,
-        status: "ok",
-        summary: "completed",
-        result: {
-          payloads: [{ text: "✅ Session reset.", isStatusNotice: true }],
-          meta: { durationMs: 0, agentMeta: { sessionId: f.sessionId } },
-        },
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        agentDedupeKeys: keys,
+        suppressVisibleSessionEffects: false,
+        context: f.context,
+        io,
       });
-      expect(resetObserver).toHaveBeenCalledOnce();
-      expect(loadSessionEntry(f.sessionKey, { agentId: "main" }).entry).toEqual(committed);
-      expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(transcript);
-      expect(listSessionPendingInputs(f.scope).total).toBe(0);
-      expect(attempts()).toBe(1);
-      await expect(fs.stat(sink)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(agentCommandMock).not.toHaveBeenCalled();
-    } finally {
-      await f.cleanup();
-      resetObserver.mockRestore();
-    }
-  });
+      lifecycle.reserve(f.sessionKey, "main");
+      const admission = createAgentAdmissionController({
+        runId: f.runId,
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        agentDedupeKeys: keys,
+        context: f.context,
+        io,
+        dedupeLifecycle: lifecycle,
+        getRequestedSessionKey: () => f.sessionKey,
+        getResolvedSessionKey: () => f.sessionKey,
+        getResolvedSessionId: () => f.sessionId,
+        getResolvedSessionAgentId: () => "main",
+        getAgentId: () => "main",
+        getSessionPersisted: () => true,
+        getSupersededSessionId: () => undefined,
+        setAdmittedSessionId: vi.fn(),
+      });
+      let registration: ReturnType<typeof registerChatAbortController> | undefined;
+      let newer: ReturnType<typeof createAgentDedupeLifecycle> | undefined;
+      let interrupted: ReturnType<typeof startSessionWorkAdmissionInterruption> | undefined;
+      try {
+        await admission.acquire(f.scope.storePath);
+        if (replaceAlias) {
+          const runId = f.runId + "-replacement";
+          newer = createAgentDedupeLifecycle({
+            cfg: f.context.getRuntimeConfig(),
+            request: { message: "other", idempotencyKey: runId },
+            runId,
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            agentDedupeKeys: ["agent:" + runId, alias],
+            suppressVisibleSessionEffects: false,
+            context: f.context,
+            io,
+          });
+          newer.reserve(f.sessionKey, "main");
+        }
+        const retained = f.context.dedupe.get(alias);
+        if (phase === "pre-registration") {
+          interrupted = startSessionWorkAdmissionInterruption({
+            scope: f.scope.storePath,
+            identities: [f.sessionKey, f.sessionId],
+          });
+        } else {
+          registration = registerChatAbortController({
+            chatAbortControllers: f.context.chatAbortControllers,
+            runId: f.runId,
+            sessionKey: f.sessionKey,
+            sessionId: f.sessionId,
+            agentId: "main",
+            timeoutMs: 60_000,
+            kind: "agent",
+          });
+          registration.controller.abort(new Error("stop old admission"));
+          const source = {
+            context: f.context,
+            agentDedupeKeys: keys,
+            getOwnedAgentDedupeKeys: () => lifecycle.ownedReservationKeys(),
+            admissionAgentId: () => "main",
+            runId: f.runId,
+            assertGatewayWorkAdmissionAllowed: admission.assertAllowed,
+            client: null,
+            cfg: f.context.getRuntimeConfig(),
+            resolvedSessionKey: f.sessionKey,
+            getAdmittedSessionId: () => f.sessionId,
+            respondToGatewayAdmissionOutcome: admission.respondToOutcome,
+          };
+          await createAgentRunAdmissionRevalidator({
+            source,
+            activeRunAbort: registration,
+            parentResume: undefined,
+            rejectPreaccept: async () => undefined,
+            cleanupPreaccept: async () => admission.release(),
+          })();
+        }
+        expect(f.context.dedupe.get(keys[0]!)).toMatchObject({
+          ok: true,
+          payload: { status: "timeout" },
+        });
+        if (replaceAlias) {
+          expect(f.context.dedupe.get(alias)).toBe(retained);
+        } else {
+          expect(f.context.dedupe.get(alias)).toMatchObject({
+            ok: true,
+            payload: { status: "timeout", runId: f.runId },
+          });
+        }
+      } finally {
+        admission.release();
+        registration?.cleanup();
+        await interrupted?.released;
+        newer?.clearUnaccepted();
+        lifecycle.clearUnaccepted();
+        await f.cleanup();
+      }
+    },
+  );
+
+  it.for(["strict", "best effort", "ambiguous"] as const)(
+    "preserves ordinary reset delivery failure on same-key retry: %s",
+    async (mode) => {
+      const { f, sink, recordingAdapterRetained, attempts } = await createResetDeliveryFixture(
+        fixture,
+        { failSend: mode === "ambiguous" ? "after write" : true },
+      );
+      const before = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
+      const resetObserver = vi.spyOn(resets, "performGatewaySessionReset");
+      try {
+        expect(recordingAdapterRetained).toBe(true);
+        const params = {
+          message: "/reset",
+          deliver: true,
+          bestEffortDeliver: mode === "best effort",
+          channel: "matrix",
+          to: "!proof:example.test",
+        };
+        const response = await f.dispatch(params, null);
+        await f.drain();
+        const committed = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
+        const transcript = sessionAccessor.loadTranscriptEventsSync(f.scope);
+        observe("strict-delivery-failure", {
+          mode,
+          ...rpcObservation(response),
+          ...f.effects(),
+          rowChanged: !isDeepStrictEqual(committed, before),
+          sessionPreserved: committed?.sessionId === f.sessionId,
+          deliveryAttempts: attempts(),
+        });
+        if (mode !== "best effort") {
+          expect(response).toMatchObject({
+            ok: false,
+            error: { message: expect.stringContaining("proof strict reset delivery failure") },
+          });
+          expect(response.payload).toBeUndefined();
+        } else {
+          expect(response).toMatchObject({
+            ok: true,
+            payload: {
+              result: { deliveryStatus: { status: "failed", succeeded: false, attempted: true } },
+            },
+          });
+        }
+        expect(committed?.sessionId).toBe(f.sessionId);
+        expect(committed?.lifecycleRevision).not.toBe(before?.lifecycleRevision);
+        expect(transcript).not.toEqual(f.before);
+        expect(attempts()).toBe(1);
+        const delivered = await readEffectFile(sink);
+        expect(delivered?.toString()).toBe(
+          mode === "ambiguous" ? "✅ Session reset.\n" : undefined,
+        );
+        const retry = await f.dispatch(params, null);
+        await f.drain();
+        observe("strict-delivery-retry", {
+          mode,
+          ...rpcObservation(retry),
+          ...f.effects(),
+          resetCalls: resetObserver.mock.calls.length,
+          rowChanged: !isDeepStrictEqual(
+            loadSessionEntry(f.sessionKey, { agentId: "main" }).entry,
+            committed,
+          ),
+          deliveryAttempts: attempts(),
+        });
+        // Reset idempotency must not turn a strict send failure into RPC success.
+        expect(retry).toMatchObject({ ok: response.ok, meta: { cached: true } });
+        expect(retry.error).toEqual(response.error);
+        expect(retry.payload).toEqual(response.payload);
+        expect(resetObserver).toHaveBeenCalledOnce();
+        expect(loadSessionEntry(f.sessionKey, { agentId: "main" }).entry).toEqual(committed);
+        expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(transcript);
+        expect(listSessionPendingInputs(f.scope).total).toBe(0);
+        expect(attempts()).toBe(1);
+        expect(await readEffectFile(sink)).toEqual(delivered);
+        expect(agentCommandMock).not.toHaveBeenCalled();
+      } finally {
+        await f.cleanup();
+        resetObserver.mockRestore();
+      }
+    },
+  );
 });
