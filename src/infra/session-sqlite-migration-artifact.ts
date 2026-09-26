@@ -21,6 +21,7 @@ export const MigrationArtifactSchema = z.object({
   identity: IdentitySchema,
   classification: z.enum(["imported", "repair-original", "protected"]),
   reason: z.string(),
+  verification: z.string().optional(),
   dependencies: z.array(z.string()).default([]),
   disposal: z.discriminatedUnion("state", [
     z.object({ state: z.literal("retained") }),
