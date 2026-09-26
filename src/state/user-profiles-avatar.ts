@@ -6,17 +6,17 @@ import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-conte
 import { readUserProfileVersion } from "./user-profile-events.js";
 import { profileCatalogPath } from "./user-profile-identity.read.js";
 import { retainUserProfilePublication } from "./user-profile-list.js";
-import { isUserProfileAvatarAdmission } from "./user-profiles-avatar.types.js";
-import type {
-  UserProfile,
-  UserProfileAvatar,
-  UserProfileAvatarInspection,
-} from "./user-profiles-internal.js";
+import {
+  isUserProfileAvatarAdmission,
+  type UserProfileAvatar,
+  type UserProfileAvatarInspection,
+} from "./user-profiles-avatar.types.js";
 import { UserProfileNotFoundError } from "./user-profiles-schema.js";
 import {
   fetchTailscaleAvatar,
   type TailscaleAvatarFetchOptions,
 } from "./user-profiles-tailscale-avatar.js";
+import type { UserProfile } from "./user-profiles.types.js";
 
 type PreparedProfileAvatar = UserProfileAvatarInspection & {
   isCurrent(): boolean;

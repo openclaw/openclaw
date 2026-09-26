@@ -41,7 +41,6 @@ import {
   selectResolvedUserProfileMetadataById,
   setUserProfileEmailBinding,
   toUserProfile,
-  type UserProfile,
   userProfileAvatarPresence,
   userProfilesDb,
 } from "./user-profiles-internal.js";
@@ -63,6 +62,7 @@ import {
 } from "./user-profiles-tailscale-login.js";
 import {
   MAX_USER_PROFILE_DISPLAY_NAME_LENGTH,
+  type UserProfile,
   type UserProfileAvatarMime,
 } from "./user-profiles.types.js";
 

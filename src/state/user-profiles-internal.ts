@@ -1,7 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { expressionBuilder, type SelectQueryBuilder } from "kysely";
-import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -19,12 +18,19 @@ import { USER_PROFILE_AVATAR_MIME_TYPES } from "../shared/avatar-limits.js";
 import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { stageUserProfileEmailBindingChange } from "./user-profile-events.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
+import type {
+  UserProfileAvatar,
+  UserProfileAvatarInspection,
+  UserProfileAvatarReadCommand,
+  UserProfileAvatarRepresentation,
+} from "./user-profiles-avatar.types.js";
 import {
   hasEnsuredUserProfileRoleSchema,
   UserProfileNotFoundError,
 } from "./user-profiles-schema.js";
 import type {
   ProfileDisplayRow,
+  UserProfile,
   UserProfileDisplay,
   UserProfileAvatarMime,
   UserProfileEmailBinding,
@@ -34,7 +40,6 @@ import type {
 
 export type UserProfileRow = UserProfilesDatabase["user_profiles"];
 export type UserProfileMetadataRow = Omit<UserProfileRow, "avatar">;
-export type UserProfile = Omit<UserProfileListItem, "emails" | "githubIdentity" | "hasAvatar">;
 
 const metadataReaders = new WeakMap<
   DatabaseSync,
@@ -80,23 +85,6 @@ export const userProfileAvatarPresence = expressionBuilder<UserProfilesDatabase,
   "is not",
   null,
 ).as("has_avatar");
-export type UserProfileAvatar = {
-  bytes: Uint8Array;
-  mime: UserProfileAvatarMime;
-  sha256: string;
-  updatedAt: number;
-};
-export type UserProfileAvatarInspection = {
-  profile: UserProfile | undefined;
-  hasAvatar: boolean;
-  avatar?: Omit<UserProfileAvatar, "bytes"> & { byteLength: number };
-  emails: string[];
-};
-type UserProfileAvatarRepresentation = {
-  canonicalProfileId: string;
-  sha256: string;
-  mime: UserProfileAvatarMime;
-};
 
 export function userProfilesDb(db: DatabaseSync) {
   return getNodeSqliteKysely<UserProfilesDatabase>(db);
@@ -380,14 +368,6 @@ function readProfileAvatarInDatabase(
       : undefined;
   });
 }
-
-export type UserProfileAvatarReadCommand =
-  | { type: "userProfiles.avatar.inspect"; profileId: string }
-  | {
-      type: "userProfiles.avatar.read";
-      profileId: string;
-      expected: UserProfileAvatarRepresentation;
-    };
 
 export function readUserProfileAvatarCommand(
   db: DatabaseSync,
