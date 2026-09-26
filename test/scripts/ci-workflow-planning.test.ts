@@ -6851,6 +6851,11 @@ describe("ci workflow guards", () => {
       selectedJobs: ["android"],
     },
     {
+      label: "Docs Agent",
+      changedPath: ".github/workflows/docs-agent.yml",
+      selectedJobs: ["macos-node", "checks-windows"],
+    },
+    {
       label: "Mac app",
       changedPath: "apps/macos/Sources/Foo.swift",
       selectedJobs: ["macos-node", "macos-swift"],

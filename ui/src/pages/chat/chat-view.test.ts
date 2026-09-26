@@ -6604,22 +6604,8 @@ describe("chat model controls", () => {
     ["openclaw", "missing catalog entry", "gpt-5.6-sol", "other", false, "openai/gpt-5.6-sol"],
     ["claude-cli", "empty catalog", "gpt-5.6-sol", "empty", false, "openai/gpt-5.6-sol"],
     [undefined, "refreshing catalog", "gpt-5.6-sol", "known", true, "GPT-5.6 Sol"],
-    [
-      "codex",
-      "loading catalog without a snapshot",
-      "gpt-5.6-sol",
-      "empty",
-      true,
-      "openai/gpt-5.6-sol",
-    ],
-    [
-      "codex",
-      "no current model despite an unrelated default",
-      null,
-      "other",
-      false,
-      "Session model",
-    ],
+    ["codex", "loading without snapshot", "gpt-5.6-sol", "empty", true, "openai/gpt-5.6-sol"],
+    ["codex", "no model with unrelated default", null, "other", false, "Session model"],
   ] as const)(
     "preserves the locked %s %s",
     (runtimeId, _name, model, catalog, loading, expected) => {
