@@ -12,6 +12,7 @@ import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js"
 import {
   acquireSqliteStagingToken,
   SQLITE_STAGING_TOKEN_FILES,
+  SqliteStagingOwnershipUnknownError,
   SqliteStagingRetiredError,
   type SqliteStagingToken,
 } from "./sqlite-staging-token.js";
@@ -20,8 +21,25 @@ const scratchName =
   /^openclaw-backup-(?:owned-|retired-)?(?:[A-Za-z0-9]{6}|[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12})$/u;
 const ownedPrefix = "openclaw-backup-owned-";
 const retiredPrefix = "openclaw-backup-retired-";
+const publicationName =
+  /^\.openclaw-backup-publish-(?:owned-|retired-)(?:[A-Za-z0-9]{6}|[\da-f-]{36})$/u;
+type ScratchKind = "snapshot" | "publication";
+const publicationOwnedPrefix = ".openclaw-backup-publish-owned-";
+const publicationRetiredPrefix = ".openclaw-backup-publish-retired-";
+// Keep publication recovery independent of the tar writer's runtime module:
+// backup-scratch is part of the eager CLI closure, while backup-tar-retry is not.
+const publicationPayloadNames: ReadonlySet<string> = new Set([
+  "archive.tar.gz.tmp",
+  "archive.tar.gz.tmp.retry-2",
+  "archive.tar.gz.tmp.retry-3",
+]);
 
-export type BackupScratch = { directory: string; release: SqliteStagingToken; boundary: Root };
+export type BackupScratch = {
+  directory: string;
+  release: SqliteStagingToken;
+  boundary: Root;
+  kind?: ScratchKind;
+};
 
 export type BackupScratchReport = {
   reclaimed: string[];
@@ -31,17 +49,63 @@ export type BackupScratchReport = {
   warnings: string[];
 };
 
-export async function createBackupScratchDirectory(root: string): Promise<BackupScratch> {
+async function isUnknownWindowsScratchIdentity(
+  error: unknown,
+  directory: string,
+  initial: fsSync.BigIntStats,
+): Promise<boolean> {
+  if (
+    process.platform !== "win32" ||
+    !(error instanceof FsSafeError) ||
+    error.code !== "path-mismatch"
+  ) {
+    return false;
+  }
+  const observed = await fs.lstat(directory, { bigint: true }).catch(() => undefined);
+  if (!observed?.isDirectory()) {
+    return false;
+  }
+  if (observed.dev === 0n || observed.ino === 0n) {
+    return true;
+  }
+  // A known replacement is a definite mismatch and must still fail closed.
+  // If the original identity remains, fs-safe exhausted its retries on an
+  // unknown intermediate observation and publication may use unowned staging.
+  return sameFileIdentity(initial, observed);
+}
+
+export async function createBackupScratchDirectory(
+  root: string,
+  kind: ScratchKind = "snapshot",
+): Promise<BackupScratch> {
   for (let attempt = 0; ; attempt += 1) {
-    const directory = await createPrivateSqliteTempDirectory(root, ownedPrefix);
+    const directory = await createPrivateSqliteTempDirectory(
+      root,
+      kind === "publication" ? publicationOwnedPrefix : ownedPrefix,
+    );
     let boundary: Root | undefined;
     try {
-      boundary = await createRoot(directory);
-      const observed = await fs.lstat(directory);
-      if (!observed.isDirectory() || !sameFileIdentity(observed, await boundary.stat("."))) {
+      const initial = await fs.lstat(directory, { bigint: true });
+      if (process.platform === "win32" && (initial.dev === 0n || initial.ino === 0n)) {
+        throw new SqliteStagingOwnershipUnknownError();
+      }
+      try {
+        boundary = await createRoot(directory);
+      } catch (error) {
+        if (await isUnknownWindowsScratchIdentity(error, directory, initial)) {
+          throw new SqliteStagingOwnershipUnknownError();
+        }
+        throw error;
+      }
+      const observed = await fs.lstat(directory, { bigint: true });
+      if (
+        !observed.isDirectory() ||
+        !sameFileIdentity(initial, observed) ||
+        !sameFileIdentity(observed, await boundary.stat("."))
+      ) {
         throw new Error("Backup scratch directory identity changed");
       }
-      return { directory, boundary, release: acquireSqliteStagingToken(directory, "create") };
+      return { directory, boundary, kind, release: acquireSqliteStagingToken(directory, "create") };
     } catch (error) {
       // A reclaimer can win before BEGIN IMMEDIATE. No payload exists yet;
       // leave that attempt to its new owner and allocate a fresh directory.
@@ -97,13 +161,23 @@ async function wasScratchReclaimed(directory: string): Promise<boolean> {
 
 async function inspectScratchPayload(
   directory: string,
-  layout: "root" | "snapshot" | "verification" | "sqlite" = "root",
+  layout: "root" | "snapshot" | "verification" | "sqlite" | "publication" = "root",
 ): Promise<void> {
   for (const name of await fs.readdir(directory)) {
     const location = path.join(directory, name);
     const item = await fs.lstat(location);
     if (process.getuid && item.uid !== process.getuid()) {
       throw new Error(`Scratch file ownership is unknown: ${location}`);
+    }
+    if (layout === "publication") {
+      if (
+        item.isFile() &&
+        (publicationPayloadNames.has(name) ||
+          SQLITE_STAGING_TOKEN_FILES.some((control) => control === name))
+      ) {
+        continue;
+      }
+      throw new Error(`Unrecognized backup publication content: ${location}`);
     }
     if (item.isDirectory()) {
       const nested =
@@ -163,21 +237,24 @@ async function cleanupBackupScratchDirectory(
 > {
   let directory = initialDirectory;
   let boundary = initialBoundary;
+  const retirementPrefix = publicationName.test(path.basename(directory))
+    ? publicationRetiredPrefix
+    : retiredPrefix;
   try {
-    if (boundary && !path.basename(directory).startsWith(retiredPrefix)) {
+    if (boundary && !path.basename(directory).startsWith(retirementPrefix)) {
       const expected = await boundary.stat(".");
       const parent = await createRoot(path.dirname(directory));
-      const retiredPath = await createPrivateSqliteTempDirectory(parent.rootReal, retiredPrefix);
+      const retiredPath = await createPrivateSqliteTempDirectory(parent.rootReal, retirementPrefix);
       const retiredName = path.basename(retiredPath);
-      const reservation = await fs.lstat(retiredPath);
+      const reservation = await fs.lstat(retiredPath, { bigint: true });
       // The committed token fenced every writer before this move into our empty reservation.
       // The retired name survives failures after the token itself is removed.
       await parent.move(path.basename(directory), retiredName, {
         overwrite: true,
         mutationSymlinks: "reject",
         assertBeforeMutation: () => {
-          const current = fsSync.lstatSync(directory);
-          const destination = fsSync.lstatSync(retiredPath);
+          const current = fsSync.lstatSync(directory, { bigint: true });
+          const destination = fsSync.lstatSync(retiredPath, { bigint: true });
           if (
             !current.isDirectory() ||
             !sameFileIdentity(expected, current) ||
@@ -209,7 +286,11 @@ async function cleanupBackupScratchDirectory(
     if (await wasScratchReclaimed(directory)) {
       return { status: "already-reclaimed", directory };
     }
-    const warning = `Backup scratch cleanup failed at ${directory}: ${formatErrorMessage(error)}. Run \`openclaw doctor --fix\` to retry cleanup.`;
+    const retry =
+      retirementPrefix === publicationRetiredPrefix
+        ? "Run another backup using the same output directory to retry cleanup."
+        : "Run `openclaw doctor --fix` to retry cleanup.";
+    const warning = `Backup scratch cleanup failed at ${directory}: ${formatErrorMessage(error)}. ${retry}`;
     reportScratchMessage(warning, log);
     return { status: "failed", warning };
   }
@@ -222,6 +303,9 @@ export async function finishBackupScratch(
   let retirementFailure: unknown;
   try {
     scratch.release = scratch.release.beginRetirement();
+    if (scratch.kind === "publication") {
+      await inspectScratchPayload(scratch.directory, "publication");
+    }
     // The exclusive token excludes readers while payload deletion makes space
     // for SQLite's retirement page/journal without a filesystem-specific reserve.
     await removeBackupScratchPayload(scratch.boundary);
@@ -251,6 +335,7 @@ export async function maintainBackupScratch(params: {
   roots?: readonly string[];
   repair: boolean;
   log?: (message: string) => void;
+  kind?: ScratchKind;
 }): Promise<BackupScratchReport> {
   const report: BackupScratchReport = {
     reclaimed: [],
@@ -274,7 +359,8 @@ export async function maintainBackupScratch(params: {
   for (const root of roots) {
     try {
       for (const entry of await fs.readdir(root, { withFileTypes: true })) {
-        if (!scratchName.test(entry.name)) {
+        const publication = publicationName.test(entry.name);
+        if (params.kind === "publication" ? !publication : !scratchName.test(entry.name)) {
           continue;
         }
         const directory = path.join(root, entry.name);
@@ -286,8 +372,11 @@ export async function maintainBackupScratch(params: {
         }
         let release: SqliteStagingToken | undefined;
         try {
-          const before = await fs.lstat(directory);
-          if (!before.isDirectory() || (process.getuid && before.uid !== process.getuid())) {
+          const before = await fs.lstat(directory, { bigint: true });
+          if (
+            !before.isDirectory() ||
+            (process.getuid && before.uid !== BigInt(process.getuid()))
+          ) {
             continue;
           }
           const token = await fs
@@ -298,13 +387,17 @@ export async function maintainBackupScratch(params: {
               }
               throw error;
             });
-          const owned = entry.name.startsWith(ownedPrefix);
+          const owned = entry.name.startsWith(publication ? publicationOwnedPrefix : ownedPrefix);
           // Live snapshots can remove journals while inspection awaits lstat.
           // Token-backed and newly owned repair inspect after exclusive admission below.
           if (!params.repair || (!token && !owned)) {
-            await inspectScratchPayload(directory);
+            await inspectScratchPayload(directory, publication ? "publication" : "root");
           }
-          if (!token && !owned && !entry.name.startsWith(retiredPrefix)) {
+          if (
+            !token &&
+            !owned &&
+            !entry.name.startsWith(publication ? publicationRetiredPrefix : retiredPrefix)
+          ) {
             report.warnings.push(
               `Legacy backup scratch at ${directory} has no lifetime token. Confirm older backup processes have stopped before removing it.`,
             );
@@ -319,7 +412,7 @@ export async function maintainBackupScratch(params: {
             release = acquireSqliteStagingToken(directory, "reclaim", { allowMissing: owned });
           }
           const boundary = await createRoot(directory);
-          const current = await fs.lstat(directory);
+          const current = await fs.lstat(directory, { bigint: true });
           if (
             !current.isDirectory() ||
             !sameFileIdentity(before, current) ||
@@ -327,7 +420,7 @@ export async function maintainBackupScratch(params: {
           ) {
             throw new Error("Scratch directory identity changed");
           }
-          await inspectScratchPayload(directory);
+          await inspectScratchPayload(directory, publication ? "publication" : "root");
           await removeBackupScratchPayload(boundary);
           release?.(true);
           const cleanup = await cleanupBackupScratchDirectory(directory, boundary, () => {});

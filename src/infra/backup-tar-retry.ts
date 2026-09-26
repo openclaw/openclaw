@@ -3,11 +3,14 @@ import { hasErrnoCode } from "./errno.js";
 
 const BACKUP_TAR_MAX_ATTEMPTS = 3;
 const BACKUP_TAR_BACKOFF_MS = [10_000, 20_000];
+export const BACKUP_ARCHIVE_STAGING_BASENAME = "archive.tar.gz.tmp";
 
 type BackupTarRetryLogger = (message: string) => void;
 
-function resolveBackupTarAttemptTempPath(tempArchivePath: string, attempt: number): string {
-  return attempt === 1 ? tempArchivePath : `${tempArchivePath}.retry-${attempt}`;
+function backupTarAttemptTempPaths(tempArchivePath: string): string[] {
+  return Array.from({ length: BACKUP_TAR_MAX_ATTEMPTS }, (_, index) =>
+    index === 0 ? tempArchivePath : `${tempArchivePath}.retry-${index + 1}`,
+  );
 }
 
 export async function writeTarArchiveWithRetry<T>(params: {
@@ -19,9 +22,11 @@ export async function writeTarArchiveWithRetry<T>(params: {
   const sleepFn = params.sleepMs ?? sleep;
   let lastErr: unknown;
   let attempts = 0;
-  for (let attempt = 1; attempt <= BACKUP_TAR_MAX_ATTEMPTS; attempt += 1) {
+  for (const [index, attemptTempArchivePath] of backupTarAttemptTempPaths(
+    params.tempArchivePath,
+  ).entries()) {
+    const attempt = index + 1;
     attempts = attempt;
-    const attemptTempArchivePath = resolveBackupTarAttemptTempPath(params.tempArchivePath, attempt);
     try {
       return await params.runTar(attemptTempArchivePath);
     } catch (err) {
