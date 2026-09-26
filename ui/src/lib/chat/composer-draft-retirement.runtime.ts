@@ -15,8 +15,7 @@ type DeletedComposerDraftTarget = {
 type DeletedComposerDraftScope = Parameters<typeof deleteStoredChatSessionSnapshots>[0] & {
   client: ApplicationContext["gateway"]["snapshot"]["client"];
   gatewayUrl: string | undefined;
-  recoveryScope: string | undefined;
-  recoveryScopeReady: boolean | undefined;
+  isCurrent: () => boolean;
 };
 
 export async function retireDeletedComposerDrafts(
@@ -31,36 +30,51 @@ export async function retireDeletedComposerDrafts(
       showToast({ message: t("sessionsView.draftCleanupFailed") });
     }
   };
-  void deleteStoredChatSessionSnapshots(scope, targets).catch(reportFailure);
   try {
-    if (!scope.client) {
+    const { retireDurableComposerDrafts } = await import("./composer-draft-store.runtime.ts");
+    if (scope.client && !scope.client.recoveryScopeReady && scope.isCurrent()) {
+      await new Promise<void>((resolve) => {
+        let unsubscribe = () => {};
+        const onReady = () => {
+          if (scope.client?.recoveryScopeReady || !scope.isCurrent()) {
+            unsubscribe();
+            resolve();
+          }
+        };
+        unsubscribe = context.gateway.subscribe(onReady);
+        onReady();
+      });
+    }
+    if (!scope.client || !scope.isCurrent()) {
       reportFailure();
       return;
     }
+    // Readiness can settle during either import without replacing the connection.
+    const { recoveryScope, recoveryScopeReady } = scope.client;
+    void deleteStoredChatSessionSnapshots(scope, targets).catch(reportFailure);
     const stored = retireStoredComposerDrafts(
       { settings: { gatewayUrl: scope.gatewayUrl } },
       targets,
     );
-    retireSessionPaneHandoffs(context, targets, scope.client, scope.recoveryScope);
+    retireSessionPaneHandoffs(context, targets, scope.client, recoveryScope);
     for (const retirement of stored.retirements) {
       context.chatAttachmentHandoff.retireScope(
         storedChatOutboxScopeKey(retirement.scope),
         retirement.retireBeforeRevision,
         scope.client,
-        scope.recoveryScope,
+        recoveryScope,
       );
     }
     let failed = stored.storageFailed;
-    if (!scope.recoveryScopeReady || !scope.recoveryScope) {
+    if (!recoveryScopeReady || !recoveryScope) {
       failed = true;
     } else {
-      const owner = { gatewayOwner: stored.gatewayOwner, recoveryScope: scope.recoveryScope };
+      const owner = { gatewayOwner: stored.gatewayOwner, recoveryScope };
       const retirements = stored.retirements.map((retirement) => ({
         scopeKey: `chat:v3:${storedChatOutboxScopeKey(retirement.scope)}`,
         minimumRevision: retirement.minimumRevision,
         retireBeforeRevision: retirement.retireBeforeRevision,
       }));
-      const { retireDurableComposerDrafts } = await import("./composer-draft-store.runtime.ts");
       const durable = await retireDurableComposerDrafts(owner, retirements);
       failed ||= durable === "storage-failed";
     }

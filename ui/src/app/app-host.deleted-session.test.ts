@@ -21,6 +21,12 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import { createSessionDeletionHarness } from "../lib/sessions/session-deletion.test-support.ts";
+import {
+  clearPaneSessionHandoffs,
+  consumePaneSessionHandoff,
+  preparePaneSessionHandoff,
+} from "../pages/chat/chat-pane-shared.ts";
+import { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.ts";
 /* @vitest-environment jsdom */
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
@@ -54,11 +60,15 @@ function createSessionRecoveryShell(params: {
 }) {
   const replace = vi.fn();
   const setSessionKey = vi.fn();
+  const fixture = createApplicationGateway();
+  const { gateway } = fixture;
+  gateway.setSessionKey = setSessionKey;
+  gateway.snapshot.phase = "connected";
   const shell = document.createElement("openclaw-app-shell") as unknown as DeletedSessionShell;
   shell.runtime = {
     context: {
       basePath: "",
-      chatAttachmentHandoff: createChatAttachmentHandoff(createApplicationGateway().gateway),
+      chatAttachmentHandoff: createChatAttachmentHandoff(gateway),
       chatSubmissions: createChatSubmissions(),
       placementStartup: { get: () => null },
       agents: {
@@ -71,10 +81,7 @@ function createSessionRecoveryShell(params: {
         },
       },
       agentSelection: { set: vi.fn(), state: { selectedId: "main" } },
-      gateway: {
-        setSessionKey,
-        snapshot: { client: null, hello: null, phase: "connected" },
-      },
+      gateway,
       sessions: params.sessions ?? {
         deletionState: (key: string) =>
           params.deletedSessionKeys?.includes(key) ? "confirmed" : undefined,
@@ -92,7 +99,7 @@ function createSessionRecoveryShell(params: {
   };
   shell.activeSessionKey = params.activeSessionKey;
   shell.routeState = { routeId: "chat" };
-  return { replace, setSessionKey, shell };
+  return { replace, setSessionKey, shell, publishGateway: () => fixture.publish(gateway.snapshot) };
 }
 
 afterEach(() => {
@@ -101,8 +108,126 @@ afterEach(() => {
 });
 
 describe("OpenClaw shell deleted-session recovery", () => {
-  it.each(["gateway switch", "principal change", "disconnect"] as const)(
-    "keeps lazy deletion cleanup bound to its original owner across a %s",
+  it.each(["initial readiness", "reconnect", "late readiness", "late principal change"] as const)(
+    "keeps draft cleanup scoped through %s",
+    async (transition) => {
+      const storage = createStorageMock();
+      const indexedDb = new IDBFactory();
+      vi.stubGlobal("sessionStorage", storage);
+      vi.stubGlobal("indexedDB", indexedDb);
+      const scopeKey = storedChatOutboxScopeKey({ sessionKey: deletedKey, agentId: "main" });
+      const owner = {
+        gatewayOwner: "ws://gateway.example.test",
+        recoveryScope: "original-principal",
+        scopeKey: `chat:v3:${scopeKey}`,
+      };
+      const client = {
+        gatewayUrl: owner.gatewayOwner,
+        recoveryScope: owner.recoveryScope,
+        recoveryScopeReady: true,
+      };
+      const { shell, publishGateway } = createSessionRecoveryShell({
+        activeSessionKey: deletedKey,
+        sessionKeys: [deletedKey],
+        deletedSessionKeys: [deletedKey],
+      });
+      const context = shell.runtime.context;
+      context.gateway.snapshot.client = client as GatewayBrowserClient;
+      const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
+      try {
+        expect(
+          await writeDurableComposerDraft(
+            owner,
+            { text: "retire me", attachments: [], revision: 1 },
+            { expectedRevision: 0, writeId: "readiness" },
+          ),
+        ).toMatchObject({ status: "persisted" });
+        writeStoredOutboxStore(storage, storageTargetForGateway(owner.gatewayOwner), {
+          version: 4,
+          recovery: {},
+          gatewayOwner: owner.gatewayOwner,
+          sessions: {
+            [scopeKey]: {
+              draft: "retire queued draft",
+              draftRevision: 1,
+              queue: [{ id: "queued", text: "queued", createdAt: 1 }],
+              updatedAt: 1,
+            },
+          },
+        });
+        const stored = storage.getItem(storageTargetForGateway(owner.gatewayOwner).key);
+        if (transition !== "initial readiness") {
+          preparePaneSessionHandoff(context, "retained", deletedKey, {
+            draft: "retire pane draft",
+            attachments: [],
+          });
+          context.chatAttachmentHandoff.prepare({
+            reviewPrivateDraft: reviewPrivateComposerDraft,
+            owner: client as GatewayBrowserClient,
+            paneId: "retained",
+            scopeKey,
+            message: "retire attachment handoff",
+            attachments: [],
+            fallbacks: {},
+          });
+        }
+        if (transition !== "late principal change") {
+          client.recoveryScope = "";
+        }
+        client.recoveryScopeReady = false;
+        shell.observeDeletedSessions({
+          ...context.sessions.state,
+          deletedSessions: [
+            { key: deletedKey, agentId: "main", retireBeforeRevision: Date.now() + 1 },
+          ],
+        });
+        const late = transition === "late readiness" || transition === "late principal change";
+        if (late) {
+          await vi.dynamicImportSettled();
+          expect.soft(await readDurableComposerDraft(owner)).toMatchObject({ status: "found" });
+          expect
+            .soft(storage.getItem(storageTargetForGateway(owner.gatewayOwner).key))
+            .toBe(stored);
+          expect.soft(toast.textContent).toBe("");
+        }
+        client.recoveryScope =
+          transition === "late principal change" ? "other-principal" : owner.recoveryScope;
+        client.recoveryScopeReady = true;
+        publishGateway();
+        await vi.dynamicImportSettled();
+
+        const pane = consumePaneSessionHandoff(context, "retained", deletedKey);
+        const handoff = context.chatAttachmentHandoff.consume({
+          owner: client as GatewayBrowserClient,
+          paneId: "retained",
+          scopeKey,
+        });
+        if (transition === "late principal change") {
+          expect.soft(await readDurableComposerDraft(owner)).toMatchObject({ status: "found" });
+          expect
+            .soft(storage.getItem(storageTargetForGateway(owner.gatewayOwner).key))
+            .toBe(stored);
+          expect.soft(pane?.draft).toBe("retire pane draft");
+          expect.soft(handoff?.message).toBe("retire attachment handoff");
+          expect
+            .soft(toast.textContent)
+            .toContain("Session deleted; browser draft remains. Clear site data.");
+        } else {
+          expect.soft(await readDurableComposerDraft(owner)).toMatchObject({ status: "not-found" });
+          expect.soft(pane).toBeNull();
+          expect.soft(handoff).toBeNull();
+          expect.soft(toast.textContent).toBe("");
+        }
+      } finally {
+        clearPaneSessionHandoffs(context, "retained");
+        context.chatAttachmentHandoff.dispose();
+        await requestResult(indexedDb.deleteDatabase("openclaw-control-ui"));
+      }
+    },
+  );
+
+  it.each(["gateway switch", "principal change", "disconnect", "credentials change"] as const)(
+    "preserves drafts and reports failed cleanup after a %s during import",
     async (change) => {
       const storage = createStorageMock();
       const indexedDb = new IDBFactory();
@@ -155,11 +280,16 @@ describe("OpenClaw shell deleted-session recovery", () => {
         };
         const context = shell.runtime.context;
         context.gateway.snapshot.client = client as GatewayBrowserClient;
+        context.gateway.connection.gatewayUrl = original.gatewayOwner;
+        const originalStored = storage.getItem(storageTargetForGateway(original.gatewayOwner).key);
+        const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
 
         shell.observeDeletedSessions(context.sessions.state);
-        // Both imports must use the observed identity, even if the old client mutates.
-        client.recoveryScope = other.recoveryScope;
-        if (change !== "principal change") {
+        if (change === "principal change") {
+          client.recoveryScope = other.recoveryScope;
+        } else if (change === "credentials change") {
+          Object.assign(context.gateway, { connectionRevision: 1 });
+        } else {
           context.gateway.snapshot.client =
             change === "disconnect"
               ? null
@@ -169,17 +299,18 @@ describe("OpenClaw shell deleted-session recovery", () => {
 
         expect
           .soft(await readDurableComposerDraft(original))
-          .toMatchObject({ status: "not-found" });
+          .toMatchObject({ status: "found", draft: { text: original.recoveryScope } });
         expect.soft(await readDurableComposerDraft(other)).toMatchObject({
           status: "found",
           draft: { text: other.recoveryScope },
         });
-        const retired = readStoredOutboxStore(
-          storage,
-          storageTargetForGateway(original.gatewayOwner),
-        ).sessions[scopeKey];
-        expect.soft(retired?.draft).toBeUndefined();
-        expect.soft(retired?.queue).toBeUndefined();
+        expect
+          .soft(storage.getItem(storageTargetForGateway(original.gatewayOwner).key))
+          .toBe(originalStored);
+        expect
+          .soft(toast.textContent)
+          .toContain("Session deleted; browser draft remains. Clear site data.");
+        expect.soft(toast.querySelectorAll(".app-toast")).toHaveLength(1);
         if (other.gatewayOwner !== original.gatewayOwner) {
           expect
             .soft(storage.getItem(storageTargetForGateway(other.gatewayOwner).key))
@@ -378,8 +509,9 @@ describe("OpenClaw shell deleted-session recovery", () => {
       });
       shell.runtime.context.gateway.snapshot.client = {
         gatewayUrl,
-        recoveryScopeReady: false,
+        recoveryScopeReady: true,
       } as GatewayBrowserClient;
+      shell.runtime.context.gateway.connection.gatewayUrl = gatewayUrl;
       let stop = () => {};
       try {
         await h.sessions.refresh({ force: true });
@@ -489,9 +621,11 @@ describe("OpenClaw shell deleted-session recovery", () => {
         chatAttachmentHandoff: createChatAttachmentHandoff(createApplicationGateway().gateway),
         chatSubmissions: createChatSubmissions(),
         gateway: {
+          connection: { gatewayUrl },
+          connectionRevision: 0,
           snapshot: {
             assistantAgentId: "main",
-            client: { gatewayUrl, recoveryScopeReady: false },
+            client: { gatewayUrl, recoveryScopeReady: true },
             hello: null,
           },
         },

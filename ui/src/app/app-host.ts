@@ -69,6 +69,7 @@ import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import "./router-outlet.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import { isApplyingServerUiPrefs, pushServerUiPrefs } from "./server-prefs.ts";
+import { capturePlacementStartupConnection } from "./session-placement-startup.ts";
 import { setSettingsChangeListener } from "./settings.ts";
 import {
   isStaleChunkImportError,
@@ -568,13 +569,16 @@ class OpenClawShell
     if (deletedSessions.length === 0) {
       return;
     }
-    // Client identity survives reconnects; capture its principal before either import yields.
     const { client, assistantAgentId, hello } = context.gateway.snapshot;
+    const gatewayUrl = context.gateway.connection.gatewayUrl;
+    const sameConnection = capturePlacementStartupConnection(context.gateway, {
+      gatewayUrl,
+      recoveryScope: client?.recoveryScope || undefined,
+    });
     const scope = {
       client,
-      gatewayUrl: client?.gatewayUrl,
-      recoveryScope: client?.recoveryScope,
-      recoveryScopeReady: client?.recoveryScopeReady,
+      gatewayUrl,
+      isCurrent: () => context.gateway.snapshot.client === client && sameConnection(),
       assistantAgentId,
       hello,
       agentsList: context.agents.state.agentsList,
