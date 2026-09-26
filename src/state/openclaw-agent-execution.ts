@@ -465,8 +465,8 @@ function createAgentDatabaseExecution(
           const result = run(
             source,
             async () => undefined,
-            (identity) => {
-              assertReferenceCurrent(identity);
+            (nativeIdentity) => {
+              assertReferenceCurrent(nativeIdentity);
               assertCreationReference(true);
             },
             expectedIdentity,
@@ -484,8 +484,8 @@ function createAgentDatabaseExecution(
           const result = run(
             source,
             operation,
-            (identity) => {
-              assertReferenceCurrent(identity);
+            (nativeIdentity) => {
+              assertReferenceCurrent(nativeIdentity);
               assertCreationReference(false);
             },
             expectedIdentity,
