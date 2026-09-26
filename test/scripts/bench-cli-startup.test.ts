@@ -872,6 +872,43 @@ try {
     );
   });
 
+  it("benchmarks root help with an inert plugin config through the real fixture path", () => {
+    const tmpDir = memoryTempDirs.make("openclaw-cli-inert-plugins-");
+    const entryPath = join(tmpDir, "entry.mjs");
+    writeFileSync(
+      entryPath,
+      [
+        'import fs from "node:fs";',
+        'const config = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8"));',
+        "if (Object.keys(config.plugins ?? {}).length !== 0) process.exit(2);",
+        'console.log("inert plugin config ready");',
+      ].join("\n"),
+    );
+
+    const result = runBenchmarkCli([
+      "--entry",
+      entryPath,
+      "--case",
+      "helpInertPlugins",
+      "--runs",
+      "1",
+      "--warmup",
+      "0",
+      "--json",
+    ]);
+
+    expect(result.status, result.stderr).toBe(0);
+    const report = JSON.parse(result.stdout);
+    expect(report.primary.cases).toMatchObject([
+      {
+        id: "helpInertPlugins",
+        args: ["--help"],
+        contract: { firstOutputBudgetMs: 500, exitBudgetMs: 1_000 },
+        samples: [{ exitCode: 0, signal: null }],
+      },
+    ]);
+  });
+
   it("writes a config fixture for config get benchmarks", () => {
     for (const id of ["configGetGatewayPort", "gatewayHealthJson", "health", "healthJson"]) {
       expect(withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () => configFixture(id))).toEqual({

@@ -1,11 +1,8 @@
 // Reads and applies global dotenv files without loading config or logging.
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { readRegularFile, readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { parse as parseDotEnv } from "dotenv";
-import { resolveConfigDir } from "./config-dir.js";
-import { resolveRequiredHomeDir } from "./home-dir.js";
+import { resolveGlobalRuntimeDotEnvPaths } from "./dotenv-paths.js";
 import { normalizeEnvVarKey } from "./host-env-security.js";
 
 /** Maximum bytes to read from any dotenv file. */
@@ -187,22 +184,6 @@ function loadParsedDotEnvFiles(
   return appliedKeysByFile;
 }
 
-function resolveGlobalDotEnvPaths(opts: GlobalRuntimeDotEnvOptions, env: NodeJS.ProcessEnv) {
-  const stateEnvPath = opts.stateEnvPath ?? path.join(resolveConfigDir(env), ".env");
-  const globalEnvPaths = [...new Set([stateEnvPath, ...(opts.additionalEnvPaths ?? [])])];
-  const home = resolveRequiredHomeDir(env, os.homedir);
-  const defaultStateEnvPath = path.join(home, ".openclaw", ".env");
-  const hasExplicitNonDefaultStateDir =
-    env.OPENCLAW_STATE_DIR?.trim() !== undefined &&
-    path.resolve(stateEnvPath) !== path.resolve(defaultStateEnvPath);
-  return {
-    globalEnvPaths,
-    gatewayEnvPath: hasExplicitNonDefaultStateDir
-      ? undefined
-      : path.join(home, ".config", "openclaw", "gateway.env"),
-  };
-}
-
 function applyGlobalDotEnvFiles(
   globalEnvs: (LoadedDotEnvFile | null)[],
   gatewayEnv: LoadedDotEnvFile | null,
@@ -226,7 +207,11 @@ function applyGlobalDotEnvFiles(
 /** Load global runtime dotenv files with first-wins precedence, defaulting to `process.env`. */
 export function loadGlobalRuntimeDotEnvFilesCore(opts: GlobalRuntimeDotEnvOptions = {}) {
   const env = opts.env ?? process.env;
-  const { globalEnvPaths, gatewayEnvPath } = resolveGlobalDotEnvPaths(opts, env);
+  const { globalEnvPaths, gatewayEnvPath } = resolveGlobalRuntimeDotEnvPaths({
+    env,
+    additionalEnvPaths: opts.additionalEnvPaths,
+    stateEnvPath: opts.stateEnvPath,
+  });
   const readOptions = {
     entryFilter: opts.entryFilter,
     quiet: opts.quiet ?? true,
@@ -246,7 +231,11 @@ export async function loadGlobalRuntimeDotEnvFilesAsyncCore(
   opts: GlobalRuntimeDotEnvOptions & { env: NodeJS.ProcessEnv },
 ) {
   const { env } = opts;
-  const { globalEnvPaths, gatewayEnvPath } = resolveGlobalDotEnvPaths(opts, env);
+  const { globalEnvPaths, gatewayEnvPath } = resolveGlobalRuntimeDotEnvPaths({
+    env,
+    additionalEnvPaths: opts.additionalEnvPaths,
+    stateEnvPath: opts.stateEnvPath,
+  });
   const readOptions = {
     entryFilter: opts.entryFilter,
     quiet: opts.quiet ?? true,

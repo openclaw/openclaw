@@ -13,6 +13,13 @@ function hasListEntries(value: string[] | undefined): boolean {
 export async function loadRootHelpRenderOptionsForConfigSensitivePlugins(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RootHelpRenderOptions | null> {
+  if (env === process.env) {
+    const { canUsePrecomputedRootHelpWithoutLiveConfig } =
+      await import("../config/root-help-preflight.js");
+    if (canUsePrecomputedRootHelpWithoutLiveConfig(env)) {
+      return null;
+    }
+  }
   const configModule = await import("../config/config.js");
   const snapshot = await configModule.readConfigFileSnapshot({
     observe: false,
