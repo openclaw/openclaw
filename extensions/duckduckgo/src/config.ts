@@ -1,6 +1,6 @@
-// Duckduckgo helper module supports config behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -20,11 +20,7 @@ function resolveDdgWebSearchConfig(
   config?: OpenClawConfig,
 ): DdgPluginConfig["webSearch"] | undefined {
   const pluginConfig = config?.plugins?.entries?.duckduckgo?.config as DdgPluginConfig | undefined;
-  const webSearch = pluginConfig?.webSearch;
-  if (webSearch && typeof webSearch === "object" && !Array.isArray(webSearch)) {
-    return webSearch;
-  }
-  return undefined;
+  return asOptionalRecord(pluginConfig?.webSearch);
 }
 
 export function resolveDdgRegion(config?: OpenClawConfig): string | undefined {

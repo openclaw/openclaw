@@ -16,6 +16,7 @@ import {
   canAccessOperatorApproval,
   canReviewOperatorApproval,
 } from "./operator-approval-authorization.js";
+import { matchesOperatorApprovalReviewerBinding } from "./operator-approval-reviewer-binding.js";
 import { projectOperatorApprovalSnapshot } from "./operator-approval-snapshot.js";
 import {
   expireDueOperatorApprovals,
@@ -28,6 +29,14 @@ import type { GatewayClient, PreparedSessionApprovalReplay } from "./server-meth
 
 const MAX_SESSION_APPROVAL_REPLAY = 1_000;
 type ApprovalSessionClient = GatewayClient & { invalidated?: boolean };
+type ApprovalReplaySnapshot = Omit<PreparedSessionApprovalReplay, "release">;
+type ApprovalReplayScope = {
+  sessionKey: string;
+  reviewerDeviceId: string | undefined;
+  references: number;
+  revision: number;
+  preparation?: Promise<ApprovalReplaySnapshot>;
+};
 
 type OperatorApprovalSessionEventRuntime = {
   publish: (event: OperatorApprovalLifecycleEvent) => void;
@@ -62,8 +71,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
 }): OperatorApprovalSessionEventRuntime {
   const controlUiBasePath = normalizeControlUiBasePath(params.controlUiBasePath);
   const now = params.now ?? Date.now;
-  let publicationRevision = 0;
-  const preparations = new Map<string, Promise<PreparedSessionApprovalReplay>>();
+  const replayScopes = new Map<string, ApprovalReplayScope>();
 
   const canAccessRecord = (client: GatewayClient | null, record: OperatorApprovalRecord): boolean =>
     canAccessOperatorApproval({
@@ -95,8 +103,16 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   };
 
   const publish = (event: OperatorApprovalLifecycleEvent): void => {
-    publicationRevision += 1;
-    preparations.clear();
+    for (const scope of replayScopes.values()) {
+      if (
+        event.record.audienceSessionKeys.includes(scope.sessionKey) &&
+        (scope.reviewerDeviceId === undefined ||
+          matchesOperatorApprovalReviewerBinding(event.record, scope.reviewerDeviceId))
+      ) {
+        scope.revision += 1;
+        scope.preparation = undefined;
+      }
+    }
     const source = event.record.source;
     const pending = event.phase === "pending" && event.record.status === "pending";
     const manager = params.getLiveManager?.(event.record.kind);
@@ -163,10 +179,8 @@ export function createOperatorApprovalSessionEventRuntime(params: {
     }
   };
 
-  const prepareReplay = async (
-    sessionKey: string,
-    reviewerDeviceId: string | undefined,
-  ): Promise<PreparedSessionApprovalReplay> => {
+  const prepareReplay = async (scope: ApprovalReplayScope): Promise<ApprovalReplaySnapshot> => {
+    const { sessionKey, reviewerDeviceId } = scope;
     const snapshotAtMs = now();
     const expired = await expireDueOperatorApprovals({
       nowMs: snapshotAtMs,
@@ -183,7 +197,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
     if (params.isCurrent?.() === false) {
       throw new Error("Operator approval replay authority is no longer current");
     }
-    const revision = publicationRevision;
+    const revision = scope.revision;
     const records = await listPendingOperatorApprovals({
       audienceSessionKey: sessionKey,
       reviewerDeviceId,
@@ -191,7 +205,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
       nowMs: snapshotAtMs,
       databaseOptions: params.databaseOptions,
     });
-    const isCurrent = () => revision === publicationRevision;
+    const isCurrent = () => revision === scope.revision;
     const approvals: PendingApprovalSnapshot[] = [];
     const truncated = records.length > MAX_SESSION_APPROVAL_REPLAY;
     for (const record of records) {
@@ -220,6 +234,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         return {
           replay: { sessionKey, updatedAtMs: now(), approvals: [], truncated: false },
           isCurrent: () => !canReviewOperatorApproval(client),
+          release: () => {},
         };
       }
       const scopes = [...(client?.connect.scopes ?? [])];
@@ -240,24 +255,48 @@ export function createOperatorApprovalSessionEventRuntime(params: {
       // Only share unsettled work. Lifecycle publications fence replies but are
       // not a durable store revision suitable for retaining completed snapshots.
       const key = JSON.stringify([sessionKey, reviewerDeviceId]);
-      let preparation = preparations.get(key);
-      if (!preparation) {
-        preparation = prepareReplay(sessionKey, reviewerDeviceId).finally(() => {
-          if (preparations.get(key) === preparation) {
-            preparations.delete(key);
-          }
-        });
-        preparations.set(key, preparation);
+      let scope = replayScopes.get(key);
+      if (!scope) {
+        scope = { sessionKey, reviewerDeviceId, references: 0, revision: 0 };
+        replayScopes.set(key, scope);
       }
-      const prepared = await preparation;
-      assertCurrent();
-      return {
-        replay: prepared.replay,
-        isCurrent: () => {
-          assertCurrent();
-          return prepared.isCurrent();
-        },
+      const retained = scope;
+      retained.references += 1;
+      let released = false;
+      const release = () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        retained.references -= 1;
+        if (retained.references === 0) {
+          replayScopes.delete(key);
+        }
       };
+      try {
+        let preparation = retained.preparation;
+        if (!preparation) {
+          preparation = prepareReplay(retained).finally(() => {
+            if (retained.preparation === preparation) {
+              retained.preparation = undefined;
+            }
+          });
+          retained.preparation = preparation;
+        }
+        const prepared = await preparation;
+        assertCurrent();
+        return {
+          replay: prepared.replay,
+          isCurrent: () => {
+            assertCurrent();
+            return !released && prepared.isCurrent();
+          },
+          release,
+        };
+      } catch (error) {
+        release();
+        throw error;
+      }
     },
   };
 }

@@ -344,7 +344,7 @@ it("records successful archive pruning stages", async () => {
   });
 });
 
-it("coalesces automatic maintenance through the shared reclamation writer", async () => {
+it("coalesces automatic maintenance without redundant writer admissions", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = path.join(state.sessionsDir(), "sessions.json");
     const staleKey = "agent:main:subagent:writer-stale";
@@ -390,6 +390,7 @@ it("coalesces automatic maintenance through the shared reclamation writer", asyn
       kickSessionEntryMaintenanceAfterWrite(request);
       await finalized.promise;
       await yieldToEventLoop();
+      // Native commits retain admission; preparation and empty archive probes add no writer spans.
       expect(operations).toEqual([
         "session.maintenance.plan",
         "session.reclamation.retain",
@@ -399,13 +400,10 @@ it("coalesces automatic maintenance through the shared reclamation writer", asyn
         "session.reclamation.worker-commit",
         "session.reclamation.retain",
         "session.reclamation.worker-commit",
-        "session.maintenance.finalize",
-        "session.archive.publish-prepare",
       ]);
       expect(reclamationKinds).toEqual([
         "maintenance-plan",
         "maintenance-plan",
-        "maintenance-finalize",
         "maintenance-finalize",
       ]);
       expect(loadSessionEntry({ sessionKey: staleKey, storePath })).toBeUndefined();

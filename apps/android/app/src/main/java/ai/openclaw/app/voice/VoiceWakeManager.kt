@@ -125,13 +125,7 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
     }
   }
 
-  override fun destroy(operationId: Long) {
-    if (!claimOperation(operationId)) return
-    if (platformOwnerOperationId.get() == 0L) return
-    runOnMainSync {
-      if (operationId == latestOperationId.get()) retireRecognizer()
-    }
-  }
+  override fun destroy(operationId: Long) = stop(operationId)
 
   private fun claimOperation(operationId: Long): Boolean {
     while (true) {

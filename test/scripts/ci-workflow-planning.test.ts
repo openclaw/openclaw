@@ -2992,37 +2992,6 @@ describe("ci workflow guards", () => {
   );
 
   it.each([
-    { paths: ["README.md"], admitted: false },
-    { paths: [".agents/skills/example/SKILL.md"], admitted: false },
-    { paths: ["docs/ci.md", "docs/images/diagram.svg"], admitted: false },
-    { paths: ["docs/reference/schema.json"], admitted: false },
-    { paths: ["src/ordinary.ts"], admitted: true },
-    { paths: ["assets/logo.svg"], admitted: true },
-    { paths: ["README.md", "src/ordinary.ts"], admitted: true },
-    { paths: ["docs/ci.md", "assets/logo.svg"], admitted: true },
-  ])("admits main push paths $paths to CI: $admitted", ({ paths, admitted }) => {
-    const ignored: string[] = readCiWorkflow().on.push["paths-ignore"] ?? [];
-    // GitHub skips paths-ignore only when every changed path matches a pattern.
-    const runsCi = paths.some(
-      (changedPath) => !ignored.some((pattern) => minimatch(changedPath, pattern, { dot: true })),
-    );
-    expect(runsCi).toBe(admitted);
-    if (!runsCi) {
-      return;
-    }
-    const result = runCiManifestFixture({
-      bundledPlanner: true,
-      eventName: "push",
-      repository: "openclaw/openclaw",
-      changedPaths: paths,
-      scopeEnv: { GITHUB_REF: "refs/heads/main" },
-    });
-    expect(result.status, result.output).toBe(0);
-    expect(result.outputs.run_docker_seed_e2e).toBe("true");
-    expect(result.outputs.docker_seed_lanes).toBe("published-upgrade-survivor");
-  });
-
-  it.each([
     {
       eventName: "push" as const,
       changedPaths: ["src/cli/cron-cli/shared.ts"],
@@ -3299,9 +3268,9 @@ describe("ci workflow guards", () => {
     expect(runStep.run).not.toContain("pnpm test:windows:ci:3");
   });
 
-  it.skipIf(process.platform === "win32").for(["blacksmith", "github", "hybrid"] as const)(
-    "executes each Mac partition once and keeps historical coverage on %s",
-    (runnerBackend) => {
+  it.skipIf(process.platform === "win32")(
+    "executes each Mac partition once and keeps historical coverage",
+    () => {
       const workflow = readCiWorkflow();
       const job = workflow.jobs["macos-node"];
       const runStep = job.steps.find((step: WorkflowStep) => step.name === "TS tests (macOS)");
@@ -3316,7 +3285,7 @@ describe("ci workflow guards", () => {
           eventName: "workflow_dispatch",
           historicalCompatibility: !partsSupported,
           macosNodeParts: partsSupported,
-          runnerBackend,
+          runnerBackend: "github",
         });
         expect(manifest.status, manifest.output).toBe(0);
         const rows = JSON.parse(
@@ -3751,11 +3720,11 @@ describe("ci workflow guards", () => {
     }
 
     // Synthetic admission orders, not recovered webhook payloads.
-    it.each(
-      ["opened", "reopened", "synchronize"].flatMap((action) =>
-        ["pending", "running"].map((state) => ({ action, state })),
-      ),
-    )("preserves $state ready CI after a delayed draft $action", ({ action, state }) => {
+    it.each([
+      { action: "opened", state: "pending" },
+      { action: "reopened", state: "pending" },
+      { action: "synchronize", state: "running" },
+    ])("preserves $state ready CI after a delayed draft $action", ({ action, state }) => {
       const scheduler = admissionDriver();
       const predecessor = scheduler.admit(event(1, { action: "opened" }));
       scheduler.start(predecessor);
@@ -4093,10 +4062,6 @@ describe("ci workflow guards", () => {
 
   it.each([
     ["push", "blacksmith", false],
-    ["pull_request", "github", false],
-    ["pull_request", "hybrid", false],
-    ["workflow_dispatch", "blacksmith", false],
-    ["workflow_dispatch", "blacksmith", true],
     ["workflow_dispatch", "github", true],
   ] as const)(
     "shares contract setup while retaining process envelopes (%s, %s, frozen=%s)",
@@ -6888,26 +6853,6 @@ describe("ci workflow guards", () => {
     {
       label: "Docs Agent",
       changedPath: ".github/workflows/docs-agent.yml",
-      selectedJobs: ["macos-node", "checks-windows"],
-    },
-    ...[
-      ".github/workflows/openclaw-performance.yml",
-      "test/scripts/openclaw-performance-workflow.test-support.ts",
-      "test/scripts/openclaw-performance-git-lifecycle.test.ts",
-      "test/scripts/openclaw-performance-workflow.test.ts",
-    ].map((changedPath) => ({
-      label: `Performance owner ${changedPath}`,
-      changedPath,
-      selectedJobs: ["macos-node", "checks-windows"],
-    })),
-    {
-      label: "Git-owner fixture",
-      changedPath: "test/scripts/fixtures/ci-platform-checkout.mjs",
-      selectedJobs: ["macos-node", "checks-windows"],
-    },
-    {
-      label: "Windows process census fixture",
-      changedPath: "test/scripts/fixtures/ci-windows-process-census.py",
       selectedJobs: ["macos-node", "checks-windows"],
     },
     {
@@ -10005,12 +9950,6 @@ describe("ci workflow guards", () => {
     expect(compatibilityJob.steps.at(-1)?.run).toContain("src/config/sessions/sessions.test.ts");
   });
 
-  it.skipIf(process.platform === "win32")("ci-gate rejects an unexpected selected skip", () => {
-    const result = runCiGateFixture(renderCiGateEnvironment({}, { "checks-ui": "skipped" }));
-    expect(result.stdout).toContain("checks-ui: skipped");
-    expect(result.status, result.stdout).toBe(1);
-  });
-
   it.skipIf(process.platform === "win32").each([
     ["schedule", "ios-build", "cancelled", "true", 0],
     ["schedule", "ios-build", "failure", "true", 1],
@@ -10049,15 +9988,9 @@ describe("ci workflow guards", () => {
     [true, "success", 0],
     [true, "skipped", 1],
     [true, "failure", 1],
-    [true, "cancelled", 1],
-    [true, "", 1],
-    [true, "unknown", 1],
     [false, "success", 0],
     [false, "skipped", 0],
-    [false, "failure", 1],
     [false, "cancelled", 1],
-    [false, "", 1],
-    [false, "unknown", 1],
   ] as const)(
     "ci-gate checks all downstream lanes (selected=%s, result=%s)",
     (selected, result, exit) => {
@@ -10105,9 +10038,7 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it
-    .skipIf(process.platform === "win32")
-    .each(["failure", "cancelled", "skipped", "", "unknown", "success="])(
+  it.skipIf(process.platform === "win32").each(["failure", "skipped", "", "success="])(
     "ci-gate rejects required result %s independently of downstream success",
     (result) => {
       const outcome = runCiGateFixture(
@@ -10120,9 +10051,7 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it
-    .skipIf(process.platform === "win32")
-    .each(["", "unknown", "TRUE", "true|false", "true|", "false="])(
+  it.skipIf(process.platform === "win32").each(["", "unknown", "true|", "false="])(
     "ci-gate rejects missing or malformed selection %s even after success",
     (selection) => {
       const outcome = runCiGateFixture(

@@ -56,10 +56,6 @@ export function resolveMantleSonnet5Cost(nowMs: number = Date.now()) {
     : SONNET_5_PROMOTIONAL_COST;
 }
 
-// ---------------------------------------------------------------------------
-// Mantle region & endpoint helpers
-// ---------------------------------------------------------------------------
-
 const MANTLE_SUPPORTED_REGIONS = [
   "us-east-1",
   "us-east-2",
@@ -83,10 +79,6 @@ function isSupportedRegion(region: string): boolean {
   return (MANTLE_SUPPORTED_REGIONS as readonly string[]).includes(region);
 }
 
-// ---------------------------------------------------------------------------
-// Bearer token resolution
-// ---------------------------------------------------------------------------
-
 type MantleBearerTokenProvider = () => Promise<string>;
 type MantleBearerTokenProviderFactory = (opts?: {
   region?: string;
@@ -108,11 +100,7 @@ async function loadMantleBearerTokenProviderFactory(): Promise<MantleBearerToken
  * to generate one from IAM credentials via `@aws/bedrock-token-generator`.
  */
 export function resolveMantleBearerToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const explicitToken = env.AWS_BEARER_TOKEN_BEDROCK?.trim();
-  if (explicitToken) {
-    return explicitToken;
-  }
-  return undefined;
+  return env.AWS_BEARER_TOKEN_BEDROCK?.trim() || undefined;
 }
 
 /** Token cache for IAM-derived bearer tokens, keyed by region. */
@@ -243,10 +231,6 @@ export async function resolveMantleRuntimeBearerToken(params: {
     ...(expiresAt === undefined ? {} : { expiresAt }),
   };
 }
-// ---------------------------------------------------------------------------
-// OpenAI-format model list response
-// ---------------------------------------------------------------------------
-
 interface OpenAIModelEntry {
   id: string;
   object?: string;
@@ -258,10 +242,6 @@ interface OpenAIModelsResponse {
   data: OpenAIModelEntry[];
   object?: string;
 }
-
-// ---------------------------------------------------------------------------
-// Reasoning heuristic
-// ---------------------------------------------------------------------------
 
 /** Model ID substrings that indicate reasoning/thinking support. */
 const REASONING_PATTERNS = [
@@ -293,10 +273,6 @@ async function readMantleModelDiscoveryJson(response: Response): Promise<OpenAIM
   return body as OpenAIModelsResponse;
 }
 
-// ---------------------------------------------------------------------------
-// Discovery cache
-// ---------------------------------------------------------------------------
-
 interface MantleCacheEntry {
   bearerToken: string;
   models: ModelDefinitionConfig[];
@@ -308,10 +284,6 @@ type MantleDiscoveryConfig = {
 };
 
 const discoveryCache = new Map<string, MantleCacheEntry>();
-
-// ---------------------------------------------------------------------------
-// Model discovery
-// ---------------------------------------------------------------------------
 
 /**
  * Discover available models from the Mantle `/v1/models` endpoint.
@@ -385,10 +357,6 @@ export async function discoverMantleModels(params: {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Implicit provider resolution
-// ---------------------------------------------------------------------------
-
 /**
  * Resolve an implicit Bedrock Mantle provider if authentication is available.
  *
@@ -418,7 +386,6 @@ export async function resolveImplicitMantleProvider(params: {
     return null;
   }
 
-  // Try explicit token first, then generate from IAM credentials
   const bearerToken =
     explicitBearerToken ??
     (await generateBearerTokenFromIam({

@@ -387,7 +387,7 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
     await fs.writeFile(steadyFile, usageLine("unchanged"));
     expect(await refreshCostUsageCacheForAgent({ agentId })).toBe("refreshed");
     await fs.appendFile(growingFile, usageLine("awaiting-write"));
-    const placement = createWorkerSessionPlacementStore({
+    const placement = await createWorkerSessionPlacementStore({
       database: openOpenClawStateDatabase(),
     }).startDispatch({
       agentId,

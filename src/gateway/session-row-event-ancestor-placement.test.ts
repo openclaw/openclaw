@@ -63,12 +63,12 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
     }
     const database = openOpenClawStateDatabase();
     const placements = createWorkerSessionPlacementStore({ database, now: () => now - 50 });
-    const rootPlacement = placements.startDispatch({
+    const rootPlacement = await placements.startDispatch({
       sessionId: "root",
       sessionKey: root,
       agentId: "main",
     });
-    placements.startDispatch({
+    await placements.startDispatch({
       sessionId: "unused",
       sessionKey: "agent:main:unused",
       agentId: "main",
@@ -78,7 +78,7 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
       sessionId: "parent",
       ownerEpoch: 7,
     });
-    let parentPlacement = placements.startDispatch({
+    let parentPlacement = await placements.startDispatch({
       sessionId: "parent",
       sessionKey: parent,
       agentId: "main",

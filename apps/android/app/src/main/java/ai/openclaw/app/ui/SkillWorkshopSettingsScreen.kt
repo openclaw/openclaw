@@ -218,26 +218,10 @@ internal fun SkillWorkshopSettingsScreen(
             onInspect = {
               viewModel.inspectSkillWorkshopProposal(proposalId = proposal.id, agentId = selectedAgentParam)
             },
-            onApply = {
+            onAction = { action ->
               pendingAction =
                 SkillWorkshopPendingAction(
-                  action = SkillWorkshopProposalAction.Apply,
-                  proposalId = proposal.id,
-                  title = proposal.title,
-                )
-            },
-            onReject = {
-              pendingAction =
-                SkillWorkshopPendingAction(
-                  action = SkillWorkshopProposalAction.Reject,
-                  proposalId = proposal.id,
-                  title = proposal.title,
-                )
-            },
-            onQuarantine = {
-              pendingAction =
-                SkillWorkshopPendingAction(
-                  action = SkillWorkshopProposalAction.Quarantine,
+                  action = action,
                   proposalId = proposal.id,
                   title = proposal.title,
                 )
@@ -485,10 +469,15 @@ private fun SkillWorkshopProposalDetail(
   isConnected: Boolean,
   operatorAdminScopeAvailable: Boolean,
   onInspect: () -> Unit,
-  onApply: () -> Unit,
-  onReject: () -> Unit,
-  onQuarantine: () -> Unit,
+  onAction: (SkillWorkshopProposalAction) -> Unit,
 ) {
+  val actionEnabled =
+    skillWorkshopProposalActionEnabled(
+      isConnected = isConnected,
+      operatorAdminScopeAvailable = operatorAdminScopeAvailable,
+      busy = inspecting || mutating,
+      status = proposal.status,
+    )
   ClawPanel {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
       Row(
@@ -567,14 +556,8 @@ private fun SkillWorkshopProposalDetail(
         )
         ClawPrimaryButton(
           text = if (mutating) nativeString("Working") else nativeString("Apply"),
-          onClick = onApply,
-          enabled =
-            skillWorkshopProposalActionEnabled(
-              isConnected = isConnected,
-              operatorAdminScopeAvailable = operatorAdminScopeAvailable,
-              busy = inspecting || mutating,
-              status = proposal.status,
-            ),
+          onClick = { onAction(SkillWorkshopProposalAction.Apply) },
+          enabled = actionEnabled,
           modifier = Modifier.weight(1f),
         )
       }
@@ -587,26 +570,14 @@ private fun SkillWorkshopProposalDetail(
       ) {
         ClawSecondaryButton(
           text = nativeString("Reject"),
-          onClick = onReject,
-          enabled =
-            skillWorkshopProposalActionEnabled(
-              isConnected = isConnected,
-              operatorAdminScopeAvailable = operatorAdminScopeAvailable,
-              busy = inspecting || mutating,
-              status = proposal.status,
-            ),
+          onClick = { onAction(SkillWorkshopProposalAction.Reject) },
+          enabled = actionEnabled,
           modifier = Modifier.weight(1f),
         )
         ClawSecondaryButton(
           text = nativeString("Quarantine"),
-          onClick = onQuarantine,
-          enabled =
-            skillWorkshopProposalActionEnabled(
-              isConnected = isConnected,
-              operatorAdminScopeAvailable = operatorAdminScopeAvailable,
-              busy = inspecting || mutating,
-              status = proposal.status,
-            ),
+          onClick = { onAction(SkillWorkshopProposalAction.Quarantine) },
+          enabled = actionEnabled,
           modifier = Modifier.weight(1f),
         )
       }

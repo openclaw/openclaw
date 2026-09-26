@@ -603,7 +603,14 @@ describe("createChatRunState", () => {
 
   it("retains native boxed values, shared containers, and a proxy revoked by its last getter", () => {
     const state = createChatRunState();
-    const shared = { value: Object(3), text: Object("é"), enabled: Object(false) };
+    const numberHints: string[] = [];
+    const boxedNumber = Object.assign(Object(3), {
+      [Symbol.toPrimitive]: (hint: string) => {
+        numberHints.push(hint);
+        return -3.25;
+      },
+    });
+    const shared = { value: boxedNumber, text: Object("é"), enabled: Object(false) };
     const revocable = Proxy.revocable(["last"], {
       get(target, key, receiver) {
         const value: unknown = Reflect.get(target, key, receiver);
@@ -626,10 +633,11 @@ describe("createChatRunState", () => {
     });
     const event = state.runs.get("run-1")?.progressSnapshot?.events[0];
     expect(event?.data.result).toEqual({
-      first: { value: 3, text: "é", enabled: false },
-      again: { value: 3, text: "é", enabled: false },
+      first: { value: -3.25, text: "é", enabled: false },
+      again: { value: -3.25, text: "é", enabled: false },
       last: ["last"],
     });
+    expect(numberHints).toEqual(["number", "number"]);
     expect(state.runs.get("run-1")?.progressSnapshot?.byteLength).toBe(
       Buffer.byteLength(JSON.stringify(event)),
     );

@@ -37,7 +37,6 @@ extensions/anthropic/stream-wrappers.ts	3
 extensions/baseten/models.ts	3
 extensions/beam/src/mirror.ts	3
 extensions/beam/src/types.ts	2
-extensions/brave/src/brave-web-search-provider.shared.ts	1
 extensions/browser/plugin-registration.ts	1
 extensions/browser/src/browser-node-fallback.ts	1
 extensions/browser/src/browser-node-proxy.ts	2
@@ -217,7 +216,6 @@ extensions/codex/src/session-upstream-activity.ts	3
 extensions/codex/src/supervision-tools.ts	1
 extensions/codex/src/web-search-provider.runtime.ts	1
 extensions/codex/src/web-search-provider.ts	1
-extensions/cohere/provider-catalog.ts	3
 extensions/cohere/stream.ts	2
 extensions/comfy/workflow-runtime.ts	2
 extensions/copilot-proxy/index.ts	1
@@ -245,7 +243,7 @@ extensions/cua-computer/src/driver-result.ts	9
 extensions/cua-computer/src/mcp-driver-client.ts	4
 extensions/cua-computer/src/window-actions.ts	3
 extensions/deepinfra/provider-models.ts	2
-extensions/deepseek/provider-policy-api.ts	4
+extensions/deepseek/provider-policy-api.ts	2
 extensions/device-pair/index.ts	6
 extensions/device-pair/notify-state.ts	3
 extensions/device-pair/notify.ts	1
@@ -382,7 +380,7 @@ extensions/discord/src/voice/segment.ts	1
 extensions/duckduckgo/src/config.ts	1
 extensions/duckduckgo/src/ddg-search-provider.ts	1
 extensions/elevenlabs/config-compat.ts	2
-extensions/exa/src/exa-web-search-provider.runtime.ts	9
+extensions/exa/src/exa-web-search-provider.runtime.ts	5
 extensions/fal/image-generation-provider.ts	1
 extensions/fal/music-generation-provider.ts	2
 extensions/fal/video-generation-provider.ts	3
@@ -440,7 +438,7 @@ extensions/file-transfer/src/tools/file-fetch-tool.ts	2
 extensions/file-transfer/src/tools/file-write-tool.ts	1
 extensions/firecrawl/index.ts	2
 extensions/firecrawl/src/config.ts	3
-extensions/firecrawl/src/firecrawl-client.ts	4
+extensions/firecrawl/src/firecrawl-client.ts	2
 extensions/firecrawl/src/firecrawl-fetch-provider-shared.ts	5
 extensions/fish-audio-speech/speech-provider.ts	1
 extensions/github-copilot/connection-bound-ids.ts	1
@@ -519,9 +517,8 @@ extensions/irc/src/monitor.ts	1
 extensions/irc/src/send.ts	1
 extensions/irc/src/setup-core.ts	6
 extensions/irc/src/setup-surface.ts	31
-extensions/kilocode/provider-models.ts	4
+extensions/kilocode/provider-models.ts	3
 extensions/kilocode/stream.ts	1
-extensions/kimi-coding/index.ts	2
 extensions/kimi-coding/provider-policy-api.ts	2
 extensions/kimi-coding/stream.ts	7
 extensions/line/src/accounts.ts	3
@@ -819,7 +816,7 @@ extensions/openai/speech-provider.ts	2
 extensions/openai/tts.ts	2
 extensions/openai/video-generation-provider.ts	3
 extensions/opencode-go/reasoning-sanitizer.ts	2
-extensions/opencode-go/stream-termination.ts	9
+extensions/opencode-go/stream-termination.ts	8
 extensions/opencode/provider-catalog.ts	2
 extensions/opencode/session-catalog-plugin.ts	1
 extensions/opencode/stream.ts	3
@@ -832,10 +829,8 @@ extensions/openrouter/video-model-catalog.ts	1
 extensions/openshell/src/backend.ts	2
 extensions/openshell/src/fs-bridge.ts	1
 extensions/parallel/src/parallel-free-web-search-provider.runtime.ts	1
-extensions/parallel/src/parallel-search-normalize.ts	1
-extensions/parallel/src/parallel-web-search-provider.runtime.ts	2
-extensions/perplexity/src/perplexity-web-search-provider.shared.ts	1
-extensions/pixverse/video-generation-provider.ts	2
+extensions/parallel/src/parallel-web-search-provider.runtime.ts	1
+extensions/pixverse/video-generation-provider.ts	1
 extensions/policy/src/cli.ts	1
 extensions/policy/src/doctor/automatic-repairs.ts	7
 extensions/policy/src/doctor/evaluation.ts	3
@@ -964,7 +959,6 @@ extensions/qa-lab/web/src/capture-saved-view.ts	1
 extensions/qa-lab/web/src/http.ts	1
 extensions/qa-lab/web/src/ui-render-capture-controls.ts	1
 extensions/qa-lab/web/src/ui-render-utils.ts	1
-extensions/qianfan/onboard.ts	2
 extensions/qwen/models.ts	1
 extensions/qwen/stream.ts	3
 extensions/raft/src/accounts.ts	1
@@ -1147,7 +1141,7 @@ extensions/telegram/src/thread-bindings-store.ts	1
 extensions/telegram/src/topic-name-cache.ts	1
 extensions/telegram/src/update-offset-store.ts	1
 extensions/telegram/src/webhook.ts	1
-extensions/tencent/stream.ts	4
+extensions/tencent/stream.ts	1
 extensions/tlon/src/channel.runtime.ts	3
 extensions/tlon/src/channel.ts	2
 extensions/tlon/src/monitor/approval-runtime.ts	2
@@ -1197,7 +1191,6 @@ extensions/voice-call/src/webhook.ts	10
 extensions/voice-call/src/webhook/realtime-handler.ts	1
 extensions/volcengine/tts.ts	2
 extensions/voyage/embedding-batch.ts	1
-extensions/vydra/shared.ts	2
 extensions/web-readability/web-content-extractor.ts	2
 extensions/whatsapp/src/account-config.ts	1
 extensions/whatsapp/src/agent-tools-call.ts	1
@@ -2415,7 +2408,6 @@ src/cron/stagger.ts	1
 src/cron/store/delivery-codec.ts	2
 src/cron/store/quarantine.ts	1
 src/cron/store/row-codec.ts	3
-src/cron/task-run-detail.ts	2
 src/daemon/arg-split.ts	2
 src/daemon/launchd-install.ts	4
 src/daemon/launchd-lifecycle.ts	4
@@ -2425,7 +2417,6 @@ src/daemon/schtasks-control.ts	5
 src/daemon/schtasks-install.ts	2
 src/daemon/schtasks-process.ts	1
 src/daemon/schtasks-runtime.ts	4
-src/daemon/service.ts	1
 src/daemon/systemd-exec.ts	2
 src/daemon/systemd-install.ts	2
 src/daemon/systemd-lifecycle.ts	2
@@ -2463,7 +2454,7 @@ src/gateway/cli-session-history.claude.ts	7
 src/gateway/cli-session-history.merge.ts	6
 src/gateway/control-ui-plugin-auth-cookie.ts	1
 src/gateway/control-ui-session-pr-subscriptions.ts	2
-src/gateway/control-ui.ts	2
+src/gateway/control-ui.ts	1
 src/gateway/conversation-turn.ts	1
 src/gateway/desktop/host-guidance.ts	1
 src/gateway/desktop/managed-linux.ts	1
@@ -2530,7 +2521,7 @@ src/gateway/server-methods/chat-transcript-persistence.ts	4
 src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/config-write-flow.ts	1
 src/gateway/server-methods/config.ts	4
-src/gateway/server-methods/cron.ts	11
+src/gateway/server-methods/cron.ts	4
 src/gateway/server-methods/device-scope-upgrade.ts	2
 src/gateway/server-methods/devices.ts	4
 src/gateway/server-methods/doctor.ts	3

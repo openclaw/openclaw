@@ -107,7 +107,7 @@ async function seedActiveDevicePlacement(nodeId: string): Promise<void> {
     },
   });
 
-  let placement = placements.startDispatch({
+  let placement = await placements.startDispatch({
     sessionId: RUNNER_SESSION_ID,
     sessionKey: RUNNER_SESSION_KEY,
     agentId: "main",

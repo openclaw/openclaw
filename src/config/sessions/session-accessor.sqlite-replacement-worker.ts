@@ -23,11 +23,11 @@ import {
   type SessionTranscriptInitializationPublication,
 } from "./session-accessor.sqlite-entry-cache.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
-import {
-  prepareSessionEntryReplacementPublication,
-  type SessionEntryReplacementCommit,
-  type SessionEntryReplacementCommitted,
-} from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import type {
+  SessionEntryReplacementCommit,
+  SessionEntryReplacementCommitted,
+} from "./session-accessor.sqlite-replacement-types.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 
 type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
@@ -245,7 +245,7 @@ export async function commitSessionEntryReplacementsInWorker(
   lifecycle: {
     identityAgentId: string;
     afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
-    onLifecycleCommitted?: () => void;
+    onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
   },
   retainedExecution?: OpenClawAgentDatabaseExecution,
 ) {
@@ -272,7 +272,7 @@ export async function commitSessionEntryReplacementsInWorker(
       receipt = prepareSessionEntryReplacementPublication(committed);
     }
     if (receipt) {
-      lifecycle.onLifecycleCommitted?.();
+      lifecycle.onLifecycleCommitted?.(receipt.pendingArchiveRecovery);
     }
     const unknown = admitted.admission.settlement?.kind !== "completed" || !receipt;
     const published = publication.settle(receipt, unknown);

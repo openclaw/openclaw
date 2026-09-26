@@ -56,6 +56,8 @@ describe("cloudflare-ai-gateway plugin", () => {
     if (!capturedPayload) {
       throw new Error("expected Cloudflare AI Gateway payload capture");
     }
-    expect(capturedPayload.messages).toEqual([{ role: "user", content: "Return JSON." }]);
+    expect(JSON.stringify(capturedPayload)).toBe(
+      '{"thinking":{"type":"enabled","budget_tokens":1024},"messages":[{"role":"user","content":"Return JSON."}]}',
+    );
   });
 });

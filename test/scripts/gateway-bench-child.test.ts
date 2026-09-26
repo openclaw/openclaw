@@ -1,48 +1,35 @@
-// Gateway benchmark child test support simulates child process behavior for script tests.
+import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { stopChild } from "../../scripts/lib/gateway-bench-child.ts";
 
-type StopChildResult = {
-  exitedBeforeTeardown: boolean;
-  exitCode: number | null;
-  signal: string | null;
-};
+describe("gateway benchmark child teardown", () => {
+  it.each([0, 7])(
+    "classifies queued child exit %i before sending teardown signals",
+    async (exitCode) => {
+      const child = new EventEmitter() as EventEmitter & {
+        exitCode: number | null;
+        kill: ReturnType<typeof vi.fn>;
+        signalCode: NodeJS.Signals | null;
+      };
+      child.exitCode = null;
+      child.signalCode = null;
+      child.kill = vi.fn(() => true);
 
-type StopChild<TChild> = (
-  child: TChild,
-  options?: {
-    killGraceMs?: number;
-    teardownGraceMs?: number;
-  },
-) => Promise<StopChildResult>;
+      const stopped = stopChild(child as unknown as ChildProcess);
+      queueMicrotask(() => {
+        child.exitCode = exitCode;
+        child.emit("exit", exitCode, null);
+      });
 
-export function registerStopChildBehaviorTests<TChild>(params: {
-  stopChild: StopChild<TChild>;
-  queuedExitCode: number;
-}) {
-  it("classifies queued child exits before sending teardown signals", async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      exitCode: number | null;
-      kill: ReturnType<typeof vi.fn>;
-      signalCode: NodeJS.Signals | null;
-    };
-    child.exitCode = null;
-    child.signalCode = null;
-    child.kill = vi.fn(() => true);
-
-    const stopped = params.stopChild(child as unknown as TChild);
-    queueMicrotask(() => {
-      child.exitCode = params.queuedExitCode;
-      child.emit("exit", params.queuedExitCode, null);
-    });
-
-    await expect(stopped).resolves.toEqual({
-      exitedBeforeTeardown: true,
-      exitCode: params.queuedExitCode,
-      signal: null,
-    });
-    expect(child.kill).not.toHaveBeenCalled();
-  });
+      await expect(stopped).resolves.toEqual({
+        exitedBeforeTeardown: true,
+        exitCode,
+        signal: null,
+      });
+      expect(child.kill).not.toHaveBeenCalled();
+    },
+  );
 
   it("classifies failed teardown signaling as a pre-teardown child exit", async () => {
     const child = new EventEmitter() as EventEmitter & {
@@ -60,7 +47,7 @@ export function registerStopChildBehaviorTests<TChild>(params: {
       return false;
     });
 
-    await expect(params.stopChild(child as unknown as TChild)).resolves.toEqual({
+    await expect(stopChild(child as unknown as ChildProcess)).resolves.toEqual({
       exitedBeforeTeardown: true,
       exitCode: 8,
       signal: null,
@@ -89,7 +76,7 @@ export function registerStopChildBehaviorTests<TChild>(params: {
     child.unref = vi.fn();
 
     await expect(
-      params.stopChild(child as unknown as TChild, {
+      stopChild(child as unknown as ChildProcess, {
         killGraceMs: 1,
         teardownGraceMs: 1,
       }),
@@ -142,7 +129,7 @@ export function registerStopChildBehaviorTests<TChild>(params: {
         return true;
       });
       try {
-        const stopped = params.stopChild(child as unknown as TChild, {
+        const stopped = stopChild(child as unknown as ChildProcess, {
           killGraceMs: 50,
           teardownGraceMs: 1,
         });
@@ -212,7 +199,7 @@ export function registerStopChildBehaviorTests<TChild>(params: {
       });
       try {
         await expect(
-          params.stopChild(child as unknown as TChild, {
+          stopChild(child as unknown as ChildProcess, {
             killGraceMs: 50,
             teardownGraceMs: 1,
           }),
@@ -233,4 +220,4 @@ export function registerStopChildBehaviorTests<TChild>(params: {
       }
     },
   );
-}
+});

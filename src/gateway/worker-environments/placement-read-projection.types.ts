@@ -19,6 +19,7 @@ export type WorkerSessionPlacementProjection = {
   placements: ReadonlyMap<string, WorkerSessionPlacementRecord>;
   moves: ReadonlyMap<string, WorkerPlacementMoveIntent>;
   workspaceResultReconcilingSessionIds: ReadonlySet<string>;
+  workspaceRecoveryPendingSessionIds: ReadonlySet<string>;
   environments: ReadonlyMap<string, WorkerEnvironmentPlacementFacts>;
 };
 

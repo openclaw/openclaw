@@ -319,6 +319,23 @@ docker_e2e_container_exec_bash() {
   docker_e2e_docker_cmd exec "$container_name" bash -lc "$*"
 }
 
+docker_e2e_wait_for_proof() {
+  local container_name="$1"
+  local attempts="$2"
+  for _ in $(seq 1 "$attempts"); do
+    if docker exec "$container_name" test -f /tmp/openclaw-proof-ready; then
+      return 0
+    fi
+    if [ "$(docker inspect --format '{{.State.Running}}' "$container_name")" != "true" ]; then
+      docker logs "$container_name" >&2
+      return 1
+    fi
+    sleep 1
+  done
+  docker logs "$container_name" >&2
+  return 1
+}
+
 docker_e2e_wait_container_bash() {
   local container_name="$1"
   shift

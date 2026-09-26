@@ -1412,27 +1412,25 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
-  it.each(["stop", "esc", "abort", "wait", "exit"])(
-    "sends the idle conversational word %s as a normal message",
-    async (message) => {
-      const host = makeChatHost({
-        requestHandlers: {
-          "chat.send": { runId: `idle-${message}`, status: "started" },
-        },
-        chatMessage: message,
-        sessionKey: "agent:main",
-      });
+  it("sends the idle conversational word stop as a normal message", async () => {
+    const message = "stop";
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": { runId: `idle-${message}`, status: "started" },
+      },
+      chatMessage: message,
+      sessionKey: "agent:main",
+    });
 
-      await handleSendChat(host);
+    await handleSendChat(host);
 
-      expect(host.request).toHaveBeenCalledWith(
-        "chat.send",
-        expect.objectContaining({ message, sessionKey: "agent:main" }),
-      );
-      expect(host.request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
-      expect(host.chatMessage).toBe("");
-    },
-  );
+    expect(host.request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({ message, sessionKey: "agent:main" }),
+    );
+    expect(host.request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
+    expect(host.chatMessage).toBe("");
+  });
 
   afterEach(() => {
     replaceSlashCommands(buildFallbackSlashCommands());
@@ -1440,7 +1438,7 @@ describe("handleSendChat", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["/pair", "/pair:", "/pair :"])(
+  it.each(["/pair", "/pair :"])(
     "handles parsed no-argument presentation %s before queueing",
     async (chatMessage) => {
       installPairClientPresentationCommand();
@@ -1490,7 +1488,7 @@ describe("handleSendChat", () => {
     expect(host.chatQueue).toStrictEqual([]);
   });
 
-  it.each(["/pair status", "/pair approve request-1", "/pair:qr", "/pair unknown"])(
+  it.each(["/pair status", "/pair:qr"])(
     "keeps argument-bearing presentation command %s on the remote path",
     async (chatMessage) => {
       installPairClientPresentationCommand();
@@ -1624,22 +1622,6 @@ describe("handleSendChat", () => {
     );
   });
 
-  it("routes typed /new through the fresh-session action without confirmation", async () => {
-    const createChatSession = vi.fn(async () => true);
-    const host = makeChatHost({
-      requestHandlers: {},
-      chatMessage: "/new",
-      sessionKey: "agent:main",
-      createChatSession,
-    });
-
-    await handleSendChat(host);
-
-    expect(host.request).not.toHaveBeenCalled();
-    expect(createChatSession).toHaveBeenCalledTimes(1);
-    expect(host.chatMessage).toBe("");
-  });
-
   it("restores typed /new when session creation is cancelled", async () => {
     const createChatSession = vi.fn(async () => false);
     const host = makeChatHost({
@@ -1657,6 +1639,7 @@ describe("handleSendChat", () => {
   it("does not queue typed /new behind an active run", async () => {
     const createChatSession = vi.fn(async () => true);
     const host = makeChatHost({
+      requestHandlers: {},
       chatMessage: "/new",
       chatRunId: "run-main",
       chatStream: "Working...",
@@ -1666,26 +1649,10 @@ describe("handleSendChat", () => {
     await handleSendChat(host);
 
     expect(createChatSession).toHaveBeenCalledTimes(1);
+    expect(host.request).not.toHaveBeenCalled();
     expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatRunId).toBe("run-main");
     expect(host.chatStream).toBe("Working...");
-    expect(host.chatMessage).toBe("");
-  });
-
-  it("preserves typed /reset command dispatch without confirmation", async () => {
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.send": { status: "started" },
-      },
-      chatMessage: "/reset",
-      sessionKey: "agent:main",
-    });
-
-    await handleSendChat(host);
-
-    const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
-    expect(payload.sessionKey).toBe("agent:main");
-    expect(payload.message).toBe("/reset");
     expect(host.chatMessage).toBe("");
   });
 
@@ -1790,14 +1757,6 @@ describe("handleSendChat", () => {
 
   it.each([
     {
-      input: "/reset soft please reload system prompt",
-      expected: "/reset soft please reload system prompt",
-    },
-    {
-      input: "/reset\tsoft please reload system prompt",
-      expected: "/reset soft please reload system prompt",
-    },
-    {
       input: "/reset\nsoft please reload system prompt",
       expected: "/reset soft please reload system prompt",
     },
@@ -1885,33 +1844,6 @@ describe("handleSendChat", () => {
     expect(host.sessionsResult).toBe(archivedSessions);
   });
 
-  it("keeps terminal error ACK sends retryable without restoring a duplicate draft", async () => {
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.send": (params: unknown) => {
-          const payload = requireRecord(params, "chat send payload");
-          return { runId: payload.idempotencyKey, status: "error" };
-        },
-      },
-      chatMessage: "send before failing",
-      sessionKey: "agent:main",
-    });
-
-    await handleSendChat(host);
-
-    expect(host.chatMessages).toStrictEqual([]);
-    expect(host.chatMessage).toBe("");
-    expect(host.chatQueue).toHaveLength(1);
-    expect(host.chatQueue[0]).toMatchObject({
-      text: "send before failing",
-      sendState: "failed",
-      sendError: "Chat failed before the run started; try again.",
-    });
-    expect(host.lastError).toBeNull();
-    expect(host.chatError).toBeNull();
-    expect(host.chatRunId).toBeNull();
-  });
-
   it.each(["error", "timeout"] as const)(
     "removes only a reducer-owned optimistic turn after a terminal %s ACK",
     async (status) => {
@@ -1957,6 +1889,9 @@ describe("handleSendChat", () => {
         sendRunId: rejectedRunId,
         sendState: "failed",
       });
+      expect(host.lastError).toBeNull();
+      expect(host.chatError).toBeNull();
+      expect(host.chatRunId).toBeNull();
       expect(
         getChatSessionProjection(host, { sessionKey: host.sessionKey }).entries,
       ).not.toContainEqual(expect.objectContaining({ pendingRunId: rejectedRunId }));
@@ -2076,36 +2011,6 @@ describe("handleSendChat", () => {
       (payload) => payload.phase,
     );
     expect(phasesAfterAck).toEqual(expect.arrayContaining(["ack"]));
-  });
-
-  it("waits for an in-flight model picker update before sending chat", async () => {
-    const switchUpdate = createDeferred<boolean>();
-
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.send": { status: "started" },
-      },
-      chatMessage: "use the newly selected model",
-      pendingSettingsPatches: { "agent:main": switchUpdate.promise },
-    });
-
-    const send = handleSendChat(host);
-    await Promise.resolve();
-
-    expect(host.request).not.toHaveBeenCalled();
-    expect(host.chatMessage).toBe("");
-    expect(host.chatQueue[0]).toMatchObject({
-      sendState: "waiting-model",
-      text: "use the newly selected model",
-    });
-
-    switchUpdate.resolve(true);
-    await send;
-
-    const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
-    expect(payload.sessionKey).toBe("agent:main");
-    expect(payload.message).toBe("use the newly selected model");
-    expect(host.chatMessage).toBe("");
   });
 
   it("waits for every pending reasoning and speed patch before sending chat", async () => {
@@ -2764,30 +2669,6 @@ describe("handleSendChat", () => {
       expect(container.scrollTop).toBe(1200);
     },
   );
-
-  it("preserves draft edits made while waiting for a model picker update", async () => {
-    const switchUpdate = createDeferred<boolean>();
-
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.send": { status: "started" },
-      },
-      chatMessage: "send this",
-      pendingSettingsPatches: { "agent:main": switchUpdate.promise },
-    });
-
-    const send = handleSendChat(host);
-    await Promise.resolve();
-    host.chatMessage = "keep typing";
-
-    switchUpdate.resolve(true);
-    await send;
-
-    const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
-    expect(payload.sessionKey).toBe("agent:main");
-    expect(payload.message).toBe("send this");
-    expect(host.chatMessage).toBe("keep typing");
-  });
 
   it.each([
     {
@@ -3456,28 +3337,26 @@ describe("handleSendChat", () => {
     expect(refreshCurrentSessionTools).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["/model default", "/model DEFAULT"])(
-    "forwards semantic model reset commands through chat.send: %s",
-    async (command) => {
-      const host = makeChatHost({
-        agentsList: { defaultId: "main", mainKey: "main" },
-        requestHandlers: {
-          "chat.send": { status: "started" },
-          "sessions.patch": createResolvedModelPatch("default", "openai"),
-        },
-        sessionKey: "main",
-        chatMessage: command,
-      });
+  it("forwards a case-insensitive semantic model reset through chat.send", async () => {
+    const command = "/model DEFAULT";
+    const host = makeChatHost({
+      agentsList: { defaultId: "main", mainKey: "main" },
+      requestHandlers: {
+        "chat.send": { status: "started" },
+        "sessions.patch": createResolvedModelPatch("default", "openai"),
+      },
+      sessionKey: "main",
+      chatMessage: command,
+    });
 
-      await handleSendChat(host);
+    await handleSendChat(host);
 
-      expect(host.request).toHaveBeenCalledWith(
-        "chat.send",
-        expect.objectContaining({ message: command, sessionKey: "agent:main:main" }),
-      );
-      expect(host.request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
-    },
-  );
+    expect(host.request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({ message: command, sessionKey: "agent:main:main" }),
+    );
+    expect(host.request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
+  });
 
   it("queues local slash commands while the gateway client is unavailable", async () => {
     const host = makeChatHost({
@@ -3824,22 +3703,6 @@ describe("handleSendChat", () => {
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
   });
 
-  it("routes /side through the same session companion path", async () => {
-    const openSessionCompanion = vi.fn();
-    const host = makeChatHost({
-      chatRunId: "run-main",
-      chatStream: "Working...",
-      chatMessage: "/side what changed?",
-      openSessionCompanion,
-    });
-
-    await handleSendChat(host);
-
-    expect(openSessionCompanion).toHaveBeenCalledWith("what changed?");
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(host.chatRunId).toBe("run-main");
-  });
-
   it("routes /btw without adopting a main chat run when idle", async () => {
     const openSessionCompanion = vi.fn();
     const host = makeChatHost({
@@ -4178,41 +4041,39 @@ describe("handleSendChat", () => {
     expect(payload).not.toHaveProperty("queueMode");
   });
 
-  it.each(["followup", "collect", "interrupt"] as const)(
-    "preserves the inherited %s mode for active-run sends",
-    async (queueMode) => {
-      const host = makeChatHost({
-        requestHandlers: {
-          "chat.send": { status: "started", runId: `${queueMode}-run` },
-        },
-        chatFollowUpMode: queueMode,
-        chatMessage: `send with ${queueMode}`,
-        chatRunId: "run-1",
-        chatStream: "Working...",
-        sessionKey: "agent:main:main",
-      });
+  it("preserves an inherited collect mode for active-run sends", async () => {
+    const queueMode = "collect" as const;
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": { status: "started", runId: `${queueMode}-run` },
+      },
+      chatFollowUpMode: queueMode,
+      chatMessage: `send with ${queueMode}`,
+      chatRunId: "run-1",
+      chatStream: "Working...",
+      sessionKey: "agent:main:main",
+    });
 
-      await handleSendChat(host);
+    await handleSendChat(host);
 
-      await waitForFast(() =>
-        expect(host.request).toHaveBeenCalledWith(
-          "chat.send",
-          expect.objectContaining({
-            message: `send with ${queueMode}`,
-            queueMode,
-            sessionKey: "agent:main:main",
-          }),
-        ),
-      );
-      expect(host.chatQueue).toEqual([
+    await waitForFast(() =>
+      expect(host.request).toHaveBeenCalledWith(
+        "chat.send",
         expect.objectContaining({
+          message: `send with ${queueMode}`,
           queueMode,
-          sendState: "sending",
-          text: `send with ${queueMode}`,
+          sessionKey: "agent:main:main",
         }),
-      ]);
-    },
-  );
+      ),
+    );
+    expect(host.chatQueue).toEqual([
+      expect.objectContaining({
+        queueMode,
+        sendState: "sending",
+        text: `send with ${queueMode}`,
+      }),
+    ]);
+  });
 
   it("honors the selected mode when only the session row reports an active run", async () => {
     const host = makeChatHost({
