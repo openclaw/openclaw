@@ -152,6 +152,7 @@ describe("nvidia provider hooks", () => {
         method: "api-key",
         choiceId: "nvidia-api-key",
         appGuidedSecret: true,
+        credentialOnly: true,
         choiceLabel: "NVIDIA API key",
         groupId: "nvidia",
         groupLabel: "NVIDIA",
