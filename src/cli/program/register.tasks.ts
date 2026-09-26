@@ -2,6 +2,7 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { TASK_FLOW_STATUSES } from "../../tasks/task-flow-registry.types.js";
 import {
   TASK_RUNTIMES,
@@ -34,13 +35,12 @@ const TASKS_LEAF_OPTION_SUPPORT = {
 } satisfies Record<string, readonly TasksParentOption[]>;
 type TasksLeaf = keyof typeof TASKS_LEAF_OPTION_SUPPORT;
 
-function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
-  let promise: Promise<T> | undefined;
-  return () => (promise ??= load());
-}
-
-const loadTasksCommands = createModuleLoader(() => import("../../commands/tasks.js"));
-const loadFlowsCommands = createModuleLoader(() => import("../../commands/flows.js"));
+const loadTasksCommands = createLazyPromise(() => import("../../commands/tasks.js"), {
+  cacheRejections: true,
+});
+const loadFlowsCommands = createLazyPromise(() => import("../../commands/flows.js"), {
+  cacheRejections: true,
+});
 
 async function runOwner<T>(load: () => Promise<T>, action: (owner: T) => Promise<void>) {
   await runCommandWithRuntime(defaultRuntime, async () => action(await load()));

@@ -189,6 +189,11 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
 
     `openChannelIngressDrain(...)` opens the core channel-agnostic worker over that queue (or creates a queue when none is supplied). The drain owns stale-claim recovery, per-lane claim serialization, complete-at-adoption or complete-on-dispatch-return, retry/dead-letter disposition, optional pre-adoption supersede, and claim→adoption stall timeout. Wire claim ownership into reply generation with `turnAdoptionLifecycle` (via `bindIngressLifecycleToReplyOptions` from `plugin-sdk/channel-outbound`). Channel plugins keep accept-side enqueue, lane derivation, non-retryable classification, and any supersede authorization policy.
 
+    Shared ingress monitors keep their drain alive during shutdown until completion,
+    release, and failure writes that have already started settle. If a write fails
+    while the drain still owns the claim, shutdown reports the error and retains
+    that ownership.
+
     <Warning>
     `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available only to bundled plugins and trusted official plugin installations in this release. Refusals include the recorded reason, registry database path, origin, and install source/spec; `plugins inspect` reports the same trust facts. A load path selecting the recorded official installation preserves trust; an untracked local copy does not. See [Trusted plugin state refused](/tools/plugin#trusted-plugin-state-refused) for doctor migrations and cause-specific remedies. An untrusted channel's ingress monitor fails channel start instead of running without a durable queue.
     </Warning>
@@ -318,8 +323,14 @@ input validation, and JSON serialization remain on the calling thread.
 Callback-based `update` and `deleteIf` retain the native synchronous transaction;
 do not replace either with a separate lookup and write. Worker errors retain `PluginStateStoreError` codes, operation, and path. Canonical
 state errors use their existing codec; other native causes retain bounded causal
-messages and error codes. Arbitrary custom properties and original stacks do not
-cross the worker boundary.
+messages, error codes, and numeric `errno` values. Structured file logs include
+the process ID, thread ID, and OpenClaw version that constructed the plugin-state
+error in `owner`, plus nested cause details. Failures before command dispatch
+are wrapped on the caller thread. Native cause codes appear as `errorCode` in these
+records; the in-memory error keeps its original `code`. Existing log redaction
+still applies. Arbitrary custom properties and original stacks do not cross the
+worker boundary. `PLUGIN_STATE_OPEN_FAILED` can describe a rejected admission
+before SQLite opens; inspect the cause and owner before diagnosing a file error.
 
 Discord and Slack use scalar conditional deletion when relinquishing a presence
 cooldown. On older hosts without that optional capability, they leave it to expire
@@ -360,6 +371,32 @@ admission releases. SessionManager `appendModelChange` and
 AgentSession and extension `setThinkingLevel` return `Promise<void>`. Await these
 operations before using the resulting model or thinking state. Other synchronous
 SessionManager operations still need an appropriate caller-owned write boundary.
+
+`SessionManager.appendMessageToTranscript` is a deprecated public SDK compatibility
+method, retained for plugins using the v2026.9.5 contract. It accepts ordinary,
+custom, and Bash execution messages and synchronously returns the persisted
+message ID. It delegates to the canonical append kernel and can perform SQLite
+work on the calling thread. Removal requires a versioned SDK replacement and a
+plugin migration window; the bundled failed-image path does not call it.
+
+Core failed-image settlement uses the internal `appendSessionTranscriptNote`
+operation, which accepts a custom message and returns a promise for its persisted `messageId`, canonical
+`message`, the append owner's `appended` result, and a `currentTail` fact from the same snapshot.
+The tail fact uses the transaction's visible leaf and generation: side metadata does not suppress a retry's publication, while a later visible entry does.
+File-backed notes use the same canonical agent worker and writer queue, reserving their turn
+before asynchronous target preparation. The embedded runner awaits its failed-image note before publishing that stored message in live context or the
+completed result when the owner appended it or confirms it is still the current tail after a lost reply. An idempotent historical result does not reintroduce a note omitted by compaction. Input and target capture precede awaited work; transaction and
+publication checks retain the original writer and session binding. A known
+commit followed by a publication failure retains its message ID and prevents
+model fallback from replaying the append. Incognito notes use the same canonical
+append snapshot under their existing process-held native write owner until its
+actor cutover; this path still performs caller-thread SQLite work. It leaves the
+manager's loaded view unchanged and applies the same fresh-append/current-tail
+publication rules. Detached notes continue through their in-memory manager owner.
+Canonical storage close revokes pending asynchronous notes and joins their target
+preparation, accepted work, and cleanup before releasing the store.
+Failed-image notes use the existing message idempotency key to survive redaction
+and same-run retries. Existing unkeyed notes retain their run-metadata matching.
 
 `SessionManager.open`, `openBounded`, and `setSessionTarget` capture `storePath`
 as an absolute lexical locator before reading the transcript or invoking

@@ -12,6 +12,20 @@ const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 18_000;
 
 type SkillsPromptFormat = { kind: "full" } | { kind: "compact"; descriptionMaxChars: number };
 
+function largestFittingValue(min: number, max: number, fits: (value: number) => boolean): number {
+  let lo = min;
+  let hi = max;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (fits(mid)) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return lo;
+}
+
 function buildSkillsLimitNote(params: {
   truncated: boolean;
   format: SkillsPromptFormat;
@@ -120,17 +134,10 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
   }
 
   if (!fitsCompact(skillsForPrompt, 0)) {
-    let lo = 0;
-    let hi = skillsForPrompt.length;
-    while (lo < hi) {
-      const mid = Math.ceil((lo + hi) / 2);
-      if (fitsCompact(skillsForPrompt.slice(0, mid), 0)) {
-        lo = mid;
-      } else {
-        hi = mid - 1;
-      }
-    }
-    skillsForPrompt = skillsForPrompt.slice(0, lo);
+    const count = largestFittingValue(0, skillsForPrompt.length, (candidateCount) =>
+      fitsCompact(skillsForPrompt.slice(0, candidateCount), 0),
+    );
+    skillsForPrompt = skillsForPrompt.slice(0, count);
   }
 
   if (skillsForPrompt.length === 0 && byCount.length > 0) {
@@ -138,18 +145,11 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
     if (fullWithoutNotice !== undefined) {
       return { prompt: fullWithoutNotice, skills: byCount };
     }
-    let lo = 0;
-    let hi = byCount.length;
-    while (lo < hi) {
-      const mid = Math.ceil((lo + hi) / 2);
-      if (fitsCompact(byCount.slice(0, mid), 0, false)) {
-        lo = mid;
-      } else {
-        hi = mid - 1;
-      }
-    }
-    if (lo > 0) {
-      skillsForPrompt = byCount.slice(0, lo);
+    const count = largestFittingValue(0, byCount.length, (candidateCount) =>
+      fitsCompact(byCount.slice(0, candidateCount), 0, false),
+    );
+    if (count > 0) {
+      skillsForPrompt = byCount.slice(0, count);
     }
   }
 
@@ -159,17 +159,11 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
     skillsForPrompt.length > 0 &&
     fitsCompact(skillsForPrompt, COMPACT_DESCRIPTION_MIN_CHARS, includeLimitNote)
   ) {
-    let lo = COMPACT_DESCRIPTION_MIN_CHARS;
-    let hi = COMPACT_DESCRIPTION_MAX_CHARS;
-    while (lo < hi) {
-      const mid = Math.ceil((lo + hi) / 2);
-      if (fitsCompact(skillsForPrompt, mid, includeLimitNote)) {
-        lo = mid;
-      } else {
-        hi = mid - 1;
-      }
-    }
-    descriptionMaxChars = lo;
+    descriptionMaxChars = largestFittingValue(
+      COMPACT_DESCRIPTION_MIN_CHARS,
+      COMPACT_DESCRIPTION_MAX_CHARS,
+      (chars) => fitsCompact(skillsForPrompt, chars, includeLimitNote),
+    );
   }
   const prompt =
     renderWithinLimit(

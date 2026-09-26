@@ -1,3 +1,5 @@
+import { isProxy } from "node:util/types";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import {
   GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
@@ -10,9 +12,10 @@ import {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
+  SESSION_READ_SCOPE,
   TALK_SCOPE,
   WRITE_SCOPE,
-} from "./method-scopes.js";
+} from "./operator-scopes.js";
 import type { GatewayPluginEventScope } from "./server-broadcast-types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -20,16 +23,16 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 // require operator-level session access. Pairing-scoped and node-role clients
 // must not passively receive chat-class broadcasts.
 const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
-  agent: [READ_SCOPE],
-  chat: [READ_SCOPE],
+  agent: [SESSION_READ_SCOPE],
+  chat: [SESSION_READ_SCOPE],
   // This keyless, redacted invalidation tells session readers to refresh their own projection.
-  "chat.metadata.changed": [READ_SCOPE, "operator.sessions.read"],
+  "chat.metadata.changed": [SESSION_READ_SCOPE],
   "board.changed": [READ_SCOPE],
   "board.command": [READ_SCOPE],
-  "progressCard.changed": [READ_SCOPE],
+  "progressCard.changed": [SESSION_READ_SCOPE],
   "ui.command": [READ_SCOPE],
   "chat.send_timing": [READ_SCOPE],
-  "chat.side_result": [READ_SCOPE],
+  "chat.side_result": [SESSION_READ_SCOPE],
   cron: [READ_SCOPE],
   health: [],
   "exec.approval.requested": [APPROVALS_SCOPE],
@@ -56,7 +59,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   // Hash-only change notice after a persisted config write; content stays
   // behind the operator-scoped config.get.
   "config.changed": [READ_SCOPE],
-  "users.prefs.changed": [READ_SCOPE],
+  "users.prefs.changed": [SESSION_READ_SCOPE],
   "mentions.changed": [READ_SCOPE],
   "skills.changed": [READ_SCOPE],
   "plugins.changed": [READ_SCOPE],
@@ -74,18 +77,18 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "node.hostStats": [READ_SCOPE],
   [GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED]: [READ_SCOPE],
   "sessions.catalog.host": [READ_SCOPE],
-  "sessions.changed": [READ_SCOPE],
+  "sessions.changed": [SESSION_READ_SCOPE],
   "controlUi.sessionPullRequests.changed": [READ_SCOPE],
   "plugins.controlUi.changed": [READ_SCOPE],
   "session.approval": [APPROVALS_SCOPE],
-  "session.message": [READ_SCOPE],
-  "session.observer": [READ_SCOPE],
+  "session.message": [SESSION_READ_SCOPE],
+  "session.observer": [SESSION_READ_SCOPE],
   "session.operation": [READ_SCOPE],
   "session.sharing": [READ_SCOPE],
   "session.sharing.evidence": [READ_SCOPE],
-  "session.suggestion": [READ_SCOPE],
-  "session.typing": [READ_SCOPE],
-  "session.tool": [READ_SCOPE],
+  "session.suggestion": [SESSION_READ_SCOPE],
+  "session.typing": [SESSION_READ_SCOPE],
+  "session.tool": [SESSION_READ_SCOPE],
   // Operator terminal byte/exit streams. Admin-gated to match the terminal.*
   // methods; also targeted to the owning connection at broadcast time.
   "terminal.data": [ADMIN_SCOPE],
@@ -93,11 +96,72 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "portal.changed": [READ_SCOPE],
 };
 
+const SESSION_CATALOG_INVALIDATIONS = new Set(["delete", "groups", "sharing", "profile-identity"]);
+
+export function isSessionReadInvalidation(
+  event: string,
+  payload: unknown,
+  targeted: boolean,
+): boolean {
+  if (isProxy(payload) || !isRecord(payload)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(payload);
+  if ((prototype !== null && prototype !== Object.prototype) || "toJSON" in payload) {
+    return false;
+  }
+  const fields = Object.entries(Object.getOwnPropertyDescriptors(payload));
+  // Hidden/deleted rows send subscribed readers only a signal to repeat an authorized read.
+  return (
+    event === "sessions.changed" &&
+    targeted &&
+    Object.hasOwn(payload, "reason") &&
+    fields.every(
+      ([key, field]) =>
+        "value" in field &&
+        ((key === "reason" && SESSION_CATALOG_INVALIDATIONS.has(field.value)) ||
+          (key === "ts" && typeof field.value === "number" && Number.isFinite(field.value))),
+    )
+  );
+}
+
+export function modelMetadataInvalidationFragment(payload: unknown): string | undefined {
+  if (isProxy(payload) || !isRecord(payload)) {
+    return undefined;
+  }
+  const prototype = Object.getPrototypeOf(payload);
+  if ((prototype !== null && prototype !== Object.prototype) || "toJSON" in payload) {
+    return undefined;
+  }
+  const keys = Reflect.ownKeys(payload);
+  if (keys.length === 0) {
+    return ',"payload":{}';
+  }
+  const fields: Record<string, boolean> = {};
+  for (const key of keys) {
+    if (key !== "modelSelectionChanged" && key !== "modelCatalogChanged" && key !== "authChanged") {
+      return undefined;
+    }
+    const field = Object.getOwnPropertyDescriptor(payload, key);
+    if (
+      !field?.enumerable ||
+      !("value" in field) ||
+      typeof field.value !== "boolean" ||
+      (key === "modelSelectionChanged" && !field.value)
+    ) {
+      return undefined;
+    }
+    fields[key] = field.value;
+  }
+  return `,"payload":${JSON.stringify(fields)}`;
+}
+
 export function hasEventScope(
   client: GatewayWsClient,
   event: string,
   explicitPluginScope?: GatewayPluginEventScope,
   ownRunQuestion = false,
+  hasSessionReadContext?: () => boolean,
 ): boolean {
   if (client.connectionKind === "worker") {
     return false;
@@ -116,7 +180,13 @@ export function hasEventScope(
   return (
     required.length === 0 ||
     (role === "operator" &&
-      (required.some((scope) => operatorScopeSatisfied(scope, scopes)) ||
+      (required.some(
+        (scope) =>
+          operatorScopeSatisfied(scope, scopes) &&
+          (scope !== SESSION_READ_SCOPE ||
+            operatorScopeSatisfied(READ_SCOPE, scopes) ||
+            hasSessionReadContext?.() === true),
+      ) ||
         (ownRunQuestion && operatorScopeSatisfied("operator.sessions.write", scopes))))
   );
 }

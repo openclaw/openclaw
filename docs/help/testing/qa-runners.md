@@ -165,6 +165,17 @@ inside every shard.
   or `custom` lane profiles. Set `telegram_mode=mock-openai` or
   `live-frontier` to run the Telegram QA workflow against the same
   `package-under-test` artifact.
+  - For existing Telegram topic bindings across a published-driver update, select
+    `suite_profile=telegram`, `telegram_mode=mock-openai`, and the single scenario
+    `telegram-published-upgrade-bindings`. Supply `package_spec` as an exact
+    published baseline, such as `openclaw@2026.9.6`, and resolve the candidate
+    through `source=ref` or a verified tarball artifact. This scenario installs
+    the baseline before leasing Test Server credentials, creates a real bound
+    child session, and runs that installation's normal `openclaw update` against
+    the candidate. It checks the same binding after activation and another
+    Gateway restart, including all three orderly shutdowns. Raw credential,
+    session, and transport state stays in container scratch; uploaded evidence
+    contains the package identities and redacted outcome only.
   - Latest beta product proof:
 
 ```bash

@@ -19,6 +19,7 @@ import {
   getOpenClawStateRuntimeSchema,
   STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
 } from "../state/openclaw-state-schema-compatibility.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { recordSessionCreated } from "./session-created.js";
 import {
   acknowledgeSessionStateNotices,
@@ -33,7 +34,6 @@ import {
   recordSessionHumanDirectMessage,
   recordSessionStateEvent,
   recordSubagentSpawned,
-  recordSubagentTerminalState,
   registerMainSessionGroupWatch,
   registerSessionStateWatch,
   sweepSessionStateWatchNotices,
@@ -48,6 +48,7 @@ import {
   seedChild,
   watcher,
 } from "./session-state-events.test-support.js";
+import { recordSubagentTerminalState } from "./subagent-terminal-state.js";
 
 const SESSION_STATE_MAX_ROWS = 50_000;
 const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
@@ -735,7 +736,7 @@ describe("session state events", () => {
     registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
 
     for (const actorId of ["human-1", "human-2"]) {
-      recordSessionHumanDirectMessage(
+      await recordSessionHumanDirectMessage(
         {
           sessionKey: group,
           entry: { sessionId: "session-group", updatedAt: Date.now(), chatType: "group" },
@@ -756,7 +757,7 @@ describe("session state events", () => {
     expect(wakes).not.toHaveBeenCalled();
   });
 
-  it("prunes dormant ambient cursors while retaining active cursors", () => {
+  it("prunes dormant ambient cursors while retaining active cursors", async () => {
     const database = createDatabaseOptions();
     const dormantGroup = "agent:main:slack:channel:dormant";
     const registeredAt = 100;
@@ -770,7 +771,7 @@ describe("session state events", () => {
     );
 
     const activeAt = registeredAt + SESSION_STATE_RETENTION_MS + 1;
-    recordSessionHumanDirectMessage(
+    await recordSessionHumanDirectMessage(
       {
         sessionKey: group,
         entry: { sessionId: "session-group", updatedAt: activeAt, chatType: "group" },
@@ -802,7 +803,7 @@ describe("session state events", () => {
       database,
     );
 
-    recordSessionHumanDirectMessage(
+    await recordSessionHumanDirectMessage(
       {
         sessionKey: group,
         entry: { sessionId: "session-group", updatedAt: Date.now(), chatType: "group" },
@@ -841,7 +842,7 @@ describe("session state events", () => {
     // Later inbound group registration must not downgrade the explicit watch.
     registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
 
-    recordSessionHumanDirectMessage(
+    await recordSessionHumanDirectMessage(
       {
         sessionKey: group,
         entry: { sessionId: "session-group", updatedAt: Date.now(), chatType: "group" },
@@ -857,10 +858,10 @@ describe("session state events", () => {
     expect(wakes).toHaveBeenCalledTimes(1);
   });
 
-  it("gates unparented human turns on registered watchers", () => {
+  it("gates unparented human turns on registered watchers", async () => {
     const database = createDatabaseOptions();
     const entry = { sessionId: "session-child", updatedAt: Date.now() };
-    recordSessionHumanDirectMessage({
+    await recordSessionHumanDirectMessage({
       sessionKey: child,
       entry,
       agentId: "main",
@@ -870,7 +871,7 @@ describe("session state events", () => {
     expect(listSessionStateEventsSince(child, "main", 0, 200, database).events).toHaveLength(0);
 
     registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: child }, database);
-    recordSessionHumanDirectMessage({
+    await recordSessionHumanDirectMessage({
       sessionKey: child,
       entry,
       agentId: "main",
@@ -903,24 +904,35 @@ describe("session state events", () => {
       requesterSessionKey: watcher,
       agentId: "main",
     });
-    recordSubagentTerminalState({
-      childSessionKey: child,
-      runId: "run-child",
-      requesterSessionKey: watcher,
-      outcomeStatus: "ok",
-    });
-    recordSubagentTerminalState({
-      childSessionKey: child,
-      runId: "run-child",
-      requesterSessionKey: watcher,
-      outcomeStatus: "ok",
-    });
-    recordSubagentTerminalState({
-      childSessionKey: child,
-      runId: "run-child-cancelled",
-      requesterSessionKey: watcher,
-      outcomeStatus: "cancelled",
-    });
+    const terminalContext = captureOpenClawStateWorkerContext(database);
+    const assertTerminalCurrent = () => terminalContext.admission.assertCurrent();
+    await recordSubagentTerminalState(
+      {
+        childSessionKey: child,
+        runId: "run-child",
+        requesterSessionKey: watcher,
+        outcomeStatus: "ok",
+      },
+      assertTerminalCurrent,
+    );
+    await recordSubagentTerminalState(
+      {
+        childSessionKey: child,
+        runId: "run-child",
+        requesterSessionKey: watcher,
+        outcomeStatus: "ok",
+      },
+      assertTerminalCurrent,
+    );
+    await recordSubagentTerminalState(
+      {
+        childSessionKey: child,
+        runId: "run-child-cancelled",
+        requesterSessionKey: watcher,
+        outcomeStatus: "cancelled",
+      },
+      assertTerminalCurrent,
+    );
     await recordSessionGoalChanged({
       sessionKey: child,
       entry: {

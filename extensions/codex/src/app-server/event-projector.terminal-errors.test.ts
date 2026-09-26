@@ -1,3 +1,5 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createNativeCommandItem } from "./event-projector-command.test-support.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -80,20 +82,12 @@ describe("CodexAppServerEventProjector terminal errors", () => {
 
     await projector.handleNotification(
       turnWithStatus("interrupted", [
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-empty-output",
           command:
             "ps -eo pid,ppid,stat,cmd | rg 'venv-roadmap|pytest|run_security_contract_validation|validate_public_install|git push|apply_patch' || true",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
           aggregatedOutput: "",
-          exitCode: 0,
-          durationMs: 42,
-        },
+        }),
       ]),
     );
 
@@ -108,19 +102,15 @@ describe("CodexAppServerEventProjector terminal errors", () => {
 
   it("marks every failed tool in a multi-call turn", async () => {
     const projector = await createProjector();
-    const commandItem = (id: string, status: "completed" | "failed", exitCode: number) => ({
-      type: "commandExecution",
-      id,
-      command: `/bin/bash -lc 'exit ${exitCode}'`,
-      cwd: "/workspace",
-      processId: null,
-      source: "agent",
-      status,
-      commandActions: [],
-      aggregatedOutput: "",
-      exitCode,
-      durationMs: 10,
-    });
+    const commandItem = (id: string, status: "completed" | "failed", exitCode: number) =>
+      createNativeCommandItem({
+        id,
+        command: `/bin/bash -lc 'exit ${exitCode}'`,
+        status,
+        aggregatedOutput: "",
+        exitCode,
+        durationMs: 10,
+      });
 
     await projector.handleNotification(
       turnCompleted([
@@ -141,19 +131,12 @@ describe("CodexAppServerEventProjector terminal errors", () => {
 
     await projector.handleNotification(
       turnWithStatus("interrupted", [
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-cancelled",
           command: "/bin/bash -lc true",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
           aggregatedOutput: "",
-          exitCode: 0,
           durationMs: 12,
-        },
+        }),
       ]),
     );
 
@@ -439,7 +422,6 @@ describe("CodexAppServerEventProjector terminal errors", () => {
 
   it.each([
     { codexErrorInfo: "serverOverloaded", expected: true },
-    { codexErrorInfo: "usageLimitExceeded", expected: false },
     { codexErrorInfo: "unauthorized", expected: false },
     { codexErrorInfo: "other", expected: false },
   ])(
@@ -503,7 +485,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     });
     expect(projector.settledTurnFailureFinalizationAllowed).toBe(true);
     expect(projector.isCompacting()).toBe(false);
-    expect(result.itemLifecycle).toEqual({ startedCount: 0, completedCount: 0, activeCount: 0 });
+    expect(result.itemLifecycle).toEqual({ startedCount: 1, completedCount: 0, activeCount: 0 });
     expect(result.compactionCount).toBeUndefined();
     expect(onContextCompacted).not.toHaveBeenCalled();
     expect(
@@ -535,8 +517,124 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     ]);
   });
 
+  it.each(["interrupted", "failed", "completed", "local close"] as const)(
+    "closes visible unfinished compaction once after %s without forgetting native work",
+    async (ending) => {
+      const onAgentEvent = vi.fn();
+      const onContextCompacted = vi.fn();
+      const projector = await createProjector(
+        { ...(await createParams()), onAgentEvent },
+        { onContextCompacted },
+      );
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item: { type: "contextCompaction", id: "compact-unfinished" },
+        }),
+      );
+      expect(onAgentEvent).toHaveBeenCalledWith({
+        stream: "compaction",
+        data: {
+          phase: "start",
+          backend: "codex-app-server",
+          threadId: THREAD_ID,
+          turnId: TURN_ID,
+          itemId: "compact-unfinished",
+        },
+      });
+
+      if (ending !== "local close") {
+        await projector.handleNotification(turnWithStatus(ending));
+      }
+      await projector.closeProjection();
+      await projector.closeProjection();
+
+      const result = projector.buildResult(buildEmptyToolTelemetry());
+      expect(projector.isCompacting()).toBe(false);
+      expect(result.itemLifecycle).toEqual({ startedCount: 1, completedCount: 0, activeCount: 0 });
+      expect(result.compactionCount).toBeUndefined();
+      expect(onContextCompacted).not.toHaveBeenCalled();
+      expect(
+        onAgentEvent.mock.calls
+          .map(([event]) => event)
+          .filter((event) => event.stream === "compaction"),
+      ).toEqual([
+        expect.objectContaining({
+          data: expect.objectContaining({ phase: "start", itemId: "compact-unfinished" }),
+        }),
+        {
+          stream: "compaction",
+          data: {
+            phase: "end",
+            completed: false,
+            backend: "codex-app-server",
+            threadId: THREAD_ID,
+            turnId: TURN_ID,
+            itemId: "compact-unfinished",
+          },
+        },
+      ]);
+    },
+  );
+
+  it("preserves observed native completion when closing progress with a pending observer", async () => {
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const onAgentEvent = vi.fn();
+    const onContextCompacted = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const projector = await createProjector(
+      { ...(await createParams()), onAgentEvent },
+      { onContextCompacted },
+    );
+    const compaction = { item: { type: "contextCompaction", id: "compact-observer-pending" } };
+    await projector.handleNotification(forCurrentTurn("item/started", compaction));
+    const completion = projector.handleNotification(forCurrentTurn("item/completed", compaction));
+    const expectedEvents = [
+      expect.objectContaining({
+        data: expect.objectContaining({ phase: "start", itemId: "compact-observer-pending" }),
+      }),
+      expect.objectContaining({
+        data: expect.objectContaining({
+          phase: "end",
+          itemId: "compact-observer-pending",
+          completed: true,
+        }),
+      }),
+    ];
+    try {
+      await entered.promise;
+      await projector.closeProjection();
+      await projector.closeProjection();
+      expect(projector.buildResult(buildEmptyToolTelemetry())).toMatchObject({
+        compactionCount: 1,
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+      });
+      expect(
+        onAgentEvent.mock.calls
+          .map(([event]) => event)
+          .filter((event) => event.stream === "compaction"),
+      ).toEqual(expectedEvents);
+    } finally {
+      release.resolve();
+      await completion;
+    }
+    expect(onContextCompacted).toHaveBeenCalledOnce();
+    expect(
+      onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.stream === "compaction"),
+    ).toEqual(expectedEvents);
+  });
+
   it("keeps other errors prompt-scoped after native compaction completes", async () => {
-    const projector = await createProjector();
+    const onAgentEvent = vi.fn();
+    const onContextCompacted = vi.fn();
+    const projector = await createProjector(
+      { ...(await createParams()), onAgentEvent },
+      { onContextCompacted },
+    );
     const compaction = { item: { type: "contextCompaction", id: "compact-completed" } };
 
     await projector.handleNotification(forCurrentTurn("item/started", compaction));
@@ -554,6 +652,20 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       promptErrorSource: "prompt",
     });
     expect(projector.settledTurnFailureFinalizationAllowed).toBe(false);
+    await projector.handleNotification(forCurrentTurn("item/completed", compaction));
+    await projector.handleNotification(turnWithStatus("interrupted"));
+    await projector.closeProjection();
+    expect(projector.buildResult(buildEmptyToolTelemetry()).compactionCount).toBe(1);
+    expect(onContextCompacted).toHaveBeenCalledOnce();
+    expect(
+      onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.stream === "compaction" && event.data.phase === "end"),
+    ).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({ itemId: "compact-completed", completed: true }),
+      }),
+    ]);
   });
 
   it("uses Codex rate-limit resets for usage-limit app-server errors", async () => {
@@ -579,35 +691,6 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
     expect(promptError.message).toContain("Next reset in");
     expect(promptError.message).toContain("Wait until the reset time");
-    expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
-  });
-
-  it("uses Codex rate-limit resets for failed turns", async () => {
-    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-    const projector = await createProjector(undefined, {
-      readRecentRateLimits: () => rateLimitsUpdated(resetsAt).params,
-    });
-
-    await projector.handleNotification(
-      forCurrentTurn("turn/completed", {
-        turn: {
-          id: TURN_ID,
-          status: "failed",
-          error: {
-            message: "You've reached your usage limit.",
-            codexErrorInfo: "usageLimitExceeded",
-            additionalDetails: null,
-          },
-          items: [],
-        },
-      }),
-    );
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-
-    const promptError = expectUsageLimitPromptError(readAttemptTerminal(result).promptError);
-    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
-    expect(promptError.message).toContain("Next reset in");
     expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
   });
 

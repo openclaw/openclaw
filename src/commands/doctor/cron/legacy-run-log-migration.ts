@@ -2,9 +2,9 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { parseCronRunLogEntryObject } from "../../../cron/run-history-detail.js";
 import type { CronRunLogEntry } from "../../../cron/run-log-types.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
-import { parseCronRunLogEntryObject } from "../../../cron/task-run-detail.js";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../../../infra/state-migrations.cron-run-logs.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 

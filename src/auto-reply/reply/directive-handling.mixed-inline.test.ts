@@ -178,7 +178,7 @@ describe("mixed inline directives", () => {
   );
 
   describe.each(["", "please reply "])("off-catalog selection with prefix %j", (prefix) => {
-    it.each([undefined, {}, { allow: [] }])(
+    it.each([undefined, { allow: [] }])(
       "uses policy %j independently of inventory",
       async (modelPolicy) => {
         const { result, sessionEntry } = await applyMixedDirectives({
@@ -345,7 +345,7 @@ describe("mixed inline directives", () => {
       });
 
       expect(result).toMatchObject({ kind: "continue", provider: "openai", model: "gpt-5.6-luna" });
-      expect(sessionEntry.thinkingLevel).toBe(stored ? "max" : undefined);
+      expect(sessionEntry.thinkingLevel).toBe(stored ? "ultra" : undefined);
       if (hint) {
         expect(result).toMatchObject({ kind: "continue", directives: { thinkLevel: "high" } });
       }
@@ -353,12 +353,10 @@ describe("mixed inline directives", () => {
         throw new Error("Expected the model switch to continue the task");
       }
       expect(result.directiveAck?.text).toContain("Model set to openai/gpt-5.6-luna");
-      expect(
-        result.directiveAck?.text?.includes("Thinking level set to max (ultra not supported"),
-      ).toBe(stored);
+      expect(result.directiveAck?.text).not.toContain("ultra not supported");
       expect(persistenceMocks.persist).toHaveBeenCalledOnce();
       expect(persistenceMocks.persist.mock.calls[0]?.[0].entry.thinkingLevel).toBe(
-        stored ? "max" : undefined,
+        stored ? "ultra" : undefined,
       );
       expect(triggerSessionPatchHook).toHaveBeenCalledOnce();
       expect(refreshQueuedFollowupSession).toHaveBeenCalledOnce();
@@ -374,7 +372,7 @@ describe("mixed inline directives", () => {
           nextProvider: "openai",
           nextModel: "gpt-5.6-luna",
           nextThinking: expect.objectContaining({
-            level: stored ? "max" : undefined,
+            level: stored ? "ultra" : undefined,
             agentRuntime: "codex",
           }),
         }),

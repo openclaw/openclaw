@@ -193,7 +193,7 @@ describe("inference HTTP transport ownership", () => {
     };
     for (const metadata of [
       { request_kind: "turn", thread_id: "child", parent_thread_id: "root" },
-      { request_kind: "turn", subagent_kind: "review" },
+      { request_kind: "turn", thread_id: "review", subagent_kind: "review" },
       { request_kind: "compaction" },
       { request_kind: "memory" },
       { request_kind: "prewarm" },

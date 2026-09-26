@@ -123,25 +123,6 @@ function exists(target) {
     throw error;
   }
 }
-function removeTree(target) {
-  let stats;
-  try {
-    stats = fs.lstatSync(target);
-  } catch (error) {
-    if (error && error.code === "ENOENT") return;
-    throw error;
-  }
-  if (stats.isDirectory() && !stats.isSymbolicLink()) {
-    fs.chmodSync(target, 0o700);
-    for (const name of fs.readdirSync(target)) removeTree(path.join(target, name));
-    fs.rmdirSync(target);
-  } else {
-    fs.unlinkSync(target);
-  }
-}
-function sameInode(left, right) {
-  return left.dev === right.dev && left.ino === right.ino;
-}
 ${REMOTE_WORKSPACE_MUTATION_LOCK_JS}
 function readPaths() {
   return parsePaths(fs.readFileSync(pathsFile, "utf8"));

@@ -68,9 +68,9 @@ exceeds the limit.
 Bundled channels spell these overrides as
 `channels.<id>.streaming.{chunkMode,block.enabled,block.coalesce}`. The flat
 `*.chunkMode` / `*.blockStreaming` / `*.blockStreamingCoalesce` spellings are
-rejected by validation. `openclaw doctor --fix` migrates legacy configs into the
-nested shape; Gateway startup applies the same migration automatically when the
-single-file config meets the [startup migration conditions](/gateway/doctor#detailed-behavior-and-rationale).
+rejected by validation. Run `openclaw doctor --fix` to migrate legacy configs into
+the nested shape before starting the Gateway. See the
+[Doctor migration guidance](/gateway/doctor#detailed-behavior-and-rationale).
 
 **Boundary semantics** for `blockStreamingBreak`:
 
@@ -327,10 +327,8 @@ Slack-only:
 
 - In `partial` mode, streams thinking and partial reply text into a single draft
   preview post that finalizes in place when the final answer is safe to send.
-- In `progress` mode, streams thinking and tool activity into a single status
-  preview that finalizes in place when the final answer is safe to send.
-- With `streaming.progress.finalDelivery: "separate"`, creates the progress
-  preview atomically as `custom_openclaw_progress`, pins the configured label,
+- In `progress` mode, creates the progress preview atomically as
+  `custom_openclaw_progress`, pins the configured label,
   sends the final answer as a separate normal post in the same conversation and
   thread, then deletes progress only after that send succeeds. OpenClaw agents
   ignore typed progress posts; human posts with the same visible prefix remain

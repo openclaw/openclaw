@@ -57,14 +57,25 @@ it.each([
       };
       mocks.config.mockReturnValue(cfg);
       let failedWrite = false;
-      const write = fs.writeFileSync;
       if (failure === "ENOSPC") {
-        vi.spyOn(fs, "writeFileSync").mockImplementation((target, ...args) => {
+        const failCaptureWrite = (target: fs.PathLike) => {
           if (path.basename(String(target)) === "index.cjs" && String(target) !== source) {
             failedWrite = true;
             throw Object.assign(new Error("fixture capture write failed"), { code: "ENOSPC" });
           }
-          return write(target, ...args);
+        };
+        const copy = fs.copyFileSync;
+        vi.spyOn(fs, "copyFileSync").mockImplementation((from, target, ...args) => {
+          failCaptureWrite(target);
+          return copy(from, target, ...args);
+        });
+        // Platforms without descriptor paths create the bounded-copy destination directly.
+        const open = fs.openSync;
+        vi.spyOn(fs, "openSync").mockImplementation((target, flags, ...args) => {
+          if (flags === "w") {
+            failCaptureWrite(target);
+          }
+          return open(target, flags, ...args);
         });
       }
       mocks.runContributions.mockImplementation(async () => {
@@ -74,6 +85,9 @@ it.each([
             expect(registry.plugins.find((plugin) => plugin.id === id)).toMatchObject({
               status: "error",
               failurePhase: "load",
+              error: expect.stringContaining(
+                failure === "ENOSPC" ? "fixture capture write failed" : "fixture syntax failed",
+              ),
             });
           } finally {
             await disposePluginRegistryInstances(registry);

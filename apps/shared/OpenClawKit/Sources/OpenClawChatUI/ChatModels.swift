@@ -116,7 +116,7 @@ public enum OpenClawChatPlaybackMode: String, Codable, Hashable, Sendable {
 
 public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let type: String?
-    public let text: String?
+    public internal(set) var text: String?
     public let textSignature: String?
     public let thinking: String?
     public let thinkingSignature: String?
@@ -129,7 +129,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let width: Int?
     public let height: Int?
     public let sizeBytes: Int?
-    public let durationSeconds: Double?
+    public internal(set) var durationSeconds: Double?
     public let playback: OpenClawChatPlaybackMode?
     public let content: AnyCodable?
     public let preview: OpenClawChatCanvasPreview?
@@ -311,13 +311,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
             container.decodeIfPresent(Bool.self, forKey: .is_error)
         self.preview = try container.decodeIfPresent(OpenClawChatCanvasPreview.self, forKey: .preview)
 
-        if let any = try container.decodeIfPresent(AnyCodable.self, forKey: .content) {
-            self.content = any
-        } else if let str = try container.decodeIfPresent(String.self, forKey: .content) {
-            self.content = AnyCodable(str)
-        } else {
-            self.content = nil
-        }
+        self.content = try container.decodeIfPresent(AnyCodable.self, forKey: .content)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -478,16 +472,16 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     public var id: UUID = .init()
     public var transcriptMessageID: String?
     public var activity: [OpenClawAgentActivityItem]?
-    public let transcriptRunID: String?
+    public internal(set) var transcriptRunID: String?
     public var isTruncated = false
     public let role: String
     public let phase: String?
     public let turnBoundary: Bool?
     public let steerTargetRunID: String?
     public let streamFallback: OpenClawChatStreamFallback?
-    public let content: [OpenClawChatMessageContent]
-    public let timestamp: Double?
-    public let idempotencyKey: String?
+    public internal(set) var content: [OpenClawChatMessageContent]
+    public internal(set) var timestamp: Double?
+    public internal(set) var idempotencyKey: String?
     public let toolCallId: String?
     public let toolName: String?
     public let usage: OpenClawChatUsage?
@@ -495,8 +489,8 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     public let errorMessage: String?
     public let details: AnyCodable?
     public let isError: Bool?
-    public let provenance: OpenClawChatInputProvenance?
-    public let historyMarker: OpenClawChatHistoryMarker?
+    public internal(set) var provenance: OpenClawChatInputProvenance?
+    public internal(set) var historyMarker: OpenClawChatHistoryMarker?
 
     var streamSegmentID: String? {
         guard self.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "assistant" else { return nil }
@@ -1004,11 +998,7 @@ public struct OpenClawSessionMessageEventPayload: Codable, Sendable {
         try container.encodeIfPresent(self.messageSeq, forKey: .messageSeq)
         try container.encodeIfPresent(self.hasActiveRun, forKey: .hasActiveRun)
         if self.activeRunIdsPresent {
-            if let activeRunIds {
-                try container.encode(activeRunIds, forKey: .activeRunIds)
-            } else {
-                try container.encodeNil(forKey: .activeRunIds)
-            }
+            try container.encode(self.activeRunIds, forKey: .activeRunIds)
         }
     }
 

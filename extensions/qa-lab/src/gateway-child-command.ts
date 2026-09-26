@@ -16,23 +16,17 @@ import { createQaGatewayCliError } from "./gateway-log-redaction.js";
 import type { QaGatewayProcessBoundaryConfig } from "./gateway-process-boundary.js";
 import { createQaRepairProgressObserver } from "./gateway-repair-progress.js";
 
-type QaGatewayChildDirectCommand = {
+export type QaGatewayChildCommand = {
   executablePath: string;
   argsPrefix?: string[];
   argsSuffix?: string[];
   cwd?: string;
   tempParentDir?: string;
   usePackagedPlugins?: boolean;
-  processBoundary?: undefined;
+  processBoundary?: QaGatewayProcessBoundaryConfig;
 };
 
 const QA_GATEWAY_CLI_EXECUTION_TIMEOUT_MS = 120_000;
-
-type QaGatewayChildVerifiedCommand = Omit<QaGatewayChildDirectCommand, "processBoundary"> & {
-  processBoundary: QaGatewayProcessBoundaryConfig;
-};
-
-export type QaGatewayChildCommand = QaGatewayChildDirectCommand | QaGatewayChildVerifiedCommand;
 
 export function resolveQaGatewayChildCommand(repoRoot: string): QaGatewayChildCommand {
   for (const relativePath of ["scripts/run-node.mjs", "dist/index.mjs", "dist/index.js"]) {

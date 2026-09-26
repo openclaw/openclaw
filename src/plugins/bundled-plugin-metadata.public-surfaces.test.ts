@@ -1,4 +1,3 @@
-// Verifies bundled plugin public-surface metadata assembly.
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -16,15 +15,35 @@ beforeEach(() => {
   clearPluginMetadataLifecycleCaches();
 });
 
+function writePlugin(
+  rootDir: string,
+  params: {
+    manifest?: Record<string, unknown>;
+    packageOpenClaw?: Record<string, unknown>;
+    entrypoint?: "index.ts" | "index.js";
+  } = {},
+) {
+  const pluginDir = path.join(rootDir, "extensions", "alpha");
+  writeJson(path.join(pluginDir, "package.json"), {
+    name: "@openclaw/alpha",
+    version: "0.0.1",
+    openclaw: { extensions: ["./index.ts"], ...params.packageOpenClaw },
+  });
+  writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+    id: "alpha",
+    configSchema: { type: "object" },
+    ...params.manifest,
+  });
+  fs.writeFileSync(path.join(pluginDir, params.entrypoint ?? "index.ts"), "export {};\n", "utf8");
+  return pluginDir;
+}
+
 describe("bundled plugin public surfaces", () => {
   it("merges runtime channel schema metadata with manifest-owned channel config fields", () => {
     const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-channel-configs-");
 
-    writeJson(path.join(tempRoot, "extensions", "alpha", "package.json"), {
-      name: "@openclaw/alpha",
-      version: "0.0.1",
-      openclaw: {
-        extensions: ["./index.ts"],
+    const pluginDir = writePlugin(tempRoot, {
+      packageOpenClaw: {
         channel: {
           id: "alpha",
           label: "Alpha Root Label",
@@ -32,31 +51,20 @@ describe("bundled plugin public surfaces", () => {
           preferOver: ["alpha-legacy"],
         },
       },
-    });
-    writeJson(path.join(tempRoot, "extensions", "alpha", "openclaw.plugin.json"), {
-      id: "alpha",
-      channels: ["alpha"],
-      configSchema: { type: "object" },
-      channelConfigs: {
-        alpha: {
-          schema: { type: "object", properties: { stale: { type: "boolean" } } },
-          label: "Manifest Label",
-          uiHints: {
-            "channels.alpha.explicitOnly": {
-              help: "manifest hint",
-            },
+      manifest: {
+        channels: ["alpha"],
+        channelConfigs: {
+          alpha: {
+            schema: { type: "object", properties: { stale: { type: "boolean" } } },
+            label: "Manifest Label",
+            uiHints: { "channels.alpha.explicitOnly": { help: "manifest hint" } },
           },
         },
       },
     });
+    fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
     fs.writeFileSync(
-      path.join(tempRoot, "extensions", "alpha", "index.ts"),
-      "export {};\n",
-      "utf8",
-    );
-    fs.mkdirSync(path.join(tempRoot, "extensions", "alpha", "src"), { recursive: true });
-    fs.writeFileSync(
-      path.join(tempRoot, "extensions", "alpha", "src", "config-schema.js"),
+      path.join(pluginDir, "src", "config-schema.js"),
       [
         "export const AlphaChannelConfigSchema = {",
         "  schema: {",
@@ -95,34 +103,12 @@ describe("bundled plugin public surfaces", () => {
   it("captures top-level public surface artifacts without duplicating the primary entrypoints", () => {
     const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-public-artifacts-");
 
-    writeJson(path.join(tempRoot, "extensions", "alpha", "package.json"), {
-      name: "@openclaw/alpha",
-      version: "0.0.1",
-      openclaw: {
-        extensions: ["./index.ts"],
-        setupEntry: "./setup-entry.ts",
-      },
+    const pluginDir = writePlugin(tempRoot, {
+      packageOpenClaw: { setupEntry: "./setup-entry.ts" },
     });
-    writeJson(path.join(tempRoot, "extensions", "alpha", "openclaw.plugin.json"), {
-      id: "alpha",
-      configSchema: { type: "object" },
-    });
-    fs.writeFileSync(
-      path.join(tempRoot, "extensions", "alpha", "index.ts"),
-      "export {};\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(tempRoot, "extensions", "alpha", "setup-entry.ts"),
-      "export {};\n",
-      "utf8",
-    );
-    fs.writeFileSync(path.join(tempRoot, "extensions", "alpha", "api.ts"), "export {};\n", "utf8");
-    fs.writeFileSync(
-      path.join(tempRoot, "extensions", "alpha", "runtime-api.ts"),
-      "export {};\n",
-      "utf8",
-    );
+    for (const filename of ["setup-entry.ts", "api.ts", "runtime-api.ts"]) {
+      fs.writeFileSync(path.join(pluginDir, filename), "export {};\n", "utf8");
+    }
     const entries = listBundledPluginMetadata({ rootDir: tempRoot });
     const firstEntry = entries[0] as
       | {
@@ -138,43 +124,24 @@ describe("bundled plugin public surfaces", () => {
     const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-dist-config-");
     const distRoot = path.join(tempRoot, "dist");
 
-    writeJson(path.join(distRoot, "extensions", "alpha", "package.json"), {
-      name: "@openclaw/alpha",
-      version: "0.0.1",
-      openclaw: {
-        extensions: ["./index.ts"],
-        channel: {
-          id: "alpha",
-          label: "Alpha Root Label",
-          blurb: "Alpha Root Description",
-        },
+    const pluginDir = writePlugin(distRoot, {
+      entrypoint: "index.js",
+      packageOpenClaw: {
+        channel: { id: "alpha", label: "Alpha Root Label", blurb: "Alpha Root Description" },
       },
-    });
-    writeJson(path.join(distRoot, "extensions", "alpha", "openclaw.plugin.json"), {
-      id: "alpha",
-      configSchema: {
-        type: "object",
-        properties: {},
-      },
-      channels: ["alpha"],
-      channelConfigs: {
-        alpha: {
-          schema: { type: "object", properties: { stale: { type: "boolean" } } },
-          uiHints: {
-            "channels.alpha.explicitOnly": {
-              help: "manifest hint",
-            },
+      manifest: {
+        configSchema: { type: "object", properties: {} },
+        channels: ["alpha"],
+        channelConfigs: {
+          alpha: {
+            schema: { type: "object", properties: { stale: { type: "boolean" } } },
+            uiHints: { "channels.alpha.explicitOnly": { help: "manifest hint" } },
           },
         },
       },
     });
     fs.writeFileSync(
-      path.join(distRoot, "extensions", "alpha", "index.js"),
-      "export {};\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(distRoot, "extensions", "alpha", "channel-config-api.js"),
+      path.join(pluginDir, "channel-config-api.js"),
       [
         "export const AlphaChannelConfigSchema = {",
         "  schema: {",
@@ -214,38 +181,21 @@ describe("bundled plugin public surfaces", () => {
     const distRoot = path.join(tempRoot, "dist");
     const markerPath = path.join(tempRoot, "runtime-api-loaded");
 
-    writeJson(path.join(distRoot, "extensions", "alpha", "package.json"), {
-      name: "@openclaw/alpha",
-      version: "0.0.1",
-      openclaw: {
-        extensions: ["./index.ts"],
-        channel: {
-          id: "alpha",
-          label: "Alpha Root Label",
-          blurb: "Alpha Root Description",
-        },
+    const pluginDir = writePlugin(distRoot, {
+      entrypoint: "index.js",
+      packageOpenClaw: {
+        channel: { id: "alpha", label: "Alpha Root Label", blurb: "Alpha Root Description" },
       },
-    });
-    writeJson(path.join(distRoot, "extensions", "alpha", "openclaw.plugin.json"), {
-      id: "alpha",
-      configSchema: {
-        type: "object",
-        properties: {},
-      },
-      channels: ["alpha"],
-      channelConfigs: {
-        alpha: {
-          schema: { type: "object", properties: { manifest: { type: "boolean" } } },
+      manifest: {
+        configSchema: { type: "object", properties: {} },
+        channels: ["alpha"],
+        channelConfigs: {
+          alpha: { schema: { type: "object", properties: { manifest: { type: "boolean" } } } },
         },
       },
     });
     fs.writeFileSync(
-      path.join(distRoot, "extensions", "alpha", "index.js"),
-      "export {};\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(distRoot, "extensions", "alpha", "runtime-api.js"),
+      path.join(pluginDir, "runtime-api.js"),
       [
         "import fs from 'node:fs';",
         `fs.writeFileSync(${JSON.stringify(markerPath)}, "loaded", "utf8");`,
@@ -257,7 +207,7 @@ describe("bundled plugin public surfaces", () => {
       "utf8",
     );
     fs.writeFileSync(
-      path.join(distRoot, "extensions", "alpha", "api.js"),
+      path.join(pluginDir, "api.js"),
       [
         "import fs from 'node:fs';",
         `fs.writeFileSync(${JSON.stringify(markerPath)}, "loaded", "utf8");`,

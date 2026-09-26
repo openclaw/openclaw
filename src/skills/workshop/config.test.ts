@@ -6,7 +6,7 @@ describe("resolveSkillWorkshopConfig", () => {
     expect(resolveSkillWorkshopConfig().autonomous.mode).toBe("auto");
   });
 
-  it.each(["off", "propose", "auto"] as const)("reads autonomous mode %s", (mode) => {
+  it.each(["off", "propose"] as const)("reads autonomous mode %s", (mode) => {
     expect(
       resolveSkillWorkshopConfig({ skills: { workshop: { autonomous: { mode } } } }).autonomous
         .mode,

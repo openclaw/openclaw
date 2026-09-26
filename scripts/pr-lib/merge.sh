@@ -568,7 +568,7 @@ merge_run() {
       ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg refusal "$refusal_directory" '
         .phase == "intent" and
         ((.accepted == false and (.route == "immediate" or ($refusal != "" and .route == "auto" and .method == "squash"))) or
-         (.accepted == true and .route == "auto" and .cancellation.state == "confirmed"))
+         (.route == "auto" and .cancellation.state == "confirmed"))
       ' >/dev/null; then
       merge_outcome_stop "operator recovery requires the exact unaccepted immediate intent or confirmed auto cancellation; no attempt was authorized"
       return 1

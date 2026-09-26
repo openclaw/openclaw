@@ -1,4 +1,3 @@
-// Mattermost plugin module owns draft-preview final delivery.
 import {
   createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,

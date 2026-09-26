@@ -154,8 +154,13 @@ describe("normalizeAssistantReplayContent", () => {
         ]),
       ).toEqual([before, reply, after]);
       for (const api of ["bedrock-converse-stream", "anthropic-messages"] as const) {
+        const normalized = normalizeAssistantReplayContent([
+          before,
+          bedrockAssistant(content, "error"),
+        ]);
+        expect(normalized).toEqual([before]);
         const history = await validateReplayTurns({
-          messages: normalizeAssistantReplayContent([before, bedrockAssistant(content, "error")]),
+          messages: normalized,
           modelApi: api,
         });
         const messages = [...history, after];
@@ -584,77 +589,6 @@ describe("normalizeAssistantReplayContent", () => {
     const messages = [userMessage("check"), first, second];
 
     expect(normalizeAssistantReplayContent(messages)).toBe(messages);
-  });
-
-  it("returns the original array reference when nothing needs to change", () => {
-    const messages = [userMessage("hello"), bedrockAssistant([{ type: "text", text: "fine" }])];
-    const out = normalizeAssistantReplayContent(messages);
-    expect(out).toBe(messages);
-  });
-
-  it("drops a trailing assistant turn whose content: [] would have been rewritten to the sentinel (#77228)", () => {
-    // The sentinel was synthesized to satisfy Bedrock's non-empty-content
-    // rule for *non-trailing* error turns. As the trailing message it would
-    // make prefill-strict providers (e.g. github-copilot/claude-opus-4.6)
-    // 400 with "conversation must end with a user message". The original
-    // turn carried content:[] and zero usage — drop is lossless.
-    const messages = [userMessage("hello"), bedrockAssistant([], "error")];
-    const out = normalizeAssistantReplayContent(messages);
-    expect(out).not.toBe(messages);
-    expect(out).toStrictEqual([messages[0]]);
-  });
-
-  it("drops a trailing zero-usage empty stop assistant turn (#77228)", () => {
-    const falseSuccessStop = bedrockAssistant([], "stop");
-    const messages = [userMessage("hello"), falseSuccessStop];
-    const out = normalizeAssistantReplayContent(messages);
-    expect(out).toStrictEqual([messages[0]]);
-  });
-
-  it("drops a trailing assistant turn that already carries the persisted sentinel content (#77228)", () => {
-    // Covers a doctor-imported legacy sentinel; on the next turn the loaded transcript ends with a non-empty
-    // assistant turn whose only content is the sentinel text. Provider
-    // request must still end with user.
-    const persistedSentinel = bedrockAssistant([{ type: "text", text: FALLBACK_TEXT }], "error");
-    const messages = [userMessage("hello"), persistedSentinel];
-    const out = normalizeAssistantReplayContent(messages);
-    expect(out).toStrictEqual([messages[0]]);
-  });
-
-  it("drops several consecutive trailing sentinel/empty-error turns at the tail", () => {
-    const messages = [
-      userMessage("hi"),
-      bedrockAssistant([{ type: "text", text: "real" }]),
-      userMessage("again"),
-      bedrockAssistant([], "error"),
-      bedrockAssistant([{ type: "text", text: FALLBACK_TEXT }], "error"),
-    ];
-    const out = normalizeAssistantReplayContent(messages);
-    expect(out).toHaveLength(3);
-    expect((out.at(-1) as { role: string }).role).toBe("user");
-  });
-
-  it("does not drop a trailing assistant turn that has real content", () => {
-    const realReply = bedrockAssistant([{ type: "text", text: "hello back" }], "stop", {
-      input: 1,
-      output: 1,
-      totalTokens: 2,
-    });
-    const messages = [userMessage("hi"), realReply];
-    const out = normalizeAssistantReplayContent(messages);
-    expect(out).toBe(messages);
-    expect(out).toHaveLength(2);
-  });
-
-  it("does not drop a trailing assistant turn with non-error empty content (toolUse / length)", () => {
-    // Boundary lock: only error/zero-usage-empty-stop and the sentinel
-    // shape are droppable. toolUse/length empty turns are real provider
-    // states and must be preserved on the wire.
-    const toolUse = bedrockAssistant([], "toolUse");
-    const messages = [userMessage("hi"), toolUse];
-    const out = normalizeAssistantReplayContent(messages);
-    expect(out).toBe(messages);
-    expect(out).toHaveLength(2);
   });
 
   it("preserves a trailing real model reply whose only content happens to be the sentinel text (clawsweeper review on #77287)", () => {

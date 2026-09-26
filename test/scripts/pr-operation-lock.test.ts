@@ -9,10 +9,12 @@ import {
 import { once } from "node:events";
 import {
   chmodSync,
+  closeSync,
   cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   realpathSync,
@@ -38,7 +40,11 @@ import {
   validReview,
   writeReviewArtifacts,
 } from "./pr-review-artifact-fixture.js";
-import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
+import {
+  copyPrWrapperSources,
+  createIndependentPrFixtureEnv,
+  linkPrWrapperDependencies,
+} from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const freshMainTemplateDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -78,7 +84,11 @@ function realpathSpecialFixtureWithNode(filePath: string): string {
 }
 
 function spawnDetached(command: string, args: readonly string[], options: SpawnOptions = {}) {
-  const child = spawn(command, args, { ...options, detached: true });
+  const child = spawn(command, args, {
+    env: createIndependentPrFixtureEnv(),
+    ...options,
+    detached: true,
+  });
   detachedChildren.add(child);
   if (child.pid) {
     goneProcessGroups.delete(child.pid);
@@ -210,16 +220,9 @@ function expectMaterializedWorktree(worktreeDir: string) {
   ).toBe("false");
 }
 
-function bashSource(repoDir: string, supervised = false) {
+function bashSource(repoDir: string) {
   return [
     "set -euo pipefail",
-    ...(supervised
-      ? []
-      : [
-          "unset OPENCLAW_PR_LOCK_NOTIFY_FD",
-          "unset OPENCLAW_PR_LOCK_SUPERVISOR_PID",
-          "unset OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT",
-        ]),
     `source '${worktreeScript}'`,
     `source '${lockScript}'`,
     `source '${commonScript}'`,
@@ -241,7 +244,7 @@ function writeOperationFixture(repoDir: string, name: string, commands: string[]
   const fixture = writeFixtureFile(
     repoDir,
     name,
-    ["#!/usr/bin/env bash", ...bashSource(repoDir, true), ...commands].join("\n"),
+    ["#!/usr/bin/env bash", ...bashSource(repoDir), ...commands].join("\n"),
   );
   chmodSync(fixture, 0o755);
   return fixture;
@@ -385,7 +388,7 @@ async function runSupervisedFixture(
     ],
     {
       cwd: repoDir,
-      env: { ...process.env, ...options.env },
+      env: { ...createIndependentPrFixtureEnv(), ...options.env },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -455,7 +458,7 @@ function runLockShell(
 ) {
   return spawnSync("bash", ["-c", [...bashSource(repoDir), ...commands].join("\n")], {
     cwd: repoDir,
-    env: parentEnv,
+    env: createIndependentPrFixtureEnv(parentEnv),
     detached: true,
     encoding: "utf8",
     timeout: 10_000,
@@ -789,7 +792,7 @@ describe("scripts/pr process-group platform guard", () => {
       const child = spawnDetached("bash", [fixture], {
         cwd: repoDir,
         env: {
-          ...process.env,
+          ...createIndependentPrFixtureEnv(),
           OPENCLAW_PR_DEDICATED_PROCESS_GROUP: "1",
           OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
           OPENCLAW_PR_LOCK_SUPERVISOR_PID: String(process.pid),
@@ -808,11 +811,13 @@ describe("scripts/pr process-group platform guard", () => {
 
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 describePosix("scripts/pr per-PR operation lock", () => {
-  it("isolates unsupervised candidate-source fixtures from unrelated supervisor bindings", () => {
+  it("isolates independent fixtures from inherited maintainer bindings", () => {
     const repoDir = createRepo();
     const result = runLockShell(
       repoDir,
       [
+        'test -z "${OPENCLAW_PR_GIT-}"',
+        'test -z "${GIT_EXEC-}"',
         'test -z "${OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT-}"',
         'test -z "${OPENCLAW_PR_LOCK_NOTIFY_FD-}"',
         'test -z "${OPENCLAW_PR_LOCK_SUPERVISOR_PID-}"',
@@ -822,6 +827,8 @@ describePosix("scripts/pr per-PR operation lock", () => {
       ],
       {
         ...process.env,
+        OPENCLAW_PR_GIT: "/bin/false",
+        GIT_EXEC: "/bin/false",
         OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: tempDirs.make("unrelated-lock-snapshot-"),
         OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
         OPENCLAW_PR_LOCK_SUPERVISOR_PID: "1",
@@ -1064,15 +1071,22 @@ describePosix("scripts/pr per-PR operation lock", () => {
         OPENCLAW_TEST_FAILURE: failure,
         OPENCLAW_TEST_AUTH_FAILURE: failure === "auth" ? "1" : "0",
       };
-      const controller = spawn(
-        cli,
-        [command, "42", ...(command === "review-tests" ? ["missing-fixture.test.ts"] : [])],
-        {
-          cwd: repoDir,
-          env: childEnv,
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
+      // A concurrent fork can retain the copied script's writable descriptor on Linux.
+      const writableCli = openSync(cli, "r+");
+      let controller: ChildProcess;
+      try {
+        controller = spawn(
+          join(binDir, "bash"),
+          [cli, command, "42", ...(command === "review-tests" ? ["missing-fixture.test.ts"] : [])],
+          {
+            cwd: repoDir,
+            env: childEnv,
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        );
+      } finally {
+        closeSync(writableCli);
+      }
       let output = "";
       controller.stdout!.setEncoding("utf8");
       controller.stderr!.setEncoding("utf8");
@@ -1446,7 +1460,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       {
         cwd: repoDir,
         encoding: "utf8",
-        env: { ...process.env, PATH: binDir },
+        env: { ...createIndependentPrFixtureEnv(), PATH: binDir },
       },
     );
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
@@ -1474,12 +1488,10 @@ describePosix("scripts/pr per-PR operation lock", () => {
     writeFileSync(reviewScript, `${readFileSync(reviewScript, "utf8")}\nreview_init() { :; }\n`);
     installRequiredPrCommandStubs(binDir);
     const env: NodeJS.ProcessEnv = {
-      ...process.env,
+      ...createIndependentPrFixtureEnv(),
       OPENCLAW_PR_DEDICATED_PROCESS_GROUP: "1",
       PATH: `${binDir}:${process.env.PATH ?? ""}`,
     };
-    delete env.OPENCLAW_PR_LOCK_NOTIFY_FD;
-    delete env.OPENCLAW_PR_LOCK_SUPERVISOR_PID;
     const result = spawnSync(cli, ["review-init", "42"], {
       cwd: repoDir,
       encoding: "utf8",
@@ -1504,7 +1516,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const result = spawnSync(cli, ["review-init", "42"], {
       cwd: repoDir,
       encoding: "utf8",
-      env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+      env: { ...createIndependentPrFixtureEnv(), PATH: `${binDir}:${process.env.PATH ?? ""}` },
     });
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
@@ -1529,7 +1541,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const result = spawnSync(cli, ["review-init", "42"], {
       cwd: repoDir,
       encoding: "utf8",
-      env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+      env: { ...createIndependentPrFixtureEnv(), PATH: `${binDir}:${process.env.PATH ?? ""}` },
     });
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
@@ -2036,7 +2048,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
           // Linked landing verifies the full transitive anchor before starting cleanup.
           timeout: wrapper === "linked" ? 120_000 : 15_000,
           env: {
-            ...process.env,
+            ...createIndependentPrFixtureEnv(),
             canonical_repo_root: join(repoDir, "untrusted-root"),
             OPENCLAW_GH_BIN: gh,
             GH_REPO: "fixture/repo",
@@ -2536,26 +2548,98 @@ describePosix("scripts/pr per-PR operation lock", () => {
       await cleanupRecordedProcessGroup(operationPgidFile, operationPgid);
     }
   });
-  it("fails and retains the lock when a clean wrapper leaves same-group work", async () => {
+  it.each([
+    {
+      title: "fails and retains the lock when a clean wrapper leaves same-group work",
+      report: "native",
+    },
+    {
+      title: "reports a current zombie snapshot after draining same-group work",
+      report: "current",
+    },
+    {
+      title: "reports the exit snapshot when drained same-group work is absent",
+      report: "historical",
+    },
+  ])("$title", async ({ report }) => {
     const repoDir = createRepo();
     const operationPgidFile = join(repoDir, "clean-background-operation-pgid");
+    const backgroundPidFile = join(repoDir, "clean-background-pid");
+    const ownerFile = join(repoDir, "clean-background-owner");
+    const reportCallsFile = join(repoDir, "report-calls");
+    let options: SupervisedFixtureOptions | undefined;
+    if (report !== "native") {
+      const binDir = tempDirs.make("openclaw-pr-report-snapshot-");
+      const realPs = execFileSync("which", ["ps"], { encoding: "utf8" }).trim();
+      // Only diagnostic snapshots are controlled. Identity and all-thread
+      // liveness checks still use the real ps and real process group.
+      const ps = writeFixtureFile(binDir, "ps", [
+        "#!/bin/sh",
+        "set -eu",
+        'if [ "$#" -eq 3 ] && [ "$1" = ax ] && [ "$2" = -o ] && [ "$3" = pid=,pgid=,command= ]; then',
+        "  calls=0",
+        `  if [ -f ${shellQuote(reportCallsFile)} ]; then read -r calls < ${shellQuote(reportCallsFile)}; fi`,
+        "  calls=$((calls + 1))",
+        `  printf '%s\\n' "$calls" > ${shellQuote(reportCallsFile)}`,
+        `  read -r pid < ${shellQuote(backgroundPidFile)}`,
+        `  read -r pgid < ${shellQuote(operationPgidFile)}`,
+        '  case "$calls" in',
+        '    1) printf "%s %s /fixture/bin/sleep 30\\n" "$pid" "$pgid" ;;',
+        report === "current"
+          ? '    2) printf "%s %s [sleep] <defunct>\\n" "$pid" "$pgid" ;;'
+          : "    2) : ;;",
+        "    *) exit 99 ;;",
+        "  esac",
+        "  exit 0",
+        "fi",
+        `exec ${shellQuote(realPs)} "$@"`,
+      ]);
+      chmodSync(ps, 0o755);
+      options = { env: { PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` } };
+    }
     let operationPgid: number | undefined;
     try {
-      const result = await runSupervisedOperation(repoDir, "clean-background-operation.sh", [
-        `printf '%s\\n' "$$" >'${operationPgidFile}'`,
-        "acquire_pr_operation_lock 42",
-        "sleep 30 &",
-        "exit 0",
-      ]);
+      const result = await runSupervisedOperation(
+        repoDir,
+        "clean-background-operation.sh",
+        [
+          `printf '%s\\n' "$$" >'${operationPgidFile}'`,
+          "acquire_pr_operation_lock 42",
+          `printf '%s\\n' "$PR_OPERATION_LOCK_OWNER_OID" >'${ownerFile}'`,
+          "sleep 30 &",
+          `printf '%s\\n' "$!" >'${backgroundPidFile}'`,
+          "exit 0",
+        ],
+        options,
+      );
       operationPgid = await waitForProcessId(operationPgidFile);
-      const ownerOid = refOid(repoDir);
+      const backgroundPid = await waitForProcessId(backgroundPidFile);
+      const ownerOid = readFileSync(ownerFile, "utf8").trim();
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
       assertFixtureProcessGroupStopped(operationPgid);
       goneProcessGroups.add(operationPgid);
       expect(result.stderr).toContain("process group remained active after wrapper exit");
-      expect(result.stderr).toContain(`surviving processes in group ${operationPgid}`);
-      expect(result.stderr).toMatch(/^\s+\d+ \d+ sleep$/mu);
-      expect(result.stderr).toContain("process group appears empty at report time");
+      expect(result.stderr).toMatch(
+        new RegExp(`^\\s+${backgroundPid} ${operationPgid} \\S+$`, "mu"),
+      );
+      const currentHeader = `surviving processes in group ${operationPgid}:`;
+      const historicalHeader = `surviving processes in group ${operationPgid} when wrapper exited:`;
+      const headers = result.stderr
+        .split("\n")
+        .filter((line) => line === currentHeader || line === historicalHeader);
+      expect(headers).toHaveLength(1);
+      // Drain completion does not promise that the OS has reaped its zombie row.
+      expect(result.stderr.includes("process group appears empty at report time")).toBe(
+        headers[0] === historicalHeader,
+      );
+      if (report !== "native") {
+        expect(readFileSync(reportCallsFile, "utf8")).toBe("2\n");
+        expect(headers).toEqual([report === "current" ? currentHeader : historicalHeader]);
+        expect(result.stderr).toContain(
+          `  ${backgroundPid} ${operationPgid} ${report === "current" ? "[sleep]" : "sleep"}\n`,
+        );
+      }
+      expect(refOid(repoDir)).toBe(ownerOid);
       expect(result.stderr).toContain(
         `scripts/pr lock-recover 42 ${ownerOid} --confirmed-no-running-tools`,
       );
@@ -2875,7 +2959,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         cwd: repoDir,
         // The test deliberately kills the relay before its managed claim can release.
         // Only this fixture's independent group census may dispose its retained inputs.
-        env: { ...process.env, TMPDIR: repoDir, TMP: repoDir, TEMP: repoDir },
+        env: { ...createIndependentPrFixtureEnv(), TMPDIR: repoDir, TMP: repoDir, TEMP: repoDir },
         stdio: "ignore",
       });
       let nestedPgid: number | undefined;

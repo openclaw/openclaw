@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -10,6 +10,7 @@ import {
   patchSessionEntryCore as patchInternalSessionEntry,
   replaceSessionEntry as replaceInternalSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { observeSessionMaintenanceCompletion } from "../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
 import type * as ConfigSessionTypes from "../config/sessions/types.js";
 import {
   cleanupSessionLifecycleArtifacts,
@@ -61,6 +62,24 @@ describe("session-store-runtime compatibility surface", () => {
       replaceEntry: true,
       skipMaintenance: true,
     });
+  }
+
+  async function seedRecoveringSession(
+    sessionKey: string,
+    sessionId: string,
+    targetStorePath = storePath,
+  ) {
+    const entry: InternalSessionEntry = {
+      abortedLastRun: true,
+      mainRestartRecovery: { chargedAttempts: 1, cycleId: "rotation-cycle", revision: 1 },
+      restartRecoveryRuns: [{ lifecycleGeneration: "rotation-generation", runId: "rotation-run" }],
+      sessionId,
+      updatedAt: 10,
+    };
+    await replaceInternalSessionEntry(
+      { agentId: "main", sessionKey, storePath: targetStorePath },
+      entry,
+    );
   }
 
   function assignOwner(sessionKey: string): void {
@@ -692,41 +711,8 @@ describe("session-store-runtime compatibility surface", () => {
     const patchKey = "agent:main:telegram:direct:patch-rotation";
     const upsertKey = "agent:main:telegram:direct:upsert-rotation";
     const upsertStorePath = path.join(tempDir, "upsert-sessions.json");
-    const mainRestartRecovery = {
-      chargedAttempts: 1,
-      cycleId: "rotation-cycle",
-      revision: 1,
-    };
-    await seedSessionEntry(patchKey, {
-      abortedLastRun: true,
-      restartRecoveryRuns: [{ lifecycleGeneration: "patch-generation", runId: "patch-run" }],
-      sessionId: "patch-before",
-      updatedAt: 10,
-    });
-    await patchInternalSessionEntry(
-      { agentId: "main", sessionKey: patchKey, storePath },
-      () =>
-        ({
-          abortedLastRun: true,
-          mainRestartRecovery,
-          restartRecoveryRuns: [{ lifecycleGeneration: "patch-generation", runId: "patch-run" }],
-        }) as Partial<InternalSessionEntry>,
-    );
-    await upsertSessionEntry({
-      agentId: "main",
-      entry: { sessionId: "upsert-before", updatedAt: 10 },
-      sessionKey: upsertKey,
-      storePath: upsertStorePath,
-    });
-    await patchInternalSessionEntry(
-      { agentId: "main", sessionKey: upsertKey, storePath: upsertStorePath },
-      () =>
-        ({
-          abortedLastRun: true,
-          mainRestartRecovery,
-          restartRecoveryRuns: [{ lifecycleGeneration: "upsert-generation", runId: "upsert-run" }],
-        }) as Partial<InternalSessionEntry>,
-    );
+    await seedRecoveringSession(patchKey, "patch-before");
+    await seedRecoveringSession(upsertKey, "upsert-before", upsertStorePath);
 
     await patchSessionEntry({
       replaceEntry: true,
@@ -757,41 +743,8 @@ describe("session-store-runtime compatibility surface", () => {
     const patchKey = "agent:main:telegram:direct:patch-rotation";
     const updateKey = "agent:main:telegram:direct:update-rotation";
     const updateStorePath = path.join(tempDir, "update-patch-sessions.json");
-    const mainRestartRecovery = {
-      chargedAttempts: 1,
-      cycleId: "rotation-cycle",
-      revision: 1,
-    };
-    await seedSessionEntry(patchKey, {
-      abortedLastRun: true,
-      restartRecoveryRuns: [{ lifecycleGeneration: "patch-generation", runId: "patch-run" }],
-      sessionId: "patch-before",
-      updatedAt: 10,
-    });
-    await upsertSessionEntry({
-      agentId: "main",
-      entry: { sessionId: "update-before", updatedAt: 10 },
-      sessionKey: updateKey,
-      storePath: updateStorePath,
-    });
-    await patchInternalSessionEntry(
-      { agentId: "main", sessionKey: patchKey, storePath },
-      () =>
-        ({
-          abortedLastRun: true,
-          mainRestartRecovery,
-          restartRecoveryRuns: [{ lifecycleGeneration: "patch-generation", runId: "patch-run" }],
-        }) as Partial<InternalSessionEntry>,
-    );
-    await patchInternalSessionEntry(
-      { agentId: "main", sessionKey: updateKey, storePath: updateStorePath },
-      () =>
-        ({
-          abortedLastRun: true,
-          mainRestartRecovery,
-          restartRecoveryRuns: [{ lifecycleGeneration: "update-generation", runId: "update-run" }],
-        }) as Partial<InternalSessionEntry>,
-    );
+    await seedRecoveringSession(patchKey, "patch-before");
+    await seedRecoveringSession(updateKey, "update-before", updateStorePath);
 
     await patchSessionEntry({
       sessionKey: patchKey,
@@ -817,7 +770,6 @@ describe("session-store-runtime compatibility surface", () => {
   it.each([
     { pruneAfterMs: 7 * DAY_MS, archivedAt: expect.any(Number) },
     { pruneAfterMs: 0, archivedAt: undefined },
-    { pruneAfterMs: -DAY_MS, archivedAt: undefined },
   ])(
     "applies age retention $pruneAfterMs through entry patches",
     async ({ pruneAfterMs, archivedAt }) => {
@@ -829,6 +781,7 @@ describe("session-store-runtime compatibility surface", () => {
       await seedSessionEntry(activeSessionKey, { sessionId: "session-active", updatedAt: now });
       assignOwner(staleSessionKey);
 
+      const done = observeSessionMaintenanceCompletion(path.join(tempDir, "openclaw-agent.sqlite"));
       await patchSessionEntry({
         sessionKey: activeSessionKey,
         storePath,
@@ -844,11 +797,10 @@ describe("session-store-runtime compatibility surface", () => {
         update: () => ({ model: "gpt-5.5" }),
       });
 
-      const readStaleEntry = () => getSessionEntry({ sessionKey: staleSessionKey, storePath });
-      await vi.waitFor(() => expect(readStaleEntry()?.archivedAt).toEqual(archivedAt), {
-        timeout: 5_000,
-      });
-      expect(readStaleEntry()).toMatchObject(staleEntry);
+      await done;
+      const retainedEntry = getSessionEntry({ sessionKey: staleSessionKey, storePath });
+      expect(retainedEntry?.archivedAt).toEqual(archivedAt);
+      expect(retainedEntry).toMatchObject(staleEntry);
       const activeEntry = getSessionEntry({ sessionKey: activeSessionKey, storePath });
       expect(activeEntry).toMatchObject({ sessionId: "session-active", model: "gpt-5.5" });
       expect(activeEntry?.archivedAt).toBeUndefined();

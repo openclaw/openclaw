@@ -9,6 +9,7 @@ import {
   type AnthropicStreamEvent,
   type QaMockProviderFailure,
   countApproxTokens,
+  parseJsonObjectBody,
 } from "./mock-openai-contracts.js";
 
 // Anthropic Messages conversion preserves role and tool ordering while reusing
@@ -17,22 +18,11 @@ import {
 export function normalizeAnthropicSystemToString(
   system: AnthropicMessagesRequest["system"],
 ): string | undefined {
-  if (typeof system === "string") {
-    return system.trim() || undefined;
-  }
-  if (Array.isArray(system)) {
-    const joined = system
-      .map((block) => (block?.type === "text" ? block.text : ""))
-      .filter(Boolean)
-      .join("\n")
-      .trim();
-    return joined || undefined;
-  }
-  return undefined;
+  return stringifyToolResultContent(system).trim() || undefined;
 }
 
 function stringifyToolResultContent(
-  content: Extract<AnthropicMessageContentBlock, { type: "tool_result" }>["content"],
+  content: Extract<AnthropicMessageContentBlock, { type: "tool_result" }>["content"] | undefined,
 ): string {
   if (typeof content === "string") {
     return content;
@@ -215,30 +205,13 @@ export function extractAssistantOutputFromEvents(events: StreamEvent[]): Extract
     if (event.type !== "response.output_item.done") {
       continue;
     }
-    const item = event.item as {
-      type?: unknown;
-      name?: unknown;
-      call_id?: unknown;
-      id?: unknown;
-      arguments?: unknown;
-      content?: unknown;
-    };
+    const item = event.item;
     if (item.type === "function_call" && typeof item.name === "string") {
-      let input: Record<string, unknown> = {};
-      if (typeof item.arguments === "string" && item.arguments.trim()) {
-        try {
-          const parsed = JSON.parse(item.arguments) as unknown;
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            input = parsed as Record<string, unknown>;
-          }
-        } catch {
-          // keep empty input on malformed args — mock dispatcher owns arg shape
-        }
-      }
       toolCalls.push({
         id: typeof item.call_id === "string" ? item.call_id : `toolu_mock_${toolCalls.length + 1}`,
         name: item.name,
-        input,
+        input:
+          typeof item.arguments === "string" ? (parseJsonObjectBody(item.arguments) ?? {}) : {},
       });
       continue;
     }

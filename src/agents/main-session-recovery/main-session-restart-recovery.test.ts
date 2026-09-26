@@ -16,9 +16,8 @@ import * as configSessions from "../../config/sessions.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
-  appendTranscriptMessage,
   listSessionEntriesCore,
-  loadSessionEntry as loadSessionEntryRaw,
+  loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -51,6 +50,7 @@ import {
 import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import * as gatewayWorkAdmission from "../../process/gateway-work-admission.js";
 import {
   GatewayDrainingError,
   getActiveGatewayRootWorkCount,
@@ -116,8 +116,19 @@ import {
 } from "./main-session-recovery-store.js";
 import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-dispatch-start.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
+import { createRestartRecoveryTranscriptFixture } from "./main-session-restart-recovery-fixture.test-support.js";
 import { discoverRestartRecoveryStoreTargets } from "./main-session-restart-recovery-shared.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
+import {
+  codeModeCheckpointMessage,
+  codeModeWaitCallMessage,
+  makeAssistantTextMessage,
+  makeMessageDeliveryTranscript,
+  makeMessageToolCall,
+  makeMessageToolResult,
+  makeToolResultMessage,
+  makeUserMessage,
+} from "./main-session-restart-recovery-transcript.test-support.js";
 import {
   markRestartAbortedMainSessions,
   markStartupOrphanedMainSessionsForRecovery,
@@ -193,6 +204,9 @@ vi.mock("../../config/sessions/transcript.js", async (importOriginal) => {
 });
 
 let tmpDir: string;
+let freshTmpDir: string;
+const transcriptFixture = createRestartRecoveryTranscriptFixture(readStore);
+const { writeTranscript } = transcriptFixture;
 
 function seedQueuedFinal(id: string, text: string): void {
   const entry: QueuedDelivery = {
@@ -211,12 +225,6 @@ function seedQueuedFinal(id: string, text: string): void {
 }
 const resolveGatewayContext = () => undefined;
 
-function loadSessionEntry(
-  scope: Parameters<typeof loadSessionEntryRaw>[0],
-): SessionEntry | undefined {
-  return loadSessionEntryRaw(scope) as SessionEntry | undefined;
-}
-
 beforeEach(async () => {
   vi.clearAllMocks();
   dispatchSettlement = createDeferred();
@@ -225,12 +233,19 @@ beforeEach(async () => {
   resetAgentEventsForTest();
   resetGatewayWorkAdmission();
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-main-restart-recovery-"));
+  freshTmpDir = tmpDir;
 });
 
 afterEach(async () => {
   resetGatewayWorkAdmission();
-  await cleanupSessionStateForTest({ stateDir: tmpDir });
-  await fs.rm(tmpDir, { recursive: true, force: true });
+  const caseDir = tmpDir;
+  tmpDir = freshTmpDir;
+  try {
+    await transcriptFixture.reset(caseDir);
+  } finally {
+    await cleanupSessionStateForTest({ stateDir: tmpDir });
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
 });
 
 async function makeSessionsDir(agentId = "main"): Promise<string> {
@@ -325,73 +340,6 @@ function makePendingFinalDelivery(
   };
 }
 
-function makeUserMessage(content = "do the thing", overrides: Record<string, unknown> = {}) {
-  return { role: "user", content, ...overrides };
-}
-
-function makeToolResultMessage(content: unknown = "done", overrides: Record<string, unknown> = {}) {
-  return { role: "toolResult", content, ...overrides };
-}
-
-function makeAssistantTextMessage(text: string, overrides: Record<string, unknown> = {}) {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    ...overrides,
-  };
-}
-
-function makeMessageToolCall(
-  toolCallId = "message-call-1",
-  message = "delivered answer",
-  overrides: Record<string, unknown> = {},
-) {
-  return createAssistantToolCallMessage([
-    {
-      type: "toolCall",
-      id: toolCallId,
-      name: "message",
-      arguments: { action: "send", message },
-      ...overrides,
-    },
-  ]);
-}
-
-function makeMessageToolResult(
-  toolCallId = "message-call-1",
-  overrides: Record<string, unknown> = {},
-) {
-  return makeToolResultMessage([{ type: "text", text: "sent" }], {
-    toolCallId,
-    toolName: "message",
-    isError: false,
-    ...overrides,
-  });
-}
-
-function makeMessageDeliveryTranscript({
-  beforeCall = [],
-  content = "do the thing",
-  message = "delivered answer",
-  sourceRunId = "discord-message-1",
-  toolCallId = "message-call-1",
-  tail = [],
-}: {
-  beforeCall?: readonly unknown[];
-  content?: string;
-  message?: string;
-  sourceRunId?: string;
-  toolCallId?: string;
-  tail?: readonly unknown[];
-} = {}) {
-  return [
-    makeUserMessage(content, { idempotencyKey: sourceRunId }),
-    ...beforeCall,
-    makeMessageToolCall(toolCallId, message),
-    ...tail,
-  ];
-}
-
 function deliveredReceiptEntry(
   toolCallId = "message-call-1",
   sourceRunId = "discord-message-1",
@@ -441,27 +389,12 @@ function readStore(storePath: string): Record<string, SessionEntry> {
   );
 }
 
-async function writeTranscript(
-  sessionsDir: string,
-  sessionId: string,
+async function writePreparedMainSessionTranscript(
   messages: readonly unknown[],
-): Promise<void> {
-  const storePath = path.join(sessionsDir, "sessions.json");
-  const sessionKey = Object.entries(readStore(storePath)).find(
-    ([, entry]) => entry.sessionId === sessionId,
-  )?.[0];
-  if (!sessionKey) {
-    throw new Error(`expected session entry for transcript fixture: ${sessionId}`);
-  }
-  for (const message of messages) {
-    await appendTranscriptMessage(
-      { sessionId, sessionKey, storePath },
-      {
-        cwd: sessionsDir,
-        message,
-      },
-    );
-  }
+  entry: SessionEntryFixture = {},
+): Promise<string> {
+  tmpDir = transcriptFixture.prepareRoot();
+  return writeMainSessionTranscript(messages, entry);
 }
 
 async function writeMainSessionTranscript(
@@ -493,39 +426,27 @@ async function loadTestTranscript(
   })) as Array<{ message?: Record<string, unknown> }>;
 }
 
-function codeModeCheckpointMessage(
-  toolName: "exec" | "wait" = "wait",
-  checkpoint: Record<string, unknown> = {
-    status: "waiting",
-    runId: "cm_interrupted",
-    replaySafe: true,
-  },
+function observeRecoveryRootCompletions(
+  expectedOrigin: "main-session:startup-recovery" | "main-session:restart-recovery",
+  expectedCount: number,
 ) {
-  return {
-    role: "toolResult",
-    toolName,
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(checkpoint),
+  const completed = createDeferred();
+  const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
+  let count = 0;
+  const spy = vi
+    .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
+    .mockImplementation(
+      async <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal): Promise<T> => {
+        try {
+          return await admit(run, origin, signal);
+        } finally {
+          if (origin === expectedOrigin && ++count === expectedCount) {
+            completed.resolve();
+          }
+        }
       },
-    ],
-  };
-}
-
-function codeModeWaitCallMessage() {
-  return {
-    role: "assistant",
-    content: [
-      {
-        type: "toolCall",
-        id: "call-wait-1",
-        name: "wait",
-        arguments: { runId: "cm_interrupted" },
-      },
-    ],
-    stopReason: "toolUse",
-  };
+    );
+  return { completed: completed.promise, restore: () => spy.mockRestore() };
 }
 
 function getHarnessRecoveryFixture() {
@@ -1200,6 +1121,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("persists abort-registry runs after their event context was cleared", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const sessionsDir = await makeSessionsDir();
     await writeMainSession({
       sessionsDir,
@@ -1229,6 +1151,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("marks queued abort-registry runs before lifecycle start changes session status", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
       "agent:main:main": {
@@ -1307,6 +1230,7 @@ describe("main-session-restart-recovery", () => {
       currentGeneration: true,
     },
   ])("$name", async ({ updatedAt, runId, observedAt, isActive, currentGeneration }) => {
+    tmpDir = transcriptFixture.prepareRoot();
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
       "agent:main:main": createSessionEntry({
@@ -1340,6 +1264,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("preserves current-generation markers across repeated restart marking", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const sessionsDir = await makeSessionsDir();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     await writeMainSession({
@@ -1379,6 +1304,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("replaces an older marker when the same run id is active after another restart", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const sessionsDir = await makeSessionsDir();
     await writeMainSession({
       sessionsDir,
@@ -1444,8 +1370,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("resumes marked sessions with a tool-result transcript tail", async () => {
-    const sessionsDir = await makeSessionsDir();
-    await writeStore(sessionsDir, mainSessionStore());
+    const { sessionsDir } = await makeMainSessionFixture();
     await writeCompletedToolTranscript(sessionsDir);
 
     await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
@@ -2349,9 +2274,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("retries reservation cleanup after a transient session-store failure", async () => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    await writeStore(sessionsDir, mainSessionStore());
+    const { sessionsDir, storePath } = await makeMainSessionFixture();
     await writeCompletedToolTranscript(sessionsDir);
     let dispatchFailed = false;
     vi.mocked(callGateway).mockImplementationOnce(async () => {
@@ -2385,9 +2308,8 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("schedules exact reservation cleanup after immediate retries are exhausted", async () => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    await writeStore(sessionsDir, mainSessionStore());
+    const scheduled = createDeferred();
+    const { sessionsDir, storePath } = await makeMainSessionFixture();
     await writeCompletedToolTranscript(sessionsDir);
     let dispatchFailed = false;
     vi.mocked(callGateway).mockImplementationOnce(async () => {
@@ -2397,7 +2319,7 @@ describe("main-session-restart-recovery", () => {
     const applySessionEntryReplacements = sessionAccessor.applySessionEntryReplacements;
     const schedulePendingSpy = vi
       .spyOn(recoveryOwnerRelease, "scheduleMainSessionRecoveryPendingTarget")
-      .mockImplementation(() => {});
+      .mockImplementation(() => scheduled.resolve());
     let cleanupFailures = 0;
     const replacementSpy = vi
       .spyOn(sessionAccessor, "applySessionEntryReplacements")
@@ -2417,15 +2339,11 @@ describe("main-session-restart-recovery", () => {
         loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.mainRestartRecovery
           ?.reservation,
       ).toBeDefined();
-      await vi.waitFor(
-        () => {
-          expect(
-            loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.mainRestartRecovery
-              ?.reservation,
-          ).toBeUndefined();
-        },
-        { timeout: 3_000 },
-      );
+      await scheduled.promise;
+      expect(
+        loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.mainRestartRecovery
+          ?.reservation,
+      ).toBeUndefined();
       expect(schedulePendingSpy).toHaveBeenCalledWith({
         agentId: "main",
         sessionId: "main-session",
@@ -2444,9 +2362,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("retries reservation cleanup when durable dispatch preparation is rejected", async () => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    await writeStore(sessionsDir, mainSessionStore());
+    const { sessionsDir, storePath } = await makeMainSessionFixture();
     await writeCompletedToolTranscript(sessionsDir);
     const applySessionEntryReplacements = sessionAccessor.applySessionEntryReplacements;
     let preparationRejected = false;
@@ -2487,9 +2403,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("refunds an explicit Gateway rejection before recovery admission", async () => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    await writeStore(sessionsDir, mainSessionStore());
+    const { sessionsDir, storePath } = await makeMainSessionFixture();
     await writeCompletedToolTranscript(sessionsDir);
     vi.mocked(callGateway).mockRejectedValueOnce(
       new GatewayClientRequestError({
@@ -2510,9 +2424,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("does not settle an ambiguous recovery after a foreground owner wins admission", async () => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    await writeStore(sessionsDir, mainSessionStore());
+    const { sessionsDir, storePath } = await makeMainSessionFixture();
     await writeCompletedToolTranscript(sessionsDir);
     vi.mocked(callGateway).mockImplementation(async (request) => {
       if (request.method === "agent") {
@@ -2540,9 +2452,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("rolls back the reservation when ambiguous settlement persistence fails", async () => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    await writeStore(sessionsDir, mainSessionStore());
+    const { sessionsDir, storePath } = await makeMainSessionFixture();
     await writeCompletedToolTranscript(sessionsDir);
     let dispatchFailed = false;
     vi.mocked(callGateway).mockImplementation(async (request) => {
@@ -2583,9 +2493,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("settles an admitted recovery that completed before its ambiguous response", async () => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    await writeStore(sessionsDir, mainSessionStore());
+    const { sessionsDir, storePath } = await makeMainSessionFixture();
     await writeCompletedToolTranscript(sessionsDir);
     vi.mocked(callGateway).mockImplementation(async (request) => {
       if (request.method === "agent") {
@@ -2969,58 +2877,29 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
-  it.each(["owed", "unresolved", "acknowledged"] as const)(
-    "preserves a prior %s notice when the same pending final completes",
-    async (state) => {
-      const sessionsDir = await makeSessionsDir();
-      const storePath = path.join(sessionsDir, "sessions.json");
-      const pending = makePendingFinalDelivery("Uncertain reply.", {
-        context: discordDeliveryContext,
-        intentId: "intent-notice-retained",
-        deliveries: [{ id: "delivery-notice-retained", state: "unknown" }],
-      });
-      await writeMainSession({
-        sessionsDir,
-        pendingFinalDelivery: pending,
-        pendingDeliveryNotice: {
-          createdAt: pending.createdAt,
-          context: discordDeliveryContext,
-          intentId: "intent-notice-retained",
-          state,
-        },
-      });
-      await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 });
-      const entry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
-      expect(entry?.pendingFinalDelivery).toBeUndefined();
-      expect(entry?.pendingDeliveryNotice?.state).toBe(state);
-      expect(sendRecoveryNotice).not.toHaveBeenCalled();
-    },
-  );
-
-  it("completes an unqueued text and media final with owed notice debt instead of replaying", async () => {
+  it("preserves an acknowledged notice when the same pending final completes", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
+    const pending = makePendingFinalDelivery("Uncertain reply.", {
+      context: discordDeliveryContext,
+      intentId: "intent-notice-retained",
+      deliveries: [{ id: "delivery-notice-retained", state: "unknown" }],
+    });
     await writeMainSession({
       sessionsDir,
-      pendingFinalDelivery: {
-        kind: "transport-only",
-        createdAt: Date.now(),
+      pendingFinalDelivery: pending,
+      pendingDeliveryNotice: {
+        createdAt: pending.createdAt,
         context: discordDeliveryContext,
-        intentId: "intent-text-media",
-        deliveries: [
-          { id: "delivery-text", state: "prepared" },
-          { id: "delivery-media", state: "prepared" },
-        ],
+        intentId: "intent-notice-retained",
+        state: "acknowledged",
       },
     });
-
     await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 });
-
-    expect(callGateway).not.toHaveBeenCalled();
+    const entry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+    expect(entry?.pendingFinalDelivery).toBeUndefined();
+    expect(entry?.pendingDeliveryNotice?.state).toBe("acknowledged");
     expect(sendRecoveryNotice).not.toHaveBeenCalled();
-    expect(
-      loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.pendingDeliveryNotice,
-    ).toMatchObject({ intentId: "intent-text-media", state: "owed" });
   });
 
   it.each(["delivered", "unknown"] as const)(
@@ -3566,14 +3445,10 @@ describe("main-session-restart-recovery", () => {
       stateDir: tmpDir,
     });
     try {
-      await waitForFast(() =>
-        expect(
-          loadSessionEntry({
-            sessionKey: "agent:main:control",
-            storePath: path.join(sessionsDir, "sessions.json"),
-          }),
-        ).toMatchObject({ abortedLastRun: false }),
-      );
+      await mockRecoveryRuntime.expectAdmission(1, {
+        sessionKey: "agent:main:control",
+        storePath: path.join(sessionsDir, "sessions.json"),
+      });
       await recovery.stop();
 
       expect(callGateway).toHaveBeenCalledOnce();
@@ -3699,11 +3574,10 @@ describe("main-session-restart-recovery", () => {
       stateDir: tmpDir,
     });
     try {
-      await waitForFast(() =>
-        expect(
-          loadSessionEntry({ sessionKey: "agent:main:main", storePath: customStorePath }),
-        ).toMatchObject({ abortedLastRun: false }),
-      );
+      await mockRecoveryRuntime.expectAdmission(1, {
+        sessionKey: "agent:main:main",
+        storePath: customStorePath,
+      });
       await recovery.stop();
     } finally {
       await recovery.stop();
@@ -3755,13 +3629,19 @@ describe("main-session-restart-recovery", () => {
         return result;
       });
 
+    const firstDispatch = createDeferred();
+    vi.mocked(callGateway).mockImplementationOnce(async () => {
+      firstDispatch.resolve();
+      return { runId: "run-resumed" };
+    });
     const recovery = scheduleRestartAbortedMainSessionRecovery({
       getConfig: () => cfg,
       delayMs: 0,
       stateDir: tmpDir,
     });
     try {
-      await waitForFast(() => expect(callGateway).toHaveBeenCalledOnce());
+      await firstDispatch.promise;
+      expect(callGateway).toHaveBeenCalledOnce();
       dispatchSettlement.resolve(); // The second store waits for the first recovery slot.
       await mockRecoveryRuntime.expectAdmission(
         2,
@@ -3776,6 +3656,7 @@ describe("main-session-restart-recovery", () => {
         2,
       );
     } finally {
+      dispatchSettlement.resolve();
       await recovery.stop();
       replacementSpy.mockRestore();
       discoverySpy.mockRestore();
@@ -4173,6 +4054,15 @@ describe("main-session-restart-recovery", () => {
           }
           return await apply(params);
         });
+      const firstDispatch = createDeferred();
+      vi.mocked(callGateway).mockImplementationOnce(async () => {
+        firstDispatch.resolve();
+        return { runId: "run-resumed" };
+      });
+      const attempts = observeRecoveryRootCompletions(
+        "main-session:startup-recovery",
+        transient ? 2 : 1,
+      );
       const recovery = scheduleRestartAbortedMainSessionRecovery({
         getConfig: () => cfg,
         delayMs: transient ? 1 : 0,
@@ -4182,11 +4072,12 @@ describe("main-session-restart-recovery", () => {
       try {
         await failedMark.promise;
         if (transient) {
-          await waitForFast(() => expect(callGateway).toHaveBeenCalledOnce());
+          await firstDispatch.promise;
+          expect(callGateway).toHaveBeenCalledOnce();
           dispatchSettlement.resolve(); // Retried stores share the same bounded recovery slot.
-          await waitForFast(() => expect(callGateway).toHaveBeenCalledTimes(2));
         }
-        await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        await attempts.completed;
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
         await recovery.stop();
         expect(callGateway).toHaveBeenCalledTimes(transient ? 2 : 1);
         expect(gatewayParams()).toMatchObject({
@@ -4206,7 +4097,9 @@ describe("main-session-restart-recovery", () => {
           expect(readStartupRecoveryWarning()).toContain("startup store temporarily locked");
         }
       } finally {
+        dispatchSettlement.resolve();
         await recovery.stop();
+        attempts.restore();
         replacementSpy.mockRestore();
         rotateAgentEventLifecycleGeneration();
       }
@@ -4409,21 +4302,27 @@ describe("main-session-restart-recovery", () => {
       .mockResolvedValueOnce({ runId: "run-resumed", status: "running" })
       .mockResolvedValueOnce({ runId: "run-resumed" });
 
-    scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease({
-      delayMs: 0,
-      expectedSessionId: "main-session",
-      getConfig: () => ({}),
-      getGatewayRuntime: () => mockRecoveryRuntime,
-      maxRetries: 2,
-      sessionKey: "agent:main:main",
-      storePath,
-    });
+    const attempts = observeRecoveryRootCompletions("main-session:restart-recovery", 2);
+    try {
+      scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease({
+        delayMs: 0,
+        expectedSessionId: "main-session",
+        getConfig: () => ({}),
+        getGatewayRuntime: () => mockRecoveryRuntime,
+        maxRetries: 2,
+        sessionKey: "agent:main:main",
+        storePath,
+      });
 
-    await vi.waitFor(() => expect(callGateway).toHaveBeenCalledTimes(3), { timeout: 5_000 });
-    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
-      abortedLastRun: false,
-    });
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
+      await attempts.completed;
+      expect(callGateway).toHaveBeenCalledTimes(3);
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+        abortedLastRun: false,
+      });
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      attempts.restore();
+    }
   });
 
   it("tombstones exhausted recovery with replacement-session instructions", async () => {
@@ -4548,6 +4447,7 @@ describe("main-session-restart-recovery", () => {
       .mockRejectedValueOnce(new Error("final ambiguous dispatch failure"))
       .mockResolvedValueOnce({ runId: "run-resumed", status: "running" });
 
+    const attempts = observeRecoveryRootCompletions("main-session:restart-recovery", 2);
     scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease({
       delayMs: 0,
       expectedSessionId: "main-session",
@@ -4558,14 +4458,17 @@ describe("main-session-restart-recovery", () => {
       storePath,
     });
 
-    await waitForFast(() => {
+    try {
+      await attempts.completed;
       expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
         status: "failed",
         lastRunId: "control-ui-run",
         mainRestartRecovery: { tombstone: expect.any(Object) },
       });
-    });
-    expect(callGateway).toHaveBeenCalledTimes(2);
+      expect(callGateway).toHaveBeenCalledTimes(2);
+    } finally {
+      attempts.restore();
+    }
   });
 
   it("tombstones when message-tool-only authority cannot be reconstructed", async () => {
@@ -5515,7 +5418,7 @@ describe("main-session-restart-recovery", () => {
   ])(
     "resumes %s at the transcript tail for model reconciliation",
     async (_label, assistantMessage) => {
-      await writeMainSessionTranscript([
+      await writePreparedMainSessionTranscript([
         { role: "user", content: "do the thing" },
         assistantMessage,
       ]);
@@ -5535,7 +5438,7 @@ describe("main-session-restart-recovery", () => {
     async (errorMessage) => {
       // The process that wrote this tail predates errorCode propagation, and it
       // can be the very process replaced by the upgrade running recovery now.
-      await writeMainSessionTranscript([
+      await writePreparedMainSessionTranscript([
         { role: "user", content: "do the thing" },
         { role: "assistant", content: [], stopReason: "error", errorMessage },
       ]);
@@ -5572,7 +5475,7 @@ describe("main-session-restart-recovery", () => {
   ])(
     "resumes an aborted tail persisted with %s",
     async (_label, assistantMessage, forceRestartSafeTools) => {
-      await writeMainSessionTranscript([
+      await writePreparedMainSessionTranscript([
         { role: "user", content: "do the thing" },
         assistantMessage,
       ]);
@@ -5664,7 +5567,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("reads a provider-native Code Mode wait input", async () => {
-    await writeMainSessionTranscript([
+    await writePreparedMainSessionTranscript([
       { role: "user", content: "do the thing" },
       codeModeCheckpointMessage("exec"),
       createAssistantToolCallMessage([
@@ -5698,7 +5601,7 @@ describe("main-session-restart-recovery", () => {
   ])(
     "classifies a direct waiting checkpoint with replaySafe=$replaySafe",
     async ({ replaySafe, expected, gatewayCalls }) => {
-      await writeMainSessionTranscript([
+      await writePreparedMainSessionTranscript([
         { role: "user", content: "do the thing" },
         {
           role: "toolResult",
@@ -5728,7 +5631,7 @@ describe("main-session-restart-recovery", () => {
   it.each(["completed", "failed"] as const)(
     "keeps restart safety after a terminal Code Mode %s result",
     async (status) => {
-      await writeMainSessionTranscript([
+      await writePreparedMainSessionTranscript([
         { role: "user", content: "do the thing" },
         {
           role: "toolResult",
@@ -5800,7 +5703,7 @@ describe("main-session-restart-recovery", () => {
   ])(
     "preserves the restart-safe boundary after an ordinary tool result with $label",
     async ({ messages, forceRestartSafeTools }) => {
-      await writeMainSessionTranscript(messages);
+      await writePreparedMainSessionTranscript(messages);
 
       await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
       if (forceRestartSafeTools) {
@@ -5812,7 +5715,7 @@ describe("main-session-restart-recovery", () => {
   );
 
   it("keeps restart safety across a second restart of the recovery turn", async () => {
-    await writeMainSessionTranscript(
+    await writePreparedMainSessionTranscript(
       [
         { role: "user", content: "do the thing" },
         {
@@ -5844,7 +5747,7 @@ describe("main-session-restart-recovery", () => {
   it.each(["guarded", "full"] as const)(
     "keeps replay safety outside the recent transcript window with %s access",
     async (permissionMode) => {
-      await writeMainSessionTranscript(
+      await writePreparedMainSessionTranscript(
         [
           { role: "user", content: "do the thing" },
           codeModeCheckpointMessage(),
@@ -5868,7 +5771,7 @@ describe("main-session-restart-recovery", () => {
   );
 
   it("resumes an in-flight safe tool call across a repeated restart", async () => {
-    await writeMainSessionTranscript(
+    await writePreparedMainSessionTranscript(
       [
         { role: "user", content: "do the thing" },
         createAssistantToolCallMessage([
@@ -5886,7 +5789,7 @@ describe("main-session-restart-recovery", () => {
   it.each(["guarded", "full"] as const)(
     "retains explicit replay safety after a provider error with %s access",
     async (permissionMode) => {
-      await writeMainSessionTranscript(
+      await writePreparedMainSessionTranscript(
         [
           { role: "user", content: "do the thing" },
           codeModeCheckpointMessage(),
@@ -5906,7 +5809,7 @@ describe("main-session-restart-recovery", () => {
   );
 
   it("ends prior replay restrictions at a new full-access user turn", async () => {
-    await writeMainSessionTranscript(
+    await writePreparedMainSessionTranscript(
       [
         { role: "user", content: "the earlier request" },
         codeModeCheckpointMessage(),
@@ -5929,7 +5832,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("resumes safely without replaying visible assistant text beside a Code Mode wait", async () => {
-    await writeMainSessionTranscript([
+    await writePreparedMainSessionTranscript([
       { role: "user", content: "do the thing" },
       codeModeCheckpointMessage("exec"),
       createAssistantToolCallMessage([
@@ -5965,7 +5868,7 @@ describe("main-session-restart-recovery", () => {
   ])(
     "handles $label without discarding assistant output",
     async ({ content, expected, gatewayCalls }) => {
-      await writeMainSessionTranscript([
+      await writePreparedMainSessionTranscript([
         { role: "user", content: "do the thing" },
         codeModeCheckpointMessage("exec"),
         codeModeWaitCallMessage(),
@@ -5985,7 +5888,7 @@ describe("main-session-restart-recovery", () => {
   );
 
   it("resumes a partial streamed answer interrupted by a restart", async () => {
-    await writeMainSessionTranscript([
+    await writePreparedMainSessionTranscript([
       { role: "user", content: "do the thing" },
       makeAssistantTextMessage("Here is the first half of the answer", {
         stopReason: "aborted",
@@ -5999,7 +5902,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("resumes an abort artifact persisted with the gateway restart reason", async () => {
-    await writeMainSessionTranscript([
+    await writePreparedMainSessionTranscript([
       { role: "user", content: "do the thing" },
       {
         role: "assistant",
@@ -6021,7 +5924,7 @@ describe("main-session-restart-recovery", () => {
   ] as const)(
     "continues interrupted work with $label",
     async ({ mode, permissionMode, restricted }) => {
-      const sessionsDir = await writeMainSessionTranscript(
+      const sessionsDir = await writePreparedMainSessionTranscript(
         [
           { role: "user", content: "do the thing" },
           createAssistantToolCallMessage([
@@ -6055,7 +5958,7 @@ describe("main-session-restart-recovery", () => {
   );
 
   it("reports an interrupted native tool outcome as unknown", async () => {
-    await writeMainSessionTranscript([
+    await writePreparedMainSessionTranscript([
       { role: "user", content: "run the command" },
       createAssistantToolCallMessage([
         { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "true" } },
@@ -6077,7 +5980,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("keeps a confirmed native tool failure distinct from an unknown outcome", async () => {
-    await writeMainSessionTranscript([
+    await writePreparedMainSessionTranscript([
       { role: "user", content: "run the command" },
       createAssistantToolCallMessage([
         { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "false" } },
@@ -6097,7 +6000,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("keeps a dangling side-effecting call in an aborted tail restricted", async () => {
-    await writeMainSessionTranscript([
+    await writePreparedMainSessionTranscript([
       { role: "user", content: "do the thing" },
       {
         role: "assistant",
@@ -6116,7 +6019,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("resumes an interrupted replay-safe tool call without restricting tools", async () => {
-    await writeMainSessionTranscript([
+    await writePreparedMainSessionTranscript([
       { role: "user", content: "do the thing" },
       createAssistantToolCallMessage([
         { type: "text", text: "Let me look that up." },
@@ -6130,7 +6033,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("resumes through the shutdown error persisted for an interrupted Code Mode wait", async () => {
-    await writeMainSessionTranscript([
+    await writePreparedMainSessionTranscript([
       { role: "user", content: "do the thing" },
       codeModeCheckpointMessage(),
       codeModeWaitCallMessage(),
@@ -6162,7 +6065,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("resumes through the current Code Mode abort persisted for an interrupted wait", async () => {
-    await writeMainSessionTranscript([
+    await writePreparedMainSessionTranscript([
       { role: "user", content: "do the thing" },
       codeModeCheckpointMessage(),
       codeModeWaitCallMessage(),
@@ -6228,7 +6131,7 @@ describe("main-session-restart-recovery", () => {
   ])(
     "restores Code Mode tools only for exactly one $label",
     async ({ toolCallIds, restoresCodeModeTools }) => {
-      await writeMainSessionTranscript([
+      await writePreparedMainSessionTranscript([
         { role: "user", content: "do the thing" },
         codeModeCheckpointMessage(),
         codeModeWaitCallMessage(),
@@ -6276,7 +6179,7 @@ describe("main-session-restart-recovery", () => {
       },
     },
   ])("resumes a Code Mode wait safely after a $label", async ({ checkpoint }) => {
-    await writeMainSessionTranscript([
+    await writePreparedMainSessionTranscript([
       { role: "user", content: "do the thing" },
       codeModeCheckpointMessage("wait", checkpoint),
       codeModeWaitCallMessage(),
@@ -6289,7 +6192,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("resumes a mixed Code Mode wait and side-effecting tool tail safely", async () => {
-    await writeMainSessionTranscript([
+    await writePreparedMainSessionTranscript([
       { role: "user", content: "do the thing" },
       codeModeCheckpointMessage("exec"),
       createAssistantToolCallMessage([

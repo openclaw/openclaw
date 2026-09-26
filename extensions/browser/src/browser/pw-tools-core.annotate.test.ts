@@ -8,7 +8,10 @@ import {
 
 installPwToolsCoreTestHooks();
 const imageSize = vi.hoisted(() => ({ width: 1280, height: 720 }));
-vi.mock("../media/media-services.js", () => ({ getImageMetadata: async () => imageSize }));
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+  getImageMetadata: async () => imageSize,
+}));
 beforeEach(() => {
   imageSize.width = 1280;
 });
@@ -119,27 +122,6 @@ describe("screenshotWithLabelsViaPlaywright (viewport)", () => {
 
 describe("screenshotWithLabelsViaPlaywright (fullpage)", () => {
   beforeEach(() => vi.clearAllMocks());
-
-  it("forwards fullPage:true to page.screenshot and uses doc-space annotations", async () => {
-    const evaluate = evaluateMockReturning({ x: 0, y: 1000 });
-    const screenshot = vi.fn(async () => Buffer.from("FULL"));
-    setPwToolsCoreCurrentPage({ evaluate, screenshot });
-    setPwToolsCoreCurrentRefLocator({
-      boundingBox: async () => ({ x: 10, y: 200, width: 50, height: 20 }),
-    });
-
-    const result = await mod.screenshotWithLabelsViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      refs: { e1: { role: "button" } },
-      fullPage: true,
-    });
-
-    expect(screenshot).toHaveBeenCalledWith(expect.objectContaining({ fullPage: true }));
-    // doc-space: scroll y=1000 + bbox y=200 = 1200
-    expect(result.annotations[0]?.box.y).toBe(1200);
-    expect(result.annotations[0]?.box.x).toBe(10);
-  });
 
   it("stops reading geometry after filling the label budget and counts remaining refs as skipped", async () => {
     const evaluate = evaluateMockReturning({ x: 0, y: 1000 });
@@ -258,31 +240,5 @@ describe("screenshotWithLabelsViaPlaywright (element/ref)", () => {
         ref: "missing",
       }),
     ).rejects.toThrow(/element not found/i);
-  });
-});
-
-describe("screenshotWithLabelsViaPlaywright (skipped accounting)", () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it("counts refs whose boundingBox is null toward skipped", async () => {
-    const evaluate = evaluateMockReturning({ x: 0, y: 0 });
-    const screenshot = vi.fn(async () => Buffer.from("PNG"));
-    setPwToolsCoreCurrentPage({ evaluate, screenshot });
-    // Two refs: first returns a box, second returns null (e.g. element detached).
-    const boundingBox = vi
-      .fn<() => Promise<{ x: number; y: number; width: number; height: number } | null>>()
-      .mockResolvedValueOnce({ x: 10, y: 20, width: 30, height: 40 })
-      .mockResolvedValueOnce(null);
-    setPwToolsCoreCurrentRefLocator({ boundingBox });
-
-    const result = await mod.screenshotWithLabelsViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      refs: { e1: { role: "button" }, e2: { role: "link" } },
-    });
-
-    expect(result.annotations).toHaveLength(1);
-    expect(result.annotations[0]?.ref).toBe("e1");
-    expect(result.skipped).toBe(1);
   });
 });

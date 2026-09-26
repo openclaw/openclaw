@@ -105,18 +105,14 @@ describe("tui command handlers", () => {
       });
 
       const olderPicker = harness.handleCommand("/models");
-      expect(harness.pendingSystemNotices.size).toBe(1);
-      const olderNoticeId = expectDefined(
-        harness.pendingSystemNotices.keys().next().value,
-        "older model picker notice",
-      );
+      const olderSelector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
       await harness.handleCommand(newerCommand);
-      expect(harness.pendingSystemNotices.has(olderNoticeId)).toBe(false);
-      expect(harness.dismissPendingSystem).toHaveBeenCalledWith(olderNoticeId);
+      expect(harness.closeOverlay).toHaveBeenCalledWith(harness.overlayHandle);
       olderModels.resolve([{ provider: "openai", id: "obsolete-model" }]);
       await olderPicker;
 
-      expect(harness.openOverlay).toHaveBeenCalledOnce();
+      expect(harness.openOverlay).toHaveBeenCalledTimes(2);
+      expect(olderSelector.items).toEqual([]);
       for (const [selection] of listModels.mock.calls) {
         expect(selection).toEqual({ agentId: "main" });
       }
@@ -2405,7 +2401,7 @@ describe("tui command handlers", () => {
       },
     });
     await codex.handleCommand("/think");
-    expect(codex.addSystem).toHaveBeenCalledWith(expect.not.stringContaining("ultra"));
+    expect(codex.addSystem).toHaveBeenCalledWith(expect.stringContaining("ultra"));
 
     const openclaw = createTuiCommandHandlersHarness({
       sessionInfo: {
@@ -3210,104 +3206,56 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("model set to nvidia/moonshotai/kimi-k2.5");
   });
 
-  it("renders model listing feedback before the backend list resolves", async () => {
-    let resolveModels: (
-      value: Array<{ provider: string; id: string; name?: string }>,
-    ) => void = () => {
-      throw new Error("model list promise resolver was not initialized");
-    };
-    const listModelsPromise = new Promise<Array<{ provider: string; id: string; name?: string }>>(
-      (resolve) => {
-        resolveModels = (value) => resolve(value);
-      },
-    );
-    const listModels = vi.fn(() => listModelsPromise);
-    const { handleCommand, addPendingSystem, openOverlay, requestRender } =
-      createTuiCommandHandlersHarness({
-        listModels,
+  it.each(["/models", "/model"])(
+    "opens %s while the backend model list is held",
+    async (command) => {
+      const deferred = createDeferred<Array<{ provider: string; id: string }>>();
+      const harness = createTuiCommandHandlersHarness({
+        listModels: vi.fn(() => deferred.promise),
       });
 
-    const pending = handleCommand("/models");
-    await Promise.resolve();
-
-    expect(listModels).toHaveBeenCalledTimes(1);
-    expect(addPendingSystem).toHaveBeenCalledWith(expect.any(String), "loading models...");
-    expect(openOverlay).not.toHaveBeenCalled();
-    const feedbackOrder = addPendingSystem.mock.invocationCallOrder[0] ?? 0;
-    const renderOrders = requestRender.mock.invocationCallOrder;
-    expect(renderOrders.filter((order) => order > feedbackOrder)).not.toEqual([]);
-
-    resolveModels([{ provider: "openrouter", id: "openrouter/auto" }]);
-    await pending;
-
-    expect(openOverlay).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([
-    {
-      name: "successful listing",
-      listModels: vi.fn().mockResolvedValue([{ provider: "openai", id: "picker-model" }]),
-      terminalNotice: undefined,
+      const pending = harness.handleCommand(command);
+      try {
+        expect(harness.openOverlay).toHaveBeenCalledOnce();
+      } finally {
+        deferred.resolve([{ provider: "fixture", id: "ready" }]);
+        await pending;
+      }
+      const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+      expect(selector.items?.map((item) => item.value)).toEqual(["fixture/ready"]);
     },
-    {
-      name: "empty listing",
-      listModels: vi.fn().mockResolvedValue([]),
-      terminalNotice: "no models available",
-    },
-    {
-      name: "failed listing",
-      listModels: vi.fn().mockRejectedValue(new Error("fixture backend unavailable")),
-      terminalNotice: "model list failed: fixture backend unavailable",
-    },
-  ])("removes temporary model feedback after $name", async ({ listModels, terminalNotice }) => {
-    const harness = createTuiCommandHandlersHarness({ listModels });
+  );
 
-    await harness.handleCommand("/models");
-
-    expect(harness.addPendingSystem).toHaveBeenCalledWith(expect.any(String), "loading models...");
-    expect(harness.pendingSystemNotices.size).toBe(0);
-    expect(harness.dismissPendingSystem).toHaveBeenCalledOnce();
-    if (terminalNotice) {
-      expect(harness.addSystem).toHaveBeenCalledWith(terminalNotice);
-    }
-  });
-
-  it("does not let an older model request remove the newer request's notice", async () => {
-    const olderModels = createDeferred<Array<{ provider: string; id: string }>>();
-    const newerModels = createDeferred<Array<{ provider: string; id: string }>>();
+  it("keeps known choices interactive and updates an open picker without losing its search or selection", async () => {
+    const held = createDeferred<Array<{ provider: string; id: string; name: string }>>();
+    let known = [
+      { provider: "fixture", id: "known-a", name: "Known A" },
+      { provider: "fixture", id: "known-b", name: "Known B" },
+      { provider: "fixture", id: "unrelated", name: "Other choice" },
+    ];
     const harness = createTuiCommandHandlersHarness({
-      listModels: vi
-        .fn()
-        .mockReturnValueOnce(olderModels.promise)
-        .mockReturnValueOnce(newerModels.promise),
+      getKnownModels: () => known,
+      listModels: vi.fn(() => held.promise),
     });
-
-    const olderPicker = harness.handleCommand("/models");
-    const olderNoticeId = expectDefined(
-      harness.pendingSystemNotices.keys().next().value,
-      "older model picker notice",
-    );
-    const newerPicker = harness.handleCommand("/models");
-    const newerNoticeId = expectDefined(
-      harness.pendingSystemNotices.keys().next().value,
-      "newer model picker notice",
-    );
-
-    expect(newerNoticeId).not.toBe(olderNoticeId);
-    expect(harness.pendingSystemNotices.has(olderNoticeId)).toBe(false);
-    expect(harness.pendingSystemNotices.has(newerNoticeId)).toBe(true);
-
-    olderModels.resolve([{ provider: "openai", id: "obsolete-model" }]);
-    await olderPicker;
-    expect(harness.pendingSystemNotices.has(newerNoticeId)).toBe(true);
-
-    newerModels.resolve([{ provider: "openai", id: "current-model" }]);
-    await newerPicker;
-    expect(harness.pendingSystemNotices.size).toBe(0);
-    expect(harness.openOverlay).toHaveBeenCalledOnce();
+    await harness.handleCommand("/models");
+    const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+    selector.handleInput("known");
+    selector.handleInput("\u001b[B");
+    expect(selector.render(100).join("\n")).toContain("fixture/known-b");
+    known = [{ provider: "signed-in", id: "known-new", name: "New provider" }, ...known];
+    harness.client.onModelsChanged?.("main");
+    expect(selector.render(100).join("\n")).toContain("signed-in/known-new");
+    expect(selector.render(100).join("\n")).not.toContain("fixture/unrelated");
+    selector.handleInput("\r");
+    await flushAsyncSelect();
+    expect(harness.patchSession).toHaveBeenCalledWith({
+      key: "agent:main:main",
+      model: "fixture/known-b",
+    });
+    held.resolve(known);
   });
 
-  it("does not open a stale model selector after switching sessions", async () => {
+  it("does not populate a stale model selector after switching sessions", async () => {
     const deferred = createDeferred<Array<{ provider: string; id: string; name?: string }>>();
     const harness = createTuiCommandHandlersHarness({
       currentSessionKey: "agent:main:first",
@@ -3315,18 +3263,17 @@ describe("tui command handlers", () => {
     });
 
     const pending = harness.handleCommand("/models");
-    expect(harness.addPendingSystem).toHaveBeenCalledWith(expect.any(String), "loading models...");
+    const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
     harness.state.currentSessionKey = "agent:main:second";
     deferred.resolve([{ provider: "openai", id: "gpt-5.6-luna" }]);
     await pending;
 
-    expect(harness.openOverlay).not.toHaveBeenCalled();
+    expect(selector.items).toEqual([]);
     expect(harness.addSystem).not.toHaveBeenCalled();
-    expect(harness.pendingSystemNotices.size).toBe(0);
   });
 
   it.each(["models", "sessions"] as const)(
-    "does not open a stale %s selector after the same session key is reset",
+    "does not publish stale %s choices after the same session key is reset",
     async (picker) => {
       const deferred = createDeferred<unknown>();
       const harness = createTuiCommandHandlersHarness({
@@ -3348,9 +3295,13 @@ describe("tui command handlers", () => {
       );
       await pending;
 
-      expect(harness.openOverlay).not.toHaveBeenCalled();
+      if (picker === "models") {
+        const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+        expect(selector.items).toEqual([]);
+      } else {
+        expect(harness.openOverlay).not.toHaveBeenCalled();
+      }
       expect(harness.addSystem).not.toHaveBeenCalled();
-      expect(harness.pendingSystemNotices.size).toBe(0);
     },
   );
 

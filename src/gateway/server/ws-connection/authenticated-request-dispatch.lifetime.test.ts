@@ -131,6 +131,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
         });
         vi.doMock("../../session-sharing-target-input.js", () => ({
           resolveDirectIncognitoTargets: () => [],
+          resolveDirectSessionTargets: () => [],
         }));
         vi.doMock("../../server-methods/gateway-personal-caller.js", () => ({
           isSyntheticGatewayCaller: () => false,

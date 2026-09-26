@@ -1,4 +1,3 @@
-// Mattermost plugin module implements interactions behavior.
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
@@ -344,15 +343,14 @@ export function buildButtonProps(params: {
   };
 }
 
-// ── Request body reader ────────────────────────────────────────────────
-
-function readInteractionBody(req: IncomingMessage): Promise<string> {
-  return readRequestBodyWithLimit(req, {
-    maxBytes: INTERACTION_MAX_BODY_BYTES,
-    timeoutMs: INTERACTION_BODY_TIMEOUT_MS,
-    // Defer destruction so the rejection below reaches Mattermost before the close.
-    destroyOnLimit: false,
-  });
+function sendInteractionResponse(
+  res: ServerResponse,
+  statusCode: number,
+  body: MattermostInteractionResponse | { error: string },
+): void {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify(body));
 }
 
 // ── HTTP handler ───────────────────────────────────────────────────────
@@ -425,15 +423,18 @@ export function createMattermostInteractionHandler(params: {
       log?.(
         `mattermost interaction: rejected callback source remote=${req.socket?.remoteAddress ?? "?"}`,
       );
-      res.statusCode = 403;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Forbidden origin" }));
+      sendInteractionResponse(res, 403, { error: "Forbidden origin" });
       return;
     }
 
     let payload: MattermostInteractionPayload;
     try {
-      const raw = await readInteractionBody(req);
+      const raw = await readRequestBodyWithLimit(req, {
+        maxBytes: INTERACTION_MAX_BODY_BYTES,
+        timeoutMs: INTERACTION_BODY_TIMEOUT_MS,
+        // Defer destruction so the rejection below reaches Mattermost before the close.
+        destroyOnLimit: false,
+      });
       payload = parseInteractionPayload(raw);
     } catch (err) {
       log?.(`mattermost interaction: failed to parse body: ${String(err)}`);
@@ -457,17 +458,13 @@ export function createMattermostInteractionHandler(params: {
         );
         return;
       }
-      res.statusCode = 400;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Invalid request body" }));
+      sendInteractionResponse(res, 400, { error: "Invalid request body" });
       return;
     }
 
     const context = payload.context;
     if (!context) {
-      res.statusCode = 400;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Missing context" }));
+      sendInteractionResponse(res, 400, { error: "Missing context" });
       return;
     }
 
@@ -475,9 +472,7 @@ export function createMattermostInteractionHandler(params: {
     const token = context["_token"];
     if (typeof token !== "string") {
       log?.("mattermost interaction: missing _token in context");
-      res.statusCode = 403;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Missing token" }));
+      sendInteractionResponse(res, 403, { error: "Missing token" });
       return;
     }
 
@@ -485,17 +480,13 @@ export function createMattermostInteractionHandler(params: {
     const { _token, ...contextWithoutToken } = context;
     if (!verifyInteractionToken(contextWithoutToken, token, accountId)) {
       log?.("mattermost interaction: invalid _token");
-      res.statusCode = 403;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Invalid token" }));
+      sendInteractionResponse(res, 403, { error: "Invalid token" });
       return;
     }
 
     const actionId = context.action_id;
     if (typeof actionId !== "string") {
-      res.statusCode = 400;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Missing action_id in context" }));
+      sendInteractionResponse(res, 400, { error: "Missing action_id in context" });
       return;
     }
 
@@ -507,15 +498,13 @@ export function createMattermostInteractionHandler(params: {
       log?.(
         `mattermost interaction: signed channel mismatch payload=${payload.channel_id} signed=${signedChannelId}`,
       );
-      res.statusCode = 403;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Channel mismatch" }));
+      sendInteractionResponse(res, 403, { error: "Channel mismatch" });
       return;
     }
 
     const userName = payload.user_name ?? payload.user_id;
     let originalMessage;
-    let originalPost: MattermostPost | null;
+    let originalPost: MattermostPost;
     let clickedButtonName: string | null = null;
     try {
       originalPost = await client.request<MattermostPost>(`/posts/${payload.post_id}`);
@@ -524,9 +513,7 @@ export function createMattermostInteractionHandler(params: {
         log?.(
           `mattermost interaction: post channel mismatch payload=${payload.channel_id} post=${postChannelId ?? "<missing>"}`,
         );
-        res.statusCode = 403;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Post/channel mismatch" }));
+        sendInteractionResponse(res, 403, { error: "Post/channel mismatch" });
         return;
       }
       originalMessage = originalPost.message ?? "";
@@ -546,24 +533,12 @@ export function createMattermostInteractionHandler(params: {
       }
       if (clickedButtonName === null) {
         log?.(`mattermost interaction: action ${actionId} not found in post ${payload.post_id}`);
-        res.statusCode = 403;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Unknown action" }));
+        sendInteractionResponse(res, 403, { error: "Unknown action" });
         return;
       }
     } catch (err) {
       log?.(`mattermost interaction: failed to validate post ${payload.post_id}: ${String(err)}`);
-      res.statusCode = 500;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Failed to validate interaction" }));
-      return;
-    }
-
-    if (!originalPost) {
-      log?.(`mattermost interaction: missing fetched post ${payload.post_id}`);
-      res.statusCode = 500;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Failed to load interaction post" }));
+      sendInteractionResponse(res, 500, { error: "Failed to validate interaction" });
       return;
     }
 
@@ -579,22 +554,18 @@ export function createMattermostInteractionHandler(params: {
           post: originalPost,
         });
         if (!authorization.ok) {
-          res.statusCode = authorization.statusCode ?? 200;
-          res.setHeader("Content-Type", "application/json");
-          res.end(
-            JSON.stringify(
-              authorization.response ?? {
-                ephemeral_text: "You are not allowed to use this action here.",
-              },
-            ),
+          sendInteractionResponse(
+            res,
+            authorization.statusCode ?? 200,
+            authorization.response ?? {
+              ephemeral_text: "You are not allowed to use this action here.",
+            },
           );
           return;
         }
       } catch (err) {
         log?.(`mattermost interaction: authorization failed: ${String(err)}`);
-        res.statusCode = 500;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Interaction authorization failed" }));
+        sendInteractionResponse(res, 500, { error: "Interaction authorization failed" });
         return;
       }
     }
@@ -611,16 +582,12 @@ export function createMattermostInteractionHandler(params: {
           post: originalPost,
         });
         if (response !== null) {
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify(response));
+          sendInteractionResponse(res, 200, response);
           return;
         }
       } catch (err) {
         log?.(`mattermost interaction: custom handler failed: ${String(err)}`);
-        res.statusCode = 500;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Interaction handler failed" }));
+        sendInteractionResponse(res, 500, { error: "Interaction handler failed" });
         return;
       }
     }
@@ -667,9 +634,7 @@ export function createMattermostInteractionHandler(params: {
     }
 
     // Respond with empty JSON — the post update is handled above
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "application/json");
-    res.end("{}");
+    sendInteractionResponse(res, 200, {});
 
     // Dispatch a synthetic inbound message so the agent responds to the button click.
     if (params.dispatchButtonClick) {

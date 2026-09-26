@@ -388,6 +388,7 @@ describe("startCodexAttemptThread", () => {
         "account/login/start",
         "config/read",
         "configRequirements/read",
+        "account/read",
         "thread/start",
       ]);
       await vi.waitFor(() => expect(first.process.stdin.destroyed).toBe(true));

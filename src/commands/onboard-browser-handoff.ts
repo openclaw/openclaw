@@ -70,14 +70,7 @@ type BrowserHatchHandoffDeps = {
   waitForDocument?: typeof waitForControlUiDocument;
   issueBrowserHandoff?: typeof issueControlUiBrowserHandoff;
   verifyLoopbackAlias?: typeof hasVerifiedControlUiLoopbackAlias;
-  pollForClient?: (params: {
-    target: BrowserHatchTarget;
-    baselineClientKeys: ReadonlySet<string>;
-    timeoutMs: number;
-    probe: (target: BrowserHatchTarget, timeoutMs: number) => Promise<DashboardPresenceProbeResult>;
-    now?: () => number;
-    sleep?: (ms: number) => Promise<void>;
-  }) => Promise<DashboardWaitResult>;
+  pollForClient?: typeof waitForDashboardClient;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 };

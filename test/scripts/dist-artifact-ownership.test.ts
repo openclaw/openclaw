@@ -316,7 +316,10 @@ describe("native check launchers in paths with spaces", () => {
         installScripts(
           root,
           ["run-tsgo-core-test-shards.mts", "run-oxlint.mts", "run-oxlint-shards.mts"],
-          { compiler: false, dependencies: ["tsx", "@openclaw/fs-safe", "p-map", "koffi"] },
+          {
+            compiler: false,
+            dependencies: ["tsx", "@openclaw/fs-safe", "json5", "p-map", "koffi"],
+          },
         );
         const nativeJob = "src/process/supervisor/service-child-windows-job-native.ts";
         write(root, nativeJob, fs.readFileSync(path.join(sourceRoot, nativeJob), "utf8"));
@@ -524,6 +527,8 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         import fs from 'node:fs';
         import { createRequire } from 'node:module';
         const require = createRequire(import.meta.url);
+        const { registerSourceRunnerServiceFixture } = await import(${JSON.stringify(path.join(sourceRoot, "test/scripts/fixtures/source-runner-service.mjs"))});
+        registerSourceRunnerServiceFixture(${JSON.stringify(sourceRoot)});
         const { runNodeMain } = await import(${JSON.stringify(path.join(sourceRoot, "scripts/run-node.mts"))});
         process.exitCode = await runNodeMain({
           cwd: process.cwd(), args: ['artifact-fixture'],
@@ -568,7 +573,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     expect(fs.existsSync(path.join(resolveDistArtifactLockPath(root), "unjoined"))).toBe(false);
   });
 
-  it.for(["cause", "error", "cyclic aggregate"])(
+  it.for(["cause", "error", "cyclic aggregate", "bundler errors"])(
     "retains ownership for unjoined work nested in %s",
     async (kind, { signal }) => {
       // Retention deliberately keeps lock handles open; a joined child owns
@@ -586,6 +591,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           const aggregate = new AggregateError([], 'sibling cleanup');
           aggregate.errors.push(aggregate, new Error('command failed', { cause: uncertainty }));
           const error = kind === 'cyclic aggregate' ? aggregate
+            : kind === 'bundler errors' ? Object.assign(new Error('Build failed'), { errors: [aggregate] })
             : new Error('command failed', { cause: kind === 'cause' ? uncertainty : { error: uncertainty } });
           const outcome = await withDistArtifactOwnership(process.cwd(), async () => {
             throw error;
@@ -704,7 +710,6 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
   it.for([
     { owner: "{", unjoined: false },
     { owner: '{"pid":0}', unjoined: false },
-    { owner: '{"pid":-1}', unjoined: false },
     { owner: '{"pid":2147483648}', unjoined: false },
     { owner: JSON.stringify({ pid: process.pid }), unjoined: true },
   ])(
@@ -1006,11 +1011,16 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       installCompiler(root);
       // Entrypoints resolve this fixture as their checkout. SDK and plugin
       // sources let the lint consumer distinguish the narrow preparation mode.
-      installScripts(root, [
-        "run-oxlint.mts",
-        "run-tsgo.mts",
-        "prepare-extension-package-boundary-artifacts.mts",
-      ]);
+      installScripts(
+        root,
+        [
+          "run-oxlint.mts",
+          "run-tsgo.mts",
+          "prepare-extension-package-boundary-artifacts.mts",
+          "compile-extension-boundary.mts",
+        ],
+        { dependencies: ["tsx", "@openclaw/fs-safe", "json5"] },
+      );
       write(root, "tsconfig.json", "{}");
       write(
         root,

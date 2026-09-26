@@ -1,5 +1,4 @@
 import path from "node:path";
-// Matrix plugin module implements recovery key store behavior.
 import { decodeRecoveryKey } from "matrix-js-sdk/lib/crypto-api/recovery-key.js";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
@@ -473,18 +472,10 @@ export class MatrixRecoveryKeyStore {
     if (!keyId) {
       return null;
     }
-    this.rememberStagedSecretStorageKey(keyId, privateKey, staged.keyInfo);
+    this.stagedRecoveryKeyUsed = true;
+    this.rememberSecretStorageKey(keyId, privateKey, staged.keyInfo);
     this.stagedCacheKeyIds.add(keyId);
     return [keyId, privateKey];
-  }
-
-  private rememberStagedSecretStorageKey(
-    keyId: string,
-    key: Uint8Array,
-    keyInfo?: MatrixStoredRecoveryKey["keyInfo"],
-  ): void {
-    this.stagedRecoveryKeyUsed = true;
-    this.rememberSecretStorageKey(keyId, key, keyInfo);
   }
 
   private rememberSecretStorageKey(

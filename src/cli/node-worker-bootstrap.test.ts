@@ -20,7 +20,7 @@ import {
   getNodeHostPluginRegistry,
 } from "../node-host/plugin-node-host.test-support.js";
 import { prepareNodeHostRuntime } from "../node-host/runtime.js";
-import { runStartupMigrations } from "../node-host/startup-state-migrations.js";
+import { ensureNodeHostStateReady } from "../node-host/startup-state-readiness.js";
 import { createPluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -208,11 +208,11 @@ describe("private node worker bootstrap", () => {
         fs.writeFileSync(databasePath, "not a SQLite database");
       }
       const before = fs.readFileSync(databasePath);
-      const startup = runStartupMigrations({ log: { info: vi.fn(), warn: vi.fn() } });
+      const startup = () => initializeNativeOpenClawStateDatabase();
       if (shape === "future" || shape === "corrupt") {
-        await expect(startup).rejects.toThrow();
+        expect(startup).toThrow();
       } else {
-        await expect(startup).resolves.toBeUndefined();
+        expect(startup()).toBeUndefined();
       }
       expect(fs.readFileSync(databasePath)).toEqual(before);
     },
@@ -223,7 +223,7 @@ describe("private node worker bootstrap", () => {
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
     const rows = seedMacNodeWorkerProofState(databasePath);
     await bootstrap();
-    await runStartupMigrations({ log: { info: vi.fn(), warn: vi.fn() } });
+    ensureNodeHostStateReady();
     const store = createPluginStateSyncKeyedStore("fixture-node", {
       namespace: "bootstrap-proof",
       maxEntries: 10,
@@ -284,7 +284,7 @@ describe("private node worker bootstrap", () => {
       } finally {
         allocateSnapshot.mockRestore();
       }
-      await runStartupMigrations({ log: { info: vi.fn(), warn: vi.fn() } });
+      ensureNodeHostStateReady();
       const prepared = await prepareNodeHostRuntime();
       expect(getRuntimeConfig()).toBe(pinned);
       expect(prepared.manifest.commands).toEqual(

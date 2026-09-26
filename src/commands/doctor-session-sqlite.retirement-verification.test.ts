@@ -1,18 +1,16 @@
 import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import {
-  readSessionTranscriptHistoryEventCount,
-  readSessionTranscriptHistoryEventPage,
-} from "../config/sessions/session-accessor.sqlite-history-events.js";
+import { readSessionTranscriptHistoryEventPage } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import {
   readSessionTranscriptHistoryEvents,
+  readSessionTranscriptHistoryEventCount,
   readSessionTranscriptHistoryEventById,
 } from "../config/sessions/session-accessor.sqlite-history.test-support.js";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
+import * as sqliteReaders from "../infra/session-sqlite-migration-readers.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import * as sqliteReaders from "./doctor-session-sqlite-readers.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
@@ -205,12 +203,12 @@ describe("runDoctorSessionSqlite", () => {
   it.each([
     {
       name: "identical",
-      repeated: { role: "assistant", content: "same replay" },
+      repeated: { role: "assistant", content: [{ type: "text", text: "same replay" }] },
       archived: true,
     },
     {
       name: "divergent",
-      repeated: { role: "assistant", content: "different replay" },
+      repeated: { role: "assistant", content: [{ type: "text", text: "different replay" }] },
       archived: false,
     },
   ])(
@@ -220,10 +218,10 @@ describe("runDoctorSessionSqlite", () => {
         type: "message",
         id: "reply",
         parentId: "root",
-        message: { role: "assistant", content: "same replay" },
+        message: { role: "assistant", content: [{ type: "text", text: "same replay" }] },
       };
       const sourceEvents = [
-        { type: "session", id: "session-1", version: 3 },
+        { type: "session", id: "session-1", version: 3, timestamp: "", cwd: "" },
         {
           type: "message",
           id: "root",

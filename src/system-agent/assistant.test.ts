@@ -53,13 +53,19 @@ describe("OpenClaw assistant", () => {
     expect(systemPrompt).toContain("call configure_gateway");
     expect(systemPrompt).toContain("call import_memory");
     expect(systemPrompt).toContain("default agent's existing workspace");
-    expect(systemPrompt).toContain("Never ask for or repeat reusable secrets");
   });
 
   it("does not tell the fallback planner to solicit secrets", () => {
     expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).not.toMatch(/\bask for secrets?\b/iu);
   });
 
+  it.each([
+    ["fallback planner", SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT],
+    ["primary agent loop", buildSystemAgentSystemPrompt()],
+  ])("keeps normal-agent slash commands out of %s", (_name, prompt) => {
+    expect(prompt).toContain("cannot run normal-agent slash commands such as `/codex`");
+    expect(prompt).toContain("never that the task, conversation, or work has already transferred");
+  });
   it("keeps remote Gateway mode outside both hosted chat planners", () => {
     for (const prompt of [SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT, buildSystemAgentSystemPrompt()]) {
       expect(prompt).toContain("running the Gateway on another machine");

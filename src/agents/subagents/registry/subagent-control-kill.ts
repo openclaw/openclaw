@@ -92,6 +92,7 @@ async function withSubagentKillScope<T>(
     : taskControl;
   const selected = new Set<string>();
   const releaseRetirements: Array<() => void> = [];
+  const completeRetirementPublications: Array<() => void> = [];
   const holds: Array<NonNullable<ReturnType<typeof holdQueuedSwarmRun>>> = [];
   const hold = (tree: KillTree) => {
     if (!tree.dispatchHold) {
@@ -166,6 +167,7 @@ async function withSubagentKillScope<T>(
         entry,
         (candidate) => latest() === candidate,
       );
+      completeRetirementPublications.push(retirement.completePublication);
       releaseRetirements.push(retirement.release);
       const bind = (current: SubagentRunRecord): KillBinding => {
         const { generation, createdAt } = retirement.observation;
@@ -266,6 +268,10 @@ async function withSubagentKillScope<T>(
   } catch (error) {
     outcome = { ok: false, error };
   }
+  // Failed-launch cleanup may own the same provisional session. Let it proceed only
+  // after cancellation publication finishes (including failure), before releasing a
+  // scheduler hold that can itself await that cleanup.
+  completeRetirementPublications.forEach((complete) => complete());
   const released = await Promise.allSettled(holds.map((reservation) => reservation.release()));
   const retired = await Promise.allSettled(releaseRetirements.map(async (release) => release()));
   if (!outcome.ok) {
@@ -363,19 +369,31 @@ type KillTraversal = {
 };
 
 async function killSubagentRunTree(
-  params: KillTraversal & { trees: KillTree[] },
+  params: KillTraversal & { trees: KillTree[]; suppressCompletedWakes?: boolean },
 ): Promise<{ killed: number; labels: string[] }> {
-  const visits = new Map<KillTree, { label?: string; descendants: boolean }>();
-  const visit = async (tree: KillTree): Promise<void> => {
+  const visits = new Map<
+    KillTree,
+    { label?: string; descendants: boolean; suppressCompletedWakes: boolean }
+  >();
+  const visit = async (tree: KillTree, suppressCompletedWakes: boolean): Promise<void> => {
     let result = visits.get(tree);
     try {
       if (!result) {
-        result = { descendants: false };
+        result = { descendants: false, suppressCompletedWakes };
         visits.set(tree, result);
-        if (!tree.entry.execution.endedAt || tree.entry.pauseReason === "sessions_yield") {
+        if (
+          !tree.entry.execution.endedAt ||
+          tree.entry.pauseReason === "sessions_yield" ||
+          (params.suppressTaskDelivery && suppressCompletedWakes && tree.entry.requesterSettleWake)
+        ) {
           const stopped = await killLatestSubagentRun({ ...params, tree });
           if (stopped.result.error) {
             tree.errors.add(stopped.result.error);
+          }
+          if (stopped.result.error || stopped.result.declined) {
+            // A parent's failed Stop cannot retire the completion it still owns.
+            // Keep trying live descendants under the existing best-effort policy.
+            result.suppressCompletedWakes = false;
           }
           if (stopped.result.killed) {
             result.label = resolveSubagentLabel(stopped.entry);
@@ -387,7 +405,8 @@ async function killSubagentRunTree(
         result.descendants = true;
       }
       if (result.descendants && tree.canTraverse()) {
-        await Promise.all(tree.children.map(visit));
+        const suppressDescendantWakes = result.suppressCompletedWakes;
+        await Promise.all(tree.children.map((child) => visit(child, suppressDescendantWakes)));
       }
     } catch (error) {
       tree.errors.add(formatErrorMessage(error));
@@ -400,7 +419,9 @@ async function killSubagentRunTree(
   do {
     selected = params.scope.refresh();
     // First visits interrupt siblings together; descendants still wait for their parent.
-    await Promise.all(params.trees.map(visit));
+    await Promise.all(
+      params.trees.map((tree) => visit(tree, params.suppressCompletedWakes !== false)),
+    );
     // A sibling's drain can capture children beneath an already visited branch.
     // Complete that frontier before releasing holds, without stopping a session twice.
   } while (params.scope.refresh() !== selected);
@@ -420,7 +441,7 @@ async function killSubagentRoot(params: Parameters<typeof killLatestSubagentRun>
   };
   let cascade: Awaited<ReturnType<typeof killSubagentRunTree>> = { killed: 0, labels: [] };
   try {
-    // Root calls also reconcile finished tasks; the bulk walker skips that work.
+    // Explicit root cancellation also reconciles terminal execution state.
     stopped = await killLatestSubagentRun(params);
     if (stopped.result.error) {
       params.tree.errors.add(stopped.result.error);
@@ -430,6 +451,7 @@ async function killSubagentRoot(params: Parameters<typeof killLatestSubagentRun>
       cascade = await killSubagentRunTree({
         cfg: params.cfg,
         suppressTaskDelivery: params.suppressTaskDelivery,
+        suppressCompletedWakes: !stopped.result.error,
         scope: params.scope,
         trees: params.tree.children,
       });

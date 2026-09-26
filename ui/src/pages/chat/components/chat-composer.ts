@@ -1,4 +1,3 @@
-// Chat-owned composer orchestration.
 import { nothing } from "lit";
 import {
   normalizeChatSendShortcut,
@@ -70,7 +69,7 @@ export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.
 export function renderChatComposer(props: ChatComposerProps) {
   const state = getChatComposerState(props.paneId);
   state.slashCommandDispatchConnected = props.connected;
-  const canCompose = props.canSend;
+  const canCompose = props.canCompose ?? props.canSend;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const showAbortableUi = canAbort && !hasTerminalRunStatus(props.runStatus);
@@ -181,14 +180,11 @@ export function renderChatComposer(props: ChatComposerProps) {
     refreshCommands: props.onSlashIntent,
   };
   const slashMenuHost: SlashMenuHost = {
-    paneId: props.paneId,
-    getDraft: skillMenuHost.getDraft,
-    commitDraft: skillMenuHost.commitDraft,
-    getTextarea: () => state.composerTextarea,
+    ...skillMenuHost,
     resolveArgOptions: (command) => resolveChatSlashCommandArgOptions(command, props),
     runCommand: goalComposer.submitCommand,
     canRun: (inline, command, args = "") =>
-      canCompose &&
+      props.canSend &&
       state.slashCommandDispatchConnected &&
       !(inline && !props.onSlashCommand) &&
       (!props.modelRequiredReason ||
@@ -198,8 +194,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       (!props.submitDisabledReason ||
         isChatControlCommand(command ? `/${command.name} ${args}` : skillMenuHost.getDraft())),
     runInlineCommand: props.connected ? props.onSlashCommand : undefined,
-    refreshCommands: props.onSlashIntent,
-    activateComposerMode: (command) => goalComposer.activateCommand(command),
+    activateComposerMode: goalComposer.activateCommand,
   };
   const mentionMenuHost: HumanMentionMenuHost = {
     paneId: props.paneId,
@@ -249,7 +244,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   // Offline text and attachments may enter the persisted reconnect queue, but
   // slash commands are live controls and must not execute against stale state.
   const canSubmitDraft = (draft: string) =>
-    canCompose &&
+    props.canSend &&
     (!props.modelRequiredReason ||
       (!goalComposer.active &&
         (props.getAttachments?.() ?? props.attachments ?? []).length === 0 &&
@@ -301,7 +296,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   });
 
   const syncComposerValue = (target: HTMLTextAreaElement, typedAtSign = false) => {
-    adjustTextareaHeight(target);
+    adjustTextareaHeight(target, { nativeInput: true });
     target.dir = detectTextDirection(target.value);
     const mentions = getMentions();
     commitComposerDraft(
@@ -673,7 +668,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     slashMenuVisible,
     skillMenuVisible,
     mentionMenuVisible,
-    emojiMenuVisible,
+    menuVisible,
     activeMenuOptionId: activeSlashMenuOptionId,
     activeMenuOptionLabel: activeSlashMenuOptionLabel,
     menuListboxId: slashMenuListboxId,
@@ -717,7 +712,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     slashMenuVisible,
     skillMenuVisible,
     mentionMenuVisible,
-    emojiMenuVisible,
+    menuVisible,
     mentionMenuHost,
     mentionError,
     skillMenuHost,

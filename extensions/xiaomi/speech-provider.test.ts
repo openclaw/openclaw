@@ -6,8 +6,7 @@ const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 
 const PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
 }));
 

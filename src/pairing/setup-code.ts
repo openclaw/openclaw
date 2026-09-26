@@ -249,40 +249,6 @@ function parseNormalizedGatewayUrl(raw: string): string | null {
   }
 }
 
-function resolveScheme(
-  cfg: OpenClawConfig,
-  opts?: {
-    forceSecure?: boolean;
-  },
-): "ws" | "wss" {
-  if (opts?.forceSecure) {
-    return "wss";
-  }
-  return cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
-}
-
-function isTailnetIPv4(address: string): boolean {
-  return isCarrierGradeNatIpv4Address(address);
-}
-
-function pickIPv4Matching(
-  networkInterfaces: () => ReturnType<typeof os.networkInterfaces>,
-  matches: (address: string) => boolean,
-): string | null {
-  return (
-    pickMatchingExternalInterfaceAddress(safeNetworkInterfaces(networkInterfaces), {
-      family: "IPv4",
-      matches,
-    }) ?? null
-  );
-}
-
-function pickTailnetIPv4(
-  networkInterfaces: () => ReturnType<typeof os.networkInterfaces>,
-): string | null {
-  return pickIPv4Matching(networkInterfaces, isTailnetIPv4);
-}
-
 function resolvePairingSetupAuthLabel(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -305,17 +271,11 @@ function resolvePairingSetupAuthLabel(
     envPassword ||
     (passwordRef ? undefined : normalizeSecretInputString(cfg.gateway?.auth?.password));
 
-  if (mode === "password") {
-    if (!password) {
-      return { error: "Gateway auth is set to password, but no password is configured." };
+  if (mode === "password" || mode === "token") {
+    if (!(mode === "password" ? password : token)) {
+      return { error: `Gateway auth is set to ${mode}, but no ${mode} is configured.` };
     }
-    return { label: "password" };
-  }
-  if (mode === "token") {
-    if (!token) {
-      return { error: "Gateway auth is set to token, but no token is configured." };
-    }
-    return { label: "token" };
+    return { label: mode };
   }
   if (token) {
     return { label: "token" };
@@ -348,7 +308,7 @@ export async function resolvePairingGatewayUrl(
     networkInterfaces: () => ReturnType<typeof os.networkInterfaces>;
   },
 ): Promise<ResolveUrlResult> {
-  const scheme = resolveScheme(cfg, { forceSecure: opts.forceSecure });
+  const scheme = opts.forceSecure || cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
   const port = resolveGatewayPort(cfg, opts.env);
 
   if (typeof opts.publicUrl === "string" && opts.publicUrl.trim()) {
@@ -398,7 +358,11 @@ export async function resolvePairingGatewayUrl(
     customBindHost: cfg.gateway?.customBindHost,
     scheme,
     port,
-    pickTailnetHost: () => pickTailnetIPv4(opts.networkInterfaces),
+    pickTailnetHost: () =>
+      pickMatchingExternalInterfaceAddress(safeNetworkInterfaces(opts.networkInterfaces), {
+        family: "IPv4",
+        matches: isCarrierGradeNatIpv4Address,
+      }) ?? null,
     pickLanHost: () => advertisedLanHost,
   });
   if (bindResult) {
@@ -534,17 +498,15 @@ export async function resolvePairingSetupFromConfig(
     return { ok: false, error: "Gateway auth is not configured (no token or password)." };
   }
 
-  const uniqueUrls = [urlResult.url];
   const requestedBootstrapProfile =
     options.bootstrapProfile ?? FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE;
   const accessDowngraded =
     deviceBootstrapProfilesEqual(
       requestedBootstrapProfile,
       FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-    ) && uniqueUrls.some((url) => !isFullAccessMobilePairingUrl(url));
-  // Every advertised URL shares this bearer token. Keep plaintext LAN routes
-  // useful for node/chat access, but reserve admin handoff for an all-TLS
-  // route set (or same-host loopback, where no LAN observer exists).
+    ) && !isFullAccessMobilePairingUrl(urlResult.url);
+  // Keep plaintext LAN routes useful for node/chat access, but reserve admin
+  // handoff for TLS or same-host loopback, where no LAN observer exists.
   const issuedBootstrapProfile = accessDowngraded
     ? PAIRING_SETUP_BOOTSTRAP_PROFILE
     : requestedBootstrapProfile;
@@ -571,7 +533,6 @@ export async function resolvePairingSetupFromConfig(
     ok: true,
     payload: {
       url: urlResult.url,
-      ...(uniqueUrls.length > 1 ? { urls: uniqueUrls } : {}),
       bootstrapToken: issued.token,
       expiresAtMs: issued.expiresAtMs,
       ...(directGatewayTlsFingerprint ? { tlsFingerprint: directGatewayTlsFingerprint } : {}),

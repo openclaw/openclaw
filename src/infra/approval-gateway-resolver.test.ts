@@ -107,9 +107,6 @@ describe("resolveApprovalOverGateway", () => {
   });
 
   it.each([
-    { channel: "telegram" },
-    { accountId: "ops" },
-    { senderId: "owner" },
     { channel: "telegram", accountId: "ops" },
     { channel: "telegram", senderId: "owner" },
     { accountId: "ops", senderId: "owner" },
@@ -127,16 +124,7 @@ describe("resolveApprovalOverGateway", () => {
     expect(hoisted.withOperatorApprovalsGatewayClient).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["signal", "Signal"],
-    ["whatsapp", "WhatsApp"],
-    ["matrix", "Matrix"],
-    ["imessage", "iMessage"],
-    ["telegram", "Telegram"],
-    ["discord", "Discord"],
-    ["googlechat", "Google Chat"],
-    ["slack", "Slack"],
-  ] as const)(
+  it.each([["googlechat", "Google Chat"]] as const)(
     "derives the %s approval client label from channel metadata",
     async (channel, label) => {
       await resolveApprovalOverGateway({

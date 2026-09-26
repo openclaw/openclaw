@@ -4,27 +4,13 @@ import { link, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
-import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
+import { useSqliteWorkerStoreFixture } from "./sqlite-worker-fixture.test-support.js";
+import { openSqliteWorkerStore } from "./sqlite-worker-store.js";
 import type { FixtureOpenInput, FixtureOperations } from "./sqlite-worker-store.test-support.js";
 
-const stores = new Set<SqliteWorkerStore<FixtureOperations>>();
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    try {
-      await Promise.all([...stores].map((store) => store.close()));
-    } finally {
-      stores.clear();
-      cleanup();
-    }
-  }),
-);
-
-function databasePath(): string {
-  return path.join(tempDirs.make("openclaw-sqlite-worker-existing-"), "store.sqlite");
-}
+const { stores, databasePath } = useSqliteWorkerStoreFixture("openclaw-sqlite-worker-existing-");
 
 async function open(file: string, existingOnly = false, input?: FixtureOpenInput) {
   const store = await openSqliteWorkerStore<FixtureOperations>({

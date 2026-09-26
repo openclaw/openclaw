@@ -76,7 +76,7 @@ async function createSubmissionFixture() {
       ),
     consume,
   };
-  const parent = registerCodexNativeSubagentMonitor({
+  const parent = await registerCodexNativeSubagentMonitor({
     client: client as never,
     parentThreadId: binding.threadId,
     requesterSessionKey: "agent:main:main",

@@ -28,10 +28,8 @@ import {
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import {
-  createAgentRuntimeApprovalAuthorityValidator,
-  type AgentRuntimeIdentity,
-} from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
+import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { cronHandlers } from "./cron.js";

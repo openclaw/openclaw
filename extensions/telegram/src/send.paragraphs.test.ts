@@ -1,20 +1,13 @@
 import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it } from "vitest";
 import { telegramOutbound } from "./outbound-adapter.js";
-import {
-  getTelegramSendTestMocks,
-  importTelegramSendModule,
-  installTelegramSendTestHooks,
-} from "./send.test-harness.js";
-
-installTelegramSendTestHooks();
-
-const { botApi } = getTelegramSendTestMocks();
-const { sendMessageTelegram } = await importTelegramSendModule();
+import { sendMessageTelegram } from "./send.js";
+import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
 
 describe("Telegram paragraph delivery", () => {
+  const fixture = useTelegramHttpFixture();
+
   it("preserves indented code through the shared payload path in newline mode", async () => {
-    botApi.sendMessage.mockResolvedValue({ message_id: 53, chat: { id: "123" } });
     const first = "A".repeat(128);
     const second = "B".repeat(128);
     await sendTextMediaPayload({
@@ -23,7 +16,7 @@ describe("Telegram paragraph delivery", () => {
         cfg: {
           channels: {
             telegram: {
-              botToken: "123456:paragraph-regression",
+              ...fixture.cfg.channels.telegram,
               richMessages: false,
               textChunkLimit: 512,
               streaming: { chunkMode: "length" },
@@ -39,7 +32,15 @@ describe("Telegram paragraph delivery", () => {
       adapter: telegramOutbound,
     });
 
-    const chunks = botApi.sendMessage.mock.calls.map((call) => String(call[1] ?? ""));
+    const chunks = fixture.requests
+      .filter(({ method }) => method === "sendMessage")
+      .map(({ fields }) => {
+        expect(fields.parse_mode).toBe("HTML");
+        if (typeof fields.text !== "string") {
+          throw new Error("Expected a string Telegram sendMessage text");
+        }
+        return fields.text;
+      });
     const code = chunks.map((html) => {
       expect(html.length).toBeLessThanOrEqual(256);
       expect(html).toMatch(/^<pre><code>[\s\S]+<\/code><\/pre>$/u);

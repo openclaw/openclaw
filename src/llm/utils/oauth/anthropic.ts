@@ -11,8 +11,6 @@ import { startOAuthLoopbackCallbackServer } from "../../../infra/oauth-loopback-
 import {
   generateOAuthState,
   generatePKCE,
-  oauthErrorHtml,
-  oauthSuccessHtml,
   parseOAuthAuthorizationInput,
   resolveOAuthTokenExpiresAt,
 } from "../../../plugin-sdk/provider-oauth-runtime.js";
@@ -141,16 +139,6 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
     expectedState,
     timeoutMs: CALLBACK_TIMEOUT_MS,
     bindHostname: resolveCallbackHost(),
-    renderSuccess: () => ({
-      body: oauthSuccessHtml(
-        "Authorization received; return to the terminal while OpenClaw finishes.",
-      ),
-      contentType: "text/html; charset=utf-8",
-    }),
-    renderError: (message) => ({
-      body: oauthErrorHtml(message),
-      contentType: "text/html; charset=utf-8",
-    }),
   });
   return {
     cancelWait: () => void callback.close(),

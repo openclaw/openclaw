@@ -1,6 +1,6 @@
+import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import {
-  bytesToBase64,
   estimateBase64DecodedByteLength,
   floatToPcm16,
   RealtimeTalkMediaStreamMeter,
@@ -21,6 +21,7 @@ import {
   createRealtimeTalkEventEmitter,
   steerRealtimeTalkActiveConsult,
   shouldAutoControlRealtimeVoiceAgentText,
+  shouldInterruptRealtimeTalkControlResponse,
   type RealtimeTalkTransport,
   type RealtimeTalkTransportContext,
   type RealtimeTalkTransportStartResult,
@@ -39,6 +40,7 @@ type GoogleLiveMessage = {
       }>;
     };
     generationComplete?: boolean;
+    interactionStatus?: "IN_PROGRESS" | "IDLE" | "INTERACTION_STATUS_UNSPECIFIED";
     turnComplete?: boolean;
   };
   toolCall?: {
@@ -63,12 +65,35 @@ function googleLiveVideoMessage(frame: RealtimeTalkVideoFrame): unknown {
 
 // Browser sessions can still pin a 2.5 model, whose text and tool-response wire
 // contract differs from the 3.1 default carried in new session metadata.
+function normalizeGoogleLiveModelId(model: string): string {
+  return model.startsWith("models/") ? model.slice("models/".length) : model;
+}
+
 function isGemini31LiveModel(model: string | undefined): boolean {
   if (!model) {
     return true;
   }
-  const modelId = model.startsWith("models/") ? model.slice("models/".length) : model;
+  const modelId = normalizeGoogleLiveModelId(model);
   return modelId.startsWith("gemini-3.1-") && modelId.includes("-live");
+}
+
+// Gemini 3.8 Live Extended Thinking closes the session (1007) on function response
+// scheduling, so like Gemini 3.1 Live it gets one unscheduled final response per call.
+// Plain `gemini-3.8-live` keeps the async tool contract.
+function isGemini38LiveExtendedThinkingModel(model: string | undefined): boolean {
+  if (!model) {
+    return false;
+  }
+  const modelId = normalizeGoogleLiveModelId(model);
+  return modelId.startsWith("gemini-3.8-live") && modelId.includes("extended-thinking");
+}
+
+function supportsToolResultScheduling(model: string | undefined): boolean {
+  return !isGemini31LiveModel(model) && !isGemini38LiveExtendedThinkingModel(model);
+}
+
+function isTerminalGoogleLiveTurn(model: string | undefined, interactionStatus?: string): boolean {
+  return !isGemini38LiveExtendedThinkingModel(model) || interactionStatus === "IDLE";
 }
 
 export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
@@ -113,8 +138,6 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       isDescribeViewActive: () =>
         this.videoFramesActive && this.hasSentVideoFrame && this.camera.hasUsableTrack(),
       sendResult: (callId, name, result) => this.sendToolResult(callId, name, result),
-      sendControlSpeechMessage: (message) => this.sendControlSpeechMessage(message),
-      stopOutputForSuppressedControl: (result) => this.stopOutputForSuppressedControl(result),
     });
     this.camera = new RealtimeTalkCameraController({
       acquire: (deviceId, signal) => openRealtimeTalkCamera(deviceId, { signal }),
@@ -407,11 +430,17 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         final: true,
         payload: { reason: "provider-interrupted" },
       });
-    } else if (content?.turnComplete && !this.interruptedTurn) {
+    } else if (
+      content?.turnComplete &&
+      !this.interruptedTurn &&
+      isTerminalGoogleLiveTurn(this.session.model, content.interactionStatus)
+    ) {
       this.emitTalkEvent({ type: "turn.ended", final: true });
     }
-    // Google completes interrupted turns separately; input transcription can
-    // arrive in between and must not have its new Talk turn closed by that frame.
+    // Every turnComplete finalizes that spoken utterance above. Extended Thinking filler
+    // remains IN_PROGRESS, so it does not end the overall Talk turn until IDLE. Google
+    // completes interrupted turns separately; their cancellation remains terminal even if
+    // the accompanying interaction status is not IDLE.
     if (content?.turnComplete) {
       this.interruptedTurn = false;
     }
@@ -532,7 +561,9 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
           {
             id: callId,
             name,
-            ...(!isGemini31LiveModel(this.session.model) ? { scheduling: "WHEN_IDLE" } : {}),
+            ...(supportsToolResultScheduling(this.session.model)
+              ? { scheduling: "WHEN_IDLE" }
+              : {}),
             response:
               result && typeof result === "object" && !Array.isArray(result)
                 ? result
@@ -635,14 +666,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private stopOutputForSuppressedControl(result: unknown): void {
-    if (!result || typeof result !== "object") {
-      return;
-    }
-    const record = result as Record<string, unknown>;
-    if (
-      record.ok === true &&
-      (record.mode === "cancel" || (record.suppress === true && record.mode !== "steer"))
-    ) {
+    if (shouldInterruptRealtimeTalkControlResponse(result)) {
       this.stopOutput();
     }
   }

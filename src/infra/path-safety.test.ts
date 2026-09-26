@@ -1,6 +1,6 @@
+import { isWithinDir } from "@openclaw/fs-safe/path";
 // Covers safe base-dir and containment checks.
 import { describe, expect, it } from "vitest";
-import { isWithinDir } from "./path-safety.js";
 
 describe("path-safety", () => {
   it.each([

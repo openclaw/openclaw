@@ -156,10 +156,13 @@ export function collectVitestExcludePatterns(args: string[]): string[] {
   return patterns;
 }
 
+function normalizeVitestPath(file: string): string {
+  return path.sep === "\\" ? file.replaceAll("\\", "/") : file;
+}
+
 function normalizeCliFileFilter(filter: string): string {
   // Line qualifiers belong to native task selection, not physical discovery or wrapper routing.
-  const file = filter.replace(/:\d+$/u, "");
-  return process.platform === "win32" ? file.replaceAll("\\", "/") : file;
+  return normalizeVitestPath(filter.replace(/:\d+$/u, ""));
 }
 
 function loadPatternListFromArgvForScope(
@@ -186,7 +189,10 @@ export function narrowIncludePatternsForCli(
     return null;
   }
 
-  return narrowIncludePatterns(includePatterns, cliPatterns, matchesVitestGlob);
+  // CLI operands may be absolute while canonical project ownership is repo-relative.
+  return narrowIncludePatterns(includePatterns, cliPatterns, (value, pattern) =>
+    matchesVitestGlob(path.resolve(repoRoot, value), path.resolve(repoRoot, pattern)),
+  );
 }
 
 export function relativizeScopedPatterns(values: readonly string[], dir = ""): string[] {
@@ -219,7 +225,7 @@ export function matchesVitestCliSelection(
     narrowIncludePatternsForCli(include, ["node", "vitest", ...args], { scopedDir }) ??
     include;
   const relativeFile = path.posix.relative(scopedDir, file);
-  const absoluteFile = path.resolve(repoRoot, file);
+  const absoluteFile = normalizeVitestPath(path.resolve(repoRoot, file));
   if (
     !relativizeScopedPatterns(patterns, scopedDir).some((pattern) =>
       matchesVitestGlob(path.isAbsolute(pattern) ? absoluteFile : relativeFile, pattern),
@@ -239,9 +245,11 @@ export function matchesVitestCliSelection(
       if (path.isAbsolute(filter) && absoluteFile.startsWith(filter)) {
         return true;
       }
-      const relativeFilter = filter.endsWith("/")
-        ? path.join(path.relative(dir, filter), "/")
-        : path.relative(dir, filter);
+      const relativeFilter = normalizeVitestPath(
+        filter.endsWith("/")
+          ? path.join(path.relative(dir, filter), "/")
+          : path.relative(dir, filter),
+      );
       return (
         relativeFile.toLocaleLowerCase().includes(filter.toLocaleLowerCase()) ||
         relativeFile.toLocaleLowerCase().includes(relativeFilter.toLocaleLowerCase())

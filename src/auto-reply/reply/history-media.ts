@@ -32,10 +32,6 @@ function isRemotePath(value: string): boolean {
   }
 }
 
-function resolveTimestamp(value: unknown): number | undefined {
-  return asFiniteNumber(value);
-}
-
 function resolveHistoryEntries(ctx: MsgContext): HistoryEntry[] {
   return Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory : [];
 }
@@ -48,7 +44,7 @@ export function resolveRecentInboundHistoryImages(params: {
   ttlMs?: number;
   limit?: number;
 }): RecentInboundHistoryImage[] {
-  const nowMs = params.nowMs ?? resolveTimestamp(params.ctx.Timestamp) ?? Date.now();
+  const nowMs = params.nowMs ?? asFiniteNumber(params.ctx.Timestamp) ?? Date.now();
   const ttlMs = params.ttlMs ?? RECENT_HISTORY_IMAGE_TTL_MS;
   const limit = Math.max(0, params.limit ?? RECENT_HISTORY_IMAGE_LIMIT);
   if (limit === 0) {
@@ -60,7 +56,7 @@ export function resolveRecentInboundHistoryImages(params: {
   const entries = resolveHistoryEntries(params.ctx);
   for (let index = entries.length - 1; index >= 0 && out.length < limit; index -= 1) {
     const entry = expectDefined(entries[index], "entries entry at index");
-    const timestamp = resolveTimestamp(entry?.timestamp);
+    const timestamp = asFiniteNumber(entry?.timestamp);
     if (timestamp === undefined || Math.abs(nowMs - timestamp) > ttlMs) {
       continue;
     }

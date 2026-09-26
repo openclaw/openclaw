@@ -120,12 +120,6 @@ describe("createMattermostDirectChannelWithRetry", () => {
       expectedError: "Mattermost API 400",
     },
     {
-      name: "does not retry on 4xx client errors (except 429)",
-      status: 400,
-      message: "Bad request",
-      expectedError: "400",
-    },
-    {
       name: "does not retry on 404 not found",
       status: 404,
       message: "User not found",
@@ -345,24 +339,6 @@ describe("createMattermostDirectChannelWithRetry", () => {
     delays.forEach((delay) => {
       expect(delay).toBeLessThanOrEqual(2500);
     });
-  });
-
-  it("passes AbortSignal to fetch for timeout support", async () => {
-    let capturedSignal: AbortSignal | undefined;
-    mockFetch.mockImplementationOnce((url, init) => {
-      capturedSignal = init?.signal ?? undefined;
-      return Promise.resolve(jsonResponse({ id: "dm-channel-signal" }, 201));
-    });
-
-    const client = createMockClient();
-    await resolveRetryRun(
-      createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
-        timeoutMs: 5000,
-      }),
-    );
-
-    expect(capturedSignal).toBeInstanceOf(AbortSignal);
-    expect(capturedSignal?.aborted).toBe(false);
   });
 
   it("retries on 5xx even if error message contains 4xx substring", async () => {

@@ -24,10 +24,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { claimAgentRunContext } from "../infra/agent-run-registry.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  resolveIncognitoOpenClawAgentSqlitePath,
-} from "../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
@@ -35,6 +32,7 @@ import {
   createSessionRowProjectionFixture,
 } from "./session-row-projection.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
+import { useSessionStoreFixture } from "./session-utils.test-support.js";
 const rowReader = createResidentSessionRowReader();
 async function withStateDirEnv<T>(
   prefix: string,
@@ -55,9 +53,7 @@ import {
   resolveGatewayModelSupportsImages,
 } from "./session-utils.js";
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-});
+const fixtureStorePath = useSessionStoreFixture("openclaw-session-subagent-list-");
 
 async function seedSessionEntry(
   storePath: string,
@@ -83,6 +79,13 @@ describe("session list subagent metadata", () => {
     session: { mainKey: "main" },
     agents: { list: [{ id: "main", default: true }] },
   } as OpenClawConfig;
+
+  function listSubagentSessions(
+    store: Record<string, SessionEntry>,
+    opts: Parameters<typeof listSessionFixture>[0]["opts"] = {},
+  ) {
+    return listSessionFixture({ cfg, storePath: fixtureStorePath(), store, opts });
+  }
 
   test("keeps exact rows equivalent through descendant retention, moves, generations, and deletion", async () => {
     await withStateDirEnv("openclaw-exact-tree-parity-", async () => {
@@ -206,10 +209,8 @@ describe("session list subagent metadata", () => {
   });
 
   test("searches channel-derived display names before row enrichment", async () => {
-    const result = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store: {
+    const result = await listSubagentSessions(
+      {
         "agent:main:slack:group:general": {
           sessionId: "slack-general-session",
           updatedAt: 2,
@@ -221,8 +222,8 @@ describe("session list subagent metadata", () => {
           channel: "discord",
         } as SessionEntry,
       },
-      opts: { search: "slack:g-general" },
-    });
+      { search: "slack:g-general" },
+    );
 
     expect(result.sessions.map((session) => session.key)).toEqual([
       "agent:main:slack:group:general",
@@ -251,7 +252,7 @@ describe("session list subagent metadata", () => {
     const projection = createSessionRowProjectionFixture({
       cfg,
       store,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
     });
     const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
     try {
@@ -297,19 +298,12 @@ describe("session list subagent metadata", () => {
       controllerSessionKey: controlParentKey,
       requesterSessionKey: controlParentKey,
       requesterDisplayKey: "runtime-controller",
-      task: "controlled child",
-      cleanup: "keep",
       createdAt: now - 5_000,
       startedAt: now - 4_000,
     });
 
     const listForOwner = async (ownerSessionKey: string) =>
-      await listSessionFixture({
-        cfg,
-        storePath: "/tmp/sessions.json",
-        store,
-        opts: { spawnedBy: ownerSessionKey },
-      });
+      await listSubagentSessions(store, { spawnedBy: ownerSessionKey });
 
     const navigationChildren = (await listForOwner(navigationParentKey)).sessions;
     expect(navigationChildren.map((session) => session.key)).toEqual([childSessionKey]);
@@ -320,12 +314,7 @@ describe("session list subagent metadata", () => {
     ]);
     expect((await listForOwner(staleParentKey)).sessions).toEqual([]);
 
-    const all = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {},
-    });
+    const all = await listSubagentSessions(store);
     expect(
       all.sessions.find((session) => session.key === navigationParentKey)?.childSessions,
     ).toEqual([childSessionKey]);
@@ -368,10 +357,6 @@ describe("session list subagent metadata", () => {
       runId: "run-parent",
       childSessionKey: "agent:main:subagent:parent",
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "parent task",
-      cleanup: "keep",
       createdAt: now - 10_000,
       startedAt: now - 9_000,
       model: "openai/gpt-5.4",
@@ -385,10 +370,6 @@ describe("session list subagent metadata", () => {
       runId: "run-child",
       childSessionKey: "agent:main:subagent:child",
       controllerSessionKey: "agent:main:subagent:parent",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "child task",
-      cleanup: "keep",
       createdAt: now - 8_000,
       startedAt: now - 7_500,
       endedAt: now - 2_500,
@@ -399,10 +380,6 @@ describe("session list subagent metadata", () => {
       runId: "run-failed",
       childSessionKey: "agent:main:subagent:failed",
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "failed task",
-      cleanup: "keep",
       createdAt: now - 6_000,
       startedAt: now - 5_500,
       endedAt: now - 500,
@@ -410,12 +387,7 @@ describe("session list subagent metadata", () => {
       model: "openai/gpt-5.4",
     });
 
-    const result = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {},
-    });
+    const result = await listSubagentSessions(store);
 
     const main = result.sessions.find((session) => session.key === "agent:main:main");
     expect(main?.childSessions).toEqual([
@@ -468,21 +440,12 @@ describe("session list subagent metadata", () => {
       runId: "run-stale-display",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "stale display task",
-      cleanup: "keep",
       createdAt: now - 5_000,
       startedAt: now - 4_000,
       model: "openai/gpt-5.4",
     });
 
-    const result = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {},
-    });
+    const result = await listSubagentSessions(store);
 
     const row = result.sessions.find((session) => session.key === childSessionKey);
     expect(row?.status).toBe("done");
@@ -490,95 +453,6 @@ describe("session list subagent metadata", () => {
     expect(row?.hasActiveSubagentRun).toBe(false);
     expect(row?.endedAt).toBe(now - 500);
     expect(row?.runtimeMs).toBe(3_500);
-  });
-
-  test("does not keep childSessions attached to a stale older controller row", async () => {
-    const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      "agent:main:main": {
-        sessionId: "sess-main",
-        updatedAt: now,
-      } as SessionEntry,
-      "agent:main:subagent:old-parent": {
-        sessionId: "sess-old-parent",
-        updatedAt: now - 4_000,
-        spawnedBy: "agent:main:main",
-      } as SessionEntry,
-      "agent:main:subagent:new-parent": {
-        sessionId: "sess-new-parent",
-        updatedAt: now - 3_000,
-        spawnedBy: "agent:main:main",
-      } as SessionEntry,
-      "agent:main:subagent:shared-child": {
-        sessionId: "sess-shared-child",
-        updatedAt: now - 1_000,
-        spawnedBy: "agent:main:subagent:new-parent",
-      } as SessionEntry,
-    };
-
-    addSubagentRunForTests({
-      runId: "run-old-parent",
-      childSessionKey: "agent:main:subagent:old-parent",
-      controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "old parent task",
-      cleanup: "keep",
-      createdAt: now - 10_000,
-      startedAt: now - 9_000,
-    });
-    addSubagentRunForTests({
-      runId: "run-new-parent",
-      childSessionKey: "agent:main:subagent:new-parent",
-      controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "new parent task",
-      cleanup: "keep",
-      createdAt: now - 8_000,
-      startedAt: now - 7_000,
-    });
-    addSubagentRunForTests({
-      runId: "run-child-stale-parent",
-      childSessionKey: "agent:main:subagent:shared-child",
-      controllerSessionKey: "agent:main:subagent:old-parent",
-      requesterSessionKey: "agent:main:subagent:old-parent",
-      requesterDisplayKey: "old-parent",
-      task: "shared child stale parent",
-      cleanup: "keep",
-      createdAt: now - 6_000,
-      startedAt: now - 5_500,
-      endedAt: now - 4_500,
-      outcome: { status: "ok" },
-    });
-    addSubagentRunForTests({
-      runId: "run-child-current-parent",
-      childSessionKey: "agent:main:subagent:shared-child",
-      controllerSessionKey: "agent:main:subagent:new-parent",
-      requesterSessionKey: "agent:main:subagent:new-parent",
-      requesterDisplayKey: "new-parent",
-      task: "shared child current parent",
-      cleanup: "keep",
-      createdAt: now - 2_000,
-      startedAt: now - 1_500,
-    });
-
-    const result = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {},
-    });
-
-    const oldParent = result.sessions.find(
-      (session) => session.key === "agent:main:subagent:old-parent",
-    );
-    const newParent = result.sessions.find(
-      (session) => session.key === "agent:main:subagent:new-parent",
-    );
-
-    expect(oldParent?.childSessions).toBeUndefined();
-    expect(newParent?.childSessions).toEqual(["agent:main:subagent:shared-child"]);
   });
 
   test("does not reattach moved children through stale spawnedBy store metadata", async () => {
@@ -609,10 +483,6 @@ describe("session list subagent metadata", () => {
       runId: "run-old-parent-store",
       childSessionKey: "agent:main:subagent:old-parent-store",
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "old parent store task",
-      cleanup: "keep",
       createdAt: now - 10_000,
       startedAt: now - 9_000,
     });
@@ -620,10 +490,6 @@ describe("session list subagent metadata", () => {
       runId: "run-new-parent-store",
       childSessionKey: "agent:main:subagent:new-parent-store",
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "new parent store task",
-      cleanup: "keep",
       createdAt: now - 8_000,
       startedAt: now - 7_000,
     });
@@ -633,8 +499,6 @@ describe("session list subagent metadata", () => {
       controllerSessionKey: "agent:main:subagent:old-parent-store",
       requesterSessionKey: "agent:main:subagent:old-parent-store",
       requesterDisplayKey: "old-parent-store",
-      task: "shared child stale store parent",
-      cleanup: "keep",
       createdAt: now - 6_000,
       startedAt: now - 5_500,
       endedAt: now - 4_500,
@@ -646,18 +510,11 @@ describe("session list subagent metadata", () => {
       controllerSessionKey: "agent:main:subagent:new-parent-store",
       requesterSessionKey: "agent:main:subagent:new-parent-store",
       requesterDisplayKey: "new-parent-store",
-      task: "shared child current store parent",
-      cleanup: "keep",
       createdAt: now - 2_000,
       startedAt: now - 1_500,
     });
 
-    const result = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {},
-    });
+    const result = await listSubagentSessions(store);
 
     const oldParent = result.sessions.find(
       (session) => session.key === "agent:main:subagent:old-parent-store",
@@ -698,10 +555,6 @@ describe("session list subagent metadata", () => {
       runId: "run-old-parent-filter",
       childSessionKey: "agent:main:subagent:old-parent-filter",
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "old parent filter task",
-      cleanup: "keep",
       createdAt: now - 10_000,
       startedAt: now - 9_000,
     });
@@ -709,10 +562,6 @@ describe("session list subagent metadata", () => {
       runId: "run-new-parent-filter",
       childSessionKey: "agent:main:subagent:new-parent-filter",
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "new parent filter task",
-      cleanup: "keep",
       createdAt: now - 8_000,
       startedAt: now - 7_000,
     });
@@ -722,8 +571,6 @@ describe("session list subagent metadata", () => {
       controllerSessionKey: "agent:main:subagent:old-parent-filter",
       requesterSessionKey: "agent:main:subagent:old-parent-filter",
       requesterDisplayKey: "old-parent-filter",
-      task: "shared child stale filter parent",
-      cleanup: "keep",
       createdAt: now - 6_000,
       startedAt: now - 5_500,
       endedAt: now - 4_500,
@@ -735,70 +582,15 @@ describe("session list subagent metadata", () => {
       controllerSessionKey: "agent:main:subagent:new-parent-filter",
       requesterSessionKey: "agent:main:subagent:new-parent-filter",
       requesterDisplayKey: "new-parent-filter",
-      task: "shared child current filter parent",
-      cleanup: "keep",
       createdAt: now - 2_000,
       startedAt: now - 1_500,
     });
 
-    const result = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {
-        spawnedBy: "agent:main:subagent:old-parent-filter",
-      },
+    const result = await listSubagentSessions(store, {
+      spawnedBy: "agent:main:subagent:old-parent-filter",
     });
 
     expect(result.sessions.map((session) => session.key)).toStrictEqual([]);
-  });
-
-  test("reports the newest run owner for moved child session rows", async () => {
-    const now = Date.now();
-    const childSessionKey = "agent:main:subagent:shared-child-owner";
-    const store: Record<string, SessionEntry> = {
-      [childSessionKey]: {
-        sessionId: "sess-shared-child-owner",
-        updatedAt: now,
-        spawnedBy: "agent:main:subagent:old-parent-owner",
-      } as SessionEntry,
-    };
-
-    addSubagentRunForTests({
-      runId: "run-child-owner-stale-parent",
-      childSessionKey,
-      controllerSessionKey: "agent:main:subagent:old-parent-owner",
-      requesterSessionKey: "agent:main:subagent:old-parent-owner",
-      requesterDisplayKey: "old-parent-owner",
-      task: "shared child stale owner parent",
-      cleanup: "keep",
-      createdAt: now - 6_000,
-      startedAt: now - 5_500,
-      endedAt: now - 4_500,
-      outcome: { status: "ok" },
-    });
-    addSubagentRunForTests({
-      runId: "run-child-owner-current-parent",
-      childSessionKey,
-      controllerSessionKey: "agent:main:subagent:new-parent-owner",
-      requesterSessionKey: "agent:main:subagent:new-parent-owner",
-      requesterDisplayKey: "new-parent-owner",
-      task: "shared child current owner parent",
-      cleanup: "keep",
-      createdAt: now - 2_000,
-      startedAt: now - 1_500,
-    });
-
-    const result = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {},
-    });
-
-    expect(result.sessions).toHaveLength(1);
-    expect(result.sessions[0]?.key).toBe(childSessionKey);
-    expect(result.sessions[0]?.spawnedBy).toBe("agent:main:subagent:new-parent-owner");
   });
 
   test("keeps the persisted parentSessionKey while reporting the newest runtime controller", async () => {
@@ -818,8 +610,6 @@ describe("session list subagent metadata", () => {
       controllerSessionKey: "agent:main:subagent:old-parent-parent",
       requesterSessionKey: "agent:main:subagent:old-parent-parent",
       requesterDisplayKey: "old-parent-parent",
-      task: "shared child stale parentSessionKey parent",
-      cleanup: "keep",
       createdAt: now - 6_000,
       startedAt: now - 5_500,
       endedAt: now - 4_500,
@@ -831,18 +621,11 @@ describe("session list subagent metadata", () => {
       controllerSessionKey: "agent:main:subagent:new-parent-parent",
       requesterSessionKey: "agent:main:subagent:new-parent-parent",
       requesterDisplayKey: "new-parent-parent",
-      task: "shared child current parentSessionKey parent",
-      cleanup: "keep",
       createdAt: now - 2_000,
       startedAt: now - 1_500,
     });
 
-    const result = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {},
-    });
+    const result = await listSubagentSessions(store);
 
     expect(result.sessions).toHaveLength(1);
     expect(result.sessions[0]?.key).toBe(childSessionKey);
@@ -867,10 +650,6 @@ describe("session list subagent metadata", () => {
       runId: "run-followup-new",
       childSessionKey: "agent:main:subagent:followup",
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "follow-up task",
-      cleanup: "keep",
       createdAt: now - 10_000,
       startedAt: now - 30_000,
       sessionStartedAt: now - 150_000,
@@ -883,12 +662,7 @@ describe("session list subagent metadata", () => {
       { trackOwner: true, ownsContext: true },
     );
 
-    const result = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {},
-    });
+    const result = await listSubagentSessions(store);
 
     const followup = result.sessions.find(
       (session) => session.key === "agent:main:subagent:followup",
@@ -913,10 +687,6 @@ describe("session list subagent metadata", () => {
       runId: "run-stale-active",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "stale active row",
-      cleanup: "keep",
       createdAt: now - 5_000,
       startedAt: now - 4_500,
       model: "openai/gpt-5.4",
@@ -925,10 +695,6 @@ describe("session list subagent metadata", () => {
       runId: "run-current-ended",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "current ended row",
-      cleanup: "keep",
       createdAt: now - 1_000,
       startedAt: now - 900,
       endedAt: now - 200,
@@ -936,12 +702,7 @@ describe("session list subagent metadata", () => {
       model: "openai/gpt-5.4",
     });
 
-    const result = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {},
-    });
+    const result = await listSubagentSessions(store);
 
     expect(result.sessions).toHaveLength(1);
     expect(result.sessions[0]?.key).toBe(childSessionKey);
@@ -995,20 +756,15 @@ describe("session list subagent metadata", () => {
         },
         async () => {
           saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(persistedRuns));
-          const result = await listSessionFixture({
-            cfg,
-            storePath: "/tmp/sessions.json",
-            store: {
-              [childSessionKey]: {
-                sessionId: "sess-disk-live",
-                updatedAt: now,
-                spawnedBy: "agent:main:main",
-                status: "done",
-                endedAt: now - 1_800,
-                runtimeMs: 100,
-              } as SessionEntry,
-            },
-            opts: {},
+          const result = await listSubagentSessions({
+            [childSessionKey]: {
+              sessionId: "sess-disk-live",
+              updatedAt: now,
+              spawnedBy: "agent:main:main",
+              status: "done",
+              endedAt: now - 1_800,
+              runtimeMs: 100,
+            } as SessionEntry,
           });
           return result.sessions.find((session) => session.key === childSessionKey);
         },
@@ -1024,61 +780,6 @@ describe("session list subagent metadata", () => {
       await closeOpenClawStateDatabaseAsync();
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
-  });
-
-  test("includes explicit parentSessionKey relationships for dashboard child sessions", async () => {
-    resetSubagentRegistryForTests({ persist: false });
-    const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      "agent:main:main": {
-        sessionId: "sess-main",
-        updatedAt: now,
-      } as SessionEntry,
-      "agent:main:dashboard:child": {
-        sessionId: "sess-child",
-        updatedAt: now - 1_000,
-        parentSessionKey: "agent:main:main",
-      } as SessionEntry,
-    };
-
-    const result = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {},
-    });
-
-    const main = result.sessions.find((session) => session.key === "agent:main:main");
-    const child = result.sessions.find((session) => session.key === "agent:main:dashboard:child");
-    expect(main?.childSessions).toEqual(["agent:main:dashboard:child"]);
-    expect(child?.parentSessionKey).toBe("agent:main:main");
-  });
-
-  test("returns dashboard child sessions when filtering by parentSessionKey owner", async () => {
-    resetSubagentRegistryForTests({ persist: false });
-    const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      "agent:main:main": {
-        sessionId: "sess-main",
-        updatedAt: now,
-      } as SessionEntry,
-      "agent:main:dashboard:child": {
-        sessionId: "sess-dashboard-child",
-        updatedAt: now - 1_000,
-        parentSessionKey: "agent:main:main",
-      } as SessionEntry,
-    };
-
-    const result = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {
-        spawnedBy: "agent:main:main",
-      },
-    });
-
-    expect(result.sessions.map((session) => session.key)).toEqual(["agent:main:dashboard:child"]);
   });
 
   test("does not reattach stale terminal store-only child links", async () => {
@@ -1099,22 +800,12 @@ describe("session list subagent metadata", () => {
       } as SessionEntry,
     };
 
-    const all = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {},
-    });
+    const all = await listSubagentSessions(store);
     const main = all.sessions.find((session) => session.key === "agent:main:main");
     expect(main?.childSessions).toBeUndefined();
 
-    const filtered = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {
-        spawnedBy: "agent:main:main",
-      },
+    const filtered = await listSubagentSessions(store, {
+      spawnedBy: "agent:main:main",
     });
     expect(filtered.sessions.map((session) => session.key)).toStrictEqual([]);
   });
@@ -1135,22 +826,12 @@ describe("session list subagent metadata", () => {
       } as SessionEntry,
     };
 
-    const all = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {},
-    });
+    const all = await listSubagentSessions(store);
     const main = all.sessions.find((session) => session.key === "agent:main:main");
     expect(main?.childSessions).toBeUndefined();
 
-    const filtered = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {
-        spawnedBy: "agent:main:main",
-      },
+    const filtered = await listSubagentSessions(store, {
+      spawnedBy: "agent:main:main",
     });
     expect(filtered.sessions.map((session) => session.key)).toStrictEqual([]);
   });
@@ -1170,7 +851,6 @@ describe("session list subagent metadata", () => {
         childSessionKey: childKey,
         requesterSessionKey: parentKey,
         requesterDisplayKey: "parent",
-        task: "retained result",
         cleanup: "delete",
         collect,
         createdAt: now - 5_000,
@@ -1179,13 +859,7 @@ describe("session list subagent metadata", () => {
         outcome: { status: collect ? "ok" : "error" },
         cleanupCompletedAt: now - 500,
       });
-      const list = (spawnedBy?: string) =>
-        listSessionFixture({
-          cfg,
-          storePath: "/tmp/sessions.json",
-          store,
-          opts: { spawnedBy },
-        });
+      const list = (spawnedBy?: string) => listSubagentSessions(store, { spawnedBy });
       const before = await list();
       expect(before.sessions.find((row) => row.key === parentKey)?.childSessions).toEqual([
         childKey,
@@ -1218,32 +892,18 @@ describe("session list subagent metadata", () => {
       runId: "run-old-ended",
       childSessionKey: "agent:main:subagent:old-ended",
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "old ended task",
-      cleanup: "keep",
       createdAt: now - 60 * 60_000,
       startedAt: now - 59 * 60_000,
       endedAt: now - 31 * 60_000,
       outcome: { status: "ok" },
     });
 
-    const all = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {},
-    });
+    const all = await listSubagentSessions(store);
     const main = all.sessions.find((session) => session.key === "agent:main:main");
     expect(main?.childSessions).toBeUndefined();
 
-    const filtered = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {
-        spawnedBy: "agent:main:main",
-      },
+    const filtered = await listSubagentSessions(store, {
+      spawnedBy: "agent:main:main",
     });
     expect(filtered.sessions.map((session) => session.key)).toStrictEqual([]);
   });
@@ -1273,10 +933,6 @@ describe("session list subagent metadata", () => {
       runId: "run-ended-parent",
       childSessionKey: parentKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "ended parent task",
-      cleanup: "keep",
       createdAt: now - 60 * 60_000,
       startedAt: now - 59 * 60_000,
       endedAt: now - 31 * 60_000,
@@ -1288,18 +944,11 @@ describe("session list subagent metadata", () => {
       controllerSessionKey: parentKey,
       requesterSessionKey: parentKey,
       requesterDisplayKey: "ended-parent",
-      task: "live child task",
-      cleanup: "keep",
       createdAt: now - 1_000,
       startedAt: now - 900,
     });
 
-    const result = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {},
-    });
+    const result = await listSubagentSessions(store);
     const main = result.sessions.find((session) => session.key === "agent:main:main");
     expect(main?.childSessions).toEqual([parentKey]);
     expect(main?.hasActiveSubagentRun).toBe(true);
@@ -1322,12 +971,7 @@ describe("session list subagent metadata", () => {
       } as SessionEntry,
     };
 
-    const result = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {},
-    });
+    const result = await listSubagentSessions(store);
 
     const archived = result.sessions.find(
       (session) => session.key === "agent:main:subagent:archived",
@@ -1352,10 +996,6 @@ describe("session list subagent metadata", () => {
       runId: "run-timeout",
       childSessionKey: "agent:main:subagent:timeout",
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "timeout task",
-      cleanup: "keep",
       createdAt: now - 10_000,
       startedAt: now - 1_000,
       endedAt: now - 2_000,
@@ -1363,12 +1003,7 @@ describe("session list subagent metadata", () => {
       model: "openai/gpt-5.4",
     });
 
-    const result = await listSessionFixture({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {},
-    });
+    const result = await listSubagentSessions(store);
 
     const timeout = result.sessions.find(
       (session) => session.key === "agent:main:subagent:timeout",

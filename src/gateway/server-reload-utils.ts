@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import { requestActiveCronJobCancellationByDeclarationKeyPrefix } from "../cron/active-jobs.js";
+import { settlesWithin } from "../shared/settle-within.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { isRecord } from "../utils.js";
 import { reloadPlanNeedsRecovery } from "./config-reload-recovery.js";
@@ -80,21 +81,12 @@ export async function disposeMcpRuntimesWithTimeout(params: {
 }) {
   // MCP runtime disposal may need async provider cleanup. Bound it so config
   // reload can proceed and report the stale runtime risk.
-  let timer: ReturnType<typeof setTimeout> | undefined;
   const disposePromise = Promise.resolve()
     .then(params.dispose)
     .catch((error: unknown) => {
       params.onWarn(`${params.label} failed: ${String(error)}`);
     });
-  const timeoutPromise = new Promise<"timeout">((resolve) => {
-    timer = setTimeout(() => resolve("timeout"), params.timeoutMs);
-    timer.unref?.();
-  });
-  const result = await Promise.race([disposePromise.then(() => "done" as const), timeoutPromise]);
-  if (timer) {
-    clearTimeout(timer);
-  }
-  if (result === "timeout") {
+  if (!(await settlesWithin(disposePromise, params.timeoutMs))) {
     params.onWarn(`${params.label} exceeded ${params.timeoutMs}ms; continuing`);
   }
 }

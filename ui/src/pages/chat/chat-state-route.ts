@@ -12,6 +12,7 @@ import {
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
+import { isExpiredIncognitoSession } from "./chat-history-state.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 export { resolveChatAgentId } from "./chat-agent-id.ts";
@@ -54,7 +55,7 @@ export function canCreateChatSession(state: ChatPageHost) {
     !state.chatSending &&
     !state.chatRunId &&
     state.chatStream === null &&
-    state.chatQueue.length === 0
+    (state.chatQueue.length === 0 || isExpiredIncognitoSession(state))
   );
 }
 
@@ -103,9 +104,8 @@ export function resolveChatAvatarUrl(state: ChatPageHost): string | null {
   ) {
     return assistantAvatar;
   }
-  const agent = state.agentsList?.agents?.find((candidate) => candidate.id === agentId) as
-    | { identity?: { avatar?: string; avatarUrl?: string } }
-    | undefined;
+  const agentsList: ApplicationContext["agents"]["state"]["agentsList"] = state.agentsList;
+  const agent = agentsList?.agents?.find((candidate) => candidate.id === agentId);
   const identity = agent?.identity;
   const avatar = identity?.avatarUrl ?? identity?.avatar;
   return typeof avatar === "string" && isRenderableControlUiAvatarUrl(avatar) ? avatar : null;

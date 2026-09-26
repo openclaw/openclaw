@@ -13,7 +13,7 @@ import {
 } from "./refresh.watcher.test-support.js";
 
 type SkillsChangeEvent = NonNullable<Parameters<typeof bumpSkillsSnapshotVersion>[0]>;
-const { createdWatchers, watchMock, nativeWatchMock, watchForSkillRoot } =
+const { createdWatchers, watchMock, nativeWatchMock, nativeContentWatchMock, watchForSkillRoot } =
   createSkillsWatcherMock();
 let refreshModule: typeof import("./refresh.js");
 let fixtureWorkspaceDir: string;
@@ -21,6 +21,9 @@ let fixtureWorkspaceDir: string;
 vi.mock("chokidar", () => ({ default: { watch: watchMock } }));
 vi.mock("./refresh-ancestor-native.js", () => ({
   createNativeSkillsAncestorWatcher: nativeWatchMock,
+}));
+vi.mock("./refresh-content-native.js", () => ({
+  createNativeSkillsContentWatcher: nativeContentWatchMock,
 }));
 vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillRoots: () => [],
@@ -112,6 +115,7 @@ describe("skills watcher subscription lifecycle", () => {
     );
     second.watcher.emit("raw", "rename", undefined, { watchedPath: ancestor });
     expect(first.watcher.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(0);
     const promoted = [watchForSkillRoot(firstRoot).watcher, watchForSkillRoot(secondRoot).watcher];
     await vi.advanceTimersByTimeAsync(250);
     expect(readFirst()).toEqual(["first-proof"]);

@@ -294,7 +294,7 @@ test("active Codex sessions patch and list catalog-advertised Ultra", async () =
   expect(listedSession?.thinkingOptions).toContain("ultra");
 });
 
-test("unsupported generic stored levels clamp through the current profile", async () => {
+test("generic models retain stored Ultra as a native harness mode", async () => {
   const { session } = await listMainSessionWithThinking({
     reqId: "req-e2e-generic-ultra",
     primaryModel: "test-generic/reasoner",
@@ -315,6 +315,6 @@ test("unsupported generic stored levels clamp through the current profile", asyn
     }),
   });
 
-  expect(session?.thinkingOptions).not.toContain("ultra");
-  expect(session?.thinkingLevel).toBe("max");
+  expect(session?.thinkingOptions).toContain("ultra");
+  expect(session?.thinkingLevel).toBe("ultra");
 });

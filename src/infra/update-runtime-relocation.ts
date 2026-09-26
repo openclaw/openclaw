@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { hasErrnoCode } from "./errno.js";
 import { isPathInside } from "./path-guards.js";
+import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 
 export type RuntimeRelocation = {
   sourceRoot: string;
@@ -11,10 +12,40 @@ export type RuntimeRelocation = {
   sourceAliases?: string[];
 };
 
-export function relocateRuntimePath(
-  value: string,
-  relocations: readonly RuntimeRelocation[],
-): string {
+type PreparedRuntimeRelocations = {
+  rules: readonly RuntimeRelocation[];
+  find: (value: string) => { root: string; relocation: RuntimeRelocation } | undefined;
+};
+type RuntimeRelocations = readonly RuntimeRelocation[] | PreparedRuntimeRelocations;
+
+/** Prepare once for the whole tree; never cache mutable filesystem observations. */
+export function prepareRuntimeRelocations(
+  relocations: RuntimeRelocations,
+): PreparedRuntimeRelocations {
+  if ("rules" in relocations) {
+    return relocations;
+  }
+  return {
+    rules: relocations,
+    find: createRuntimePathLookup(
+      relocations.flatMap((relocation) =>
+        [relocation.sourceRoot, ...(relocation.sourceAliases ?? [])].map(
+          (root) => [root, { root, relocation }] as const,
+        ),
+      ),
+    ),
+  };
+}
+
+export function relocateRuntimePath(value: string, relocations: RuntimeRelocations): string {
+  if ("rules" in relocations) {
+    const match = relocations.find(value);
+    return match
+      ? path.join(match.relocation.destinationRoot, path.relative(match.root, value))
+      : value;
+  }
+  // One-shot callers generally rebase a single root; only tree operations need
+  // an index. Preserve their direct lookup without allocating a prepared plan.
   for (const relocation of relocations) {
     const root = [relocation.sourceRoot, ...(relocation.sourceAliases ?? [])].find((candidate) =>
       isPathInside(candidate, value),
@@ -30,13 +61,14 @@ export async function relocateRuntimeSymlink(
   file: string,
   sourceFile: string,
   destinationFile: string,
-  relocations: readonly RuntimeRelocation[],
+  relocations: RuntimeRelocations,
+  assertBeforeMutation?: () => void,
 ): Promise<void> {
   const link = await fs.readlink(file);
   const target = relocateRuntimePath(path.resolve(path.dirname(sourceFile), link), relocations);
   const replacement = path.isAbsolute(link)
     ? target
-    : path.relative(path.dirname(destinationFile), target);
+    : path.relative(path.dirname(destinationFile), target) || ".";
   if (replacement === link) {
     return;
   }
@@ -44,7 +76,9 @@ export async function relocateRuntimeSymlink(
   // source before rebinding; Windows junctions require the final absolute target.
   const type =
     process.platform === "win32" && (await fs.stat(sourceFile)).isDirectory() ? "junction" : "file";
+  assertBeforeMutation?.();
   await fs.unlink(file);
+  assertBeforeMutation?.();
   await fs.symlink(type === "junction" ? target : replacement, file, type);
 }
 
@@ -52,8 +86,10 @@ export async function relocateRuntimeLauncher(
   file: string,
   sourceFile: string,
   destinationFile: string,
-  relocations: readonly RuntimeRelocation[],
+  relocations: RuntimeRelocations,
+  assertBeforeMutation?: () => void,
 ): Promise<void> {
+  const prepared = prepareRuntimeRelocations(relocations);
   const original = await fs.readFile(file, "utf8");
   // pnpm cmd-shim uses these directory-relative references on sh, cmd and PowerShell.
   // Resolve them before changing the directory; absolute store/runtime paths stay external.
@@ -72,12 +108,12 @@ export async function relocateRuntimeLauncher(
             path.dirname(destinationFile),
             path.relative(path.dirname(sourceFile), sourceTarget),
           )
-        : relocateRuntimePath(sourceTarget, relocations);
+        : relocateRuntimePath(sourceTarget, prepared);
       const replacement = path.relative(path.dirname(destinationFile), target);
       return `${prefix}${prefix.startsWith("%") ? replacement.replaceAll("/", "\\") : replacement.replaceAll("\\", "/")}`;
     },
   );
-  for (const relocation of relocations) {
+  for (const relocation of prepared.rules) {
     for (const sourceRoot of [relocation.sourceRoot, ...(relocation.sourceAliases ?? [])]) {
       // NODE_PATH and the shim's target comment can carry absolute project paths.
       content = content.replaceAll(
@@ -93,6 +129,7 @@ export async function relocateRuntimeLauncher(
     }
   }
   if (content !== original) {
+    assertBeforeMutation?.();
     await fs.writeFile(file, content);
   }
 }
@@ -115,7 +152,8 @@ async function relocateModulesManifest(
   file: string,
   sourceFile: string,
   destinationFile: string,
-  relocations: readonly RuntimeRelocation[],
+  relocations: RuntimeRelocations,
+  assertBeforeMutation?: () => void,
 ): Promise<void> {
   const contents = await readRuntimeModulesManifest(file);
   if (!contents) {
@@ -145,6 +183,7 @@ async function relocateModulesManifest(
     const content = original.trimStart().startsWith("{")
       ? `${JSON.stringify(manifest, null, 2)}\n`
       : stringifyYaml(manifest);
+    assertBeforeMutation?.();
     await fs.writeFile(file, content);
   }
 }
@@ -155,14 +194,33 @@ export async function relocateRuntimeEntry(
   sourceFile: string,
   destinationFile: string,
   kind: "file" | "symlink",
-  relocations: readonly RuntimeRelocation[],
+  relocations: RuntimeRelocations,
+  assertBeforeMutation?: () => void,
 ): Promise<void> {
   if (kind === "symlink") {
-    await relocateRuntimeSymlink(file, sourceFile, destinationFile, relocations);
+    await relocateRuntimeSymlink(
+      file,
+      sourceFile,
+      destinationFile,
+      relocations,
+      assertBeforeMutation,
+    );
   } else if (path.basename(file) === ".modules.yaml") {
-    await relocateModulesManifest(file, sourceFile, destinationFile, relocations);
+    await relocateModulesManifest(
+      file,
+      sourceFile,
+      destinationFile,
+      relocations,
+      assertBeforeMutation,
+    );
   } else if (path.basename(path.dirname(file)) === ".bin" && !file.endsWith(".exe")) {
-    await relocateRuntimeLauncher(file, sourceFile, destinationFile, relocations);
+    await relocateRuntimeLauncher(
+      file,
+      sourceFile,
+      destinationFile,
+      relocations,
+      assertBeforeMutation,
+    );
   }
 }
 
@@ -171,10 +229,11 @@ export async function relocateRuntimeTree(
   root: string,
   sourceRoot: string,
   destinationRoot: string,
-  relocations: readonly RuntimeRelocation[],
+  relocations: RuntimeRelocations,
 ): Promise<void> {
+  const prepared = prepareRuntimeRelocations(relocations);
   if ((await fs.lstat(root)).isSymbolicLink()) {
-    await relocateRuntimeSymlink(root, sourceRoot, destinationRoot, relocations);
+    await relocateRuntimeSymlink(root, sourceRoot, destinationRoot, prepared);
     return;
   }
   for (const entry of await fs.readdir(root, { withFileTypes: true })) {
@@ -182,11 +241,11 @@ export async function relocateRuntimeTree(
     const sourceFile = path.join(sourceRoot, entry.name);
     const destinationFile = path.join(destinationRoot, entry.name);
     if (entry.isDirectory()) {
-      await relocateRuntimeTree(file, sourceFile, destinationFile, relocations);
+      await relocateRuntimeTree(file, sourceFile, destinationFile, prepared);
     } else if (entry.isSymbolicLink()) {
-      await relocateRuntimeEntry(file, sourceFile, destinationFile, "symlink", relocations);
+      await relocateRuntimeEntry(file, sourceFile, destinationFile, "symlink", prepared);
     } else if (entry.isFile()) {
-      await relocateRuntimeEntry(file, sourceFile, destinationFile, "file", relocations);
+      await relocateRuntimeEntry(file, sourceFile, destinationFile, "file", prepared);
     }
   }
 }

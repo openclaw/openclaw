@@ -11,6 +11,7 @@ import {
 import {
   GitHubDiffDataError,
   GitHubRateLimitError,
+  GitHubReadTimeoutError,
   GitHubStatusPublicationError,
   publishGuardStatus,
   withSecurityReviewRecovery,
@@ -125,6 +126,7 @@ async function ciState(review) {
 }
 
 let diffRecoveryReview;
+let currentReview;
 
 async function main() {
   const mode = process.env.OPENCLAW_SECURITY_REVIEW_MODE ?? "enforce";
@@ -132,6 +134,7 @@ async function main() {
     throw new Error(`Unknown security review mode: ${mode}`);
   }
   const review = await readGuardReview(diffRecoveryReview);
+  currentReview = review;
   if (!review) {
     return;
   }
@@ -157,6 +160,7 @@ async function main() {
           if (
             error instanceof GitHubRateLimitError ||
             ((error instanceof GitHubStatusPublicationError ||
+              error instanceof GitHubReadTimeoutError ||
               error instanceof GitHubDiffDataError ||
               error instanceof SupersededReviewError) &&
               errors.length === 0)
@@ -236,6 +240,7 @@ async function main() {
     if (
       error instanceof GitHubRateLimitError ||
       error instanceof GitHubStatusPublicationError ||
+      error instanceof GitHubReadTimeoutError ||
       error instanceof SupersededReviewError
     ) {
       throw error;
@@ -264,7 +269,13 @@ async function main() {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  withSecurityReviewRecovery(main).catch(
+  withSecurityReviewRecovery(main, {
+    checkCurrent: async () => {
+      if (currentReview) {
+        await assertGuardUnchanged(currentReview, { allowFileCountChange: true });
+      }
+    },
+  }).catch(
     /** @param {unknown} error */ (error) => {
       if (error instanceof SupersededReviewError) {
         console.log(error.message);

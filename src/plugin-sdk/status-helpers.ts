@@ -289,18 +289,8 @@ export function buildComputedAccountStatusSnapshot<TExtra extends StatusSnapshot
   },
   extra?: TExtra,
 ) {
-  const { accountId, name, enabled, configured, runtime, probe } = params;
   return buildBaseAccountStatusSnapshot(
-    {
-      account: {
-        accountId,
-        name,
-        enabled,
-        configured,
-      },
-      runtime,
-      probe,
-    },
+    { account: params, runtime: params.runtime, probe: params.probe },
     extra,
   );
 }

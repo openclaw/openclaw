@@ -5,7 +5,11 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-ag
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 
 /** Retain the selected row and physical owner through asynchronous metadata preparation. */
-export function retainGatewaySessionEntryReadOnly(sessionKey: string, agentId: string) {
+export function retainGatewaySessionEntryReadOnly(
+  sessionKey: string,
+  agentId: string,
+  allowMetadataChanges?: Parameters<typeof captureSessionEntryRead>[2],
+) {
   const options = { agentId, projection: "list" as const };
   const selected = loadGatewaySessionEntryReadOnly(sessionKey, options);
   let released = false;
@@ -51,7 +55,11 @@ export function retainGatewaySessionEntryReadOnly(sessionKey: string, agentId: s
     claim.release();
   };
   try {
-    entryRead = captureSessionEntryRead(database, selected.legacyKey ?? selected.canonicalKey);
+    entryRead = captureSessionEntryRead(
+      database,
+      selected.legacyKey ?? selected.canonicalKey,
+      allowMetadataChanges,
+    );
     const read = entryRead;
     unregister = registerOpenClawAgentDatabaseAsyncResource({
       agentId: database.agentId,

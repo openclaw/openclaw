@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements chatgpt import behavior.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -564,40 +563,10 @@ function renderConversationPage(record: ChatGptConversationRecord): string {
   });
 }
 
-function replaceSimpleManagedBlock(params: {
-  original: string;
-  startMarker: string;
-  endMarker: string;
-  replacement: string;
-}): string {
-  const escapedStart = params.startMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapedEnd = params.endMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const blockPattern = new RegExp(`${escapedStart}[\\s\\S]*?${escapedEnd}`);
-  return params.original.replace(blockPattern, () => params.replacement);
-}
-
-function extractSimpleManagedBlock(params: {
-  body: string;
-  startMarker: string;
-  endMarker: string;
-}): string | null {
-  const escapedStart = params.startMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapedEnd = params.endMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const blockPattern = new RegExp(`${escapedStart}[\\s\\S]*?${escapedEnd}`);
-  return params.body.match(blockPattern)?.[0] ?? null;
-}
-
-function extractManagedBlockBody(params: {
-  body: string;
-  startMarker: string;
-  endMarker: string;
-}): string | null {
-  const escapedStart = params.startMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapedEnd = params.endMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const blockPattern = new RegExp(`${escapedStart}\\n?([\\s\\S]*?)\\n?${escapedEnd}`);
-  const captured = params.body.match(blockPattern)?.[1];
-  return typeof captured === "string" ? captured.trim() : null;
-}
+const HUMAN_BLOCK_PATTERN = new RegExp(`${HUMAN_START_MARKER}[\\s\\S]*?${HUMAN_END_MARKER}`);
+const RELATED_BLOCK_BODY_PATTERN = new RegExp(
+  `${WIKI_RELATED_START_MARKER}\\n?([\\s\\S]*?)\\n?${WIKI_RELATED_END_MARKER}`,
+);
 
 function preserveExistingPageBlocks(rendered: string, existing: string): string {
   if (!existing.trim()) {
@@ -607,25 +576,12 @@ function preserveExistingPageBlocks(rendered: string, existing: string): string 
   const parsedRendered = parseWikiMarkdown(rendered);
   let nextBody = parsedRendered.body;
 
-  const humanBlock = extractSimpleManagedBlock({
-    body: parsedExisting.body,
-    startMarker: HUMAN_START_MARKER,
-    endMarker: HUMAN_END_MARKER,
-  });
+  const humanBlock = parsedExisting.body.match(HUMAN_BLOCK_PATTERN)?.[0];
   if (humanBlock) {
-    nextBody = replaceSimpleManagedBlock({
-      original: nextBody,
-      startMarker: HUMAN_START_MARKER,
-      endMarker: HUMAN_END_MARKER,
-      replacement: humanBlock,
-    });
+    nextBody = nextBody.replace(HUMAN_BLOCK_PATTERN, () => humanBlock);
   }
 
-  const relatedBody = extractManagedBlockBody({
-    body: parsedExisting.body,
-    startMarker: WIKI_RELATED_START_MARKER,
-    endMarker: WIKI_RELATED_END_MARKER,
-  });
+  const relatedBody = parsedExisting.body.match(RELATED_BLOCK_BODY_PATTERN)?.[1]?.trim();
   if (relatedBody) {
     nextBody = replaceManagedMarkdownBlock({
       original: nextBody,
@@ -664,13 +620,6 @@ function normalizeConversationActions(
     assistantMessageCount: record.assistantMessageCount,
     preferenceSignals: record.preferenceSignals,
   }));
-}
-
-async function writeImportRunRecord(
-  vaultRoot: string,
-  record: ChatGptImportRunRecord,
-): Promise<void> {
-  await writeMemoryWikiImportRunRecord(vaultRoot, record);
 }
 
 async function readImportRunRecord(
@@ -830,7 +779,7 @@ async function importChatGptConversationsUnlocked(params: {
   let indexUpdatedFiles: string[] = [];
   if (!params.dryRun && importRunRecord) {
     if (importRunRecord.createdPaths.length > 0 || importRunRecord.updatedPaths.length > 0) {
-      await writeImportRunRecord(params.config.vault.path, importRunRecord);
+      await writeMemoryWikiImportRunRecord(params.config.vault.path, importRunRecord);
       const compile = await compileMemoryWikiVault(params.config).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(
@@ -1149,7 +1098,7 @@ async function rollbackChatGptImportRunUnlocked(params: {
   }
   if (!record.rollbackStartedAt) {
     record.rollbackStartedAt = new Date().toISOString();
-    await writeImportRunRecord(vaultRoot, record);
+    await writeMemoryWikiImportRunRecord(vaultRoot, record);
   }
   if (!record.rollbackTargetsFinalizedAt) {
     await initializeMemoryWikiVault(params.config);
@@ -1159,7 +1108,7 @@ async function rollbackChatGptImportRunUnlocked(params: {
     const runFs = await fsRoot(runDir);
     const recoverySlots = await scanRecoverySlots({ runRoot: runFs, record });
     if (await classifyRecoverySlots({ vaultRoot, runRoot: runFs, slots: recoverySlots })) {
-      await writeImportRunRecord(vaultRoot, record);
+      await writeMemoryWikiImportRunRecord(vaultRoot, record);
     }
     for (const ref of refs.filter((candidate) => candidate.kind === "created")) {
       let removed = false;
@@ -1175,7 +1124,7 @@ async function rollbackChatGptImportRunUnlocked(params: {
           break;
         }
         if (await classifyRecoverySlots({ vaultRoot, runRoot: runFs, slots: [slot] })) {
-          await writeImportRunRecord(vaultRoot, record);
+          await writeMemoryWikiImportRunRecord(vaultRoot, record);
         }
       }
       if (!removed) {
@@ -1206,7 +1155,7 @@ async function rollbackChatGptImportRunUnlocked(params: {
         });
         if (slot) {
           if (await classifyRecoverySlots({ vaultRoot, runRoot: runFs, slots: [slot] })) {
-            await writeImportRunRecord(vaultRoot, record);
+            await writeMemoryWikiImportRunRecord(vaultRoot, record);
           }
         }
         try {
@@ -1228,7 +1177,7 @@ async function rollbackChatGptImportRunUnlocked(params: {
     // The store commits path rows before this meta fence. It does not claim
     // host power-loss ordering beyond process-restart recovery.
     record.rollbackTargetsFinalizedAt = new Date().toISOString();
-    await writeImportRunRecord(vaultRoot, record);
+    await writeMemoryWikiImportRunRecord(vaultRoot, record);
   }
   // Finalization rebuilds derived artifacts without rewriting source pages.
   // A normal later compile may refresh machine-managed Related blocks.
@@ -1236,7 +1185,7 @@ async function rollbackChatGptImportRunUnlocked(params: {
     sourcePageWrites: "preserve",
   });
   record.rolledBackAt = new Date().toISOString();
-  await writeImportRunRecord(vaultRoot, record);
+  await writeMemoryWikiImportRunRecord(vaultRoot, record);
   const preservedPaths = listPreservedPaths(record);
   const removedCount = record.createdPaths.length;
   const restoredCount = record.updatedPaths.filter((entry) => entry.snapshotPath).length;

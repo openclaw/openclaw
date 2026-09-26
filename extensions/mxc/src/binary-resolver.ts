@@ -27,30 +27,6 @@ function resolveSdkBinDir(): string | null {
   return null;
 }
 
-function buildSearchPaths(binary: string, sdkBinDir: string | null): string[] {
-  return sdkBinDir ? [path.join(sdkBinDir, binary)] : [];
-}
-
-/** SDK-owned search paths for wxc-exec on Windows. */
-function wxcSearchPaths(): string[] {
-  return buildSearchPaths("wxc-exec.exe", resolveSdkBinDir());
-}
-
-function findBinary(searchPaths: string[]): string | null {
-  for (const p of searchPaths) {
-    if (fs.existsSync(p)) {
-      return p;
-    }
-  }
-  return null;
-}
-
-/**
- * Resolves the MXC executor binary path.
- * @param configOverride Optional user-configured path override.
- * @returns Absolute path to the binary.
- * @throws If the binary cannot be found.
- */
 export function resolveMxcBinaryPath(configOverride?: string): string {
   if (configOverride) {
     const resolvedOverride = path.win32.isAbsolute(configOverride)
@@ -63,12 +39,13 @@ export function resolveMxcBinaryPath(configOverride?: string): string {
   }
 
   const binaryName = "wxc-exec.exe";
-  const found = findBinary(wxcSearchPaths());
+  const sdkBinDir = resolveSdkBinDir();
+  const binaryPath = sdkBinDir ? path.join(sdkBinDir, binaryName) : undefined;
 
-  if (!found) {
+  if (!binaryPath || !fs.existsSync(binaryPath)) {
     throw new Error(
       `MXC executor "${binaryName}" not found. Install @microsoft/mxc-sdk or set mxcBinaryPath in config.`,
     );
   }
-  return found;
+  return binaryPath;
 }

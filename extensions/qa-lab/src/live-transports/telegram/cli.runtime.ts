@@ -179,6 +179,7 @@ export async function runQaTelegramSuite(opts: TelegramQaSuiteOptions) {
     ],
     adapterOptions: {
       repoRoot: runOptions.repoRoot,
+      ...(runOptions.credentialFile ? { credentialFile: runOptions.credentialFile } : {}),
       ...(runOptions.credentialRole ? { credentialRole: runOptions.credentialRole } : {}),
       ...(runOptions.credentialSource ? { credentialSource: runOptions.credentialSource } : {}),
       ...(runOptions.sutAccountId ? { sutAccountId: runOptions.sutAccountId } : {}),

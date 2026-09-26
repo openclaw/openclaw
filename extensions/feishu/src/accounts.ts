@@ -19,7 +19,7 @@ import type {
 
 const {
   listAccountIds: listFeishuAccountIds,
-  resolveDefaultAccountId,
+  resolveDefaultAccountId: resolveDefaultFeishuAccountId,
   resolveAccountConfig: resolveMergedFeishuAccountConfig,
 } = createAccountListHelpers<FeishuConfig>("feishu", {
   allowUnlistedDefaultAccount: true,
@@ -31,7 +31,7 @@ const {
   },
 });
 
-export { listFeishuAccountIds };
+export { listFeishuAccountIds, resolveDefaultFeishuAccountId };
 
 type FeishuCredentialResolutionMode = "inspect" | "strict";
 type FeishuResolvedSecretRef = NonNullable<ReturnType<typeof coerceSecretRef>>;
@@ -174,13 +174,6 @@ export function resolveDefaultFeishuAccountSelection(cfg: ClawdbotConfig): {
     accountId: ids[0] ?? DEFAULT_ACCOUNT_ID,
     source: "fallback",
   };
-}
-
-/**
- * Resolve the default account ID.
- */
-export function resolveDefaultFeishuAccountId(cfg: ClawdbotConfig): string {
-  return resolveDefaultAccountId(cfg);
 }
 
 /**

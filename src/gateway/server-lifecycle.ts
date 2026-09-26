@@ -9,6 +9,7 @@ import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
+import { markGatewaySuspendExiting } from "../infra/gateway-suspend-coordinator.js";
 import { upsertPresence } from "../infra/system-presence.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -45,12 +46,7 @@ import type { prepareGatewayKernelState } from "./server-runtime-state-prepare.j
 import { resolveGatewayShutdownNotice, runGatewayCloseSteps } from "./server-shutdown.js";
 import type { GatewayShutdownRuntime } from "./server-shutdown.runtime.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
-import {
-  getHealthVersion,
-  incrementPresenceVersion,
-  refreshGatewayHealthSnapshot,
-} from "./server/health-state.js";
-import { broadcastPresenceSnapshot } from "./server/presence-events.js";
+import { refreshGatewayHealthSnapshot } from "./server/health-state.js";
 import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 
 type GatewayRuntimePreparation = Awaited<ReturnType<typeof prepareGatewayKernelState>>;
@@ -142,7 +138,7 @@ export async function prepareGatewayLifecycle(params: {
     onPairingInvalidated: ({ nodeId, connId }) => {
       void nodeDesktopServiceRef.current?.stopNode(nodeId);
       upsertPresence(nodeId, { reason: "disconnect" });
-      broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
+      runtime.publishPresence();
       removeRemoteNodeInfoForConnection(nodeId, connId);
     },
     onPairingGenerationChanged: ({ nodeId }) => {
@@ -191,7 +187,7 @@ export async function prepareGatewayLifecycle(params: {
         instanceId: session.nodeId,
         reason: "connect",
       });
-      broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
+      runtime.publishPresence();
       recordRemoteNodeInfo({
         nodeId: session.nodeId,
         connId: session.connId,
@@ -205,7 +201,7 @@ export async function prepareGatewayLifecycle(params: {
     },
     onNodeDisconnected: (nodeId) => {
       upsertPresence(nodeId, { reason: "disconnect" });
-      broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
+      runtime.publishPresence();
       removeRemoteNodeInfo(nodeId);
       nodeUnsubscribeAll(nodeId);
       clearNodeWakeState(nodeId);
@@ -236,6 +232,7 @@ export async function prepareGatewayLifecycle(params: {
     gatewayMethods: listActiveGatewayMethods(pluginRuntime.baseGatewayMethods),
   });
   const runtimeState = runtimeStateRef.current;
+  runtimeState.gatewayLifetimeSidecars.publish({ stop: () => runtime.scheduler.stop() });
   const pluginRuntimeGeneration = createGatewayPluginRuntimeGeneration({
     getServices: () => runtimeState.pluginServices,
     setServices: (services) => {
@@ -332,12 +329,13 @@ export async function prepareGatewayLifecycle(params: {
     },
   };
   runtimeState.controlUiSessionPullRequests = createControlUiSessionPullRequestSubscriptions({
+    scheduler: runtime.scheduler,
     broadcastToConnIds,
     isConnectionActive,
-    prepareRead: (connId, session) => {
+    prepareRead: async (connId, session) => {
       const client = clients.getByConnectionId(connId);
       return client
-        ? prepareControlUiSessionPrRead({
+        ? await prepareControlUiSessionPrRead({
             client,
             ...session,
             getRuntimeConfig,
@@ -349,9 +347,7 @@ export async function prepareGatewayLifecycle(params: {
   });
   runtimeState.sessionViewerPresence = createSessionViewerPresenceDeclarations({
     clients,
-    broadcast,
-    incrementPresenceVersion,
-    getHealthVersion,
+    publishPresence: runtime.publishPresence,
   });
   deps.cron = runtimeState.cronState.cron;
   const pluginHostServices = {
@@ -392,11 +388,13 @@ export async function prepareGatewayLifecycle(params: {
   const healthWork = new AsyncWorkScope();
   const markClosePreludeStarted = (options?: GatewayCloseOptions) => {
     if (lifecycle.closePreludeStarted) {
-      return;
+      return params.pluginMetadata.beginClose();
     }
-    params.pluginMetadata.beginClose();
+    const prelude = params.pluginMetadata.beginClose();
     const notice = resolveGatewayShutdownNotice(options);
     lifecycle.closePreludeStarted = true;
+    markGatewaySuspendExiting();
+    runtime.scheduler.beginClose();
     void runtimeState.maintenance?.stopPeriodicTasks();
     // Publish the exact cancellation before withdrawing capabilities or running
     // disposal callbacks; startup can otherwise fail before restart marking.
@@ -415,18 +413,20 @@ export async function prepareGatewayLifecycle(params: {
     void runtimeState.stopGatewayUpdateCheck().catch(() => {});
     void runtimeState.controlUiSessionPullRequests?.stop();
     runtimeState.sessionViewerPresence?.stop();
+    runtime.stopPresencePublications();
     kernel.setDispatchReady(false);
     gatewayInstanceRuntimeRef.current?.close();
     cronReconciliation.invalidate();
     clearTimeout(postReadyState.maintenanceTimer ?? undefined);
     postReadyState.maintenanceTimer = null;
+    return prelude;
   };
   let configReloaderStopPromise: Promise<void> | null = null;
   const stopConfigReloaderForClose = () =>
     (configReloaderStopPromise ??= runtimeState.configReloader.stop());
   const beginClosePrelude = async (options?: GatewayCloseOptions) => {
     fenceSessionSuspensionWritesForGatewayShutdown();
-    markClosePreludeStarted(options);
+    await markClosePreludeStarted(options);
     // Owners are fenced synchronously above. Join them before any runtime they
     // can publish into is torn down.
     await Promise.all([

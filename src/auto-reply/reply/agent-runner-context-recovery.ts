@@ -1,21 +1,14 @@
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
+import type { ModelRef } from "../../agents/model-ref-shared.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
-
-function buildContextOverflowResetHint(): string {
-  return "\n\nTry starting a fresh session or using a model with a larger context window.";
-}
-
-type ModelRefLike = {
-  provider: string;
-  model: string;
-};
 
 function resolveAgentHeartbeatModelRaw(params: {
   cfg: FollowupRun["run"]["config"];
@@ -29,23 +22,14 @@ function resolveAgentHeartbeatModelRaw(params: {
   return agentModel ?? defaultModel;
 }
 
-function normalizeModelRefForCompare(ref: ModelRefLike | undefined) {
-  if (!ref) {
-    return undefined;
-  }
-  const provider = normalizeLowercaseStringOrEmpty(ref.provider);
-  const model = normalizeLowercaseStringOrEmpty(ref.model);
-  return provider && model ? { provider, model } : undefined;
-}
-
-function modelRefsEqual(left: ModelRefLike | undefined, right: ModelRefLike | undefined) {
-  const normalizedLeft = normalizeModelRefForCompare(left);
-  const normalizedRight = normalizeModelRefForCompare(right);
-  return (
-    normalizedLeft !== undefined &&
-    normalizedRight !== undefined &&
-    normalizedLeft.provider === normalizedRight.provider &&
-    normalizedLeft.model === normalizedRight.model
+function modelRefsEqual(left: ModelRef, right: ModelRef | undefined): boolean {
+  const provider = normalizeLowercaseStringOrEmpty(left.provider);
+  const model = normalizeLowercaseStringOrEmpty(left.model);
+  return Boolean(
+    provider &&
+    model &&
+    provider === normalizeLowercaseStringOrEmpty(right?.provider) &&
+    model === normalizeLowercaseStringOrEmpty(right?.model),
   );
 }
 
@@ -56,29 +40,22 @@ function formatContextWindowLabel(tokens: number): string {
   return `${Math.round(tokens / 1024)}k`;
 }
 
-function normalizePositiveContextTokens(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.floor(value);
-}
-
 function resolveContextWindowForHint(params: {
   cfg: FollowupRun["run"]["config"];
-  agentId?: string;
-  ref: ModelRefLike;
+  ref: ModelRef;
   activeSessionEntry?: SessionEntry;
 }) {
-  const sessionContextTokens = normalizePositiveContextTokens(
-    params.activeSessionEntry?.contextTokens,
-  );
+  const sessionContextTokens = asPositiveFiniteNumber(params.activeSessionEntry?.contextTokens);
   const modelContextTokens = resolveContextTokensForModel({
     cfg: params.cfg,
     provider: params.ref.provider,
     model: params.ref.model,
     allowAsyncLoad: false,
   });
-  return modelContextTokens ?? sessionContextTokens;
+  return (
+    modelContextTokens ??
+    (sessionContextTokens === undefined ? undefined : Math.floor(sessionContextTokens))
+  );
 }
 
 function resolveHeartbeatBleedHint(params: {
@@ -118,13 +95,11 @@ function resolveHeartbeatBleedHint(params: {
 
   const runtimeWindow = resolveContextWindowForHint({
     cfg: params.cfg,
-    agentId: params.agentId,
     ref: runtimeRef,
     activeSessionEntry: params.activeSessionEntry,
   });
   const primaryWindow = resolveContextWindowForHint({
     cfg: params.cfg,
-    agentId: params.agentId,
     ref: primaryRef,
   });
   if (
@@ -150,8 +125,6 @@ function resolveHeartbeatBleedHint(params: {
 
 /** Builds recovery instructions for context-overflow failures. */
 export function buildContextOverflowRecoveryText(params: {
-  duringCompaction?: boolean;
-  preserveSessionMapping?: boolean;
   cfg: FollowupRun["run"]["config"];
   agentId?: string;
   primaryProvider?: string;
@@ -160,11 +133,8 @@ export function buildContextOverflowRecoveryText(params: {
   runtimeModel?: string;
   activeSessionEntry?: SessionEntry;
 }): string {
-  const prefix = params.preserveSessionMapping
-    ? "⚠️ Auto-compaction could not recover this turn. I kept this conversation mapped to the current session. Please try again, use /compact, or use /new to start a fresh session."
-    : params.duringCompaction
-      ? "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again."
-      : "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.";
+  const prefix =
+    "⚠️ Auto-compaction could not recover this turn. I kept this conversation mapped to the current session. Please try again, use /compact, or use /new to start a fresh session.";
   const explicitRuntimeMatchesSession =
     !params.runtimeProvider ||
     !params.runtimeModel ||
@@ -179,5 +149,9 @@ export function buildContextOverflowRecoveryText(params: {
         activeSessionEntry: params.activeSessionEntry,
       })
     : undefined;
-  return prefix + (heartbeatBleedHint ?? buildContextOverflowResetHint());
+  return (
+    prefix +
+    (heartbeatBleedHint ??
+      "\n\nTry starting a fresh session or using a model with a larger context window.")
+  );
 }

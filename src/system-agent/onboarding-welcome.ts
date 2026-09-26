@@ -1,5 +1,6 @@
 // First-run onboarding welcome: state findings, propose setup, wait for "yes".
 import type { SystemAgentChatQuestion } from "../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef, normalizeSecretInputString } from "../config/types.secrets.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import type { SystemAgentChatEngine } from "./chat-engine.js";
@@ -64,21 +65,19 @@ async function loadAuthoredSetupConfig(params: {
   configExists: boolean;
   configValid: boolean;
 }): Promise<{
-  authoredConfig?: import("../config/types.openclaw.js").OpenClawConfig;
+  authoredConfig?: OpenClawConfig;
   hasAuthoredSetup: boolean;
 }> {
-  const authoredConfig = await (async () => {
-    if (!params.configExists || !params.configValid) {
-      return undefined;
-    }
+  let authoredConfig: OpenClawConfig | undefined;
+  if (params.configExists && params.configValid) {
     try {
       const { readConfigFileSnapshot } = await import("../config/config.js");
       const snapshot = await readConfigFileSnapshot();
-      return snapshot.sourceConfig ?? snapshot.config ?? {};
+      authoredConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
     } catch {
-      return undefined;
+      // An unreadable config must keep onboarding available.
     }
-  })();
+  }
   const auth = authoredConfig?.gateway?.auth;
   const hasAuthMode = normalizeSecretInputString(auth?.mode) !== undefined;
   const hasAuthSecret =

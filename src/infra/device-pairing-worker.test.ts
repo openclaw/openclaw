@@ -11,11 +11,13 @@ import {
   readDevicePairingStoreStateFromDatabase,
   type DevicePairingStoreState,
 } from "./device-pairing-store.js";
+import { ensureDeviceToken, verifyDeviceToken } from "./device-pairing-tokens.js";
 import {
   getPairedDevice,
   getPendingDevicePairing,
   listDevicePairing,
   listDevicePairingReadOnly,
+  updatePairedDeviceMetadata,
 } from "./device-pairing.js";
 import * as queries from "./kysely-sync.js";
 
@@ -226,6 +228,129 @@ test("refreshes cached reads after another connection replaces pairing authority
   expect(JSON.stringify(await getPairedDevice("paired-rich", baseDir))).toBe(
     JSON.stringify(native),
   );
+});
+
+test("reconnects without replacing paired rows or changing unrelated device fields", async () => {
+  // Admit the writer before installing fixture-only mutation guards.
+  await ensureDeviceToken({
+    deviceId: "paired-rich",
+    role: "operator",
+    scopes: ["operator.read"],
+    baseDir,
+  });
+  database.db.exec(`
+    CREATE TRIGGER pairing_reconnect_no_delete BEFORE DELETE ON device_pairing_paired
+      BEGIN SELECT RAISE(ABORT, 'reconnect deleted a paired row'); END;
+    CREATE TRIGGER pairing_reconnect_no_insert BEFORE INSERT ON device_pairing_paired
+      BEGIN SELECT RAISE(ABORT, 'reconnect inserted a paired row'); END;
+    CREATE TRIGGER pairing_reconnect_exact_update BEFORE UPDATE ON device_pairing_paired
+      WHEN OLD.device_id <> 'paired-rich'
+      BEGIN SELECT RAISE(ABORT, 'reconnect updated another device'); END;
+  `);
+  const before = readDevicePairingStoreStateFromDatabase(database.db);
+  try {
+    await expect(
+      verifyDeviceToken({
+        deviceId: " paired-rich ",
+        token: "synthetic-operator-token",
+        role: "operator",
+        scopes: ["operator.read"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+    const verified = await getPairedDevice("paired-rich", baseDir);
+    expect(verified?.tokens?.operator?.lastUsedAtMs).toBeGreaterThan(3);
+    expect(verified?.lastSeenAtMs).toBe(verified?.tokens?.operator?.lastUsedAtMs);
+    expect(verified?.lastSeenReason).toBe("device-token-auth");
+    await expect(
+      updatePairedDeviceMetadata(
+        "paired-rich",
+        {
+          displayName: undefined,
+          remoteIp: "192.0.2.2",
+          lastSeenAtMs: 1234,
+          lastSeenReason: "connect",
+        },
+        baseDir,
+      ),
+    ).resolves.toBe(true);
+    await expect(
+      ensureDeviceToken({
+        deviceId: "paired-rich",
+        role: "operator",
+        scopes: ["operator.read"],
+        baseDir,
+      }),
+    ).resolves.toEqual(verified?.tokens?.operator);
+    const after = readDevicePairingStoreStateFromDatabase(database.db);
+    expect(after).toEqual({
+      ...before,
+      pairedByDeviceId: {
+        ...before.pairedByDeviceId,
+        "paired-rich": {
+          ...before.pairedByDeviceId["paired-rich"],
+          displayName: undefined,
+          remoteIp: "192.0.2.2",
+          tokens: verified?.tokens,
+          lastSeenAtMs: 1234,
+          lastSeenReason: "connect",
+        },
+      },
+    });
+  } finally {
+    database.db.exec(`
+      DROP TRIGGER pairing_reconnect_no_delete;
+      DROP TRIGGER pairing_reconnect_no_insert;
+      DROP TRIGGER pairing_reconnect_exact_update;
+    `);
+  }
+});
+
+test("reconnect receipts ignore pending rows while invalidating foreign pairing changes", async () => {
+  await listDevicePairing(baseDir);
+  const previousBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
+  expect(previousBinding).not.toBeNull();
+  const other = new DatabaseSync(database.path);
+  try {
+    other
+      .prepare("UPDATE device_pairing_paired SET public_key = ? WHERE device_id = ?")
+      .run("synthetic-foreign-key", "paired-rich");
+    // A receipt must not decode unrelated pending requests.
+    other
+      .prepare("UPDATE device_pairing_pending SET roles_json = ? WHERE request_id = ?")
+      .run("synthetic-unreadable-json", "refreshed");
+  } finally {
+    other.close();
+  }
+  try {
+    await expect(
+      updatePairedDeviceMetadata("paired-minimal", { displayName: "Reconnected" }, baseDir),
+    ).resolves.toBe(true);
+    expect(() => getPublishedPairedDeviceBinding("paired-rich", baseDir)).toThrow(
+      "requires a current worker publication",
+    );
+    const tokenParams = {
+      deviceId: "paired-rich",
+      role: "operator",
+      scopes: ["operator.read"],
+      baseDir,
+    };
+    await expect(
+      verifyDeviceToken({ ...tokenParams, token: "synthetic-operator-token" }),
+    ).resolves.toEqual({ ok: true });
+    const currentBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
+    expect(currentBinding).not.toBeNull();
+    expect(currentBinding?.identity).not.toBe(previousBinding?.identity);
+    await expect(ensureDeviceToken(tokenParams)).resolves.toMatchObject({
+      token: "synthetic-operator-token",
+    });
+    expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)).toEqual(currentBinding);
+  } finally {
+    database.db
+      .prepare("UPDATE device_pairing_pending SET roles_json = ? WHERE request_id = ?")
+      .run("[]", "refreshed");
+  }
+  expect((await getPendingDevicePairing("refreshed", baseDir))?.roles).toEqual([]);
 });
 
 test.each(["reply lost", "policy revoked", "callback throws"] as const)(

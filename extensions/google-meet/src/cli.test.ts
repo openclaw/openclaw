@@ -19,6 +19,76 @@ describe("google-meet CLI", () => {
     vi.resetModules();
   });
 
+  it.each([
+    { route: "gateway", json: false },
+    { route: "gateway", json: true },
+    { route: "local", json: false },
+    { route: "local", json: true },
+  ])("prints $route doctor output (json=$json)", async ({ route, json }) => {
+    const result = { found: false };
+    const status = vi.fn<GoogleMeetRuntime["status"]>().mockResolvedValue(result);
+    const ensureRuntime = vi
+      .fn<() => Promise<GoogleMeetRuntime>>()
+      .mockRejectedValue(new Error("gateway success must not load the local runtime"));
+    const callGatewayFromCli = vi.fn(async () => {
+      if (route === "local") {
+        throw Object.assign(new Error("gateway closed"), {
+          name: "GatewayTransportError",
+          kind: "closed",
+          connectionDetails: { url: "ws://127.0.0.1:18789" },
+        });
+      }
+      return result;
+    });
+    const stdout = captureStdout();
+    try {
+      await setupCli({
+        runtime: { status },
+        ensureRuntime: route === "gateway" ? ensureRuntime : undefined,
+        callGatewayFromCli,
+      }).parseAsync(["googlemeet", "doctor", "meet_missing", ...(json ? ["--json"] : [])], {
+        from: "user",
+      });
+      if (json) {
+        expect(parseStdoutJson(stdout)).toEqual({ found: false });
+      } else {
+        expect(stdout.output()).toBe("Google Meet session: not found\n");
+      }
+      expect(callGatewayFromCli.mock.calls).toEqual([
+        [
+          "googlemeet.status",
+          { json: true, timeout: "5000" },
+          { sessionId: "meet_missing" },
+          { progress: false },
+        ],
+      ]);
+      expect(ensureRuntime).not.toHaveBeenCalled();
+      expect(status.mock.calls).toEqual(route === "local" ? [["meet_missing"]] : []);
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it.each(["gateway", "runtime", "status"] as const)(
+    "preserves the original %s doctor error without output",
+    async (source) => {
+      const error = new Error(`${source} failed`);
+      const stdout = captureStdout();
+      try {
+        await expect(
+          setupCli({
+            runtime: { status: vi.fn().mockRejectedValue(error) },
+            ensureRuntime: source === "runtime" ? vi.fn().mockRejectedValue(error) : undefined,
+            callGatewayFromCli: source === "gateway" ? vi.fn().mockRejectedValue(error) : undefined,
+          }).parseAsync(["googlemeet", "doctor", "meet_missing"], { from: "user" }),
+        ).rejects.toBe(error);
+        expect(stdout.output()).toBe("");
+      } finally {
+        stdout.restore();
+      }
+    },
+  );
+
   it("prints human-readable session doctor output", async () => {
     const stdout = captureStdout();
     try {
@@ -166,26 +236,24 @@ describe("google-meet CLI", () => {
   });
 
   it("can prove Google Meet API create access", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = requestUrl(input).href;
-        if (url === "https://oauth2.googleapis.com/token") {
-          return jsonResponse({
-            access_token: "new-access-token",
-            expires_in: 3600,
-            token_type: "Bearer",
-          });
-        }
-        if (url === "https://meet.googleapis.com/v2/spaces") {
-          return jsonResponse({
-            name: "spaces/new-space",
-            meetingUri: "https://meet.google.com/new-abcd-xyz",
-          });
-        }
-        return new Response("not found", { status: 404 });
-      }),
-    );
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = requestUrl(input).href;
+      if (url === "https://oauth2.googleapis.com/token") {
+        return jsonResponse({
+          access_token: "new-access-token",
+          expires_in: 3600,
+          token_type: "Bearer",
+        });
+      }
+      if (url === "https://meet.googleapis.com/v2/spaces") {
+        return jsonResponse({
+          name: "spaces/new-space",
+          meetingUri: "https://meet.google.com/new-abcd-xyz",
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
     const stdout = captureStdout();
 
     try {
@@ -210,6 +278,15 @@ describe("google-meet CLI", () => {
       expectFields(checks[0], { id: "oauth-config", ok: true });
       expectFields(checks[1], { id: "oauth-token", ok: true });
       expectFields(checks[2], { id: "meet-spaces-create", ok: true });
+      expect(fetchMock).toHaveBeenCalledWith("https://meet.googleapis.com/v2/spaces", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer new-access-token",
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: "{}",
+      });
     } finally {
       stdout.restore();
     }

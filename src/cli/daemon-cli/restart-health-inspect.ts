@@ -45,12 +45,16 @@ export async function inspectGatewayRestart(params: {
       ? params.deadline.read(`${params.phase ?? "inspection"}:${phase}`, operation)
       : operation();
   const startedAtMs = performance.now();
-  const remainingTimeoutMs = () =>
-    params.deadline
-      ? Math.max(1, params.deadline.remainingMs())
-      : params.timeoutMs === undefined
+  const remainingTimeoutMs = () => {
+    const remaining =
+      params.timeoutMs === undefined
         ? undefined
         : Math.max(1, params.timeoutMs - (performance.now() - startedAtMs));
+    // The overall readiness deadline must not replace a shorter inspection budget.
+    return params.deadline
+      ? Math.min(Math.max(1, params.deadline.remainingMs()), remaining ?? Infinity)
+      : remaining;
+  };
   const env = params.env ?? process.env;
   const probeHosts =
     params.probeHosts ??
@@ -74,6 +78,7 @@ export async function inspectGatewayRestart(params: {
   );
   let reachability: GatewayReachability | null = null;
   let probeError: string | undefined;
+  let staleConnection: GatewayReachability["staleConnection"];
   let gatewayBootId: string | undefined;
   let gatewayVersion: string | null | undefined;
   let gatewayBuildId: string | null | undefined;
@@ -93,6 +98,7 @@ export async function inspectGatewayRestart(params: {
         }),
       );
       probeError = reachability.probeError;
+      staleConnection = reachability.staleConnection;
       gatewayBootId = reachability.gatewayBootId;
       gatewayVersion = reachability.gatewayVersion;
       gatewayBuildId = reachability.gatewayBuildId;
@@ -255,6 +261,7 @@ export async function inspectGatewayRestart(params: {
       ...(gatewayBuildId !== undefined ? { gatewayBuildId } : {}),
       ...(startupPhase ? { startupPhase } : {}),
       ...(probeError ? { probeError } : {}),
+      ...(staleConnection ? { staleConnection } : {}),
       ...(activatedPluginErrors.length ? { activatedPluginErrors } : {}),
       ...(unavailablePlugins.length ? { unavailablePlugins } : {}),
       ...(channelProbeErrors.length ? { channelProbeErrors } : {}),

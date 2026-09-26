@@ -1,6 +1,11 @@
 /* oxlint-disable unicorn/no-array-fill-with-reference-type -- CanvasRenderingContext2D.fill is not Array.fill. */
 // Canvas-only rendering for the canonical 120x120 Clawd vector.
-import type { MascotPalette, MascotPose } from "./mascot-pose.ts";
+import {
+  clampMascotValue as clamp,
+  mascotBell as bell,
+  type MascotPalette,
+  type MascotPose,
+} from "./mascot-pose.ts";
 
 const ART_SIZE = 120;
 const TAU = Math.PI * 2;
@@ -104,16 +109,6 @@ function radians(degrees: number): number {
   return (degrees * Math.PI) / 180;
 }
 
-function easeInOut(value: number): number {
-  const t = clamp(value, 0, 1);
-  return t * t * (3 - 2 * t);
-}
-
-function bell(value: number): number {
-  const t = clamp(value, 0, 1);
-  return easeInOut(t < 0.5 ? t * 2 : (1 - t) * 2);
-}
-
 function rotated(
   ctx: CanvasRenderingContext2D,
   degrees: number,
@@ -185,20 +180,7 @@ function drawEye(ctx: CanvasRenderingContext2D, center: Point, openness: number,
     ctx.restore();
   }
 
-  if (pose.dizzy > 0) {
-    const angle = pose.dizzyPhase * TAU + (center.x > 60 ? Math.PI : 0);
-    const dot = {
-      x: shifted.x + Math.cos(angle) * 3.4,
-      y: shifted.y + Math.sin(angle) * 2.6,
-    };
-    ctx.save();
-    ctx.globalAlpha *= pose.dizzy;
-    ctx.fillStyle = EYE_GLOW;
-    ctx.fill(ellipsePath(dot, 1.8, 1.8));
-    ctx.restore();
-  }
-
-  const glowVisibility = pose.eyeGlowOpacity * openness * (1 - pose.happyEyes) * (1 - pose.dizzy);
+  const glowVisibility = pose.eyeGlowOpacity * openness * (1 - pose.happyEyes);
   if (glowVisibility <= 0.01) {
     return;
   }
@@ -411,10 +393,6 @@ function drawEffect(ctx: CanvasRenderingContext2D, pose: MascotPose, palette: Ma
       ctx.restore();
     }
   }
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
 }
 
 /** Draw one pose. Whole-body float is applied by the host to avoid canvas clipping. */

@@ -1,5 +1,9 @@
 import type { CopilotClient } from "@github/copilot-sdk";
 import type { AgentHarnessAttemptResult as AgentHarnessAttemptResultContract } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  AgentHarnessTaskRecord,
+  AgentHarnessTaskRuntime,
+} from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { vi } from "vitest";
 import type { CopilotClientPool } from "./runtime.js";
 
@@ -16,6 +20,34 @@ export function projectAgentRunAttemptTerminal(terminal: AgentHarnessAttemptResu
           : (terminal.failure?.error ?? null),
     timedOut: terminal.kind === "timeout" && terminal.source !== "observation",
     timedOutDuringCompaction: terminal.kind === "timeout" && terminal.phase === "compaction",
+  };
+}
+
+export function makeFailingNativeTaskRuntime(failure: Error): AgentHarnessTaskRuntime {
+  const task: AgentHarnessTaskRecord = {
+    taskId: "native-task",
+    runId: "copilot-agent:call-1",
+    runtime: "subagent",
+    taskKind: "copilot-native",
+    requesterSessionKey: "agent:main:main",
+    ownerKey: "agent:main:main",
+    scopeKind: "session",
+    task: "inspect",
+    status: "running",
+    notifyPolicy: "silent",
+    deliveryStatus: "not_applicable",
+    createdAt: 0,
+  };
+  return {
+    assertTaskAssignmentSupported: () => undefined,
+    createRunningTaskRun: () => task,
+    tryCreateRunningTaskRun: () => task,
+    recordTaskRunProgressByRunId: () => [],
+    finalizeTaskRunByRunId: () => {
+      throw failure;
+    },
+    setDetachedTaskDeliveryStatusByRunId: () => [],
+    listTaskRecords: () => [task],
   };
 }
 

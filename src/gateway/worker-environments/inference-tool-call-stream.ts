@@ -9,10 +9,6 @@ const RETAINED_TOOL_ARGUMENT_CHUNK_BYTES = 16 * 1024;
 
 type ToolCallEmissionResult = "ok" | "invalid" | "cancelled";
 
-function contentAt(message: AssistantMessage, index: number) {
-  return message.content[index];
-}
-
 export function createWorkerToolCallStream(params: {
   emit: (event: WorkerInferenceEventParams["event"]) => void;
   isCurrent: () => boolean;
@@ -23,8 +19,7 @@ export function createWorkerToolCallStream(params: {
   const started = new Set<number>();
   const ended = new Set<number>();
   const identities = new Map<number, { id: string; name: string }>();
-  const emittedArgumentChunks = new Map<number, string[]>();
-  const emittedArgumentChunkBytes = new Map<number, number[]>();
+  const emittedArgumentChunks = new Map<number, Array<{ text: string; bytes: number }>>();
   let retainedArgumentBytes = 0;
   let streamedDeltaCount = 0;
 
@@ -45,23 +40,14 @@ export function createWorkerToolCallStream(params: {
     }
     params.emit({ type: "toolcall_delta", contentIndex, delta });
     const emitted = emittedArgumentChunks.get(contentIndex) ?? [];
-    const emittedBytes = emittedArgumentChunkBytes.get(contentIndex) ?? [];
-    const lastIndex = emitted.length - 1;
-    const last = emitted[lastIndex];
-    const lastBytes = emittedBytes[lastIndex];
-    if (
-      last !== undefined &&
-      lastBytes !== undefined &&
-      lastBytes + deltaBytes <= RETAINED_TOOL_ARGUMENT_CHUNK_BYTES
-    ) {
-      emitted[lastIndex] = last + delta;
-      emittedBytes[lastIndex] = lastBytes + deltaBytes;
+    const last = emitted.at(-1);
+    if (last && last.bytes + deltaBytes <= RETAINED_TOOL_ARGUMENT_CHUNK_BYTES) {
+      last.text += delta;
+      last.bytes += deltaBytes;
     } else {
-      emitted.push(delta);
-      emittedBytes.push(deltaBytes);
+      emitted.push({ text: delta, bytes: deltaBytes });
     }
     emittedArgumentChunks.set(contentIndex, emitted);
-    emittedArgumentChunkBytes.set(contentIndex, emittedBytes);
     retainedArgumentBytes += deltaBytes;
     return params.isCurrent() ? "ok" : "cancelled";
   };
@@ -70,7 +56,7 @@ export function createWorkerToolCallStream(params: {
     if (started.has(contentIndex)) {
       return params.isCurrent() ? "ok" : "cancelled";
     }
-    const content = contentAt(partial, contentIndex);
+    const content = partial.content[contentIndex];
     if (content?.type !== "toolCall" || !content.id || !content.name) {
       return "invalid";
     }
@@ -126,7 +112,9 @@ export function createWorkerToolCallStream(params: {
     if (!identity || identity.id !== complete.id || identity.name !== complete.name) {
       return "invalid";
     }
-    const emittedJson = (emittedArgumentChunks.get(contentIndex) ?? []).join("");
+    const emittedJson = (emittedArgumentChunks.get(contentIndex) ?? [])
+      .map((chunk) => chunk.text)
+      .join("");
     if (!emittedJson) {
       try {
         const completeJson = JSON.stringify(complete.arguments);

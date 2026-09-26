@@ -1,21 +1,8 @@
 // Mattermost tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { MattermostConfigSchema } from "./config-schema-core.js";
-import { mattermostChannelConfigUiHints } from "./config-ui-hints.js";
 
 describe("MattermostConfigSchema", () => {
-  it("describes separate final delivery at root and account scope", () => {
-    for (const key of [
-      "streaming.progress.finalDelivery",
-      "accounts.*.streaming.progress.finalDelivery",
-    ] as const) {
-      expect(mattermostChannelConfigUiHints[key]).toMatchObject({
-        label: "Mattermost Progress Final Delivery",
-        help: expect.stringContaining("delete the progress post only after delivery succeeds"),
-      });
-    }
-  });
-
   it("accepts SecretRef botToken at top-level", () => {
     const result = MattermostConfigSchema.safeParse({
       botToken: { source: "env", provider: "default", id: "MATTERMOST_BOT_TOKEN" },
@@ -78,7 +65,6 @@ describe("MattermostConfigSchema", () => {
           maxLines: 4,
           toolProgress: false,
           commandText: "status",
-          finalDelivery: "separate",
         },
         preview: { commandText: "raw" },
       },
@@ -89,16 +75,6 @@ describe("MattermostConfigSchema", () => {
       },
     });
     expect(result.success).toBe(true);
-  });
-
-  it("rejects unsupported progress final delivery modes", () => {
-    const result = MattermostConfigSchema.safeParse({
-      streaming: {
-        mode: "progress",
-        progress: { finalDelivery: "replace" },
-      },
-    });
-    expect(result.success).toBe(false);
   });
 
   it("rejects retired scalar streaming and flat delivery keys", () => {

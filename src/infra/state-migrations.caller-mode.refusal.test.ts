@@ -21,6 +21,7 @@ import {
   snapshotFiles,
   writeLegacyStateSchemaV1,
 } from "./state-migrations.caller-mode.test-helpers.js";
+import * as deviceIdentityMigrations from "./state-migrations.device-identity.js";
 import {
   autoMigrateLegacyState,
   planLegacyStateMigrationsReadOnly,
@@ -897,23 +898,17 @@ module.exports = { stateMigrations: [{
       snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
-    const params = Object.defineProperty(
-      {
-        cfg: {},
-        doctorOnlyStateMigrations: true,
-        env: fixture.env,
-        homedir: () => fixture.homeDir,
-        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-      } as Parameters<typeof autoMigrateLegacyState>[0],
-      "allowLegacyDeviceIdentityImport",
-      {
-        get() {
-          throw new Error("synthetic execution detection failure");
-        },
-      },
-    );
+    vi.spyOn(deviceIdentityMigrations, "detectLegacyDeviceIdentity").mockImplementationOnce(() => {
+      throw new Error("synthetic execution detection failure");
+    });
 
-    const result = await autoMigrateLegacyState(params);
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      doctorOnlyStateMigrations: true,
+      env: fixture.env,
+      homedir: () => fixture.homeDir,
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    });
 
     expectBlockedTailInPlanOrder({
       plan,

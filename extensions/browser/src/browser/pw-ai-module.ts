@@ -4,7 +4,7 @@
  * Lazily imports the Playwright-backed browser helpers while allowing routes to
  * soft-fail when the dependency is unavailable in a gateway build.
  */
-import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
+import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 
 /** Type of the Playwright-backed browser helper module. */
 export type PwAiModule = (typeof import("./pw-ai.js"))["pwAi"];

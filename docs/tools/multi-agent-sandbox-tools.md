@@ -310,7 +310,12 @@ Per-agent elevated overrides (`agents.entries.*.tools.elevated`) can further res
 </Tabs>
 
 <Note>
-Legacy `agents.list` rosters and retired per-agent keys (such as `sandbox.perSession`, `agentRuntime`, and `embeddedPi`) are migrated by `openclaw doctor`; prefer `agents.defaults` + `agents.entries` going forward.
+Doctor migrates legacy `agents.list` rosters to `agents.entries`. Migrations for
+pre-June keys such as `sandbox.perSession`, `embeddedPi`, and `embeddedHarness`
+are retired; use `sandbox.scope`, `embeddedAgent`, and provider/model runtime
+policy. For an older installation,
+[upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions) before
+installing the latest version.
 </Note>
 
 ---

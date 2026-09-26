@@ -95,7 +95,7 @@ export function addRetainedWindowSessionReferences(
 }
 
 export function collectRecentSessionHistoryIds(params: {
-  database: OpenClawAgentDatabase;
+  database: Pick<OpenClawAgentDatabase, "db">;
   preserveRecentMs?: number | null;
 }): Set<string> {
   if (params.preserveRecentMs == null) {

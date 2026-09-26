@@ -32,6 +32,12 @@ paths:
       # actionlint's built-in runner label allowlist lags Blacksmith additions.
       - 'label "blacksmith-16vcpu-[^"]+" is unknown\.'
   # GitHub Actions supports concurrency.queue, but actionlint does not yet model it.
+  .github/workflows/ios-release.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/android-store-release.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
   .github/workflows/qa-live-transports-convex.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'

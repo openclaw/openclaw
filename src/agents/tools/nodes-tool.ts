@@ -60,10 +60,6 @@ const CAMERA_PTZ_OPERATIONS = ["status", "set", "move", "home"] as const;
 const LOCATION_ACCURACY = ["coarse", "balanced", "precise"] as const;
 type GatewayCallOptions = ReturnType<typeof readGatewayCallOptions>;
 
-function resolveApproveScopes(commands: unknown): OperatorScope[] {
-  return resolveNodePairApprovalScopes(commands) as OperatorScope[];
-}
-
 async function resolveNodePairApproveScopes(
   gatewayOpts: GatewayCallOptions,
   requestId: string,
@@ -86,7 +82,7 @@ async function resolveNodePairApproveScopes(
       return scopes;
     }
   }
-  return resolveApproveScopes(match?.commands);
+  return resolveNodePairApprovalScopes(match?.commands);
 }
 
 // Flattened schema: runtime validates per-action requirements.

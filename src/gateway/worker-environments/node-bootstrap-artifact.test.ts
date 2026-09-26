@@ -339,6 +339,32 @@ describe("node bootstrap distribution", () => {
     await expect(provider.prepare()).resolves.toMatchObject({ buildId });
   });
 
+  it("refuses a shortened non-JavaScript package member", async () => {
+    const { packageRoot, provider } = await fixture();
+    const entryPath = path.join(packageRoot, longEntryPath);
+    const openFile = fs.open.bind(fs);
+    let truncated = false;
+    const reader = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await openFile(...args);
+      if (args[0] === entryPath) {
+        const stat = handle.stat.bind(handle);
+        vi.spyOn(handle, "stat").mockImplementationOnce(async () => {
+          const before = await stat();
+          await fs.truncate(entryPath, 1);
+          truncated = true;
+          return before;
+        });
+      }
+      return handle;
+    });
+    try {
+      await expect(provider.prepare()).rejects.toThrow("Node distribution changed while packaging");
+      expect(truncated).toBe(true);
+    } finally {
+      reader.mockRestore();
+    }
+  });
+
   it.each(["root resolution", "staging creation"])(
     "retries preparation after temporary %s becomes available",
     async (stage) => {
@@ -503,15 +529,16 @@ describe("node bootstrap distribution", () => {
     // oxlint-disable-next-line typescript/unbound-method -- Fault injection reapplies the original ReadEntry receiver below.
     const writeEntry = tar.ReadEntry.prototype.write;
     let substituted = false;
-    const writer = vi
-      .spyOn(tar.ReadEntry.prototype, "write")
-      .mockImplementation(function (this: tar.ReadEntry, chunk) {
-        if (this.path === "package/dist/shared.js") {
-          substituted = true;
-          return writeEntry.call(this, Buffer.alloc(chunk.length, 0x20));
-        }
-        return writeEntry.call(this, chunk);
-      });
+    const writer = vi.spyOn(tar.ReadEntry.prototype, "write").mockImplementation(function (
+      this: tar.ReadEntry,
+      chunk,
+    ) {
+      if (this.path === "package/dist/shared.js") {
+        substituted = true;
+        return writeEntry.call(this, Buffer.alloc(chunk.length, 0x20));
+      }
+      return writeEntry.call(this, chunk);
+    });
     try {
       await expect(provider.prepare()).rejects.toThrow(
         "Node bootstrap archive does not match the verified distribution",

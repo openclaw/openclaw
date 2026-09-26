@@ -1,6 +1,7 @@
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 // Whatsapp plugin module implements identity behavior.
-import { jidToE164, normalizeE164 } from "./text-runtime.js";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+import { jidToE164 } from "./targets-runtime.js";
 
 const WHATSAPP_LID_RE = /@(lid|hosted\.lid)$/i;
 
@@ -12,11 +13,7 @@ export type WhatsAppIdentity = {
   label?: string | null;
 };
 
-export type WhatsAppSelfIdentity = {
-  jid?: string | null;
-  lid?: string | null;
-  e164?: string | null;
-};
+export type WhatsAppSelfIdentity = Pick<WhatsAppIdentity, "jid" | "lid" | "e164">;
 
 export type WhatsAppReplyContext = {
   id?: string;
@@ -162,15 +159,13 @@ export function getReplyContext(
   };
 }
 
-function getMentionJids(msg: LegacyMentionsLike): string[] {
-  return msg.group?.mentions?.jids ?? [];
-}
-
 export function getMentionIdentities(
   msg: LegacyMentionsLike,
   authDir?: string,
 ): WhatsAppIdentity[] {
-  return getMentionJids(msg).map((jid) => resolveComparableIdentity({ jid }, authDir));
+  return (msg.group?.mentions?.jids ?? []).map((jid) =>
+    resolveComparableIdentity({ jid }, authDir),
+  );
 }
 
 export function getPrimaryIdentityId(identity: WhatsAppIdentity | null | undefined): string | null {

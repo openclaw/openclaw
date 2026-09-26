@@ -126,7 +126,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
     );
   });
 
-  it.each(["automations", "cron", undefined] as const)(
+  it.each(["automations", undefined] as const)(
     "keeps shell-quoting guidance without process and with scheduler %s",
     (schedulerToolName) => {
       const exec = findToolDescription("exec", schedulerToolName, false);
@@ -142,24 +142,9 @@ describe("createOpenClawCodingTools availability guidance", () => {
   it.each([
     { name: "process", description: "plugin process", available: [] },
     {
-      name: "sessions_send",
-      description: describeSessionsSendTool(),
-      available: ["conversations_list", "conversations_send"],
-    },
-    {
       name: "sessions_search",
       description: describeSessionsSearchTool(),
       available: ["sessions_history"],
-    },
-    {
-      name: "sessions_spawn",
-      description: describeSessionsSpawnTool(),
-      available: ["agents_list"],
-    },
-    {
-      name: "conversations_send",
-      description: createConversationsSendTool().description,
-      available: ["conversations_list"],
     },
   ])(
     "preserves ownership metadata when replacing $name descriptions",
@@ -338,6 +323,19 @@ describe("createOpenClawCodingTools availability guidance", () => {
     expect(tool?.description).toContain("persistent/thread-bound");
     expect(tool?.description).toContain("(self: current session only)");
     expect(tool?.description).not.toContain('runtime="acp"');
+    // Transcript access alone does not expose execution/delivery diagnostics.
+    expect(tool?.description).not.toContain("When diagnosing a missing result");
+  });
+
+  it("gates missing-result diagnostics on subagents, not sessions_history alone", () => {
+    const [tool] = applyToolAvailabilityDescriptions([
+      { name: "sessions_spawn", description: describeSessionsSpawnTool() },
+      { name: "subagents", description: "status" },
+    ] as AnyAgentTool[]);
+
+    expect(tool?.description).toContain(
+      "After spawn, do non-overlap work; follow the receipt's completion mode. When diagnosing a missing result from an announcing child, use `subagents` to inspect execution and delivery status. Recover existing results or follow up within the still-authorized task; respect intentional cancellation and never loop-poll.",
+    );
   });
 
   it("preserves original inline spawn guidance when every follow-up remains available", () => {
@@ -350,11 +348,18 @@ describe("createOpenClawCodingTools availability guidance", () => {
       })),
     ] as AnyAgentTool[]);
 
+    expect(tool?.description).toContain(
+      "Default to a hidden subagent for internal QA, research, coding, review, tests, and parallel work supporting the current task. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. Omit `visible` or set it false, and report results through the parent.",
+    );
+    expect(tool?.description).not.toContain("trial-and-error");
     expect(tool?.description).toContain("configured agent (see agents_list);");
     expect(tool?.description).toContain("`groupId` groups a batch; await with agents_wait.");
     expect(tool?.description).toContain("(all: all sessions, cross-agent per tools.agentToAgent)");
     expect(tool?.description).toContain(
       "No spawn for quick lookup/single read. Check spawns via `subagents`/`sessions_history`. After spawn,",
+    );
+    expect(tool?.description).toContain(
+      "When diagnosing a missing result from an announcing child, use `subagents` to inspect execution and delivery status. Recover existing results or follow up within the still-authorized task; respect intentional cancellation and never loop-poll.",
     );
   });
 });

@@ -30,6 +30,7 @@ import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
+import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.ui.GatewayConnectPlan
@@ -44,6 +45,7 @@ import ai.openclaw.app.ui.chat.shouldMigrateComposerDraft
 import ai.openclaw.app.ui.chat.toOutgoingAttachment
 import ai.openclaw.app.voice.AndroidAudioInputSession
 import ai.openclaw.app.voice.AudioInputDeviceOption
+import ai.openclaw.app.voice.TalkFailureNotice
 import ai.openclaw.app.voice.VoiceWakePreferences
 import android.Manifest
 import android.app.Application
@@ -58,10 +60,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
@@ -525,6 +529,8 @@ class MainViewModel private constructor(
   val isNodeConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.nodeConnected }
   val nodeCapabilityApproval: StateFlow<GatewayNodeCapabilityApproval> =
     runtimeState(initial = GatewayNodeCapabilityApproval.Loading) { it.nodeCapabilityApproval }
+  val nodeApprovalAction: StateFlow<GatewayNodeApprovalActionState> =
+    runtimeState(initial = GatewayNodeApprovalActionState()) { it.nodeApprovalAction }
   val statusText: StateFlow<String> = runtimeState(initial = "Offline") { it.statusText }
   val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = runtimeState(initial = null) { it.gatewayConnectionProblem }
   val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> =
@@ -611,8 +617,17 @@ class MainViewModel private constructor(
   internal val gatewayConnectionHandoff: StateFlow<GatewayConnectionHandoff> =
     runtimeState(initial = GatewayConnectionHandoff()) { it.gatewayConnectionHandoff }
   val pairedGateways: StateFlow<List<GatewayRegistryEntry>> = prefs.gatewayRegistry.entries
+  private val pendingTalkSetupMessageMutable = MutableStateFlow<NativeText?>(null)
+  val pendingTalkSetupMessage: StateFlow<NativeText?> = pendingTalkSetupMessageMutable
   val activeGatewayStableId: StateFlow<String?> = prefs.gatewayRegistry.activeStableId
   val connectedGatewayStableIds: StateFlow<List<String>> = prefs.gatewayRegistry.connectedStableIds
+
+  init {
+    viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+      activeGatewayStableId.drop(1).collect { pendingTalkSetupMessageMutable.value = null }
+    }
+  }
+
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
   val accessibilityControlEnabled: StateFlow<Boolean> = prefs.accessibilityControlEnabled
@@ -643,7 +658,7 @@ class MainViewModel private constructor(
   val talkModeSpeaking: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeSpeaking }
   val talkAwaitingAgent: StateFlow<Boolean> = runtimeState(initial = false) { it.talkAwaitingAgent }
   val talkModeStatusText: StateFlow<String> = runtimeState(initial = "Off") { it.talkModeStatusText }
-  val talkFailureText: StateFlow<String?> = runtimeState(initial = null) { it.talkFailureText }
+  internal val talkFailureNotice: StateFlow<TalkFailureNotice?> = runtimeState(initial = null) { it.talkFailureNotice }
 
   val chatSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.chatSessionKey }
   internal val chatPermissionSettingsAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.chatPermissionSettingsAvailable }
@@ -669,6 +684,7 @@ class MainViewModel private constructor(
   val chatThinkingLevelSelection: StateFlow<ChatThinkingLevelSelection> =
     runtimeState(initial = defaultChatThinkingLevelSelection) { it.chatThinkingLevelSelection }
   val chatSelectedModelRef: StateFlow<String?> = runtimeState(initial = null) { it.chatSelectedModelRef }
+  val chatDefaultModelRef: StateFlow<String?> = runtimeState(initial = null) { it.chatDefaultModelRef }
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.chatModelCatalog }
   val chatPendingSessionSettingsKeys: StateFlow<Set<String>> =
     runtimeState(initial = emptySet()) { it.chatPendingSessionSettingsKeys }
@@ -1213,6 +1229,18 @@ class MainViewModel private constructor(
     }
   }
 
+  internal fun acknowledgeTalkModeFailure(notice: TalkFailureNotice) {
+    ensureRuntime().acknowledgeTalkModeFailure(notice)
+  }
+
+  fun showTalkSetupMessage(message: NativeText) {
+    pendingTalkSetupMessageMutable.value = message
+  }
+
+  fun dismissTalkSetupMessage(message: NativeText) {
+    pendingTalkSetupMessageMutable.update { if (it === message) null else it }
+  }
+
   fun setTalkModeEnabled(enabled: Boolean) {
     ensureRuntime().setTalkModeEnabled(enabled)
   }
@@ -1633,6 +1661,10 @@ class MainViewModel private constructor(
     ensureRuntime().refreshNodesDevices()
   }
 
+  fun approveNodeCapabilities(requestId: String) {
+    ensureRuntime().approveNodeCapabilities(requestId)
+  }
+
   fun approveDevicePairing(
     requestId: String,
     deviceId: String,
@@ -1967,10 +1999,10 @@ class MainViewModel private constructor(
     mainSessionKey: String,
     expectedCount: Int,
     load: suspend () -> List<PendingAttachment>,
-  ) {
+  ): Job? {
     val importId =
-      chatComposerState.beginMediaImport(owner, mediaAuthorizationId, mainSessionKey) ?: return
-    viewModelScope.launch(Dispatchers.IO) {
+      chatComposerState.beginMediaImport(owner, mediaAuthorizationId, mainSessionKey) ?: return null
+    return viewModelScope.launch(Dispatchers.IO) {
       try {
         val loaded =
           try {

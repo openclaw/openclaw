@@ -9,23 +9,12 @@ type PluginApiFacadeFields = Pick<
 >;
 /** Plugin API shape without nested facade namespaces attached. */
 export type OpenClawPluginApiWithoutFacades = Omit<OpenClawPluginApi, keyof PluginApiFacadeFields>;
-type PluginApiFacadeSource = Pick<
-  OpenClawPluginApi,
-  | "clearRunContext"
-  | "emitAgentEvent"
-  | "enqueueNextTurnInjection"
-  | "getRunContext"
-  | "registerAgentEventSubscription"
-  | "registerControlUiDescriptor"
-  | "registerRuntimeLifecycle"
-  | "registerSessionAction"
-  | "registerSessionExtension"
-  | "registerSessionSchedulerJob"
-  | "scheduleSessionTurn"
-  | "sendSessionAttachment"
-  | "setRunContext"
-  | "unscheduleSessionTurnsByTag"
->;
+type PluginApiFacadeSource = OpenClawPluginApi["session"]["state"] &
+  OpenClawPluginApi["session"]["workflow"] &
+  OpenClawPluginApi["session"]["controls"] &
+  OpenClawPluginApi["agent"]["events"] &
+  OpenClawPluginApi["runContext"] &
+  Pick<OpenClawPluginApi["lifecycle"], "registerRuntimeLifecycle">;
 
 const identitySensitiveRegistrations = new Set([
   "registerCompactionProvider",

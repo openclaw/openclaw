@@ -293,7 +293,7 @@ describe("resolveEffectiveAgentRuntime", () => {
     ).toBe("medium");
   });
 
-  it("clamps an unsupported candidate level without changing the requested value", () => {
+  it("preserves logical Ultra across candidate fallback", () => {
     const requested = "ultra" as const;
 
     expect(
@@ -303,7 +303,7 @@ describe("resolveEffectiveAgentRuntime", () => {
         modelId: "demo-model",
         level: requested,
       }),
-    ).toBe("high");
+    ).toBe("ultra");
     expect(requested).toBe("ultra");
   });
 
@@ -327,7 +327,7 @@ describe("resolveEffectiveAgentRuntime", () => {
         modelId: "gpt-5.6-luna",
         level: requested,
       }),
-    ).toBe("max");
+    ).toBe("ultra");
     expect(
       resolveCandidateThinkingLevel({
         cfg,

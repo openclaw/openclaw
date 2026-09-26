@@ -169,19 +169,6 @@ function sniffCharset(contentType: string | null, bytes: Uint8Array): string | u
   return undefined;
 }
 
-function concatBytes(parts: Uint8Array[], totalBytes: number): Uint8Array {
-  if (parts.length === 1 && parts[0]?.byteLength === totalBytes) {
-    return parts[0];
-  }
-  const bytes = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const part of parts) {
-    bytes.set(part, offset);
-    offset += part.byteLength;
-  }
-  return bytes;
-}
-
 function responseContentType(res: Response): string | null {
   const headers = (res as { headers?: { get?: (name: string) => string | null } }).headers;
   return typeof headers?.get === "function" ? headers.get("content-type") : null;
@@ -249,7 +236,10 @@ export async function readResponseText(
       }
     }
 
-    const bytes = concatBytes(parts, bytesRead);
+    const bytes =
+      parts.length === 1 && parts[0]?.byteLength === bytesRead
+        ? parts[0]
+        : Buffer.concat(parts, bytesRead);
     return { text: decodeResponseBytes(res, bytes, truncated), truncated, bytesRead };
   }
 

@@ -135,7 +135,8 @@ export function createBoundedReadTextPage(params: {
   // The cursor advances only over text that survives both model limits and its real footer.
   const contentBudgetBytes = Buffer.byteLength(prefix, "utf8");
   const truncation = truncateHead(params.content, { maxBytes: contentBudgetBytes });
-  if (!truncation.truncated) {
+  const truncatedBy = truncation.truncatedBy;
+  if (!truncation.truncated || truncatedBy === null) {
     return completeSelectedPage(truncation.content);
   }
 
@@ -168,6 +169,8 @@ export function createBoundedReadTextPage(params: {
       content,
       truncation: {
         ...truncationDetails,
+        truncated: true,
+        truncatedBy,
         outputBytes: Buffer.byteLength(content, "utf8"),
         firstLineExceedsLimit: false,
         lastLinePartial: continuation.kind === "cursor",

@@ -83,18 +83,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function placement(
+async function placement(
   sessionId = "subject",
   agentId = "main",
   sessionKey = `agent:${agentId}:${sessionId}`,
 ) {
-  return createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }).startDispatch(
-    {
-      sessionId,
-      sessionKey,
-      agentId,
-    },
-  );
+  return await createWorkerSessionPlacementStore({
+    database: openOpenClawStateDatabase(),
+  }).startDispatch({
+    sessionId,
+    sessionKey,
+    agentId,
+  });
 }
 
 function pauseRegistry() {
@@ -106,6 +106,7 @@ function pauseRegistry() {
     .mockImplementationOnce((...args) => {
       const prepared = prepare(...args);
       return {
+        assertCurrent: prepared.assertCurrent,
         read: async () => {
           entered.resolve();
           await resume.promise;
@@ -155,7 +156,7 @@ function isEvidenceReply(reply: unknown): boolean {
 
 it("charges captured discovery paths to queue capacity and recovers after refusal", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const subject = placement();
+    const subject = await placement();
     replaceSessionEntrySync(subject, { sessionId: subject.sessionId, updatedAt: 1 });
     const small: OpenClawConfig = { agents: { list: [{ id: "main" }] } };
     const large: OpenClawConfig = {
@@ -183,7 +184,7 @@ it.each(["path", "root", "agent"] as const)(
   "revokes unresolved discovery before a %s close can finish",
   async (selection) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const subject = placement();
+      const subject = await placement();
       replaceSessionEntrySync(subject, { sessionId: subject.sessionId, updatedAt: 1 });
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       const gate = pauseInventory();
@@ -218,7 +219,7 @@ it.each([false, true])(
       const store = state.statePath("custom", "shared.json");
       const cfg: OpenClawConfig = { session: { store } };
       setRuntimeConfigSnapshot(cfg, cfg);
-      const subject = placement();
+      const subject = await placement();
       openOpenClawAgentDatabase({
         agentId: "other",
         path: state.statePath("custom", "shared.sqlite"),
@@ -251,7 +252,7 @@ it("keeps a different legacy family usable while another family closes", async (
     const store = state.statePath("custom", "shared.json");
     const cfg: OpenClawConfig = { session: { store } };
     setRuntimeConfigSnapshot(cfg, cfg);
-    const subject = placement();
+    const subject = await placement();
     replaceSessionEntrySync(
       { ...subject, storePath: store },
       { sessionId: subject.sessionId, updatedAt: 1 },
@@ -279,7 +280,7 @@ it("captures config, environment, cwd and placement identity before discovery yi
     const store = path.relative(process.cwd(), state.statePath("captured.sqlite"));
     const cfg: OpenClawConfig = { session: { store } };
     setRuntimeConfigSnapshot(cfg, cfg);
-    const subject = placement();
+    const subject = await placement();
     replaceSessionEntrySync(
       { ...subject, storePath: store },
       { sessionId: subject.sessionId, updatedAt: 1 },
@@ -320,7 +321,7 @@ it.each(["evidence", "settlement"] as const)(
       fs.symlinkSync(physical, alias);
       const cfg: OpenClawConfig = { session: { store: alias } };
       setRuntimeConfigSnapshot(cfg, cfg);
-      const subject = placement();
+      const subject = await placement();
       // A fixed shared store is selected only for agents with persisted scoped rows.
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: "agent:main:anchor", storePath: physical },
@@ -376,7 +377,7 @@ it.each(["path", "root"] as const)(
       const aliasDir = state.statePath("aliases");
       fs.mkdirSync(aliasDir);
       const alias = path.join(aliasDir, "session.sqlite");
-      const subject = placement();
+      const subject = await placement();
       replaceSessionEntrySync(
         { ...subject, storePath: physical },
         { sessionId: subject.sessionId, updatedAt: 1 },
@@ -421,7 +422,7 @@ it.each(["path", "root"] as const)(
 
 it("rejects discovery revoked during final reader cleanup", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const subject = placement();
+    const subject = await placement();
     replaceSessionEntrySync(subject, { sessionId: subject.sessionId, updatedAt: 1 });
     let revoke: Promise<void> | undefined;
     boundary.afterCleanup = async () => {
@@ -444,7 +445,7 @@ it("rejects discovery revoked during final reader cleanup", async () => {
 
 it("transfers a Windows-normalized environment through inventory and evidence workers", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const subject = placement();
+    const subject = await placement();
     replaceSessionEntrySync(subject, { sessionId: subject.sessionId, updatedAt: 1 });
     const { OPENCLAW_STATE_DIR, ...otherEnv } = process.env;
     const normalized = withMockedPlatform("win32", () =>
@@ -469,8 +470,8 @@ it("transfers a Windows-normalized environment through inventory and evidence wo
 
 it("rereads incognito absence when a row appears in the same native owner during disk work", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const disk = placement("disk-current");
-    const incognito = placement(
+    const disk = await placement("disk-current");
+    const incognito = await placement(
       "private-created",
       "main",
       "agent:main:dashboard:incognito-created",
@@ -506,7 +507,7 @@ it("rejects absence when the configured alias selects another database after the
     const previous = state.statePath("previous.sqlite");
     const replacement = state.statePath("replacement.sqlite");
     const alias = state.statePath("selected.sqlite");
-    const subject = placement("alias-retarget");
+    const subject = await placement("alias-retarget");
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: "agent:main:anchor", storePath: previous },
       {
@@ -552,7 +553,7 @@ it("keeps the fixed physical owner and current precedence across canonical and m
       session: { store },
     };
     setRuntimeConfigSnapshot(cfg, cfg);
-    const subject = placement("shared-subject", "ops");
+    const subject = await placement("shared-subject", "ops");
     subject.sessionKey = "agent:main:main";
     for (const agentId of ["main", "ops"]) {
       replaceSessionEntrySync(

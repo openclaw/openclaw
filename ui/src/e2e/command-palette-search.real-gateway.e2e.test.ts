@@ -94,7 +94,11 @@ async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig)
   ];
   // Prepare canonical SQLite entries and synchronously indexed message appends
   // before the child starts, so its resident projection sees the complete corpus.
-  for (const fixture of fixtures) {
+  // The database owner retains one idle writer; finish each agent before switching.
+  const fixturesByAgent = fixtures.toSorted(
+    (left, right) => agentIds.indexOf(left.agentId) - agentIds.indexOf(right.agentId),
+  );
+  for (const fixture of fixturesByAgent) {
     const sessionId = randomUUID();
     const target = { agentId: fixture.agentId, sessionKey: fixture.key, env: owner.env };
     const created = await createSessionEntryWithTranscript(

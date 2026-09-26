@@ -16,6 +16,7 @@ import {
   loadPreparedModelRuntimeAuth,
 } from "./prepared-model-runtime-auth.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
+import { readCatalogCaptureFootprint } from "./test-helpers/catalog-capture-footprint.js";
 import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog-fleet-fixture.js";
 import {
   loadCompletedFullCatalog,
@@ -127,31 +128,13 @@ describe("Gateway catalog worker captures", () => {
       expect(fs.existsSync(filename)).toBe(true);
       const inventory = () => fs.readdirSync(captureRoot).toSorted();
       const retained = inventory();
-      const footprint = () => {
-        const directories = inventory().filter((name) => name.startsWith("openclaw-plugin-build-"));
-        const result = { captures: directories.length, bytes: 0, allocatedBytes: 0 };
-        const pending = [captureRoot];
-        // Recursive readdir follows the host-package symlink outside this owned tree.
-        for (const directory of pending) {
-          for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-            const file = path.join(directory, entry.name);
-            if (entry.isDirectory()) {
-              pending.push(file);
-            } else if (entry.isFile()) {
-              const stat = fs.statSync(file);
-              result.bytes += stat.size;
-              result.allocatedBytes += stat.blocks * 512;
-            }
-          }
-        }
-        return result;
-      };
+      const footprint = () => readCatalogCaptureFootprint(captureRoot);
       const initialFootprint = footprint();
       console.info(
         "Catalog capture footprint",
         JSON.stringify({ phase: "loaded", ...initialFootprint }),
       );
-      expect(initialFootprint.captures).toBe(2);
+      expect(initialFootprint.captures).toHaveLength(2);
       for (const token of ["B", "C"]) {
         fs.writeFileSync(fixture.externalAuthPath, token);
         for (const snapshot of snapshots) {

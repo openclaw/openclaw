@@ -5,7 +5,7 @@ import type { Client } from "../internal/discord.js";
 import type { VoicePlugin } from "../internal/voice.js";
 import { formatMention } from "../mentions.js";
 import { getDiscordRuntime } from "../runtime.js";
-import { createDiscordAudioTransport, type DiscordAudioTransport } from "./audio-transport.js";
+import { DiscordAudioTransport } from "./audio-transport.js";
 import { createVoiceCaptureState, stopVoiceCaptureState } from "./capture-state.js";
 import { resolveDiscordVoiceRealtimeBootstrapContext } from "./ingress.js";
 import type { DiscordVoiceMembershipTracker } from "./membership.js";
@@ -221,7 +221,7 @@ export class DiscordVoiceSessions {
     if (this.params.destroyed() || authority?.isCurrent() === false) {
       return cancelledJoinResult();
     }
-    const audio = createDiscordAudioTransport(
+    const audio = new DiscordAudioTransport(
       {
         guildId,
         channelId,
@@ -289,11 +289,11 @@ export class DiscordVoiceSessions {
     );
 
     let stopCompletion: Promise<void> | undefined;
-    const stopEntry = (optionsLocal: { reason: string }): void | Promise<void> => {
+    const stopEntry = (reason: string): void | Promise<void> => {
       if (entry.sessionLifecycle.status === "stopped") {
         return stopCompletion;
       }
-      entry.sessionLifecycle = { status: "stopped", reason: optionsLocal.reason };
+      entry.sessionLifecycle = { status: "stopped", reason };
       // A late callback from an old connection must not remove its replacement.
       if (this.params.sessions.get(guildId) === entry) {
         this.params.sessions.delete(guildId);
@@ -306,7 +306,7 @@ export class DiscordVoiceSessions {
       entry.realtimeLifecycle = {
         status: "stopped",
         generation: realtimeLifecycle.generation,
-        reason: optionsLocal.reason,
+        reason,
       };
       let realtimeCompletion: void | Promise<void> = undefined;
       try {
@@ -317,18 +317,10 @@ export class DiscordVoiceSessions {
         logger.warn(`discord voice: realtime close failed: ${formatErrorMessage(error)}`);
       }
       const audioCompletion = this.stopTransport(guildId, audio);
-      realtimeCompletion = Promise.allSettled([realtimeCompletion, audioCompletion]).then(
-        () => undefined,
-      );
-      const finish = () => {
+      stopCompletion = Promise.allSettled([realtimeCompletion, audioCompletion]).then(() => {
         entry.conversations.close();
-        this.params.onSessionStopped(entry, optionsLocal.reason);
-      };
-      stopCompletion = realtimeCompletion
-        .catch((error: unknown) =>
-          logger.warn(`discord voice: realtime close failed: ${formatErrorMessage(error)}`),
-        )
-        .then(finish);
+        this.params.onSessionStopped(entry, reason);
+      });
       const completion = stopCompletion;
       this.pendingStops.add(completion);
       const forget = () => {
@@ -376,9 +368,7 @@ export class DiscordVoiceSessions {
       receiveRecovery: createVoiceReceiveRecoveryState(),
       realtimeLifecycle: { status: "inactive", generation: 0 },
       stop(reason) {
-        return stopEntry({
-          reason: reason ?? `stop guild ${guildId} channel ${channelId}`,
-        });
+        return stopEntry(reason ?? `stop guild ${guildId} channel ${channelId}`);
       },
     };
 
@@ -392,7 +382,7 @@ export class DiscordVoiceSessions {
       }
     };
     const destroyedHandler = () => {
-      void stopEntry({ reason: "audio worker stopped" });
+      void stopEntry("audio worker stopped");
     };
     audio.on("stopped", destroyedHandler);
     if (!entry.captureOnly && isDiscordRealtimeVoiceMode(voiceMode)) {
@@ -427,8 +417,7 @@ export class DiscordVoiceSessions {
       };
     }
 
-    this.params.receive.enableDaveReceivePassthrough(
-      entry,
+    entry.audio.enablePassthrough(
       "post-join warmup",
       DAVE_RECEIVE_PASSTHROUGH_INITIAL_EXPIRY_SECONDS,
     );
@@ -529,17 +518,7 @@ export class DiscordVoiceSessions {
           void entry.stop("realtime terminal error");
         }
       },
-      runAgentTurn: ({ context, message, toolsAllow, userId, isCurrent, signal, voiceSelection }) =>
-        this.params.receive.runDiscordRealtimeAgentTurn({
-          context,
-          entry,
-          message,
-          toolsAllow,
-          userId,
-          isCurrent,
-          ...(signal ? { signal } : {}),
-          voiceSelection,
-        }),
+      runAgentTurn: (turn) => this.params.receive.runDiscordRealtimeAgentTurn({ ...turn, entry }),
       resolveSpeakerContext: (userId) =>
         this.params.receive.resolveDiscordVoiceIngressContext(entry, userId),
     });

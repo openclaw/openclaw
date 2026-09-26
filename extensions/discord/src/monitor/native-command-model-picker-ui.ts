@@ -43,37 +43,19 @@ type DiscordNativeChoiceInteraction =
   | ButtonInteraction
   | StringSelectMenuInteraction;
 
-function resolveDiscordModelPickerCommandContext(
-  command: ChatCommandDefinition,
-): DiscordModelPickerCommandContext | null {
-  const normalized = normalizeLowercaseStringOrEmpty(command.nativeName ?? command.key);
-  if (normalized === "model" || normalized === "models") {
-    return normalized;
-  }
-  return null;
-}
-
-function resolveCommandArgStringValue(args: CommandArgs | undefined, key: string): string {
-  const value = args?.values?.[key];
-  if (typeof value !== "string") {
-    return "";
-  }
-  return value.trim();
-}
-
 export function shouldOpenDiscordModelPickerFromCommand(params: {
   command: ChatCommandDefinition;
   commandArgs?: CommandArgs;
 }): DiscordModelPickerCommandContext | null {
-  const context = resolveDiscordModelPickerCommandContext(params.command);
-  if (!context) {
+  const context = normalizeLowercaseStringOrEmpty(params.command.nativeName ?? params.command.key);
+  if (context !== "model" && context !== "models") {
     return null;
   }
 
   const serializedArgs =
     normalizeOptionalString(serializeCommandArgs(params.command, params.commandArgs)) ?? "";
   if (context === "model") {
-    const modelValue = resolveCommandArgStringValue(params.commandArgs, "model");
+    const modelValue = normalizeOptionalString(params.commandArgs?.values?.model);
     return !modelValue && !serializedArgs ? context : null;
   }
 
@@ -114,12 +96,8 @@ export function buildDiscordModelPickerNoticePayload(message: string): { compone
   };
 }
 
-async function resolveDiscordModelPickerRouteState(params: {
-  interaction:
-    | CommandInteraction
-    | ButtonInteraction
-    | StringSelectMenuInteraction
-    | AutocompleteInteraction;
+export async function resolveDiscordModelPickerRoute(params: {
+  interaction: DiscordNativeChoiceInteraction;
   cfg: OpenClawConfig;
   accountId: string;
   threadBindings: ThreadBindingManager;
@@ -150,21 +128,7 @@ async function resolveDiscordModelPickerRouteState(params: {
     conversationId: rawChannelId,
     parentConversationId: threadParentId,
     threadBinding,
-  });
-}
-
-export async function resolveDiscordModelPickerRoute(params: {
-  interaction:
-    | CommandInteraction
-    | ButtonInteraction
-    | StringSelectMenuInteraction
-    | AutocompleteInteraction;
-  cfg: OpenClawConfig;
-  accountId: string;
-  threadBindings: ThreadBindingManager;
-}) {
-  const resolved = await resolveDiscordModelPickerRouteState(params);
-  return resolved.effectiveRoute;
+  }).effectiveRoute;
 }
 
 export async function resolveDiscordNativeChoiceContext(params: {
@@ -326,8 +290,6 @@ export async function replyWithDiscordModelPickerProviders(params: {
           model: parsedCurrentRef.model,
         })
       : { page: 1 };
-  const initialPage = initialResolved.page;
-  const initialModelBucket = initialResolved.bucket;
   const initialProviderLocation = findProviderBucketLocation(data, initialProvider);
 
   const rendered = renderDiscordModelPickerModelsView({
@@ -335,10 +297,10 @@ export async function replyWithDiscordModelPickerProviders(params: {
     userId: params.userId,
     data,
     provider: initialProvider,
-    page: initialPage,
+    page: initialResolved.page,
     providerPage: initialProviderLocation?.page ?? 1,
     providerBucket: initialProviderLocation?.bucket,
-    modelBucket: initialModelBucket,
+    modelBucket: initialResolved.bucket,
     currentModel,
     currentRuntime,
     quickModels,
@@ -349,11 +311,7 @@ export async function replyWithDiscordModelPickerProviders(params: {
   };
 
   await params.safeInteractionCall("model picker reply", async () => {
-    if (params.preferFollowUp) {
-      await params.interaction.followUp(payload);
-      return;
-    }
-    await params.interaction.reply(payload);
+    await params.interaction[params.preferFollowUp ? "followUp" : "reply"](payload);
   });
 }
 

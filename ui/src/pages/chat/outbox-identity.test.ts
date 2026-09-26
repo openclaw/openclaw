@@ -331,6 +331,19 @@ describe("outbox browser-state transfer", () => {
     expect(readChatOutboxRecovery(state).entries[0]).toEqual(entry);
   });
 
+  it("preserves a quote-only destination and its recoverable source", () => {
+    seed(2, { "global\u0000agent:selected": legacy });
+    const entry = readChatOutboxRecovery(state).entries[0]!;
+    const replyTarget = { messageId: "selected-message", text: "Keep this quote" };
+    expect(
+      persistChatComposerState({ ...state, chatMessage: "", chatReplyTarget: replyTarget }),
+    ).toBe(true);
+    const destination = captureDefaultDestination();
+    expect(restoreChatOutboxRecovery(state, entry, destination)).toBe("conflict");
+    expect(loadChatComposerSnapshot(state, state.sessionKey)?.replyTarget).toEqual(replyTarget);
+    expect(readChatOutboxRecovery(state).entries[0]).toEqual(entry);
+  });
+
   it.each([1, 2, 3] as const)(
     "retains later v%i writes for review after the current namespace exists",
     (version) => {
@@ -356,7 +369,7 @@ describe("outbox browser-state transfer", () => {
       const entry = readChatOutboxRecovery(state).entries[0]!;
       const destination = captureDefaultDestination();
       expect(restoreChatOutboxRecovery(state, entry, destination)).toBe("restored");
-      expect(sessionStorage.getItem(source.key)).toBe(source.raw);
+      expect(sessionStorage.getItem(source.key) || null).toBeNull();
       expect(readChatOutboxRecovery(state).entries).toEqual([]);
       expect(listStoredChatOutboxes(state)[0]?.queue).toHaveLength(60);
       remove.mockRestore();

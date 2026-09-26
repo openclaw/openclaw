@@ -1,6 +1,3 @@
-/**
- * Plugin HTTP runtime-scope integration tests.
- */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -178,6 +175,10 @@ describe("plugin HTTP route runtime scopes", () => {
           auth: params.auth,
           gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface,
           handler: async () => {
+            const scope = getPluginRuntimeGatewayRequestScope();
+            if (params.auth === "plugin") {
+              expect(scope?.hasCurrentClientAuthority).toBeUndefined();
+            }
             assertWriteHelperAllowed();
             return true;
           },
@@ -229,25 +230,18 @@ describe("plugin HTTP route runtime scopes", () => {
       const grant = new AbortController();
       let current = true;
       const nextRoute = vi.fn(() => true);
+      const firstRoute = createRoute({
+        path: SECURE_HOOK_PATH,
+        auth: "gateway",
+        handler: async () => {
+          expect(getPluginRuntimeGatewayRequestScope()?.signal).toBe(grant.signal);
+          entered.resolve();
+          await release.promise;
+          return false;
+        },
+      });
       const handler = createPluginRequestHandler({
-        routes: [
-          createRoute({
-            path: SECURE_HOOK_PATH,
-            auth: "gateway",
-            handler: async () => {
-              expect(getPluginRuntimeGatewayRequestScope()?.signal).toBe(grant.signal);
-              entered.resolve();
-              await release.promise;
-              return false;
-            },
-          }),
-          createRoute({
-            path: SECURE_HOOK_PATH,
-            match: "prefix",
-            auth: "gateway",
-            handler: nextRoute,
-          }),
-        ],
+        routes: [firstRoute, { ...firstRoute, match: "prefix", handler: nextRoute }],
       });
       const pending = dispatchPluginRequest(handler, {
         path: SECURE_HOOK_PATH,
@@ -279,7 +273,11 @@ describe("plugin HTTP route runtime scopes", () => {
       } finally {
         release.resolve();
       }
-      expect((await pending).handled).toBe(true);
+      const { handled, res } = await pending;
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(
+        changed === "unchanged" ? 200 : changed === "request policy" ? 401 : 403,
+      );
       expect(nextRoute).toHaveBeenCalledTimes(changed === "unchanged" ? 1 : 0);
     },
   );
@@ -752,6 +750,13 @@ async function withCookieSessionReader(
     readerId: string;
     ownerEmail: string;
     dispatch: (method: SessionReadMethod, key?: string) => ReturnType<typeof dispatchGatewayMethod>;
+    dispatchHttp: (
+      method: SessionReadMethod,
+      key?: string,
+    ) => Promise<{
+      statusCode: number;
+      result: Awaited<ReturnType<typeof dispatchGatewayMethod>> | undefined;
+    }>;
     blockCatalog: () => { entered: Promise<void>; release: () => void };
   }) => Promise<void>,
 ) {
@@ -834,7 +839,7 @@ async function withCookieSessionReader(
           throw new Error("expected signed HTTP plugin cookie");
         }
         const cookie = value.split(";", 1)[0]!;
-        const dispatch = async (method: SessionReadMethod, key = "agent:main:shared") => {
+        const dispatchHttp = async (method: SessionReadMethod, key = "agent:main:shared") => {
           let result: Awaited<ReturnType<typeof dispatchGatewayMethod>> | undefined;
           const handler = createPluginRequestHandler({
             getGatewayRequestContext: () => context,
@@ -871,7 +876,11 @@ async function withCookieSessionReader(
               gatewayRequestOperatorScopes: authorized!.operatorScopes,
             }),
           ).toBe(true);
-          expect(response.res.statusCode).toBe(200);
+          return { statusCode: response.res.statusCode, result };
+        };
+        const dispatch = async (method: SessionReadMethod, key?: string) => {
+          const { statusCode, result } = await dispatchHttp(method, key);
+          expect(statusCode).toBe(200);
           if (!result) {
             throw new Error("plugin handler did not dispatch the session read");
           }
@@ -883,6 +892,7 @@ async function withCookieSessionReader(
             readerId: reader.id,
             ownerEmail,
             dispatch,
+            dispatchHttp,
             blockCatalog: () => {
               catalogGate = createDeferred();
               catalogEntered = createDeferred();
@@ -1022,24 +1032,28 @@ describe("plugin HTTP authenticated session reads", () => {
   );
 
   it("withdraws foreign-session access during HTTP projection readiness", async () => {
-    await withCookieSessionReader(true, async ({ readerId, dispatch, blockCatalog }) => {
-      expectSessionKeys(await dispatch("sessions.list"), [
-        "agent:main:own-draft",
-        "agent:main:shared",
-      ]);
-      const gate = blockCatalog();
-      const pending = dispatch("sessions.list");
-      try {
-        await gate.entered;
-        setUserProfileRole(readerId, "blocked");
-        invalidateOperatorRolePolicy(readerId);
-        gate.release();
-        expectSessionKeys(await pending, ["agent:main:own-draft"]);
-        expect(await dispatch("sessions.describe")).toMatchObject({ ok: false });
-      } finally {
-        gate.release();
-        await pending;
-      }
-    });
+    await withCookieSessionReader(
+      true,
+      async ({ readerId, dispatch, dispatchHttp, blockCatalog }) => {
+        expectSessionKeys(await dispatch("sessions.list"), [
+          "agent:main:own-draft",
+          "agent:main:shared",
+        ]);
+        const gate = blockCatalog();
+        const pending = dispatchHttp("sessions.list");
+        try {
+          await gate.entered;
+          setUserProfileRole(readerId, "blocked");
+          invalidateOperatorRolePolicy(readerId);
+          gate.release();
+          expect(await pending).toEqual({ statusCode: 500, result: undefined });
+          expectSessionKeys(await dispatch("sessions.list"), ["agent:main:own-draft"]);
+          expect(await dispatch("sessions.describe")).toMatchObject({ ok: false });
+        } finally {
+          gate.release();
+          await pending;
+        }
+      },
+    );
   });
 });

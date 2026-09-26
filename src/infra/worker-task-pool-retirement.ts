@@ -1,14 +1,19 @@
 import type { Worker } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { runBestEffortCleanup } from "./non-fatal-cleanup.js";
+import { markWorkerRetirement, type WorkerRetirementReason } from "./worker-cpu.js";
 import {
   cancelWorkerNativeSections,
   waitForWorkerNativeSections,
 } from "./worker-task-native-sections.js";
 import type { Slot, WorkerTaskPoolOptions } from "./worker-task-pool.types.js";
 
+const WORKER_WARM_WINDOW_MS = 5 * 60_000;
+
 export type WorkerTaskPoolRetirement<Input, Output> = {
-  retire(slot: Slot<Input, Output>): Promise<void>;
+  retire(slot: Slot<Input, Output>, reason?: WorkerRetirementReason): Promise<void>;
+  idle(slot: Slot<Input, Output>): void;
+  clearIdle(slot: Slot<Input, Output>): void;
   retireIdle(resourceClosures: WeakMap<Worker, { pending: number }>): void;
   retryFailedRetirements(): Promise<void>;
   joinArtifacts(): Promise<void[]>;
@@ -17,26 +22,46 @@ export type WorkerTaskPoolRetirement<Input, Output> = {
 export function createWorkerTaskPoolRetirement<Input, Output>({
   slots,
   options,
-  clearIdleTimer,
   runInContext,
   dispatch,
 }: {
   slots: Set<Slot<Input, Output>>;
   options: WorkerTaskPoolOptions<Output>;
-  clearIdleTimer: (timer: Slot<Input, Output>["idleTimer"]) => void;
   runInContext: <T>(operation: () => T) => T;
   dispatch: () => void;
 }): WorkerTaskPoolRetirement<Input, Output> {
   const artifactCleanups = new Set<Promise<void>>();
+  let lastIdleRetirementAt = -Infinity;
+  let warmSlot: Slot<Input, Output> | undefined;
+  // Worker replies can arrive under an unrelated fake clock; use the owner's clock.
+  const setTimeoutFn = setTimeout;
+  const clearTimeoutFn = clearTimeout;
+  const now = performance.now.bind(performance);
+  const clearIdle = (slot: Slot<Input, Output>) => clearTimeoutFn(slot.idleTimer);
 
-  function retire(slot: Slot<Input, Output>): Promise<void> {
-    clearIdleTimer(slot.idleTimer);
+  function retire(
+    slot: Slot<Input, Output>,
+    reason: WorkerRetirementReason = "closed",
+  ): Promise<void> {
+    if (reason === "idle_timeout") {
+      lastIdleRetirementAt = now();
+    } else if (reason === "rotation") {
+      lastIdleRetirementAt = -Infinity;
+    }
+    if (warmSlot === slot) {
+      warmSlot = undefined;
+    }
+    if (slot.worker) {
+      markWorkerRetirement(slot.worker, reason);
+    }
+    clearIdle(slot);
     cancelWorkerNativeSections(slot.nativeSections);
     // Retain error listeners until exit: termination can race a worker startup error.
     // Constructor observers can retire this slot before its Worker is assigned.
     return (slot.retiring ??= Promise.resolve()
       .then(async () => {
         if (slot.worker) {
+          markWorkerRetirement(slot.worker, reason);
           // Node can abort if termination interrupts zlib between allocation and initialization.
           // Keep custody until the current bounded native operation settles, including on timeout.
           const settlement = waitForWorkerNativeSections(slot.nativeSections);
@@ -106,6 +131,24 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
 
   return {
     retire,
+    clearIdle,
+    idle(slot) {
+      const idleMs = options.idleTimeoutMs ?? 60_000;
+      if (idleMs <= 0) {
+        return;
+      }
+      // A promptly reused pool retains one isolate; excess slots keep their normal timeout.
+      if (!warmSlot && now() - lastIdleRetirementAt < WORKER_WARM_WINDOW_MS) {
+        warmSlot = slot;
+      }
+      slot.idleTimer = runInContext(() =>
+        setTimeoutFn(
+          () => void retire(slot, "idle_timeout").catch(() => undefined),
+          warmSlot === slot ? Math.max(idleMs, WORKER_WARM_WINDOW_MS) : idleMs,
+        ),
+      );
+      slot.idleTimer.unref();
+    },
     retireIdle(resourceClosures) {
       for (const slot of slots) {
         if (
@@ -115,7 +158,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
           slot.worker &&
           !resourceClosures.get(slot.worker)?.pending
         ) {
-          void retire(slot).catch(() => undefined);
+          void retire(slot, "memory_pressure").catch(() => undefined);
         }
       }
     },

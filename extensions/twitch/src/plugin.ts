@@ -1,10 +1,3 @@
-/**
- * Twitch channel plugin for OpenClaw.
- *
- * Main plugin export combining all adapters (outbound, actions, status, gateway).
- * This is the primary entry point for the Twitch channel integration.
- */
-
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import {
@@ -64,13 +57,6 @@ function normalizeTwitchMessagingTarget(target: string): string {
   return normalizeTwitchChannel(channelTarget);
 }
 
-/**
- * Twitch channel plugin.
- *
- * Implements the ChannelPlugin interface to provide Twitch chat integration
- * for OpenClaw. Supports message sending, receiving, access control, and
- * status monitoring.
- */
 export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
   createChatChannelPlugin<ResolvedTwitchAccount>({
     pairing: {

@@ -42,6 +42,7 @@ import {
   killAllControlledSubagentRuns,
   killSubagentRunAdmin,
 } from "./subagent-control.js";
+import { registerLateDescendantControlTests } from "./subagent-control.late-registration.test-support.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
@@ -51,7 +52,6 @@ import {
   replaceSubagentRunAfterSteerCore,
   markSubagentRunTerminated,
   startQueuedSubagentRun,
-  registerSubagentRun,
 } from "./subagent-registry.js";
 import {
   addSubagentRunForTests,
@@ -1805,175 +1805,11 @@ describe("killAllControlledSubagentRuns", () => {
     resetSubagentRegistryForTests({ persist: false });
   });
 
-  it.each([
-    ["runtime load", false],
-    ["parent persistence", false],
-    ["admission drain", false],
-    ["parent persistence", true],
-  ] as const)(
-    "captures descendants registered during %s before releasing capacity (replacement=%s)",
-    async (phase, replaceChild) => {
-      const owner = "agent:main:main";
-      const parent = createSubagentRunRecord({
-        runId: "late-parent",
-        childSessionKey: "agent:main:subagent:late-parent",
-        requesterSessionKey: owner,
-        requesterDisplayKey: owner,
-        task: "orchestrator",
-        cleanup: "keep",
-        createdAt: 1,
-        startedAt: 2,
-      });
-      const activeChild = createSubagentRunRecord({
-        ...parent,
-        runId: "live-child",
-        childSessionKey: "agent:main:subagent:live-child",
-        controllerSessionKey: parent.childSessionKey,
-      });
-      addSubagentRunForTests(parent);
-      if (phase === "admission drain") {
-        addSubagentRunForTests(activeChild);
-      }
-      const storePath = await writeSessionStoreFixture("late-descendant", {
-        [parent.childSessionKey]: { sessionId: "late-parent-session", updatedAt: 1 },
-      });
-      const reached = createDeferred();
-      const proceed = createDeferred();
-      const admission = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [parent.childSessionKey, "late-parent-session"],
-        assertAllowed: () => {},
-        onInterrupt: () => {
-          reached.resolve();
-          if (phase !== "admission drain") {
-            expect(releaseSwarmRun(parent.runId)).toBe(true);
-            admission.release();
-          }
-        },
-      });
-      const start = vi.fn(async () => {});
-      const childKey = "agent:main:subagent:late-child";
-      const registerChild = () => {
-        const requester = phase === "admission drain" ? activeChild : parent;
-        expect(requester.execution.endedAt).toBeUndefined();
-        registerSubagentRun({
-          runId: "late-child",
-          childSessionKey: childKey,
-          requesterSessionKey: requester.childSessionKey,
-          requesterAgentId: "main",
-          requesterDisplayKey: requester.childSessionKey,
-          task: "registered while orchestrator is live",
-          cleanup: "keep",
-          collect: true,
-          queued: true,
-        });
-        enqueueSwarmRun({
-          groupId: "late-descendants",
-          runId: "late-child",
-          activeRunIds: [parent.runId],
-          maxConcurrent: 1,
-          start,
-          onStartFailure: () => true,
-        });
-      };
-      setSubagentControlDepsForTest({
-        isEmbeddedAgentRunActive: () => true,
-        abortEmbeddedAgentRun: () => {
-          if (phase === "admission drain") {
-            expect(releaseSwarmRun(parent.runId)).toBe(true);
-          }
-          return true;
-        },
-      });
-      const controller = {
-        controllerSessionKey: owner,
-        controllerAgentId: "main",
-        callerSessionKey: owner,
-        callerIsSubagent: false,
-        controlScope: "children" as const,
-      };
-      const cfg = cfgWithSessionStore(storePath);
-      if (replaceChild) {
-        registerChild();
-      }
-      const pending = killAllControlledSubagentRuns({
-        cfg,
-        controller,
-        runs: [parent],
-        beforeKill:
-          phase === "parent persistence"
-            ? async () => {
-                reached.resolve();
-                await proceed.promise;
-                return true;
-              }
-            : undefined,
-      });
-      try {
-        if (phase !== "runtime load") {
-          await reached.promise;
-        }
-        if (replaceChild) {
-          expect(removeQueuedSwarmRun("late-child")).toBe(true);
-        }
-        registerChild();
-        const outsideStart = vi.fn(async () => {});
-        registerSubagentRun({
-          runId: "other-turn-root",
-          childSessionKey: "agent:main:subagent:other-turn-root",
-          requesterSessionKey: owner,
-          requesterAgentId: "main",
-          requesterTurnRunId: "other-turn",
-          requesterDisplayKey: owner,
-          task: "outside the captured root set",
-          cleanup: "keep",
-          collect: true,
-          queued: true,
-        });
-        enqueueSwarmRun({
-          groupId: "other-turn",
-          runId: "other-turn-root",
-          maxConcurrent: 1,
-          activeRunIds: [],
-          start: outsideStart,
-          onStartFailure: () => true,
-        });
-        proceed.resolve();
-        if (phase === "admission drain") {
-          admission.release();
-        }
-        await pending;
-        if (replaceChild) {
-          expect(
-            start,
-            "discovery cannot adopt a selected child's replacement generation",
-          ).toHaveBeenCalledOnce();
-          expect(getSubagentRunByChildSessionKey(childKey)?.execution.endedAt).toBeUndefined();
-        } else {
-          expect(
-            start,
-            "late descendant must be held before the capacity-releasing signal",
-          ).not.toHaveBeenCalled();
-          expect(getSubagentRunByChildSessionKey(childKey)).toMatchObject({
-            endedReason: SUBAGENT_ENDED_REASON_KILLED,
-            execution: { status: "terminal" },
-          });
-        }
-        expect(
-          outsideStart,
-          "discovery cannot add another root or inhibit its lane",
-        ).toHaveBeenCalledOnce();
-        expect(
-          getSubagentRunByChildSessionKey("agent:main:subagent:other-turn-root")?.execution.endedAt,
-        ).toBeUndefined();
-      } finally {
-        proceed.resolve();
-        admission.release();
-        await pending;
-        swarmSchedulerTesting.reset();
-      }
-    },
-  );
+  registerLateDescendantControlTests({
+    cfgWithSessionStore,
+    setSubagentControlDepsForTest,
+    writeSessionStoreFixture,
+  });
 
   it.each(["bulk", "first cancellation await", "controlled tree", "admin tree", "channel stop"])(
     "does not dispatch selected queued work during %s cancellation",

@@ -16,14 +16,17 @@ import { registerModelControlsEnglish } from "../i18n/locales/en-model-controls.
 import {
   invalidateModelCatalogCache,
   invalidateModelCatalogEntry,
+  isModelCatalogRetired,
   beginModelCatalogRead,
   getModelCatalogCache,
   modelCatalogCache,
+  modelCatalogEventInvalidation,
   modelCatalogKey,
   modelCatalogObservers,
   modelCatalogParams,
   publishModelCatalogResult,
   type ModelCatalogReadScope,
+  type ModelCatalogInvalidation,
   type ModelCatalogClient,
   type ModelCatalogCacheUpdate,
   type ModelCatalogRead,
@@ -36,10 +39,36 @@ registerModelControlsEnglish();
 
 export type ChatModelCatalogState = {
   hasSnapshot: boolean;
+  initialized?: boolean;
+  retired?: boolean;
+  modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
   refreshFailed?: boolean;
   pendingProviders?: readonly string[];
   status: "idle" | "loading" | "ready" | "error" | "offline";
 };
+
+export type ModelCatalogPresentation = ModelCatalogResult & {
+  hasSnapshot: boolean;
+  retired: boolean;
+};
+
+/** Settings readers share the catalog's accepted display receipt and retirement boundary. */
+export function readAgentModelCatalog(
+  client: ModelCatalogClient | null | undefined,
+  agentId: string | null | undefined,
+): ModelCatalogPresentation {
+  if (!client || !agentId) {
+    return { models: [], hasSnapshot: false, retired: false };
+  }
+  const scope = { agentId };
+  const catalog = peekModelCatalog(client, scope, { allowStale: true });
+  return {
+    ...catalog,
+    models: catalog?.models ?? [],
+    hasSnapshot: catalog !== undefined,
+    retired: isModelCatalogRetired(client, scope),
+  };
+}
 
 export function subscribeModelCatalogCache(
   client: ModelCatalogClient,
@@ -57,23 +86,38 @@ export function subscribeModelCatalogCache(
 }
 
 export function resolveModelCatalogState(
-  result: Pick<ModelCatalogResult, "models" | "refreshFailed"> &
+  result: Pick<ModelCatalogResult, "models" | "refreshFailed" | "modelSelectionPolicy"> &
     Pick<ChatModelCatalogState, "pendingProviders">,
   {
     connected = true,
     loading = false,
     error = null,
+    retired = false,
+    initialized = true,
   }: {
     connected?: boolean;
     loading?: boolean;
     error?: string | null;
+    retired?: boolean;
+    initialized?: boolean;
   } = {},
 ): ChatModelCatalogState {
   return {
-    hasSnapshot: result.models.length > 0 || (!loading && !error),
+    hasSnapshot: initialized && !retired && (result.models.length > 0 || (!loading && !error)),
+    initialized,
+    retired,
+    modelSelectionPolicy: result.modelSelectionPolicy,
     refreshFailed: result.refreshFailed,
     pendingProviders: result.pendingProviders,
-    status: !connected ? "offline" : error ? "error" : loading ? "loading" : "ready",
+    status: !connected
+      ? "offline"
+      : error
+        ? "error"
+        : loading
+          ? "loading"
+          : initialized
+            ? "ready"
+            : "idle",
   };
 }
 
@@ -396,12 +440,13 @@ export async function loadModelCatalog(
 
 export function subscribeModelCatalogChanges(
   gateway: ApplicationGateway,
-  listener: () => void,
+  listener: (invalidation: ModelCatalogInvalidation) => void,
   scope?: ModelCatalogReadScope,
 ): () => void {
   return gateway.subscribeEvents((event) => {
-    if (event.event === "config.changed" || event.event === "chat.metadata.changed") {
-      listener();
+    const invalidation = modelCatalogEventInvalidation(event);
+    if (invalidation) {
+      listener(invalidation);
     } else if (event.event === "models.snapshot" && scope) {
       // SAFETY: The authenticated connect dispatcher emits this as ModelsSnapshotEvent.
       const publication = event.payload as ModelsSnapshotEvent;
@@ -409,7 +454,7 @@ export function subscribeModelCatalogChanges(
         modelCatalogKey(modelCatalogParams(scope)) ===
         modelCatalogKey(modelCatalogParams(publication.scope))
       ) {
-        listener();
+        listener("refresh");
       }
     }
   });

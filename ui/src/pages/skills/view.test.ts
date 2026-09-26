@@ -85,6 +85,9 @@ describe("renderSkills", () => {
         (button) => normalizeText(button) === "Save key",
       );
       expect(input?.required).toBe(true);
+      expect(normalizeText(expectDefined(input?.labels?.[0], "API key label"))).toBe(
+        "API key (OPENAI_API_KEY)",
+      );
       expect(save?.disabled).toBe(disabled);
 
       save?.click();

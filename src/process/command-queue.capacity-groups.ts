@@ -10,7 +10,7 @@ import {
   type LaneGroupState,
 } from "./command-queue.state.js";
 import type { CommandLaneBlockReason, CommandLaneSnapshot } from "./command-queue.types.js";
-import { CommandLane } from "./lanes.js";
+import { CommandLane, SUBAGENT_LANE_PREFIX } from "./lanes.js";
 
 /** Internal bounded drain contract used by the group arbiter. */
 type BoundedDrainLaneFn = (lane: string, maxStarts?: number) => number | void;
@@ -57,7 +57,12 @@ const GROUP_INELIGIBLE_LANES: ReadonlySet<string> = new Set<string>([
   CommandLane.Nested,
 ]);
 
-const GROUP_INELIGIBLE_PREFIXES = ["session:", "nested:", "context-engine-turn-maintenance:"];
+const GROUP_INELIGIBLE_PREFIXES = [
+  "session:",
+  "nested:",
+  SUBAGENT_LANE_PREFIX,
+  "context-engine-turn-maintenance:",
+];
 
 function assertGroupEligibleLane(lane: string): void {
   if (GROUP_INELIGIBLE_LANES.has(lane)) {

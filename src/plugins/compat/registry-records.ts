@@ -6,7 +6,31 @@ import {
 } from "./plugin-sdk-subpath-records.js";
 import type { PluginCompatRecord } from "./types.js";
 
+const ACTIVATION_HINT_METADATA = {
+  status: "active",
+  owner: "plugin-execution",
+  introduced: "2026-04-24",
+  docsPath: "/plugins/manifest",
+  diagnostics: ["activation plan compat reason"],
+  tests: ["src/plugins/activation-planner.test.ts"],
+} as const;
+
 export const PLUGIN_COMPAT_RECORDS = [
+  {
+    code: "channel-webhook-listener-config-inputs",
+    status: "deprecated",
+    owner: "config",
+    introduced: "2026-09-26",
+    deprecated: "2026-09-26",
+    warningStarts: "2026-09-26",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Use legacyWebhook for canonical listener config. Doctor migrates stored webhookPort/webhookHost inputs; deprecated optional TypeScript properties preserve config producer source compatibility until an approved SDK major removal.",
+    docsPath: "/gateway/doctor/config-migrations#channel-webhook-listeners",
+    surfaces: ["TelegramAccountConfig.webhookPort", "TelegramAccountConfig.webhookHost"],
+    diagnostics: ["TypeScript @deprecated annotations and plugin-owned Doctor migration"],
+    tests: ["extensions/telegram/src/doctor.test.ts"],
+  },
   {
     code: "conversation-binding-sync-mutations",
     status: "deprecated",
@@ -45,6 +69,29 @@ export const PLUGIN_COMPAT_RECORDS = [
   ...DEPRECATION_MARKING_COMPAT_RECORDS,
   MEDIA_LEGACY_PROJECTION_COMPAT_RECORD,
   {
+    code: "node-workspace-sync-acquisition",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-08-21",
+    deprecated: "2026-09-15",
+    warningStarts: "2026-09-15",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await context.acquireManagedWorkspaceAsync(request) and release the returned lease in finally. Retain synchronous acquisition for supported external plugins until explicit breaking-release approval.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#managed-node-workspace-acquisition",
+    surfaces: ["OpenClawPluginNodeHostCommandContext.acquireManagedWorkspace"],
+    diagnostics: [
+      "TypeScript @deprecated annotation and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/node-host/invoke-workspace.test.ts",
+      "src/node-host/node-worker-workspace-retention.test.ts",
+      "extensions/codex/src/node-exec-server.test.ts",
+    ],
+    releaseNote:
+      "Node-host plugins can await managed workspace acquisition while existing synchronous callers retain their immediate lease contract.",
+  },
+  {
     code: "plugin-tasks-sync-reads",
     status: "deprecated",
     owner: "sdk",
@@ -67,7 +114,6 @@ export const PLUGIN_COMPAT_RECORDS = [
     tests: [
       "src/infra/sqlite-worker-task-runtime.test.ts",
       "src/infra/sqlite-worker-managed-task-link.test.ts",
-      "extensions/webhooks/index.test.ts",
     ],
     releaseNote:
       "Plugins can opt into worker-backed task and flow reads plus managed-flow writes and child linkage through tasks.async while synchronous methods remain available for external compatibility. Cold registry and configuration preparation remains synchronous.",
@@ -98,7 +144,7 @@ export const PLUGIN_COMPAT_RECORDS = [
       "src/plugins/compat/registry.test.ts",
       "src/plugin-state/plugin-state-store.test.ts",
       "src/plugin-state/plugin-state-store.runtime.test.ts",
-      "src/plugin-sdk/plugin-state-store-runtime.test.ts",
+      "test/type-contracts/plugin-state-store-runtime.ts",
       "src/plugins/loader.runtime-registry.test.ts",
     ],
     releaseNote:
@@ -494,81 +540,48 @@ export const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "activation-agent-harness-hint",
-    status: "active",
-    owner: "plugin-execution",
-    introduced: "2026-04-24",
+    ...ACTIVATION_HINT_METADATA,
     replacement:
       "top-level `cliBackends[]` for CLI aliases and future `agentRuntime` ownership metadata",
-    docsPath: "/plugins/manifest",
     surfaces: ["activation.onAgentHarnesses", "activation planner"],
-    diagnostics: ["activation plan compat reason"],
-    tests: ["src/plugins/activation-planner.test.ts"],
   },
   {
     code: "activation-provider-hint",
-    status: "active",
-    owner: "plugin-execution",
-    introduced: "2026-04-24",
+    ...ACTIVATION_HINT_METADATA,
     replacement: "`providers[]` manifest ownership",
-    docsPath: "/plugins/manifest",
     surfaces: ["activation.onProviders", "activation planner"],
-    diagnostics: ["activation plan compat reason"],
-    tests: ["src/plugins/activation-planner.test.ts"],
   },
   {
     code: "activation-channel-hint",
-    status: "active",
-    owner: "plugin-execution",
-    introduced: "2026-04-24",
+    ...ACTIVATION_HINT_METADATA,
     replacement: "`channels[]` manifest ownership",
-    docsPath: "/plugins/manifest",
     surfaces: ["activation.onChannels", "activation planner"],
-    diagnostics: ["activation plan compat reason"],
-    tests: ["src/plugins/activation-planner.test.ts"],
   },
   {
     code: "activation-command-hint",
-    status: "active",
-    owner: "plugin-execution",
-    introduced: "2026-04-24",
+    ...ACTIVATION_HINT_METADATA,
     replacement: "`commandAliases` or command contribution metadata",
-    docsPath: "/plugins/manifest",
     surfaces: ["activation.onCommands", "activation planner"],
-    diagnostics: ["activation plan compat reason"],
-    tests: ["src/plugins/activation-planner.test.ts"],
   },
   {
     code: "activation-route-hint",
-    status: "active",
-    owner: "plugin-execution",
-    introduced: "2026-04-24",
+    ...ACTIVATION_HINT_METADATA,
     replacement: "HTTP route contribution metadata",
-    docsPath: "/plugins/manifest",
     surfaces: ["activation.onRoutes", "activation planner"],
-    diagnostics: ["activation plan compat reason"],
-    tests: ["src/plugins/activation-planner.test.ts"],
   },
   {
     code: "activation-config-path-hint",
-    status: "active",
-    owner: "plugin-execution",
+    ...ACTIVATION_HINT_METADATA,
     introduced: "2026-04-27",
     replacement: "manifest contribution ownership for root config surfaces",
-    docsPath: "/plugins/manifest",
     surfaces: ["activation.onConfigPaths", "startup plugin selection"],
-    diagnostics: ["activation plan compat reason"],
     tests: ["src/plugins/channel-plugin-ids.test.ts"],
   },
   {
     code: "activation-capability-hint",
-    status: "active",
-    owner: "plugin-execution",
-    introduced: "2026-04-24",
+    ...ACTIVATION_HINT_METADATA,
     replacement: "manifest contribution ownership",
-    docsPath: "/plugins/manifest",
     surfaces: ["activation.onCapabilities", "activation planner"],
-    diagnostics: ["activation plan compat reason"],
-    tests: ["src/plugins/activation-planner.test.ts"],
   },
   {
     code: "agent-harness-sdk-alias",

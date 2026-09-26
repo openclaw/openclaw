@@ -49,9 +49,17 @@ public final class OpenClawChatViewModel {
     public internal(set) var showsThinkingPicker = false
     public internal(set) var preferredVerboseLevel: String
     var prefersExplicitVerboseLevel: Bool
-    public private(set) var modelSelectionID: String = "__default__"
+    private var requestedModelSelectionID: String = "__default__"
+
+    public private(set) var modelSelectionID: String {
+        get { self.projectedModelSelectionID(self.requestedModelSelectionID) }
+        set { self.requestedModelSelectionID = newValue }
+    }
+
     public internal(set) var modelChoices: [OpenClawChatModelChoice] = []
     var modelAvailabilityIsSessionScoped = false
+    var modelSelectionPolicy: OpenClawChatModelSelectionPolicy?
+    var modelCatalogInvalidated = false
     public internal(set) var modelCatalogMessage: String?
     var agentCatalog: OpenClawChatAgentsListResponse?
     var isLoadingAgents = false
@@ -270,6 +278,8 @@ public final class OpenClawChatViewModel {
     private(set) var isTransportDetached = false
     @ObservationIgnored
     private nonisolated(unsafe) var bootstrapTask: Task<Void, Never>?
+    @ObservationIgnored
+    var historyInvalidationRefresh: (requestID: UInt64, task: Task<Void, Never>)?
     var runOwnershipGeneration: UInt64 = 0
     var latestAppliedRunSnapshotRequestID: UInt64 = 0
     var isApplyingRunSnapshot = false
@@ -463,6 +473,7 @@ public final class OpenClawChatViewModel {
         let supportsInFlightRunState: Bool
         let hasInFlightRun: Bool
         let sessionHasActiveRun: Bool
+        var retryAfterMs: Int?
 
         static let failed = RunHistoryRefreshResult(
             applied: false,
@@ -597,6 +608,7 @@ public final class OpenClawChatViewModel {
     /// Permanently retires a replaced presentation without aborting its gateway run.
     public func detachTransport() {
         guard !self.isTransportDetached else { return }
+        self.cancelHistoryInvalidationRefresh()
         self.retireQuestionAuthority()
         self.isTransportDetached = true
         self.invalidateSourceContext()
@@ -743,13 +755,6 @@ public final class OpenClawChatViewModel {
 
     public var showsModelPicker: Bool {
         !self.modelChoices.isEmpty
-    }
-
-    public var defaultModelLabel: String {
-        guard let defaultModelID = normalizedModelSelectionID(sessionDefaults?.model) else {
-            return "Default"
-        }
-        return "Default: \(modelLabel(for: defaultModelID))"
     }
 }
 
@@ -1265,7 +1270,8 @@ extension OpenClawChatViewModel {
         self.invalidateComposerCapabilities()
         self.modelSelectionID = Self.defaultModelSelectionID
         self.modelAvailabilityIsSessionScoped = false
-        self.modelChoices = []
+        self.invalidateModelChoices()
+        self.modelSelectionPolicy = nil
         self.modelCatalogMessage = nil
         replaceMessages([])
         self.isShowingCachedTranscript = false
@@ -1537,9 +1543,8 @@ extension OpenClawChatViewModel {
         let explicitModelID = self.normalizedModelSelectionID(
             currentSession?.model,
             provider: currentSession?.modelProvider)
-        let defaultModelID = self.normalizedModelSelectionID(
-            self.sessionDefaults?.model,
-            provider: self.sessionDefaults?.modelProvider)
+        let defaults = self.modelPickerDefault
+        let defaultModelID = self.normalizedModelSelectionID(defaults.model, provider: defaults.provider)
         if self.lastSuccessfulModelSelectionIDsByTarget[target] == Self.defaultModelSelectionID,
            explicitModelID == defaultModelID
         {
@@ -1561,7 +1566,7 @@ extension OpenClawChatViewModel {
         return trimmed
     }
 
-    private func normalizedModelSelectionID(_ modelID: String?, provider: String? = nil) -> String? {
+    func normalizedModelSelectionID(_ modelID: String?, provider: String? = nil) -> String? {
         guard let modelID else { return nil }
         let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -1591,11 +1596,6 @@ extension OpenClawChatViewModel {
             return nil
         }
         return normalized
-    }
-
-    private func modelLabel(for modelID: String) -> String {
-        self.modelChoices.first(where: { $0.selectionID == modelID || $0.modelID == modelID })?.displayLabel ??
-            modelID
     }
 
     private func applySuccessfulModelSelection(

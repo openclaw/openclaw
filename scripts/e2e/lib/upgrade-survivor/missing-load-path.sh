@@ -8,6 +8,17 @@ start_missing_load_path_baseline() {
   # Published startup may install migration plugins, then require one fresh process.
   # Never restart a live/timed-out child or reinterpret an unrelated startup failure.
   if kill -0 "$gateway_pid" >/dev/null 2>&1; then
+    local observation
+    if observation="$(mktemp "$ARTIFACT_ROOT/missing-load-path/startup-readiness.XXXXXX")"; then
+      {
+        printf '\nStartup readiness observation after failure (does not change the result):\n'
+        if probe_gateway_endpoint /readyz ready "$observation" \
+          --timeout-ms 400 --attempt-timeout-ms 400 --max-body-bytes 16384; then
+          cat "$observation"
+        fi
+      } >"$ARTIFACT_ROOT/missing-load-path/startup-readiness.log" 2>&1 || true
+      rm -f -- "$observation" || true
+    fi
     return "$start_status"
   fi
   wait "$gateway_pid" || exit_status=$?
@@ -55,14 +66,13 @@ run_missing_load_path_fixture() {
         import { compareReleaseVersions, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
         const release = parseReleaseVersion(process.argv[1]);
         if (!release) throw new Error("Invalid baseline release version");
-        if (compareReleaseVersions(release.version, "2026.5.2-beta.1") !== -1 &&
-            compareReleaseVersions(release.version, "2026.9.1") === -1) {
+        if (compareReleaseVersions(release.version, "2026.9.1") === -1) {
           process.stdout.write(release.correctionNumber === undefined ? release.version : release.baseVersion);
         }
       ' "$baseline_version")" || return "$?"
       if [ -n "$companion_version" ]; then
-        # Before May these plugins were bundled; 2026.9.1 exempts official plugin consent.
-        # Intervening startup repairs need their published cohort; core corrections share it.
+        # Before 2026.9.1 exempted official plugin consent, startup repairs needed
+        # their published companion cohort; core corrections share it.
         for plugin in codex discord whatsapp; do
           phase "missing-load-path-baseline-$plugin" openclaw_prepublish_plugin_registry_run_published \
             openclaw_e2e_fixture_plugin_command openclaw -- \

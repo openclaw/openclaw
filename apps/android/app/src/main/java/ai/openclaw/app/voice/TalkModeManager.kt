@@ -147,6 +147,13 @@ private data class TalkStatus(
   val awaitingAgent: Boolean = false,
   val owner: TalkStatusOwner = TalkStatusOwner(),
   val route: TalkModeRoute? = null,
+  val failureAcknowledged: Boolean = false,
+)
+
+/** Identity is the failure's status owner, retained across its relay close event. */
+internal data class TalkFailureNotice(
+  val text: String,
+  val owner: Any,
 )
 
 private data class TalkConfigCache(
@@ -274,9 +281,13 @@ class TalkModeManager internal constructor(
     }
   val awaitingAgent: StateFlow<Boolean> = LocaleResolvingStateFlow(status) { it.awaitingAgent }
 
-  /** Why Talk last failed, until Talk starts again; relay failures end Talk without any other visible trace. */
-  val failureText: StateFlow<String?> =
-    LocaleResolvingStateFlow(status) { if (it.state == TalkStatusState.TalkFailure) it.text.resolveNativeText() else null }
+  /** The current unacknowledged failure; dismissal leaves the diagnostic status intact. */
+  internal val failureNotice: StateFlow<TalkFailureNotice?> =
+    LocaleResolvingStateFlow(status) { status ->
+      status
+        .takeIf { it.state == TalkStatusState.TalkFailure && !it.failureAcknowledged }
+        ?.let { TalkFailureNotice(it.text.resolveNativeText(), it.owner) }
+    }
 
   private fun setStatus(
     text: NativeText,
@@ -293,6 +304,19 @@ class TalkModeManager internal constructor(
 
   private fun setTalkFailure(text: NativeText) {
     setStatus(text, state = TalkStatusState.TalkFailure)
+  }
+
+  /** Dismisses this failure across Chat recreation while retaining its terminal status. */
+  internal fun acknowledgeFailure(notice: TalkFailureNotice) {
+    synchronized(realtimeCapturePauseLock) {
+      status.update { current ->
+        if (current.state == TalkStatusState.TalkFailure && current.owner === notice.owner) {
+          current.copy(failureAcknowledged = true)
+        } else {
+          current
+        }
+      }
+    }
   }
 
   private val _conversation = MutableStateFlow<List<VoiceConversationEntry>>(emptyList())
@@ -929,7 +953,7 @@ class TalkModeManager internal constructor(
       // A live realtime relay owns speech, including gateway-run consult answers;
       // local TTS would repeat them on a media stream the mic's AEC does not cancel.
       if (ttsOnAllResponses && state == "final" && realtimeSessionId == null) {
-        val text = extractTextFromChatEventMessage(message)
+        val text = ChatEventText.assistantTextFromMessage(message)
         if (!text.isNullOrBlank()) {
           playTtsForText(text)
         }
@@ -945,7 +969,7 @@ class TalkModeManager internal constructor(
       } ?: return
     // Cache text from final event so we never need to poll chat.history
     if (terminal) {
-      val text = extractTextFromChatEventMessage(message)
+      val text = ChatEventText.assistantTextFromMessage(message)
       if (!text.isNullOrBlank()) {
         synchronized(completedRunsLock) {
           completedRunTexts[runId] = text
@@ -1973,11 +1997,7 @@ class TalkModeManager internal constructor(
         RealtimeCaptureResume.Resumed
       }
     when (outcome) {
-      RealtimeCaptureResume.Skipped -> {
-        return
-      }
-
-      RealtimeCaptureResume.Resumed -> {
+      RealtimeCaptureResume.Skipped, RealtimeCaptureResume.Resumed -> {
         return
       }
 
@@ -2259,7 +2279,7 @@ class TalkModeManager internal constructor(
             }
           }
         pttRecognitionRung = rung
-        recognizerInstance.startListening(pushToTalkRecognizerIntent(rung))
+        recognizerInstance.startListening(recognizerIntent(rung))
         _isListening.value = true
         setStatus(nativeText("Listening (PTT)"))
         return@synchronized
@@ -2272,7 +2292,7 @@ class TalkModeManager internal constructor(
     throw lastFailure ?: IllegalStateException("Speech recognizer unavailable")
   }
 
-  private fun pushToTalkRecognizerIntent(rung: PushToTalkRecognitionRung): Intent =
+  private fun recognizerIntent(rung: PushToTalkRecognitionRung = PushToTalkRecognitionRung.RestartingSingleSession): Intent =
     Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
       putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
       putExtra(RecognizerIntent.EXTRA_LANGUAGE, resolvedSpeechLocaleTag())
@@ -2286,17 +2306,15 @@ class TalkModeManager internal constructor(
           }
         }
 
-        PushToTalkRecognitionRung.SilenceSegmented -> {
+        PushToTalkRecognitionRung.SilenceSegmented,
+        PushToTalkRecognitionRung.RestartingSingleSession,
+        -> {
+          // Cloud recognition tolerates natural speech and pauses better than on-device recognition.
           putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500)
           putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800)
-          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+          if (rung == PushToTalkRecognitionRung.SilenceSegmented && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             applySilenceSegmentedExtras(this)
           }
-        }
-
-        PushToTalkRecognitionRung.RestartingSingleSession -> {
-          putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500)
-          putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800)
         }
       }
     }
@@ -2444,19 +2462,7 @@ class TalkModeManager internal constructor(
 
   private fun startListeningInternal(markListening: Boolean) {
     val r = recognizer ?: return
-    val intent =
-      Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE, resolvedSpeechLocaleTag())
-        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-        putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
-        // Use cloud recognition — it handles natural speech and pauses better
-        // than on-device which cuts off aggressively after short silences.
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500)
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800)
-      }
-
+    val intent = recognizerIntent()
     if (markListening) {
       setStatus(nativeText("Listening"))
       _isListening.value = true
@@ -2643,21 +2649,11 @@ class TalkModeManager internal constructor(
     val completion = CompletableDeferred<Unit>()
     pttReleaseCompletion = completion
     _isListening.value = false
-    when (rung) {
-      is PushToTalkRecognitionRung.RawAudioSegmented -> {
-        rung.source.requestFinish()
-        // EXTRA_AUDIO_SOURCE is optional: a service may ignore the pipe and run its own mic,
-        // so closing our AudioRecord alone would leave it listening past release. stopListening
-        // forces its endpointer; for pipe-consuming services it is redundant after EOF.
-        runCatching { recognizer?.stopListening() }.onFailure { completion.complete(Unit) }
-      }
-
-      PushToTalkRecognitionRung.SilenceSegmented,
-      PushToTalkRecognitionRung.RestartingSingleSession,
-      -> {
-        runCatching { recognizer?.stopListening() }.onFailure { completion.complete(Unit) }
-      }
-    }
+    (rung as? PushToTalkRecognitionRung.RawAudioSegmented)?.source?.requestFinish()
+    // EXTRA_AUDIO_SOURCE is optional: a service may ignore the pipe and run its own mic,
+    // so closing our AudioRecord alone would leave it listening past release. stopListening
+    // forces its endpointer; for pipe-consuming services it is redundant after EOF.
+    runCatching { recognizer?.stopListening() }.onFailure { completion.complete(Unit) }
     awaitPushToTalkReleaseCompletion(completion, pushToTalkReleaseGraceMs)
     if (pttReleaseCompletion === completion) {
       pttReleaseCompletion = null
@@ -2849,8 +2845,6 @@ class TalkModeManager internal constructor(
       return completedRunTexts.remove(runId)
     }
   }
-
-  private fun extractTextFromChatEventMessage(messageEl: JsonElement?): String? = ChatEventText.assistantTextFromMessage(messageEl)
 
   private suspend fun waitForAssistantText(
     sinceSeconds: Double?,

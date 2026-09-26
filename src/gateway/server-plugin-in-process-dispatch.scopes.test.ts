@@ -12,6 +12,7 @@ import {
 } from "../plugin-sdk/plugin-test-contracts.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { OperatorScope } from "./operator-scopes.js";
@@ -70,7 +71,7 @@ describe("synthetic operator scope attenuation", () => {
         withOperatorToolGatewayAuthority(
           {
             authenticatedUserProfile: {
-              profileId: "scope-owner",
+              profileId: ensureProfileForEmail("scope-owner@example.test").id,
               displayName: null,
               hasAvatar: false,
               updatedAt: 1,
@@ -152,7 +153,7 @@ describe("synthetic operator scope attenuation", () => {
       const dispatch = withOperatorToolGatewayAuthority(
         {
           authenticatedUserProfile: {
-            profileId: "scope-owner",
+            profileId: ensureProfileForEmail("scope-owner@example.test").id,
             displayName: "Scope owner",
             hasAvatar: false,
             updatedAt: 1,
@@ -196,13 +197,13 @@ describe("registered plugin SDK scope attenuation", () => {
       const context = createContext();
       context.resolveGatewayContext = () => context;
       const identified = createOperatorClient({
-        profileId: "scope-proof-operator",
+        profileName: "scope-proof-operator",
         scopes: [`operator.${original}`],
       });
       const sourceController = new AbortController();
       const current = () => true;
       const source = expectDefined(
-        captureGatewayOperatorRunAuthority({
+        await captureGatewayOperatorRunAuthority({
           client: identified,
           context,
           hasCurrentClientAuthority: current,
@@ -291,7 +292,7 @@ describe("registered plugin SDK scope attenuation", () => {
         }
 
         const recaptured = expectDefined(
-          captureGatewayOperatorRunAuthority({
+          await captureGatewayOperatorRunAuthority({
             client: { ...client, connect: { ...client.connect, scopes: ["operator.admin"] } },
             context,
           }),
@@ -420,12 +421,12 @@ describe("native tool scope provenance", () => {
     context.getGatewayMethodRegistry = () =>
       createGatewayMethodRegistry(registry.registry.gatewayMethodDescriptors, registry.registry);
     const sourceClient = createOperatorClient({
-      profileId: "native-scope-owner",
+      profileName: "native-scope-owner",
       scopes: testCase.source ?? [],
     });
     const captured = testCase.system
       ? undefined
-      : captureGatewayOperatorRunAuthority({ client: sourceClient, context });
+      : await captureGatewayOperatorRunAuthority({ client: sourceClient, context });
     const client: GatewayClient = testCase.system
       ? createSyntheticPluginRuntimeClient({ operatorRoleActor: { kind: "system" } })
       : { ...sourceClient, internal: { operatorRunAuthority: captured?.authority } };

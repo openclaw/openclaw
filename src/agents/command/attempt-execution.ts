@@ -1,17 +1,8 @@
 /**
- * Orchestrates one agent attempt across embedded, CLI, and ACP runtimes.
+ * Orchestrates one agent attempt across embedded and CLI runtimes.
  */
-import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
-import {
-  normalizeOptionalLowercaseString,
-  type FastMode,
-} from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
-import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "../../acp/control-plane/manager.turn-timeout.js";
-import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
-import { resolveAcpToolTerminalOutcome } from "../../acp/tool-status.js";
-import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import {
   readChannelSourceTurnId,
   readChannelSourceTurnSameThreadRequired,
@@ -31,9 +22,6 @@ import {
   injectTimestamp,
   timestampOptsFromConfig,
 } from "../../gateway/server-methods/agent-timestamp.js";
-import { emitAgentAuditEvent, emitAgentEvent } from "../../infra/agent-events.js";
-import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
-import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
@@ -48,10 +36,6 @@ import {
 import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
-import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
-import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
-import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
-import { ensureAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { resizeExecApprovalContinuationPrompt } from "../bash-tools.exec-approval-output.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
@@ -87,10 +71,7 @@ import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { hasVerifiedRequesterCompletionHandoff } from "../requester-tool-policy.js";
-import {
-  createAgentRunSupersededAbortError,
-  resolveAgentRunAbortLifecycleFields,
-} from "../run-termination.js";
+import { createAgentRunSupersededAbortError } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
@@ -101,119 +82,21 @@ import {
 } from "../subagents/announce/subagent-announce-handoff.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
+import { resolveHarnessAuthProfileSelection } from "./attempt-auth-selection.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
   resolveFallbackRetryPrompt,
   rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
-import { resolveAgentRunContext } from "./run-context.js";
 import {
   consumeCliSessionForkInStore,
   persistCliSessionForkSuccessorInStore,
   restoreCliSessionForkInStore,
 } from "./session-store.js";
-import type { AgentCommandOpts } from "./types.js";
-
-export {
-  createAcpVisibleTextAccumulator,
-  sessionTranscriptHasContent,
-} from "./attempt-execution.helpers.js";
+import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
 const log = createSubsystemLogger("agents/agent-command");
-
-function shouldSuppressEmbeddedLiveStreamOutput(params: { opts: AgentCommandOpts }): boolean {
-  return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
-}
-
-type HarnessAuthProfileSelection = {
-  authProfileId?: string;
-  authProfileIdSource?: "auto" | "user";
-  authProfileProvider: string;
-  authProfileMode?: string;
-};
-
-function resolveProfileAuthFromStore(params: { agentDir: string; profileId: string | undefined }): {
-  provider?: string;
-  mode?: string;
-} {
-  const profileId = params.profileId?.trim();
-  if (!profileId) {
-    return {};
-  }
-  const credential = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-    externalCliProfileIds: [profileId],
-  }).profiles[profileId];
-  return { provider: credential?.provider, mode: credential?.type };
-}
-
-function resolveHarnessAuthProfileSelection(params: {
-  config: OpenClawConfig;
-  agentDir: string;
-  workspaceDir: string;
-  provider: string;
-  authProfileProvider: string;
-  sessionAuthProfileId?: string;
-  sessionAuthProfileSource?: "auto" | "user";
-  harnessId?: string;
-  harnessRuntime?: string;
-  metadataSnapshot?: PluginMetadataSnapshot;
-  providerAuthAliasesEnabled?: boolean;
-  allowHarnessAuthProfileForwarding: boolean;
-}): HarnessAuthProfileSelection {
-  const sessionAuthProfileId = params.sessionAuthProfileId?.trim();
-  if (sessionAuthProfileId) {
-    const profileAuth = resolveProfileAuthFromStore({
-      agentDir: params.agentDir,
-      profileId: sessionAuthProfileId,
-    });
-    return {
-      authProfileId: sessionAuthProfileId,
-      authProfileIdSource: params.sessionAuthProfileSource,
-      authProfileProvider: profileAuth.provider ?? params.authProfileProvider,
-      authProfileMode: profileAuth.mode,
-    };
-  }
-
-  if (!params.allowHarnessAuthProfileForwarding) {
-    return { authProfileProvider: params.authProfileProvider };
-  }
-
-  const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
-    provider: params.provider,
-    authProfileProvider: params.authProfileProvider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
-    providerAuthAliasesEnabled: params.providerAuthAliasesEnabled,
-    harnessId: params.harnessId,
-    harnessRuntime: params.harnessRuntime,
-    allowHarnessAuthProfileForwarding: params.allowHarnessAuthProfileForwarding,
-  });
-  const harnessAuthProvider = runtimeAuthPlan.harnessAuthProvider;
-  if (!harnessAuthProvider) {
-    return { authProfileProvider: params.authProfileProvider };
-  }
-
-  const store = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-    externalCliProviderIds: [harnessAuthProvider],
-  });
-  const authProfileId = resolveAuthProfileOrder({
-    cfg: params.config,
-    store,
-    provider: harnessAuthProvider,
-  })[0];
-
-  return authProfileId
-    ? {
-        authProfileId,
-        authProfileIdSource: "auto",
-        authProfileProvider: harnessAuthProvider,
-      }
-    : { authProfileProvider: params.authProfileProvider };
-}
 
 function isClaudeCliProvider(provider: string): boolean {
   return provider.trim().toLowerCase() === "claude-cli";
@@ -253,7 +136,7 @@ export function runAgentAttempt(params: {
   runId: string;
   lifecycleGeneration: string;
   opts: AgentCommandOpts;
-  runContext: ReturnType<typeof resolveAgentRunContext>;
+  runContext: AgentRunContext;
   spawnedBy: string | undefined;
   messageChannel: ReturnType<typeof resolveMessageChannel>;
   skillsSnapshot: SkillSnapshot | undefined;
@@ -607,6 +490,7 @@ export function runAgentAttempt(params: {
       lifecycleGeneration: params.lifecycleGeneration,
       onExecutionPhase: onRuntimeActivity,
       lane: params.opts.lane,
+      swarmExecutionLane: params.opts.swarmExecutionLane,
       extraSystemPrompt: params.opts.extraSystemPrompt,
       inputProvenance: params.opts.inputProvenance,
       skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
@@ -708,7 +592,7 @@ export function runAgentAttempt(params: {
                 assertCommitAllowed: assertSettlementCurrent,
               }
             : undefined;
-        const resolveReusableCliSessionBinding = async () => {
+        const prepareCliSessionBinding = async () => {
           const hasManagedClaudeLiveSession = Boolean(
             isClaudeCliProvider(cliExecutionProvider) &&
             cliSessionBinding?.sessionId &&
@@ -730,7 +614,7 @@ export function runAgentAttempt(params: {
               workspaceDir: cliProcessCwd,
             }))
           ) {
-            return cliSessionBinding;
+            return;
           }
 
           log.warn(
@@ -744,20 +628,14 @@ export function runAgentAttempt(params: {
                 ...mutableCliSessionStore,
               })) ?? params.sessionEntry;
           }
-
-          // The store is already cleared above, so no stale --resume can leak to a
-          // later turn. Still return the bound id as the reuse candidate: prepare
-          // re-detects the missing transcript, keeps useResume=false, and arms
-          // raw-transcript reseed from prior OpenClaw history. Returning undefined
-          // strips the candidate and starves reseed, losing warm-stdin continuity.
-          return cliSessionBinding;
         };
         const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(params.sessionKey);
-        const runCliWithSession = async (
-          nextCliSessionId: string | undefined,
-          activeCliSessionBinding = cliSessionBinding,
-        ) => {
-          const forkCliSessionOnResume = activeCliSessionBinding?.forkNextResume === true;
+        await prepareCliSessionBinding();
+        // Retain the cleared binding as the preparation candidate so missing-transcript
+        // recovery can reseed history without resuming the stale CLI session.
+        let result: EmbeddedAgentRunResult;
+        try {
+          const forkCliSessionOnResume = cliSessionBinding?.forkNextResume === true;
           const resolvedCliBackend = resolveCliBackendConfig(cliExecutionProvider, params.cfg, {
             agentId: params.sessionAgentId,
           });
@@ -766,10 +644,10 @@ export function runAgentAttempt(params: {
             throw new Error(`CLI backend "${cliExecutionProvider}" does not support session forks`);
           }
           const forkStoreParams =
-            supportsCliSessionFork && nextCliSessionId && mutableCliSessionStore
+            supportsCliSessionFork && cliSessionBinding?.sessionId && mutableCliSessionStore
               ? {
                   provider: cliExecutionProvider,
-                  expectedCliSessionId: nextCliSessionId,
+                  expectedCliSessionId: cliSessionBinding.sessionId,
                   ...mutableCliSessionStore,
                   assertCommitAllowed: () => {
                     assertSettlementCurrent();
@@ -777,7 +655,7 @@ export function runAgentAttempt(params: {
                   },
                 }
               : undefined;
-          return await runCliAgent({
+          result = await runCliAgent({
             ...buildCommonRunParams(),
             diagnosticOwner,
             sessionEntry: params.sessionEntry,
@@ -795,11 +673,8 @@ export function runAgentAttempt(params: {
             requireExplicitMessageTarget:
               params.opts.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             cliSessionBindingFacts: params.opts.cliSessionBindingFacts,
-            cliSessionId: nextCliSessionId,
-            cliSessionBinding:
-              nextCliSessionId === activeCliSessionBinding?.sessionId
-                ? activeCliSessionBinding
-                : undefined,
+            cliSessionId: cliSessionBinding?.sessionId,
+            cliSessionBinding,
             forkCliSessionOnResume,
             ...(forkStoreParams
               ? {
@@ -871,7 +746,7 @@ export function runAgentAttempt(params: {
                         params.sessionKey,
                         mediaTaskIdsBefore,
                       ) ||
-                      retry.sessionId !== activeCliSessionBinding?.sessionId
+                      retry.sessionId !== cliSessionBinding?.sessionId
                     ) {
                       return false;
                     }
@@ -927,14 +802,6 @@ export function runAgentAttempt(params: {
                 }
               : {}),
           });
-        };
-        const activeCliSessionBinding = await resolveReusableCliSessionBinding();
-        let result: EmbeddedAgentRunResult;
-        try {
-          result = await runCliWithSession(
-            activeCliSessionBinding?.sessionId,
-            activeCliSessionBinding,
-          );
         } catch (err) {
           const failedCliSessionBinding = getCliSessionBinding(
             params.sessionEntry,
@@ -946,7 +813,7 @@ export function runAgentAttempt(params: {
             shouldClearFailedCliSessionBinding({
               error: err,
               binding: failedCliSessionBinding,
-              bindingReplacedDuringRun: failedCliSessionId !== activeCliSessionBinding?.sessionId,
+              bindingReplacedDuringRun: failedCliSessionId !== cliSessionBinding?.sessionId,
               hasNewGeneratedMediaTask: hasNewGeneratedMediaTaskForSessionKey(
                 params.sessionKey,
                 mediaTaskIdsBefore,
@@ -1034,7 +901,8 @@ export function runAgentAttempt(params: {
     execApprovalContinuationPromptRange: embeddedExecApprovalContinuationPromptRange,
     execApprovalContinuationTranscriptPromptRange: continuationTranscriptPromptRange,
     // Hidden internal runs lack an event consumer; visible lanes still feed UI and parent relays.
-    suppressLiveStreamOutput: shouldSuppressEmbeddedLiveStreamOutput(params),
+    suppressLiveStreamOutput:
+      params.opts.sessionEffects === "internal" && params.opts.deliver !== true,
     abortSignal: params.opts.abortSignal,
     bootstrapContextMode: params.opts.bootstrapContextMode,
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
@@ -1093,447 +961,5 @@ export function runAgentAttempt(params: {
     readChannelSourceTurnSameThreadRequired(params.runContext),
   );
   return runEmbeddedAgent(embeddedRunParams);
-}
-
-export function buildAcpResult(params: {
-  payloadText: string;
-  terminalReply?: AgentRunTerminalReplySnapshot;
-  startedAt: number;
-  stopReason?: string;
-  resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"];
-  abortSignal?: AbortSignal;
-}) {
-  const normalizedFinalPayload = normalizeReplyPayload({
-    text: params.payloadText,
-  });
-  const payloads = normalizedFinalPayload ? [normalizedFinalPayload] : [];
-  const abortFields = resolveAgentRunAbortLifecycleFields(params.abortSignal);
-  const resultCancelled = params.resultStatus === "cancelled";
-  return {
-    payloads,
-    meta: {
-      durationMs: Date.now() - params.startedAt,
-      aborted: abortFields.aborted ?? resultCancelled,
-      stopReason: abortFields.stopReason ?? (resultCancelled ? "stop" : params.stopReason),
-      ...(params.terminalReply ? { terminalReply: params.terminalReply } : {}),
-    },
-  };
-}
-
-type AcpRunIdentity = Pick<
-  Parameters<typeof emitAgentEvent>[0],
-  "runId" | "sessionKey" | "agentId"
->;
-type AcpLifecycleContext = AcpRunIdentity & {
-  lifecycleGeneration?: string;
-  auditOnly?: boolean;
-  completionSource?: "reply-dispatch";
-};
-
-function acpRunIdentity(params: AcpRunIdentity) {
-  return {
-    runId: params.runId,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-  };
-}
-
-function emitAcpLifecycleEvent(params: AcpLifecycleContext, data: Record<string, unknown>) {
-  const emit = params.auditOnly ? emitAgentAuditEvent : emitAgentEvent;
-  emit({
-    ...acpRunIdentity(params),
-    ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
-    stream: "lifecycle",
-    data,
-  });
-}
-
-export function emitAcpLifecycleStart(params: AcpLifecycleContext & { startedAt: number }) {
-  emitAcpLifecycleEvent(params, {
-    phase: "start",
-    ...(params.completionSource ? { completionSource: params.completionSource } : {}),
-    startedAt: params.startedAt,
-  });
-}
-
-const ACP_PROXY_ENV_KEYS = [
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "all_proxy",
-] as const;
-type ActiveAcpTool = AcpRunIdentity & {
-  toolCallId: string;
-  toolName: string;
-  startedAt: number;
-};
-
-export type AcpToolLifecycleTracker = {
-  active: Map<string, ActiveAcpTool>;
-  terminalToolCallIds: Set<string>;
-  saturated: boolean;
-};
-
-const MAX_TRACKED_ACP_TOOLS = 4_096;
-
-export function createAcpToolLifecycleTracker(): AcpToolLifecycleTracker {
-  return {
-    active: new Map(),
-    terminalToolCallIds: new Set(),
-    saturated: false,
-  };
-}
-
-function acpAuditToolName(kind: unknown): string {
-  switch (kind) {
-    case "read":
-    case "edit":
-    case "delete":
-    case "move":
-    case "search":
-    case "execute":
-    case "fetch":
-    case "switch_mode":
-    case "think":
-    case "other":
-      return `acp_${kind}`;
-    default:
-      return "acp_tool";
-  }
-}
-
-function resolveAcpToolTerminalReason(
-  signal: AbortSignal | undefined,
-  stopReason?: string,
-  error?: unknown,
-  resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"],
-): "failed" | "cancelled" | "timed_out" {
-  const abortFields = resolveAgentRunAbortLifecycleFields(signal);
-  if (abortFields.aborted) {
-    return abortFields.stopReason === "timeout" ? "timed_out" : "cancelled";
-  }
-  const normalizedStopReason = normalizeOptionalLowercaseString(stopReason);
-  if (normalizedStopReason === "timeout") {
-    return "timed_out";
-  }
-  if (resultStatus === "cancelled") {
-    return "cancelled";
-  }
-  if (
-    error instanceof Error &&
-    (error as Error & { detailCode?: unknown }).detailCode === ACP_TURN_TIMEOUT_DETAIL_CODE
-  ) {
-    return "timed_out";
-  }
-  if (
-    normalizedStopReason === "cancel" ||
-    normalizedStopReason === "cancelled" ||
-    normalizedStopReason === "manual-cancel"
-  ) {
-    return "cancelled";
-  }
-  return "failed";
-}
-
-export function resolveAcpLifecycleEndFields(
-  signal: AbortSignal | undefined,
-  stopReason?: string,
-  resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"],
-) {
-  const abortFields = resolveAgentRunAbortLifecycleFields(signal);
-  if (abortFields.aborted) {
-    return abortFields;
-  }
-  const terminalReason = resolveAcpToolTerminalReason(
-    undefined,
-    stopReason,
-    undefined,
-    resultStatus,
-  );
-  if (terminalReason === "timed_out") {
-    return { aborted: true, stopReason: "timeout", status: "timed_out" } as const;
-  }
-  if (terminalReason === "cancelled") {
-    return { aborted: true, stopReason: "stop", status: "cancelled" } as const;
-  }
-  return {};
-}
-
-function emitAcpToolExecutionEvent(
-  params: AcpRunIdentity & {
-    toolTracker: AcpToolLifecycleTracker;
-    abortSignal?: AbortSignal;
-    event: Extract<AcpRuntimeEvent, { type: "tool_call" }>;
-  },
-): void {
-  const { event } = params;
-  const now = Date.now();
-  const toolCallId = event.toolCallId?.trim() ? event.toolCallId : undefined;
-  const activeTool = toolCallId ? params.toolTracker.active.get(toolCallId) : undefined;
-  const terminalOutcome = resolveAcpToolTerminalOutcome(event.status);
-  const toolName = acpAuditToolName(event.kind);
-  // ACP runtimes may replay terminal updates. Keep the closed identity until the run ends so a
-  // late progress/terminal pair cannot reopen one invocation as a second durable audit action.
-  if (toolCallId && !activeTool) {
-    if (params.toolTracker.terminalToolCallIds.has(toolCallId)) {
-      return;
-    }
-    // Never evict an open identity: once this run reaches its bound, ignore new identities until
-    // lifecycle cleanup releases the complete set. Other runs own independent trackers.
-    const trackedIdentities =
-      params.toolTracker.active.size + params.toolTracker.terminalToolCallIds.size;
-    if (params.toolTracker.saturated || trackedIdentities >= MAX_TRACKED_ACP_TOOLS) {
-      params.toolTracker.saturated = true;
-      return;
-    }
-  }
-  // Without an identity, wait for a terminal event so every observed action closes immediately.
-  // Opening on progress would leave an unmatched audit action if the runtime omits its result.
-  const startsUnidentifiedTool = toolCallId === undefined && terminalOutcome !== undefined;
-  if (!activeTool && (toolCallId !== undefined || startsUnidentifiedTool)) {
-    emitTrustedDiagnosticEvent({
-      type: "tool.execution.started",
-      ...acpRunIdentity(params),
-      ...(toolCallId ? { toolCallId } : {}),
-      toolName,
-      toolSource: "core",
-      toolOwner: "acp",
-    });
-    if (toolCallId) {
-      params.toolTracker.active.set(toolCallId, {
-        ...acpRunIdentity(params),
-        toolCallId,
-        toolName,
-        startedAt: now,
-      });
-    }
-  }
-  if (!terminalOutcome) {
-    return;
-  }
-  const terminalReason = resolveAcpToolTerminalReason(
-    params.abortSignal,
-    undefined,
-    undefined,
-    terminalOutcome === "cancelled" ? "cancelled" : undefined,
-  );
-  const durationMs = Math.max(0, now - (activeTool?.startedAt ?? now));
-  const terminalFields = {
-    ...acpRunIdentity(params),
-    ...(toolCallId ? { toolCallId } : {}),
-    toolName: activeTool?.toolName ?? toolName,
-    toolSource: "core" as const,
-    toolOwner: "acp",
-    durationMs,
-  };
-  emitTrustedDiagnosticEvent(
-    terminalOutcome === "completed"
-      ? { type: "tool.execution.completed", ...terminalFields }
-      : {
-          type: "tool.execution.error",
-          ...terminalFields,
-          errorCategory: terminalReason === "cancelled" ? "aborted" : "acp_tool",
-          terminalReason,
-        },
-  );
-  if (toolCallId) {
-    params.toolTracker.active.delete(toolCallId);
-    params.toolTracker.terminalToolCallIds.add(toolCallId);
-  }
-}
-
-function finalizeAcpToolsForRun(
-  toolTracker: AcpToolLifecycleTracker,
-  runId: string,
-  terminalReason: "failed" | "cancelled" | "timed_out",
-): void {
-  const now = Date.now();
-  for (const activeTool of toolTracker.active.values()) {
-    emitTrustedDiagnosticEvent({
-      type: "tool.execution.error",
-      runId,
-      ...(activeTool.sessionKey ? { sessionKey: activeTool.sessionKey } : {}),
-      ...(activeTool.agentId ? { agentId: activeTool.agentId } : {}),
-      toolName: activeTool.toolName,
-      toolSource: "core",
-      toolOwner: "acp",
-      toolCallId: activeTool.toolCallId,
-      durationMs: Math.max(0, now - activeTool.startedAt),
-      errorCategory: terminalReason === "cancelled" ? "aborted" : "acp_tool_incomplete",
-      terminalReason,
-    });
-  }
-  toolTracker.active.clear();
-  toolTracker.terminalToolCallIds.clear();
-  toolTracker.saturated = false;
-}
-
-function resolvePresentProxyEnvKeys(env: NodeJS.ProcessEnv = process.env): string[] {
-  return ACP_PROXY_ENV_KEYS.filter((key) => Boolean(env[key]?.trim()));
-}
-
-function sanitizeAcpDiagnosticText(value: string): string {
-  return truncateUtf16Safe(redactSensitiveText(value).replace(/\s+/g, " ").trim(), 240);
-}
-
-function acpRuntimeEventDiagnostics(event: AcpRuntimeEvent): Record<string, unknown> {
-  if (event.type === "status" || event.type === "tool_call") {
-    return {
-      eventType: event.type,
-      text: sanitizeAcpDiagnosticText(event.text),
-      ...(event.tag ? { tag: event.tag } : {}),
-      ...(event.type === "tool_call"
-        ? {
-            ...(event.status ? { status: sanitizeAcpDiagnosticText(event.status) } : {}),
-            ...(event.title ? { title: sanitizeAcpDiagnosticText(event.title) } : {}),
-            ...(event.toolCallId
-              ? { toolCallId: sanitizeAcpDiagnosticText(event.toolCallId) }
-              : {}),
-          }
-        : {}),
-    };
-  }
-  if (event.type === "error") {
-    return {
-      eventType: event.type,
-      message: sanitizeAcpDiagnosticText(event.message),
-      ...(event.code ? { code: sanitizeAcpDiagnosticText(event.code) } : {}),
-      ...(typeof event.retryable === "boolean" ? { retryable: event.retryable } : {}),
-    };
-  }
-  if (event.type === "done") {
-    return {
-      eventType: event.type,
-      ...(event.status ? { status: event.status } : {}),
-      ...(event.stopReason ? { stopReason: sanitizeAcpDiagnosticText(event.stopReason) } : {}),
-    };
-  }
-  return {
-    eventType: event.type,
-    stream: event.stream ?? "output",
-  };
-}
-
-export function emitAcpPromptSubmitted(params: { runId: string; sessionKey?: string; at: number }) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "acp",
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    data: {
-      phase: "prompt_submitted",
-      at: params.at,
-      proxyEnvKeys: resolvePresentProxyEnvKeys(),
-    },
-  });
-}
-
-export function emitAcpRuntimeEvent(
-  params: AcpRunIdentity & {
-    toolTracker: AcpToolLifecycleTracker;
-    event: AcpRuntimeEvent;
-    abortSignal?: AbortSignal;
-    auditOnly?: boolean;
-  },
-) {
-  if (params.event.type === "tool_call") {
-    emitAcpToolExecutionEvent({
-      runId: params.runId,
-      toolTracker: params.toolTracker,
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
-      event: params.event,
-    });
-  }
-  if (!params.auditOnly) {
-    emitAgentEvent({
-      runId: params.runId,
-      stream: "acp",
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      data: {
-        phase: "runtime_event",
-        ...acpRuntimeEventDiagnostics(params.event),
-      },
-    });
-  }
-}
-
-function emitAcpTerminalLifecycle(
-  params: AcpLifecycleContext,
-  terminal: Record<string, unknown> & { phase: "end" | "error"; endedAt: number },
-) {
-  const data = {
-    ...terminal,
-    executionSettled: true,
-    ...(params.completionSource ? { completionSource: params.completionSource } : {}),
-  };
-  emitAcpLifecycleEvent(params, data);
-  return buildAgentRunTerminalOutcomeFromLifecycleEvent({
-    phase: terminal.phase,
-    data,
-    endedAt: terminal.endedAt,
-  });
-}
-
-export function emitAcpLifecycleEnd(
-  params: AcpLifecycleContext & {
-    toolTracker: AcpToolLifecycleTracker;
-    endFields: ReturnType<typeof resolveAcpLifecycleEndFields>;
-    terminalReply?: AgentRunTerminalReplySnapshot;
-  },
-) {
-  finalizeAcpToolsForRun(
-    params.toolTracker,
-    params.runId,
-    params.endFields.stopReason === "timeout"
-      ? "timed_out"
-      : params.endFields.aborted
-        ? "cancelled"
-        : "failed",
-  );
-  return emitAcpTerminalLifecycle(params, {
-    phase: "end",
-    endedAt: Date.now(),
-    ...params.endFields,
-    ...(params.terminalReply ? { terminalReply: params.terminalReply } : {}),
-  });
-}
-
-export function emitAcpLifecycleError(
-  params: AcpLifecycleContext & {
-    toolTracker: AcpToolLifecycleTracker;
-    error: unknown;
-    abortSignal?: AbortSignal;
-    terminalOutcome?: "blocked";
-  },
-) {
-  const terminalReason = resolveAcpToolTerminalReason(params.abortSignal, undefined, params.error);
-  finalizeAcpToolsForRun(params.toolTracker, params.runId, terminalReason);
-  const lifecycleFields =
-    params.terminalOutcome === "blocked"
-      ? ({ livenessState: "blocked" } as const)
-      : terminalReason === "timed_out"
-        ? ({ aborted: true, stopReason: "timeout", status: "timed_out" } as const)
-        : resolveAgentRunAbortLifecycleFields(params.abortSignal);
-  return emitAcpTerminalLifecycle(params, {
-    phase: "error",
-    ...(!params.auditOnly ? { error: formatAcpErrorChain(params.error) } : {}),
-    endedAt: Date.now(),
-    ...lifecycleFields,
-  });
-}
-
-export function emitAcpAssistantDelta(params: { runId: string; text: string; delta: string }) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "assistant",
-    data: {
-      text: params.text,
-      delta: params.delta,
-    },
-  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -280,11 +280,7 @@ final class RemotePortTunnel: @unchecked Sendable {
             if await PortGuardian.shared.isListening(port: Int(localPort), pid: processIdentifier) {
                 return
             }
-            do {
-                try await Task.sleep(nanoseconds: 100_000_000)
-            } catch {
-                throw error
-            }
+            try await Task.sleep(nanoseconds: 100_000_000)
         } while Date() < deadline
 
         let stderr = stderrCapture.snapshot()

@@ -1,5 +1,5 @@
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Control UI module implements tool display behavior.
 import SHARED_TOOL_DISPLAY_JSON from "../../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" with { type: "json" };
 import {
   defaultTitle,
@@ -57,16 +57,9 @@ const EMOJI_ICON_MAP: Record<string, ChatToolIconName> = {
   "💬": "messageSquare",
 };
 
-function iconForEmoji(emoji?: string): ChatToolIconName {
-  if (!emoji) {
-    return "puzzle";
-  }
-  return EMOJI_ICON_MAP[emoji] ?? "puzzle";
-}
-
 function convertSpec(spec?: SharedToolDisplaySpec): ToolDisplaySpec {
   return {
-    icon: iconForEmoji(spec?.emoji),
+    icon: EMOJI_ICON_MAP[spec?.emoji ?? ""] ?? "puzzle",
     title: spec?.title,
     label: spec?.label,
     detailKeys: spec?.detailKeys,
@@ -84,24 +77,10 @@ const TOOL_MAP: Record<string, ToolDisplaySpec> = Object.fromEntries(
 );
 
 function shortenHomeInString(input: string): string {
-  if (!input) {
-    return input;
-  }
-
   // Browser-safe home shortening: avoid importing Node-only helpers (keeps Vite builds working in Docker/CI).
-  const patterns = [
-    { re: /^\/Users\/[^/]+(\/|$)/, replacement: "~$1" }, // macOS
-    { re: /^\/home\/[^/]+(\/|$)/, replacement: "~$1" }, // Linux
-    { re: /^C:\\Users\\[^\\]+(\\|$)/i, replacement: "~$1" }, // Windows
-  ] as const;
-
-  for (const pattern of patterns) {
-    if (pattern.re.test(input)) {
-      return input.replace(pattern.re, pattern.replacement);
-    }
-  }
-
-  return input;
+  return input
+    .replace(/^\/(?:Users|home)\/[^/]+(\/|$)/, "~$1")
+    .replace(/^[A-Za-z]:\\Users\\[^\\]+(\\|$)/i, "~$1");
 }
 
 export function resolveToolDisplay(params: {
@@ -156,10 +135,6 @@ function isCanvasHttpPath(pathname: string): boolean {
   );
 }
 
-function isExternalHttpUrl(entry: URL): boolean {
-  return entry.protocol === "http:" || entry.protocol === "https:";
-}
-
 function sanitizeCanvasEntryUrl(
   rawEntryUrl: string,
   allowExternalEmbedUrls = false,
@@ -167,7 +142,7 @@ function sanitizeCanvasEntryUrl(
   try {
     const entry = new URL(rawEntryUrl, "http://localhost");
     if (entry.origin !== "http://localhost") {
-      if (!allowExternalEmbedUrls || !isExternalHttpUrl(entry)) {
+      if (!allowExternalEmbedUrls || !isHttpUrl(entry)) {
         return undefined;
       }
       return entry.toString();

@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { ok, type Result } from "@openclaw/normalization-core/result";
@@ -11,7 +10,6 @@ import {
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import {
-  openClawStateDatabaseCache,
   registerOpenClawStateDatabaseLifecycleListener,
   requireOpenClawStateDatabaseIdentity,
 } from "./openclaw-state-db-cache.js";
@@ -21,7 +19,6 @@ import {
 } from "./openclaw-state-db-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import {
   captureUserProfileAuthorityRead,
@@ -31,6 +28,9 @@ import {
   readUserProfileVersion,
 } from "./user-profile-events.js";
 import {
+  profileCatalogPath,
+  projectHasMultipleSessionSharingIdentities,
+  selectHasMultipleSessionSharingIdentities,
   selectUserProfileIdentityInDatabase,
   selectUserProfileDisplaysInDatabase,
   selectUserProfileReferenceInDatabase,
@@ -38,6 +38,7 @@ import {
 import type { UserProfileEmailBindingChange } from "./user-profile-mutation.js";
 import {
   applyUserProfileEmailBinding,
+  bindPreparedUserProfileIdentity,
   projectUserProfileDisplay,
   projectCatalogUserProfileIdentity,
   matchUserProfileReference,
@@ -56,10 +57,14 @@ import type {
 } from "./user-profiles.types.js";
 
 export { projectUserProfileDisplay } from "./user-profiles-internal.js";
-export {
-  readCurrentUserProfileAliases,
-  hasMultipleSessionSharingIdentities,
-} from "./user-profile-identity.read.js";
+export { readCurrentUserProfileAliases } from "./user-profile-identity.read.js";
+
+export const hasMultipleSessionSharingIdentities = (options: OpenClawStateDatabaseOptions = {}) =>
+  readProfileCatalog(
+    options,
+    projectHasMultipleSessionSharingIdentities,
+    selectHasMultipleSessionSharingIdentities,
+  ) ?? false;
 
 /** Exact durable identity facts; never use display-reference prefix matching for authority. */
 export function readUserProfileIdentity(
@@ -91,6 +96,12 @@ export function readResidentUserProfileId(
     throw new Error("User profile catalog is not ready");
   }
   return resolveCatalogProfile(catalog.rows, profileId)?.id;
+}
+
+/** Committed canonical row identity is the revision of catalog-derived avatar facts. */
+export function readResidentUserProfileRevision(profileId: string, pathname: string) {
+  const catalog = profileCatalogs.get(pathname);
+  return catalog?.valid ? resolveCatalogProfile(catalog.rows, profileId) : undefined;
 }
 type ProfileCatalog = {
   rows: Map<string, ProfileDisplayRow>;
@@ -171,8 +182,6 @@ function observeEmailBindings(): void {
     }
   });
 }
-const profileCatalogPath = (options: OpenClawStateDatabaseOptions) =>
-  path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
 
 function readProfileCatalog<T>(
   options: OpenClawStateDatabaseOptions,
@@ -483,11 +492,7 @@ export function retainUserProfileCatalog(options: OpenClawStateDatabaseOptions =
   return () => releaseProfileCatalog(catalog, lease);
 }
 
-/** Prepare once off-thread; execution reads only committed facts retained by this owner. */
-export async function prepareUserProfileIdentity(
-  profileId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): Promise<PreparedUserProfileIdentity> {
+async function acquireUserProfileCatalog(options: OpenClawStateDatabaseOptions = {}) {
   const context = captureOpenClawStateWorkerContext(options);
   const authority = await captureUserProfileAuthorityRead(context.admission);
   const pathname = context.admission.databasePath;
@@ -562,69 +567,30 @@ export async function prepareUserProfileIdentity(
     for (const publication of profileMutationPublications) {
       retainProfileMutationPublicationCatalog(publication, catalog, true);
     }
-    // Registration now sees prepared rows and never needs a cold host read.
-    const cached = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(pathname);
-    if (cached) {
-      profileCatalogHandles.set(cached.db, catalog.rows);
-    }
   }
   observeProfileCatalogs(refreshObserver);
   const retained = catalog;
   const identity = retained.identity.key;
   const rows = retained.rows;
   const bindings = profileBindings.get(rows)!;
-  const initial = [...bindings.byEmail.values()].filter(
-    (binding) => binding.profileId === profileId,
-  );
-  const ids = Object.freeze(
-    initial.flatMap((binding) => (binding.bindingId ? [binding.bindingId] : [])).toSorted(),
-  );
-  const lease = Symbol("prepared profile identity");
+  const lease = Symbol("prepared profile catalog");
   retained.leases.add(lease);
   let active = true;
-  const assertCurrent = (requiredEmailBindingIds: readonly string[] = []) => {
-    context.admission.assertCurrent();
-    if (
-      !active ||
-      !retained.valid ||
-      context.admission.identity.key !== identity ||
-      retained.identity.key !== identity ||
-      retained.rows !== rows
-    ) {
-      throw new UserProfileNotFoundError(profileId);
-    }
-    authority.assertSettled(profileId);
-    if (
-      resolveCatalogProfile(rows, profileId)?.id !== profileId ||
-      requiredEmailBindingIds.some((id) => bindings.byId.get(id) !== profileId)
-    ) {
-      throw new UserProfileNotFoundError(profileId);
-    }
-  };
   return {
-    get emailBindingIds() {
-      assertCurrent();
-      if (initial.some((binding) => binding.bindingId === null)) {
+    rows,
+    bindings,
+    assertCurrent(profileId: string) {
+      context.admission.assertCurrent();
+      if (
+        !active ||
+        !retained.valid ||
+        context.admission.identity.key !== identity ||
+        retained.identity.key !== identity ||
+        retained.rows !== rows
+      ) {
         throw new UserProfileNotFoundError(profileId);
       }
-      return ids;
-    },
-    readCurrentFacts(this: void, requiredEmailBindingIds) {
-      assertCurrent(requiredEmailBindingIds);
-      const aliases = new Set([profileId]);
-      for (const row of rows.values()) {
-        if (row.merged_into === profileId) {
-          aliases.add(row.id);
-        }
-      }
-      return {
-        profile: {
-          profileId,
-          emails: [...(bindings.emailsByProfile.get(profileId) ?? [])].toSorted(),
-          assignedRole: rows.get(profileId)?.role || null,
-        },
-        aliases,
-      };
+      authority.assertSettled(profileId);
     },
     release(this: void) {
       if (active) {
@@ -633,6 +599,30 @@ export async function prepareUserProfileIdentity(
       }
     },
   };
+}
+
+/** Retain one off-thread preparation for a synchronous batch of current canonical identities. */
+export async function prepareUserProfileCatalog(options: OpenClawStateDatabaseOptions = {}) {
+  const catalog = await acquireUserProfileCatalog(options);
+  return {
+    readCurrentIdentity(this: void, profileId: string) {
+      catalog.assertCurrent(profileId);
+      const profile = projectCatalogUserProfileIdentity(catalog.rows, profileId);
+      if (profile && profile.profileId !== profileId) {
+        catalog.assertCurrent(profile.profileId);
+      }
+      return profile;
+    },
+    release: catalog.release,
+  };
+}
+
+/** Prepare once off-thread; execution reads only committed facts retained by this owner. */
+export async function prepareUserProfileIdentity(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<PreparedUserProfileIdentity> {
+  return bindPreparedUserProfileIdentity(profileId, await acquireUserProfileCatalog(options));
 }
 
 /** Stage exact changed keys before commit so observers always see the whole committed catalog. */

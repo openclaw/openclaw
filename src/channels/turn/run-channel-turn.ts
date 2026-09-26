@@ -248,6 +248,18 @@ export async function runChannelTurn<
   });
 
   const admission = resolved.admission ?? preflightAdmission ?? ({ kind: "dispatch" } as const);
+  const emitFinalize = (event: { event: "done" | "error"; error?: unknown }) =>
+    emit({
+      ...params,
+      accountId: resolved.accountId ?? params.accountId,
+      event: {
+        stage: "finalize",
+        messageId: input.id,
+        sessionKey: resolved.routeSessionKey,
+        admission: admission.kind,
+        ...event,
+      },
+    });
   let result: ChannelTurnResult<TDispatchResult>;
   try {
     if ("runDispatch" in resolved) {
@@ -294,46 +306,15 @@ export async function runChannelTurn<
     } catch {
       // Preserve the original dispatch error.
     }
-    emit({
-      ...params,
-      accountId: resolved.accountId ?? params.accountId,
-      event: {
-        stage: "finalize",
-        event: "done",
-        messageId: input.id,
-        sessionKey: resolved.routeSessionKey,
-        admission: admission.kind,
-      },
-    });
+    emitFinalize({ event: "done" });
     throw err;
   }
 
   try {
     await params.adapter.onFinalize?.(result);
-    emit({
-      ...params,
-      accountId: resolved.accountId ?? params.accountId,
-      event: {
-        stage: "finalize",
-        event: "done",
-        messageId: input.id,
-        sessionKey: resolved.routeSessionKey,
-        admission: admission.kind,
-      },
-    });
+    emitFinalize({ event: "done" });
   } catch (err) {
-    emit({
-      ...params,
-      accountId: resolved.accountId ?? params.accountId,
-      event: {
-        stage: "finalize",
-        event: "error",
-        messageId: input.id,
-        sessionKey: resolved.routeSessionKey,
-        admission: admission.kind,
-        error: err,
-      },
-    });
+    emitFinalize({ event: "error", error: err });
     throw err;
   }
 

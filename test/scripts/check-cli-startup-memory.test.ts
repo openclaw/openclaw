@@ -15,7 +15,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing } from "../../scripts/check-cli-startup-memory.mjs";
 import { withEnv } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -29,6 +29,15 @@ const successSpawn = () => ({
   status: 0,
   stderr: "__OPENCLAW_MAX_RSS_KB__=1024\n",
   stdout: "",
+});
+
+beforeEach(() => {
+  vi.stubEnv("GITHUB_ACTIONS", "");
+  vi.stubEnv("GITHUB_STEP_SUMMARY", "");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 function expectNoNodeStack(stderr: string): void {
@@ -181,17 +190,35 @@ describe("check-cli-startup-memory", () => {
     );
   });
 
-  it("still fails when most cold-start RSS samples exceed the bounded tolerance", () => {
+  it.each(["", "true"])("reports cold-start RSS overages with Actions=%s", (actions) => {
     if (process.platform !== "darwin" && process.platform !== "linux") {
       return;
     }
 
     const helpLimitMb = testing.resolveDefaultLimitsMb(process.platform).help;
     const helpSamplesMb = [helpLimitMb + 1.5, helpLimitMb + 1.25, helpLimitMb - 20];
-
-    expect(() => runStartupMemoryCheckWithHelpSamples(helpSamplesMb)).toThrow(
-      `--help median max RSS ${(helpLimitMb + 1.25).toFixed(1)} MB exceeded effective ceiling ${helpLimitMb + 1} MB (base limit ${helpLimitMb} MB; RSS tolerance 1 MB; samples: ${helpSamplesMb.map((sample) => sample.toFixed(1)).join(", ")} MB)`,
-    );
+    const tempRoot = tempRoots.make("openclaw-startup-memory-limit-");
+    const summaryPath = path.join(tempRoot, "github-summary.md");
+    vi.stubEnv("CI", "1");
+    vi.stubEnv("GITHUB_ACTIONS", actions);
+    vi.stubEnv("GITHUB_STEP_SUMMARY", summaryPath);
+    const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
+    const run = () => runStartupMemoryCheckWithHelpSamples(helpSamplesMb, tempRoot);
+    if (actions) {
+      expect(run).not.toThrow();
+      expect(diagnostic.mock.calls.flat().join("\n")).toContain("::warning file=");
+      expect(readFileSync(summaryPath, "utf8")).toContain("CLI startup memory budget");
+    } else {
+      expect(run).toThrow(
+        `--help median max RSS ${(helpLimitMb + 1.25).toFixed(1)} MB exceeded effective ceiling ${helpLimitMb + 1} MB (base limit ${helpLimitMb} MB; RSS tolerance 1 MB; samples: ${helpSamplesMb.map((sample) => sample.toFixed(1)).join(", ")} MB)`,
+      );
+      expect(existsSync(summaryPath)).toBe(false);
+    }
+    const report = JSON.parse(readFileSync(path.join(tempRoot, "startup-memory.json"), "utf8"));
+    expect(report.results[0]).toMatchObject({
+      status: "fail",
+      maxRssMb: helpLimitMb + 1.25,
+    });
   });
 
   it("keeps invalid startup memory env values from bypassing budgets", () => {
@@ -652,7 +679,7 @@ describe("check-cli-startup-memory", () => {
     expectNoNodeStack(result.stderr);
   });
 
-  it("times out startup probes instead of hanging indefinitely", () => {
+  it.each(["", "true"])("keeps probe timeouts blocking with Actions=%s", (actions) => {
     if (process.platform !== "darwin" && process.platform !== "linux") {
       return;
     }
@@ -661,6 +688,7 @@ describe("check-cli-startup-memory", () => {
     const seenTimeouts: Array<number | undefined> = [];
     const seenKillSignals: Array<string | undefined> = [];
     const timeoutError = Object.assign(new Error("spawnSync timed out"), { code: "ETIMEDOUT" });
+    vi.stubEnv("GITHUB_ACTIONS", actions);
 
     expect(() =>
       testing.runStartupMemoryCheck(

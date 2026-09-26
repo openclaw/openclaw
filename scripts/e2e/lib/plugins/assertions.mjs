@@ -7,11 +7,13 @@ import {
   readBoundedResponseText,
 } from "../../../lib/bounded-response.mjs";
 import { createTimeoutError } from "../../../lib/timeout-error.mjs";
-import { assertClawHubArtifactMetadata } from "../clawhub-artifact-assertions.mjs";
+import {
+  assertClawHubArtifactMetadata,
+  assertClawHubExternalInstallContract,
+} from "../clawhub-artifact-assertions.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 import { assertRealPathInside, resolveHomePath } from "../openclaw-state-paths.mjs";
 import {
-  readPluginInstallIndex,
   readPluginInstallRecords,
   writePluginInstallIndexForE2E,
 } from "../plugin-index-sqlite.mjs";
@@ -69,17 +71,10 @@ function pathsEqual(left, right) {
 }
 
 function getInstallRecords() {
-  const configPath = openClawConfigPath();
-  const config = readOpenClawConfig();
-  const allowLegacyCompat = process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1";
-  const index = readPluginInstallIndex({
-    configPath,
-    fallbackRecords: allowLegacyCompat ? (config.plugins?.installs ?? {}) : {},
+  return readPluginInstallRecords({
+    configPath: openClawConfigPath(),
+    fallbackRecords: {},
   });
-  if (!allowLegacyCompat && !index.installRecords) {
-    throw new Error("expected modern installRecords in installed plugin index");
-  }
-  return index.installRecords ?? {};
 }
 
 function openClawConfigPath() {
@@ -364,10 +359,6 @@ function assertMarketplaceRecords() {
   for (const id of ["marketplace-shortcut", "marketplace-direct"]) {
     const record = installRecords[id];
     if (!record) {
-      if (allowLegacyCompat) {
-        console.log(`legacy package did not persist marketplace install record for ${id}`);
-        continue;
-      }
       throw new Error(`missing marketplace install record for ${id}`);
     }
     if (record.source !== "marketplace") {
@@ -509,26 +500,6 @@ function assertGitPluginRemoved() {
     throw new Error(
       `empty git managed install parent still exists after uninstall: ${installParent}`,
     );
-  }
-}
-
-function assertClawHubExternalInstallContract(installPath) {
-  const openclawPeerPath = path.join(installPath, "node_modules", "openclaw");
-  if (!fs.existsSync(openclawPeerPath)) {
-    throw new Error(`missing ClawHub openclaw peer symlink: ${openclawPeerPath}`);
-  }
-  if (!fs.lstatSync(openclawPeerPath).isSymbolicLink()) {
-    throw new Error(`ClawHub openclaw peer is not a symlink: ${openclawPeerPath}`);
-  }
-  const hostRoot = fs.realpathSync(process.cwd());
-  const linkedHostRoot = fs.realpathSync(openclawPeerPath);
-  if (linkedHostRoot !== hostRoot) {
-    throw new Error(`expected ClawHub openclaw peer ${linkedHostRoot} to target ${hostRoot}`);
-  }
-
-  const dependencyPackagePath = path.join(installPath, "node_modules", "is-number", "package.json");
-  if (fs.existsSync(dependencyPackagePath)) {
-    assertRealPathInside(installPath, dependencyPackagePath, "ClawHub isolated dependency");
   }
 }
 
@@ -899,17 +870,7 @@ function assertClawHubInstalled() {
     throw new Error(`unexpected ClawHub inspect plugin id: ${inspect.plugin?.id}`);
   }
 
-  const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-  const config = fs.existsSync(configPath) ? readJson(configPath) : {};
-  const allowLegacyCompat = process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1";
-  const index = readPluginInstallIndex({
-    configPath,
-    fallbackRecords: allowLegacyCompat ? (config.plugins?.installs ?? {}) : {},
-  });
-  if (!allowLegacyCompat && !index.installRecords) {
-    throw new Error("expected modern installRecords in installed plugin index");
-  }
-  const installRecords = index.installRecords ?? {};
+  const installRecords = getInstallRecords();
   const record = installRecords[pluginId];
   if (!record) {
     throw new Error(`missing ClawHub install record for ${pluginId}`);
@@ -942,7 +903,7 @@ function assertClawHubInstalled() {
   const extensionsRoot = path.join(process.env.HOME, ".openclaw", "extensions");
   assertRealPathInside(extensionsRoot, installPath, "ClawHub install path");
   if (record.artifactKind === "npm-pack") {
-    assertClawHubExternalInstallContract(installPath);
+    assertClawHubExternalInstallContract(installPath, "ClawHub");
   }
   fs.writeFileSync(scratchFile("plugins-clawhub-install-path.txt"), installPath, "utf8");
 }
@@ -957,12 +918,7 @@ function assertClawHubRemoved() {
     throw new Error(`ClawHub plugin still listed after uninstall: ${pluginId}`);
   }
 
-  const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-  const config = fs.existsSync(configPath) ? readJson(configPath) : {};
-  const installRecords = readPluginInstallRecords({
-    configPath,
-    fallbackRecords: config.plugins?.installs ?? {},
-  });
+  const installRecords = getInstallRecords();
   if (installRecords[pluginId]) {
     throw new Error(`ClawHub install record still present after uninstall: ${pluginId}`);
   }

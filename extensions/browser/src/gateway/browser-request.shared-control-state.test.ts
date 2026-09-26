@@ -1,9 +1,9 @@
 // Browser tests cover browser request.shared control state plugin behavior.
 import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 
 const mocks = vi.hoisted(() => ({
   runtimeConfig: {} as OpenClawConfig,
@@ -16,8 +16,9 @@ const mocks = vi.hoisted(() => ({
   isChromeCdpReady: vi.fn(async () => false),
 }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>();
   return {
     ...actual,
     getRuntimeConfig: () => mocks.runtimeConfig,

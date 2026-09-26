@@ -1,4 +1,4 @@
-// Real session/worktree admission, media authorization, and browser image decoding.
+// Real session/worktree admission, media authorization, image decoding, and downloads.
 import { execFile } from "node:child_process";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -6,7 +6,9 @@ import { promisify } from "node:util";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { appendTranscriptMessage } from "../../../src/config/sessions/session-accessor.js";
+import { saveMediaBuffer } from "../../../src/media/store.js";
 import { ensureGatewayOwnerProfile, setAvatar } from "../../../src/state/user-profiles.js";
+import { withEnvAsync } from "../../../src/test-utils/env.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -51,7 +53,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("renders project images, honors full access, and allows only the selected outside image", async () => {
+  it("renders project media, enforces image access, and preserves inbound download names", async () => {
     if (!instance) {
       throw new Error("Gateway fixture is not running");
     }
@@ -236,6 +238,58 @@ suite.define(() => {
           .poll(() => page.getByRole("button", { name: "Allow image", exact: true }).count())
           .toBe(2);
         await capture("05-workspace-protection-restored.png");
+
+        const filename = "café 雪 🦞.txt";
+        const bytes = Buffer.from("café|雪|🦞\r\n139+241=380\r\n");
+        const saved = await withEnvAsync({ OPENCLAW_STATE_DIR: owner.env.OPENCLAW_STATE_DIR }, () =>
+          saveMediaBuffer(bytes, "text/plain", "inbound", undefined, filename),
+        );
+        await appendTranscriptMessage(
+          { agentId: "main", sessionKey, sessionId: String(session.sessionId), env: owner.env },
+          {
+            message: {
+              role: "user",
+              timestamp: Date.now(),
+              content: "Synthetic original-filename download proof.",
+              __openclaw: {
+                media: [
+                  {
+                    url: `media://inbound/${saved.id}`,
+                    contentType: "text/plain",
+                    kind: "document",
+                    fileName: filename,
+                    sizeBytes: bytes.length,
+                    origin: "file",
+                    hydrationSuppressed: true,
+                  },
+                ],
+              },
+            },
+          },
+        );
+        await page.reload();
+        await waitForControlUiGatewayReady(page);
+        const fileCard = page
+          .locator(".chat-assistant-attachment-card")
+          .filter({ hasText: filename });
+        const downloadFile = async (link: Locator) => {
+          // Focus keeps the action exposed while reloaded images move the card.
+          await link.focus();
+          const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
+          const downloadedPath = await download.path();
+          expect(downloadedPath).not.toBeNull();
+          expect(await readFile(downloadedPath!)).toEqual(bytes);
+          expect(download.suggestedFilename()).toBe(filename);
+        };
+        await downloadFile(
+          fileCard.getByRole("link", { name: `Download ${filename}`, exact: true }),
+        );
+        await fileCard
+          .getByRole("button", { name: `Open ${filename} in the side panel`, exact: true })
+          .click();
+        await downloadFile(
+          page.locator("openclaw-chat-detail-panel:visible").locator("a[download]"),
+        );
         if (captureEnabled) {
           await writeFile(
             path.join(suite.artifactDir, "evidence.json"),

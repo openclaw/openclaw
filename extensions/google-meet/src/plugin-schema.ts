@@ -15,6 +15,8 @@ export const GoogleMeetToolSchema = Type.Object({
       "create",
       "status",
       "transcript",
+      "participation_context",
+      "participate",
       "setup_status",
       "resolve_space",
       "preflight",
@@ -73,6 +75,35 @@ export const GoogleMeetToolSchema = Type.Object({
   ),
   dtmfSequence: Type.Optional(Type.String({ description: "Explicit DTMF sequence for Twilio" })),
   sessionId: Type.Optional(Type.String({ description: "Meet session ID" })),
+  requestId: Type.Optional(
+    Type.String({
+      description:
+        "For participate, a unique request ID. Reuse the same ID only to retry the same action.",
+    }),
+  ),
+  sourceId: Type.Optional(
+    Type.String({
+      description: "For participate, the current source ID from participation_context.",
+    }),
+  ),
+  correctionOf: Type.Optional(
+    Type.String({
+      description: "For participate, the rejected request ID whose correction is being submitted.",
+    }),
+  ),
+  participationAction: Type.Optional(
+    Type.Object({
+      type: Type.String({
+        description: "Action type advertised by participation_context capabilities.",
+      }),
+      text: Type.Optional(
+        Type.String({ description: "Text for a supported participation action." }),
+      ),
+      reaction: Type.Optional(
+        Type.String({ description: "Native reaction advertised by the current capability." }),
+      ),
+    }),
+  ),
   sinceIndex: Type.Optional(
     Type.Integer({
       description: "For transcript, resume from the previous response's nextIndex.",

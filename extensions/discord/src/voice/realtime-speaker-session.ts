@@ -52,10 +52,6 @@ const discordRealtimeTalkPayload = () => ({});
 
 type DiscordRealtimeVoiceConfig = NonNullable<DiscordAccountConfig["voice"]>["realtime"];
 
-function isDiscordAgentProxyVoiceMode(mode: DiscordVoiceMode): boolean {
-  return mode === "agent-proxy";
-}
-
 export type DiscordRealtimeSessionParams = {
   accountId: string;
   cfg: OpenClawConfig;
@@ -111,7 +107,13 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     },
   ) {
     this.outputEnabled = !params.standby;
-    this.recording = this.createRecording();
+    const recordingEpoch = this.providerContinuityEpoch;
+    this.recording = new DiscordRealtimeRecording({
+      entry: this.params.entry,
+      isCurrent: () =>
+        this.lifecycle.status !== "stopped" && this.providerContinuityEpoch === recordingEpoch,
+      warn: (message) => logger.warn(message),
+    });
     this.harness = createRealtimeVoiceSessionHarness<AgentProxyConsultState>({
       talk: {
         sessionId: this.params.sessionId,
@@ -188,8 +190,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
       debounceMs: () => this.realtimeConfig?.debounceMs,
       entry: this.params.entry,
       harness: this.harness,
-      isAgentProxy: () =>
-        isDiscordAgentProxyVoiceMode(this.params.mode) && !this.handlesAgentConsult,
+      isAgentProxy: () => this.params.mode === "agent-proxy" && !this.handlesAgentConsult,
       isWakeNameRequired: () => this.isWakeNameRequired(),
       playback: this.playback,
       providerEpoch: () => this.providerContinuityEpoch,
@@ -224,7 +225,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
       agentId: this.params.entry.route.agentId,
       cfg: this.params.cfg,
       realtimeConfig: this.realtimeConfig,
-      isAgentProxy: isDiscordAgentProxyVoiceMode(this.params.mode),
+      isAgentProxy: this.params.mode === "agent-proxy",
       bootstrapContextInstructions: this.params.bootstrapContextInstructions,
       voiceOverride: this.params.voiceOverride,
       conversationHistory: this.params.conversationHistory,
@@ -702,16 +703,6 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     this.consults.resetProviderContinuity();
     this.turns.resetProviderContinuity();
     this.playback.resetProviderContinuity(reason);
-  }
-
-  private createRecording(): DiscordRealtimeRecording {
-    const epoch = this.providerContinuityEpoch;
-    return new DiscordRealtimeRecording({
-      entry: this.params.entry,
-      isCurrent: () =>
-        this.lifecycle.status !== "stopped" && this.providerContinuityEpoch === epoch,
-      warn: (message) => logger.warn(message),
-    });
   }
 
   private logRealtimeError(message: string): void {

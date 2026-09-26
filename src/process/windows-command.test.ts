@@ -8,189 +8,122 @@ import { runCommandWithTimeout } from "./exec.js";
 import { spawnTerminalPty } from "./terminal-pty.js";
 import { resolveSafeChildProcessInvocation, resolveWindowsCommandShim } from "./windows-command.js";
 
+async function withWindowsFiles(files: string[], run: (directory: string) => void) {
+  await withTempDir("openclaw-windows-command-", async (directory) => {
+    for (const file of files) {
+      const filename = path.join(directory, file);
+      await mkdir(path.dirname(filename), { recursive: true });
+      await writeFile(filename, "");
+    }
+    withMockedWindowsPlatform(() => run(directory));
+  });
+}
+
 describe("Windows command helpers", () => {
-  it("leaves commands unchanged outside Windows", () => {
+  it.each([
+    { command: "pnpm", platform: "linux", expected: "pnpm" },
+    { command: "corepack", platform: "win32", expected: "corepack.cmd" },
+    { command: "npm.cmd", platform: "win32", expected: "npm.cmd" },
+  ] as const)("resolves $command on $platform to $expected", ({ command, platform, expected }) => {
     expect(
-      resolveWindowsCommandShim({
-        command: "pnpm",
-        cmdCommands: ["pnpm"],
-        platform: "linux",
-      }),
-    ).toBe("pnpm");
-  });
-
-  it("appends .cmd for configured Windows shims", () => {
-    expect(
-      resolveWindowsCommandShim({
-        command: "pnpm",
-        cmdCommands: ["corepack", "pnpm", "yarn"],
-        platform: "win32",
-      }),
-    ).toBe("pnpm.cmd");
-  });
-
-  it("appends .cmd for corepack on Windows", () => {
-    expect(
-      resolveWindowsCommandShim({
-        command: "corepack",
-        cmdCommands: ["corepack", "pnpm", "yarn"],
-        platform: "win32",
-      }),
-    ).toBe("corepack.cmd");
-  });
-
-  it("keeps explicit extensions on Windows", () => {
-    expect(
-      resolveWindowsCommandShim({
-        command: "npm.cmd",
-        cmdCommands: ["npm", "npx"],
-        platform: "win32",
-      }),
-    ).toBe("npm.cmd");
+      resolveWindowsCommandShim({ command, platform, cmdCommands: ["corepack", "pnpm", "npm"] }),
+    ).toBe(expected);
   });
 
   it("resolves relative executables against the child cwd", async () => {
-    await withTempDir("openclaw-windows-command-cwd-", async (cwd) => {
-      const binDir = path.join(cwd, "bin");
-      const executable = path.join(binDir, "tool.exe");
-      await mkdir(binDir);
-      await writeFile(executable, "");
-
-      await withMockedWindowsPlatform(async () => {
-        expect(
-          resolveSafeChildProcessInvocation({
-            argv: ["./bin/tool"],
-            cwd,
-            env: { PATHEXT: ".EXE" },
-          }).command,
-        ).toBe(executable);
-      });
+    await withWindowsFiles(["bin/tool.exe"], (cwd) => {
+      expect(
+        resolveSafeChildProcessInvocation({ argv: ["./bin/tool"], cwd, env: { PATHEXT: ".EXE" } })
+          .command,
+      ).toBe(path.join(cwd, "bin", "tool.exe"));
     });
   });
 
   it("resolves bare executables from PATH without allowing child-cwd shadowing", async () => {
-    await withTempDir("openclaw-windows-command-bare-path-", async (base) => {
-      const cwd = path.join(base, "cwd");
+    await withWindowsFiles(["cwd/tool.exe", "bin/tool.exe"], (base) => {
       const binDir = path.join(base, "bin");
-      const cwdExecutable = path.join(cwd, "tool.exe");
-      const pathExecutable = path.join(binDir, "tool.exe");
-      await mkdir(cwd);
-      await mkdir(binDir);
-      await writeFile(cwdExecutable, "");
-      await writeFile(pathExecutable, "");
-
-      await withMockedWindowsPlatform(async () => {
-        expect(
-          resolveSafeChildProcessInvocation({
-            argv: ["tool.exe"],
-            cwd,
-            env: { PATH: binDir, PATHEXT: ".EXE" },
-          }).command,
-        ).toBe(pathExecutable);
-      });
+      expect(
+        resolveSafeChildProcessInvocation({
+          argv: ["tool.exe"],
+          cwd: path.join(base, "cwd"),
+          env: { PATH: binDir, PATHEXT: ".EXE" },
+        }).command,
+      ).toBe(path.join(binDir, "tool.exe"));
     });
   });
 
   it.each([".EXE;.CMD;", ";;"])(
     "reports an unresolved command for a bare file with PATHEXT %j",
     async (pathext) => {
-      await withTempDir("openclaw-windows-command-bare-file-", async (binDir) => {
-        await writeFile(path.join(binDir, "runner"), "bare file\n");
-
-        await withMockedWindowsPlatform(async () => {
-          expect(() =>
-            resolveSafeChildProcessInvocation({
-              argv: ["runner"],
-              env: { PATH: binDir, PATHEXT: pathext },
-            }),
-          ).toThrow(/spawn runner ENOENT/);
-        });
+      await withWindowsFiles(["runner"], (binDir) => {
+        expect(() =>
+          resolveSafeChildProcessInvocation({
+            argv: ["runner"],
+            env: { PATH: binDir, PATHEXT: pathext },
+          }),
+        ).toThrow(/spawn runner ENOENT/);
       });
     },
   );
 
   it("requires an explicit relative path for executables in the child cwd", async () => {
-    await withTempDir("openclaw-windows-command-bare-cwd-", async (cwd) => {
-      await writeFile(path.join(cwd, "tool.exe"), "");
-
-      await withMockedWindowsPlatform(async () => {
-        expect(() =>
-          resolveSafeChildProcessInvocation({
-            argv: ["tool.exe"],
-            cwd,
-            env: { PATH: "", PATHEXT: ".EXE" },
-          }),
-        ).toThrow(/ENOENT/);
-      });
+    await withWindowsFiles(["tool.exe"], (cwd) => {
+      expect(() =>
+        resolveSafeChildProcessInvocation({
+          argv: ["tool.exe"],
+          cwd,
+          env: { PATH: "", PATHEXT: ".EXE" },
+        }),
+      ).toThrow(/ENOENT/);
     });
   });
 
   it("accepts explicit executable paths independently of PATHEXT", async () => {
-    await withTempDir("openclaw-windows-command-explicit-", async (cwd) => {
+    await withWindowsFiles(["tool.exe"], (cwd) => {
       const executable = path.join(cwd, "tool.exe");
-      await writeFile(executable, "");
-
-      await withMockedWindowsPlatform(async () => {
-        expect(
-          resolveSafeChildProcessInvocation({
-            argv: [executable],
-            cwd,
-            env: { PATH: "", PATHEXT: ".CMD;.BAT" },
-          }).command,
-        ).toBe(executable);
-      });
+      expect(
+        resolveSafeChildProcessInvocation({
+          argv: [executable],
+          cwd,
+          env: { PATH: "", PATHEXT: ".CMD;.BAT" },
+        }).command,
+      ).toBe(executable);
     });
   });
 
   it("resolves PATH and PATHEXT keys case-insensitively", async () => {
-    await withTempDir("openclaw-windows-command-env-case-", async (binDir) => {
-      const executable = path.join(binDir, "tool.exe");
-      await writeFile(executable, "");
-
-      await withMockedWindowsPlatform(async () => {
-        expect(
-          resolveSafeChildProcessInvocation({
-            argv: ["tool"],
-            env: { path: binDir, pathext: ".EXE" },
-          }).command,
-        ).toBe(executable);
-      });
+    await withWindowsFiles(["tool.exe"], (binDir) => {
+      expect(
+        resolveSafeChildProcessInvocation({
+          argv: ["tool"],
+          env: { path: binDir, pathext: ".EXE" },
+        }).command,
+      ).toBe(path.join(binDir, "tool.exe"));
     });
   });
 
   it("accepts PATH executables with explicit extensions independently of PATHEXT", async () => {
-    await withTempDir("openclaw-windows-command-path-extension-", async (binDir) => {
-      const executable = path.join(binDir, "tool.exe");
-      await writeFile(executable, "");
-
-      await withMockedWindowsPlatform(async () => {
-        expect(
-          resolveSafeChildProcessInvocation({
-            argv: ["tool.exe"],
-            env: { PATH: binDir, PATHEXT: ".CMD;.BAT" },
-          }).command,
-        ).toBe(executable);
-      });
+    await withWindowsFiles(["tool.exe"], (binDir) => {
+      expect(
+        resolveSafeChildProcessInvocation({
+          argv: ["tool.exe"],
+          env: { PATH: binDir, PATHEXT: ".CMD;.BAT" },
+        }).command,
+      ).toBe(path.join(binDir, "tool.exe"));
     });
   });
 
   it("honors PATHEXT precedence before package-manager shim fallback", async () => {
-    await withTempDir("openclaw-windows-command-pathext-", async (binDir) => {
-      const exePath = path.join(binDir, "pnpm.exe");
-      await writeFile(exePath, "");
-      await writeFile(path.join(binDir, "pnpm.cmd"), "");
-
-      await withMockedWindowsPlatform(async () => {
-        expect(
-          resolveSafeChildProcessInvocation({
-            argv: ["pnpm", "--version"],
-            env: { PATH: binDir, PATHEXT: ".EXE;.CMD" },
-          }),
-        ).toMatchObject({
-          args: ["--version"],
-          command: exePath,
-          usesWindowsExitCodeShim: false,
-        });
+    await withWindowsFiles(["pnpm.exe", "pnpm.cmd"], (binDir) => {
+      expect(
+        resolveSafeChildProcessInvocation({
+          argv: ["pnpm", "--version"],
+          env: { PATH: binDir, PATHEXT: ".EXE;.CMD" },
+        }),
+      ).toMatchObject({
+        args: ["--version"],
+        command: path.join(binDir, "pnpm.exe"),
+        usesWindowsExitCodeShim: false,
       });
     });
   });
@@ -217,11 +150,14 @@ describe.runIf(process.platform === "win32")("Windows batch argv preservation", 
     },
   ];
 
-  it.each(
-    cases.flatMap(({ name, args }) =>
-      ["argv.cmd", "argv with spaces.cmd", "argv^caret.cmd"].map((file) => ({ name, args, file })),
-    ),
-  )(
+  it.each([
+    ...cases.map((testCase) => ({ ...testCase, file: "argv with ^caret.cmd" })),
+    ...["argv.cmd", "argv with spaces.cmd"].map((file) => ({
+      name: "ordinary arguments",
+      args: ["alpha", "omega"],
+      file,
+    })),
+  ])(
     "preserves $name through $file",
     async ({ args, file }) => {
       await withTempDir("openclaw-batch-argv-", async (cwd) => {

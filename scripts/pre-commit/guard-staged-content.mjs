@@ -98,7 +98,7 @@ function scan() {
     const batch = [];
     let bytes = 0;
     // Bound both argv count and bytes, leaving room for Git flags and the environment.
-    while (offset < paths.length && batch.length < 64) {
+    while (offset < paths.length && batch.length < 256) {
       const size = Buffer.byteLength(paths[offset]) + 1;
       if (batch.length && bytes + size > 16 * 1024) {
         break;

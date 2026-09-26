@@ -1,9 +1,5 @@
-// Shared param-validation helpers used by all four agent tools.
-// Goal: identical validation behavior + identical error shapes everywhere.
-
 import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type GatewayCallOptions = {
   gatewayUrl?: string;
@@ -21,10 +17,6 @@ export function readGatewayCallOptions(params: Record<string, unknown>): Gateway
   }
   opts.timeoutMs = readPositiveIntegerParam(params, "timeoutMs");
   return opts;
-}
-
-export function readTrimmedString(params: Record<string, unknown>, key: string): string {
-  return normalizeOptionalString(params[key]) ?? "";
 }
 
 export function readClampedInt(params: {

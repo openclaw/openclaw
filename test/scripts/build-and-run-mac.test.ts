@@ -364,7 +364,6 @@ const portableScripts = [
   "scripts/e2e/update-channel-switch-docker.sh",
   "scripts/e2e/update-corrupt-plugin-docker.sh",
   "scripts/e2e/update-first-hop-compat-docker.sh",
-  "scripts/e2e/update-run-package-self-upgrade-docker.sh",
   "scripts/e2e/upgrade-survivor-docker.sh",
   "scripts/github/find-reusable-release-validation.sh",
   "scripts/github/resolve-openclaw-ref.sh",

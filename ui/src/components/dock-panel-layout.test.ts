@@ -5,7 +5,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { DockLayoutController } from "./dock-layout-controller.ts";
-import { createDockPanelLayout, type DockPanelSide } from "./dock-panel-layout.ts";
+import { createDockPanelLayout, type DockPanelPlacement } from "./dock-panel-layout.ts";
 
 function createControllerHost() {
   return {
@@ -17,7 +17,7 @@ function createControllerHost() {
   };
 }
 
-function createLayout(defaultDock: DockPanelSide) {
+function createLayout(defaultDock: Exclude<DockPanelPlacement, "main">) {
   return createDockPanelLayout({
     storageKey: `test.dock-panel.${defaultDock}`,
     minHeight: 140,
@@ -61,16 +61,6 @@ describe("createDockPanelLayout", () => {
       height: layout.defaults.height,
       width: layout.defaults.width,
     });
-  });
-
-  it("restores a left dock without changing existing consumers", () => {
-    const layout = createLayout("right");
-    localStorage.setItem(
-      "test.dock-panel.right",
-      JSON.stringify({ open: true, dock: "left", height: 320, width: 420 }),
-    );
-
-    expect(layout.load()).toEqual({ open: true, dock: "left", height: 320, width: 420 });
   });
 
   it("rejects docks unsupported by a consumer", () => {

@@ -1,5 +1,7 @@
 {
   "extends": "../tsconfig.json",
+  // This editor/lint graph includes tests; retain their compatibility augmentation.
+  "files": ["config/sessions/session-entry.test-compat.d.ts"],
   "compilerOptions": {
     "allowJs": true
   },

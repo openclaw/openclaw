@@ -184,7 +184,7 @@ describe("Crabbox plugin generation lifecycle", () => {
         expect(waitForDeviceId).toHaveBeenCalledOnce();
         await expect(
           generation.provider.inspect({ leaseId: lease.leaseId, profile }),
-        ).resolves.toEqual({ status: "active" });
+        ).resolves.toEqual({ status: "active", sharedHost: false });
         await expect(
           generation.provider.destroy({ leaseId: lease.leaseId, profile }),
         ).resolves.toBeUndefined();

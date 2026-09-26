@@ -1,12 +1,16 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
-import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
+import { createNativeTypeScriptProject } from "../../scripts/lib/native-typescript.mts";
 import { collectNpmPackInventory } from "../../scripts/lib/npm-pack-inventory.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runPluginsInitCommand } from "./plugins-authoring-command.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const require = createRequire(import.meta.url);
+const compiler = path.join(path.dirname(require.resolve("typescript/package.json")), "bin/tsc");
 
 describe("plugin scaffold compilation", () => {
   it.each(["tool", "provider"] as const)(
@@ -24,12 +28,16 @@ describe("plugin scaffold compilation", () => {
       );
       fs.writeFileSync(path.join(projectDir, "src/index.test.ts"), 'throw new Error("test only");');
 
-      const config = JSON.parse(fs.readFileSync(path.join(projectDir, "tsconfig.json"), "utf8"));
-      const parsed = ts.parseJsonConfigFileContent(config, ts.sys, projectDir);
-      expect(parsed.errors).toEqual([]);
-      const program = ts.createProgram(parsed.fileNames, parsed.options);
-      expect(ts.getPreEmitDiagnostics(program)).toEqual([]);
-      expect(program.emit().emitSkipped).toBe(false);
+      const compiled = spawnSync(
+        process.execPath,
+        [compiler, "-p", "tsconfig.json", "--pretty", "false"],
+        {
+          cwd: projectDir,
+          encoding: "utf8",
+        },
+      );
+      expect(compiled.error).toBeUndefined();
+      expect(compiled.status, compiled.stdout + compiled.stderr).toBe(0);
       const files = fs.readdirSync(path.join(projectDir, "dist")).toSorted();
       expect(files).toEqual(
         type === "tool"
@@ -46,10 +54,12 @@ describe("plugin scaffold compilation", () => {
   it("keeps the feature scaffold browser entry in its TypeScript compilation", async () => {
     const projectDir = path.join(tempDirs.make("openclaw-feature-compile-"), "project");
     await runPluginsInitCommand("compile-proof", { directory: projectDir, type: "feature" });
-    const config = JSON.parse(fs.readFileSync(path.join(projectDir, "tsconfig.json"), "utf8"));
-    const parsed = ts.parseJsonConfigFileContent(config, ts.sys, projectDir);
-    expect(parsed.errors).toEqual([]);
-    expect(parsed.fileNames.map((file) => path.relative(projectDir, file))).toContain(
+    using session = createNativeTypeScriptProject({
+      cwd: projectDir,
+      configFileName: path.join(projectDir, "tsconfig.json"),
+    });
+    expect(session.project.program.getConfigFileParsingDiagnostics()).toEqual([]);
+    expect(session.project.rootFiles.map((file) => path.relative(projectDir, file))).toContain(
       path.join("src", "control-ui.ts"),
     );
   });

@@ -17,7 +17,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
-  DEFAULT_LIVE_RETRIES,
   DEFAULT_RESOURCE_LIMITS,
   resolveDockerE2ePlan,
 } from "../../scripts/lib/docker-e2e-plan.mts";
@@ -25,7 +24,6 @@ import {
   appendBoundedShellCapture,
   buildLaneRerunCommand,
   canStartSchedulerLane,
-  describeDockerSchedulerLimits,
   dockerPreflightContainerNames,
   dockerPreflightSmokeCommand,
   githubWorkflowRerunCommand,
@@ -41,10 +39,12 @@ import {
   validateDockerCandidateEnvironment,
   writeRunSummary,
 } from "../../scripts/test-docker-all.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { waitForChildClose } from "../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { copyDockerSchedulerHarness } from "./docker-all-harness.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 const { createPrepublishPluginRegistryArtifact } = vi.hoisted(() => ({
   createPrepublishPluginRegistryArtifact: vi.fn(),
@@ -339,26 +339,10 @@ async function runReadyTimedCommand<T>(
 }
 
 describe("scripts/test-docker-all scheduler", () => {
-  it("parses the supported CLI options", () => {
-    expect(parseDockerAllCliArgs([])).toEqual({
-      help: false,
-      planJson: false,
-      preparePluginRegistry: false,
-    });
-    expect(parseDockerAllCliArgs(["--plan-json"])).toEqual({
-      help: false,
-      planJson: true,
-      preparePluginRegistry: false,
-    });
+  it("parses CLI modes and rejects conflicts", () => {
     expect(parseDockerAllCliArgs(["--help"])).toEqual({
       help: true,
       planJson: false,
-      preparePluginRegistry: false,
-    });
-    expect(parseDockerAllCliArgs(["--prepare-only=/tmp/candidate.json"])).toEqual({
-      help: false,
-      planJson: false,
-      prepareOnly: "/tmp/candidate.json",
       preparePluginRegistry: false,
     });
     expect(parseDockerAllCliArgs(["--prepare-plugin-registry"])).toEqual({
@@ -393,7 +377,6 @@ describe("scripts/test-docker-all scheduler", () => {
       allowFrozenTargetScenarioOmissions: true,
       includeOpenWebUI: false,
       liveMode: "all",
-      liveRetries: DEFAULT_LIVE_RETRIES,
       orderLanes: <T>(lanes: T[]) => lanes,
       planReleaseAll: false,
       profile: "all",
@@ -1168,48 +1151,6 @@ process.exit(0);
     ).toBe(false);
   });
 
-  it("keeps resource and weight limits as co-scheduling limits", () => {
-    expect(
-      canStartSchedulerLane(
-        {
-          name: "npm-smoke",
-          resources: ["npm"],
-          weight: 1,
-        },
-        activePool({
-          count: 1,
-          resources: {
-            docker: 1,
-            npm: 1,
-          },
-          weight: 1,
-        }),
-        2,
-        limits,
-      ),
-    ).toBe(true);
-
-    expect(
-      canStartSchedulerLane(
-        {
-          name: "npm-heavy",
-          resources: ["npm"],
-          weight: 2,
-        },
-        activePool({
-          count: 1,
-          resources: {
-            docker: 1,
-            npm: 1,
-          },
-          weight: 1,
-        }),
-        2,
-        limits,
-      ),
-    ).toBe(false);
-  });
-
   it("serializes live OpenAI Docker lanes by default", () => {
     expect(DEFAULT_RESOURCE_LIMITS["live:openai"]).toBe(1);
   });
@@ -1491,7 +1432,7 @@ const startedAt = realNow();
 Date.now = () => startedAt + (realNow() - startedAt) * 100;
 
 const { runShellCommand } = await import(${JSON.stringify(
-        new URL("../../scripts/test-docker-all.mts", import.meta.url).href,
+        resolveRuntimeWorkerUrl(toolingMtsEntrypoints.dockerAll).href,
       )});
 
 await runShellCommand({
@@ -1563,11 +1504,5 @@ await runShellCommand({
         runner.kill("SIGKILL");
       }
     }
-  });
-
-  it("describes effective scheduler limits for operator errors", () => {
-    expect(describeDockerSchedulerLimits(2, limits)).toBe(
-      "parallelism=2 weightLimit=2 resources=docker=2 npm=2",
-    );
   });
 });

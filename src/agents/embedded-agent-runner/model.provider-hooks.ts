@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Api, Model } from "../../llm/types.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { normalizeModelCompat } from "../../plugins/provider-model-compat.js";
 import { resolveProviderPolicySurface } from "../../plugins/provider-public-artifacts.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -23,7 +24,6 @@ import {
   resolveProviderModelInput,
 } from "./model.inline-provider.js";
 import type { ProviderRuntimeHooks } from "./model.provider-hooks.types.js";
-import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 export type { ProviderRuntimeHooks } from "./model.provider-hooks.types.js";
 export { resolveProviderTransport } from "./model.provider-transport.js";
 
@@ -220,10 +220,9 @@ export function normalizeResolvedModel(params: {
       runtimeHooks,
       model: pluginNormalized ?? normalizedInputModel,
     });
-  const normalizedModel = normalizeResolvedProviderModel({
-    provider: params.provider,
-    model: fallbackTransportNormalized ?? pluginNormalized ?? normalizedInputModel,
-  }) as Model & ProviderRuntimeModel;
+  const normalizedModel = normalizeModelCompat(
+    fallbackTransportNormalized ?? pluginNormalized ?? normalizedInputModel,
+  ) as Model & ProviderRuntimeModel;
   // Rebuilding provider hooks may drop the host-prepared timeout. Restore it
   // only when the final model does not declare a provider-owned override.
   const modelWithProviderTimeout =

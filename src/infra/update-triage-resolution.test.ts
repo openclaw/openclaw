@@ -425,6 +425,7 @@ describe("saved update failure resolution", () => {
     "runtime-verification-failed",
     "database-schema-preflight",
     "invalid-config",
+    "config-read-failed",
     "finalize:doctor",
     "post-update-plugins",
     "restart-unhealthy",

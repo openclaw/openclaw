@@ -15,7 +15,7 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../src/config/config.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,

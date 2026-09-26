@@ -282,7 +282,6 @@ async function withBoundary(runBoundary: (boundary: Boundary) => Promise<void>) 
       baseUrl: `http://127.0.0.1:${address.port}`,
       baseUrlSource: "config",
       streamingMode: "partial",
-      progressFinalDelivery: "in-place",
       config: {
         groupPolicy: "open",
         network: { dangerouslyAllowPrivateNetwork: true },

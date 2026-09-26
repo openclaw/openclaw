@@ -1,4 +1,3 @@
-// Test Live Shard tests cover test live shard script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -13,6 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mts";
 import {
   LIVE_TEST_SHARDS,
   RELEASE_LIVE_TEST_SHARDS,
@@ -29,8 +29,10 @@ import {
   selectLiveShardFiles,
   validateLiveShardReportPayload,
 } from "../../scripts/test-live-shard.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 import { waitForPidFile } from "../helpers/process-wait.js";
+import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
 
 describe("scripts/test-live-shard", () => {
   const allFiles = collectAllLiveTestFiles();
@@ -182,6 +184,12 @@ describe("scripts/test-live-shard", () => {
     const result = spawnSync(process.execPath, ["scripts/test-live-shard.mjs", "--help"], {
       cwd: process.cwd(),
       encoding: "utf8",
+      env: preparedScriptWrapperEnv([
+        [
+          new URL("../../scripts/test-live-shard.mts", import.meta.url),
+          resolveRuntimeWorkerUrl(scriptModuleEntrypoints.liveShard),
+        ],
+      ]),
     });
 
     expect(result.status).toBe(0);
@@ -266,11 +274,9 @@ describe("scripts/test-live-shard", () => {
 
   it.each([
     "native-live-src-gateway-core",
-    "native-live-src-gateway-backends",
     "native-live-src-infra",
     "native-live-test",
     "src/infra/heartbeat-runner.live.test.ts",
-    "test/e2e/qa-lab/runtime/worker-skill-resources.live.test.ts",
     "test/e2e/qa-lab/runtime/gateway-node-mcp.live.test.ts",
   ])("prepares the built gateway runtime before %s starts Vitest", (target) => {
     const files = target.endsWith(".live.test.ts")
@@ -406,108 +412,11 @@ describe("scripts/test-live-shard", () => {
     });
   });
 
-  it("allows explicitly opt-in live shard files to be skipped until their env is enabled", () => {
-    const payload = {
-      numPassedTests: 1,
-      numTotalTests: 2,
-      testResults: [
-        {
-          name: path.join(process.cwd(), "src/gateway/gateway-codex-harness.live.test.ts"),
-          assertionResults: [{ status: "passed" }],
-        },
-        {
-          name: path.join(process.cwd(), "src/gateway/gateway-cli-backend.live.test.ts"),
-          assertionResults: [{ status: "skipped" }],
-        },
-      ],
-    };
-    const expectedFiles = [
-      "src/gateway/gateway-codex-harness.live.test.ts",
-      "src/gateway/gateway-cli-backend.live.test.ts",
-    ];
-
-    expect(validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {})).toEqual({
-      ok: true,
-    });
-    expect(
-      validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
-        OPENCLAW_LIVE_CLI_BACKEND: "1",
-      }),
-    ).toEqual({
-      ok: false,
-      reason:
-        "Vitest report selected live test files had no passing assertions: src/gateway/gateway-cli-backend.live.test.ts",
-    });
-  });
-
-  it("allows gateway core opt-in live files to be skipped until their env is enabled", () => {
-    const payload = {
-      numPassedTests: 1,
-      numTotalTests: 2,
-      testResults: [
-        {
-          name: path.join(process.cwd(), "src/gateway/gateway-codex-harness.live.test.ts"),
-          assertionResults: [{ status: "passed" }],
-        },
-        {
-          name: path.join(process.cwd(), "src/gateway/gateway-acp-spawn-defaults.live.test.ts"),
-          assertionResults: [{ status: "skipped" }],
-        },
-      ],
-    };
-    const expectedFiles = [
-      "src/gateway/gateway-codex-harness.live.test.ts",
-      "src/gateway/gateway-acp-spawn-defaults.live.test.ts",
-    ];
-
-    expect(validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {})).toEqual({
-      ok: true,
-    });
-    expect(
-      validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
-        OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS: "1",
-      }),
-    ).toEqual({
-      ok: false,
-      reason:
-        "Vitest report selected live test files had no passing assertions: src/gateway/gateway-acp-spawn-defaults.live.test.ts",
-    });
-  });
-
-  it("allows the OpenAI long-context live file to be skipped until its env is enabled", () => {
-    const profilesFile = "src/gateway/gateway-models.profiles.live.test.ts";
-    const longContextFile = "src/gateway/gateway-openai-long-context.live.test.ts";
-    const payload = {
-      numPassedTests: 1,
-      numTotalTests: 2,
-      testResults: [
-        {
-          name: path.join(process.cwd(), profilesFile),
-          assertionResults: [{ status: "passed" }],
-        },
-        {
-          name: path.join(process.cwd(), longContextFile),
-          assertionResults: [{ status: "skipped" }],
-        },
-      ],
-    };
-    const expectedFiles = [profilesFile, longContextFile];
-
-    expect(validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {})).toEqual({
-      ok: true,
-    });
-    expect(
-      validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
-        OPENCLAW_LIVE_OPENAI_LONG_CONTEXT: "1",
-      }),
-    ).toEqual({
-      ok: false,
-      reason: `Vitest report selected live test files had no passing assertions: ${longContextFile}`,
-    });
-  });
-
   it.each([
     ["test/e2e/crabbox-sandbox.live.test.ts", "OPENCLAW_E2E_CRABBOX"],
+    ["src/gateway/gateway-cli-backend.live.test.ts", "OPENCLAW_LIVE_CLI_BACKEND"],
+    ["src/gateway/gateway-acp-spawn-defaults.live.test.ts", "OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS"],
+    ["src/gateway/gateway-openai-long-context.live.test.ts", "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT"],
     ["src/skills/workshop/experience-review.live.test.ts", "OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"],
     ["src/agents/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
     ["src/agents/subagents/announce/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
@@ -718,14 +627,22 @@ describe("scripts/test-live-shard", () => {
           [path.resolve("scripts/test-live-shard.mjs"), "native-live-src-infra"],
           {
             cwd: root,
-            env: {
-              ...process.env,
-              OPENCLAW_FAKE_PNPM_ARGS_PATH: argsPath,
-              OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH: descendantPidPath,
-              OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
-              OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
-              npm_execpath: fakePnpmPath,
-            },
+            env: preparedScriptWrapperEnv(
+              [
+                [
+                  new URL("../../scripts/test-live-shard.mts", import.meta.url),
+                  resolveRuntimeWorkerUrl(scriptModuleEntrypoints.liveShard),
+                ],
+              ],
+              {
+                ...process.env,
+                OPENCLAW_FAKE_PNPM_ARGS_PATH: argsPath,
+                OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH: descendantPidPath,
+                OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
+                OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
+                npm_execpath: fakePnpmPath,
+              },
+            ),
             stdio: "ignore",
           },
         );

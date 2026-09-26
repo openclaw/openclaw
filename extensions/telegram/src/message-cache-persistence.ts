@@ -1,4 +1,3 @@
-// Lightweight Telegram message-cache persistence contract shared with doctor migrations.
 import { createHash } from "node:crypto";
 import type { Message } from "grammy/types";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -97,12 +96,8 @@ export function parseTelegramResolvedMedia(value: unknown): TelegramResolvedMedi
   };
 }
 
-export function resolveTelegramMessageCachePath(storePath: string): string {
-  return `${storePath}.telegram-messages.json`;
-}
-
 export function resolveTelegramMessageCacheScope(storePath: string): string {
-  return resolveTelegramMessageCachePath(storePath);
+  return `${storePath}.telegram-messages.json`;
 }
 
 export function resolveTelegramMessageCachePersistentScopeKey(scope: string): string {

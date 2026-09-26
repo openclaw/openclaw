@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import type { FileHandle } from "node:fs/promises";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { selectSessionTranscriptActiveEntries } from "../config/sessions/transcript-tree.js";
-import { readFileWindowFully } from "../infra/file-read.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import {

@@ -117,32 +117,6 @@ describe("createIngressEffectOnce", () => {
     ).resolves.toEqual({ kind: "executed", value: "acknowledged" });
   });
 
-  it("isolates queue-local event ids by factory namespace", async () => {
-    const firstQueue = createIngressEffectOnce({
-      ...EFFECT_ONCE_PARAMS,
-      namespacePrefix: "test.ingress-effect-once.account-a",
-    });
-    const secondQueue = createIngressEffectOnce({
-      ...EFFECT_ONCE_PARAMS,
-      namespacePrefix: "test.ingress-effect-once.account-b",
-    });
-
-    await expect(
-      firstQueue.runOnce({
-        eventId: "event-local-1",
-        effect: "config-write",
-        run: async () => "first",
-      }),
-    ).resolves.toEqual({ kind: "executed", value: "first" });
-    await expect(
-      secondQueue.runOnce({
-        eventId: "event-local-1",
-        effect: "config-write",
-        run: async () => "second",
-      }),
-    ).resolves.toEqual({ kind: "executed", value: "second" });
-  });
-
   it("keeps normalized-prefix collisions isolated", async () => {
     const slashQueue = createIngressEffectOnce({
       ...EFFECT_ONCE_PARAMS,

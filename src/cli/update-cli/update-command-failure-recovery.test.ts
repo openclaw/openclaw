@@ -3,11 +3,14 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as gatewayService from "../../daemon/service.js";
+import * as ports from "../../infra/ports-inspect.js";
 import * as updateLedger from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
+import * as utils from "../../utils.js";
 import { finishSuccessfulPackageSwitch } from "./update-command-post-update.test-support.js";
+import { UpdateCommandFailure as ReportedUpdateCommandFailure } from "./update-command-result.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
@@ -49,6 +52,100 @@ afterEach(() => {
 });
 
 describe("post-update failure recovery observation", () => {
+  it("reports a preactivation Doctor failure after one observation of an unknown foreground setup", async () => {
+    const root = dirs.make("preactivation-recovery-");
+    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "2026.9.5" }));
+    const env = { ...process.env };
+    const run = { runId: updateLedger.createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    const readRuntime = vi.fn(async () => ({ status: "unknown" }));
+    vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue({
+      ...gatewayService.resolveGatewayService(),
+      readRuntime,
+      readCommand: vi.fn(async () => null),
+      isLoaded: vi.fn(async () => false),
+    });
+    const inspect = vi.spyOn(ports, "inspectPortUsage").mockImplementation(async (port) => ({
+      port,
+      status: "free",
+      listeners: [],
+      hints: [],
+    }));
+    let elapsedMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    const sleep = vi.spyOn(utils, "sleep").mockImplementation(async (ms) => {
+      elapsedMs += ms;
+    });
+    mocks.activePort.mockResolvedValueOnce(19431);
+    const actual = await vi.importActual<typeof import("./update-command-verification.js")>(
+      "./update-command-verification.js",
+    );
+    vi.mocked(verifyUpdatedGateway).mockImplementationOnce(actual.verifyUpdatedGateway);
+    const failure = await withUpdateCommandTerminalResult(async (registerRun) => {
+      registerRun(run);
+      await finishSuccessfulPackageSwitch(
+        { packageRoot: root, run, json: true },
+        {
+          mutationStarted: false,
+          shouldRestart: true,
+          preManagedServiceStop: {
+            stopped: false,
+            inspected: true,
+            runtimeInspected: true,
+            running: false,
+            serviceEnv: env,
+          },
+          result: {
+            status: "error",
+            mode: "npm",
+            root,
+            reason: "doctor-failed",
+            recovery: { serviceRestartSafe: true, version: "2026.9.5" },
+            steps: [
+              {
+                name: "candidate-doctor-lint",
+                command: "doctor",
+                cwd: root,
+                exitCode: 2,
+                durationMs: 1,
+              },
+            ],
+            durationMs: 1,
+          },
+        },
+      );
+    }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      name: "UpdateCommandFailure",
+      exitCode: 1,
+      result: { status: "error", reason: "doctor-failed" },
+    });
+    if (!(failure instanceof ReportedUpdateCommandFailure)) {
+      throw failure;
+    }
+    expect(readRuntime).toHaveBeenCalledOnce();
+    expect(inspect).toHaveBeenCalledExactlyOnceWith(19431, expect.anything());
+    expect(sleep).not.toHaveBeenCalled();
+    expect(elapsedMs).toBe(0);
+    const recorded = updateLedger.getUpdateRun(run.runId, { env });
+    expect(recorded).toMatchObject({ status: "failed", reason: "doctor-failed" });
+    expect(recorded?.verification.serviceRunning).toBeUndefined();
+    expect(recorded?.verification.readyz).toBe(false);
+    expect(recorded?.steps).toContainEqual(
+      expect.objectContaining({ step: "candidate-doctor-lint", exitCode: 2 }),
+    );
+    const recoveryStep = recorded?.steps.find(
+      (step) => step.step === "gateway recovery verification",
+    );
+    expect(recoveryStep).toMatchObject({ status: "failed", exitCode: 1 });
+    expect(
+      failure.result.steps.find((step) => step.name === "gateway recovery verification")
+        ?.termination,
+    ).toBeUndefined();
+    expect(recoveryStep?.failureFacts?.some((fact) => fact.code === "timeout")).toBe(false);
+    expect(mocks.converge).not.toHaveBeenCalled();
+    expect(mocks.printResult).toHaveBeenCalledOnce();
+  });
+
   it.each(["observation", "terminal", "standalone"] as const)(
     "keeps pending recovery facts coherent at %s publication after a transient write failure",
     async (publication) => {

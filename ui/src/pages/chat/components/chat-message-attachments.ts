@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
@@ -13,6 +12,11 @@ import {
   safePlainTextAttachmentHref,
   safeMediaAttachmentHref,
 } from "./chat-attachment-href.ts";
+import {
+  renderChatAttachmentAdmission,
+  shouldDeferAttachmentCard,
+  type AttachmentCardAdmission,
+} from "./chat-message-attachment-admission.ts";
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES,
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS,
@@ -28,6 +32,7 @@ import {
 } from "./chat-message-attachment-status.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import {
+  applyResourceBasePath,
   buildAssistantAttachmentUrl,
   isLocalAssistantAttachmentSource,
 } from "./chat-message-local-media.ts";
@@ -46,8 +51,7 @@ import {
 import { renderMessageVideoPreview } from "./chat-message-video-preview.ts";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
-import type { AttachmentSidebarState } from "./chat-sidebar-content-types.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { AttachmentSidebarState, SidebarContent } from "./chat-sidebar-content-types.ts";
 
 type OmittedMediaItem = Extract<MessageContentItem, { type: "omitted_media" }>;
 
@@ -107,23 +111,6 @@ function retryManagedAttachment(
     refreshAfter: now + ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS * 2 ** refreshAttempts,
     refreshAttempts: refreshAttempts + 1,
   };
-}
-
-function applyResourceBasePath(source: string, resourceBasePath: string | undefined): string {
-  if (!source.startsWith("/") || source.startsWith("//")) {
-    return source;
-  }
-  try {
-    const parsed = new URL(source, window.location.origin);
-    const basePath = normalizeBasePath(resourceBasePath ?? "");
-    const pathname =
-      basePath && parsed.pathname !== basePath && !parsed.pathname.startsWith(`${basePath}/`)
-        ? `${basePath}${parsed.pathname}`
-        : parsed.pathname;
-    return `${pathname}${parsed.search}${parsed.hash}`;
-  } catch {
-    return source;
-  }
 }
 
 function setManagedAttachmentAvailability(
@@ -375,6 +362,7 @@ function resolveAttachmentSource(
         resourceBasePath,
         assistantAvailability.mediaTicket,
         options,
+        attachment.label,
       )
     : isManagedOutgoingMediaSource(attachment.url)
       ? applyResourceBasePath(managedAvailability.url, resourceBasePath)
@@ -395,6 +383,15 @@ function resolveAttachmentSource(
       height: assistantAvailability.height ?? attachment.height,
     },
   };
+}
+
+export function hasUserFileAttachments(attachments: readonly AssistantAttachmentItem[]): boolean {
+  return attachments.some(
+    (item) =>
+      item.attachment.kind === "document" &&
+      !isSentCommentAttachment(item) &&
+      !isSentPastedTextAttachment(item),
+  );
 }
 
 export function renderAssistantAttachments(
@@ -470,6 +467,33 @@ export function renderMessageAttachment(
   onAssistantAttachmentLoaded?: () => void,
   presentation: "inline" | "card" | "preview" = "inline",
 ) {
+  const renderContent = (admission?: AttachmentCardAdmission) =>
+    renderMessageAttachmentContent(
+      item,
+      options,
+      onOpenSidebar,
+      onAssistantAttachmentLoaded,
+      presentation,
+      admission,
+    );
+  if (item.type !== "attachment" || !shouldDeferAttachmentCard(item, presentation)) {
+    return renderContent();
+  }
+  return html`${renderChatAttachmentAdmission({
+    attachment: item.attachment,
+    options,
+    render: renderContent,
+  })}`;
+}
+
+function renderMessageAttachmentContent(
+  item: AssistantAttachmentItem,
+  options: ImageRenderOptions,
+  onOpenSidebar?: (content: SidebarContent) => void,
+  onAssistantAttachmentLoaded?: () => void,
+  presentation: "inline" | "card" | "preview" = "inline",
+  admission?: AttachmentCardAdmission,
+) {
   const { onRequestOpenImage, onOpenImage, resolveArtifactDownload } = options;
   if (item.type === "attachment_error") {
     const { attachment } = item;
@@ -483,8 +507,13 @@ export function renderMessageAttachment(
   const { attachment } = item;
   const pastedText = presentation === "card" && isSentPastedTextAttachment(item);
   const imageAttachment = resolveAttachmentImageKind(attachment) === "svg";
-  const resolved = resolveAttachmentSource(attachment, options);
-  if (resolved.status !== "available" && !pastedText) {
+  const resolved = admission?.observeCard
+    ? undefined
+    : resolveAttachmentSource(attachment, options);
+  if (
+    !pastedText &&
+    (resolved?.status === "unavailable" || (resolved?.status === "checking" && !admission))
+  ) {
     return renderAssistantAttachmentStatusCard({
       label: attachment.label,
       mimeType: attachment.mimeType,
@@ -495,7 +524,7 @@ export function renderMessageAttachment(
       path: isLocalAssistantAttachmentSource(attachment.url) ? attachment.url : undefined,
     });
   }
-  const media = resolved.status === "available" ? resolved.source : undefined;
+  const media = resolved?.status === "available" ? resolved.source : undefined;
   const attachmentUrl = media?.src ?? "";
   const safeAttachmentUrl =
     attachment.kind === "audio" || attachment.kind === "video"
@@ -575,6 +604,24 @@ export function renderMessageAttachment(
       .onOpen=${openAttachmentSidebar}
     ></openclaw-chat-pasted-text>`;
   }
+  const card = renderCompactAttachmentCard(
+    {
+      kind: attachment.kind,
+      label: attachment.label,
+      mimeType: attachment.mimeType,
+      sizeBytes: media?.sizeBytes ?? attachment.sizeBytes,
+      downloadHref: safeAttachmentUrl,
+      downloadPending: Boolean(admission && !media),
+      downloadPendingFocusable: Boolean(admission),
+      onExpand: openAttachmentSidebar,
+      voiceNote: attachment.isVoiceNote === true,
+    },
+    admission?.observeCard,
+    admission?.onFocus,
+  );
+  if (admission && !media) {
+    return card;
+  }
   if (imageAttachment) {
     const title = attachment.label.trim() || t("chat.imageLightbox.untitled");
     return html`<openclaw-chat-svg-attachment
@@ -629,15 +676,6 @@ export function renderMessageAttachment(
       .onMediaLoaded=${onAssistantAttachmentLoaded}
     ></openclaw-chat-video-player>`;
   }
-  const card = renderCompactAttachmentCard({
-    kind: attachment.kind,
-    label: attachment.label,
-    mimeType: attachment.mimeType,
-    sizeBytes: media?.sizeBytes,
-    downloadHref: safeAttachmentUrl,
-    onExpand: openAttachmentSidebar,
-    voiceNote: attachment.isVoiceNote === true,
-  });
   if (
     presentation === "preview" &&
     attachment.kind === "video" &&

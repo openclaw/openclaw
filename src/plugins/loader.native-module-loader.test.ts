@@ -224,8 +224,10 @@ describe("createPluginModuleLoader", () => {
 
   it("loads published pre-split SDK bridge imports (doctor repair, WhatsApp ack, Slack render)", () => {
     const pluginRoot = writePreSplitSdkBridgeConsumerFixture();
-    const hostRoot = createCompiledSdkHost(publishedSdkBridgeEntrypoints, (prefix) =>
-      tempDirs.make(prefix),
+    const hostRoot = createCompiledSdkHost(
+      publishedSdkBridgeEntrypoints,
+      (prefix) => tempDirs.make(prefix),
+      { mode: "link" },
     );
     const hasCompiledSdk = hostRoot !== undefined;
     if (hasCompiledSdk) {

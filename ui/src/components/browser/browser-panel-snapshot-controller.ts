@@ -1,19 +1,22 @@
 import {
+  captureBrowserScreenshot,
+  fetchBrowserScreenshotDataUrl,
+  isBrowserEvaluateDisabledError,
   isBrowserNavigationBlockedError,
   listBrowserTabs,
+  readBrowserPageMetrics,
+  type BrowserPageMetrics,
   type BrowserPanelTab,
   type BrowserRequestClient,
 } from "./browser-client.ts";
 import type { BrowserPanelNativeController } from "./browser-panel-native-controller.ts";
-import {
-  captureBrowserPanelOwnedView,
-  type BrowserPanelControllerHost,
-  type BrowserPanelOperationOwnership,
-  type BrowserPanelSnapshotOutcome,
+import type {
+  BrowserPanelControllerHost,
+  BrowserPanelOperationOwnership,
+  BrowserPanelSnapshotOutcome,
 } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelStream } from "./browser-panel-stream.ts";
-import type { BrowserPanelView } from "./browser-panel-surface.ts";
-import type { BrowserPanelViewportController } from "./browser-panel-viewport-controller.ts";
+import { loadBrowserPanelImage, type BrowserPanelView } from "./browser-panel-surface.ts";
 
 type BrowserPanelSnapshotState = {
   running: boolean | null;
@@ -56,10 +59,7 @@ interface BrowserPanelSnapshotHost extends BrowserPanelSnapshotState {
 
 /** Coordinates remote tab snapshots and their owned page images and input metrics. */
 export class BrowserPanelSnapshotController {
-  constructor(
-    private readonly controller: BrowserPanelSnapshotHost,
-    private readonly viewport: BrowserPanelViewportController,
-  ) {}
+  constructor(private readonly controller: BrowserPanelSnapshotHost) {}
 
   async listTabs(client: BrowserRequestClient) {
     const snapshot = await listBrowserTabs(client);
@@ -150,19 +150,47 @@ export class BrowserPanelSnapshotController {
         return;
       }
       captureRevision = stream.frameRevision;
-      const view = await captureBrowserPanelOwnedView({
-        client,
-        targetId,
-        route: this.controller.operations.route,
-        host: this.controller.host,
-        isEvaluateUnavailable: () => this.controller.evaluateUnavailable,
-        current: captureCurrent,
-        markEvaluateUnavailable: () => this.controller.setState("evaluateUnavailable", true),
-      });
-      if (!view || !captureCurrent()) {
+      const route = this.controller.operations.route;
+      const host = this.controller.host;
+      const shot = await captureBrowserScreenshot(client, targetId);
+      if (!captureCurrent()) {
         return;
       }
-      const { metrics } = view;
+      // Media transfer and page geometry are independent once the screenshot exists.
+      const [dataUrl, observedMetrics] = await Promise.all([
+        fetchBrowserScreenshotDataUrl({
+          resourceBasePath: host.resourceBasePath,
+          authToken: host.authToken,
+          path: shot.path,
+        }),
+        readBrowserPanelOwnedMetrics(
+          client,
+          targetId,
+          this.controller.evaluateUnavailable,
+          captureCurrent,
+          () => this.controller.setState("evaluateUnavailable", true),
+        ),
+      ]);
+      if (!captureCurrent()) {
+        return;
+      }
+      const image = await loadBrowserPanelImage(dataUrl);
+      if (!captureCurrent()) {
+        return;
+      }
+      // A navigation between screenshot and evaluation changes the coordinate document.
+      const metrics =
+        shot.url && observedMetrics?.url && shot.url !== observedMetrics.url
+          ? null
+          : observedMetrics;
+      const view: BrowserPanelView = {
+        targetId,
+        dataUrl,
+        image,
+        url: shot.url,
+        metrics,
+        ...(route ? { browserTab: { ...route, targetId } } : {}),
+      };
       // Tab snapshots can lag history and in-page navigation. Keep the stable
       // identity aligned with the document this capture owns.
       this.controller.setState(
@@ -171,7 +199,6 @@ export class BrowserPanelSnapshotController {
       );
       this.controller.setState("view", view);
       stream.releaseReplacedView();
-      this.viewport.captured(metrics);
       if (view.url) {
         this.controller.syncUrlDraft(view.url);
       }
@@ -201,5 +228,29 @@ export class BrowserPanelSnapshotController {
         this.controller.setState("loading", false);
       }
     }
+  }
+}
+
+/** A stale gateway must not disable evaluation on the replacement browser. */
+async function readBrowserPanelOwnedMetrics(
+  client: BrowserRequestClient,
+  targetId: string,
+  evaluateUnavailable: boolean,
+  current: () => boolean,
+  markEvaluateUnavailable: () => void,
+): Promise<BrowserPageMetrics | null> {
+  if (evaluateUnavailable || !current()) {
+    return null;
+  }
+  try {
+    return await readBrowserPageMetrics(client, targetId);
+  } catch (error) {
+    if (current() && isBrowserNavigationBlockedError(error)) {
+      throw error;
+    }
+    if (current() && isBrowserEvaluateDisabledError(error)) {
+      markEvaluateUnavailable();
+    }
+    return null;
   }
 }

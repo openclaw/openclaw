@@ -1018,10 +1018,10 @@ export async function runBtwSideQuestion(
               params.messageThreadId === undefined ? undefined : String(params.messageThreadId),
           },
           pluginId: resolveAgentHarnessOwnerPluginId(selectedHarness),
+          nativeModelPolicySupport: selectedHarness.nativeModelPolicySupport,
         });
         const sideParams = {
           ...hostAttempt,
-          images: params.images,
           hostCapabilities: host.capabilities,
           sandbox,
           provider: runtimeModel.provider,
@@ -1275,6 +1275,7 @@ export async function runBtwSideQuestion(
       workspaceDir,
       env: process.env,
       wrapProviderStream: true,
+      auth: { mode: apiKeyInfo.mode, authFlow: apiKeyInfo.authFlow },
       apiRegistry: modelRegistryRuntime.apiRegistry,
     });
     const { streamFn } = resolveEmbeddedAgentStream({

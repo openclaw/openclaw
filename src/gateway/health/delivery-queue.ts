@@ -40,7 +40,7 @@ export function captureDeliveryQueueHealthContext(): DeliveryQueueHealthContext 
 
 /** Builds redacted inbound pressure and dead-letter health for gateway snapshots. */
 export async function buildDeliveryQueueHealthSummary(
-  cachedIngressPressure?: ReturnType<typeof countChannelIngressQueuePressure>,
+  cachedIngressPressure?: Awaited<ReturnType<typeof countChannelIngressQueuePressure>>,
   context: DeliveryQueueHealthContext = captureDeliveryQueueHealthContext(),
 ) {
   // Queue health reads are diagnostic; a storage failure must not take the

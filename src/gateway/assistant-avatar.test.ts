@@ -1,11 +1,10 @@
 // Gateway assistant-avatar tests cover selected-source precedence and safe fallbacks.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createGatewayAvatarDataUrlCache } from "./assistant-avatar-cache.js";
-import { openGatewayAssistantAvatar, resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
+import { resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 
 const REAL_PNG = Buffer.from(
@@ -14,7 +13,6 @@ const REAL_PNG = Buffer.from(
 );
 const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`;
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
-type GatewayAssistantAvatarProjection = ReturnType<typeof resolveGatewayAssistantAvatar>;
 
 function createWorkspace(): { workspace: string; cfg: OpenClawConfig } {
   const root = tempRoots.make("openclaw-gateway-avatar-");
@@ -26,101 +24,47 @@ function createWorkspace(): { workspace: string; cfg: OpenClawConfig } {
   };
 }
 
-function projectAvatar(cfg: OpenClawConfig): GatewayAssistantAvatarProjection {
-  const identity = resolveAssistantIdentity({ cfg, agentId: "main" });
+async function projectAvatar(cfg: OpenClawConfig) {
+  const identity = await resolveAssistantIdentity({ cfg, agentId: "main" });
   return resolveGatewayAssistantAvatar({ cfg, identity });
 }
 
 describe("resolveGatewayAssistantAvatar", () => {
-  it("reuses unchanged pinned files and rereads after mtime or size changes", () => {
-    const read = vi.fn(
-      (opened: { stat: { mtimeMs: number; size: number } }) =>
-        `data:image/png;base64,${opened.stat.mtimeMs}:${opened.stat.size}`,
-    );
-    const close = vi.fn();
-    const cache = createGatewayAvatarDataUrlCache({ maxEntries: 2, read, close });
-    const opened = (
-      fd: number,
-      mtimeMs: number,
-      size: number,
-      identity = { ctimeMs: 5, dev: 1, ino: 2 },
-    ) => ({
-      path: "/workspace/avatar.png",
-      fd,
-      stat: { ...identity, mtimeMs, size },
-    });
-
-    expect(cache.read(opened(1, 10, 20))).toBe("data:image/png;base64,10:20");
-    expect(cache.read(opened(2, 10, 20))).toBe("data:image/png;base64,10:20");
-    expect(read).toHaveBeenCalledTimes(1);
-    expect(close).toHaveBeenCalledWith(2);
-
-    expect(cache.read(opened(3, 11, 20))).toBe("data:image/png;base64,11:20");
-    expect(cache.read(opened(4, 11, 21))).toBe("data:image/png;base64,11:21");
-    expect(read).toHaveBeenCalledTimes(3);
-
-    expect(cache.read(opened(5, 11, 21, { ctimeMs: 6, dev: 1, ino: 3 }))).toBe(
-      "data:image/png;base64,11:21",
-    );
-    expect(read).toHaveBeenCalledTimes(4);
-  });
-
-  it("inlines the selected local file", () => {
+  it("inlines the selected local file", async () => {
     const { cfg, workspace } = createWorkspace();
     fs.writeFileSync(path.join(workspace, "avatar.png"), REAL_PNG);
     cfg.agents!.list![0]!.identity = { avatar: "avatar.png" };
 
-    expect(projectAvatar(cfg)).toMatchObject({
+    expect(await projectAvatar(cfg)).toMatchObject({
       avatar: REAL_PNG_DATA_URL,
       resolution: { kind: "local", source: "avatar.png" },
     });
   });
 
-  it("leaves a pinned local descriptor for the route owner", () => {
-    const { cfg, workspace } = createWorkspace();
-    fs.writeFileSync(path.join(workspace, "avatar.png"), REAL_PNG);
-    cfg.agents!.list![0]!.identity = { avatar: "avatar.png" };
-    const identity = resolveAssistantIdentity({ cfg, agentId: "main" });
-
-    const projected = openGatewayAssistantAvatar({ cfg, identity });
-    expect(projected).toMatchObject({
-      resolution: { kind: "local", source: "avatar.png" },
-      openedFile: { fd: expect.any(Number) },
-    });
-    if (!projected.openedFile) {
-      throw new Error("expected a pinned avatar descriptor");
-    }
-    try {
-      expect(fs.readFileSync(projected.openedFile.fd)).toEqual(REAL_PNG);
-    } finally {
-      fs.closeSync(projected.openedFile.fd);
-    }
-  });
-
-  it("preserves a selected emoji over a lower-priority IDENTITY.md file", () => {
+  it("preserves a selected emoji over a lower-priority IDENTITY.md file", async () => {
     const { cfg, workspace } = createWorkspace();
     fs.writeFileSync(path.join(workspace, "identity.png"), REAL_PNG);
     fs.writeFileSync(path.join(workspace, "IDENTITY.md"), "- Avatar: identity.png\n");
     cfg.agents!.list![0]!.identity = { emoji: "🦞" };
 
-    expect(projectAvatar(cfg)).toEqual({ avatar: "🦞", resolution: null });
+    expect(await projectAvatar(cfg)).toEqual({ avatar: "🦞", resolution: null });
   });
 
   it.each([
     ["remote URL", "https://example.com/avatar.png"],
     ["data URI", REAL_PNG_DATA_URL],
-  ])("preserves a selected %s", (_name, avatar) => {
+  ])("preserves a selected %s", async (_name, avatar) => {
     const { cfg } = createWorkspace();
     cfg.agents!.list![0]!.identity = { avatar };
 
-    expect(projectAvatar(cfg)).toMatchObject({ avatar, resolution: { source: avatar } });
+    expect(await projectAvatar(cfg)).toMatchObject({ avatar, resolution: { source: avatar } });
   });
 
-  it("uses a configured emoji when the selected local path is rejected", () => {
+  it("uses a configured emoji when the selected local path is rejected", async () => {
     const { cfg } = createWorkspace();
     cfg.agents!.list![0]!.identity = { avatar: "missing.png", emoji: "🦞" };
 
-    expect(projectAvatar(cfg)).toEqual({
+    expect(await projectAvatar(cfg)).toEqual({
       avatar: "🦞",
       resolution: { kind: "none", reason: "missing", source: "missing.png" },
     });
@@ -129,11 +73,11 @@ describe("resolveGatewayAssistantAvatar", () => {
   it.each([
     ["unsupported_data_url", "data:text/plain,avatar"],
     ["unsupported_uri", "slack://avatar.png"],
-  ])("rejects %s before local-path handling", (reason, avatar) => {
+  ])("rejects %s before local-path handling", async (reason, avatar) => {
     const { cfg } = createWorkspace();
 
     expect(
-      resolveGatewayAssistantAvatar({
+      await resolveGatewayAssistantAvatar({
         cfg,
         identity: { agentId: "main", avatar, emoji: "🦞" },
       }),
@@ -143,47 +87,47 @@ describe("resolveGatewayAssistantAvatar", () => {
     });
   });
 
-  it("never maps a rejected local path back to an authenticated avatar route", () => {
+  it("never maps a rejected local path back to an authenticated avatar route", async () => {
     const { cfg } = createWorkspace();
     cfg.agents!.list![0]!.identity = { avatar: "missing.png" };
 
-    expect(projectAvatar(cfg)).toEqual({
+    expect(await projectAvatar(cfg)).toEqual({
       avatar: "A",
       resolution: { kind: "none", reason: "missing", source: "missing.png" },
     });
   });
 
-  it("reports pinned-read rejection instead of claiming the avatar is local", () => {
+  it("reports pinned-read rejection instead of claiming the avatar is local", async () => {
     const { cfg, workspace } = createWorkspace();
     fs.writeFileSync(path.join(workspace, "original.png"), REAL_PNG);
     fs.linkSync(path.join(workspace, "original.png"), path.join(workspace, "avatar.png"));
     cfg.agents!.list![0]!.identity = { avatar: "avatar.png" };
 
-    expect(projectAvatar(cfg)).toEqual({
+    expect(await projectAvatar(cfg)).toEqual({
       avatar: "A",
       resolution: { kind: "none", reason: "unreadable", source: "avatar.png" },
     });
   });
 
-  it.each(["A", "PS", "🦞"])("keeps the %s text avatar free of file metadata", (avatar) => {
+  it.each(["PS", "🦞"])("keeps the %s text avatar free of file metadata", async (avatar) => {
     const { cfg } = createWorkspace();
     cfg.agents!.list![0]!.identity = { avatar };
 
-    expect(projectAvatar(cfg)).toEqual({ avatar, resolution: null });
+    expect(await projectAvatar(cfg)).toEqual({ avatar, resolution: null });
   });
 
-  it("preserves same-origin avatar routes and applies the configured base path", () => {
+  it("preserves same-origin avatar routes and applies the configured base path", async () => {
     const { cfg } = createWorkspace();
     cfg.gateway = { controlUi: { basePath: "/openclaw" } };
 
     expect(
-      resolveGatewayAssistantAvatar({
+      await resolveGatewayAssistantAvatar({
         cfg,
         identity: { agentId: "main", avatar: "/avatar/main" },
       }),
     ).toEqual({ avatar: "/openclaw/avatar/main", resolution: null });
     expect(
-      resolveGatewayAssistantAvatar({
+      await resolveGatewayAssistantAvatar({
         cfg,
         identity: { agentId: "main", avatar: "/openclaw/avatar/main" },
       }),
@@ -192,11 +136,11 @@ describe("resolveGatewayAssistantAvatar", () => {
 
   it.each(["/avatar/main/extra", "//evil.example/avatar/main", "//[", "/avatar\\main"])(
     "rejects non-canonical same-origin avatar path %s",
-    (avatar) => {
+    async (avatar) => {
       const { cfg } = createWorkspace();
 
       expect(
-        resolveGatewayAssistantAvatar({
+        await resolveGatewayAssistantAvatar({
           cfg,
           identity: { agentId: "main", avatar, emoji: "🦞" },
         }),

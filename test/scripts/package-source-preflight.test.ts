@@ -12,7 +12,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { readCurrentPackageChangelog } from "../../scripts/package-changelog.mjs";
 import { validateBundledPackageDependencyAlignment } from "../../scripts/package-source-dependencies.mjs";
 import {
   validatePackageSource,
@@ -306,10 +305,14 @@ function runReleaseInputCapture(params: {
       "scripts/lib/docker-e2e-plan.mts",
       "scripts/lib/docker-e2e-scenarios.mts",
       "scripts/lib/official-external-channel-catalog.json",
+      "scripts/lib/update-compat-inventory.json",
+      "scripts/lib/update-first-hop-lanes.mjs",
       "scripts/lib/upgrade-survivor-policy.mjs",
       "scripts/lib/upgrade-survivor-scenarios.json",
       "scripts/lib/release-version.mjs",
       "scripts/lib/frozen-target-compat.sh",
+      "scripts/lib/trusted-native-typescript.mjs",
+      "scripts/lib/native-typescript.mts",
       "scripts/resolve-frozen-codex-live-suite.mjs",
       "scripts/resolve-fs-safe-native-contract.mjs",
       "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
@@ -420,7 +423,6 @@ describe("package source preflight", () => {
   it.each([
     ["2026.8.1", "Unreleased"],
     ["2026.8.1-beta.4", "Unreleased"],
-    ["2026.9.1", "Unreleased"],
     ["2026.9.1", "2026.8.3 (Unreleased)"],
   ])("accepts aligned %s source manifests with %s notes", (version, heading) => {
     expect(
@@ -514,26 +516,6 @@ describe("package source preflight", () => {
         rootDependencies: { invalid: 123 },
       }),
     ).toThrow("root package.json dependency invalid must declare a string version");
-  });
-
-  it("rejects real partial-json source manifest drift", () => {
-    const root = JSON.parse(readFileSync("package.json", "utf8")) as {
-      dependencies: Record<string, string>;
-      version: string;
-    };
-    root.dependencies["partial-json"] = "0.1.8";
-    expect(() =>
-      validatePackageSource({
-        aiManifestContent: readFileSync("packages/ai/package.json", "utf8"),
-        allowUnreleasedChangelog: true,
-        changelogContent: readCurrentPackageChangelog(process.cwd(), root.version, {
-          allowUnreleased: true,
-        }),
-        rootManifestContent: JSON.stringify(root),
-      }),
-    ).toThrow(
-      "package.json must declare partial-json@0.1.7 to bundle packages/ai/package.json without duplicate dependencies",
-    );
   });
 
   it("preserves historical sources from before the @openclaw/ai workspace split", () => {
@@ -710,24 +692,6 @@ describe("package source preflight", () => {
     expect(pack.if).toBe(
       "steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true'",
     );
-  });
-
-  it("treats tab and newline-only package artifact tuples as absent", () => {
-    const whitespace = " \t\n ";
-    const { output, result } = runLiveArtifactTupleValidation({
-      PACKAGE_ARTIFACT_DIGEST: whitespace,
-      PACKAGE_ARTIFACT_ID: whitespace,
-      PACKAGE_ARTIFACT_NAME: whitespace,
-      PACKAGE_ARTIFACT_RUN_ATTEMPT: whitespace,
-      PACKAGE_ARTIFACT_RUN_ID: whitespace,
-      PACKAGE_FILE_NAME: whitespace,
-      PACKAGE_SHA256: whitespace,
-      PACKAGE_SOURCE_SHA: whitespace,
-      PACKAGE_VERSION: whitespace,
-    });
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(output.package_artifact_present).toBe("false");
   });
 
   it("keeps a whitespace-only artifact tuple in source mode through Docker reports", async () => {

@@ -15,15 +15,6 @@ const FIELD_ENTRY_KEYS = new Set(["ref", "type", "value"]);
 
 type BrowserFormFieldValue = NonNullable<BrowserFormField["value"]>;
 
-function normalizeBrowserFormFieldRef(value: unknown): string {
-  return normalizeOptionalString(value) ?? "";
-}
-
-function normalizeBrowserFormFieldType(value: unknown): string {
-  const type = normalizeOptionalString(value) ?? "";
-  return type || DEFAULT_FILL_FIELD_TYPE;
-}
-
 /** Normalize a form field value to the types accepted by fill actions. */
 export function normalizeBrowserFormFieldValue(value: unknown): BrowserFormFieldValue | undefined {
   return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
@@ -36,7 +27,7 @@ export function normalizeBrowserFormField(
   index: number,
 ): BrowserFormField {
   const prefix = `fields[${index}]`;
-  const ref = normalizeBrowserFormFieldRef(record.ref);
+  const ref = normalizeOptionalString(record.ref);
   if (!ref) {
     throw new Error(`${prefix} must include ref`);
   }
@@ -47,7 +38,7 @@ export function normalizeBrowserFormField(
       );
     }
   }
-  const type = normalizeBrowserFormFieldType(record.type);
+  const type = normalizeOptionalString(record.type) ?? DEFAULT_FILL_FIELD_TYPE;
   if (record.value === undefined || record.value === null) {
     return { ref, type };
   }

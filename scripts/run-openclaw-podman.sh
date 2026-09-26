@@ -192,10 +192,24 @@ sync_local_control_ui_origins_via_cli() {
   local config_dir=""
   local allowed_json=""
   local merged_json=""
+  local public_origin=""
   config_dir="$(dirname "$file")"
   if ! command -v openclaw >/dev/null 2>&1; then
     echo "Warning: openclaw not found; unable to sync gateway.controlUi.allowedOrigins in $file." >&2
     return 0
+  fi
+  allowed_json="$(
+    OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$config_dir" \
+      openclaw config get gateway.controlUi.allowedOrigins 2>/dev/null || true
+  )"
+  if [[ -z "$allowed_json" ]]; then
+    public_origin="$(
+      OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$config_dir" \
+        openclaw config get gateway.publicOrigin 2>/dev/null || true
+    )"
+    if [[ -n "${public_origin//[[:space:]]/}" ]]; then
+      return 0
+    fi
   fi
   if ! command -v python3 >/dev/null 2>&1; then
     OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$config_dir" \
@@ -204,10 +218,6 @@ sync_local_control_ui_origins_via_cli() {
       --strict-json >/dev/null
     return 0
   fi
-  allowed_json="$(
-    OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$config_dir" \
-      openclaw config get gateway.controlUi.allowedOrigins --json 2>/dev/null || true
-  )"
   merged_json="$(python3 - "$port" "$allowed_json" <<'PY'
 import json
 import sys
@@ -282,6 +292,8 @@ control_ui = gateway.setdefault("controlUi", {})
 if not isinstance(control_ui, dict):
     raise SystemExit(f"{path}: expected gateway.controlUi object")
 allowed = control_ui.get("allowedOrigins")
+public_origin = gateway.get("publicOrigin")
+inherits_public_origin = "allowedOrigins" not in control_ui and isinstance(public_origin, str) and public_origin.strip()
 desired = [
     f"http://127.0.0.1:{port}",
     f"http://localhost:{port}",
@@ -302,7 +314,8 @@ for origin in desired:
     if origin not in seen:
         cleaned.append(origin)
         seen.add(origin)
-control_ui["allowedOrigins"] = cleaned
+if not inherits_public_origin:
+    control_ui["allowedOrigins"] = cleaned
 with open(tmp, "w", encoding="utf-8") as fh:
     json.dump(data, fh, indent=2)
     fh.write("\n")

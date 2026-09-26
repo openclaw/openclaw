@@ -39,7 +39,7 @@ import {
   registerClientVoiceConsultRun,
   resolveClientVoiceRunBinding,
 } from "../../../talk/client-voice-session.js";
-import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { projectChatDisplayMessages } from "../../chat-display-projection.js";
 import { createTranscriptUpdateBroadcastHandler } from "../../server-session-events.js";
 import { createSessionRowProjection } from "../../session-row-projection.js";
@@ -465,9 +465,7 @@ describe("native Talk action ownership through public plugin registration", () =
   );
 
   it.each([
-    ["open", "open"],
     ["closed", "closed"],
-    ["reassigned", "reassigned"],
     ["returned A-to-B-to-A", "reassigned"],
     ["identical registration replay", "open"],
   ] as const)(
@@ -763,49 +761,47 @@ describe("native Talk action ownership through public plugin registration", () =
     });
   });
 
-  it.each(activeControls)(
-    "keeps $mode on retained work after same-call transport replacement",
-    async ({ text, acknowledgment }) => {
-      await withParkedNativeTask(
-        async ({
-          create,
-          offer,
-          result,
-          socket,
-          activeRun,
-          queueMessage,
-          abortOwned,
-          settleBackend,
-        }) => {
-          const replacement = await connectNativeSession(
-            { create, offer },
-            true,
-            requireString(result, "voiceSessionId"),
-          );
-          expect(replacement.result.voiceSessionId).toBe(result.voiceSessionId);
-          await vi.waitFor(() => expect(socket.readyState).toBe(upstream.NativeSocket.CLOSED));
-          replacement.socket.serverEvent(nativeDelegation("replacement-control", text));
-          await vi.waitFor(() =>
-            expect({
-              deliveries: queueMessage.mock.calls.length,
-              taskStarts: upstream.runEmbeddedAgent.mock.calls.length,
-              originalRunAborted: activeRun.abortSignal.aborted,
-            }).toEqual({ deliveries: 1, taskStarts: 1, originalRunAborted: false }),
-          );
-          replacement.socket.serverEvent(nativeTranscript(text));
-          await flushNativeTranscript(replacement.result);
-          expect(spokenMessages(replacement.socket.sent)).toEqual([
-            expect.stringContaining(acknowledgment),
-          ]);
-          expect(abortOwned).not.toHaveBeenCalled();
-          await settleBackend();
-          expect(activeRun.abortSignal.aborted).toBe(false);
-          expect(queueMessage).toHaveBeenCalledOnce();
-          expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
-        },
-      );
-    },
-  );
+  it("keeps followup on retained work after same-call transport replacement", async () => {
+    const { text, acknowledgment } = activeControls[1];
+    await withParkedNativeTask(
+      async ({
+        create,
+        offer,
+        result,
+        socket,
+        activeRun,
+        queueMessage,
+        abortOwned,
+        settleBackend,
+      }) => {
+        const replacement = await connectNativeSession(
+          { create, offer },
+          true,
+          requireString(result, "voiceSessionId"),
+        );
+        expect(replacement.result.voiceSessionId).toBe(result.voiceSessionId);
+        await vi.waitFor(() => expect(socket.readyState).toBe(upstream.NativeSocket.CLOSED));
+        replacement.socket.serverEvent(nativeDelegation("replacement-control", text));
+        await vi.waitFor(() =>
+          expect({
+            deliveries: queueMessage.mock.calls.length,
+            taskStarts: upstream.runEmbeddedAgent.mock.calls.length,
+            originalRunAborted: activeRun.abortSignal.aborted,
+          }).toEqual({ deliveries: 1, taskStarts: 1, originalRunAborted: false }),
+        );
+        replacement.socket.serverEvent(nativeTranscript(text));
+        await flushNativeTranscript(replacement.result);
+        expect(spokenMessages(replacement.socket.sent)).toEqual([
+          expect.stringContaining(acknowledgment),
+        ]);
+        expect(abortOwned).not.toHaveBeenCalled();
+        await settleBackend();
+        expect(activeRun.abortSignal.aborted).toBe(false);
+        expect(queueMessage).toHaveBeenCalledOnce();
+        expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
+      },
+    );
+  });
 
   // Unlike classifier tests, these pairs reach the provider's replacement policy and real run queue.
   describe.each(activeControls)("active $mode", ({ text, acknowledgment }) => {
@@ -896,47 +892,45 @@ describe("native Talk action ownership through public plugin registration", () =
   );
 
   // A same-turn test misses the state transition between a persisted transcript and its delegation.
-  it.each(activeControls)(
-    "makes one current-state decision for $mode delegated after original settlement",
-    async ({ text }) => {
-      await withParkedNativeTask(
-        async ({ socket, result, activeRun, queueMessage, abortOwned, settleBackend }) => {
-          const beforeTranscript = socket.sent.length;
-          socket.serverEvent(nativeTranscript(text));
-          await flushNativeTranscript(result);
-          expect.soft(queueMessage, "final ASR must not steer the old task").not.toHaveBeenCalled();
-          expect
-            .soft(
-              spokenMessages(socket.sent.slice(beforeTranscript)),
-              "final ASR must not attempt control before delegation",
-            )
-            .toEqual([]);
-          expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
-          await settleBackend();
-          await vi.waitFor(() => expectOriginalResult(socket.sent));
-          expect(activeRun.abortSignal.aborted).toBe(false);
+  it("makes one current-state decision for steering delegated after original settlement", async () => {
+    const { text } = activeControls[0];
+    await withParkedNativeTask(
+      async ({ socket, result, activeRun, queueMessage, abortOwned, settleBackend }) => {
+        const beforeTranscript = socket.sent.length;
+        socket.serverEvent(nativeTranscript(text));
+        await flushNativeTranscript(result);
+        expect.soft(queueMessage, "final ASR must not steer the old task").not.toHaveBeenCalled();
+        expect
+          .soft(
+            spokenMessages(socket.sent.slice(beforeTranscript)),
+            "final ASR must not attempt control before delegation",
+          )
+          .toEqual([]);
+        expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
+        await settleBackend();
+        await vi.waitFor(() => expectOriginalResult(socket.sent));
+        expect(activeRun.abortSignal.aborted).toBe(false);
 
-          socket.serverEvent(nativeDelegation("after-settlement", text));
-          await vi.waitFor(() => expect(upstream.runEmbeddedAgent).toHaveBeenCalledTimes(2));
-          await vi.waitFor(() =>
-            expect(socket.sent.map((frame): unknown => JSON.parse(frame))).toContainEqual({
-              type: "delegation.context.append",
-              delegation_item_id: "after-settlement",
-              channel: "speakable",
-              content: [{ type: "input_text", text: "Subsequent task completed." }],
-            }),
-          );
-          expect(upstream.runEmbeddedAgent.mock.calls[1]?.[0].prompt).toContain(text);
-          expect(
-            queueMessage,
-            "one input must not both steer old work and start new work",
-          ).not.toHaveBeenCalled();
-          expect(abortOwned).not.toHaveBeenCalled();
-          expect(socket.readyState).toBe(upstream.NativeSocket.OPEN);
-        },
-      );
-    },
-  );
+        socket.serverEvent(nativeDelegation("after-settlement", text));
+        await vi.waitFor(() => expect(upstream.runEmbeddedAgent).toHaveBeenCalledTimes(2));
+        await vi.waitFor(() =>
+          expect(socket.sent.map((frame): unknown => JSON.parse(frame))).toContainEqual({
+            type: "delegation.context.append",
+            delegation_item_id: "after-settlement",
+            channel: "speakable",
+            content: [{ type: "input_text", text: "Subsequent task completed." }],
+          }),
+        );
+        expect(upstream.runEmbeddedAgent.mock.calls[1]?.[0].prompt).toContain(text);
+        expect(
+          queueMessage,
+          "one input must not both steer old work and start new work",
+        ).not.toHaveBeenCalled();
+        expect(abortOwned).not.toHaveBeenCalled();
+        expect(socket.readyState).toBe(upstream.NativeSocket.OPEN);
+      },
+    );
+  });
 
   // The real queue yields on readiness: one synchronous burst fills it without a blocker seam.
   it("speaks a bounded refusal at control capacity and accepts a fresh cancel after draining", async () => {

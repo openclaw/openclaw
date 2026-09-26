@@ -3,8 +3,8 @@ set -euo pipefail
 
 readonly SUT_USER="openclaw-sut"
 readonly RUNNER_USER="openclaw-bench"
-readonly NODE_VERSION="24.19.0"
-readonly NODE_SHA256="14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647"
+readonly NODE_VERSION="24.21.0"
+readonly NODE_SHA256="fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6"
 readonly PNPM_VERSION="11.15.1"
 readonly OCM_BINARY="/opt/openclaw-performance/ocm"
 readonly CRABBOX_COMMIT="8ba71f913bbe57285ae29af45ef0d8ec6712477d"

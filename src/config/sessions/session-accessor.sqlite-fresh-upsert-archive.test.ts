@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
@@ -11,6 +13,8 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
+import * as archiveWorker from "./session-accessor.sqlite-archive.js";
+import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
 import {
   getSessionKysely,
   resolveSqliteScope,
@@ -30,6 +34,33 @@ describe("fresh session creation with pending transcript archives", () => {
     storePath: fixture.storePath(),
   });
 
+  it.each([true, false])(
+    "skips empty archive recovery with skipMaintenance=%s",
+    async (skipMaintenance) => {
+      await replaceSessionEntry(freshScope(), freshEntry);
+      const probe = vi.spyOn(archiveWorker, "readPendingSqliteTranscriptArchivesInWorker");
+      try {
+        for (let turn = 0; turn < 3; turn += 1) {
+          await applySessionEntryLifecycleMutation({
+            storePath: fixture.storePath(),
+            skipMaintenance,
+            maintenanceOverride: skipMaintenance ? undefined : { mode: "warn" },
+            upserts: [
+              {
+                sessionKey: freshScope().sessionKey,
+                entry: { ...freshEntry, label: `turn-${turn}` },
+              },
+            ],
+          });
+        }
+        expect(loadSessionEntry(freshScope())?.label).toBe("turn-2");
+        expect(probe).not.toHaveBeenCalled();
+      } finally {
+        probe.mockRestore();
+      }
+    },
+  );
+
   function readArchive() {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(freshScope())));
     const row = executeSqliteQueryTakeFirstSync(
@@ -37,8 +68,11 @@ describe("fresh session creation with pending transcript archives", () => {
       getSessionKysely(database.db)
         .selectFrom("session_transcript_archives")
         .select([
+          "archive_blob",
           "archive_name",
           "archive_sha256",
+          "generation",
+          "publish_attempts",
           "last_publish_attempt_at",
           "last_publish_error",
           "published_at",
@@ -127,6 +161,128 @@ describe("fresh session creation with pending transcript archives", () => {
     expect(readSessionArchiveContentSync(collisionPath)).toBe(`${JSON.stringify(archivedEvent)}\n`);
     expect(loadSessionEntry(freshScope())).toMatchObject(freshEntry);
   });
+
+  it.each(["canonical", "alias"] as const)(
+    "retries unrelated archive exports after %s adoption commits, retaining history and recoverable errors",
+    async (kind) => {
+      const scope = {
+        sessionId: "adopted-session",
+        sessionKey:
+          kind === "alias" ? "agent:main:signal:group:adopted" : "agent:main:adopted-session",
+        storePath: fixture.storePath(),
+      };
+      const entry = {
+        sessionId: scope.sessionId,
+        updatedAt: freshEntry.updatedAt,
+        archivedAt: freshEntry.updatedAt - 1,
+        archivedBy: { type: "human" as const, id: "archiver" },
+        archiveReason: "manual" as const,
+      };
+      const transcript = [
+        { type: "session", id: scope.sessionId, version: 3, cwd: "/workspace" },
+        {
+          type: "message",
+          id: "retained-message",
+          parentId: null,
+          timestamp: "2026-07-15T21:23:03.698Z",
+          message: { role: "user", content: "Keep adopted history.\r\n  Preserve spacing." },
+        },
+      ];
+      await replaceSessionEntry(scope, entry);
+      await replaceTranscriptEvents(scope, transcript);
+      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
+      const retainedRows = readTranscriptStorageRows(database, scope.sessionId);
+      expect(retainedRows).toHaveLength(transcript.length);
+      const collisionPath = await failUnrelatedArchiveExport();
+      const pendingArchive = readArchive();
+      const adoptedEntry = { ...entry, label: "adopted" };
+      const target = {
+        ...scope,
+        sessionKey: kind === "alias" ? "agent:main:signal:group:Adopted" : scope.sessionKey,
+      };
+      const order: string[] = [];
+      const stop = onInternalSessionTranscriptUpdate((update) => {
+        if (update.sessionFile === collisionPath) {
+          order.push("archive-published");
+        }
+      });
+      const adopt = () =>
+        createSessionEntryWithTranscript(
+          target,
+          ({ existingEntry }) => {
+            expect(existingEntry).toMatchObject(entry);
+            return { ok: true, entry: { ...existingEntry!, label: adoptedEntry.label } };
+          },
+          {
+            onLifecycleCommitted: () => {
+              order.push("committed");
+            },
+            afterCommitted: async (_entry, source) => {
+              source.assertCurrent();
+              order.push("registered");
+            },
+          },
+        );
+      const sql = observeHostDataSql();
+      try {
+        await expect(adopt()).rejects.toThrow(
+          "transcript archive file export(s) remain pending in SQLite",
+        );
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+        stop();
+      }
+      expect(order).toEqual(["committed", "registered"]);
+      expect(readArchive()).toEqual({
+        ...pendingArchive,
+        publish_attempts: pendingArchive.publish_attempts + 1,
+        last_publish_attempt_at: expect.any(Number),
+      });
+      expect(fs.readFileSync(collisionPath, "utf8")).toBe("collision");
+      expect(loadSessionEntry(target)).toMatchObject(adoptedEntry);
+      expect(readTranscriptStorageRows(database, scope.sessionId)).toEqual(retainedRows);
+
+      fs.rmSync(collisionPath);
+      const stopRecovered = onInternalSessionTranscriptUpdate((update) => {
+        if (update.sessionFile === collisionPath) {
+          order.push("archive-published");
+        }
+      });
+      const recoverySql = observeHostDataSql();
+      try {
+        await expect(adopt()).resolves.toMatchObject({
+          ok: true,
+          entry: adoptedEntry,
+          sessionFile: target.sessionKey,
+        });
+        expect(recoverySql.queries).toEqual([]);
+      } finally {
+        recoverySql.restore();
+        stopRecovered();
+      }
+      expect(order).toEqual([
+        "committed",
+        "registered",
+        "committed",
+        "registered",
+        "archive-published",
+      ]);
+      expect(readArchive()).toEqual({
+        ...pendingArchive,
+        last_publish_attempt_at: expect.any(Number),
+        last_publish_error: null,
+        publish_attempts: pendingArchive.publish_attempts + 2,
+        published_at: expect.any(Number),
+      });
+      expect(fs.readFileSync(collisionPath)).toEqual(Buffer.from(pendingArchive.archive_blob));
+      expect(readSessionArchiveContentSync(collisionPath)).toBe(
+        `${JSON.stringify(archivedEvent)}\n`,
+      );
+      expect(loadSessionEntry(target)).toMatchObject(adoptedEntry);
+      expect(readTranscriptStorageRows(database, scope.sessionId)).toEqual(retainedRows);
+    },
+  );
 
   it.each([
     "existing upsert",

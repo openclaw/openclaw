@@ -106,7 +106,7 @@ Top-level fields:
 
 `modelsDev` opts an owned provider into models.dev metadata hydration when the hosted catalog is published. Declare the upstream provider once per OpenClaw provider, not once per model. Omission means no models.dev hydration; there is no central provider fallback. Keys are normalized as OpenClaw provider ids and source ids are trimmed. Empty or non-string source ids and mappings for unowned providers are ignored; an alias alone does not grant ownership. A mapping does not create catalog provider rows or relax their validation.
 
-Hydration adds eligible model ids and fills only undefined metadata. Explicit manifest values remain authoritative, including `false`; models.dev never supplies transport settings or prices. Prices still follow the provider-owned pricing policy. Opt in only when the provider defaults are appropriate for newly imported rows; providers that choose a transport per model should not opt in unless those defaults are safe. Hydration errors fail publication, leaving the last published artifact intact. The publisher hydrates opted-in metadata even without `--pricing`; that flag controls price enrichment only. A dry run performs the same metadata hydration without writing the artifact.
+Hydration adds eligible model ids and fills only undefined metadata. Explicit manifest values remain authoritative, including `false`; models.dev never supplies transport settings or prices. Prices still follow the provider-owned pricing policy. Opt in only when the provider defaults are appropriate for newly imported rows; providers that choose a transport per model should not opt in unless those defaults are safe. If models.dev is unreachable or its response is malformed, publication fails and the last published artifact stays intact. If only a mapped upstream provider is missing or malformed, that provider publishes its manifest rows without hydration and the run logs a warning naming it; other providers still update. Keep each mapping current when models.dev renames a provider. The publisher hydrates opted-in metadata even without `--pricing`; that flag controls price enrichment only. A dry run performs the same metadata hydration without writing the artifact.
 
 This field is publication-time authoring metadata, not a Gateway discovery hook. It does not add runtime network calls or hot reload; the existing [hosted catalog update lifecycle](/concepts/models#hosted-catalog-updates) is unchanged.
 
@@ -123,6 +123,11 @@ Provider fields:
 | `headers`             | `Record<string, string>` | Optional static headers that apply to this provider catalog.                                                                                                                                                      |
 | `defaultUtilityModel` | `string`                 | Optional provider-recommended small model id for short internal utility tasks (titles, progress narration). Used when `agents.defaults.utilityModel` is unset and this provider serves the agent's primary model. |
 | `models`              | `object[]`               | Required model rows. Rows without an `id` are ignored.                                                                                                                                                            |
+
+`recommendedModels` is an optional ordered shortlist of distinct model
+ids from this provider's `models`. Ids are trimmed and must be non-empty. The field
+is reserved for picker ordering and is not yet used. It is published only in catalog
+v2, never v1. Invalid manifest lists are omitted; invalid remote v2 lists are rejected.
 
 Model fields:
 
@@ -220,8 +225,9 @@ Use `modelPricing` when the hosted catalog publisher needs provider-specific pri
       },
       "openrouter": {
         "openRouter": {
-          "passthroughProviderModel": true
+          "provider": "openrouter"
         },
+        "modelsDev": false,
         "liteLLM": false
       }
     }
@@ -238,7 +244,8 @@ Provider fields:
 | `deepinfra`  | `false \| object` | Explicit mapping to the public DeepInfra `/models/list` catalog. Never enabled implicitly.      |
 | `external`   | `boolean`         | Set `false` for local/self-hosted providers that should never use published external pricing.   |
 | `openCode`   | `false \| object` | Explicit mapping to the public `models.opencode.ai/api.json` catalog. Never enabled implicitly. |
-| `openRouter` | `false \| object` | OpenRouter publication-key mapping. `false` disables OpenRouter matching for this provider.     |
+| `modelsDev`  | `false \| object` | models.dev price list for the provider that bills the request. Enabled by default.              |
+| `openRouter` | `false \| object` | OpenRouter's own prices. They price only `openrouter/*` keys, never a vendor's models.          |
 | `liteLLM`    | `false \| object` | LiteLLM publication-key mapping. `false` disables LiteLLM matching for this provider.           |
 | `venice`     | `false \| object` | Explicit mapping to the public Venice `/api/v1/models` catalog. Never enabled implicitly.       |
 
@@ -247,14 +254,24 @@ Source fields:
 | Field                      | Type               | What it means                                                                                                        |
 | -------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | `provider`                 | `string`           | External catalog provider id when it differs from the OpenClaw provider id, for example `z-ai` for a `zai` provider. |
-| `passthroughProviderModel` | `boolean`          | Treat slash-containing model ids as nested provider/model refs, useful for proxy providers such as OpenRouter.       |
+| `passthroughProviderModel` | `boolean`          | Treat slash-containing model ids as `vendor/model` refs priced at the vendor's rate, for gateways that bill it.      |
 | `modelIdTransforms`        | `"version-dots"[]` | Extra external catalog model-id variants. `version-dots` tries dotted version ids like `claude-opus-4.6`.            |
 
-A declared provider policy enables only its declared source mappings. Without a
-policy, publication tries OpenRouter, then LiteLLM. Each selected price is a
-complete schedule: base rates and context tiers are never combined across sources.
-OpenRouter's native prompt-length overrides are supported; time-based overrides
-are not represented as static context tiers.
+Prices come from whoever bills the request. A declared provider policy enables
+only its declared source mappings. Without a policy, publication tries the
+provider's models.dev entry, then LiteLLM. The models.dev entry is the one named
+by `modelCatalog.modelsDev`, or by `modelsDev.provider`, and otherwise the
+OpenClaw provider id. OpenRouter's feed describes OpenRouter's billing, including
+its promotions, so it prices only OpenRouter routes.
+
+Gateways with `passthroughProviderModel` use their own price list first when their
+manifest names one, for example a `kilo` or `vercel` models.dev entry. Without a
+named list, a gateway bills the vendor's rate: the vendor's own catalog row, then
+the vendor's standalone price.
+
+Each selected price is a complete schedule: base rates and context tiers are
+never combined across sources. OpenRouter's native prompt-length overrides are
+supported; time-based overrides are not represented as static context tiers.
 
 For authoritative native source mappings, use:
 

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   collectEnvVarNames,
   isCountedSourcePath,
@@ -11,6 +11,8 @@ import { withEnv } from "../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => vi.stubEnv("GITHUB_ACTIONS", ""));
+afterEach(() => vi.unstubAllEnvs());
 
 function createRepo(files: Record<string, string> = {}) {
   const root = tempDirs.make("openclaw-env-count-");
@@ -32,6 +34,22 @@ function createRepo(files: Record<string, string> = {}) {
 }
 
 describe("check-env-var-count", () => {
+  it("warns on CI count growth while malformed budgets stay blocking", () => {
+    const { root, git, write } = createRepo({
+      "config/env-var-count-budget.txt": "0\n",
+    });
+    git("add", ".");
+    git("commit", "-m", "base");
+    write("src/runtime.ts", "process.env.OPENCLAW_CANARY;\n");
+    expect(() => main(["--base", "HEAD"], root)).toThrow(/exceeds budget/u);
+    vi.stubEnv("GITHUB_ACTIONS", "true");
+    vi.stubEnv("GITHUB_STEP_SUMMARY", path.join(root, "summary.md"));
+    expect(main(["--base", "HEAD"], root)).toBe(1);
+    expect(fs.readFileSync(path.join(root, "summary.md"), "utf8")).toContain("exceeds budget");
+    write("config/env-var-count-budget.txt", "invalid\n");
+    expect(() => main(["--base", "HEAD"], root)).toThrow(/non-negative integer/u);
+  });
+
   it("counts production source and excludes tests and QA Lab", () => {
     expect(isCountedSourcePath("src/config/paths.ts")).toBe(true);
     expect(isCountedSourcePath("packages/api/src/index.ts")).toBe(true);

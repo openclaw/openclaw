@@ -10,8 +10,14 @@ import type { SessionBindingRecord } from "../infra/outbound/session-binding-ser
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { collectCronHistoryOverflowTaskIds } from "./cron-history-retention.js";
 import * as taskRegistry from "./runtime-internal.js";
+import {
+  captureCronTaskMaintenanceSelection,
+  prepareCronTaskMaintenance,
+} from "./task-cron-maintenance-policy.js";
 import * as acpCleanup from "./task-registry-acp-cleanup.js";
 import type { TaskRegistryAcpMaintenanceRuntime } from "./task-registry-acp-cleanup.js";
+import * as cronMaintenance from "./task-registry-maintenance-cron.js";
+import * as retention from "./task-registry-maintenance-retention.js";
 import * as backingFacts from "./task-registry-maintenance-session-facts.js";
 import type { BackingSessionRuntime } from "./task-registry-maintenance-session-facts.js";
 import * as snapshots from "./task-registry-maintenance-snapshot.js";
@@ -19,6 +25,10 @@ import type {
   TaskRegistryMaintenanceRead,
   TaskRegistryMaintenanceReader,
 } from "./task-registry-maintenance-snapshot.js";
+import {
+  captureTaskRetentionSelection,
+  prepareTaskRetention,
+} from "./task-registry-retention.operation.js";
 import { configureTaskRegistryMaintenance } from "./task-registry.maintenance.js";
 import * as taskStore from "./task-registry.store.sqlite.js";
 import type { TaskRecord } from "./task-registry.types.js";
@@ -28,7 +38,6 @@ type TaskRegistryMaintenanceRuntime = TaskRegistryAcpMaintenanceRuntime &
   TaskRegistryMaintenanceReader &
   Pick<
     typeof taskRegistry,
-    | "deleteTaskRecordById"
     | "ensureTaskRegistryReady"
     | "getTaskById"
     | "listTaskRecords"
@@ -36,7 +45,6 @@ type TaskRegistryMaintenanceRuntime = TaskRegistryAcpMaintenanceRuntime &
     | "markTaskTerminalById"
     | "maybeDeliverTaskTerminalUpdate"
     | "resolveTaskForLookupToken"
-    | "setTaskCleanupAfterById"
   > & {
     isCronJobActive: typeof cronJobs.isCronJobActive;
     getAgentRunContext: typeof agentRuns.getAgentRunContext;
@@ -84,10 +92,44 @@ export function resetTaskRegistryMaintenanceMocks() {
 
 function installMaintenanceRuntime(
   runtime: TaskRegistryMaintenanceRuntime,
+  currentTasks: Map<string, TaskRecord>,
   authoritative: boolean,
 ) {
   resetTaskRegistryMaintenanceMocks();
   configureTaskRegistryMaintenance({ runtimeAuthoritative: authoritative });
+  replace(
+    cronMaintenance.reconcileCronTaskForMaintenance,
+    () => vi.spyOn(cronMaintenance, "reconcileCronTaskForMaintenance"),
+    async (selected, now, options) => {
+      options.assertOwnerCurrent();
+      const task = currentTasks.get(selected.taskId);
+      const jobId = task?.sourceId?.trim();
+      if (!task || (options.runtimeAuthoritative() && jobId && runtime.isCronJobActive(jobId))) {
+        return { task };
+      }
+      const rows = jobId
+        ? runtime.listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
+            runtime: "cron",
+            sourceId: jobId,
+          })
+        : [];
+      const result = prepareCronTaskMaintenance(task, rows, {
+        taskId: selected.taskId,
+        selected: captureCronTaskMaintenanceSelection(selected),
+        now,
+        markLost: options.markLost,
+      });
+      if (result) {
+        currentTasks.set(task.taskId, result.task);
+      }
+      return {
+        task: result?.task ?? task,
+        ...(result && result.task.status !== selected.status
+          ? { outcome: result.task.status === "lost" ? ("lost" as const) : ("recovered" as const) }
+          : {}),
+      };
+    },
+  );
   replace(
     cronJobs.isCronJobActive,
     () => vi.spyOn(cronJobs, "isCronJobActive"),
@@ -112,11 +154,6 @@ function installMaintenanceRuntime(
     taskStore.listTaskRegistryRecordsByRuntimeSourceIdFromSqlite,
     () => vi.spyOn(taskStore, "listTaskRegistryRecordsByRuntimeSourceIdFromSqlite"),
     runtime.listTaskRegistryRecordsByRuntimeSourceIdFromSqlite,
-  );
-  replace(
-    taskRegistry.deleteTaskRecordById,
-    () => vi.spyOn(taskRegistry, "deleteTaskRecordById"),
-    runtime.deleteTaskRecordById,
   );
   replace(
     taskRegistry.ensureTaskRegistryReady,
@@ -154,9 +191,27 @@ function installMaintenanceRuntime(
     runtime.resolveTaskForLookupToken,
   );
   replace(
-    taskRegistry.setTaskCleanupAfterById,
-    () => vi.spyOn(taskRegistry, "setTaskCleanupAfterById"),
-    runtime.setTaskCleanupAfterById,
+    retention.applyTaskRegistryMaintenanceRetention,
+    () => vi.spyOn(retention, "applyTaskRegistryMaintenanceRetention"),
+    async (selected, now, cronHistoryOverflowTaskIds, assertOwnerCurrent) => {
+      assertOwnerCurrent();
+      // Keep retention decisions production-owned while these fixtures use an in-memory ledger.
+      const result = prepareTaskRetention(currentTasks.get(selected.taskId), {
+        taskId: selected.taskId,
+        selection: captureTaskRetentionSelection(selected),
+        now,
+        cronHistoryOverflow: cronHistoryOverflowTaskIds.has(selected.taskId),
+      });
+      if (result.kind === "pruned") {
+        currentTasks.delete(selected.taskId);
+        return "pruned";
+      }
+      if (result.kind === "stamped") {
+        currentTasks.set(selected.taskId, result.task);
+        return "stamped";
+      }
+      return undefined;
+    },
   );
   replace(
     acpTurns.isAcpTurnActive,
@@ -202,7 +257,6 @@ function createPreparedMaintenanceRead(): TaskRegistryMaintenanceRead {
   return {
     assertOwnerCurrent() {},
     assertCurrent() {},
-    isTaskSettled: () => true,
   };
 }
 
@@ -316,10 +370,9 @@ export function createTaskRegistryMaintenanceHarness(params: {
           task.childSessionKey?.trim().toLowerCase() === normalized,
       );
     },
-    deleteTaskRecordById: (taskId: string) => currentTasks.delete(taskId),
     ensureTaskRegistryReady: () => {},
     getTaskById: (taskId: string) => currentTasks.get(taskId),
-    getTaskRegistryMaintenanceTask: (_read, taskId: string) => currentTasks.get(taskId),
+    getTaskRegistryMaintenanceTask: (taskId: string) => currentTasks.get(taskId),
     prepareTaskRegistryRead: async () => createPreparedMaintenanceRead(),
     listTaskRecords: () => Array.from(currentTasks.values()),
     getTaskRegistryMaintenanceSnapshot: () => {
@@ -376,20 +429,11 @@ export function createTaskRegistryMaintenanceHarness(params: {
     },
     maybeDeliverTaskTerminalUpdate: async () => null,
     resolveTaskForLookupToken: () => undefined,
-    setTaskCleanupAfterById: (patch) => {
-      const current = currentTasks.get(patch.taskId);
-      if (!current) {
-        return null;
-      }
-      const next = { ...current, cleanupAfter: patch.cleanupAfter };
-      currentTasks.set(patch.taskId, next);
-      return next;
-    },
     listTaskRegistryRecordsByRuntimeSourceIdFromSqlite: ({ sourceId }) =>
       sourceId ? (durableCronTaskRows[sourceId] ?? []) : Object.values(durableCronTaskRows).flat(),
   };
 
-  installMaintenanceRuntime(runtime, params.runtimeAuthoritative ?? true);
+  installMaintenanceRuntime(runtime, currentTasks, params.runtimeAuthoritative ?? true);
   return { currentTasks };
 }
 
@@ -449,10 +493,9 @@ export function configureTaskRegistryMaintenanceRuntimeForTest(params: {
             task.childSessionKey?.trim().toLowerCase() === normalized,
         );
       },
-      deleteTaskRecordById: (taskId: string) => params.currentTasks.delete(taskId),
       ensureTaskRegistryReady: () => {},
       getTaskById: (taskId: string) => params.currentTasks.get(taskId),
-      getTaskRegistryMaintenanceTask: (_read, taskId: string) => params.currentTasks.get(taskId),
+      getTaskRegistryMaintenanceTask: (taskId: string) => params.currentTasks.get(taskId),
       prepareTaskRegistryRead: async () => createPreparedMaintenanceRead(),
       listTaskRecords: listSnapshotTasks,
       getTaskRegistryMaintenanceSnapshot: () => {
@@ -487,20 +530,9 @@ export function configureTaskRegistryMaintenanceRuntimeForTest(params: {
       markTaskTerminalById: () => null,
       maybeDeliverTaskTerminalUpdate: async () => null,
       resolveTaskForLookupToken: () => undefined,
-      setTaskCleanupAfterById: (patch: { taskId: string; cleanupAfter: number }) => {
-        const current = params.currentTasks.get(patch.taskId);
-        if (!current) {
-          return null;
-        }
-        const next = {
-          ...current,
-          cleanupAfter: patch.cleanupAfter,
-        };
-        params.currentTasks.set(patch.taskId, next);
-        return next;
-      },
       listTaskRegistryRecordsByRuntimeSourceIdFromSqlite: () => [],
     },
+    params.currentTasks,
     params.runtimeAuthoritative ?? true,
   );
 }

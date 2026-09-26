@@ -1,3 +1,7 @@
+import {
+  createBrowserControlContext,
+  startBrowserControlServiceFromConfig,
+} from "../control-service.js";
 /**
  * Local browser control dispatch bridge.
  *
@@ -5,10 +9,6 @@
  * through the in-process route dispatcher for local Browser tool calls.
  */
 import { describeBrowserControlUnavailable } from "../plugin-enabled.js";
-import {
-  createBrowserControlContext,
-  startBrowserControlServiceFromConfig,
-} from "./control-service.js";
 import {
   createBrowserRouteDispatcher,
   type BrowserDispatchRequest,

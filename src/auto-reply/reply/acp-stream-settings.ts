@@ -12,7 +12,7 @@ const DEFAULT_ACP_HIDDEN_BOUNDARY_SEPARATOR_LIVE = "space";
 const DEFAULT_ACP_MAX_OUTPUT_CHARS = 24_000;
 const DEFAULT_ACP_MAX_SESSION_UPDATE_CHARS = 320;
 
-const ACP_TAG_VISIBILITY_DEFAULTS: Record<AcpSessionUpdateTag, boolean> = {
+const ACP_TAG_VISIBILITY_DEFAULTS = {
   agent_message_chunk: true,
   tool_call: false,
   tool_call_update: false,
@@ -23,20 +23,19 @@ const ACP_TAG_VISIBILITY_DEFAULTS: Record<AcpSessionUpdateTag, boolean> = {
   session_info_update: false,
   plan: false,
   agent_thought_chunk: false,
-};
+} satisfies Record<AcpSessionUpdateTag, boolean>;
 
-function isAcpSessionUpdateTag(tag: string): tag is AcpSessionUpdateTag {
+function isAcpSessionUpdateTag(tag: string): tag is keyof typeof ACP_TAG_VISIBILITY_DEFAULTS {
   return Object.hasOwn(ACP_TAG_VISIBILITY_DEFAULTS, tag);
 }
 
 /** ACP delivery strategy for projected assistant output. */
 type AcpDeliveryMode = "live" | "final_only";
-export type AcpHiddenBoundarySeparator = "none" | "space" | "newline" | "paragraph";
 
 /** Normalized ACP projection settings consumed by stream projectors. */
 export type AcpProjectionSettings = {
   deliveryMode: AcpDeliveryMode;
-  hiddenBoundarySeparator: AcpHiddenBoundarySeparator;
+  hiddenBoundarySeparator: "space" | "paragraph";
   repeatSuppression: boolean;
   maxOutputChars: number;
   maxSessionUpdateChars: number;
@@ -54,25 +53,16 @@ function resolveAcpDeliveryMode(value: unknown): AcpDeliveryMode {
   return DEFAULT_ACP_DELIVERY_MODE;
 }
 
-function resolveAcpStreamCoalesceIdleMs(): number {
-  return DEFAULT_ACP_STREAM_COALESCE_IDLE_MS;
-}
-
-function resolveAcpStreamMaxChunkChars(): number {
-  return DEFAULT_ACP_STREAM_MAX_CHUNK_CHARS;
-}
-
 /** Resolves ACP projection settings with bounded defaults. */
 export function resolveAcpProjectionSettings(cfg: OpenClawConfig): AcpProjectionSettings {
   const stream = cfg.acp?.stream;
   const deliveryMode = resolveAcpDeliveryMode(stream?.deliveryMode);
-  const hiddenBoundaryFallback: AcpHiddenBoundarySeparator =
-    deliveryMode === "live"
-      ? DEFAULT_ACP_HIDDEN_BOUNDARY_SEPARATOR_LIVE
-      : DEFAULT_ACP_HIDDEN_BOUNDARY_SEPARATOR;
   return {
     deliveryMode,
-    hiddenBoundarySeparator: hiddenBoundaryFallback,
+    hiddenBoundarySeparator:
+      deliveryMode === "live"
+        ? DEFAULT_ACP_HIDDEN_BOUNDARY_SEPARATOR_LIVE
+        : DEFAULT_ACP_HIDDEN_BOUNDARY_SEPARATOR,
     repeatSuppression: clampBoolean(stream?.repeatSuppression, DEFAULT_ACP_REPEAT_SUPPRESSION),
     maxOutputChars: DEFAULT_ACP_MAX_OUTPUT_CHARS,
     maxSessionUpdateChars: DEFAULT_ACP_MAX_SESSION_UPDATE_CHARS,
@@ -91,8 +81,8 @@ export function resolveAcpStreamingConfig(params: {
     cfg: params.cfg,
     provider: params.provider,
     accountId: params.accountId,
-    maxChunkChars: resolveAcpStreamMaxChunkChars(),
-    coalesceIdleMs: resolveAcpStreamCoalesceIdleMs(),
+    maxChunkChars: DEFAULT_ACP_STREAM_MAX_CHUNK_CHARS,
+    coalesceIdleMs: DEFAULT_ACP_STREAM_COALESCE_IDLE_MS,
   });
 
   // In live mode, ACP text deltas should flush promptly and never be held
@@ -126,9 +116,5 @@ export function isAcpTagVisible(settings: AcpProjectionSettings, tag: string | u
   if (typeof override === "boolean") {
     return override;
   }
-  const defaultVisibility = ACP_TAG_VISIBILITY_DEFAULTS[tag];
-  if (defaultVisibility === undefined) {
-    throw new Error(`Missing ACP visibility default for ${tag}`);
-  }
-  return defaultVisibility;
+  return ACP_TAG_VISIBILITY_DEFAULTS[tag];
 }

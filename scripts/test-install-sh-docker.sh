@@ -114,58 +114,40 @@ console.log(
 assert_pack_unpacked_size_budget() {
   local label="$1"
   local pack_json_file="$2"
-  node --input-type=module - "$label" "$pack_json_file" <<'NODE'
+  node --input-type=module - "$label" "$pack_json_file" "$HARNESS_ROOT" <<'NODE'
 import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const harnessRoot = process.argv[4];
+const { collectPackUnpackedSizeFindings } = await import(
+  pathToFileURL(`${harnessRoot}/scripts/lib/npm-pack-budget.mts`).href
+);
+const { reportLimitViolations } = await import(
+  pathToFileURL(`${harnessRoot}/scripts/lib/check-limits.mts`).href
+);
 
 const label = process.argv[2];
 const packJsonFile = process.argv[3];
 const raw = readFileSync(packJsonFile, "utf8") || "[]";
 const parsed = JSON.parse(raw);
 const budgetOverride = process.env.OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES;
-// Both bundled fs-safe loader layouts need all native targets (~31 MiB), plus the
-// portable SQLite worker bundle and bundled chrome-devtools-mcp. Must match
-// NPM_PACK_UNPACKED_SIZE_BUDGET_BYTES in scripts/lib/npm-pack-budget.mts.
-const budgetBytes = budgetOverride ? Number(budgetOverride) : 320 * 1024 * 1024;
-if (!Number.isFinite(budgetBytes)) {
+const budgetBytes = budgetOverride ? Number(budgetOverride) : undefined;
+if (budgetBytes !== undefined && !Number.isFinite(budgetBytes)) {
   throw new Error(
     `OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES must be numeric, got ${JSON.stringify(
       budgetOverride,
     )}`,
   );
 }
-const entries = Array.isArray(parsed) ? parsed : [parsed];
-const errors = [];
-let checkedCount = 0;
-for (const [index, entry] of entries.entries()) {
-  if (
-    !entry ||
-    typeof entry !== "object" ||
-    Array.isArray(entry) ||
-    typeof entry.unpackedSize !== "number" ||
-    !Number.isFinite(entry.unpackedSize)
-  ) {
-    continue;
-  }
-  checkedCount += 1;
-  if (entry.unpackedSize > budgetBytes) {
-    const resultLabel =
-      typeof entry.filename === "string" && entry.filename.trim()
-        ? entry.filename.trim()
-        : `pack result #${index + 1}`;
-    errors.push(
-      `${resultLabel} unpackedSize ${entry.unpackedSize} bytes exceeds budget ${budgetBytes} bytes. Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.`,
-    );
-  }
-}
-if (entries.length > 0 && checkedCount === 0) {
-  errors.push(
-    `${label} npm pack output did not include unpackedSize; install smoke cannot verify pack budget.`,
-  );
-}
+const { errors, violations } = collectPackUnpackedSizeFindings(parsed, {
+  budgetBytes,
+  missingDataMessage: `${label} npm pack output did not include unpackedSize; install smoke cannot verify pack budget.`,
+});
 for (const error of errors) {
   console.error(`ERROR: ${error}`);
 }
-if (errors.length > 0) {
+const sizeFailed = reportLimitViolations(violations);
+if (errors.length > 0 || sizeFailed) {
   process.exit(1);
 }
 NODE
@@ -347,8 +329,6 @@ fi
 
 for env_name in \
   OPENCLAW_INSTALL_ALLOW_LEGACY_SAME_VERSION_APPLY \
-  OPENCLAW_INSTALL_ALLOW_LEGACY_UPDATE_WARNING \
-  OPENCLAW_INSTALL_SELF_UPDATE_WARNING_FIXED_VERSION \
   OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT \
   OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL \
   OPENCLAW_INSTALL_SMOKE_PREVIOUS \
@@ -440,7 +420,7 @@ prepare_update_tarball() {
     UPDATE_TGZ_FILE="candidate.tgz"
   elif [[ -n "$UPDATE_PACKAGE_SPEC" ]]; then
     echo "==> Pack update tgz from spec: $UPDATE_PACKAGE_SPEC"
-    quiet_npm pack "$UPDATE_PACKAGE_SPEC" --json --pack-destination "$UPDATE_DIR" >"$pack_json_file"
+    quiet_npm pack "$UPDATE_PACKAGE_SPEC" --json --min-release-age=0 --pack-destination "$UPDATE_DIR" >"$pack_json_file"
     normalize_npm_pack_json_file "$pack_json_file"
   else
     echo "==> Build local release artifacts for update smoke"
@@ -498,7 +478,8 @@ process.stdout.write(last.version);
   fi
 
   echo "==> Pack baseline tgz: ${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
-  quiet_npm pack "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" --json --pack-destination "$UPDATE_DIR" >"$baseline_pack_json_file"
+  # The repo .npmrc dependency cooldown must not hide a days-old published baseline.
+  quiet_npm pack "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" --json --min-release-age=0 --pack-destination "$UPDATE_DIR" >"$baseline_pack_json_file"
   normalize_npm_pack_json_file "$baseline_pack_json_file"
   BASELINE_TGZ_FILE="$(read_pack_tarball_filename "$baseline_pack_json_file")"
   UPDATE_BASELINE_VERSION="$(

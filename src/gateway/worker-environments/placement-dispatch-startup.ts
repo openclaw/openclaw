@@ -1,8 +1,9 @@
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { WorkerDispatchTargetChangedError } from "../server-worker-placement-session-target.js";
-import { supportsCurrentWorkerLaunch, verifyWorkerAdmissionHandshake } from "./admission.js";
+import { supportsCurrentWorkerLaunch } from "./admission.js";
 import {
   DevicePlacementUnavailableError,
   resolveDevicePlacementEligibility,
@@ -33,7 +34,8 @@ import {
   type WorkerPlacementAuthorization,
   type WorkerPlacementDispatchRequest,
 } from "./service-contract.js";
-import type { WorkerEnvironmentReconcileCore, WorkerEnvironmentService } from "./service.js";
+import type { WorkerEnvironmentService } from "./service.js";
+import type { WorkerEnvironmentReconcileCore } from "./service.types.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 
 export type WorkerPlacementRecoveryBarrier = (params: {
@@ -207,7 +209,7 @@ export function createWorkerPlacementDispatchStartup(options: {
         !environment.leaseId ||
         !environment.bootstrapReceipt ||
         !supportsCurrentWorkerLaunch(environment.bootstrapReceipt) ||
-        !verifyWorkerAdmissionHandshake(environment.bootstrapReceipt, expectedBuild)
+        !sameWorkerBuild(environment.bootstrapReceipt, expectedBuild)
       ) {
         continue;
       }

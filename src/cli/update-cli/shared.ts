@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { positiveSecondsToSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveBrewOpenClawPath } from "../../infra/brew.js";
 import { hasErrnoCode } from "../../infra/errors.js";
@@ -27,6 +27,7 @@ import {
   detectGlobalInstallManagerForRoot,
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
+import { cleanupUpdateTemporaryDirectory } from "../../infra/update-maintenance.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
@@ -35,11 +36,8 @@ import {
   describeUpdateInstallRoot,
   resolveUnmanagedUpdateInstallReason,
 } from "../../infra/update-runner-install-surface.js";
-import type {
-  UpdateRunResult,
-  UpdateStepProgress,
-  UpdateStepResult,
-} from "../../infra/update-runner-types.js";
+import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
@@ -51,7 +49,7 @@ import { resolveNodeRunner } from "./node-runner.js";
 
 export { resolveNodeRunner } from "./node-runner.js";
 
-export type UpdateCommandOptions = {
+export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"> & {
   /** Doctor's accepted source update targets dev without changing the saved channel. */
   sourceUpdate?: { root: string };
   /** In-process reporting only, after the update owner settles. Never serialized. */
@@ -68,6 +66,8 @@ export type UpdateCommandOptions = {
     defaultStepTimeoutMs?: number;
     activationTimeoutMs?: number;
     env: NodeJS.ProcessEnv;
+    /** Candidate-reported admission checks; execution authority remains installed-owned. */
+    candidateAdmissionChecks?: readonly string[];
     /** Completion routing only; mutation authority remains with the live executor. */
     completionOwner?: "gateway-restart";
     /** The handoff helper acknowledged the foreground Gateway's closure. */
@@ -76,8 +76,10 @@ export type UpdateCommandOptions = {
     requesterAuthority?: UpdateRequesterAuthority;
     /** Live local executor only. A child must independently acquire its owner. */
     executorFence?: UpdateRecoveryFence;
+    sourceArtifactLock?: import("@openclaw/fs-safe/file-lock").FileLockHandle;
   };
   acceptCapabilities?: boolean;
+  admission?: "auto" | "installed";
   json?: boolean;
   restart?: boolean;
   dryRun?: boolean;
@@ -91,6 +93,14 @@ export type UpdateStatusOptions = {
   json?: boolean;
   timeout?: string;
 };
+
+/** Only package updates hand admission to a privately staged candidate. */
+export function usesCandidateUpdateAdmission(
+  opts: Pick<UpdateCommandOptions, "admission" | "dryRun">,
+  installKind: "git" | "package" | "unknown",
+): boolean {
+  return installKind === "package" && !opts.dryRun && opts.admission !== "installed";
+}
 
 export type UpdateFinalizeOptions = {
   acceptCapabilities?: boolean;
@@ -109,20 +119,26 @@ export type UpdateWizardOptions = {
   timeout?: string;
 };
 
-export class UpdatePreMutationError extends Error {
+export class UpdatePreMutationError<Reason extends string = string> extends Error {
+  readonly origin?: "candidate-admission";
+  readonly nextAction?: string;
   readonly recoverySteps?: readonly UpdateRecoveryStep[];
   readonly failureFacts: UpdateFailureFact[];
 
   constructor(
-    readonly reason: string,
+    readonly reason: Reason,
     message: string,
     options?: ErrorOptions & {
       failureFacts?: readonly UpdateFailureFact[];
       recoverySteps?: readonly UpdateRecoveryStep[];
+      origin?: "candidate-admission";
+      nextAction?: string;
     },
   ) {
     super(message, options);
     this.name = "UpdatePreMutationError";
+    this.origin = options?.origin;
+    this.nextAction = options?.nextAction;
     this.recoverySteps = options?.recoverySteps;
     this.failureFacts = normalizeUpdateFailureFacts(
       options?.failureFacts ?? [{ check: reason, code: reason, message }],
@@ -131,19 +147,17 @@ export class UpdatePreMutationError extends Error {
 }
 
 const INVALID_TIMEOUT_ERROR = "--timeout must be a positive integer (seconds)";
-const MAX_SAFE_TIMEOUT_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000);
 
 /** Parse the shared timeout contract without exiting an owning operation. */
 export function parseUpdateTimeoutMs(timeout?: string): number | undefined {
   if (timeout === undefined) {
     return undefined;
   }
-  const trimmed = timeout.trim();
-  const seconds = parseStrictPositiveInteger(trimmed);
-  if (seconds === undefined || seconds > MAX_SAFE_TIMEOUT_SECONDS) {
+  const milliseconds = positiveSecondsToSafeMilliseconds(timeout.trim());
+  if (milliseconds === undefined) {
     throw new Error(INVALID_TIMEOUT_ERROR);
   }
-  return seconds * 1000;
+  return milliseconds;
 }
 
 /** Parse a CLI timeout in seconds, exiting through the runtime on invalid input. */
@@ -166,11 +180,10 @@ const UPSTREAM_REPOSITORY_URL = "https://github.com/openclaw/openclaw.git";
 const GIT_CLONE_BLOB_FILTER = "--filter=blob:none";
 
 export const DEFAULT_PACKAGE_NAME = "openclaw";
-const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
 
 /** Normalize a CLI tag/version/spec into the npm target form accepted by update flows. */
 export function normalizeTag(value?: string | null): string | null {
-  return normalizePackageTagInput(value, ["openclaw", DEFAULT_PACKAGE_NAME]);
+  return normalizePackageTagInput(value, [DEFAULT_PACKAGE_NAME]);
 }
 
 function normalizeVersionTag(tag: string): string | null {
@@ -218,11 +231,6 @@ export async function isGitCheckout(root: string): Promise<boolean> {
   }
 }
 
-async function isCorePackage(root: string): Promise<boolean> {
-  const name = await readPackageName(root);
-  return Boolean(name && CORE_PACKAGE_NAMES.has(name));
-}
-
 /** Return true only for existing directories with no entries. */
 export async function isEmptyDir(targetPath: string): Promise<boolean> {
   try {
@@ -239,10 +247,6 @@ export function resolveGitInstallDir(): string {
   if (override) {
     return path.resolve(override);
   }
-  return resolveDefaultGitDir();
-}
-
-function resolveDefaultGitDir(): string {
   const home = resolveRequiredHomeDir(process.env, os.homedir);
   if (home.startsWith("/")) {
     return path.posix.join(home, "openclaw");
@@ -250,16 +254,11 @@ function resolveDefaultGitDir(): string {
   return path.join(home, "openclaw");
 }
 
-export function tryResolveInvocationCwd(): string | undefined {
-  try {
-    return process.cwd();
-  } catch {
-    return undefined;
-  }
-}
-
 /** Locate the installed OpenClaw package root that should receive update operations. */
-export async function resolveUpdateRoot(): Promise<string> {
+export async function resolveUpdateRoot(context?: { root: string }): Promise<string> {
+  if (context) {
+    return path.resolve(context.root);
+  }
   // Preserve the lexical package path from the invoking shim. pnpm 11 package
   // modules realpath into a shared store, which is not the install owner.
   const invocationRoot = process.argv[1]
@@ -301,6 +300,7 @@ type StagedGitCheckout = (
   root: string,
   publish: () => Promise<string>,
   targetRoot: string,
+  storageRoot: string,
 ) => Promise<void>;
 
 async function cloneGitCheckoutTransactionally(params: {
@@ -319,11 +319,31 @@ async function cloneGitCheckoutTransactionally(params: {
     : path.join(canonicalParentDir, path.basename(params.dir));
   const targetIdentity = preserveDir ? await fs.lstat(targetDir, { bigint: true }) : undefined;
   const stagingParent = preserveDir ? targetDir : canonicalParentDir;
-  const stagingDir = await fs.mkdtemp(path.join(stagingParent, ".openclaw-clone-"));
+  // Publication moves only the repository; candidate builds keep their paths
+  // until runtime promotion and cleanup finish on this same filesystem.
+  const storageRoot = await fs.mkdtemp(path.join(stagingParent, ".openclaw-clone-"));
+  const storageIdentity = await fs.lstat(storageRoot, { bigint: true });
+  const stagingDir = path.join(storageRoot, "repository");
+  await fs.mkdir(stagingDir).catch(async (error: unknown) => {
+    try {
+      if (await ownsDirectory(storageRoot, storageIdentity)) {
+        await fs.rmdir(storageRoot);
+      }
+    } catch {
+      // Retain nonempty or replaced storage; cleanup must not hide the allocation error.
+    }
+    throw error;
+  });
   const stagingIdentity = await fs.lstat(stagingDir, { bigint: true });
   let cleanupStaging = true;
+  let published = false;
+  let result: UpdateStepResult | undefined;
 
-  async function ownsDirectory(directory: string, identity: typeof stagingIdentity) {
+  async function ownsDirectory(
+    directory: string,
+    identity: typeof storageIdentity,
+    allowMissing = false,
+  ) {
     try {
       const current = await fs.lstat(directory, { bigint: true });
       // Unknown Windows identities cannot authorize publication or recursive cleanup.
@@ -336,14 +356,14 @@ async function cloneGitCheckoutTransactionally(params: {
       );
     } catch (error) {
       if (hasErrnoCode(error, "ENOENT")) {
-        return false;
+        return allowMissing;
       }
       throw error;
     }
   }
 
   try {
-    const result = await runUpdateStep({
+    result = await runUpdateStep({
       name: "git-clone",
       argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, UPSTREAM_REPOSITORY_URL, stagingDir],
       env: params.env,
@@ -356,6 +376,7 @@ async function cloneGitCheckoutTransactionally(params: {
 
     const publish = async (): Promise<string> => {
       if (
+        !(await ownsDirectory(storageRoot, storageIdentity)) ||
         !(await ownsDirectory(stagingDir, stagingIdentity)) ||
         (targetIdentity && !(await ownsDirectory(targetDir, targetIdentity)))
       ) {
@@ -371,6 +392,7 @@ async function cloneGitCheckoutTransactionally(params: {
             throw error;
           }
           await fs.rename(stagingDir, targetDir);
+          published = true;
           return targetDir;
         }
       }
@@ -381,9 +403,8 @@ async function cloneGitCheckoutTransactionally(params: {
         );
       }
 
-      const expectedEntries = preserveDir ? [path.basename(stagingDir)] : [];
       const destinationEntries = await fs.readdir(targetDir);
-      if (destinationEntries.toSorted().join("\0") !== expectedEntries.toSorted().join("\0")) {
+      if (destinationEntries.length !== 1 || destinationEntries[0] !== path.basename(storageRoot)) {
         throw new Error(
           `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
         );
@@ -420,17 +441,38 @@ async function cloneGitCheckoutTransactionally(params: {
         }
         throw publishError.value;
       }
+      published = true;
       return targetDir;
     };
     if (params.useStagedCheckout) {
-      await params.useStagedCheckout(stagingDir, publish, targetDir);
+      await params.useStagedCheckout(stagingDir, publish, targetDir, storageRoot);
     } else {
       await publish();
     }
     return { checkoutDir: targetDir, step: result };
   } finally {
-    if (cleanupStaging && (await ownsDirectory(stagingDir, stagingIdentity))) {
-      await fs.rm(stagingDir, { recursive: true, force: true });
+    // The container does not confer ownership of a replaced repository child.
+    // Only completed publication permits that child to be absent at cleanup.
+    if (cleanupStaging) {
+      // Cleanup must not replace a completed publication or the callback's original error.
+      await cleanupUpdateTemporaryDirectory({
+        directory: storageRoot,
+        root: targetDir,
+        name: "git-clone-staging-cleanup",
+        canRemove: async () =>
+          (await ownsDirectory(storageRoot, storageIdentity)) &&
+          (await ownsDirectory(stagingDir, stagingIdentity, published)),
+        onWarning: (warning) => {
+          if (result && warning.advisory) {
+            result.warnings = [...(result.warnings ?? []), warning.advisory.message];
+          }
+          try {
+            params.progress?.onStepComplete?.({ ...warning, index: 0, total: 0 });
+          } catch {
+            // Ledger callbacks can throw; cleanup diagnostics cannot replace the operation outcome.
+          }
+        },
+      });
     }
   }
 }
@@ -445,25 +487,13 @@ export async function ensureGitCheckout(params: {
 }): Promise<GitCheckoutResult> {
   const gitEnv = params.env ?? (await createGlobalInstallEnv());
   const dirExists = await pathExists(params.dir);
-  if (!dirExists) {
-    return await cloneGitCheckoutTransactionally({
-      dir: params.dir,
-      env: gitEnv,
-      timeoutMs: params.timeoutMs,
-      progress: params.progress,
-      useStagedCheckout: params.useStagedCheckout,
-    });
-  }
-
-  if (!(await isGitCheckout(params.dir))) {
-    const empty = await isEmptyDir(params.dir);
-    if (!empty) {
+  if (!dirExists || !(await isGitCheckout(params.dir))) {
+    if (dirExists && !(await isEmptyDir(params.dir))) {
       throw new UpdatePreMutationError(
         "invalid-git-directory",
         `OPENCLAW_GIT_DIR points at a non-git directory: ${params.dir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
       );
     }
-
     return await cloneGitCheckoutTransactionally({
       dir: params.dir,
       env: gitEnv,
@@ -473,7 +503,7 @@ export async function ensureGitCheckout(params: {
     });
   }
 
-  if (!(await isCorePackage(params.dir))) {
+  if ((await readPackageName(params.dir)) !== DEFAULT_PACKAGE_NAME) {
     throw new UpdatePreMutationError(
       "invalid-git-directory",
       `OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`,
@@ -539,6 +569,7 @@ export async function tryWriteCompletionCache(
   root: string,
   jsonMode: boolean,
   timeoutMs = COMPLETION_CACHE_WRITE_TIMEOUT_MS,
+  nodeRunner = resolveNodeRunner(),
 ): Promise<"completed" | "failed" | "skipped"> {
   const binPath = path.join(root, "openclaw.mjs");
   if (!(await pathExists(binPath))) {
@@ -548,7 +579,7 @@ export async function tryWriteCompletionCache(
   let failure: string;
   try {
     const result = await runCommandWithTimeout(
-      [resolveNodeRunner(), binPath, "completion", "--write-state"],
+      [nodeRunner, binPath, "completion", "--write-state"],
       {
         cwd: root,
         env: { ...process.env, [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1" },

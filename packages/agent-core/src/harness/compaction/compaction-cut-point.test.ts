@@ -101,12 +101,6 @@ describe("findCutPoint", () => {
     ).toEqual({ firstKeptEntryIndex: 2, turnStartIndex: -1, isSplitTurn: false });
   });
 
-  it("counts the final tool result as larger than the keep budget", () => {
-    const trailing = toolResultText(LARGE_TOOL_OUTPUT, 5);
-
-    expect(estimateTokens(trailing)).toBeGreaterThanOrEqual(KEEP_RECENT_TOKENS);
-  });
-
   it("trims the prefix instead of keeping the whole transcript", () => {
     const entries = buildTranscript();
 

@@ -8,6 +8,7 @@ import {
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -83,21 +84,21 @@ import {
 } from "../sessions/session-agent-status.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import type { UserModelAccountSelection } from "./model-account-authority.js";
-import { resolveSessionPatchModelSelection } from "./server-methods/sessions-patch-model-selection.js";
+import {
+  prepareSessionPatchModelSelection,
+  resolveSessionPatchModelSelection,
+} from "./server-methods/sessions-patch-model-selection.js";
 import { applySessionExecutionSettings } from "./session-execution-settings.js";
 import {
   isAgentSessionModelPatchOrigin,
   isSessionStatusModelPatchOrigin,
   snapshotAgentModelFallback,
 } from "./session-model-patch-origin.js";
+import { invalidSessionRequest as invalid } from "./session-request-error.js";
 import { normalizeSessionToolOverrides } from "./session-tool-overrides.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 import { applySessionsPatchDisplayMetadata } from "./sessions-patch-display-metadata.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
-
-function invalid(message: string): { ok: false; error: ErrorShape } {
-  return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
-}
 
 type SessionPatchProjectionParams = {
   cfg: OpenClawConfig;
@@ -116,12 +117,13 @@ type SessionPatchProjectionParams = {
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
   personalModelSelection?: UserModelAccountSelection;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Resolved spawn identity supplied only by the trusted creation owner. */
   preparedModelSelection?: ModelRef;
 };
 
 type SessionPatchProjectionResult =
-  | { ok: true; entry: SessionEntry }
+  | { ok: true; entry: SessionEntry; validateModelSelection?: () => ErrorShape | undefined }
   | { ok: false; error: ErrorShape };
 
 type SessionPatchPreparation =
@@ -209,7 +211,7 @@ function* projectSessionPatchSteps(
   const sessionAgentId = normalizeAgentId(
     params.agentId ?? parsedAgent?.agentId ?? resolveDefaultAgentId(cfg),
   );
-  const resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
+  let resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
   const subagentModelHint = isSubagentSessionKey(storeKey)
     ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
     : undefined;
@@ -239,6 +241,7 @@ function* projectSessionPatchSteps(
     );
   };
   let loadedModelCatalog: ModelCatalogSnapshot | undefined;
+  let validateModelSelection: (() => ErrorShape | undefined) | undefined;
   let catalogPrepared = false;
   function* loadPreparedModelCatalogForPatch(): Generator<
     void,
@@ -565,6 +568,21 @@ function* projectSessionPatchSteps(
       selection = resolved;
     }
     if (selection) {
+      const prepared = prepareSessionPatchModelSelection({
+        cfg,
+        agentId: sessionAgentId,
+        selection,
+        resetToDefault: raw === null,
+        operatorAuthority: params.operatorAuthority,
+      });
+      if (!prepared.ok) {
+        return prepared;
+      }
+      selection = prepared.selection;
+      validateModelSelection = params.operatorAuthority ? prepared.validate : undefined;
+      if (raw === null) {
+        resolvedDefault = selection;
+      }
       if (
         typeof patch.agentRuntime === "string" &&
         splitTrailingAuthProfile(raw ?? "").model !== `${selection.provider}/${selection.model}`
@@ -729,5 +747,5 @@ function* projectSessionPatchSteps(
     delete next.liveModelSwitchPending;
   }
 
-  return { ok: true, entry: next };
+  return { ok: true, entry: next, ...(validateModelSelection ? { validateModelSelection } : {}) };
 }

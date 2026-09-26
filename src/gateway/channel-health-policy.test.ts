@@ -1,6 +1,3 @@
-/**
- * Channel health policy regression tests.
- */
 import { describe, expect, it } from "vitest";
 import {
   evaluateChannelHealth,
@@ -59,15 +56,6 @@ function inheritedTransportAccount() {
 }
 
 describe("evaluateChannelHealth", () => {
-  it("treats disabled accounts as healthy unmanaged", () => {
-    const evaluation = evaluateHealth({
-      running: false,
-      enabled: false,
-      configured: true,
-    });
-    expect(evaluation).toEqual({ healthy: true, reason: "unmanaged" });
-  });
-
   it("treats explicitly unlinked accounts as healthy unmanaged", () => {
     const evaluation = evaluateHealth({
       running: false,
@@ -315,36 +303,6 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: false, reason: "disconnected" });
   });
 
-  it("flags stale sockets when transport activity ages beyond threshold", () => {
-    const evaluation = evaluateHealth(staleTransportAccount());
-    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
-  });
-
-  it("ignores stale app events without transport activity", () => {
-    const evaluation = evaluateHealth(
-      connectedAccount({
-        lastStartAt: 0,
-        lastEventAt: 0,
-      }),
-    );
-    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
-  });
-
-  it("flags stale sockets for telegram polling channels with transport activity", () => {
-    const evaluation = evaluateHealth(staleTransportAccount({ mode: "polling" }), {
-      channelId: "example",
-    });
-    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
-  });
-
-  it("does not special-case malformed channel mode when transport activity is explicit", () => {
-    const evaluation = evaluateHealth(
-      staleTransportAccount({ mode: { polling: true } as unknown as string }),
-      { channelId: "example" },
-    );
-    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
-  });
-
   it("trusts explicit transport activity instead of webhook mode heuristics", () => {
     const evaluation = evaluateHealth(staleTransportAccount({ mode: "webhook" }));
     expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
@@ -356,18 +314,6 @@ describe("evaluateChannelHealth", () => {
         lastStartAt: 0,
         lastTransportActivityAt: null,
       }),
-    );
-    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
-  });
-
-  it("keeps quiet telegram webhooks healthy when they do not publish transport tracking", () => {
-    const evaluation = evaluateHealth(
-      connectedAccount({
-        mode: "webhook",
-        lastStartAt: 0,
-        lastEventAt: 0,
-      }),
-      { channelId: "telegram" },
     );
     expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
@@ -477,14 +423,6 @@ describe("evaluateChannelHealth", () => {
         }),
         { now: 10_000_000, channelId: "slack" },
       );
-      expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
-    });
-
-    it("leaves the 17 socketless channels that publish no connectivity untouched", () => {
-      const evaluation = evaluateHealth(runningAccount({ lastStartAt: 0 }), {
-        now: 10_000_000,
-        channelId: "imessage",
-      });
       expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
     });
 

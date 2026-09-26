@@ -2,6 +2,7 @@
  * Detects provider stop turns that contain no assistant-visible content.
  */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 
 type EmptyAssistantTurnLike = {
   content?: unknown;
@@ -9,46 +10,24 @@ type EmptyAssistantTurnLike = {
   usage?: unknown;
 };
 
-type UsageFieldMap = {
-  input?: unknown;
-  output?: unknown;
-  cacheRead?: unknown;
-  cacheWrite?: unknown;
-  total?: unknown;
-  totalTokens?: unknown;
-  total_tokens?: unknown;
-};
-
 // Upstream agent runtimes should normalize Anthropic zero-token empty `stop`
 // turns before OpenClaw sees them. Downstream: openclaw/openclaw#71880.
-function readFiniteTokenCount(value: unknown): number | undefined {
-  return asFiniteNumber(value);
-}
-
-function isZero(value: number | undefined): value is 0 {
-  return value === 0;
-}
-
 function hasZeroTokenUsageSnapshot(usage: unknown): boolean {
-  if (!usage || typeof usage !== "object") {
+  const fields = asOptionalObjectRecord(usage);
+  if (!fields) {
     return false;
   }
-  const typed = usage as UsageFieldMap;
-  const input = readFiniteTokenCount(typed.input);
-  const output = readFiniteTokenCount(typed.output);
-  const cacheRead = readFiniteTokenCount(typed.cacheRead);
-  const cacheWrite = readFiniteTokenCount(typed.cacheWrite);
-  const total = readFiniteTokenCount(typed.total ?? typed.totalTokens ?? typed.total_tokens);
-  if (total !== undefined) {
-    return (
-      total === 0 &&
-      [input, output, cacheRead, cacheWrite].every((value) => value === undefined || value === 0)
-    );
-  }
-  const components = [input, output, cacheRead, cacheWrite].filter(
-    (value): value is number => value !== undefined,
+  const counts = [
+    fields.input,
+    fields.output,
+    fields.cacheRead,
+    fields.cacheWrite,
+    fields.total ?? fields.totalTokens ?? fields.total_tokens,
+  ].map(asFiniteNumber);
+  return (
+    counts.some((count) => count === 0) &&
+    counts.every((count) => count === undefined || count === 0)
   );
-  return components.length > 0 && components.every(isZero);
 }
 
 export function isZeroUsageEmptyStopAssistantTurn(message: EmptyAssistantTurnLike | null): boolean {

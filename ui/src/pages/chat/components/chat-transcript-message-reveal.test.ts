@@ -19,12 +19,15 @@ describe("chat transcript controller", () => {
     "keeps only the current deferred message reveal after %s",
     async (interruption) => {
       const update = createDeferred<boolean>();
-      const transcript = new ChatTranscriptController({
-        addController: vi.fn(),
-        removeController: vi.fn(),
-        requestUpdate: vi.fn(),
-        updateComplete: update.promise,
-      });
+      const transcript = new ChatTranscriptController(
+        {
+          addController: vi.fn(),
+          removeController: vi.fn(),
+          requestUpdate: vi.fn(),
+          updateComplete: update.promise,
+        },
+        () => `message-reveal-${interruption}`,
+      );
       const rows: TestContentRow[] = ["first", "second"].map((id) => ({
         kind: "content",
         key: id,

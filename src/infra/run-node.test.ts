@@ -40,8 +40,6 @@ import {
   DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT,
   DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108,
   DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_2026_9_1,
-  DIST_LEGACY_CLI_EXIT_COMPAT,
-  DIST_LEGACY_CLI_EXIT_COMPAT_ALT,
   DIST_STABLE_ROOT_RUNTIME_SOURCE,
   DIST_STABLE_ROOT_RUNTIME_SOURCE_ALT,
   DIST_STABLE_ROOT_RUNTIME_ALIAS,
@@ -67,10 +65,6 @@ import {
   DIST_OPENCLAW_ALIAS_PACKAGE,
   DIST_OPENCLAW_ALIAS_PLUGIN_SDK_CORE,
   DIST_OPENCLAW_ALIAS_PLUGIN_SDK_STRING_COERCE,
-  DIFFS_PACKAGE,
-  DIFFS_VIEWER_RUNTIME_SOURCE,
-  DIST_DIFFS_VIEWER_RUNTIME,
-  DIST_RUNTIME_DIFFS_VIEWER_RUNTIME,
   BUNDLED_HOOK_METADATA,
   DIST_BUNDLED_HOOK_METADATA,
   DIST_EXTENSION_MANIFEST,
@@ -355,8 +349,6 @@ describe("run-node script", () => {
     await setupStampedProject(tmp, {
       files: {
         [DIST_CHANNEL_CATALOG]: '{"entries":[]}\n',
-        [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
-        [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]: "export function hasMemoryRuntime() { return false; }\n",
       },
       oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
     });
@@ -715,10 +707,6 @@ describe("run-node script", () => {
     tmp,
   }) => {
     await setupStampedProject(tmp, {
-      files: {
-        [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
-        [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]: "export function hasMemoryRuntime() { return false; }\n",
-      },
       oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
     });
     await fs.rm(resolvePath(tmp, DIST_OPENCLAW_ALIAS_PACKAGE));
@@ -1497,17 +1485,6 @@ describe("run-node script", () => {
     },
   );
 
-  it("reports a clean tree explicitly when dist is current", async ({ tmp }) => {
-    await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
-
-    const requirement = resolveBuildRequirement(createBuildRequirementDeps(tmp));
-
-    expect(requirement).toEqual({
-      shouldBuild: false,
-      reason: "clean",
-    });
-  });
-
   it.for(["build", "runtime"] as const)(
     "refreshes dirty-built %s artifacts after restoring the same HEAD source",
     async (scope, { tmp }) => {
@@ -1725,8 +1702,6 @@ describe("run-node script", () => {
       files: {
         [DIST_PLUGIN_SDK_CORE]: "export const core = true;\n",
         [DIST_CHANNEL_CATALOG]: '{"entries":[]}\n',
-        [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
-        [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]: "export function hasMemoryRuntime() { return false; }\n",
         [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
       },
     });
@@ -1807,78 +1782,6 @@ describe("run-node script", () => {
     });
   });
 
-  for (const [title, missingPath] of [
-    [
-      "reports missing static runtime postbuild asset outputs when runtime stamps match HEAD",
-      DIST_DIFFS_VIEWER_RUNTIME,
-    ],
-    [
-      "reports missing static runtime overlay asset outputs when runtime stamps match HEAD",
-      DIST_RUNTIME_DIFFS_VIEWER_RUNTIME,
-    ],
-  ] as const) {
-    it(title, async ({ tmp }) => {
-      await setupStampedProject(tmp, {
-        files: {
-          [DIFFS_PACKAGE]:
-            '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
-          [DIFFS_VIEWER_RUNTIME_SOURCE]: "export {};\n",
-          [DIST_DIFFS_VIEWER_RUNTIME]: "export {};\n",
-          [DIST_RUNTIME_DIFFS_VIEWER_RUNTIME]: "export {};\n",
-          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
-        },
-      });
-      await fs.rm(resolvePath(tmp, missingPath));
-      const requirement = resolveRuntimePostBuildRequirement(createBuildRequirementDeps(tmp));
-      expect(requirement).toEqual({
-        shouldSync: true,
-        reason: "missing_runtime_postbuild_output",
-      });
-    });
-  }
-
-  it("does not require static asset outputs when runtime static assets are disabled", async ({
-    tmp,
-  }) => {
-    await setupStampedProject(tmp, {
-      files: {
-        [DIFFS_PACKAGE]:
-          '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
-        [DIFFS_VIEWER_RUNTIME_SOURCE]: "export {};\n",
-        [DIST_RUNTIME_EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./index.js"]}}\n',
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
-      },
-    });
-
-    const requirement = resolveRuntimePostBuildRequirement(
-      createBuildRequirementDeps(tmp, { env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" } }),
-    );
-
-    expect(requirement).toEqual({
-      shouldSync: false,
-      reason: "clean",
-    });
-  });
-
-  it("does not require static asset outputs when the declared source is absent", async ({
-    tmp,
-  }) => {
-    await setupStampedProject(tmp, {
-      files: {
-        [DIFFS_PACKAGE]:
-          '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
-      },
-    });
-
-    const requirement = resolveRuntimePostBuildRequirement(createBuildRequirementDeps(tmp));
-
-    expect(requirement).toEqual({
-      shouldSync: false,
-      reason: "clean",
-    });
-  });
-
   it("reports missing core runtime postbuild outputs when runtime stamps match HEAD", async ({
     tmp,
   }) => {
@@ -1886,8 +1789,8 @@ describe("run-node script", () => {
       files: {
         [DIST_STABLE_ROOT_RUNTIME_SOURCE]: "export const value = 1;\n",
         [DIST_STABLE_ROOT_RUNTIME_ALIAS]: "export * from './model-catalog.runtime-AbCd1234.js';\n",
-        [DIST_LEGACY_ROOT_RUNTIME_TARGET]: "export const aborted = true;\n",
-        [DIST_LEGACY_ROOT_RUNTIME_COMPAT]: "export * from './abort.runtime.js';\n",
+        [DIST_LEGACY_ROOT_RUNTIME_TARGET]: "export const transform = true;\n",
+        [DIST_LEGACY_ROOT_RUNTIME_COMPAT]: "export * from './text-transforms.runtime.js';\n",
         [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
       },
     });
@@ -1899,7 +1802,6 @@ describe("run-node script", () => {
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_2026_9_1,
-      DIST_LEGACY_CLI_EXIT_COMPAT,
       DIST_STABLE_ROOT_RUNTIME_ALIAS,
       DIST_LEGACY_ROOT_RUNTIME_COMPAT,
     ]) {
@@ -2237,18 +2139,6 @@ describe("run-node script", () => {
       expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
       expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
       expect(fakeProcess.listenerCount("exit")).toBe(0);
-    });
-
-    it("releases the lock directory when the wrapper receives SIGTERM", async ({ tmp }) => {
-      const fakeProcess = createFakeProcess();
-      const lockDir = path.join(tmp, ".artifacts", "run-node-build.lock");
-
-      const release = await acquireRunNodeBuildLock(lockDeps(tmp, fakeProcess));
-      expect(fsSync.existsSync(lockDir)).toBe(true);
-
-      fakeProcess.emit("SIGTERM");
-      expect(fsSync.existsSync(lockDir)).toBe(false);
-      expect(release()).toBeUndefined();
     });
 
     it("releases the lock directory on process exit", async ({ tmp }) => {

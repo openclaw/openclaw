@@ -200,23 +200,17 @@ function guardUnknownToolLoopInMessage(
   }
   const unknownToolName = toolCallState.toolName;
 
-  if (!params.countAttempt) {
-    // Partial stream events can rewrite after the threshold, but only final
-    // messages advance the loop counter.
+  const countableMessage = message && typeof message === "object" ? message : undefined;
+  if (!params.countAttempt || (countableMessage && state.countedMessages.has(countableMessage))) {
+    // Partial events and already-counted final projections may rewrite, but
+    // only a new final message advances the loop counter.
     if (state.lastUnknownToolName === unknownToolName && state.count > threshold) {
       rewriteUnknownToolLoopMessage(message, unknownToolName);
     }
-    return false;
+    return params.countAttempt;
   }
-
-  if (message && typeof message === "object") {
-    if (state.countedMessages.has(message)) {
-      if (state.lastUnknownToolName === unknownToolName && state.count > threshold) {
-        rewriteUnknownToolLoopMessage(message, unknownToolName);
-      }
-      return true;
-    }
-    state.countedMessages.add(message);
+  if (countableMessage) {
+    state.countedMessages.add(countableMessage);
   }
 
   if (state.lastUnknownToolName === unknownToolName) {
@@ -234,13 +228,10 @@ function guardUnknownToolLoopInMessage(
 
 function wrapStreamTrimToolCallNames(
   stream: AssistantStream,
-  allowedToolNames?: Set<string>,
-  options?: { unknownToolThreshold?: number; state?: UnknownToolLoopGuardState },
+  allowedToolNames: Set<string> | undefined,
+  options: { unknownToolThreshold?: number; state: UnknownToolLoopGuardState },
 ): AssistantStream {
-  const unknownToolGuardState = options?.state ?? {
-    count: 0,
-    countedMessages: new WeakSet<object>(),
-  };
+  const unknownToolGuardState = options.state;
   // Provider-omitted ids are only message-local. Reuse one generated id per
   // content position across this response's partial/final projections, while a
   // later assistant response gets a fresh namespace and cannot alias it.
@@ -255,7 +246,7 @@ function wrapStreamTrimToolCallNames(
       fallbackIdByContentIndex,
     );
     guardUnknownToolLoopInMessage(message, toolCallState, unknownToolGuardState, {
-      threshold: options?.unknownToolThreshold,
+      threshold: options.unknownToolThreshold,
       countAttempt: !streamAttemptAlreadyCounted,
       resetOnAllowedTool: true,
       rewriteMalformedBlankToolName: true,
@@ -280,7 +271,7 @@ function wrapStreamTrimToolCallNames(
         messageState,
         unknownToolGuardState,
         {
-          threshold: options?.unknownToolThreshold,
+          threshold: options.unknownToolThreshold,
           countAttempt: !streamAttemptAlreadyCounted,
           resetOnAllowedTool: true,
           resetOnMissingUnknownTool: false,
@@ -291,7 +282,7 @@ function wrapStreamTrimToolCallNames(
     // The message guard already handles aliased partials and may replace their content.
     if (event.partial !== event.message) {
       guardUnknownToolLoopInMessage(event.partial, partialState, unknownToolGuardState, {
-        threshold: options?.unknownToolThreshold,
+        threshold: options.unknownToolThreshold,
         countAttempt: false,
       });
     }

@@ -1,3 +1,4 @@
+import { normalizeOptionalString as normalized } from "@openclaw/normalization-core/string-coerce";
 import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
@@ -16,11 +17,6 @@ export type PresenceViewer = NonNullable<PresenceEntry["user"]> & {
 
 // Matches the native Mac's recent-input window for interactive presence.
 const PRESENCE_ACTIVE_INPUT_THRESHOLD_SECONDS = 120;
-
-function normalized(value: string | null | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 function firstSorted(values: Iterable<string | null | undefined>): string | undefined {
   return [...values]

@@ -233,6 +233,9 @@ export function registerMattermostPreviewDeliveryTests<Socket extends PreviewSoc
 
       const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
       expect(replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
+      expect(mockState.createMattermostDraftStream.mock.calls.at(-1)?.[0]?.postType).toBe(
+        mode === "progress" ? "custom_openclaw_progress" : undefined,
+      );
       if (label === false) {
         expect(firstPlanRetractionDeletes).toBe(1);
         expect(resumedProgress).toContain("▸ Resume");

@@ -23,12 +23,8 @@ export async function maybeResolveIdLikeTarget(params: {
   preferredKind?: ChannelDirectoryEntryKind | "channel";
   plugin?: ChannelPlugin;
 }): Promise<ResolvedIdLikeTarget | undefined> {
-  const target = await maybeResolvePluginMessagingTarget({
+  return maybeResolvePluginMessagingTarget({
     ...params,
     requireIdLike: true,
   });
-  if (!target) {
-    return undefined;
-  }
-  return target;
 }

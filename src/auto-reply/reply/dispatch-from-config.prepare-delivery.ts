@@ -10,9 +10,9 @@ import {
   type ReplyPayload,
 } from "../reply-payload.js";
 import { resolveRoutedPolicyConversationType } from "./dispatch-from-config.context.js";
+import type { PluginBindingTranscriptOwner } from "./dispatch-from-config.events.js";
 import type { GatherDispatchRequestReadyState } from "./dispatch-from-config.gather.js";
 import { hasAskUserPayload } from "./dispatch-from-config.payloads.js";
-import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import {
   loadReplyMediaPathsRuntime,
   loadRouteReplyRuntime,
@@ -214,12 +214,6 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
   const isRoutedReplyDelivered = (result: { delivered: boolean; ambiguous?: boolean }) =>
     result.delivered && result.ambiguous !== true;
 
-  /**
-   * Helper to send a payload via route-reply (async).
-   * Only used when actually routing to a different provider.
-   * Note: Only called when shouldRouteToOriginating is true, so
-   * routeReplyChannel and routeReplyTo are guaranteed to be defined.
-   */
   const sendReplyOperationAsync = async (
     operation: ReplyDispatchOperation,
     abortSignal?: AbortSignal,
@@ -228,8 +222,6 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     deliveryIntentId?: string,
   ) => {
     const payload = operation.kind === "prepared" ? operation.plan.payload : operation.payload;
-    // Keep the runtime guard explicit because this helper is called from nested
-    // reply callbacks where TypeScript cannot narrow shouldRouteToOriginating.
     if (!routeReplyRuntime && !deliveryIntentId) {
       return null;
     }
@@ -264,12 +256,6 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
   ) =>
     sendReplyOperationAsync({ kind: "raw", payload }, abortSignal, mirror, kind, deliveryIntentId);
 
-  type PluginBindingTranscriptOwner = {
-    agentId: string;
-    expectedSessionId?: string;
-    sessionKey: string;
-    transcriptWriteBlocked?: true;
-  };
   const deliverBindingPayload = async (
     payload: ReplyPayload,
     mode: "additive" | "terminal",
@@ -305,11 +291,9 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       return result.delivered || result.suppressed === true;
     }
     markInboundDedupeReplayUnsafe();
-    return mode === "additive"
-      ? turnLedger.sendQueued("tool", bindingPayload).queued
-      : turnLedger.sendQueued("final", bindingPayload).queued;
+    return turnLedger.sendQueued(mode === "additive" ? "tool" : "final", bindingPayload).queued;
   };
-  const nextState = extendPreparedDispatchState(state, {
+  const nextState = Object.assign(state, {
     suppressAcpChildUserDelivery,
     normalizedCurrentSurface,
     isInternalWebchatTurn,
@@ -330,8 +314,6 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
   return { status: "ready" as const, state: nextState };
 }
 
-type PrepareDispatchDeliveryResult = Awaited<ReturnType<typeof prepareDispatchDelivery>>;
-export type PrepareDispatchDeliveryReadyState = Extract<
-  PrepareDispatchDeliveryResult,
-  { status: "ready" }
+export type PrepareDispatchDeliveryReadyState = Awaited<
+  ReturnType<typeof prepareDispatchDelivery>
 >["state"];

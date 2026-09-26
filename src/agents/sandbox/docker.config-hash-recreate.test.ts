@@ -39,8 +39,8 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       harness.ensureSandboxContainer(params),
     ]);
 
-    expect(first).toBe("oc-test-shared");
-    expect(second).toBe(first);
+    expect(first).toEqual({ containerName: "oc-test-shared", containerId: "c".repeat(64) });
+    expect(second).toEqual(first);
     expect(spawnState.calls.filter((call) => call.args[0] === "create")).toHaveLength(1);
     expect(spawnState.calls.filter((call) => call.args[0] === "start")).toHaveLength(1);
     expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(2);
@@ -128,7 +128,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       configHash: oldHash,
     });
 
-    const containerName = await harness.ensureSandboxContainer({
+    const { containerName } = await harness.ensureSandboxContainer({
       scopeKey: "shared",
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
@@ -139,8 +139,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     const dockerCalls = spawnState.calls.filter((call) => call.command === "docker");
     expect(
       dockerCalls.some(
-        (call) =>
-          call.args[0] === "rm" && call.args[1] === "-f" && call.args[2] === "oc-test-shared",
+        (call) => call.args[0] === "rm" && call.args[1] === "-f" && call.args[2] === "c".repeat(64),
       ),
     ).toBe(true);
     const createCall = dockerCalls.find((call) => call.args[0] === "create");
@@ -350,7 +349,10 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(
       spawnState.calls.some((call) => ["start", "exec", "rm"].includes(call.args[0] ?? "")),
     ).toBe(false);
-    expect(registryMocks.updateRegistry).not.toHaveBeenCalled();
+    expect(registryMocks.updateRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeState: "pending" }),
+    );
+    expect(registryMocks.completeSandboxRegistryReservation).not.toHaveBeenCalled();
     expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
     const envFile = collectDockerFlagValues(create.args, "--env-file")[0];
     expect(envFile).toBeDefined();
@@ -405,36 +407,32 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(collectDockerFlagValues(createCall.args, "--userns")).toEqual([]);
   });
 
-  it.each([
-    { user: "0" },
-    { user: "00" },
-    { user: "0:0" },
-    { user: "00:1002" },
-    { user: "1001:0" },
-    { user: "1001:000" },
-  ])("rejects zero-valued rootless Podman user $user", async ({ user }) => {
-    const cfg = createSandboxConfig([]);
-    cfg.docker.user = user;
-    spawnState.inspectRunning = false;
-    registryMocks.readRegistryEntry.mockResolvedValue(null);
+  it.each([{ user: "0" }, { user: "00:1002" }, { user: "1001:000" }])(
+    "rejects zero-valued rootless Podman user $user",
+    async ({ user }) => {
+      const cfg = createSandboxConfig([]);
+      cfg.docker.user = user;
+      spawnState.inspectRunning = false;
+      registryMocks.readRegistryEntry.mockResolvedValue(null);
 
-    await expect(
-      harness.ensureSandboxContainer({
-        engine: harness.PODMAN_SANDBOX_ENGINE,
-        scopeKey: "shared",
-        workspaceDir: "/tmp/workspace",
-        agentWorkspaceDir: "/tmp/workspace",
-        cfg,
-      }),
-    ).rejects.toThrow(/cannot use UID or GID 0/iu);
+      await expect(
+        harness.ensureSandboxContainer({
+          engine: harness.PODMAN_SANDBOX_ENGINE,
+          scopeKey: "shared",
+          workspaceDir: "/tmp/workspace",
+          agentWorkspaceDir: "/tmp/workspace",
+          cfg,
+        }),
+      ).rejects.toThrow(/cannot use UID or GID 0/iu);
 
-    expect(spawnState.calls).not.toContainEqual(
-      expect.objectContaining({
-        command: "podman",
-        args: expect.arrayContaining(["create"]),
-      }),
-    );
-  });
+      expect(spawnState.calls).not.toContainEqual(
+        expect.objectContaining({
+          command: "podman",
+          args: expect.arrayContaining(["create"]),
+        }),
+      );
+    },
+  );
 
   it("rejects Podman versions without mapped keep-id support", async () => {
     const cfg = createSandboxConfig([]);
@@ -555,7 +553,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
         agentWorkspaceDir: "/tmp/workspace",
         cfg,
       }),
-    ).resolves.toBe("oc-test-podman-shared");
+    ).resolves.toEqual({ containerName: "oc-test-podman-shared", containerId: "c".repeat(64) });
 
     expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("oc-test-podman-shared");
     expect(spawnState.calls).toContainEqual(

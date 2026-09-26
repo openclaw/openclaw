@@ -1,4 +1,3 @@
-// Mattermost plugin module implements accounts behavior.
 import {
   createAccountListHelpers,
   hasConfiguredAccountValue,
@@ -13,15 +12,15 @@ import {
   type TextChunkMode,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { BlockStreamingCoalesceConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
+import {
+  resolveSecretInputString,
+  type SecretInputStringResolutionMode,
+} from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveSecretInputString, type SecretInputStringResolutionMode } from "../secret-input.js";
 import type {
   MattermostAccountConfig,
   MattermostChatMode,
   MattermostChatTypeKey,
-  MattermostConfig,
-  MattermostProgressFinalDelivery,
   MattermostReplyToMode,
 } from "../types.js";
 import { normalizeMattermostBaseUrl } from "./client.js";
@@ -47,7 +46,6 @@ export type ResolvedMattermostAccount = {
   textChunkLimit?: number;
   chunkMode?: TextChunkMode;
   streamingMode: StreamingMode;
-  progressFinalDelivery: MattermostProgressFinalDelivery;
   blockStreaming?: boolean;
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
 };
@@ -91,24 +89,7 @@ function resolveMattermostAccountWithMode(params: {
     params.accountId ?? resolveDefaultMattermostAccountId(params.cfg),
   );
   const baseEnabled = params.cfg.channels?.mattermost?.enabled !== false;
-  const rootConfig: MattermostConfig | undefined = params.cfg.channels?.mattermost;
-  const accountConfig = resolveAccountEntry(rootConfig?.accounts, accountId);
   const merged = mergeMattermostAccountConfig(params.cfg, accountId);
-  const accountFinalDelivery = accountConfig?.streaming?.progress?.finalDelivery;
-  const progressFinalDelivery =
-    accountFinalDelivery ?? rootConfig?.streaming?.progress?.finalDelivery ?? "in-place";
-  // Preserve Mattermost's account-level streaming replacement contract. A
-  // finalDelivery-only override may inherit the root mode without also
-  // inheriting unrelated root preview, progress, or block options.
-  const streamingModeConfig =
-    accountFinalDelivery !== undefined &&
-    accountConfig?.streaming?.mode === undefined &&
-    rootConfig?.streaming?.mode !== undefined
-      ? {
-          ...merged,
-          streaming: { ...merged.streaming, mode: rootConfig.streaming.mode },
-        }
-      : merged;
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
 
@@ -151,8 +132,7 @@ function resolveMattermostAccountWithMode(params: {
     requireMention,
     textChunkLimit: merged.textChunkLimit,
     chunkMode: resolveChannelStreamingChunkMode(merged),
-    streamingMode: resolveChannelPreviewStreamMode(streamingModeConfig, "partial"),
-    progressFinalDelivery,
+    streamingMode: resolveChannelPreviewStreamMode(merged, "partial"),
     blockStreaming: resolveChannelStreamingBlockEnabled(merged),
     blockStreamingCoalesce: resolveChannelStreamingBlockCoalesce(merged),
   };

@@ -4,7 +4,11 @@
  * Persists files returned by node-hosted browser proxy calls and rewrites
  * proxied result paths to local saved media paths.
  */
-import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
+import {
+  canonicalizeBase64,
+  estimateBase64DecodedBytes,
+  saveMediaBuffer,
+} from "openclaw/plugin-sdk/media-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assertBrowserProxyFileCountWithinLimit,
@@ -13,7 +17,6 @@ import {
   type BrowserProxyFile,
   visitBrowserProxyFilePaths,
 } from "../browser-proxy-envelope.js";
-import { saveMediaBuffer } from "../media/store.js";
 
 const INVALID_BROWSER_PROXY_FILE_ENVELOPE = "browser proxy returned an invalid file envelope";
 

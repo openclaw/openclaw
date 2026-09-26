@@ -1,4 +1,4 @@
-type RequestData = {
+export type RequestData = {
   body?: unknown;
   multipartStyle?: "message" | "form";
   rawBody?: boolean;

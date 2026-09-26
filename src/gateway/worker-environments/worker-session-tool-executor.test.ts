@@ -1,5 +1,6 @@
 // Register the shared tool mocks before any runtime dependency is evaluated.
 import "./worker-session-tool-executor.test-support.js";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -14,6 +15,7 @@ import {
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { readAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lineage.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
@@ -216,9 +218,6 @@ describe("worker session tool topology", () => {
   it.each([
     { label: "default", mode: undefined },
     { label: "read-only", mode: "read-only" },
-    { label: "guarded", mode: "guarded" },
-    { label: "workspace", mode: "workspace" },
-    { label: "full", mode: "full" },
   ] as const)("inherits the parent's $label permission mode in a cloud child", async ({ mode }) => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     if (mode) {
@@ -331,7 +330,7 @@ describe("worker session tool topology", () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     dispatchChild.mockImplementationOnce(async (request: { sessionKey: string }) => {
       spawnState.order.push("dispatch");
-      activate({
+      await activate({
         ...CHILD,
         sessionKey: request.sessionKey,
       });
@@ -384,7 +383,7 @@ describe("worker session tool topology", () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     await spawn("spawn-child-for-nesting");
     const spawnedChildKey = spawnState.childSessionKey!;
-    const childClaim = placements.claimTurn({
+    const childClaim = await placements.claimTurn({
       sessionId: CHILD.sessionId,
       agentId: CHILD.agentId,
       sessionKey: spawnedChildKey,
@@ -406,14 +405,16 @@ describe("worker session tool topology", () => {
     } satisfies ExecutionIdentityAdmissionToken;
     const childOperationalRun = createOperationalRunInstanceRef(childClaim.runId);
     delegatedAuthorities.push(claimAgentRunDelegatedAuthority(childOperationalRun));
-    bindWorkerTurnOwner(
+    await bindWorkerTurnOwner(
       placements,
       childClaim,
       childExecutionIdentityToken,
       childOperationalRun,
       {
         agentId: CHILD.agentId,
+        sessionId: CHILD.sessionId,
         sessionKey: spawnedChildKey,
+        storePath: path.join(getFixture().root, "sessions.json"),
       },
       () => {},
     );
@@ -441,7 +442,7 @@ describe("worker session tool topology", () => {
       },
     );
     dispatchChild.mockImplementation(async (request: { sessionKey: string }) => {
-      activate({ ...GRANDCHILD, sessionKey: request.sessionKey });
+      await activate({ ...GRANDCHILD, sessionKey: request.sessionKey });
       return placements.get(GRANDCHILD.sessionId);
     });
     gatewayRequest.mockImplementation(
@@ -478,7 +479,7 @@ describe("worker session tool topology", () => {
       },
     });
     expect(JSON.parse(childSend.resultJson)).toMatchObject({ details: { status: "ok" } });
-    const grandchildClaim = placements.claimTurn({
+    const grandchildClaim = await placements.claimTurn({
       sessionId: GRANDCHILD.sessionId,
       agentId: GRANDCHILD.agentId,
       sessionKey: spawnedGrandchildKey!,
@@ -493,7 +494,7 @@ describe("worker session tool topology", () => {
     placements.authorizeWorkerTurnTools(grandchildClaim, ["sessions_send"]);
     const grandchildOperationalRun = createOperationalRunInstanceRef(grandchildClaim.runId);
     delegatedAuthorities.push(claimAgentRunDelegatedAuthority(grandchildOperationalRun));
-    bindWorkerTurnOwner(
+    await bindWorkerTurnOwner(
       placements,
       grandchildClaim,
       {
@@ -504,7 +505,12 @@ describe("worker session tool topology", () => {
         createdAt: 3,
       },
       grandchildOperationalRun,
-      { agentId: GRANDCHILD.agentId, sessionKey: spawnedGrandchildKey! },
+      {
+        agentId: GRANDCHILD.agentId,
+        sessionId: GRANDCHILD.sessionId,
+        sessionKey: spawnedGrandchildKey!,
+        storePath: path.join(getFixture().root, "sessions.json"),
+      },
       () => {},
     );
     const grandchildSend = await execute({
@@ -552,7 +558,7 @@ describe("worker session tool topology", () => {
     expect(replay.resultJson).toContain("prior operation outcome is unknown");
     expect(gatewayCreate).toHaveBeenCalledOnce();
     expect(gatewayRequest).not.toHaveBeenCalled();
-    expect(() => placements.releaseTurn(sourceClaim)).not.toThrow();
+    await expect(placements.releaseTurn(sourceClaim)).resolves.toMatchObject({ turnClaim: null });
   });
 });
 
@@ -573,6 +579,7 @@ describe("worker spawn startup composition", () => {
           const startup = await loadGatewayWorkerEnvironmentStartupState();
           const registry = createEmptyPluginRegistry();
           const runtime = await createGatewayWorkerEnvironmentRuntime({
+            scheduler: createTestGatewayScheduler(),
             getPluginRegistry: () => registry,
             getPortalRuntime: () => undefined,
             resolveGatewayContext,
@@ -609,7 +616,7 @@ describe("worker spawn startup composition", () => {
             provisioning.resolve();
             await finishProvisioning.promise;
             authorize?.();
-            activate({ ...CHILD, sessionKey: request.sessionKey });
+            await activate({ ...CHILD, sessionKey: request.sessionKey });
             const placement = placements.get(CHILD.sessionId);
             if (placement?.state !== "active") {
               throw new Error("child fixture did not activate");

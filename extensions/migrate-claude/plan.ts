@@ -1,5 +1,5 @@
-// Migrate Claude plugin module implements plan behavior.
 import { createMigrationItem, summarizeMigrationItems } from "openclaw/plugin-sdk/migration";
+import { resolvePlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import type {
   MigrationItem,
   MigrationPlan,
@@ -9,7 +9,6 @@ import { buildConfigItems } from "./config.js";
 import { buildMemoryItems } from "./memory.js";
 import { buildSkillItems } from "./skills.js";
 import { discoverClaudeSource, hasClaudeSource } from "./source.js";
-import { resolveTargets } from "./targets.js";
 
 function addArchiveItem(
   items: MigrationItem[],
@@ -39,7 +38,7 @@ export async function buildClaudePlan(ctx: MigrationProviderContext): Promise<Mi
       `Claude state was not found at ${source.root}. Pass --from <path> if it lives elsewhere.`,
     );
   }
-  const targets = resolveTargets(ctx);
+  const targets = resolvePlannedMigrationTargets(ctx);
   const items: MigrationItem[] = [];
   const memoryOnly =
     ctx.itemKinds !== undefined &&

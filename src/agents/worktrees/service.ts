@@ -18,6 +18,7 @@ import {
   requireWorktreeDiskSpace,
   WORKTREE_SETUP_HEADROOM_BYTES,
 } from "./capacity.js";
+import { inspectManagedWorktreeCheckout } from "./checkout-inspection.js";
 import { withManagedWorktreeGit } from "./checkout-policy.js";
 import { resolveWorktreeSourceProfile } from "./checkout-profiles.js";
 import {
@@ -29,6 +30,12 @@ import { ensureEmptyWorktreeSource, removeUnusedEmptyWorktreeSource } from "./em
 import { WorktreeRepositoryError } from "./errors.js";
 import { enforceWorktreeCleanupLimits } from "./gc-limits.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
+import { autoRemovalProtectionReason } from "./gc-protection.js";
+import {
+  assertOwnerAllowsCleanup,
+  createWorktreeGcErrorHandler,
+  type WorktreeCleanupOwnerPolicy,
+} from "./gc-removal.js";
 import {
   createWorktreeLockPrefilter,
   lockState,
@@ -36,10 +43,15 @@ import {
   unlockWorktree,
 } from "./git-lock.js";
 import { commandError, worktreePathExists, runGit } from "./git.js";
-import { canonicalPathKey, shouldPreserveOrphanCandidate } from "./orphan-paths.js";
+import {
+  canonicalPathKey,
+  resolveManagedWorktreePathKeys,
+  shouldPreserveOrphanCandidate,
+} from "./orphan-paths.js";
 import { worktreeOwnerMatches } from "./owner.js";
 import { provisionIncludedFiles } from "./provisioned-files.js";
-import { readRegistryWorktrees } from "./registry-read.js";
+import { readRegistryWorktrees, readWorktreeCleanupState } from "./registry-read.js";
+import { retireMissingRegistryWorktree } from "./registry-retirement.js";
 import {
   clearRegistryWorktreeProvisionedChunks,
   findLiveRegistryWorktreeByOwner,
@@ -48,7 +60,6 @@ import {
   getRegistryWorktreeProvisionedPaths,
   insertRegistryWorktree,
   listRegistryWorktrees,
-  retireMissingRegistryWorktree,
   assertWorktreeRemovalClaim,
   updateRegistryWorktree,
   WorktreeRemovalContentionError,
@@ -57,10 +68,13 @@ import { WorktreeSnapshotError, WorktreeRemovalLockError } from "./removal-error
 import {
   assertExactStateOwner,
   prepareSnapshotBranchDeletion,
+  removeManagedCheckout,
   requireExactManagedWorktreeHead,
   retireExactWorktree,
   requireManagedWorktreeHead,
 } from "./removal-git.js";
+import { worktreeRunLeaseScope } from "./run-lease-owner.js";
+import { reapWorktreeRunLeases } from "./run-lease-store.js";
 import {
   abortWorktreeRemoval,
   claimWorktreeRemoval,
@@ -130,9 +144,7 @@ export type WorktreeCleanupLimits = {
   maxTotalSizeBytes?: number;
 };
 
-type ManagedWorktreeGcParams = {
-  shouldProtectOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
-  shouldRemoveOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
+type ManagedWorktreeGcParams = WorktreeCleanupOwnerPolicy & {
   limits?: WorktreeCleanupLimits;
 };
 
@@ -972,7 +984,8 @@ export class ManagedWorktreeService {
         let exactStateDigest: string | undefined;
         let capturedProvisionedPaths: readonly string[] = [];
         try {
-          const provisionedPaths = getRegistryWorktreeProvisionedPaths(this.env, record.id);
+          const provisionedPaths = await getRegistryWorktreeProvisionedPaths(this.env, record.id);
+          params.commitGuard?.();
           if (provisionedPaths === undefined) {
             throw new Error("provisioned path ledger is unavailable");
           }
@@ -1141,17 +1154,15 @@ export class ManagedWorktreeService {
             },
           });
         }
-        const removed = await git.run(
-          record.repoRoot,
-          ["worktree", "remove", ...(params.requireLossless ? [] : ["--force"]), "--", record.path],
-          { beforeRun: params.commitGuard, killProcessTree: true },
-        );
-        if (removed.code !== 0) {
-          throw commandError("git worktree remove", removed);
-        }
+        await removeManagedCheckout(record, git, params.requireLossless, params.commitGuard);
         return await finalize();
       },
     );
+  }
+
+  async recoverRemoval(params: { id: string; snapshot: string } & WorktreeMutationGuard) {
+    const { recoverManagedWorktreeRemoval } = await import("./removal-recovery.js");
+    return await recoverManagedWorktreeRemoval(params, { env: this.env, now: this.now });
   }
 
   async restore(
@@ -1177,7 +1188,6 @@ export class ManagedWorktreeService {
 
   async removeIfLossless(id: string): Promise<boolean> {
     let record = this.requireLiveRecord(id);
-    let inspectedHead: string;
     const claimToken = randomUUID();
     const recordOutcome = (outcome: ManagedWorktreeRunEndCleanupOutcome, error?: unknown) => {
       // Retained/failed writes happen after this remover released or aborted its
@@ -1226,8 +1236,11 @@ export class ManagedWorktreeService {
     }
     try {
       record = await this.rebindLiveRepository(record);
-      inspectedHead = await requireManagedWorktreeHead(record, {});
-      const inspection = await this.inspectCheckout(record, "lossless");
+      const inspectedHead = await requireManagedWorktreeHead(record, {});
+      const inspection = await inspectManagedWorktreeCheckout(record, "lossless", {
+        env: this.env,
+        getConfig: this.getConfig ?? getRuntimeConfig,
+      });
       const retainedOutcome =
         inspection.retainedReason === "nested-repository"
           ? "retained-dirty"
@@ -1239,12 +1252,6 @@ export class ManagedWorktreeService {
         recordOutcome(retainedOutcome);
         return false;
       }
-    } catch (error) {
-      abortWorktreeRemoval(this.env, id, claimToken);
-      recordOutcome("failed", error);
-      throw error;
-    }
-    try {
       await this.release(id);
       const result = await this.remove({
         id,
@@ -1285,11 +1292,32 @@ export class ManagedWorktreeService {
     const isLocked = createWorktreeLockPrefilter();
     const progress = new WorktreeGcProgress();
     const result = progress.result;
-    const records = listRegistryWorktrees(this.env);
+    const { records, leases } = await readWorktreeCleanupState(this.env);
+    const liveLeaseScopes = new Set(leases.liveScopes);
+    const observedIds = new Set(records.map((record) => record.id));
+    const hasLiveLease = (id: string) =>
+      observedIds.has(id)
+        ? liveLeaseScopes.has(worktreeRunLeaseScope(id))
+        : hasLiveWorktreeRunLease(this.env, id);
+    const protect = (record: ManagedWorktreeRecord) =>
+      autoRemovalProtectionReason(
+        record,
+        isLocked,
+        hasLiveLease,
+        { env: this.env, getConfig: this.getConfig ?? getRuntimeConfig },
+        params,
+      );
+    const onError = createWorktreeGcErrorHandler({ env: this.env, now, progress, policy: params });
     for (const record of records) {
+      let retiredOwner = false;
       try {
         if (record.removedAt === undefined && !(await worktreePathExists(record.path))) {
-          retireMissingRegistryWorktree(this.env, record, now);
+          const retired = await retireMissingRegistryWorktree(this.env, record, now);
+          if (retired.protection) {
+            progress.protect("idle", record.id, retired.protection);
+          } else if (retired.record?.removedAt === now) {
+            result.orphansRetired += 1;
+          }
           continue;
         }
         // Manual worktrees remain until explicit removal; only run-owned worktrees expire.
@@ -1297,7 +1325,7 @@ export class ManagedWorktreeService {
         if (record.removedAt !== undefined || !expiresWhenIdle) {
           continue;
         }
-        const retiredOwner =
+        retiredOwner =
           record.ownerId !== undefined &&
           params.shouldRemoveOwner?.(record.ownerKind, record.ownerId) === true;
         if (retiredOwner || now - record.lastActiveAt > IDLE_GC_MS) {
@@ -1306,11 +1334,7 @@ export class ManagedWorktreeService {
           if (!progress.start(record.id)) {
             continue;
           }
-          const protection = await this.autoRemovalProtectionReason(
-            record,
-            isLocked,
-            params.shouldProtectOwner,
-          );
+          const protection = await protect(record);
           if (protection !== undefined) {
             progress.protect("idle", record.id, protection);
             continue;
@@ -1318,13 +1342,12 @@ export class ManagedWorktreeService {
           await this.remove({
             id: record.id,
             reason: retiredOwner ? "owner-gc" : "idle-gc",
-            commitGuard: () => this.assertOwnerAllowsCleanup(record, params, retiredOwner),
+            commitGuard: () => assertOwnerAllowsCleanup(this.env, record, params, retiredOwner),
           });
           result.removed.push(record.id);
         }
       } catch (error) {
-        progress.error("idle", error, record.id);
-        log.warn(`idle cleanup failed for ${record.id}: ${String(error)}`);
+        await onError("idle", record, error, retiredOwner);
       }
     }
     try {
@@ -1352,20 +1375,20 @@ export class ManagedWorktreeService {
         env: this.env,
         limits: params.limits ?? resolveWorktreeCleanupLimits(),
         progress,
-        protect: (record) =>
-          this.autoRemovalProtectionReason(record, isLocked, params.shouldProtectOwner),
+        protect,
+        onError: (record, error) => onError("limits", record, error),
         remove: async (record) => {
           await this.remove({
             id: record.id,
             reason: "limit-gc",
-            commitGuard: () => this.assertOwnerAllowsCleanup(record, params),
+            commitGuard: () => assertOwnerAllowsCleanup(this.env, record, params),
           });
         },
       })),
     );
     let orphansDeleted = 0;
     let snapshotsPruned = 0;
-    const expired = listRegistryWorktrees(this.env).filter(
+    const expired = records.filter(
       (record) => record.removedAt !== undefined && now - record.removedAt > SNAPSHOT_RETENTION_MS,
     );
     const entries = await fs
@@ -1415,77 +1438,14 @@ export class ManagedWorktreeService {
         log.warn(`worktree cleanup deferred: ${String(error)}`);
       }
     }
+    try {
+      await reapWorktreeRunLeases(this.env, leases.staleScopes);
+    } catch (error) {
+      progress.error("idle", error);
+    }
     result.orphansDeleted = orphansDeleted;
     result.snapshotsPruned = snapshotsPruned;
     return result;
-  }
-
-  private async inspectCheckout(
-    record: ManagedWorktreeRecord,
-    kind: "lossless" | "provisioned" | "nested-repository",
-  ) {
-    return await withManagedWorktreeGit(
-      { record, env: this.env, getConfig: this.getConfig ?? getRuntimeConfig },
-      (git) =>
-        runGitWorkerOperation(
-          {
-            type: "worktree.cleanup-inspection",
-            input:
-              kind === "nested-repository"
-                ? { kind, checkoutPath: record.path }
-                : {
-                    kind,
-                    checkoutPath: record.path,
-                    provisionedPaths: getRegistryWorktreeProvisionedPaths(this.env, record.id),
-                  },
-          },
-          { git: git.worker },
-        ),
-    );
-  }
-
-  private async autoRemovalProtectionReason(
-    record: ManagedWorktreeRecord,
-    isLocked: ReturnType<typeof createWorktreeLockPrefilter>,
-    shouldProtectOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean,
-  ): Promise<string | undefined> {
-    if (
-      record.ownerId !== undefined &&
-      shouldProtectOwner?.(record.ownerKind, record.ownerId) === true
-    ) {
-      return "owner is active";
-    }
-    if (hasLiveWorktreeRunLease(this.env, record.id)) {
-      return "run lease is active";
-    }
-    const provisioned = await this.inspectCheckout(record, "provisioned");
-    if (provisioned.retainedReason !== undefined) {
-      return `provisioned checkout state is ${provisioned.retainedReason}`;
-    }
-    if (await isLocked(record)) {
-      return "worktree has a live or foreign lock";
-    }
-    const nested = await this.inspectCheckout(record, "nested-repository");
-    return nested.retainedReason === undefined
-      ? undefined
-      : "worktree contains a nested repository";
-  }
-
-  private assertOwnerAllowsCleanup(
-    record: ManagedWorktreeRecord,
-    params: ManagedWorktreeGcParams,
-    retiredOwner = false,
-  ) {
-    if (getRegistryWorktree(this.env, record.id)?.lastActiveAt !== record.lastActiveAt) {
-      throw new WorktreeRemovalLockError("busy", "worktree activity changed during cleanup");
-    }
-    if (
-      record.ownerId !== undefined &&
-      (params.shouldProtectOwner?.(record.ownerKind, record.ownerId) === true ||
-        (retiredOwner && params.shouldRemoveOwner?.(record.ownerKind, record.ownerId) !== true))
-    ) {
-      throw new WorktreeRemovalLockError("busy", "worktree owner became active during cleanup");
-    }
   }
 
   private requireLiveRecord(id: string): ManagedWorktreeRecord {
@@ -1524,15 +1484,9 @@ export class ManagedWorktreeService {
     records: ManagedWorktreeRecord[],
     guard: WorktreeMutationGuard,
   ): Promise<number> {
-    const managedPaths = new Set<string>();
-    for (const record of records) {
-      try {
-        managedPaths.add(await canonicalPathKey(record.path));
-      } catch (error) {
-        if (!isMissingPathError(error)) {
-          throw error;
-        }
-      }
+    const managedPaths = await resolveManagedWorktreePathKeys(records);
+    if (!managedPaths) {
+      return 0;
     }
     // Only the default state-owned area grants orphan cleanup authority. A custom
     // root can contain unrelated directories; its cleanup is registry-bound above.

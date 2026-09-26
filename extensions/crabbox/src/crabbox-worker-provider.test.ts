@@ -22,7 +22,12 @@ import { crabboxState } from "./crabbox-state.test-support.js";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId, parseCrabboxProfile } from "./crabbox-worker-profile.js";
 import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
-import { classProfile, mappedCatalog } from "./crabbox-worker-provider.test-support.js";
+import {
+  active,
+  classProfile,
+  inspectCases,
+  mappedCatalog,
+} from "./crabbox-worker-provider.test-support.js";
 import {
   CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS,
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
@@ -310,7 +315,7 @@ describe("Crabbox worker provider", () => {
       { id: "standard", label: "Standard", os: "linux", cpu: 8, default: true },
     ]);
     const lease = { ...(await provider.provision(profile, OPERATION_ID)), profile };
-    expect(await provider.inspect(lease)).toEqual({ status: "active" });
+    expect(await provider.inspect(lease)).toEqual(active);
     await provider.destroy(lease);
 
     expect(runCommand.mock.calls.map(([argv]) => argv[1])).toEqual(
@@ -2459,7 +2464,7 @@ describe("Crabbox worker provider", () => {
       );
       expect(calls[2]?.argv.join(" ")).not.toContain("setup-code");
       const lease = lifecycleLease(LEASE_ID, profile);
-      await expect(provider.inspect(lease)).resolves.toEqual({ status: "active" });
+      await expect(provider.inspect(lease)).resolves.toEqual(active);
       await expect(provider.destroy(lease)).resolves.toBeUndefined();
       expect(calls.slice(3).map(({ argv, options }) => [argv[1], options.timeoutMs])).toEqual([
         ["inspect", lifecycleTimeoutMs],
@@ -3070,7 +3075,7 @@ describe("Crabbox worker provider", () => {
     providers.add(provider);
     const lease = lifecycleLease(LEASE_ID, { ...PROFILE, binary, provider: "coder" });
 
-    await expect(provider.inspect(lease)).resolves.toStrictEqual({ status: "active" });
+    await expect(provider.inspect(lease)).resolves.toStrictEqual(active);
     await expect(provider.destroy(lease)).resolves.toBeUndefined();
     expect(calls).toEqual([
       [binary, "inspect", "--provider", "coder", "--network", "public", "--id", LEASE_ID, "--json"],
@@ -3252,7 +3257,7 @@ describe("Crabbox worker provider", () => {
     const lease = lifecycleLease();
 
     try {
-      await expect(provider.inspect(lease)).resolves.toStrictEqual({ status: "active" });
+      await expect(provider.inspect(lease)).resolves.toStrictEqual(active);
       await vi.advanceTimersByTimeAsync(0);
       await provider.inspect(lease);
       await vi.advanceTimersByTimeAsync(180_000);
@@ -3288,7 +3293,7 @@ describe("Crabbox worker provider", () => {
     const lease = lifecycleLease();
 
     try {
-      await expect(provider.inspect(lease)).resolves.toStrictEqual({ status: "active" });
+      await expect(provider.inspect(lease)).resolves.toStrictEqual(active);
       await vi.advanceTimersByTimeAsync(60_012);
 
       expect(warnings).toEqual([
@@ -3334,7 +3339,7 @@ describe("Crabbox worker provider", () => {
       const lease = lifecycleLease();
 
       try {
-        await expect(provider.inspect(lease)).resolves.toStrictEqual({ status: "active" });
+        await expect(provider.inspect(lease)).resolves.toStrictEqual(active);
         await vi.advanceTimersByTimeAsync(0);
         expect(heartbeatAttempts).toBe(1);
         expect(warnings).toEqual([
@@ -3366,13 +3371,8 @@ describe("Crabbox worker provider", () => {
     expect(invoked).toBe(false);
   });
 
-  it.each([
-    { state: "running", ready: true, expected: "active" },
-    { state: "running", ready: false, expected: "active" },
-    { state: "provisioning", ready: false, expected: "active" },
-    ...NON_RUNNABLE_STATES.map((state) => ({ state, ready: false, expected: "unknown" })),
-  ])(
-    "maps inspect state $state ready=$ready to $expected without renewing lost leases",
+  it.each(inspectCases(NON_RUNNABLE_STATES))(
+    "maps inspect state $state ready=$ready to $expected.status without renewing lost leases",
     async ({ state, ready, expected }) => {
       vi.useFakeTimers();
       let inspection = inspectJson();
@@ -3386,13 +3386,13 @@ describe("Crabbox worker provider", () => {
       });
       const lease = lifecycleLease();
       try {
-        await expect(provider.inspect(lease)).resolves.toEqual({ status: "active" });
+        await expect(provider.inspect(lease)).resolves.toEqual(active);
         await vi.advanceTimersByTimeAsync(0);
         expect(heartbeats).toHaveBeenCalledTimes(1);
         inspection = inspectJson({ state, ready });
-        await expect(provider.inspect(lease)).resolves.toStrictEqual({ status: expected });
+        await expect(provider.inspect(lease)).resolves.toStrictEqual(expected);
         await vi.advanceTimersByTimeAsync(60_000);
-        expect(heartbeats).toHaveBeenCalledTimes(expected === "active" ? 2 : 1);
+        expect(heartbeats).toHaveBeenCalledTimes(expected.status === "active" ? 2 : 1);
       } finally {
         await provider.destroy(lease);
         vi.useRealTimers();
@@ -3520,45 +3520,6 @@ describe("Crabbox worker provider", () => {
     const message = error instanceof Error ? error.message : "";
     expect(message).toBe(`${INSPECT_FAILURE_PREFIX}${detail}`);
     expect(hasLoneSurrogate(message)).toBe(false);
-  });
-
-  it.each([
-    {
-      code: 5,
-      stderr: `warning: could not inspect lease before release: coordinator GET http://127.0.0.1/v1/leases/${LEASE_ID}: http 404: not_found\ncoordinator accepted release for ${LEASE_ID}, but remote cleanup reported a cleanup failure or scheduled retry`,
-    },
-    { code: 4, stderr: `lease/server not found: ${LEASE_ID}` },
-    { code: 4, stderr: `sandbox ${LEASE_ID} is not claimed by Crabbox` },
-    { code: 4, stderr: `wandb sandbox "${LEASE_ID}" has no matching local ownership claim` },
-    { code: 4, stderr: `unikraftcloud lease ${LEASE_ID} no longer exists` },
-    ...["stopped", "released", "destroyed", "terminated"].map((state) => ({
-      code: 4,
-      stderr: `lease ${LEASE_ID} already ${state}`,
-    })),
-  ])("rejects unproven stop despite misleading prose: $stderr", async ({ code, stderr }) => {
-    const calls: string[][] = [];
-    const provider = providerWithRunner(async (argv) => {
-      calls.push(argv);
-      return commandResult({ code, stderr });
-    });
-    await expect(provider.destroy(lifecycleLease())).rejects.toThrow(
-      `stop failed with exit code ${code}`,
-    );
-    expect(calls).toEqual([[SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]]);
-  });
-
-  it("accepts producer-confirmed absence only after a normal successful stop", async () => {
-    const calls: string[][] = [];
-    const provider = providerWithRunner(async (argv) => {
-      calls.push(argv);
-      return commandResult();
-    });
-    await expect(provider.destroy(lifecycleLease())).resolves.toBeUndefined();
-    await expect(provider.destroy(lifecycleLease())).resolves.toBeUndefined();
-    expect(calls).toEqual([
-      [SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID],
-      [SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID],
-    ]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

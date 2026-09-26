@@ -7,8 +7,13 @@ import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
 
 const MIB = 1024 * 1024;
 const brokers = new Set<SqliteWorkerBroker>();
+const concurrentInputs = new Set<ReturnType<SqliteWorkerBroker["reserveInputPreparation"]>>();
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
+    for (const prepared of concurrentInputs) {
+      prepared.release();
+    }
+    concurrentInputs.clear();
     try {
       await Promise.all([...brokers].map((broker) => broker.close()));
     } finally {
@@ -22,6 +27,12 @@ function createBroker() {
   const broker = new SqliteWorkerBroker();
   brokers.add(broker);
   return broker;
+}
+
+function reserveConcurrentInputs(broker: SqliteWorkerBroker) {
+  for (let index = 0; index < 3; index += 1) {
+    concurrentInputs.add(broker.reserveInputPreparation(64 * MIB));
+  }
 }
 
 async function open(broker: SqliteWorkerBroker) {
@@ -39,6 +50,7 @@ async function open(broker: SqliteWorkerBroker) {
 it("charges preparing inputs and dispatched commands to the same byte budget", async () => {
   const broker = createBroker();
   const store = await open(broker);
+  reserveConcurrentInputs(broker);
   const prepared = broker.reserveInputPreparation(64 * MIB);
   try {
     await expect(
@@ -65,6 +77,7 @@ it.each([
   "charges opening input and preparation together against the $limit limit",
   async ({ reservedMiB, inputMiB, preparationMiB }) => {
     const broker = createBroker();
+    reserveConcurrentInputs(broker);
     const databasePath = path.join(dirs.make("sqlite-opening-budget-"), "store.sqlite");
     const prepared = broker.reserveInputPreparation(reservedMiB * MIB);
     const options = {
@@ -88,11 +101,15 @@ it.each([
   },
 );
 
-it("bounds oversized preparation and releases each reservation only once", () => {
+it("bounds oversized streams and releases each reservation only once", () => {
   const broker = createBroker();
   const first = broker.reserveInputPreparation(100 * MIB);
-  const second = broker.reserveInputPreparation(100 * MIB);
+  const second = broker.reserveInputPreparation(100 * MIB, "stream");
+  const concurrent: ReturnType<typeof broker.reserveInputPreparation>[] = [];
   try {
+    for (let index = 0; index < 3; index += 1) {
+      concurrent.push(broker.reserveInputPreparation(64 * MIB));
+    }
     expect(() => broker.reserveInputPreparation(1)).toThrow(
       expect.objectContaining({ code: "overloaded" }),
     );
@@ -107,9 +124,36 @@ it("bounds oversized preparation and releases each reservation only once", () =>
       replacement.release();
     }
   } finally {
+    for (const prepared of concurrent) {
+      prepared.release();
+    }
     first.release();
     second.release();
   }
+});
+
+it("charges complete snapshots and releases exact custody after canceled dispatch", async () => {
+  const broker = createBroker();
+  const reserve = (mib: number) => {
+    const prepared = broker.reserveInputPreparation(mib * MIB, "snapshot");
+    concurrentInputs.add(prepared);
+    return prepared;
+  };
+  const first = reserve(100);
+  const second = reserve(100);
+  expect(() => reserve(100)).toThrow(expect.objectContaining({ code: "overloaded" }));
+
+  const reason = new Error("snapshot canceled before dispatch");
+  await expect(first.handoff(() => Promise.reject(reason))).rejects.toBe(reason);
+  first.release();
+  reserve(100);
+  reserve(56);
+  expect(() => reserve(1)).toThrow(expect.objectContaining({ code: "overloaded" }));
+
+  second.release();
+  second.release();
+  reserve(100);
+  expect(() => reserve(1)).toThrow(expect.objectContaining({ code: "overloaded" }));
 });
 
 it("joins captured input before drainage returns and refuses stale handoff", async () => {
@@ -142,6 +186,7 @@ it.each(["serialization", "cancellation"] as const)(
   async (failure) => {
     const broker = createBroker();
     const store = await open(broker);
+    reserveConcurrentInputs(broker);
     const prepared = broker.reserveInputPreparation(64 * MIB);
     const reason = new Error("caller canceled before dispatch");
     const result = prepared.handoff(() =>
@@ -170,6 +215,7 @@ it.each(["serialization", "cancellation"] as const)(
 it("hands preparation into synchronous execute without charging it twice", async () => {
   const broker = createBroker();
   const store = await open(broker);
+  reserveConcurrentInputs(broker);
   const prepared = broker.reserveInputPreparation(64 * MIB);
   const command = { type: "append" as const, input: { value: "captured at handoff" } };
   const result = prepared.handoff(() => store.execute(command));
@@ -186,6 +232,7 @@ it("hands preparation into synchronous execute without charging it twice", async
 it("keeps oversized handoffs out of a busy worker slot", async () => {
   const broker = createBroker();
   const store = await open(broker);
+  reserveConcurrentInputs(broker);
   const accepted = store.execute({ type: "append", input: { value: "first" } });
   const prepared = broker.reserveInputPreparation(100 * MIB);
   try {

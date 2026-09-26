@@ -135,7 +135,8 @@ describe("command CI ownership and parallel timing", () => {
       listTrackedTestFiles: (root: string) =>
         root === "src/commands" ? [...files, memoryFile] : [],
     }));
-    vi.doMock("../vitest/vitest.test-shards.mjs", () => ({
+    vi.doMock("../vitest/vitest.test-shards.mjs", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../vitest/vitest.test-shards.mjs")>()),
       fullSuiteVitestShards: [{ name: "agentic", config: "fixture.config.ts", projects: [config] }],
     }));
     vi.doMock("../vitest/vitest.unit-fast-paths.mjs", () => ({
@@ -272,9 +273,11 @@ describe("command CI ownership and parallel timing", () => {
       "src/commands/doctor-session-sqlite.codex-binding.test.ts",
       "src/commands/doctor-session-sqlite.deferred-plugin.test.ts",
       "src/commands/doctor-session-sqlite.discovery.test.ts",
+      "src/commands/doctor-session-sqlite.held-recovery.test.ts",
       "src/commands/doctor-session-sqlite.retained-source-verification.test.ts",
       "src/commands/doctor-session-sqlite.shared-orphan.test.ts",
       "src/commands/doctor-session-sqlite.shared-store.test.ts",
+      "src/commands/doctor-session-sqlite.source-conflict-recovery.test.ts",
       "src/commands/doctor-session-state-providers.test.ts",
       "src/commands/doctor-session-title-repair.test.ts",
       "src/commands/doctor-session-transcript-headers.test.ts",

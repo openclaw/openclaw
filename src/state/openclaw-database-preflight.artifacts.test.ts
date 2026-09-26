@@ -513,6 +513,9 @@ describe("schema preflight source artifacts", () => {
       expect(sourceArtifacts(fixture.paths, allowReadMarks)).toEqual(before);
     } finally {
       clearImmediate(immediate);
+      fixture.state.db.exec(`PRAGMA user_version = ${supportedVersions.state};`);
+      fixture.main.db.exec(`PRAGMA user_version = ${supportedVersions.agent};`);
+      fixture.worker.db.exec(`PRAGMA user_version = ${supportedVersions.agent};`);
     }
   });
 

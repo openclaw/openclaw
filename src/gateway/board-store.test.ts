@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readBoardHtml } from "../boards/board-store.test-support.js";
@@ -18,6 +17,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { boardStore } from "./board-store.js";
 import { progressCardStore } from "./progress-card-store.js";
 import { createBoardHarness } from "./server-methods/board.test-support.js";
@@ -112,13 +112,7 @@ it("keeps global boards and progress under each owner's canonical row across reo
     }
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
-    const parentSql = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
-    ];
+    const parentSql = observeMainThreadSql();
     try {
       const progress = await invoke("progressCard.get", { sessionKey: "global", agentId });
       expect(progress).toHaveBeenCalledWith(
@@ -134,13 +128,9 @@ it("keeps global boards and progress under each owner's canonical row across reo
       );
       await closeOpenClawAgentDatabasesAsync();
       await closeOpenClawStateDatabaseAsync();
-      for (const method of parentSql) {
-        expect(method).not.toHaveBeenCalled();
-      }
+      parentSql.expectIdle();
     } finally {
-      for (const method of parentSql) {
-        method.mockRestore();
-      }
+      parentSql.restore();
     }
   }
   await invoke("progressCard.put", { sessionKey: "agent:work:main", expectedRevision: 2 });

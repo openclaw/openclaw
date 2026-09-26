@@ -6,8 +6,8 @@ import type { lookup as dnsLookupCb } from "node:dns";
  * snapshots, DOM text, and selector lookup on top of the CDP socket helpers.
  */
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { axValue, type RawAXNode } from "./cdp-ax.js";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
+import { axValue, type AriaSnapshotNode, type RawAXNode } from "./cdp-ax.js";
 import {
   prepareCdpPageSession,
   prepareCdpTargetSession,
@@ -29,7 +29,7 @@ import {
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
 
 export { appendCdpPath, normalizeCdpWsUrl } from "./cdp.helpers.js";
-export type { RawAXNode } from "./cdp-ax.js";
+export type { AriaSnapshotNode, RawAXNode } from "./cdp-ax.js";
 export { snapshotRoleViaCdp } from "./cdp-role-snapshot.js";
 export { type CdpActionTimeouts, waitForCdpCommittedNavigationUrl } from "./cdp-page-session.js";
 
@@ -206,17 +206,6 @@ export async function createTargetViaCdp(opts: {
   throw new Error("CDP Target.createTarget failed");
 }
 
-/** Normalized accessibility tree node returned by ARIA snapshots. */
-export type AriaSnapshotNode = {
-  ref: string;
-  role: string;
-  name: string;
-  value?: string;
-  description?: string;
-  backendDOMNodeId?: number;
-  depth: number;
-};
-
 /** Prefix assigned to generated accessibility-node refs. */
 const AX_REF_PREFIX = "ax";
 export const AX_REF_PATTERN = new RegExp(`^${AX_REF_PREFIX}\\d+$`);
@@ -243,22 +232,11 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
   }
 
   const out: AriaSnapshotNode[] = [];
-  const stack: Array<{ id: string; depth: number }> = [{ id: root.nodeId, depth: 0 }];
+  const stack: Array<{ node: RawAXNode; depth: number }> = [
+    { node: byId.get(root.nodeId)!, depth: 0 },
+  ];
   while (stack.length && out.length < limit) {
-    const popped = stack.pop();
-    // `stack.pop()` only returns undefined on an empty stack, but the
-    // while guard already asserts `stack.length > 0`. Dead defensive guard.
-    /* c8 ignore next 3 */
-    if (!popped) {
-      break;
-    }
-    const { id, depth } = popped;
-    const n = byId.get(id);
-    // Child admission below only pushes ids present in this map.
-    /* c8 ignore next 3 */
-    if (!n) {
-      continue;
-    }
+    const { node: n, depth } = stack.pop()!;
     const role = axValue(n.role);
     const name = axValue(n.name);
     const value = axValue(n.value);
@@ -276,9 +254,10 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
 
     const children = n.childIds ?? [];
     for (let i = children.length - 1; i >= 0; i--) {
-      const child = children[i];
-      if (child && byId.has(child)) {
-        stack.push({ id: child, depth: depth + 1 });
+      const childId = children[i];
+      const child = childId ? byId.get(childId) : undefined;
+      if (child) {
+        stack.push({ node: child, depth: depth + 1 });
       }
     }
   }

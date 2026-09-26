@@ -144,7 +144,7 @@ export function renewAgentDatabaseMaintenanceAuthorityIfPresent(): void {
 
 export type OpenClawAgentIntegrityVerificationReceiver = (
   record: OpenClawAgentIntegrityVerification | undefined,
-  hasLiveLease: boolean,
+  canReuseRuntimeIntegrity: boolean,
   invalidated: boolean,
 ) => void;
 
@@ -223,7 +223,7 @@ function claimAgentDatabaseLeaseInDatabase(
   );
   onVerification?.(
     verification && hasLiveLease ? { ...verification, clean_close: 0 } : verification,
-    hasLiveLease && !hasOtherOwner,
+    !hasOtherOwner,
     invalidated,
   );
   executeSqliteQuerySync(
@@ -281,10 +281,21 @@ export function releaseOpenClawAgentDatabaseLease(
   if (maintenance?.databasePath === databasePath) {
     return withExistingAgentLeaseWrite(maintenance.authority, options, release);
   }
-  runOpenClawStateWriteTransaction((database) => {
-    ensureAgentDatabaseLeaseSchema(database.db);
-    release(database.db);
-  }, options);
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      ensureAgentDatabaseLeaseSchema(database.db);
+      release(database.db);
+    },
+    typeof closeOutcome === "object"
+      ? {
+          ...options,
+          initializationAgentPaths: [
+            ...(options.initializationAgentPaths ?? []),
+            closeOutcome.path,
+          ],
+        }
+      : options,
+  );
 }
 
 type AgentDatabaseLeaseOwner = Pick<
@@ -379,7 +390,10 @@ export function assertOpenClawAgentDatabaseLease(
   params: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
 ): void {
   const ownerStartTime = getFileLockProcessStartTime(process.pid);
-  const database = openOpenClawStateDatabase({ env: params.env });
+  const database = openOpenClawStateDatabase({
+    env: params.env,
+    initializationAgentPaths: [params.path],
+  });
   const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
   const held = executeSqliteQueryTakeFirstSync(
     database.db,
@@ -478,7 +492,10 @@ export function readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim(
   params: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
 ): OpenClawAgentDatabaseWorkerLeaseReceipt {
   assertOpenClawAgentDatabaseLease(leaseId, params);
-  const database = openOpenClawStateDatabase({ env: params.env });
+  const database = openOpenClawStateDatabase({
+    env: params.env,
+    initializationAgentPaths: [params.path],
+  });
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
     getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db)

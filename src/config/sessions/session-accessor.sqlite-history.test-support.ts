@@ -10,6 +10,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import type { SessionTranscriptMessageAnchorPage } from "./session-accessor.sqlite-active-events.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
+import { resolveVisibleHistoryEventCount } from "./session-accessor.sqlite-history-projection.js";
 import {
   readSessionTranscriptHistoryEventsFromProjection,
   readSessionTranscriptHistoryEventByIdFromProjection,
@@ -123,6 +124,10 @@ export function readSessionTranscriptHistoryEvents(
     (projection) => readSessionTranscriptHistoryEventsFromProjection(projection),
     options,
   );
+}
+
+export function readSessionTranscriptHistoryEventCount(scope: SessionTranscriptReadScope): number {
+  return withCurrentProjectionSnapshot(scope, resolveVisibleHistoryEventCount);
 }
 
 export function readSessionTranscriptHistoryEventById(

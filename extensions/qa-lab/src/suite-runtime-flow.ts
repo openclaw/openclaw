@@ -26,6 +26,7 @@ import * as suiteRuntimeTransport from "./suite-runtime-transport.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import type { QaSuiteScenarioResult, QaSuiteStep } from "./suite-types.js";
 import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
+import { projectQaToolMessages } from "./tool-activity.js";
 import * as webRuntime from "./web-runtime.js";
 
 type QaSuiteScenarioFlowEnv = {
@@ -39,6 +40,7 @@ const qaSuiteScenarioIdentityDeps = {
   path,
   sleep,
   randomUUID,
+  projectQaToolMessages,
   ...suiteRuntimeAgent,
   ...suiteRuntimeGateway,
   ...suiteRuntimeTransport,
@@ -89,24 +91,14 @@ export async function runQaSuiteScenarioSteps(
       });
     } catch (error) {
       const details = formatQaErrorMessage(error);
-      if (error instanceof QaSuiteScenarioSkipError) {
-        stepResults.push({ name: step.name, status: "skip", details });
-        return {
-          name,
-          status: "skip",
-          steps: stepResults,
-          details,
-          ...(timing ? { timing } : {}),
-          ...(rttMeasurement ? { rttMeasurement } : {}),
-        };
-      }
-      if (process.env.OPENCLAW_QA_DEBUG === "1") {
+      const status = error instanceof QaSuiteScenarioSkipError ? "skip" : "fail";
+      if (status === "fail" && process.env.OPENCLAW_QA_DEBUG === "1") {
         console.error(`[qa-suite] fail scenario="${name}" step="${step.name}" details=${details}`);
       }
-      stepResults.push({ name: step.name, status: "fail", details });
+      stepResults.push({ name: step.name, status, details });
       return {
         name,
-        status: "fail",
+        status,
         steps: stepResults,
         details,
         ...(timing ? { timing } : {}),

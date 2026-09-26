@@ -150,6 +150,12 @@ OpenClaw still bounds its own requests, dynamic tools, cancellation, and local
 settlement. See [Timeouts](/plugins/codex-harness-reference#timeouts) for those
 budgets, Stop and replay behavior, and Doctor migration of retired idle settings.
 
+Failed app-server startup waits for child shutdown before returning its error.
+If startup times out or is canceled during process registration, cleanup joins
+that registration and closes any late child. Cleanup can extend beyond the
+startup deadline. A canceled caller leaves startup running when another caller
+still owns it.
+
 OpenClaw preserves assistant text supplied with the initial native item and
 reasoning supplied with a completed item, even when Codex sends no text deltas.
 Completed items, including empty messages, reconcile the transcript with Codex's
@@ -259,6 +265,11 @@ capacity until their owning operation settles.
 These limits apply across chats and native child agents sharing the relay.
 Queue capacity or deadline exhaustion returns a retryable busy response.
 Sustained overload can still fail a turn after Codex exhausts its retries.
+
+If an admitted WebSocket cannot connect upstream, the relay returns HTTP `502`;
+an upstream handshake deadline returns `504`. These errors use a fixed message
+without credentials or model content. Native Codex keeps control of retries and
+HTTPS fallback. Provider HTTP failures retain their original status and body.
 
 After a completed provider failure, you can continue in the same chat with its
 existing configuration. OpenClaw retains the configured native thread, including

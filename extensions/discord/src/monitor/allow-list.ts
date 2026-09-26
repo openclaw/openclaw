@@ -26,28 +26,16 @@ type DiscordAllowListMatch = AllowlistMatch<"wildcard" | "id" | "name" | "tag">;
 
 const DISCORD_OWNER_ALLOWLIST_PREFIXES = ["discord:", "user:", "pk:"];
 
-type DiscordChannelOverrideConfig = {
-  requireMention?: boolean;
-  ignoreOtherMentions?: boolean;
-  skills?: string[];
-  enabled?: boolean;
-  users?: string[];
-  roles?: string[];
-  systemPrompt?: string;
-  includeThreadStarter?: boolean;
-  autoThread?: boolean;
-  autoThreadName?: "message" | "generated";
-  autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
-};
+type DiscordChannelOverrideConfig = Omit<
+  NonNullable<DiscordGuildEntry["channels"]>[string],
+  "tools" | "toolsBySender"
+>;
 
-export type DiscordGuildEntryResolved = Pick<DiscordGuildEntry, "presenceEvents"> & {
+export type DiscordGuildEntryResolved = Omit<
+  DiscordGuildEntry,
+  "tools" | "toolsBySender" | "channels"
+> & {
   id?: string;
-  slug?: string;
-  requireMention?: boolean;
-  ignoreOtherMentions?: boolean;
-  reactionNotifications?: "off" | "own" | "all" | "allowlist";
-  users?: string[];
-  roles?: string[];
   channels?: Record<string, DiscordChannelOverrideConfig>;
 };
 
@@ -127,18 +115,11 @@ export function allowListMatches(
   candidate: { id?: string; name?: string; tag?: string },
   params?: { allowNameMatching?: boolean },
 ) {
-  if (list.allowAll) {
-    return true;
-  }
-  if (candidate.id && list.ids.has(candidate.id)) {
-    return true;
-  }
-  if (params?.allowNameMatching === true) {
-    if (resolveDiscordAllowListNameMatch(list, candidate)) {
-      return true;
-    }
-  }
-  return false;
+  return resolveDiscordAllowListMatch({
+    allowList: list,
+    candidate,
+    allowNameMatching: params?.allowNameMatching,
+  }).allowed;
 }
 
 export function resolveDiscordAllowListMatch(params: {
@@ -401,7 +382,7 @@ function hasConfiguredDiscordChannels(
 function resolveDiscordChannelConfigEntry(
   entry: DiscordChannelEntry,
 ): DiscordChannelConfigResolved {
-  const resolved: DiscordChannelConfigResolved = {
+  return {
     allowed: entry.enabled !== false,
     requireMention: entry.requireMention,
     ignoreOtherMentions: entry.ignoreOtherMentions,
@@ -415,7 +396,6 @@ function resolveDiscordChannelConfigEntry(
     autoThreadName: entry.autoThreadName,
     autoArchiveDuration: entry.autoArchiveDuration,
   };
-  return resolved;
 }
 
 export function resolveDiscordChannelConfig(params: {
@@ -424,18 +404,12 @@ export function resolveDiscordChannelConfig(params: {
   channelName?: string;
   channelSlug: string;
 }): DiscordChannelConfigResolved | null {
-  const { guildInfo, channelId, channelName, channelSlug } = params;
-  const channels = guildInfo?.channels;
-  if (!hasConfiguredDiscordChannels(channels)) {
-    return null;
-  }
-  const match = resolveDiscordChannelEntryMatch(channels, {
-    id: channelId,
-    name: channelName,
-    slug: channelSlug,
+  return resolveDiscordChannelConfigWithFallback({
+    guildInfo: params.guildInfo,
+    channelId: params.channelId,
+    channelName: params.channelName,
+    channelSlug: params.channelSlug,
   });
-  const resolved = resolveChannelMatchConfig(match, resolveDiscordChannelConfigEntry);
-  return resolved ?? { allowed: false };
 }
 
 export function resolveDiscordChannelConfigWithFallback(params: {

@@ -234,16 +234,6 @@ function scheduleRearm(current: DesktopGenerationState, owner: GenerationOwner):
   current.rearmTimer.unref();
 }
 
-function logRefreshFailure(current: DesktopGenerationState, owner: GenerationOwner) {
-  return (error: unknown) => {
-    if (current.owner !== owner) {
-      return;
-    }
-    current.context?.serviceHealth?.reportFailure(error);
-    current.context?.logger.warn(`codex desktop generation refresh failed: ${String(error)}`);
-  };
-}
-
 function refreshGeneration(
   current: DesktopGenerationState,
   owner: GenerationOwner,
@@ -255,7 +245,13 @@ function refreshGeneration(
         current.context?.serviceHealth?.clearFailure();
       }
     })
-    .catch(logRefreshFailure(current, owner));
+    .catch((error: unknown) => {
+      if (current.owner !== owner) {
+        return;
+      }
+      current.context?.serviceHealth?.reportFailure(error);
+      current.context?.logger.warn(`codex desktop generation refresh failed: ${String(error)}`);
+    });
 }
 
 function closeWatchers(current: DesktopGenerationState): void {

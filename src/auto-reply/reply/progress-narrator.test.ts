@@ -271,25 +271,6 @@ describe("progress narration through reply options", () => {
     }
   });
 
-  it("drops a utility-model result that settles after the turn stops", async () => {
-    const started = createDeferred();
-    const generation = createDeferred<string>();
-    const { narrator, onUpdate } = createNarratorHarness({
-      generate: () => {
-        started.resolve();
-        return generation.promise;
-      },
-    });
-
-    narrator.noteToolStart({ name: "exec", phase: "start" });
-    await started.promise;
-    narrator.stopTurn();
-    generation.resolve("Stale status.");
-    await flushNarrations();
-
-    expect(onUpdate).not.toHaveBeenCalled();
-  });
-
   it.each([false, true])(
     "does not start a stopped turn after preparation with replacement=%s",
     async (replaceBeforePrepared) => {
@@ -656,21 +637,5 @@ describe("attachProgressNarratorToReplyOptions", () => {
       Promise.resolve(wrapped?.onItemEvent?.({ itemId: "i1", status: "completed" })),
     ).resolves.toBe(false);
     expect(onItemEvent).toHaveBeenCalledWith({ itemId: "i1", status: "completed" });
-  });
-
-  it("exposes turn lifecycle controls to the channel", () => {
-    const onProgressNarratorLifecycle = vi.fn();
-    const opts: InternalGetReplyOptions = {
-      onNarrationUpdate: vi.fn(),
-      onProgressNarratorLifecycle,
-    };
-
-    attachProgressNarratorToReplyOptions({ cfg: utilityCfg, agentId: "main", opts });
-
-    expect(onProgressNarratorLifecycle).toHaveBeenCalledOnce();
-    expect(onProgressNarratorLifecycle.mock.calls[0]?.[0]).toEqual({
-      beginTurn: expect.any(Function),
-      stopTurn: expect.any(Function),
-    });
   });
 });

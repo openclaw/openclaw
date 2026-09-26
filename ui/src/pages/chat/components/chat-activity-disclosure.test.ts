@@ -51,7 +51,7 @@ it.each(["activity", "work"] as const)(
     );
 
     const activity = container.querySelector<HTMLButtonElement>(".chat-activity-group__summary");
-    expect(activity?.textContent).toContain("2 reads");
+    expect(activity?.textContent).toContain(kind === "work" ? "Worked for 1s" : "2 reads");
     expect(activity?.querySelector("[title], [data-tooltip], openclaw-tooltip")).toBeNull();
     expect(activity?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelectorAll(".chat-activity-group")).toHaveLength(1);
@@ -107,7 +107,7 @@ it.each([
       container,
     );
     const summary = container.querySelector(".chat-activity-group__summary");
-    expect(summary?.textContent).toContain("1 read");
+    expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1s" : "1 read");
     expect(summary?.textContent?.match(/1 failed/gu)).toHaveLength(1);
     if (kind === "work") {
       expect(summary?.textContent).toContain("1s");
@@ -157,7 +157,41 @@ it.each(["activity", "work"] as const)("uses current prepared outcomes in %s sum
     container,
   );
   const summary = container.querySelector(".chat-activity-group__summary");
-  expect(summary?.textContent).toContain("1 read");
+  expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1s" : "1 read");
   expect(summary?.textContent).not.toContain("failed");
   expect(summary?.querySelector(".chat-tool-failure")).toBeNull();
 });
+
+it.each(["blocked", undefined] as const)(
+  "retains %s outcomes when completed work is expanded",
+  (status) => {
+    const message = createAssistantMessage([], {
+      activity: [
+        {
+          itemId: "outcome",
+          kind: "tool",
+          phase: "end",
+          name: "read",
+          title: "Read",
+          ...(status ? { status } : {}),
+        },
+      ],
+    });
+    const groups = [
+      createToolGroup("outcome-group", [createMessageEntry("outcome-entry", message)]),
+    ];
+    const container = document.createElement("div");
+    for (const expanded of [false, true]) {
+      render(
+        renderWorkGroupSummary(
+          { key: "outcome-work", durationMs: 1000, groups },
+          { expanded, onToggle: () => {} },
+        ),
+        container,
+      );
+      const summary = container.querySelector(".chat-activity-group__summary");
+      expect(summary?.textContent).toContain("Worked for 1s");
+      expect(summary?.textContent).toContain(status ? "1 blocked" : "1 unknown");
+    }
+  },
+);

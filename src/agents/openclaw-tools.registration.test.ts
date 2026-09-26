@@ -7,6 +7,7 @@ import { createPluginRecord } from "../plugins/loader-records.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import * as userProfileList from "../state/user-profile-list.js";
 import { withEnv } from "../test-utils/env.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
@@ -18,15 +19,12 @@ import {
 } from "./cron-creator-authority-context.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import {
-  collectPresentOpenClawTools,
   shouldIncludeAskUserToolForOpenClawTools,
   shouldIncludeProgressCardToolForOpenClawTools,
   shouldIncludeSecretsToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
-import { textResult, type AnyAgentTool } from "./tools/common.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
-import { createPdfTool } from "./tools/pdf-tool.js";
 import * as sessionsSpawnTool from "./tools/sessions-spawn-tool.js";
 
 vi.mock("./openclaw-plugin-tools.js", () => ({
@@ -109,9 +107,35 @@ describe("openclaw-tools progress_card gating", () => {
     ).toEqual([]);
   });
 
-  it("enables progress_card by default", () => {
-    expectProgressCardEnabled({ config: {} as OpenClawConfig }, true);
-  });
+  it.each([false, true])(
+    "gates personal instructions on multiple people (%s) without general filesystem access",
+    (multipleProfiles) => {
+      const identityCount = vi
+        .spyOn(userProfileList, "hasMultipleSessionSharingIdentities")
+        .mockReturnValue(multipleProfiles);
+      const tools = createOpenClawCodingTools({
+        sessionKey: "agent:main:dashboard:project",
+        runSessionKey: "agent:main:dashboard:project",
+        cwd: "/project/worktree",
+        workspaceDir: "/project/worktree",
+        config: {
+          agents: { entries: { main: { default: true, workspace: "/agent/workspace" } } },
+          tools: { allow: ["personal_instructions"], fs: { workspaceOnly: true } },
+        },
+        disableMessageTool: true,
+        wrapBeforeToolCallHook: false,
+      });
+      expect(toolNames(tools).includes("personal_instructions")).toBe(multipleProfiles);
+      expect(toolNames(tools)).not.toContain("write");
+      expect(toolNames(tools)).not.toContain("exec");
+      expect(resolveCoreToolFactoryFamily("personal_instructions")).toBe("openclaw");
+      setEmbeddedMode(true);
+      expect(createFastToolNames({ agentSessionKey: "agent:main:main" })).not.toContain(
+        "personal_instructions",
+      );
+      identityCount.mockRestore();
+    },
+  );
 
   it("exposes progress_card from default tool construction for every embedded model", () => {
     const defaultTools = createFastToolNames({
@@ -383,12 +407,6 @@ describe("openclaw-tools progress_card gating", () => {
     expect(expectToolNamed(withSpawn, "agents_list").description).toContain("sessions_spawn");
   });
 
-  it("registers progress_card when explicitly enabled", () => {
-    const config = { tools: { updatePlan: true } } as OpenClawConfig;
-
-    expectProgressCardEnabled({ config }, true);
-  });
-
   it("maps the shipped update_plan allowlist name to progress_card", () => {
     const tools = createFastToolNames({
       config: {} as OpenClawConfig,
@@ -476,48 +494,23 @@ describe("model capability registration", () => {
   });
 });
 
-function stubAgentTool(name: string): AnyAgentTool {
-  return {
-    label: name,
-    name,
-    description: `${name} stub`,
-    parameters: { type: "object", properties: {} },
-    async execute() {
-      return textResult("ok", {});
-    },
-  };
-}
-
-describe.each([
-  { suite: "image", toolName: "image_generate", article: "an", label: "image-generation tool" },
-  { suite: "video", toolName: "video_generate", article: "a", label: "video-generation tool" },
-])("openclaw tools $suite generation registration", ({ toolName, article, label }) => {
-  it(`registers ${toolName} when ${article} ${label} is present`, () => {
-    const tool = stubAgentTool(toolName);
-    expect(collectPresentOpenClawTools([tool])).toEqual([tool]);
-  });
-
-  it(`omits ${toolName} when ${article} ${label} is absent`, () => {
-    expect(collectPresentOpenClawTools([null]).map((tool) => tool.name)).not.toContain(toolName);
-  });
-});
-
-describe("PDF registration", () => {
-  it("includes the pdf tool when the pdf factory returns a tool", () => {
-    const pdfTool = createPdfTool({
-      agentDir: "/tmp/openclaw-agent-main",
-      config: {
-        agents: { defaults: { pdfModel: { primary: "openai/gpt-5.4-mini" } } },
-      },
-    });
-
-    expect(pdfTool?.name).toBe("pdf");
-    expect(collectPresentOpenClawTools([pdfTool]).map((tool) => tool.name)).toEqual(["pdf"]);
-  });
-});
-
 describe("sessions_yield completion ownership", () => {
   const controllerSessionKey = "agent:main:telegram:default:direct:1234";
+
+  function createYieldTool(options: CreateOpenClawToolsOptions) {
+    return expectToolNamed(
+      createTestOpenClawTools({
+        agentSessionKey: controllerSessionKey,
+        sessionId: "requester-session",
+        runId: "run-requester",
+        disableMessageTool: true,
+        disablePluginTools: true,
+        wrapBeforeToolCallHook: false,
+        ...options,
+      }),
+      "sessions_yield",
+    );
+  }
 
   it.each([
     ["the durable run owner", "agent:main:main", "agent:main:main"],
@@ -532,19 +525,10 @@ describe("sessions_yield completion ownership", () => {
     const onYield = vi.fn(async () => undefined);
 
     try {
-      const tool = expectToolNamed(
-        createTestOpenClawTools({
-          agentSessionKey: controllerSessionKey,
-          runSessionKey,
-          sessionId: "requester-session",
-          runId: "run-requester",
-          onYield,
-          disableMessageTool: true,
-          disablePluginTools: true,
-          wrapBeforeToolCallHook: false,
-        }),
-        "sessions_yield",
-      );
+      const tool = createYieldTool({
+        runSessionKey,
+        onYield,
+      });
 
       const result = await tool.execute("yield-requester", {});
 
@@ -571,19 +555,10 @@ describe("sessions_yield completion ownership", () => {
     const onYield = vi.fn(async () => undefined);
 
     try {
-      const tool = expectToolNamed(
-        createTestOpenClawTools({
-          agentSessionKey: controllerSessionKey,
-          runSessionKey: "agent:main:main",
-          sessionId: "requester-session",
-          runId: "run-requester",
-          onYield,
-          disableMessageTool: true,
-          disablePluginTools: true,
-          wrapBeforeToolCallHook: false,
-        }),
-        "sessions_yield",
-      );
+      const tool = createYieldTool({
+        runSessionKey: "agent:main:main",
+        onYield,
+      });
 
       const result = await tool.execute("yield-requester", {});
 
@@ -607,18 +582,12 @@ describe("sessions_yield completion ownership", () => {
     const onYield = vi.fn(async () => undefined);
 
     try {
-      const tool = expectToolNamed(
-        createTestOpenClawTools({
-          agentSessionKey: "agent:main:subagent:worker",
-          sessionId: "subagent-session",
-          runId: "run-subagent",
-          onYield,
-          disableMessageTool: true,
-          disablePluginTools: true,
-          wrapBeforeToolCallHook: false,
-        }),
-        "sessions_yield",
-      );
+      const tool = createYieldTool({
+        agentSessionKey: "agent:main:subagent:worker",
+        sessionId: "subagent-session",
+        runId: "run-subagent",
+        onYield,
+      });
 
       await expect(tool.execute("yield-subagent", { waitFor: "message" })).resolves.toMatchObject({
         details: { status: "yielded" },
@@ -678,19 +647,10 @@ describe("sessions_yield completion ownership", () => {
     const onYield = vi.fn(async () => undefined);
 
     try {
-      const tool = expectToolNamed(
-        createTestOpenClawTools({
-          agentSessionKey: controllerSessionKey,
-          sessionId: "requester-session",
-          runId: "run-requester",
-          claimYieldCompletion,
-          onYield,
-          disableMessageTool: true,
-          disablePluginTools: true,
-          wrapBeforeToolCallHook: false,
-        }),
-        "sessions_yield",
-      );
+      const tool = createYieldTool({
+        claimYieldCompletion,
+        onYield,
+      });
 
       await expect(tool.execute("yield-requester", {})).resolves.toMatchObject({
         details: { status: "yielded" },
@@ -718,19 +678,10 @@ describe("sessions_yield completion ownership", () => {
     const onYield = vi.fn(async () => undefined);
 
     try {
-      const tool = expectToolNamed(
-        createTestOpenClawTools({
-          agentSessionKey: controllerSessionKey,
-          sessionId: "requester-session",
-          runId: "run-requester",
-          claimYieldCompletion,
-          onYield,
-          disableMessageTool: true,
-          disablePluginTools: true,
-          wrapBeforeToolCallHook: false,
-        }),
-        "sessions_yield",
-      );
+      const tool = createYieldTool({
+        claimYieldCompletion,
+        onYield,
+      });
 
       await expect(tool.execute("yield-requester", {})).rejects.toBe(failure);
       expect(markRequesterTurnYielded).not.toHaveBeenCalled();

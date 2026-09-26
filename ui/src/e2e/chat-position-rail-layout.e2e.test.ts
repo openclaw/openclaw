@@ -366,7 +366,7 @@ suite.define(() => {
             }
             await gateway.setOnline(false);
             await gateway.closeLatest();
-            await page.locator('.agent-chat__composer-status[data-tone="info"]').waitFor();
+            await page.locator(".agent-chat__input--offline").waitFor();
             const queuedTexts = ["Review the next checkpoint", "Check the supporting notes"];
             for (const text of queuedTexts) {
               const queueSamples = sampleAnchor();

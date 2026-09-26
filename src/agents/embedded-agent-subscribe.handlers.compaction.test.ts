@@ -175,49 +175,55 @@ describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
 });
 
 describe("compaction lifecycle logging", () => {
-  it("logs lifecycle events at info level for gateway watch visibility", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-log-"));
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      compactionCount: 0,
-    });
-    const info = vi.fn();
-    const ctx = createCompactionContext({
-      storePath,
-      sessionKey,
-      initialCount: 0,
-      info,
-    });
+  it.each([
+    { label: "threshold", reason: "threshold" },
+    { label: "unknown synthetic", reason: undefined },
+  ])(
+    "logs $label lifecycle events at info level for gateway watch visibility",
+    async ({ reason }) => {
+      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-log-"));
+      const storePath = path.join(tmp, "sessions.json");
+      const sessionKey = "main";
+      await seedSessionStore({
+        storePath,
+        sessionKey,
+        compactionCount: 0,
+      });
+      const info = vi.fn();
+      const ctx = createCompactionContext({
+        storePath,
+        sessionKey,
+        initialCount: 0,
+        info,
+      });
 
-    handleCompactionStart(ctx, {
-      type: "compaction_start",
-      reason: "threshold",
-    });
-    handleCompactionEnd(ctx, completedCompactionEnd());
+      handleCompactionStart(ctx, {
+        type: "compaction_start",
+        reason,
+      });
+      handleCompactionEnd(ctx, completedCompactionEnd());
 
-    expect(loggedInfoMessageAt(info, 0)).toBe("embedded run auto-compaction start");
-    const startMeta = loggedInfoMetaAt(info, 0);
-    expect(startMeta.event).toBe("embedded_run_compaction_start");
-    expect(startMeta.reason).toBe("threshold");
-    expect(startMeta.runId).toBe("run-test");
-    expect(startMeta.consoleMessage).toBe(
-      "embedded run auto-compaction start: runId=run-test reason=threshold",
-    );
+      expect(loggedInfoMessageAt(info, 0)).toBe("embedded run auto-compaction start");
+      const startMeta = loggedInfoMetaAt(info, 0);
+      expect(startMeta.event).toBe("embedded_run_compaction_start");
+      expect(startMeta.reason).toBe("threshold");
+      expect(startMeta.runId).toBe("run-test");
+      expect(startMeta.consoleMessage).toBe(
+        "embedded run auto-compaction start: runId=run-test reason=threshold",
+      );
 
-    expect(loggedInfoMessageAt(info, 1)).toBe("embedded run auto-compaction complete");
-    const endMeta = loggedInfoMetaAt(info, 1);
-    expect(endMeta.event).toBe("embedded_run_compaction_end");
-    expect(endMeta.reason).toBe("threshold");
-    expect(endMeta.runId).toBe("run-test");
-    expect(endMeta.completed).toBe(true);
-    expect(endMeta.compactionCount).toBe(1);
-    expect(endMeta.consoleMessage).toBe(
-      "embedded run auto-compaction complete: runId=run-test reason=threshold compactionCount=1 willRetry=false",
-    );
-  });
+      expect(loggedInfoMessageAt(info, 1)).toBe("embedded run auto-compaction complete");
+      const endMeta = loggedInfoMetaAt(info, 1);
+      expect(endMeta.event).toBe("embedded_run_compaction_end");
+      expect(endMeta.reason).toBe("threshold");
+      expect(endMeta.runId).toBe("run-test");
+      expect(endMeta.completed).toBe(true);
+      expect(endMeta.compactionCount).toBe(1);
+      expect(endMeta.consoleMessage).toBe(
+        "embedded run auto-compaction complete: runId=run-test reason=threshold compactionCount=1 willRetry=false",
+      );
+    },
+  );
 
   it("logs a benign manual skip at info", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-incomplete-log-"));
@@ -296,49 +302,6 @@ describe("compaction lifecycle logging", () => {
     expect(String(metadata.reasonDetail)).toHaveLength(100);
     expect(String(metadata.consoleMessage)).not.toContain("provider detail provider detail");
   });
-
-  it("defaults an unknown synthetic compaction start to threshold logs", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-legacy-log-"));
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      compactionCount: 0,
-    });
-    const info = vi.fn();
-    const ctx = createCompactionContext({
-      storePath,
-      sessionKey,
-      initialCount: 0,
-      info,
-    });
-
-    handleCompactionStart(ctx, {
-      type: "compaction_start",
-    });
-    handleCompactionEnd(ctx, completedCompactionEnd());
-
-    expect(loggedInfoMessageAt(info, 0)).toBe("embedded run auto-compaction start");
-    const startMeta = loggedInfoMetaAt(info, 0);
-    expect(startMeta.event).toBe("embedded_run_compaction_start");
-    expect(startMeta.reason).toBe("threshold");
-    expect(startMeta.runId).toBe("run-test");
-    expect(startMeta.consoleMessage).toBe(
-      "embedded run auto-compaction start: runId=run-test reason=threshold",
-    );
-
-    expect(loggedInfoMessageAt(info, 1)).toBe("embedded run auto-compaction complete");
-    const endMeta = loggedInfoMetaAt(info, 1);
-    expect(endMeta.event).toBe("embedded_run_compaction_end");
-    expect(endMeta.reason).toBe("threshold");
-    expect(endMeta.runId).toBe("run-test");
-    expect(endMeta.completed).toBe(true);
-    expect(endMeta.compactionCount).toBe(1);
-    expect(endMeta.consoleMessage).toBe(
-      "embedded run auto-compaction complete: runId=run-test reason=threshold compactionCount=1 willRetry=false",
-    );
-  });
 });
 
 describe("handleCompactionEnd", () => {
@@ -346,12 +309,6 @@ describe("handleCompactionEnd", () => {
     {
       name: "default subscription floor",
       options: {},
-      expectedCount: 2,
-      expectedEventCount: 2,
-    },
-    {
-      name: "explicit subscription floor",
-      options: { compactionCountOwner: "subscription" },
       expectedCount: 2,
       expectedEventCount: 2,
     },

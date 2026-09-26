@@ -1,4 +1,5 @@
 // Matrix tests cover the released account-state upgrade through the Doctor CLI.
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -241,7 +242,7 @@ describe("Matrix account state Doctor migration", () => {
             "Migrated shared state audit event ledger → versioned message lifecycle schema",
           );
           expect(matrixStateRowsSha256(databasePath)).toBe(beforeRepairRowsSha256);
-          expect(fs.readFileSync(archivedDatabasePath)).toEqual(rawFixture);
+          assert.deepStrictEqual(fs.readFileSync(archivedDatabasePath), rawFixture);
 
           const repairedStore = await SqliteBackedMatrixSyncStore.create(storageRootDir);
           await expect(repairedStore.getSavedSyncToken()).resolves.toBe("cursor-a");

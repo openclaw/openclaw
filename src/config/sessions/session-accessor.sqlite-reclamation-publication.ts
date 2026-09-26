@@ -6,13 +6,18 @@ import type {
 
 export function prepareReclamationPublication(
   plan: SqliteSessionReclamationPlan,
+  databaseIdentity: string | symbol,
   result?: SqliteSessionReclamationResult,
 ): (() => void) | undefined {
   if (plan.kind === "maintenance-finalize" && result?.kind === "maintenance-finalize") {
-    return prepareCommittedSessionEntryRemovals(plan.agentId, result.value.committedEntries);
+    return prepareCommittedSessionEntryRemovals(
+      plan.agentId,
+      databaseIdentity,
+      result.value.committedEntries,
+    );
   }
   if (plan.kind === "lifecycle-artifacts") {
-    return prepareCommittedSessionEntryRemovals(plan.agentId, plan.entries);
+    return prepareCommittedSessionEntryRemovals(plan.agentId, databaseIdentity, plan.entries);
   }
   return undefined;
 }
@@ -27,6 +32,7 @@ export function collectReclamationChangedSessionKeys(
     case "maintenance-finalize":
       return result.value.committedEntries.map(({ sessionKey }) => sessionKey);
     case "maintenance-preservation-required":
+    case "maintenance-plan-stale":
     case "maintenance-statistics":
       return [];
     default:

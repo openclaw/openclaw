@@ -16,16 +16,11 @@ import {
 } from "./pdf-tool.test-support.js";
 
 const completeMock = vi.hoisted(() => vi.fn());
-const registerProviderStreamForModelMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../llm/stream.js", async () => {
   const actual = await vi.importActual<typeof import("../../llm/stream.js")>("../../llm/stream.js");
-  return { ...actual, complete: completeMock };
+  return { ...actual, completeSimple: completeMock };
 });
-
-vi.mock("../provider-stream.js", () => ({
-  registerProviderStreamForModel: registerProviderStreamForModelMock,
-}));
 
 const { createPdfModelRegistry, stubPdfToolInfra } = createPdfToolInfraStub(completeMock);
 
@@ -310,7 +305,7 @@ describe("PDF tool native provider paths", () => {
     });
   });
 
-  it("rejects explicit page ranges that resolve to no pages before native PDF analysis", async () => {
+  it("routes later explicit pages through native-provider validation", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, { provider: "anthropic", input: ["text", "document"] });
       const nativeSpy = vi
@@ -325,7 +320,7 @@ describe("PDF tool native provider paths", () => {
           pdf: "/tmp/doc.pdf",
           pages: "999",
         }),
-      ).rejects.toThrow('No PDF pages matched requested range "999"');
+      ).rejects.toThrow("pages is not supported with native PDF providers");
       expect(nativeSpy).not.toHaveBeenCalled();
     });
   });

@@ -7,6 +7,7 @@ import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWriteScope,
   TranscriptAppendRefusal,
+  TranscriptMessageAppendResult,
 } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import {
   ensureSessionEntryInTransaction,
@@ -16,15 +17,23 @@ import { readTranscriptMutationAtSync } from "../../config/sessions/session-acce
 import {
   inspectTranscriptEventsSync,
   loadTranscriptReadSnapshotSync,
+  validatePreparedAssistantAppendSync,
 } from "../../config/sessions/session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { appendTranscriptEventSnapshotSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import type { PreparedTranscriptMessageAppend } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
+import {
+  appendTranscriptEventSnapshotSync,
+  appendTranscriptMessageSnapshotSync,
+  type TranscriptEventAppendResult,
+  type TranscriptWriteSnapshot,
+} from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { assertCanonicalSessionKeyWrite } from "../../config/sessions/session-canonical-key.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import { prepareTranscriptPayloadForReuse } from "../../config/sessions/transcript-payload.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
@@ -32,16 +41,22 @@ import type {
   SqliteWorkerBackend,
   SqliteWorkerCommand,
 } from "../../infra/sqlite-worker-contract.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import {
+  resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import {
   encodeOpenClawStateWorkerError,
   type OpenClawStateWorkerErrorPayload,
 } from "../../state/openclaw-state-worker-error.js";
+import type { CustomMessage } from "./messages.js";
 import type {
   ModelChangeEntry,
   SessionHeader,
+  SessionMessageEntry,
   ThinkingLevelChangeEntry,
 } from "./session-manager-types.js";
 import type {
@@ -52,6 +67,13 @@ import type {
 type MetadataTarget = Omit<SessionTranscriptWriteScope, "env"> & SessionTranscriptRuntimeTarget;
 
 export type SessionMetadataOperations = {
+  "session.transcript.appendMessage": {
+    input: { scope: MetadataTarget; message: CustomMessage; cwd: string };
+    output: {
+      snapshot: ReturnType<typeof appendTranscriptMessageSnapshotSync<CustomMessage>>;
+      projectionNeedsReconcile: boolean;
+    };
+  };
   "session.metadata.initialize": {
     input: {
       scope: MetadataTarget;
@@ -63,7 +85,13 @@ export type SessionMetadataOperations = {
   "session.metadata.append": {
     input: {
       scope: MetadataTarget;
-      event: SessionHeader | ModelChangeEntry | ThinkingLevelChangeEntry;
+      event: SessionHeader | ModelChangeEntry | ThinkingLevelChangeEntry | SessionMessageEntry;
+      message?: {
+        prepared: PreparedTranscriptMessageAppend<SessionMessageEntry["message"]>;
+        cwd: string;
+        validateTurn: boolean;
+        idempotencyLookup?: "scan" | "scan-assistant" | "caller-checked";
+      };
       options: Pick<
         NonNullable<Parameters<typeof appendTranscriptEventSnapshotSync>[2]>,
         "appendIntent" | "expectedMutationAt"
@@ -75,7 +103,14 @@ export type SessionMetadataOperations = {
       };
     };
     output: {
-      snapshot: ReturnType<typeof appendTranscriptEventSnapshotSync>;
+      snapshot: Result<
+        TranscriptWriteSnapshot<
+          | TranscriptEventAppendResult
+          | TranscriptMessageAppendResult<SessionMessageEntry["message"]>
+          | undefined
+        >,
+        TranscriptAppendRefusal
+      >;
       projectionNeedsReconcile: boolean;
       reload?: Result<PreparedSessionTranscriptReload, OpenClawStateWorkerErrorPayload | undefined>;
     };
@@ -179,13 +214,75 @@ export function bindSqliteWorkerBackend(
     const scope = { ...command.input.scope, env: getSqliteWorkerStateContext().environment };
     const resolved = resolveSqliteTranscriptScope(scope);
     const options = toDatabaseOptions(resolved);
-    if (options.path !== context.databasePath) {
+    if (
+      readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(options)).canonicalPath !==
+      context.databasePath
+    ) {
       throw new Error("Session metadata target changed its database owner");
     }
+    scope.storePath = context.databasePath;
+    resolved.path = context.databasePath;
+    options.path = context.databasePath;
     if (command.type === "session.metadata.mutation") {
       return { ok: true, value: readTranscriptMutationAtSync(scope) };
     }
     assertCanonicalSessionKeyWrite(resolved.sessionKey, resolved.agentId);
+    if (command.type === "session.transcript.appendMessage") {
+      return runOpenClawAgentWriteTransaction<
+        SessionMetadataWorkerOperations["session.transcript.appendMessage"]["output"]
+      >((database) => {
+        if (database.db !== context.database) {
+          throw new Error("Session message lost its borrowed canonical connection");
+        }
+        context.admit("transaction");
+        let projectionNeedsReconcile = false;
+        const snapshot = appendTranscriptMessageSnapshotSync(
+          scope,
+          { message: command.input.message, cwd: command.input.cwd },
+          undefined,
+          {
+            messageAlreadyRedacted: true,
+            scheduleProjectionReconcile: false,
+            onProjectionReconcileNeeded: () => {
+              projectionNeedsReconcile = true;
+            },
+          },
+        );
+        context.admit("commit");
+        return { ok: true, value: { snapshot, projectionNeedsReconcile } };
+      }, options);
+    }
+    if (command.type === "session.metadata.append" && command.input.event.type === "message") {
+      const { event, message } = command.input;
+      if (!message) {
+        throw new Error("Session message append requires prepared storage bytes");
+      }
+      const { message: _message, ...envelope } = event;
+      const eventJson = `${JSON.stringify(envelope).slice(0, -1)},"message":${message.prepared.messageJson}}`;
+      message.prepared.physicalPayload = prepareTranscriptPayloadForReuse(
+        context.database,
+        eventJson,
+        {
+          ...envelope,
+          message: message.prepared.persistedMessage,
+        },
+      );
+      if (message.validateTurn) {
+        const mutationAt = validatePreparedAssistantAppendSync(
+          scope,
+          event.parentId,
+          command.input.view?.admission?.entryId,
+        );
+        if (mutationAt === undefined) {
+          const error = new Error(
+            `SQLite transcript changed while preparing rewrite for ${scope.sessionId}`,
+          );
+          error.name = "SqliteTranscriptMutationConflictError";
+          throw error;
+        }
+        command.input.options.expectedMutationAt = mutationAt;
+      }
+    }
     const outcome = runOpenClawAgentWriteTransaction<
       SessionMetadataWorkerOperations[
         | "session.metadata.initialize"
@@ -207,17 +304,30 @@ export function bindSqliteWorkerBackend(
         return { ok: true, value: result };
       }
       let projectionNeedsReconcile = false;
-      const snapshot = appendTranscriptEventSnapshotSync(
-        scope,
-        command.input.event,
-        command.input.options,
-        {
-          scheduleProjectionReconcile: false,
-          onProjectionReconcileNeeded: () => {
-            projectionNeedsReconcile = true;
-          },
+      const projection = {
+        scheduleProjectionReconcile: false,
+        onProjectionReconcileNeeded: () => {
+          projectionNeedsReconcile = true;
         },
-      );
+      } as const;
+      const { event, message } = command.input;
+      const snapshot =
+        event.type === "message" && message
+          ? appendTranscriptMessageSnapshotSync(
+              scope,
+              {
+                ...command.input.options,
+                message: event.message,
+                eventId: event.id,
+                parentId: event.parentId,
+                now: Date.parse(event.timestamp),
+                cwd: message.cwd,
+                idempotencyLookup: message.idempotencyLookup,
+              },
+              message.prepared,
+              projection,
+            )
+          : appendTranscriptEventSnapshotSync(scope, event, command.input.options, projection);
       context.admit("commit");
       return { ok: true, value: { snapshot, projectionNeedsReconcile } };
     }, options);
@@ -231,7 +341,7 @@ export function bindSqliteWorkerBackend(
     ) {
       const { event, view } = command.input;
       const committed = outcome.value.snapshot.value;
-      if (!committed.result.appended) {
+      if (!committed.result?.appended) {
         return outcome;
       }
       const version = view.loadedVersion;

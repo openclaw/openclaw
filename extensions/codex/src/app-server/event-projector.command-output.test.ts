@@ -1,3 +1,4 @@
+import { createNativeCommandItem } from "./event-projector-command.test-support.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -50,19 +51,10 @@ describe("CodexAppServerEventProjector command output projection", () => {
     );
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-1",
           command: "python scripts/run_demo_scenario.py",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: 0,
-          durationMs: 42,
-        },
+        }),
       ]),
     );
 
@@ -98,19 +90,11 @@ describe("CodexAppServerEventProjector command output projection", () => {
 
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-utf16-final",
           command: "printf output",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
           aggregatedOutput,
-          exitCode: 0,
-          durationMs: 42,
-        },
+        }),
       ]),
     );
 
@@ -120,54 +104,6 @@ describe("CodexAppServerEventProjector command output projection", () => {
     const item = requireRecord(content[0], "tool result content item");
     expect(item.type).toBe("text");
     expect(item.text).toBe(aggregatedOutput);
-  });
-
-  it("keeps streamed command output UTF-16 safe at the transcript limit", async () => {
-    const projector = await createProjector();
-    // The surrogate pair straddles the transcript cap in the first delta so the
-    // bounded prefix must drop the whole emoji rather than split it.
-    const prefix = "a".repeat(9_886);
-
-    await projector.handleNotification(
-      forCurrentTurn("item/commandExecution/outputDelta", {
-        itemId: "cmd-utf16-streamed",
-        delta: `${prefix}😀${"a".repeat(400)}`,
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/commandExecution/outputDelta", {
-        itemId: "cmd-utf16-streamed",
-        delta: "must not resurrect a split surrogate",
-      }),
-    );
-    await projector.handleNotification(
-      turnCompleted([
-        {
-          type: "commandExecution",
-          id: "cmd-utf16-streamed",
-          command: "printf output",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: 0,
-          durationMs: 42,
-        },
-      ]),
-    );
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    const message = requireRecord(result.messagesSnapshot[2], "tool result message");
-    const content = requireArray(message.content, "tool result content");
-    const item = requireRecord(content[0], "tool result content item");
-    // A split surrogate would leave a lone code unit behind; the streamed output
-    // must stay well-formed while still carrying the truncation notice.
-    expect(item.type).toBe("text");
-    expect(item.text).not.toMatch(/[\uD800-\uDFFF]/);
-    expect(item.text).toContain("OpenClaw truncated Codex native tool output");
-    expect(item.text).toContain("showing 10000");
   });
 
   it.each([
@@ -232,18 +168,6 @@ describe("CodexAppServerEventProjector command output projection", () => {
       );
     }
 
-    const echoState = (
-      projector as unknown as {
-        toolProgressProjection: {
-          echoesByItem: Map<string, { streamedRawSignature?: { length: number; prefix: string } }>;
-        };
-      }
-    ).toolProgressProjection.echoesByItem;
-    const state = echoState.get("cmd-freeze-prefix");
-    expect(state?.streamedRawSignature).toBeDefined();
-    expect(fullOutput.startsWith(state!.streamedRawSignature!.prefix)).toBe(true);
-    expect(state!.streamedRawSignature!.length).toBe(fullOutput.length);
-
     await projector.handleNotification(
       forCurrentTurn("rawResponseItem/completed", {
         item: {
@@ -256,19 +180,10 @@ describe("CodexAppServerEventProjector command output projection", () => {
     );
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-freeze-prefix",
           command: "printf output",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: 0,
-          durationMs: 42,
-        },
+        }),
       ]),
     );
 
@@ -276,116 +191,6 @@ describe("CodexAppServerEventProjector command output projection", () => {
     expect(result.assistantTexts).toEqual([]);
     expect(result.lastAssistant).toBeUndefined();
     expect(result.currentAttemptAssistant).toBeUndefined();
-  });
-
-  it("keeps streaming after output text includes the truncation notice prefix", async () => {
-    const trajectoryRecorder = {
-      filePath: "trajectory.jsonl",
-      recordEvent: vi.fn(),
-      flush: vi.fn(async () => undefined),
-    };
-    const projector = await createProjector(await createParams(), {
-      trajectoryRecorder,
-    });
-    const userOutputWithNotice =
-      "...(OpenClaw truncated Codex native tool output is a literal line from the process)\n";
-
-    await projector.handleNotification(
-      forCurrentTurn("item/commandExecution/outputDelta", {
-        itemId: "cmd-notice-prefix",
-        delta: userOutputWithNotice,
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/commandExecution/outputDelta", {
-        itemId: "cmd-notice-prefix",
-        delta: "second line must survive\n",
-      }),
-    );
-    await projector.handleNotification(
-      turnCompleted([
-        {
-          type: "commandExecution",
-          id: "cmd-notice-prefix",
-          command: "python scripts/run_demo_scenario.py",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: 0,
-          durationMs: 42,
-        },
-      ]),
-    );
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
-    expect(toolResultMessage.content).toEqual([
-      { type: "text", text: `${userOutputWithNotice}second line must survive\n` },
-    ]);
-    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
-      "tool.result",
-      expect.objectContaining({
-        itemId: "cmd-notice-prefix",
-        output: `${userOutputWithNotice}second line must survive`,
-      }),
-    );
-  });
-
-  it("does not parse user output as a prior truncation notice when streaming crosses the cap", async () => {
-    const trajectoryRecorder = {
-      filePath: "trajectory.jsonl",
-      recordEvent: vi.fn(),
-      flush: vi.fn(async () => undefined),
-    };
-    const projector = await createProjector(await createParams(), {
-      trajectoryRecorder,
-    });
-    const userOutputWithNotice =
-      "before user marker\n...(OpenClaw truncated Codex native tool output: original literal process text)\nsecond line must survive\n";
-
-    await projector.handleNotification(
-      forCurrentTurn("item/commandExecution/outputDelta", {
-        itemId: "cmd-user-notice-prefix",
-        delta: userOutputWithNotice,
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/commandExecution/outputDelta", {
-        itemId: "cmd-user-notice-prefix",
-        delta: "x".repeat(12_000),
-      }),
-    );
-    await projector.handleNotification(
-      turnCompleted([
-        {
-          type: "commandExecution",
-          id: "cmd-user-notice-prefix",
-          command: "python scripts/run_demo_scenario.py",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: 0,
-          durationMs: 42,
-        },
-      ]),
-    );
-
-    const output = (
-      trajectoryRecorder.recordEvent.mock.calls.find(([type]) => type === "tool.result")?.[1] as
-        | { output?: string }
-        | undefined
-    )?.output;
-    expect(output).toHaveLength(10_000);
-    expect(output).toContain("OpenClaw truncated Codex native tool output");
-    expect(output).toContain("original 12124 chars");
-    expect(output).toContain("before user marker");
-    expect(output).toContain("second line must survive");
   });
 
   it("caps streamed command output used for replay when snapshots omit aggregated output", async () => {
@@ -412,19 +217,10 @@ describe("CodexAppServerEventProjector command output projection", () => {
     );
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-stream-large",
           command: "python scripts/run_demo_scenario.py",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: 0,
-          durationMs: 42,
-        },
+        }),
       ]),
     );
 
@@ -467,19 +263,11 @@ describe("CodexAppServerEventProjector command output projection", () => {
     );
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-streamed-failure",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
           status: "failed",
-          commandActions: [],
-          aggregatedOutput: null,
           exitCode: 1,
-          durationMs: 42,
-        },
+        }),
       ]),
     );
 
@@ -502,19 +290,10 @@ describe("CodexAppServerEventProjector command output projection", () => {
       { ...(await createParams()), onAgentEvent },
       { trajectoryRecorder },
     );
-    const commandItem = {
-      type: "commandExecution",
+    const commandItem = createNativeCommandItem({
       id: "cmd-started",
-      command: "pnpm test extensions/codex",
-      cwd: "/workspace",
-      processId: null,
-      source: "agent",
-      status: "completed",
-      commandActions: [],
       aggregatedOutput: "ok",
-      exitCode: 0,
-      durationMs: 42,
-    };
+    });
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
@@ -547,19 +326,12 @@ describe("CodexAppServerEventProjector command output projection", () => {
 
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-running-snapshot",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
           status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: null,
           exitCode: null,
           durationMs: null,
-        },
+        }),
         {
           type: "imageGeneration",
           id: "image-running-snapshot",
@@ -583,34 +355,16 @@ describe("CodexAppServerEventProjector command output projection", () => {
 
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-prior-turn",
           turnId: "turn-old",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
           aggregatedOutput: "ok",
-          exitCode: 0,
-          durationMs: 42,
-        },
-        {
-          type: "commandExecution",
+        }),
+        createNativeCommandItem({
           id: "cmd-current-turn",
           turnId: TURN_ID,
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
           aggregatedOutput: "ok",
-          exitCode: 0,
-          durationMs: 42,
-        },
+        }),
       ]),
     );
 

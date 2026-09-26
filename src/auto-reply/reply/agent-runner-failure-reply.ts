@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -7,7 +8,6 @@ import {
   classifyOAuthRefreshFailureError,
   formatOAuthRefreshFailureLoginCommandMarkdown,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
-import { classifyFailoverReason } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   renderAgentHarnessPreflightUserMessage,
@@ -15,16 +15,12 @@ import {
 } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import {
-  describeFailoverError,
   findCliTerminalStopError,
   findCliTimeoutError,
   isFailoverError,
 } from "../../agents/failover-error.js";
-import {
-  renderAssistantRequestFailureCopy,
-  renderFormatErrorCopy,
-} from "../../agents/failover/assistant-request-failure-copy.js";
-import { classifyProviderRequestFacets } from "../../agents/failover/request-error-facets.js";
+import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
+import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
@@ -36,15 +32,19 @@ import {
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
-  resolveProviderRequestFailureCopy,
   type ReplyFallbackAttempt,
 } from "../../agents/failover/user-copy.js";
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recovery-hint.js";
 import type { ReplyCompletion, ReplyExpectation } from "../../agents/reply-completion.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatErrorMessage,
+  readErrorCauses,
+  readErrorName,
+} from "../../infra/errors.js";
 import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
 import {
   copyReplyPayloadMetadata,
@@ -57,33 +57,6 @@ import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
-
-export function resolveReplyFailoverFacts(error: unknown, message: string) {
-  const described = describeFailoverError(error);
-  const rawError = described.rawError ?? message;
-  const status = extractErrorHttpStatus(rawError)?.code ?? described.status;
-  const reason =
-    described.reason ?? classifyFailoverReason(rawError, { provider: described.provider });
-  const classification = reason ? ({ kind: "reason", reason } as const) : null;
-  return {
-    reason: classification?.kind === "reason" ? classification.reason : undefined,
-    code: described.code,
-    provider: described.provider,
-    model: described.model,
-    status,
-    authMode: described.authMode,
-    formatFailureText: reason === "format" ? renderFormatErrorCopy(rawError) : undefined,
-    providerRequestError: resolveProviderRequestFailureCopy({
-      classification,
-      facet: classifyProviderRequestFacets({
-        status,
-        message: rawError,
-      }),
-      status,
-      technicalMessage: message,
-    }),
-  };
-}
 
 type ReplyFailoverFacts = ReturnType<typeof resolveReplyFailoverFacts>;
 
@@ -247,6 +220,23 @@ function formatForwardedExternalRunFailureText(message: string): string {
     : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
 }
 
+function hasLocalWorkerTimeoutCause(error: unknown): boolean {
+  let localTimeout = false;
+  for (const candidate of collectErrorGraphCandidates(error, readErrorCauses)) {
+    // Failover wrappers may synthesize HTTP-like statuses; original HTTP facts still win.
+    if (isFailoverError(candidate)) {
+      continue;
+    }
+    const original = asOptionalObjectRecord(candidate);
+    if (original?.status !== undefined || original?.statusCode !== undefined) {
+      return false;
+    }
+    localTimeout ||=
+      readErrorName(candidate) === "WorkerTaskError" && extractErrorCode(candidate) === "timeout";
+  }
+  return localTimeout;
+}
+
 export function buildExternalRunFailureReply(
   input: ExternalRunFailureInput,
   options?: {
@@ -375,6 +365,12 @@ export function buildExternalRunFailureReply(
   const codexAppServerFailure = buildCodexAppServerFailureText(normalizedMessage);
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
+  }
+  if (failoverFacts.reason === "timeout" && hasLocalWorkerTimeoutCause(error)) {
+    return {
+      text: "A local worker task timed out. Please try again.",
+      isGenericRunnerFailure: false,
+    };
   }
   const classifiedFailure =
     failoverFacts.formatFailureText ?? renderAssistantRequestFailureCopy(failoverFacts);

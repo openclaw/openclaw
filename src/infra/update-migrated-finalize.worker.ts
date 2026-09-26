@@ -26,6 +26,10 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import {
+  adoptCandidateManagedServiceStop,
+  stopSupervisedPredecessorGateway,
+} from "./update-candidate-predecessor-stop.js";
+import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   recordUpdateDoctorConfigWriteRefusal,
   writeUpdatePostInstallDoctorResult,
@@ -185,6 +189,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
   const response: MigratedUpdateFinalizationResult = {
     result: finalized.result,
     exitCode: finalized.exitCode,
+    candidateStartAttempted: finalized.candidateStartAttempted || gatewayRestartPending,
     ...(gatewayRestartPending
       ? { restartRunId: terminal.runId }
       : { terminalRunId: terminal.runId }),
@@ -248,6 +253,12 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
       }
       const { runDoctorHealthFlow } = await import("../flows/doctor-health.js");
       assertCurrent();
+      await stopSupervisedPredecessorGateway(input, {
+        root: input.root,
+        assertCurrent,
+        warn: (message) => process.stderr.write(`${message}\n`),
+      });
+      assertCurrent();
       await runDoctorHealthFlow(
         {
           ...defaultRuntime,
@@ -266,6 +277,7 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
         {
           inputHash: input.configInputHash,
           assertCurrent,
+          ...(input.databaseGenerations ? { databaseGenerations: input.databaseGenerations } : {}),
           ...(input.postCoreSchemaRepair === true
             ? { postCoreSchemaRepair: { runId: input.runId, assertCurrent } }
             : {}),
@@ -316,7 +328,26 @@ async function finalizeInput(
     executorFence?.assertCurrent();
     recordUpdateRunStep(run.runId, step, { env: run.env });
   }
-  const stopped = input.params.preManagedServiceStop;
+  const { stopped, restartRequired } = await adoptCandidateManagedServiceStop({
+    transferred: input.params.preManagedServiceStop,
+    shouldRestart: input.params.shouldRestart,
+    mode: input.params.result.mode,
+    windowsTaskAutoStartSuspended: input.windowsTaskAutoStartSuspended,
+    runId: run.runId,
+    ledger: { env: run.env },
+    root: input.params.result.root ?? input.params.root,
+    timeoutMs: input.params.updateStepTimeoutMs,
+    assertCurrent: () => {
+      executorFence.assertCurrent();
+      if (run.requesterAuthority?.isCurrent() === false) {
+        throw new UpdateRequesterRevokedError();
+      }
+    },
+    onStep: (step) => input.params.result.steps.push(step),
+  });
+  if (restartRequired) {
+    input.params.shouldRestart = true;
+  }
   if (input.windowsTaskAutoStartSuspended && !stopped?.serviceEnv) {
     throw new Error("Transferred Windows task suspension is missing its stopped service owner.");
   }
@@ -341,6 +372,7 @@ async function finalizeInput(
       : undefined;
   let result;
   let exitCode = 0;
+  let candidateStartAttempted = false;
   let automaticTriage: MigratedUpdateFinalizationResult["automaticTriage"];
   try {
     // This worker already loaded the candidate; the local flag conveys no authority.
@@ -353,7 +385,12 @@ async function finalizeInput(
           ? { preManagedServiceStop: { ...stopped, windowsTaskAutoStartRecovery: windowsRecovery } }
           : {}),
       },
-      { candidateRuntime: true },
+      {
+        candidateRuntime: true,
+        onGatewayStartAttempted: () => {
+          candidateStartAttempted = true;
+        },
+      },
     );
   } catch (error) {
     if (!(error instanceof UpdateCommandFailure)) {
@@ -366,7 +403,7 @@ async function finalizeInput(
     await windowsRecovery?.complete(result?.status === "ok");
   }
   executorFence.assertCurrent();
-  return { run, result, exitCode, automaticTriage };
+  return { run, result, exitCode, automaticTriage, candidateStartAttempted };
 }
 
 void (async () => {

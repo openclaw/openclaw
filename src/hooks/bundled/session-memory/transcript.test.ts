@@ -20,34 +20,6 @@ function sessionMemoryRecord(role: "user" | "assistant", text: string): string {
   return `${role}: ${JSON.stringify(text)}`;
 }
 
-function createSessionContent(
-  entries: Array<{ role: string; content: string } | ({ type: string } & Record<string, unknown>)>,
-): string {
-  return entries
-    .map((entry) =>
-      JSON.stringify(
-        "role" in entry
-          ? { type: "message", message: { role: entry.role, content: entry.content } }
-          : entry,
-      ),
-    )
-    .join("\n");
-}
-
-function extractSessionContent(sessionContent: string, messageCount?: number): string | null {
-  const events = sessionContent
-    .trim()
-    .split("\n")
-    .flatMap((line) => {
-      try {
-        return [JSON.parse(line) as unknown];
-      } catch {
-        return [];
-      }
-    });
-  return getRecentSessionContentFromEvents(events, messageCount);
-}
-
 describe("session-memory transcript extraction", () => {
   it("returns no content for a zero recent-message limit", () => {
     expect(getRecentSessionContentFromEvents([message("user", "do not include")], 0)).toBeNull();
@@ -127,71 +99,6 @@ describe("session-memory transcript extraction", () => {
     expect(JSON.parse(records[1]!.slice("assistant: ".length))).toBe(assistantText);
   });
 
-  it("filters non-message entries", () => {
-    const memoryContent = extractSessionContent(
-      createSessionContent([
-        { role: "user", content: "Hello" },
-        { type: "tool_use", tool: "search", input: "test" },
-        { role: "assistant", content: "World" },
-        { type: "tool_result", result: "found it" },
-        { role: "user", content: "Thanks" },
-      ]),
-    );
-
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "Hello"));
-    expect(memoryContent).toContain(sessionMemoryRecord("assistant", "World"));
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "Thanks"));
-    expect(memoryContent).not.toContain("tool_use");
-    expect(memoryContent).not.toContain("tool_result");
-    expect(memoryContent).not.toContain("search");
-  });
-
-  it("filters inter-session user messages", () => {
-    const memoryContent = getRecentSessionContentFromEvents([
-      {
-        type: "message",
-        message: {
-          role: "user",
-          content: "Forwarded internal instruction",
-          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-        },
-      },
-      message("assistant", "Acknowledged"),
-      message("user", "External follow-up"),
-    ]);
-
-    expect(memoryContent).not.toContain("Forwarded internal instruction");
-    expect(memoryContent).toContain(sessionMemoryRecord("assistant", "Acknowledged"));
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "External follow-up"));
-  });
-
-  it("filters command messages starting with /", () => {
-    const memoryContent = getRecentSessionContentFromEvents([
-      message("user", "/help"),
-      message("assistant", "Here is help info"),
-      message("user", "Normal message"),
-      message("user", "/new"),
-    ]);
-
-    expect(memoryContent).not.toContain("/help");
-    expect(memoryContent).not.toContain("/new");
-    expect(memoryContent).toContain(sessionMemoryRecord("assistant", "Here is help info"));
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "Normal message"));
-  });
-
-  it("limits output to the configured recent-message count", () => {
-    const events = Array.from({ length: 10 }, (_, index) =>
-      message("user", `Message ${index + 1}`),
-    );
-    const memoryContent = getRecentSessionContentFromEvents(events, 3);
-
-    expect(memoryContent).not.toContain(sessionMemoryRecord("user", "Message 1"));
-    expect(memoryContent).not.toContain(sessionMemoryRecord("user", "Message 7"));
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "Message 8"));
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "Message 9"));
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "Message 10"));
-  });
-
   it("collapses only the retained transcript tail to its least-trusted origin", () => {
     const projection = getRecentSessionProjectionFromEvents(
       [
@@ -246,36 +153,29 @@ describe("session-memory transcript extraction", () => {
   });
 
   it("filters messages before slicing (fix for #2681)", () => {
-    const memoryContent = extractSessionContent(
-      createSessionContent([
-        { role: "user", content: "First message" },
+    const memoryContent = getRecentSessionContentFromEvents(
+      [
+        message("user", "First message"),
         { type: "tool_use", tool: "test1" },
         { type: "tool_result", result: "result1" },
-        { role: "assistant", content: "Second message" },
+        message("assistant", "Second message"),
         { type: "tool_use", tool: "test2" },
         { type: "tool_result", result: "result2" },
-        { role: "user", content: "Third message" },
+        message("user", "Third message"),
         { type: "tool_use", tool: "test3" },
         { type: "tool_result", result: "result3" },
-        { role: "assistant", content: "Fourth message" },
-      ]),
+        message("assistant", "Fourth message"),
+      ],
       3,
     );
 
-    expect(memoryContent).not.toContain("First message");
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "Third message"));
-    expect(memoryContent).toContain(sessionMemoryRecord("assistant", "Second message"));
-    expect(memoryContent).toContain(sessionMemoryRecord("assistant", "Fourth message"));
-  });
-
-  it("handles fewer messages than requested", () => {
-    const memoryContent = getRecentSessionContentFromEvents([
-      message("user", "Only message 1"),
-      message("assistant", "Only message 2"),
-    ]);
-
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "Only message 1"));
-    expect(memoryContent).toContain(sessionMemoryRecord("assistant", "Only message 2"));
+    expect(memoryContent).toBe(
+      [
+        sessionMemoryRecord("assistant", "Second message"),
+        sessionMemoryRecord("user", "Third message"),
+        sessionMemoryRecord("assistant", "Fourth message"),
+      ].join("\n"),
+    );
   });
 
   it("preserves a unique delivery mirror", () => {

@@ -248,11 +248,18 @@ describe("gateway harness questions", () => {
       releasePersistence.resolve();
       controller.abort();
       replacementController?.abort();
-      await claim;
-      await question;
-      await replacement;
-      host.closeHost();
-      host.closeAdmission();
+      try {
+        await claim;
+        await question;
+        await replacement;
+      } finally {
+        try {
+          sourceRecorder.finishPendingInput?.("interrupted");
+        } finally {
+          host.closeHost();
+          host.closeAdmission();
+        }
+      }
     }
   });
 

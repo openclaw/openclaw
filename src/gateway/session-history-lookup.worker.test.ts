@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import zlib from "node:zlib";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -16,9 +17,60 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { readSessionMessagesMatchingIdAsync } from "./session-transcript-readers.js";
+import {
+  readSessionMessageByIdAsync,
+  readSessionMessageCountAsync,
+  readSessionMessagesMatchingIdAsync,
+} from "./session-transcript-readers.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("keeps empty and reset-archive lookup results without creating a missing database", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "missing-lookup",
+      sessionKey: "agent:main:missing-lookup",
+      storePath: state.statePath("missing.sqlite"),
+    };
+    expect(await readSessionMessageCountAsync(scope)).toBe(0);
+    expect(await readSessionMessageByIdAsync(scope, "archived")).toEqual({
+      found: false,
+      oversized: false,
+    });
+    fs.writeFileSync(
+      state.statePath(`${scope.sessionId}.jsonl.reset.2026-09-23T00-00-00.000Z`),
+      [
+        { type: "session", version: 3, id: scope.sessionId },
+        {
+          type: "message",
+          id: "archived",
+          parentId: null,
+          message: { role: "user", content: "Retained reset message" },
+        },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n") + "\n",
+    );
+    expect(
+      await readSessionMessageByIdAsync(scope, "archived", { allowResetArchiveFallback: true }),
+    ).toMatchObject({ found: true, message: { content: "Retained reset message" } });
+    expect(
+      await readSessionMessageByIdAsync(scope, "archived", {
+        currentOnly: true,
+        maxBytes: 1024,
+        allowResetArchiveFallback: true,
+      }),
+    ).toEqual({ found: false, oversized: false });
+    expect(await readSessionMessageCountAsync(scope)).toBe(0);
+    expect(fs.existsSync(scope.storePath)).toBe(false);
+
+    fs.writeFileSync(scope.storePath, "unreadable database");
+    await expect(readSessionMessageCountAsync(scope)).rejects.toThrow();
+    await expect(readSessionMessageByIdAsync(scope, "archived")).rejects.toThrow();
+    expect(fs.readFileSync(scope.storePath, "utf8")).toBe("unreadable database");
+  });
+});
 
 it("reads process-held incognito history by its key or explicit sentinel path", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -42,6 +94,13 @@ it("reads process-held incognito history by its key or explicit sentinel path", 
       expect(
         await readSessionMessagesMatchingIdAsync({ ...scope, sessionKey }, "private"),
       ).toMatchObject([{ content: "Private history" }]);
+      expect(await readSessionMessageCountAsync({ ...scope, sessionKey })).toBe(1);
+      expect(await readSessionMessageByIdAsync({ ...scope, sessionKey }, "private")).toMatchObject({
+        found: true,
+        oversized: false,
+        seq: 1,
+        message: { content: "Private history" },
+      });
     }
   });
 });

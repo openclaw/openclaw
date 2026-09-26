@@ -49,6 +49,7 @@ describe("bindsClaudeThinkingPrefix", () => {
 describe("Claude Opus 5.5 model contract", () => {
   it.each([
     ["claude-opus-5-5", "claude-opus-5-5"],
+    ["opus", "claude-opus-5-5"],
     ["opus-5.5", "claude-opus-5-5"],
     ["opus-5-5", "claude-opus-5-5"],
     ["Claude Gateway/claude-opus-5-5", "claude-opus-5-5"],
@@ -66,7 +67,7 @@ describe("Claude Opus 5.5 model contract", () => {
     ["opus-5.5", true],
     ["opus-5-5", true],
     ["claude-opus-5", false],
-    ["opus", false],
+    ["opus", true],
     ["opus-5", false],
   ])("preserves family capabilities for %s with mandatory thinking: %s", (id, mandatory) => {
     expect(requiresClaudeMandatoryAdaptiveThinking({ id })).toBe(mandatory);

@@ -5,6 +5,7 @@ import { replaceConfigFile } from "../config/config.js";
 import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { coerceConfig } from "../config/io.read-helpers.js";
+import { isConfigValidationFailedError } from "../config/io.write-errors.js";
 import { prepareConfigWriteValues } from "../config/io.write-prepare.js";
 import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
@@ -22,6 +23,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { ExitError, writeRuntimeJson } from "../runtime.js";
 import { toDotPath } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
+import { formatCliCommand } from "./command-format.js";
 import {
   formatPluginInstallConfigSetError,
   type ConfigMutationOptions,
@@ -93,10 +95,7 @@ function remapSuppliedPathsAfterDelete(
 function valueHasAutoManagedChild(value: unknown, childPath: readonly PathSegment[]): boolean {
   let cursor: unknown = value;
   for (const segment of childPath) {
-    if (!isRecord(cursor)) {
-      return false;
-    }
-    if (!Object.hasOwn(cursor, segment)) {
+    if (!isRecord(cursor) || !Object.hasOwn(cursor, segment)) {
       return false;
     }
     cursor = cursor[segment];
@@ -152,8 +151,7 @@ function findAutoManagedMetaTargets(
 }
 
 function formatAutoManagedMetaError(paths: readonly PathSegment[][]): string {
-  const targets = paths.map(toDotPath);
-  const subject = targets.length === 1 ? targets[0] : targets.join(", ");
+  const subject = paths.map(toDotPath).join(", ");
   return [
     `${subject} is auto-managed by OpenClaw and cannot be edited; the value would be overwritten on the next config write.`,
     "",
@@ -262,14 +260,6 @@ function configApplyHintForOperations(
     : "No gateway restart needed.";
 }
 
-async function loadMutationSchema() {
-  try {
-    return await readBestEffortRuntimeConfigSchema();
-  } catch {
-    return undefined;
-  }
-}
-
 function assertConfigSetCurrentExpectation(params: {
   authoredConfig: OpenClawConfig;
   operation: ConfigSetOperation;
@@ -285,15 +275,6 @@ function assertConfigSetCurrentExpectation(params: {
       "conditional config set expectation did not match the authored config",
       { retryable: false },
     );
-  }
-}
-
-function assertConfigSetCurrentExpectationPath(params: {
-  operation: ConfigSetOperation;
-  writePath: readonly PathSegment[];
-}): void {
-  if (!pathEquals(params.operation.requestedPath, params.writePath)) {
-    throw new Error("conditional config set requires a direct, non-redirected config path");
   }
 }
 
@@ -337,7 +318,7 @@ export async function runConfigOperations(params: {
   // Mutate resolved config so runtime defaults never leak into the authored file.
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
   const currentConfig = normalizeConfigMutationModelRefs(snapshot.resolved);
-  const mutationSchema = await loadMutationSchema();
+  const mutationSchema = await readBestEffortRuntimeConfigSchema().catch(() => undefined);
   const roster = new ConfigMutationAgentRoster(next, snapshot.sourceConfigBeforeMigrations);
   let unsetPaths: PathSegment[][] = [];
   let explicitSetPaths: PathSegment[][] = [];
@@ -362,11 +343,11 @@ export async function runConfigOperations(params: {
     const merge =
       operation.mutation === "merge" || (options.merge && operation.mutation !== "replace");
     roster.prepare(operation, Boolean(merge));
-    if (currentExpectation) {
-      assertConfigSetCurrentExpectationPath({
-        operation,
-        writePath: roster.writePath(operation.setPath),
-      });
+    if (
+      currentExpectation &&
+      !pathEquals(operation.requestedPath, roster.writePath(operation.setPath))
+    ) {
+      throw new Error("conditional config set requires a direct, non-redirected config path");
     }
     if (operation.mutation === "delete") {
       const writePath = recordOperation(operation);
@@ -624,6 +605,14 @@ export function handleConfigMutationError(params: {
     params.runtime.error(danger(message));
     exitCliAfterOutput(params.runtime, 1);
   }
-  params.runtime.error(danger(message));
+  if (isConfigValidationFailedError(params.err)) {
+    params.runtime.error("Config change declined. No settings were saved.");
+    params.runtime.error(message);
+    params.runtime.error(
+      `Correct the setting above and retry. Run ${formatCliCommand("openclaw config schema")} to inspect supported settings and values.`,
+    );
+  } else {
+    params.runtime.error(danger(message));
+  }
   exitCliAfterOutput(params.runtime, 1);
 }

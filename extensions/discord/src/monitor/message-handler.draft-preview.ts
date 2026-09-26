@@ -168,6 +168,7 @@ export function createDiscordDraftPreviewController(params: {
       : undefined,
     retainOnError: true,
     cleanupUndelivered: true,
+    finalDelivery: discordStreamMode === "progress" ? "separate" : "in-place",
     onFinalStarted: () => {
       freezeProgress();
       params.onFinalReplyStart?.();

@@ -269,6 +269,7 @@ export function buildRealtimeVoiceAgentConsultPrompt(params: {
     `Live voice request from the ${questionSourceLabel} during ${params.surface}.`,
     "Act as the configured OpenClaw agent on behalf of this user. Use available tools when the request asks you to do work.",
     "When finished, return only the concise result the realtime voice agent should speak back.",
+    "Report a security or approval block only when an actual tool result says so. Distinguish tool errors from permission denials; do not invent a blocked attempt. If a read-only call fails, correct the tool or arguments and continue when possible.",
     "Do not include markdown, tool logs, or private reasoning. Include citations only when the spoken answer needs them.",
     parsed.responseStyle ? `Spoken style: ${parsed.responseStyle}` : undefined,
     transcript ? `Recent voice transcript for context:\n${transcript}` : undefined,

@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /** Config mutation helpers used by chat commands that edit OpenClaw config. */
+import type { ChannelAllowlistAdapter } from "../../channels/plugins/types.adapters.js";
 import { setConfigValueAtPath, unsetConfigValueAtPath } from "../../config/config-paths.js";
 import {
   mutateConfigFileWithRetry,
@@ -16,11 +17,6 @@ import { setPluginEnabledInConfig } from "../../plugins/toggle-config.js";
 export class AutoReplyConfigMutationError extends Error {}
 
 class AutoReplyConfigNoopMutation extends Error {}
-
-/** Extracts user-facing mutation error text from config command failures. */
-export function formatAutoReplyConfigMutationError(error: unknown): string | null {
-  return error instanceof AutoReplyConfigMutationError ? error.message : null;
-}
 
 function assertValidConfig(next: Record<string, unknown>, action: string): OpenClawConfig {
   const validated = validateConfigObjectWithPlugins(next);
@@ -108,25 +104,6 @@ export async function setPluginEnabledFromCommand(params: {
   });
 }
 
-type AllowlistConfigEditResult =
-  | {
-      kind?: "ok" | "invalid-entry";
-      changed?: boolean;
-    }
-  | null
-  | undefined;
-
-type MaybePromise<T> = T | Promise<T>;
-
-type ApplyAllowlistConfigEdit = (params: {
-  cfg: OpenClawConfig;
-  parsedConfig: Record<string, unknown>;
-  accountId?: string | null;
-  scope: "dm" | "group";
-  action: "add" | "remove";
-  entry: string;
-}) => MaybePromise<AllowlistConfigEditResult>;
-
 /** Applies a channel allowlist edit through a plugin-provided config mutation hook. */
 export async function applyAllowlistConfigMutation(params: {
   cfg: OpenClawConfig;
@@ -134,7 +111,7 @@ export async function applyAllowlistConfigMutation(params: {
   scope: "dm" | "group";
   action: "add" | "remove";
   entry: string;
-  applyConfigEdit: ApplyAllowlistConfigEdit;
+  applyConfigEdit: NonNullable<ChannelAllowlistAdapter["applyConfigEdit"]>;
   assertCurrent?: () => void;
 }): Promise<void> {
   await transformConfigFileWithRetry({

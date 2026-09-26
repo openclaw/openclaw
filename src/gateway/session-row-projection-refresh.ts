@@ -1,4 +1,3 @@
-import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
@@ -7,6 +6,7 @@ import {
 import { WorkerTaskError } from "../infra/worker-task-pool-core.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { yieldSessionListWork } from "./session-projection-work.js";
 import { isColdArchivedSessionRow as isCold } from "./session-row-projection-archive.js";
 import { createSessionRowMaterializer } from "./session-row-projection-materialize.js";
 import { withSessionRowDatabaseFacts } from "./session-row-projection-read.js";
@@ -25,27 +25,34 @@ export function createSessionRowRefresh(
       cfg: records.Inputs["cfg"];
       disposed: boolean;
       topologyDirty: boolean;
+      registryPrepared: boolean;
     };
     databaseRevision: () => number;
+    registrySnapshot: () => object | undefined;
+    env: NodeJS.ProcessEnv;
     runAsOwner: <T>(operation: () => T) => T;
     lookup: (query: records.Lookup) => records.Row | undefined;
     prepareRegistryFacts: () => Promise<void> | undefined;
-    topology: () => void;
+    topology: () => Promise<void>;
     catalog: { needsInitialRead: boolean; refresh: () => Promise<unknown> };
     placementFacts: { prepare: () => Promise<void>; needsPreparation: boolean };
     membership: { prepare: () => Promise<void>; needsPreparation: boolean };
-    retainArchived: (row: records.MaterializedRow) => void;
   },
 ) {
   const revision = () => (owner.state().disposed ? undefined : owner.databaseRevision());
-  const refresh = createSessionRowMaterializer({
+  const materializer = createSessionRowMaterializer({
     ...owner,
     isActive: () => !owner.state().disposed,
   });
   const exactReads = new Map<string, ExactRowPreparation>();
   const queuedExactReads = new Map<string, ExactRowPreparation>();
+  // Each row has one in-flight worker read: bulk batches skip exact-owned rows,
+  // and exact preparations join a bulk read already holding their row.
+  const bulkReads = new Map<string, Promise<void>>();
   let activeExactReads = 0;
   let exactReadBytes = 0;
+  let exactPreparations = 0;
+  let exactPreparationsIdle: Deferred | undefined;
   function releaseExactRead(id: string, read: ExactRowPreparation) {
     exactReads.delete(id);
     exactReadBytes -= read.bytes;
@@ -114,7 +121,7 @@ export function createSessionRowRefresh(
     }
     return selected;
   }
-  function prepareExactRows(queries: readonly records.Lookup[]) {
+  function prepareExactRows(queries: readonly records.Lookup[]): Promise<void> | undefined {
     if (owner.state().disposed) {
       return undefined;
     }
@@ -122,7 +129,8 @@ export function createSessionRowRefresh(
     if (selected.size === 0) {
       return undefined;
     }
-    const missing = [...selected].filter((id) => !exactReads.has(id));
+    const joined = new Set([...selected].flatMap((id) => bulkReads.get(id) ?? []));
+    const missing = [...selected].filter((id) => !exactReads.has(id) && !bulkReads.has(id));
     const bytes = missing.reduce((total, id) => total + 6 * id.length + 3, 0);
     if (
       exactReads.size + missing.length >
@@ -148,25 +156,60 @@ export function createSessionRowRefresh(
       }
     }
     queueMicrotask(dispatchExactReads);
-    return Promise.all([...selected].map((id) => exactReads.get(id)!.completion.promise)).then(
-      () => undefined,
+    const exact = Promise.all(
+      [...selected].flatMap((id) => exactReads.get(id)?.completion.promise ?? []),
     );
+    if (joined.size === 0) {
+      return exact.then(() => undefined);
+    }
+    // The bulk read may reject its facts; recheck the rows once it settles.
+    return Promise.all([exact, ...joined]).then(() => prepareExactRows(queries));
   }
   function readExactRows(selected: ReadonlySet<string>) {
     return withSessionRowDatabaseFacts(
-      { rows: owner.rows, dirty: owner.dirty, selected, cfg: owner.state().cfg, revision },
-      (ids, facts) => {
-        withAgentRosterFactsBatch(owner.state().cfg, () => refresh(ids, facts, true));
-        for (const id of ids) {
-          const row = owner.rows.get(id);
-          if (records.ready(row) && row.entry.archivedAt !== undefined) {
-            owner.retainArchived(row);
-          }
-        }
+      {
+        rows: owner.rows,
+        dirty: owner.dirty,
+        selected,
+        cfg: owner.state().cfg,
+        revision,
+        registrySnapshot: owner.registrySnapshot,
+        env: owner.env,
+      },
+      {
+        refreshPending: materializer.refreshPending,
+        accept: (ids, facts) => materializer.accept(ids, facts, true),
       },
     );
   }
   async function refreshBatch() {
+    for (
+      let pending = exactPreparationsIdle;
+      pending && !owner.state().disposed;
+      pending = exactPreparationsIdle
+    ) {
+      const state = owner.state();
+      if (
+        !state.topologyDirty &&
+        state.registryPrepared &&
+        !owner.catalog.needsInitialRead &&
+        !owner.placementFacts.needsPreparation &&
+        !owner.membership.needsPreparation
+      ) {
+        // Accepted exact facts need no worker read and may finish while their page remains pinned.
+        const ids: string[] = [];
+        for (const id of exactReads.keys()) {
+          ids.push(id);
+          if (ids.length === MAX_CONCURRENT_EXACT_ROW_READS * MAX_SESSION_ROW_FACTS_KEYS) {
+            break;
+          }
+        }
+        if (materializer.refreshPending(ids)) {
+          return;
+        }
+      }
+      await pending.promise;
+    }
     for (
       let pending = owner.prepareRegistryFacts();
       pending;
@@ -178,7 +221,10 @@ export function createSessionRowRefresh(
       return;
     }
     if (owner.state().topologyDirty) {
-      owner.topology();
+      await owner.topology();
+      if (owner.state().disposed || owner.state().topologyDirty) {
+        return;
+      }
     }
     await owner.membership.prepare();
     if (owner.catalog.needsInitialRead) {
@@ -193,22 +239,78 @@ export function createSessionRowRefresh(
       await pending;
     }
     if (
+      exactPreparations > 0 ||
       owner.state().topologyDirty ||
       owner.membership.needsPreparation ||
       owner.placementFacts.needsPreparation
     ) {
       return;
     }
-    await withSessionRowDatabaseFacts(
-      { rows: owner.rows, dirty: owner.dirty, cfg: owner.state().cfg, revision },
-      (ids, facts) => withAgentRosterFactsBatch(owner.state().cfg, () => refresh(ids, facts)),
-    );
+    const selected = new Set<string>();
+    const held = new Set<Promise<void>>();
+    for (const id of owner.dirty) {
+      const exact = exactReads.get(id);
+      // Accepted facts finish without a worker read, even while their exact read settles.
+      if (exact && !owner.rows.get(id)?.pendingDatabaseFacts) {
+        held.add(exact.completion.promise);
+      } else if (selected.add(id).size === MAX_SESSION_ROW_FACTS_KEYS) {
+        break;
+      }
+    }
+    const read = createDeferredCore();
+    for (const id of selected) {
+      bulkReads.set(id, read.promise);
+    }
+    try {
+      await withSessionRowDatabaseFacts(
+        {
+          rows: owner.rows,
+          dirty: owner.dirty,
+          selected,
+          cfg: owner.state().cfg,
+          revision,
+          registrySnapshot: owner.registrySnapshot,
+          env: owner.env,
+        },
+        materializer,
+      );
+    } finally {
+      for (const id of selected) {
+        if (bulkReads.get(id) === read.promise) {
+          bulkReads.delete(id);
+        }
+      }
+      read.resolve();
+    }
+    if (selected.size === 0) {
+      // Only exact-owned rows remain dirty; wait for them instead of spinning the drain.
+      await Promise.allSettled(held);
+      // Let exact callers install their held snapshots before preparing placements again.
+      await yieldSessionListWork();
+    }
   }
   return {
-    refresh,
+    refresh: materializer.refresh,
     refreshBatch,
     prepareExactRows,
+    retainExactPreparation(this: void) {
+      exactPreparations++;
+      exactPreparationsIdle ??= createDeferredCore();
+      let retained = true;
+      return () => {
+        if (!retained) {
+          return;
+        }
+        retained = false;
+        if (--exactPreparations === 0) {
+          const idle = exactPreparationsIdle;
+          exactPreparationsIdle = undefined;
+          idle?.resolve();
+        }
+      };
+    },
     dispose(this: void) {
+      exactPreparationsIdle?.resolve();
       for (const [id, read] of queuedExactReads) {
         read.completion.reject(new Error("Session row projection is no longer active"));
         releaseExactRead(id, read);

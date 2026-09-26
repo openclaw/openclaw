@@ -77,7 +77,7 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
       }
       const placement = parseCodexNodePlacementWorkspace(request.placement);
       if (
-        !context?.acquireManagedWorkspace ||
+        !context?.acquireManagedWorkspaceAsync ||
         context.sessionKey !== placement.sessionKey ||
         io.signal.aborted
       ) {
@@ -88,17 +88,28 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
           "Codex node execution requires node-local exec policy support; update the node.",
         );
       }
+      const runtimeIo = context.signal
+        ? { ...io, signal: AbortSignal.any([io.signal, context.signal]) }
+        : io;
       const assertExecAuthorized = context.prepareExecAuthorization(request.authorization);
       const { runCodexNodeExecServer } = await import("./node-exec-server.runtime.js");
+      runtimeIo.signal.throwIfAborted();
+      const workspace = await context.acquireManagedWorkspaceAsync({
+        workspaceDir: placement.cwd,
+        environmentId: placement.environmentId,
+        sessionId: placement.sessionId,
+        ownerEpoch: placement.ownerEpoch,
+        sessionKey: placement.sessionKey,
+      });
+      try {
+        runtimeIo.signal.throwIfAborted();
+      } catch (error) {
+        workspace.release();
+        throw error;
+      }
       return await runCodexNodeExecServer({
-        workspace: context.acquireManagedWorkspace({
-          workspaceDir: placement.cwd,
-          environmentId: placement.environmentId,
-          sessionId: placement.sessionId,
-          ownerEpoch: placement.ownerEpoch,
-          sessionKey: placement.sessionKey,
-        }),
-        io,
+        workspace,
+        io: runtimeIo,
         activeProcesses,
         assertExecAuthorized,
       });

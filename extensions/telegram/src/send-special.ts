@@ -1,3 +1,4 @@
+import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramMessageThreadSpec, type TelegramThreadSpec } from "./bot/helpers.js";
 import { resolveTelegramEffectiveGroupPolicy } from "./group-access.js";
@@ -15,7 +16,6 @@ import type {
   TelegramThreadedSendOpts,
 } from "./send-message-types.js";
 import { finalizeTelegramOutbound, prepareTelegramOutbound } from "./send-outbound.js";
-import { normalizePollInput, type PollInput } from "./send.runtime.js";
 import { parseTelegramTarget } from "./targets.js";
 import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 

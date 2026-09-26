@@ -31,7 +31,6 @@ import {
   loadTranscriptEvents,
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
-  loadTranscriptTailEventsSync,
   readTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
@@ -577,7 +576,6 @@ describe("cold transcript storage workers", () => {
       () => loadTranscriptEventsSync(fixture.scope),
       () => readSessionTranscriptHistoryEvents(fixture.scope),
       () => loadTranscriptHeaderSync(fixture.scope),
-      () => loadTranscriptTailEventsSync(fixture.scope, 1),
     ]) {
       expect(read).toThrow(expect.objectContaining({ code: "TRANSCRIPT_COLD" }));
     }

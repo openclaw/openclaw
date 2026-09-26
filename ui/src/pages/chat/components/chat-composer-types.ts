@@ -15,6 +15,7 @@ import type {
   ChatGoalDraftMode,
   ChatGoalRecovery,
   ChatQueueItem,
+  ChatQueueDisplayItem,
   HumanMention,
 } from "../../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
@@ -24,7 +25,7 @@ import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
-import type { ChatRunUiStatus } from "../run-lifecycle.ts";
+import type { ChatRunError, ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { RealtimeTalkCameraDevice } from "../talk/input.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
@@ -63,13 +64,11 @@ type ChatComposerDisabledBannerContent = {
   text: string;
   tone?: "info" | "neutral";
   icon?: "warning" | "archive";
-  actionLabel: string;
   actionStyle?: "primary";
   busy?: boolean;
   busyLabel?: string;
   disabledReason?: string;
-  onAction: () => void;
-};
+} & ({ actionLabel: string; onAction: () => void } | { actionLabel?: never; onAction?: never });
 
 export type ChatComposerDisabledBanner = ChatComposerDisabledBannerContent &
   ({ kind: "above-composer" } | { kind: "composer-replacement" });
@@ -82,6 +81,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   offline?: boolean;
   queuedOutboxCount?: number;
   canSend: boolean;
+  canCompose?: boolean;
   modelRequiredReason?: string | null;
   submitDisabledReason?: string | null;
   submitPending?: boolean;
@@ -89,7 +89,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   disabledReasonTone?: "info" | "danger";
   disabledReasonBusy?: boolean;
   disabledBanner?: ChatComposerDisabledBanner;
-  runError?: { summary: string } | null;
+  runError?: ChatRunError | null;
   sending: boolean;
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;
@@ -97,6 +97,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   fallbackStatus?: FallbackStatus | null;
   progressCard?: ProgressCard | null;
   progressCardIdentity?: string;
+  progressCardLifetime?: object;
   progressCardInitialLoading?: boolean;
   progressCardRefresh?: SessionProgressCardRefreshAction;
   gatewayScope?: object;
@@ -139,6 +140,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
+  realtimeTalkInputNotice?: string | null;
   realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkVideoStream?: MediaStream | null;
@@ -154,7 +156,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onOpenTalkSettings?: () => void;
   onOpenDictationSettings?: () => void;
   suggestionComposer?: boolean;
-  typingActors?: readonly { id: string; label: string; preview?: string }[];
+  typingActors?: readonly { id: string; label: string; preview?: string; paused?: boolean }[];
   onTypingChange?: (typing: boolean, preview?: string) => void;
   composerControls?: TemplateResult | typeof nothing;
   footerContent?: TemplateResult | typeof nothing;
@@ -173,13 +175,14 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onToggleRealtimeCamera?: () => void;
   onSwitchRealtimeCamera?: () => void;
   onDismissRealtimeTalkError?: () => void;
+  onDismissRealtimeTalkInputNotice?: () => void;
   onUseSystemDefaultMicrophone?: () => Promise<void>;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, targetId: string) => void;
-  displayQueue?: ChatQueueItem[];
+  displayQueue?: ChatQueueDisplayItem[];
   queuedEdit?: ChatQueuedEditProps;
   onClearReply?: () => void;
   goalRecovery?: ChatGoalRecovery;

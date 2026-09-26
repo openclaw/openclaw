@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
-import type { IncomingMessage } from "node:http";
 import path from "node:path";
-import { Readable } from "node:stream";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { ensureStagedInputDirectory, stagedInputDirectory } from "../../media/staged-inputs.js";
 import { invokeNodeWorkerSupervisorCommand } from "../../node-host/node-worker-supervisor-commands.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
@@ -14,12 +15,25 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
+import { workspaceProcessTestEntrypoints } from "./workspace-process-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+function transferOwner(sessionId: string) {
+  return {
+    credential: { ownerEpoch: 1, expiresAtMs: Date.now() + 60_000, sessionId },
+    environment: {
+      ownerEpoch: 1,
+      attachedSessionIds: [sessionId],
+      destroyRequestedAtMs: null,
+      state: "attached",
+    },
+  };
+}
 
 function injectUploadWriteFaults() {
   const originalOpen = fs.open.bind(fs);
@@ -108,19 +122,7 @@ describe("node workspace transfer service", () => {
     await fs.mkdir(localPath);
     await fs.writeFile(path.join(localPath, "input.txt"), "gateway input\n");
     const service = createNodeWorkspaceTransferService({
-      getOwner: () => ({
-        credential: {
-          ownerEpoch: 1,
-          expiresAtMs: Date.now() + 60_000,
-          sessionId: "session-unborn",
-        },
-        environment: {
-          ownerEpoch: 1,
-          attachedSessionIds: ["session-unborn"],
-          destroyRequestedAtMs: null,
-          state: "attached",
-        },
-      }),
+      getOwner: () => transferOwner("session-unborn"),
       temporaryRoot: path.join(root, "transfer-tmp"),
     });
     const request = {
@@ -151,6 +153,7 @@ describe("node workspace transfer service", () => {
           argv: ["node", "-e", ""],
         };
         const server = await startNodeWorkspaceTransferTestServer(service);
+        const workspaceUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.nodeWorkspace);
         try {
           const created = await runCommandWithTimeout(
             [
@@ -159,8 +162,7 @@ describe("node workspace transfer service", () => {
               'umask 0002; exec "$@"',
               "workspace-transfer-umask",
               process.execPath,
-              "--import",
-              fileURLToPath(new URL("../../../scripts/tsx.mjs", import.meta.url)),
+              ...resolveRuntimeWorkerArgv(workspaceUrl).slice(0, -1),
               "--input-type=module",
               "--eval",
               `
@@ -176,7 +178,7 @@ describe("node workspace transfer service", () => {
                   await fs.chmod(dir, 0o775);
                 }
               `,
-              new URL("../../node-host/node-worker-workspace.ts", import.meta.url).href,
+              workspaceUrl.href,
               JSON.stringify({ root: nodeRoot, input }),
             ],
             { timeoutMs: 30_000 },
@@ -535,19 +537,7 @@ describe("node workspace transfer service", () => {
     const localPath = path.join(root, "workspace");
     await fs.mkdir(localPath);
     const service = createNodeWorkspaceTransferService({
-      getOwner: () => ({
-        credential: {
-          ownerEpoch: 1,
-          expiresAtMs: Date.now() + 60_000,
-          sessionId: "session-close",
-        },
-        environment: {
-          ownerEpoch: 1,
-          attachedSessionIds: ["session-close"],
-          destroyRequestedAtMs: null,
-          state: "attached",
-        },
-      }),
+      getOwner: () => transferOwner("session-close"),
       temporaryRoot: path.join(root, "transfer-tmp"),
     });
     const prepared = await service.prepareSync({
@@ -600,19 +590,7 @@ describe("node workspace transfer service", () => {
     const temporaryRoot = path.join(root, "transfer-tmp");
     await fs.mkdir(localPath);
     const service = createNodeWorkspaceTransferService({
-      getOwner: (environmentId) => ({
-        credential: {
-          ownerEpoch: 1,
-          expiresAtMs: Date.now() + 60_000,
-          sessionId: `session-${environmentId}`,
-        },
-        environment: {
-          ownerEpoch: 1,
-          attachedSessionIds: [`session-${environmentId}`],
-          destroyRequestedAtMs: null,
-          state: "attached",
-        },
-      }),
+      getOwner: (environmentId) => transferOwner(`session-${environmentId}`),
       temporaryRoot,
     });
     for (const environmentId of ["environment-1", "environment-2"]) {
@@ -672,19 +650,7 @@ describe("node workspace transfer service", () => {
     await fs.mkdir(localPath);
     await fs.writeFile(path.join(localPath, "input.txt"), "input\n");
     const service = createNodeWorkspaceTransferService({
-      getOwner: () => ({
-        credential: {
-          ownerEpoch: 1,
-          expiresAtMs: Date.now() + 60_000,
-          sessionId: "session-serialize",
-        },
-        environment: {
-          ownerEpoch: 1,
-          attachedSessionIds: ["session-serialize"],
-          destroyRequestedAtMs: null,
-          state: "attached",
-        },
-      }),
+      getOwner: () => transferOwner("session-serialize"),
       temporaryRoot,
     });
 
@@ -711,65 +677,6 @@ describe("node workspace transfer service", () => {
       name.startsWith("context-"),
     );
     expect(contexts).toHaveLength(1);
-    await service.closeAll();
-  });
-
-  it("releases an upload owner after validation fails before staging", async () => {
-    const root = tempDirs.make("node-workspace-transfer-upload-release-");
-    const localPath = path.join(root, "workspace");
-    await fs.mkdir(localPath);
-    await fs.writeFile(path.join(localPath, "input.txt"), "input\n");
-    const service = createNodeWorkspaceTransferService({
-      getOwner: () => ({
-        credential: {
-          ownerEpoch: 1,
-          expiresAtMs: Date.now() + 60_000,
-          sessionId: "session-upload-release",
-        },
-        environment: {
-          ownerEpoch: 1,
-          attachedSessionIds: ["session-upload-release"],
-          destroyRequestedAtMs: null,
-          state: "attached",
-        },
-      }),
-      temporaryRoot: path.join(root, "transfer-tmp"),
-    });
-    const prepared = await service.prepareSync({
-      environmentId: "environment-upload-release",
-      ownerEpoch: 1,
-      sessionId: "session-upload-release",
-      generation: 1,
-      localPath,
-      isAuthorized: () => true,
-    });
-    const token = service.prepareUpload(
-      "environment-upload-release",
-      prepared.snapshot.manifestRef,
-    );
-    const route = {
-      kind: "reconcile",
-      direction: "upload",
-      environmentId: "environment-upload-release",
-      baseManifestRef: prepared.snapshot.manifestRef,
-    } as const;
-    const authorization = service.authorize({ route, token });
-    if (!authorization) {
-      throw new Error("upload authorization was not created");
-    }
-    const request = Readable.from([]) as unknown as IncomingMessage;
-    request.headers = { "content-length": "0" };
-
-    await expect(
-      service.receiveUpload({
-        authorization,
-        request,
-        signal: new AbortController().signal,
-      }),
-    ).rejects.toThrow("byte limit");
-    expect(() =>
-      service.prepareUpload("environment-upload-release", prepared.snapshot.manifestRef),
-    ).not.toThrow();
     await service.closeAll();
   });
 

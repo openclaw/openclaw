@@ -43,6 +43,47 @@ Build or pull the sandbox image into the selected Podman store before enabling t
 podman build -t openclaw-sandbox:bookworm-slim -f scripts/docker/sandbox/Dockerfile .
 ```
 
+## Changing connections and upgrading existing sandboxes
+
+OpenClaw follows the installed Podman **client** when both environment selectors are set:
+Podman 4.8 and newer prefer a nonempty `CONTAINER_CONNECTION`; Podman 4.7 prefers
+`CONTAINER_HOST` when it is present. The engine's server version does not decide
+this precedence. If OpenClaw cannot identify the client version with both selectors
+set, it refuses the ambiguous selection. Unset the unused selector or repair the
+client's `podman --version` command.
+
+Each sandbox records its engine URI and, for Podman Machine, its SSH identity.
+Earlier OpenClaw versions could pin `CONTAINER_HOST` even when the client selected
+`CONTAINER_CONNECTION`. After upgrading, those existing sandboxes can report
+"The active Podman connection changed." OpenClaw preserves the old sandbox and
+registry entry rather than removing a container on the newly selected engine.
+
+Retire the old sandbox through its recorded endpoint before switching:
+
+1. Pause runs that use the affected sandbox. Use the same OS user, OpenClaw profile,
+   config, and state directory as the Gateway for the commands below.
+2. Restore the original `CONTAINER_HOST` and, for Podman Machine, the original
+   `CONTAINER_SSHKEY`. Unset `CONTAINER_CONNECTION` in that command environment.
+   The original endpoint must be reachable, and a Podman Machine must be running.
+3. Use the affected sandbox's exact `sessionKey`. While all registered sandboxes
+   use the restored target, `openclaw sandbox list --json` shows that key and the
+   recorded URI and identity in `backendTarget.globalArgs`. Save these values before
+   changing connections. If entries already span engines, the global list can fail;
+   use the previously recorded key with the scoped recreation below. If that key is
+   unknown, preserve the registry and identify the exact scope before continuing.
+4. Preserve any needed data in the container's writable layer, then run
+   `openclaw sandbox recreate --session "<sessionKey>"`. Review the preview before
+   confirming. This removes the selected container; mounted workspace files remain.
+5. Set the intended `CONTAINER_CONNECTION` and unset the unused `CONTAINER_HOST`
+   and `CONTAINER_SSHKEY`. Apply that environment to the Gateway as well. Ensure the
+   sandbox image and workspace are available on the selected engine. The next use
+   creates a new sandbox there; it does not transfer the old container's writable layer.
+
+If the original endpoint or identity cannot be restored, keep the registry entry
+and repair that connection first. Do not edit the recorded target or delete the
+registry entry to bypass the check. `recreate --force` only skips confirmation;
+it does not bypass endpoint validation.
+
 ## Host init prerequisite
 
 OpenClaw creates Podman sandboxes with `--init` so orphaned tool processes are reaped. The Podman engine host needs its init executable, normally `catatonit`. Installing it only inside the sandbox image does not satisfy this requirement. For Podman Machine, the executable belongs inside the machine, not on the client host.

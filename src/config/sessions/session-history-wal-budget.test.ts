@@ -3,18 +3,14 @@ import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import type { Worker, WorkerOptions } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import {
   sqliteReaderDatabasePathKey,
   withSqliteReaderOwner,
 } from "../../infra/sqlite-reader-lifecycle.js";
-import * as sqliteTransaction from "../../infra/sqlite-transaction.js";
 import {
   onSqliteWalCheckpoint,
   publishSqliteWalCheckpointObservation,
@@ -34,6 +30,8 @@ import {
   measureSessionPhysicalDiskUsage,
 } from "./disk-budget-runtime.js";
 import type { SqliteSessionArchivePruningDiagnostics } from "./session-accessor.sqlite-contract.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
+import * as archivePruningDiagnostics from "./session-history-archive-pruning-diagnostics.js";
 import {
   enforceSqliteSessionHistoryDiskBudget,
   inspectSqliteSessionHistoryDiskBudget,
@@ -41,58 +39,15 @@ import {
 } from "./session-history-eviction.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
-const nativePreload = vi.hoisted(() => ({
-  moduleUrl: "",
-  path: "",
-  barrier: undefined as SharedArrayBuffer | undefined,
-  commitGate: undefined as SharedArrayBuffer | undefined,
-}));
-vi.mock("node:worker_threads", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:worker_threads")>();
-  return {
-    ...actual,
-    Worker: class extends actual.Worker {
-      private readonly selected: boolean;
-      constructor(filename: string | URL, options?: WorkerOptions) {
-        const selected = Boolean(
-          nativePreload.path && filename.toString() === nativePreload.moduleUrl,
-        );
-        super(
-          filename,
-          selected
-            ? {
-                ...options,
-                execArgv: [...(options?.execArgv ?? []), "--require", nativePreload.path],
-                workerData: { ...options?.workerData, fixtureParentBarrier: nativePreload.barrier },
-              }
-            : options,
-        );
-        this.selected = selected;
-      }
-      override postMessage(...args: Parameters<Worker["postMessage"]>) {
-        const request: unknown = args[0];
-        if (this.selected && isRecord(request) && request.type === "reclaim") {
-          nativePreload.commitGate =
-            isRecord(request.plan) &&
-            request.plan.kind === "maintenance-pages" &&
-            request.commitGate instanceof SharedArrayBuffer
-              ? request.commitGate
-              : undefined;
-        }
-        return super.postMessage(...args);
-      }
-    },
-  };
-});
-
 const warn = vi.hoisted(() => vi.fn());
+const info = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
   return {
     ...actual,
     createSubsystemLogger: (name: string) => {
       const logger = actual.createSubsystemLogger(name);
-      return name === "sessions/history-eviction" ? { ...logger, warn } : logger;
+      return name === "sessions/history-eviction" ? { ...logger, warn, info } : logger;
     },
   };
 });
@@ -100,98 +55,136 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
 let state: OpenClawTestState;
 afterEach(async () => {
   vi.restoreAllMocks();
-  nativePreload.path = "";
-  nativePreload.moduleUrl = "";
-  nativePreload.barrier = undefined;
-  nativePreload.commitGate = undefined;
   await drainSessionDiskBudgetWorkers();
   await closeOpenClawAgentDatabasesAsync();
   await state?.cleanup();
 });
 
-function installCheckpointSettlementBarrier(databasePath: string, preloadPath: string) {
-  const barrier = new Int32Array(new SharedArrayBuffer(3 * Int32Array.BYTES_PER_ELEMENT));
-  fs.writeFileSync(
-    preloadPath,
-    `
-const fs = require("node:fs");
-const { DatabaseSync } = require("node:sqlite");
-const { workerData } = require("node:worker_threads");
-const target = ${JSON.stringify(fs.realpathSync(databasePath))};
-const barrier = new Int32Array(workerData.fixtureParentBarrier);
-const execute = DatabaseSync.prototype.exec;
-let vacuumDatabase;
-DatabaseSync.prototype.exec = function(statement) {
-  if (Atomics.load(barrier, 0) === 1 && statement.startsWith("PRAGMA incremental_vacuum(")) {
-    const location = this.location();
-    if (location && fs.realpathSync(location) === target) vacuumDatabase = this;
-  }
-  const value = execute.call(this, statement);
-  if (this === vacuumDatabase && statement === "COMMIT" && Atomics.load(barrier, 1) === 0) {
-    Atomics.store(barrier, 1, 1);
-    Atomics.notify(barrier, 1);
-    if (Atomics.wait(barrier, 2, 0, 5_000) === "timed-out")
-      throw new Error("parent did not acquire the settlement barrier");
-  }
-  return value;
-};
-`,
-  );
-  nativePreload.path = preloadPath;
-  nativePreload.barrier = barrier.buffer;
-  nativePreload.moduleUrl = resolveRuntimeWorkerUrl(
-    runtimeProcessEntrypoints.sessionTranscriptArchive,
-  ).href;
-  const transaction = sqliteTransaction.runSqliteImmediateTransactionSync;
-  let barriers = 0;
-  let settledInsideBarrier = false;
-  vi.spyOn(sqliteTransaction, "runSqliteImmediateTransactionSync").mockImplementation(
-    (owner, run, options) =>
-      transaction(
-        owner,
-        () => {
-          const result = run();
-          if (
-            options?.operationLabel === "session.reclamation.commit-settlement" &&
-            nativePreload.commitGate &&
-            Atomics.load(barrier, 0) === 1 &&
-            barriers === 0
-          ) {
-            // The parent can acquire BEGIN before the worker resumes after native COMMIT.
-            if (Atomics.load(barrier, 1) === 0) {
-              expect(Atomics.wait(barrier, 1, 0, 5_000)).not.toBe("timed-out");
-            }
-            expect(Atomics.load(barrier, 1)).toBe(1);
-            barriers++;
-            const gate = new Int32Array(nativePreload.commitGate);
-            Atomics.store(barrier, 2, 1);
-            Atomics.notify(barrier, 2);
-            // Keep the real writer lock until the worker records native settlement.
-            const settled = 4;
-            const previous = Atomics.load(gate, 0);
-            if (previous !== settled) {
-              expect(Atomics.wait(gate, 0, previous, 5_000)).not.toBe("timed-out");
-            }
-            settledInsideBarrier = Atomics.load(gate, 0) === settled;
-            expect(settledInsideBarrier).toBe(true);
-          }
-          return result;
-        },
+it("admits a queued foreground write before draining all vacuum batches", async () => {
+  state = await createOpenClawTestState({
+    prefix: "wal-budget-fairness-",
+    layout: "state-only",
+    scenario: "minimal",
+  });
+  const options = { agentId: "main", env: state.env };
+  const database = openOpenClawAgentDatabase(options);
+  database.db.exec(`CREATE TABLE vacuum_fairness_fixture (payload BLOB);
+    INSERT INTO vacuum_fairness_fixture VALUES (zeroblob(262144));
+    DROP TABLE vacuum_fairness_fixture;`);
+  expect(database.walMaintenance.checkpoint()).toBe(true);
+  const freePages = () =>
+    Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count);
+  const before = freePages();
+  expect(before).toBeGreaterThan(8);
+  fs.mkdirSync(state.sessionsDir(), { recursive: true });
+  const storePath = path.join(state.sessionsDir(), "sessions.json");
+  const usage = await measureSessionPhysicalDiskUsage(storePath);
+  const maintenance = resolveMaintenanceConfigFromInput({
+    mode: "enforce",
+    maxDiskBytes: usage.totalBytes - 1,
+    highWaterBytes: usage.totalBytes - 1,
+  });
+  let foreground: Promise<void> | undefined;
+  let observedFreePages = 0;
+  const writes = channel("openclaw.session.write");
+  const observe = (message: unknown) => {
+    if (!foreground && isRecord(message) && message.operation === "session.history.free-pages") {
+      foreground = runExclusiveSqliteSessionWrite(
         options,
-      ),
-  );
-  return {
-    arm: () => Atomics.store(barrier, 0, 1),
-    verify: () => {
-      expect(barriers).toBe(1);
-      expect(settledInsideBarrier).toBe(true);
-    },
-    release: () => {
-      Atomics.store(barrier, 2, 1);
-      Atomics.notify(barrier, 2);
-    },
+        async () => {
+          observedFreePages = freePages();
+          database.db
+            .prepare("INSERT INTO cache_entries(scope,key,blob,updated_at) VALUES (?,?,?,?)")
+            .run("fairness", "foreground", Buffer.from("committed"), 1);
+        },
+        "session.entry-replacements",
+      );
+    }
   };
-}
+  writes.subscribe(observe);
+  try {
+    await enforceSqliteSessionHistoryDiskBudget({
+      ...options,
+      storePath,
+      mode: "enforce",
+      maintenance,
+    });
+    expect(foreground).toBeDefined();
+    await foreground;
+    expect(observedFreePages).toBeGreaterThan(0);
+    expect(observedFreePages).toBeLessThan(before);
+    expect(freePages()).toBe(0);
+    expect(
+      database.db.prepare("SELECT blob FROM cache_entries WHERE scope='fairness'").get()?.blob,
+    ).toEqual(new Uint8Array(Buffer.from("committed")));
+  } finally {
+    writes.unsubscribe(observe);
+    await foreground;
+  }
+});
+
+it("prunes archives when readers prevent WAL truncation but all frames are checkpointed", async () => {
+  state = await createOpenClawTestState({
+    prefix: "wal-budget-checkpointed-",
+    layout: "state-only",
+    scenario: "minimal",
+  });
+  const options = { agentId: "main", env: state.env };
+  const database = openOpenClawAgentDatabase(options);
+  ensureSessionTranscriptArchiveSchema(database.db);
+  database.db.exec("PRAGMA wal_autocheckpoint=0");
+  fs.mkdirSync(state.sessionsDir(), { recursive: true });
+  const storePath = path.join(state.sessionsDir(), "sessions.json");
+  const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
+  const write = database.db.prepare(
+    "INSERT OR REPLACE INTO cache_entries(scope,key,blob,updated_at) VALUES ('wal-proof','traffic',?,?)",
+  );
+  // Settle schema and initial allocation before measuring steady-state traffic.
+  write.run(Buffer.from("committed-init"), -1);
+  expect(database.walMaintenance.checkpoint()).toBe(true);
+  warn.mockClear();
+  info.mockClear();
+  try {
+    for (let tick = 0; tick < 3; tick++) {
+      if (reader.isTransaction) {
+        reader.exec("ROLLBACK");
+      }
+      write.run(Buffer.from(`committed-${tick}`), tick);
+      reader.exec("BEGIN");
+      reader.prepare("SELECT blob FROM cache_entries WHERE scope='wal-proof'").get();
+      const file = path.join(
+        state.sessionsDir(),
+        `traffic-${tick}.jsonl.deleted.2020-01-01T00-00-00.000Z`,
+      );
+      fs.writeFileSync(file, Buffer.alloc(256 * 1024, tick));
+      const before = await measureSessionPhysicalDiskUsage(storePath);
+      const result = await enforceSqliteSessionHistoryDiskBudget({
+        ...options,
+        storePath,
+        mode: "enforce",
+        maintenance: {
+          maxDiskBytes: before.totalBytes - 128 * 1024,
+          highWaterBytes: before.totalBytes - 128 * 1024,
+        },
+      });
+      expect(result?.deferredReason).toBeUndefined();
+      expect(result?.removedFiles).toBe(1);
+      expect(result?.freedBytes).toBeGreaterThanOrEqual(256 * 1024);
+      expect(fs.existsSync(file)).toBe(false);
+      expect(
+        reader.prepare("SELECT blob FROM cache_entries WHERE scope='wal-proof'").get()?.blob,
+      ).toEqual(new Uint8Array(Buffer.from(`committed-${tick}`)));
+    }
+    expect(warn).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledTimes(3);
+    expect(info).toHaveBeenLastCalledWith(
+      "session history disk budget cleanup completed",
+      expect.objectContaining({ removedFiles: 1, removedEntries: 0 }),
+    );
+  } finally {
+    reader.close();
+  }
+});
 
 it.each(["transaction", "iterator"] as const)(
   "defers WAL-only pressure without deleting archives, names the %s, and resumes after checkpoint recovery",
@@ -206,10 +199,6 @@ it.each(["transaction", "iterator"] as const)(
     const databasePathKey = sqliteReaderDatabasePathKey(database.path);
     ensureSessionTranscriptArchiveSchema(database.db);
     database.db.exec("PRAGMA wal_autocheckpoint=0");
-    const checkpointBarrier =
-      kind === "transaction"
-        ? installCheckpointSettlementBarrier(database.path, state.path("checkpoint-settlement.cjs"))
-        : undefined;
     const sessions = state.sessionsDir();
     fs.mkdirSync(sessions, { recursive: true });
     const storePath = path.join(sessions, "sessions.json");
@@ -283,19 +272,18 @@ it.each(["transaction", "iterator"] as const)(
         reader.exec("ROLLBACK");
       }
     };
-    const diagnostics: unknown[] = [];
-    const writes = channel("openclaw.session.write");
-    const observe = (message: unknown) => {
-      if (
-        message &&
-        typeof message === "object" &&
-        "operation" in message &&
-        message.operation === "session.history.archive-prune"
-      ) {
-        diagnostics.push(message);
-      }
-    };
-    writes.subscribe(observe);
+    const diagnostics: SqliteSessionArchivePruningDiagnostics[] = [];
+    const observePruning = archivePruningDiagnostics.observeSessionArchivePruning;
+    vi.spyOn(archivePruningDiagnostics, "observeSessionArchivePruning").mockImplementation(
+      async <T>(...args: Parameters<typeof observePruning<T>>) => {
+        const [facts, run] = args;
+        try {
+          return await observePruning(facts, run);
+        } finally {
+          diagnostics.push(structuredClone(facts));
+        }
+      },
+    );
     warn.mockClear();
     try {
       const write = database.db.prepare(
@@ -329,13 +317,11 @@ it.each(["transaction", "iterator"] as const)(
       });
       expect(diagnostics).toEqual([
         expect.objectContaining({
-          archivePruning: expect.objectContaining({
-            completed: false,
-            checkpointCalls: 1,
-            checkpointIncomplete: 1,
-            walBytesBefore: before.databaseWalBytes,
-            walBytesAfter: before.databaseWalBytes,
-          }),
+          completed: false,
+          checkpointCalls: 2,
+          checkpointIncomplete: 1,
+          walBytesBefore: before.databaseWalBytes,
+          walBytesAfter: before.databaseWalBytes,
         }),
       ]);
       assert(blocked?.checkpoint);
@@ -397,14 +383,8 @@ it.each(["transaction", "iterator"] as const)(
         checkpointClock.mockRestore();
       }
       expect(fs.statSync(`${database.path}-wal`).size).toBe(0);
-      checkpointBarrier?.arm();
       const recovered = await enforce();
-      checkpointBarrier?.verify();
-      const lastPruning = (
-        diagnostics.at(-1) as
-          | { archivePruning?: SqliteSessionArchivePruningDiagnostics }
-          | undefined
-      )?.archivePruning;
+      const lastPruning = diagnostics.at(-1);
       expect(
         recovered?.deferredReason,
         recovered?.deferredReason === undefined
@@ -433,14 +413,13 @@ it.each(["transaction", "iterator"] as const)(
       ).toBeUndefined();
       expect(recovered?.totalBytesAfter).toBeLessThanOrEqual(maintenance.highWaterBytes!);
       expect(diagnostics.at(-1)).toMatchObject({
-        archivePruning: { completed: true, checkpointIncomplete: 0 },
+        completed: true,
+        checkpointIncomplete: 0,
       });
       expect(() =>
         JSON.stringify({ blocked, recovered, diagnostics, health: database.walMaintenance.health }),
       ).not.toThrow();
     } finally {
-      checkpointBarrier?.release();
-      writes.unsubscribe(observe);
       release();
       reader.close();
     }

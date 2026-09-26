@@ -23,6 +23,23 @@ import { collectDurableServiceEnvVars } from "./state-dir-dotenv.js";
 import { withTempHome, writeStateDirDotEnv } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.js";
 
+function captureEnvEnumerations<T>(env: NodeJS.ProcessEnv, run: () => T) {
+  const entries = Object.entries;
+  const cardinalities: number[] = [];
+  const spy = vi.spyOn(Object, "entries").mockImplementation((value) => {
+    const result = entries(value);
+    if (value === env) {
+      cardinalities.push(result.length);
+    }
+    return result;
+  });
+  try {
+    return { value: run(), cardinalities };
+  } finally {
+    spy.mockRestore();
+  }
+}
+
 describe("config env vars", () => {
   it("applies env vars from env block when missing", async () => {
     await withEnvAsync({ OPENROUTER_API_KEY: undefined }, async () => {
@@ -168,6 +185,29 @@ describe("config env vars", () => {
     });
   });
 
+  it("skips env.vars values holding an unresolved reference, bare or with a default", async () => {
+    await withEnvAsync(
+      { BARE_REF: undefined, DEFAULT_REF: undefined, PLAIN_VALUE: undefined },
+      async () => {
+        applyConfigEnvVars({
+          env: {
+            vars: {
+              BARE_REF: "${SOME_VAR}",
+              DEFAULT_REF: "${SOME_VAR:-fallback}",
+              PLAIN_VALUE: "literal",
+            },
+          },
+        } as OpenClawConfig);
+
+        // applyConfigEnvVars runs before env substitution, so a reference that is still
+        // a template would otherwise be exported into process.env as literal "${...}" text.
+        expect(process.env.BARE_REF).toBeUndefined();
+        expect(process.env.DEFAULT_REF).toBeUndefined();
+        expect(process.env.PLAIN_VALUE).toBe("literal");
+      },
+    );
+  });
+
   it("can build a merged runtime env without mutating process.env", async () => {
     await withEnvAsync({ OPENROUTER_API_KEY: undefined }, async () => {
       const merged = createConfigRuntimeEnv({
@@ -198,10 +238,12 @@ describe("config env vars", () => {
     expect(env).toEqual({ UPDATE_ME: "old", REMOVE_ME: "owned", KEEP_OVERRIDE: "ambient" });
     expect(prepared.env).toEqual({ UPDATE_ME: "new", KEEP_OVERRIDE: "ambient" });
 
-    const rollback = prepared.publish();
+    const publication = captureEnvEnumerations(env, () => prepared.publish());
     expect(env).toEqual({ UPDATE_ME: "new", KEEP_OVERRIDE: "ambient" });
-    rollback();
+    const rollback = captureEnvEnumerations(env, publication.value);
     expect(env).toEqual({ UPDATE_ME: "old", REMOVE_ME: "owned", KEEP_OVERRIDE: "ambient" });
+    expect(publication.cardinalities).toEqual([3]);
+    expect(rollback.cardinalities).toEqual([2]);
   });
 
   it("removes the accepted config layer from isolated candidate reads", () => {
@@ -467,18 +509,27 @@ describe("config env vars", () => {
             nextConfig: newerConfig,
           });
 
-          const rollbackOlder = older.publish();
-          const rollbackNewer = newer.publish();
+          const olderPublication = captureEnvEnumerations(process.env, () => older.publish());
+          const newerPublication = captureEnvEnumerations(process.env, () => newer.publish());
           expect(process.env[key]).toBe("newer");
 
+          const rollbackCardinalities: number[][] = [];
           if (rollbackOrder === "older-first") {
-            rollbackOlder();
+            rollbackCardinalities.push(
+              captureEnvEnumerations(process.env, olderPublication.value).cardinalities,
+            );
             expect(process.env[key]).toBe("newer");
-            rollbackNewer();
+            rollbackCardinalities.push(
+              captureEnvEnumerations(process.env, newerPublication.value).cardinalities,
+            );
           } else {
-            rollbackNewer();
+            rollbackCardinalities.push(
+              captureEnvEnumerations(process.env, newerPublication.value).cardinalities,
+            );
             expect(process.env[key]).toBe("older");
-            rollbackOlder();
+            rollbackCardinalities.push(
+              captureEnvEnumerations(process.env, olderPublication.value).cardinalities,
+            );
           }
 
           expect(process.env[key]).toBe("old");
@@ -486,6 +537,11 @@ describe("config env vars", () => {
             ownedEnv: { [key]: "old" },
             sourceConfig: previousConfig,
           });
+          expect(olderPublication.cardinalities).toHaveLength(2);
+          expect(newerPublication.cardinalities).toHaveLength(2);
+          expect(rollbackCardinalities.map((entries) => entries.length)).toEqual(
+            rollbackOrder === "older-first" ? [0, 2] : [1, 1],
+          );
         } finally {
           resetPublishedConfigRuntimeEnv();
         }

@@ -32,34 +32,12 @@ function exceedsRichBlockLimits(size: RichBlockBudget, limits: RichBlockLimits):
   );
 }
 
-type RichTextStyleWrap =
-  | "bold"
-  | "italic"
-  | "underline"
-  | "strikethrough"
-  | "code"
-  | "spoiler"
-  | "marked"
-  | "subscript"
-  | "superscript";
-type RichTextWrapper =
-  | { type: RichTextStyleWrap }
-  | { type: "url"; url: string }
-  | { type: "anchor_link"; anchor_name: string };
+type RichTextWrapper = Extract<RichText, { text: RichText }>;
 
 function wrapRichTextFragment(fragment: RichText, wrappers: readonly RichTextWrapper[]): RichText {
   let node = fragment;
   for (let index = wrappers.length - 1; index >= 0; index -= 1) {
-    const wrapper = wrappers[index];
-    if (!wrapper) {
-      continue;
-    }
-    node =
-      wrapper.type === "url"
-        ? { type: "url", text: node, url: wrapper.url }
-        : wrapper.type === "anchor_link"
-          ? { type: "anchor_link", text: node, anchor_name: wrapper.anchor_name }
-          : { type: wrapper.type, text: node };
+    node = { ...wrappers[index]!, text: node };
   }
   return node;
 }
@@ -109,13 +87,7 @@ function splitRichTextByChars(text: RichText, limit: number): RichText[] {
       chars += atomicChars;
       return;
     }
-    const wrapper: RichTextWrapper =
-      node.type === "url"
-        ? { type: "url", url: node.url }
-        : node.type === "anchor_link"
-          ? { type: "anchor_link", anchor_name: node.anchor_name }
-          : { type: node.type };
-    visit(node.text, [...wrappers, wrapper]);
+    visit(node.text, [...wrappers, node]);
   };
   visit(text, []);
   flush();

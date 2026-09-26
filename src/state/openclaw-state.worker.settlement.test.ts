@@ -8,6 +8,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
@@ -23,6 +24,25 @@ beforeEach(async () => {
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   await state.cleanup();
+});
+
+it("rechecks a foreign commit before the next worker operation", async () => {
+  const context = captureOpenClawStateWorkerContext();
+  const backend = runWithSqliteWorkerStateContext(context, () =>
+    createSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
+  );
+  const peer = new (requireNodeSqlite().DatabaseSync)(context.admission.databasePath);
+  try {
+    peer.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+    const command = { type: "database.inspectIdle" as const, input: undefined };
+    expect(() => runWithSqliteWorkerStateContext(context, () => backend.execute(command))).toThrow(
+      "newer schema version",
+    );
+  } finally {
+    peer.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+    peer.close();
+    await backend.close();
+  }
 });
 
 it("retires an existing-only idle actor without opening its missing database", async () => {

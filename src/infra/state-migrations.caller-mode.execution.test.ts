@@ -444,21 +444,22 @@ describe("legacy state migration caller execution", () => {
     // oxlint-disable-next-line typescript/unbound-method
     const originalPrepare = DatabaseSync.prototype.prepare;
     const postRefusalQueries: string[] = [];
-    vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(
-      function (this: DatabaseSync, sql) {
-        const databases = originalPrepare.call(this, "PRAGMA database_list").all() as Array<{
-          file?: unknown;
-        }>;
-        if (
-          databases.some(
-            (entry) => typeof entry.file === "string" && path.resolve(entry.file) === databasePath,
-          )
-        ) {
-          postRefusalQueries.push(sql);
-        }
-        return originalPrepare.call(this, sql);
-      },
-    );
+    vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+      this: DatabaseSync,
+      sql,
+    ) {
+      const databases = originalPrepare.call(this, "PRAGMA database_list").all() as Array<{
+        file?: unknown;
+      }>;
+      if (
+        databases.some(
+          (entry) => typeof entry.file === "string" && path.resolve(entry.file) === databasePath,
+        )
+      ) {
+        postRefusalQueries.push(sql);
+      }
+      return originalPrepare.call(this, sql);
+    });
 
     const result = await autoMigrateLegacyState({
       cfg: {},

@@ -55,13 +55,13 @@ if ! "$convert_bin" "$input_path" \
 fi
 
 if ! output_description="$(
-  "$identify_bin" +ping -format '%m|%w|%h|%[colorspace]|%[type]|%[channels]|%Q' \
+  "$identify_bin" +ping -format '%m|%w|%h|%[colorspace]|%z|%[channels]|%Q' \
     "$temporary_output" 2>/dev/null
 )"; then
   fail "converted output is not a readable image"
 fi
 IFS='|' read -r output_format output_width output_height output_colorspace \
-  output_type output_channels output_quality <<<"$output_description"
+  output_depth output_channels output_quality <<<"$output_description"
 output_colorspace="$(printf '%s' "$output_colorspace" | tr '[:upper:]' '[:lower:]')"
 output_channels="$(printf '%s' "$output_channels" | tr '[:upper:]' '[:lower:]')"
 
@@ -69,8 +69,9 @@ output_channels="$(printf '%s' "$output_channels" | tr '[:upper:]' '[:lower:]')"
 [[ "$output_width" == "$input_width" && "$output_height" == "$input_height" ]] ||
   fail "converted output dimensions changed"
 [[ "$output_colorspace" == "srgb" ]] || fail "converted output is not sRGB"
-[[ "$output_type" == "TrueColor" ]] || fail "converted output is not true color"
-[[ "$output_channels" != *a* ]] || fail "converted output retained an alpha channel"
+# Calculated image type describes pixel colors, not the JPEG's encoded channels.
+[[ "$output_channels" == "srgb" && "$output_depth" == "8" ]] ||
+  fail "converted output is not 8-bit RGB"
 [[ "$output_quality" =~ ^[0-9]+$ && "$output_quality" -ge 90 ]] ||
   fail "converted output quality is too low"
 

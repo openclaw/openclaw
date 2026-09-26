@@ -61,11 +61,18 @@ export class WizardLoginController {
     void this.runner.cancel();
   }
 
-  render(options: { busy?: boolean; refreshWarning?: string | null; doneMessage?: string } = {}) {
+  render(
+    options: {
+      mode?: "auth" | "activate";
+      busy?: boolean;
+      refreshWarning?: string | null;
+      doneMessage?: string;
+    } = {},
+  ) {
     const state = this.runner.state;
     return html`<div @modal-cancel=${(event: Event) => event.preventDefault()}>
       ${renderModelSetupWizard({
-        mode: "auth",
+        mode: options.mode ?? "auth",
         state:
           state.phase === "step" ? { ...state, busy: state.busy || Boolean(options.busy) } : state,
         refreshWarning: options.refreshWarning ?? null,

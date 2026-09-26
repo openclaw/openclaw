@@ -1,122 +1,13 @@
 // Byteplus tests cover video generation provider plugin behavior.
+import {
+  getProviderHttpMocks,
+  installProviderHttpMockCleanup,
+} from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { streamedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-// Submit/poll transport is mocked locally so each test can inject the BytePlus task JSON
-// bodies, while readProviderJsonResponse is kept REAL (via importActual) so the byte-bounded
-// reader actually streams and cancels oversized bodies under test instead of a stub.
-const { postJsonRequestMock, fetchWithTimeoutMock, resolveApiKeyForProviderMock } = vi.hoisted(
-  () => ({
-    postJsonRequestMock: vi.fn(),
-    fetchWithTimeoutMock: vi.fn(),
-    resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
-  }),
-);
-
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-}));
-
-vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
-  const actual = await importActual<typeof import("openclaw/plugin-sdk/provider-http")>();
-  return {
-    // REAL byte-bounded JSON reader under test — not stubbed.
-    assertProviderBinaryResponseContent: actual.assertProviderBinaryResponseContent,
-    readProviderJsonResponse: actual.readProviderJsonResponse,
-    postJsonRequest: postJsonRequestMock,
-    pollProviderOperationJson: async (params: {
-      url: string;
-      headers: Headers;
-      defaultTimeoutMs: number;
-      maxAttempts: number;
-      requestFailedMessage: string;
-      timeoutMessage: string;
-      isComplete: (payload: unknown) => boolean;
-      getFailureMessage?: (payload: unknown) => string | undefined;
-    }) => {
-      for (let attempt = 0; attempt < params.maxAttempts; attempt += 1) {
-        const response = await fetchWithTimeoutMock(
-          params.url,
-          { method: "GET", headers: params.headers },
-          params.defaultTimeoutMs,
-        );
-        const payload = await actual.readProviderJsonResponse(
-          response,
-          params.requestFailedMessage,
-        );
-        if (params.isComplete(payload)) {
-          return payload;
-        }
-        const failureMessage = params.getFailureMessage?.(payload);
-        if (failureMessage) {
-          throw new Error(failureMessage);
-        }
-      }
-      throw new Error(params.timeoutMessage);
-    },
-    fetchProviderDownloadResponse: async (params: {
-      url: string;
-      init?: RequestInit;
-      deadline: { deadlineAtMs?: number; timeoutMs?: number };
-      fetchFn: typeof fetch;
-    }) =>
-      fetchWithTimeoutMock(
-        params.url,
-        params.init ?? {},
-        params.deadline.deadlineAtMs === undefined
-          ? (params.deadline.timeoutMs ?? 60_000)
-          : Math.max(1, params.deadline.deadlineAtMs - Date.now()),
-      ),
-    assertOkOrThrowHttpError: async () => {},
-    createProviderOperationDeadline: ({
-      label,
-      timeoutMs,
-    }: {
-      label: string;
-      timeoutMs?: number | (() => number);
-    }) => {
-      const resolvedTimeoutMs = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
-      return {
-        label,
-        timeoutMs: resolvedTimeoutMs,
-        deadlineAtMs:
-          typeof resolvedTimeoutMs === "number" ? Date.now() + resolvedTimeoutMs : undefined,
-      };
-    },
-    createProviderOperationTimeoutResolver:
-      ({
-        deadline,
-        defaultTimeoutMs,
-      }: {
-        deadline: { deadlineAtMs?: number; label: string; timeoutMs?: number };
-        defaultTimeoutMs: number;
-      }) =>
-      () => {
-        if (typeof deadline.deadlineAtMs !== "number") {
-          return defaultTimeoutMs;
-        }
-        const remainingMs = deadline.deadlineAtMs - Date.now();
-        if (remainingMs <= 0) {
-          throw new Error(`${deadline.label} timed out after ${deadline.timeoutMs}ms`);
-        }
-        return Math.min(defaultTimeoutMs, remainingMs);
-      },
-    resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
-      defaultTimeoutMs,
-    resolveProviderHttpRequestConfig: (params: {
-      baseUrl?: string;
-      defaultBaseUrl: string;
-      allowPrivateNetwork?: boolean;
-      defaultHeaders?: Record<string, string>;
-    }) => ({
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-      allowPrivateNetwork: params.allowPrivateNetwork === true,
-      headers: new Headers(params.defaultHeaders),
-      dispatcherPolicy: undefined,
-    }),
-  };
-});
+const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
 
 let buildBytePlusVideoGenerationProvider: typeof import("./video-generation-provider.js").buildBytePlusVideoGenerationProvider;
 
@@ -124,12 +15,8 @@ beforeAll(async () => {
   ({ buildBytePlusVideoGenerationProvider } = await import("./video-generation-provider.js"));
 });
 
-afterEach(() => {
-  postJsonRequestMock.mockReset();
-  fetchWithTimeoutMock.mockReset();
-  resolveApiKeyForProviderMock.mockClear();
-  vi.useRealTimers();
-});
+installProviderHttpMockCleanup();
+afterEach(() => vi.useRealTimers());
 
 function mockSuccessfulBytePlusTask(params?: { model?: string }) {
   postJsonRequestMock.mockResolvedValue({
@@ -149,10 +36,9 @@ function mockSuccessfulBytePlusTask(params?: { model?: string }) {
         model: params?.model ?? "seedance-1-0-pro-250528",
       }),
     )
-    .mockResolvedValueOnce({
-      headers: new Headers({ "content-type": "video/webm" }),
-      arrayBuffer: async () => Buffer.from("webm-bytes"),
-    });
+    .mockResolvedValueOnce(
+      new Response("webm-bytes", { headers: { "content-type": "video/webm" } }),
+    );
 }
 
 function requireBytePlusPostRequest(): { body?: Record<string, unknown>; url?: string } {
@@ -551,10 +437,7 @@ describe("byteplus video generation provider", () => {
           duration: 1.5,
         }),
       )
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
-      });
+      .mockResolvedValueOnce(streamedVideoResponse("mp4-bytes"));
 
     const provider = buildBytePlusVideoGenerationProvider();
     const result = await provider.generateVideo({

@@ -5,6 +5,7 @@ public enum OpenClawChatTransportEvent: Sendable {
     case health(ok: Bool)
     case tick
     case chatMetadataChanged
+    case modelSelectionChanged
     case sessionsChanged(OpenClawChatSessionsChangedEvent)
     case sessionObserver(SessionObserverDigest)
     case chat(OpenClawChatEventPayload)
@@ -226,11 +227,7 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         try container.encodeIfPresent(self.lastRunError, forKey: .lastRunError)
         try container.encodeIfPresent(self.hasActiveRun, forKey: .hasActiveRun)
         if self.activeRunIdsPresent {
-            if let activeRunIds {
-                try container.encode(activeRunIds, forKey: .activeRunIds)
-            } else {
-                try container.encodeNil(forKey: .activeRunIds)
-            }
+            try container.encode(self.activeRunIds, forKey: .activeRunIds)
         }
         try container.encodeIfPresent(self.startedAt, forKey: .startedAt)
         try container.encodeIfPresent(self.endedAt, forKey: .endedAt)
@@ -719,10 +716,16 @@ public struct OpenClawChatMetadataCapabilities: Codable, Sendable, Equatable {
     }
 }
 
+public struct OpenClawChatModelSelectionPolicy: Codable, Sendable, Equatable {
+    public let restricted: Bool
+    public let defaultModel: String?
+}
+
 public struct OpenClawChatModelCatalogSnapshot: Sendable, Equatable {
     public let choices: [OpenClawChatModelChoice]
     public let availabilityIsSessionScoped: Bool
     public let refreshFailed: Bool
+    public let modelSelectionPolicy: OpenClawChatModelSelectionPolicy?
 
     public var message: String? {
         if !self.availabilityIsSessionScoped {
@@ -735,11 +738,13 @@ public struct OpenClawChatModelCatalogSnapshot: Sendable, Equatable {
     public init(
         choices: [OpenClawChatModelChoice],
         availabilityIsSessionScoped: Bool,
-        refreshFailed: Bool = false)
+        refreshFailed: Bool = false,
+        modelSelectionPolicy: OpenClawChatModelSelectionPolicy? = nil)
     {
         self.choices = choices
         self.availabilityIsSessionScoped = availabilityIsSessionScoped
         self.refreshFailed = refreshFailed
+        self.modelSelectionPolicy = modelSelectionPolicy
     }
 }
 
@@ -972,6 +977,13 @@ public protocol OpenClawChatTransport: Sendable {
 }
 
 extension OpenClawChatTransport {
+    private static func unsupportedOperation(_ description: String) -> NSError {
+        NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: description])
+    }
+
     public func loadSourceContext() async -> OpenClawChatSourceContext? {
         nil
     }
@@ -1032,10 +1044,7 @@ extension OpenClawChatTransport {
     }
 
     public func getQuestion(id _: String) async throws -> QuestionRecord {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "question.get not supported by this transport"])
+        throw Self.unsupportedOperation("question.get not supported by this transport")
     }
 
     public func resolveQuestion(
@@ -1043,17 +1052,11 @@ extension OpenClawChatTransport {
         answers _: [String: [String]],
         secretStoreAllowedHosts _: [String]?) async throws -> QuestionAnswers
     {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "question.resolve not supported by this transport"])
+        throw Self.unsupportedOperation("question.resolve not supported by this transport")
     }
 
     public func cancelQuestion(id _: String) async throws {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "question.resolve cancellation not supported by this transport"])
+        throw Self.unsupportedOperation("question.resolve cancellation not supported by this transport")
     }
 
     public func requestFullMessage(sessionKey _: String, messageID _: String) async throws -> OpenClawChatMessage? {
@@ -1186,10 +1189,7 @@ extension OpenClawChatTransport {
         parentSessionKey _: String?,
         worktree _: Bool?) async throws -> OpenClawChatCreateSessionResponse
     {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "sessions.create not supported by this transport"])
+        throw Self.unsupportedOperation("sessions.create not supported by this transport")
     }
 
     public func createSession(
@@ -1225,24 +1225,15 @@ extension OpenClawChatTransport {
     }
 
     public func resetSession(sessionKey _: String) async throws {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "sessions.reset not supported by this transport"])
+        throw Self.unsupportedOperation("sessions.reset not supported by this transport")
     }
 
     public func compactSession(sessionKey _: String) async throws {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "sessions.compact not supported by this transport"])
+        throw Self.unsupportedOperation("sessions.compact not supported by this transport")
     }
 
     public func abortRun(sessionKey _: String, runId _: String) async throws {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "chat.abort not supported by this transport"])
+        throw Self.unsupportedOperation("chat.abort not supported by this transport")
     }
 
     public func listSessions(
@@ -1250,10 +1241,7 @@ extension OpenClawChatTransport {
         search _: String?,
         archived _: Bool) async throws -> OpenClawChatSessionsListResponse
     {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "sessions.list not supported by this transport"])
+        throw Self.unsupportedOperation("sessions.list not supported by this transport")
     }
 
     public func listChildSessions(parentKey _: String) async throws -> [OpenClawChatSessionEntry] {
@@ -1287,27 +1275,18 @@ extension OpenClawChatTransport {
     }
 
     public func putSessionGroups(names _: [String]) async throws -> OpenClawChatSessionGroupsMutationResponse {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "sessions.groups.put not supported by this transport"])
+        throw Self.unsupportedOperation("sessions.groups.put not supported by this transport")
     }
 
     public func renameSessionGroup(
         name _: String,
         to _: String) async throws -> OpenClawChatSessionGroupsMutationResponse
     {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "sessions.groups.rename not supported by this transport"])
+        throw Self.unsupportedOperation("sessions.groups.rename not supported by this transport")
     }
 
     public func deleteSessionGroup(name _: String) async throws -> OpenClawChatSessionGroupsMutationResponse {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "sessions.groups.delete not supported by this transport"])
+        throw Self.unsupportedOperation("sessions.groups.delete not supported by this transport")
     }
 
     // No parameter defaults: a call that omits a patch field must fail to compile instead of
@@ -1323,24 +1302,15 @@ extension OpenClawChatTransport {
         archived _: Bool?,
         unread _: Bool?) async throws
     {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "sessions.patch not supported by this transport"])
+        throw Self.unsupportedOperation("sessions.patch not supported by this transport")
     }
 
     public func deleteSession(key _: String) async throws {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "sessions.delete not supported by this transport"])
+        throw Self.unsupportedOperation("sessions.delete not supported by this transport")
     }
 
     public func forkSession(parentKey _: String) async throws -> String {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "sessions.create fork not supported by this transport"])
+        throw Self.unsupportedOperation("sessions.create fork not supported by this transport")
     }
 
     public func forkSession(parentKey: String, fromLastCompleted _: Bool) async throws -> String {
@@ -1356,44 +1326,29 @@ extension OpenClawChatTransport {
         sessionKey _: String,
         entryId _: String) async throws -> OpenClawChatRewindResponse
     {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "sessions.rewind not supported by this transport"])
+        throw Self.unsupportedOperation("sessions.rewind not supported by this transport")
     }
 
     public func forkSessionAtMessage(
         sessionKey _: String,
         entryId _: String) async throws -> OpenClawChatForkAtMessageResponse
     {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "sessions.fork not supported by this transport"])
+        throw Self.unsupportedOperation("sessions.fork not supported by this transport")
     }
 
     public func listSessionBranches(
         sessionKey _: String,
         agentID _: String?) async throws -> OpenClawChatSessionBranchesResponse
     {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "sessions.branches.list not supported by this transport"])
+        throw Self.unsupportedOperation("sessions.branches.list not supported by this transport")
     }
 
     public func switchSessionBranch(sessionKey _: String, agentID _: String?, leafEntryId _: String) async throws {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "sessions.branches.switch not supported by this transport"])
+        throw Self.unsupportedOperation("sessions.branches.switch not supported by this transport")
     }
 
     public func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "models.list not supported by this transport"])
+        throw Self.unsupportedOperation("models.list not supported by this transport")
     }
 
     public func acquireModelSignInContext(agentID _: String?) async -> OpenClawChatModelSignInContext? {
@@ -1419,10 +1374,7 @@ extension OpenClawChatTransport {
     }
 
     public func setSessionModel(sessionKey _: String, model _: String?) async throws {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "sessions.patch(model) not supported by this transport"])
+        throw Self.unsupportedOperation("sessions.patch(model) not supported by this transport")
     }
 
     public func patchSessionModel(
@@ -1435,10 +1387,7 @@ extension OpenClawChatTransport {
     }
 
     public func setSessionThinking(sessionKey _: String, thinkingLevel _: String) async throws {
-        throw NSError(
-            domain: "OpenClawChatTransport",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "sessions.patch(thinkingLevel) not supported by this transport"])
+        throw Self.unsupportedOperation("sessions.patch(thinkingLevel) not supported by this transport")
     }
 
     public func patchSessionSettings(

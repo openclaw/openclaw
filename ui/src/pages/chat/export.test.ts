@@ -7,11 +7,34 @@ afterEach(() => {
 });
 
 describe("exportChatMarkdown", () => {
-  it("reports an empty transcript without creating a download", () => {
+  it.each([
+    { name: "empty transcript", messages: [] },
+    {
+      name: "tool-only transcript",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "call-1", name: "read", arguments: { path: "notes.txt" } },
+          ],
+        },
+      ],
+    },
+    {
+      name: "image-only transcript",
+      messages: [{ role: "assistant", content: [{ type: "image", data: "synthetic-image" }] }],
+    },
+    {
+      name: "commentary-only transcript",
+      messages: [{ role: "assistant", phase: "commentary", content: "Checking the notes." }],
+    },
+    { name: "whitespace-only tool result", messages: [{ role: "toolResult", content: " \n\t" }] },
+  ])("reports $name without exportable text without creating a download", ({ messages }) => {
     const createObjectURL = vi.spyOn(URL, "createObjectURL");
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click");
 
-    expect(exportChatMarkdown([], "OpenClaw")).toBe("empty");
+    expect(buildChatMarkdown(messages, "OpenClaw")).toBeNull();
+    expect(exportChatMarkdown(messages, "OpenClaw")).toBe("empty");
     expect(createObjectURL).not.toHaveBeenCalled();
     expect(click).not.toHaveBeenCalled();
   });
@@ -60,7 +83,19 @@ describe("exportChatMarkdown", () => {
           content: [{ type: "output_text", text: "The build passed." }],
           timestamp: 1_000,
         },
-        { role: "tool_result", content: "exit 0" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-1",
+              name: "exec",
+              arguments: { command: "synthetic-check" },
+            },
+          ],
+          timestamp: 2_000,
+        },
+        { role: "tool_result", toolCallId: "call-1", content: "  exit 0\n" },
         { role: "assistant", content: "NO_REPLY" },
       ],
       "OpenClaw",
@@ -70,7 +105,7 @@ describe("exportChatMarkdown", () => {
       "# Chat with OpenClaw\n\n" +
         "## Kai\n\nPlease check the build.\n\n" +
         "## Build assistant (1970-01-01T00:00:01.000Z)\n\nThe build passed.\n\n" +
-        "## Tool\n\nexit 0\n",
+        "## Tool\n\n  exit 0\n\n",
     );
   });
 

@@ -23,11 +23,12 @@ describe("resolveSlackChannelAllowlist", () => {
     const fixture = "lookup-fixture";
     slackClientMocks.conversationsList.mockResolvedValue({ channels: [] });
 
-    await resolveSlackChannelAllowlist({
+    const result = await resolveSlackChannelAllowlist({
       token: fixture,
       entries: ["#does-not-exist"],
     });
 
+    expect(result).toEqual([{ input: "#does-not-exist", resolved: false }]);
     expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledOnce();
     expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledWith(fixture);
     expect(slackClientMocks.conversationsList).toHaveBeenCalledOnce();
@@ -116,20 +117,4 @@ describe("resolveSlackChannelAllowlist", () => {
       expect(slackClientMocks.conversationsList).toHaveBeenCalledTimes(resolved ? 0 : 1);
     },
   );
-
-  it("keeps unresolved entries", async () => {
-    const client = {
-      conversations: {
-        list: vi.fn().mockResolvedValue({ channels: [] }),
-      },
-    };
-
-    const res = await resolveSlackChannelAllowlist({
-      token: "xoxb-test",
-      entries: ["#does-not-exist"],
-      client: client as never,
-    });
-
-    expect(res[0]?.resolved).toBe(false);
-  });
 });

@@ -1,5 +1,5 @@
-// Slack type declarations define plugin contracts.
 import type { MessageMetadata } from "@slack/types";
+import type { InboundReplyRecordOptions } from "openclaw/plugin-sdk/channel-inbound";
 import type { FinalizedMsgContext, GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ResolvedSlackAccount } from "../../accounts.js";
@@ -22,7 +22,7 @@ export type PreparedSlackMessage = {
   ctxPayload: FinalizedMsgContext;
   turn: {
     storePath: string;
-    record: unknown;
+    record: InboundReplyRecordOptions;
   };
   replyToMode: "off" | "first" | "all" | "batched";
   forcedReplyThreadTs?: string;

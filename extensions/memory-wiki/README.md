@@ -211,7 +211,6 @@ Read methods:
 - `wiki.search`
 - `wiki.get`
 - `wiki.obsidian.status`
-- `wiki.obsidian.search`
 
 Write methods:
 
@@ -222,6 +221,7 @@ Write methods:
 - `wiki.bridge.import`
 - `wiki.unsafeLocal.import`
 - `wiki.apply`
+- `wiki.obsidian.search`
 - `wiki.obsidian.open`
 - `wiki.obsidian.command`
 - `wiki.obsidian.daily`

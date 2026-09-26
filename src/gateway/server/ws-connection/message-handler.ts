@@ -26,6 +26,7 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { isGatewaySuspendControlAvailable } from "../../../infra/gateway-suspend-coordinator.js";
 import { rawDataByteLength } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
 import {
@@ -243,9 +244,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         );
       }
     };
+    const client = getClient();
     try {
       const parsed = JSON.parse(text);
-      const client = getClient();
       if (
         !client &&
         parsed !== null &&
@@ -415,7 +416,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       await releasePendingNodePairingCleanup();
       logGateway.error(`parse/handle error: ${String(err)}`);
       logWs("out", "parse-error", { connId, error: formatForLog(err) });
-      if (!getClient()) {
+      // Failed connect frames close even after registration.
+      if (!client) {
         close();
       }
     }
@@ -523,14 +525,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           return;
         }
       }
-      if (
-        !isGatewayRestartDraining() &&
-        (getGatewaySuspendAdmissionPhase() === "draining" ||
-          getGatewaySuspendAdmissionPhase() === "prepared") &&
-        isPreparedControlConnect(data)
-      ) {
+      if (isGatewaySuspendControlAvailable() && isPreparedControlConnect(data)) {
         // Suspension fences work, not authenticated owner recovery. Operators
-        // can reconnect throughout the held lease; node and worker connects
+        // can reconnect through suspension and its drain; node and worker connects
         // would attach presence/registry state, so they stay refused.
         await handleMessage(data);
         return;

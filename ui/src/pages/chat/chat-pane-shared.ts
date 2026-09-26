@@ -4,14 +4,19 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
-import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatGoalDraftMode,
+  ChatReplyTarget,
+  HumanMention,
+} from "../../lib/chat/chat-types.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
-export type ChatPageContext = ApplicationContext;
 export type PaneSessionChangeOptions = { replace?: boolean };
 export type PaneSessionHandoff = {
   goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
   attachments: ChatAttachment[];
   composerFallbacks?: ChatPageHost["chatComposerFallbackByScope"];
   draft: string;
@@ -188,12 +193,12 @@ export function catalogRawResult(raw: unknown): string | null {
 }
 
 export type ChatPaneConnectionScope = {
-  context: ChatPageContext;
+  context: ApplicationContext;
   state: ChatPageHost;
   client: GatewayBrowserClient;
   generation: number;
   headerOutcomeOwner: string;
-  sessions: ChatPageContext["sessions"];
+  sessions: ApplicationContext["sessions"];
 };
 const CHAT_OPEN_DETAILS_SELECTOR =
   ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";

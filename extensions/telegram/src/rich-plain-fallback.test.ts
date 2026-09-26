@@ -67,7 +67,6 @@ describe("withTelegramPlainFallback", () => {
       plainText: "fallback body",
       warn,
       limit: 8,
-      chunkCount: 3,
       sendFormatted,
       sendPlain,
     });
@@ -84,7 +83,7 @@ describe("withTelegramPlainFallback", () => {
     expect(sendPlain).toHaveBeenCalledWith(
       {
         plainText: "fallback body",
-        chunks: ["fallb", "ack ", "body"],
+        chunks: ["fallback", " body"],
       },
       "test send-plain",
     );

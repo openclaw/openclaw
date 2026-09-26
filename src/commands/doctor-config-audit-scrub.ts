@@ -1,5 +1,4 @@
 /** Doctor repair for redacting historical config audit log argv records. */
-import fs from "node:fs/promises";
 import os from "node:os";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
@@ -23,7 +22,6 @@ export async function detectConfigAuditScrubIssue(params?: {
   const env = params?.env ?? process.env;
   const homedir = params?.homedir ?? os.homedir;
   const result = await scrubConfigAuditLog({
-    fs: { promises: fs },
     env,
     homedir,
     dryRun: true,
@@ -72,11 +70,10 @@ export async function maybeScrubConfigAuditLog(params: {
 }): Promise<void> {
   const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
-  const scrubFs = { promises: fs };
 
   try {
     if (params.shouldRepair) {
-      const result = await scrubConfigAuditLog({ fs: scrubFs, env, homedir });
+      const result = await scrubConfigAuditLog({ env, homedir });
       if (result.aborted) {
         note(
           "Config audit scrub was aborted because new entries were appended to config-audit.jsonl during the rewrite. No records were modified. Stop the gateway (or wait until it is idle) and rerun `openclaw doctor --fix`.",
@@ -93,7 +90,7 @@ export async function maybeScrubConfigAuditLog(params: {
       return;
     }
 
-    const preview = await scrubConfigAuditLog({ fs: scrubFs, env, homedir, dryRun: true });
+    const preview = await scrubConfigAuditLog({ env, homedir, dryRun: true });
     if (preview.rewritten > 0) {
       const fixCommand = params.doctorFixCommand ?? "openclaw doctor --fix";
       note(

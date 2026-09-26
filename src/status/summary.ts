@@ -386,11 +386,11 @@ export async function getStatusSummary(
           resolveLinkChannelContext(cfg, { sourceConfig: options.sourceConfig }),
         )
     : null;
-  const agentList = listGatewayAgentsBasic(cfg);
-  // One roster-facts batch spans enrollment and the per-agent owner-route
-  // lookup below: outside it every resolveAgentConfig re-walks the roster and
+  const agentList = await listGatewayAgentsBasic(cfg);
+  // One roster-facts batch spans enrollment and the per-agent route inputs:
+  // outside it every resolveAgentConfig re-walks the roster and
   // a large fleet stalls the loop for the whole projection (#137570).
-  const heartbeatAgents: HeartbeatStatus[] = withAgentRosterFactsBatch(cfg, () => {
+  const heartbeatInputs = withAgentRosterFactsBatch(cfg, () => {
     const heartbeatSummaries = resolveHeartbeatSummariesForAgents(
       cfg,
       agentList.agents.map((agent) => agent.id),
@@ -398,6 +398,7 @@ export async function getStatusSummary(
     return agentList.agents.map((agent, index) => {
       const summary = expectDefined(heartbeatSummaries[index], "heartbeat summary");
       let waitingForRoute = false;
+      let ownerRoute: Parameters<typeof hasResolvableHeartbeatOwnerRoute>[0] | undefined;
       if (
         summary.enabled &&
         !agent.admissionRefusal &&
@@ -416,29 +417,39 @@ export async function getStatusSummary(
           sessionKey: heartbeatSession.sessionKey,
         })?.entry;
         const route = deliveryContextFromSession(entry);
-        // Owner status uses the runner's synchronous stage-1 decision.
-        waitingForRoute =
-          summary.target === "last"
-            ? !(route?.channel && route.to)
-            : !hasResolvableHeartbeatOwnerRoute({
-                cfg,
-                agentId: agent.id,
-                entry,
-                heartbeat: {
-                  ...cfg.agents?.defaults?.heartbeat,
-                  ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
-                },
-              });
+        if (summary.target === "last") {
+          waitingForRoute = !(route?.channel && route.to);
+        } else {
+          ownerRoute = {
+            cfg,
+            agentId: agent.id,
+            entry,
+            heartbeat: {
+              ...cfg.agents?.defaults?.heartbeat,
+              ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
+            },
+          };
+        }
       }
       return {
-        agentId: agent.id,
-        enabled: summary.enabled && !agent.admissionRefusal,
-        every: summary.every,
-        everyMs: summary.everyMs,
-        waitingForRoute,
-      } satisfies HeartbeatStatus;
+        status: {
+          agentId: agent.id,
+          enabled: summary.enabled && !agent.admissionRefusal,
+          every: summary.every,
+          everyMs: summary.everyMs,
+          waitingForRoute,
+        } satisfies HeartbeatStatus,
+        ownerRoute,
+      };
     });
   });
+  const heartbeatAgents: HeartbeatStatus[] = [];
+  for (const { status, ownerRoute } of heartbeatInputs) {
+    if (ownerRoute) {
+      status.waitingForRoute = !(await hasResolvableHeartbeatOwnerRoute(ownerRoute));
+    }
+    heartbeatAgents.push(status);
+  }
   const channelSummary = needsChannelPlugins
     ? await channelSummaryModuleLoader.load().then(({ buildChannelSummary }) =>
         buildChannelSummary(cfg, {
@@ -539,7 +550,7 @@ export async function getStatusSummary(
     startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
     startupRecoveryWarning: readStartupRecoveryWarning(includeSensitive),
     installationReplacementWarning: getGatewayInstallationReplacement()?.message,
-    secretEgressProxy: getSecretEgressCertificateStatus(),
+    secretEgressProxy: await getSecretEgressCertificateStatus(),
     degradedSecretOwners: listActiveDegradedSecretOwners().map(
       ({ ownerKind, ownerId, state, degradationState, paths: ownerPaths, reason }) => {
         const redactedReason: string = redactSecretDegradationReason(reason);

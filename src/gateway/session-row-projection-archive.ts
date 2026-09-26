@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import * as records from "./session-row-projection-record.js";
 
@@ -15,7 +16,9 @@ export function createSessionRowProjectionArchive(params: {
   enqueue: (id: string, change?: SessionRowChange) => void;
   put: (row: records.Row) => void;
   release: (id: string) => void;
-  prepare: (row: records.Row) => records.Row | undefined;
+  config: () => records.Inputs["cfg"];
+  context: () => Parameters<typeof records.readSessionRowLineage>[3];
+  referenced: NonNullable<Parameters<typeof records.readSessionRowLineage>[4]>;
 }) {
   const materialized = new Set<string>();
   const readPins = new Map<symbol, ReadonlySet<string>>();
@@ -47,8 +50,51 @@ export function createSessionRowProjectionArchive(params: {
       pinCounts.set(id, count - 1);
     }
   }
+  function markRelated(
+    row: records.Row,
+    indexes: Parameters<typeof records.markRelated>[1],
+    includeChildren = true,
+  ) {
+    const related = new Set<string>();
+    records.markRelated(row, indexes, related, includeChildren, params.config());
+    for (const id of related) {
+      const current = params.rows.get(id);
+      if (current && isColdArchivedSessionRow(current)) {
+        if (!current.storedEntry) {
+          continue;
+        }
+        const lineage = records.readSessionRowLineage(
+          current,
+          current.storedEntry,
+          params.config(),
+          params.context(),
+          params.referenced,
+        );
+        if (
+          records.sameParents(current.parents, lineage.parents) &&
+          isDeepStrictEqual(current.entry, lineage.entry)
+        ) {
+          continue;
+        }
+        // Cold children retain metadata/indices; both parents must drop stale child links.
+        const next = {
+          ...current,
+          ...lineage,
+          pendingDatabaseFacts: undefined,
+          retainedDatabaseFacts: undefined,
+          databaseFactsRevision: current.databaseFactsRevision + 1,
+        };
+        params.put(next);
+        markRelated(current, indexes, false);
+        markRelated(next, indexes, false);
+      } else if (current) {
+        params.dirty.add(id);
+      }
+    }
+  }
   return {
     demote,
+    markRelated,
     deferAcquisition(row: records.Row) {
       const id = records.identity(row);
       params.put(row);
@@ -63,28 +109,27 @@ export function createSessionRowProjectionArchive(params: {
         (current.entry.archivedAt === undefined || current.materialized === row.materialized)
       );
     },
-    markRelated(
-      row: records.Row,
-      indexes: Parameters<typeof records.markRelated>[1],
-      includeChildren = true,
-    ) {
-      const related = new Set<string>();
-      records.markRelated(row, indexes, related, includeChildren);
-      for (const id of related) {
-        const current = params.rows.get(id);
-        if (current && !isColdArchivedSessionRow(current)) {
-          params.dirty.add(id);
-        }
-      }
-    },
     invalidateRows(
       change: Extract<SessionRowChange, { all: true }>,
       candidates: Iterable<records.Row>,
     ) {
+      const catalogOnly = change.scope === "catalog" && !change.factsInvalidated;
       for (const row of candidates) {
+        if (catalogOnly && row.entry?.archivedAt === undefined) {
+          if (!params.dirty.has(records.identity(row))) {
+            row.pendingDatabaseFacts = row.retainedDatabaseFacts;
+          }
+        } else {
+          row.pendingDatabaseFacts = undefined;
+          row.retainedDatabaseFacts = undefined;
+        }
         if (row.entry?.archivedAt !== undefined) {
-          if (row.materialized) {
-            demote(row);
+          const current = row.materialized ? demote(row) : row;
+          if (!catalogOnly) {
+            records.invalidateDatabaseFacts(current);
+          }
+          if (current.preparedAcpMeta === undefined || current.hasBoard === undefined) {
+            params.dirty.add(records.identity(current));
           }
           continue;
         }
@@ -143,7 +188,7 @@ export function createSessionRowProjectionArchive(params: {
       if (initial?.entry?.archivedAt === undefined) {
         return initial;
       }
-      const row = initial.materialized ? initial : params.prepare(initial);
+      const row = initial;
       if (records.ready(row) && row.entry.archivedAt !== undefined) {
         const id = records.identity(row);
         materialized.delete(id);

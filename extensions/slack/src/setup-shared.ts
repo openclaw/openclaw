@@ -1,11 +1,41 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import { patchChannelConfigForAccount } from "openclaw/plugin-sdk/setup-runtime";
+import {
+  createSetupTranslator,
+  parseMentionOrPrefixedId,
+  patchChannelConfigForAccount,
+} from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { isSlackSetupAccountConfigured } from "./account-configured.js";
 import type { ResolvedSlackAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./channel-api.js";
 
 export const SLACK_CHANNEL = "slack" as const;
+
+export function buildSlackAllowFromPrompt() {
+  const t = createSetupTranslator();
+  return {
+    helpTitle: t("wizard.slack.allowlistTitle"),
+    helpLines: [
+      t("wizard.slack.allowlistIntro"),
+      t("wizard.slack.examples"),
+      "- U12345678",
+      "- @alice",
+      t("wizard.slack.multipleEntries"),
+      t("wizard.channels.docs", { link: formatDocsLink("/slack", "slack") }),
+    ],
+    message: t("wizard.slack.allowFromPrompt"),
+    placeholder: "@alice, U12345678",
+    invalidWithoutCredentialNote: t("wizard.slack.allowFromInvalidWithoutToken"),
+    parseId: (value: string) =>
+      parseMentionOrPrefixedId({
+        value,
+        mentionPattern: /^<@([A-Z0-9]+)>$/i,
+        prefixPattern: /^(slack:|user:)/i,
+        idPattern: /^[A-Z][A-Z0-9]+$/i,
+        normalizeId: (id) => id.toUpperCase(),
+      }),
+  };
+}
 
 export function buildSlackManifest(botName = "OpenClaw") {
   const safeName = botName.trim() || "OpenClaw";

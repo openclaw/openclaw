@@ -12,7 +12,10 @@ import {
   hasSiblingThreadWork,
   hasThreadOwnership,
   invalidateThreadOwnership,
+  revertRetainedThreadSkillsCatalog,
   type RetainedLiveThread,
+  type CodexEphemeralThreadPolicy,
+  type CodexAppServerLiveThreadOwnership,
   type ThreadOwnershipState,
   type ThreadOwnerToken,
   type ThreadReleaseTransition,
@@ -33,18 +36,6 @@ type ClientRuntime = ThreadOwnershipState & {
   sessionMetadata: Map<string, { sessionsRoot: string; rolloutPath: string; metadata: JsonObject }>;
   workspaceReferences: Map<string, { digest?: string; needsReintroduction: boolean }>;
   evictionTimer?: ReturnType<typeof setTimeout>;
-};
-
-export type CodexAppServerLiveThreadOwnership = {
-  assertCurrent: () => void;
-  configFingerprint?: string;
-  /** Ephemeral configuration is creation-owned and cannot be refreshed or cold-resumed. */
-  ephemeralPolicy?: string;
-  serviceTier?: CodexServiceTier | null;
-  /** Releases this active claim or the exact idle record it published. */
-  release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
-  /** Forgets this local owner after native shutdown, without unsubscribing a successor. */
-  forget: () => void;
 };
 
 /** Match Codex's native grace window without retaining inactive conversations indefinitely. */
@@ -429,7 +420,7 @@ export async function retainCodexAppServerLiveThread(
   releaseThread?: (threadId: string, assertCurrent?: () => void) => Promise<void>,
   configFingerprint?: string,
   serviceTier?: CodexServiceTier | null,
-  ephemeralPolicy?: string,
+  ephemeralPolicy?: CodexEphemeralThreadPolicy,
 ): Promise<boolean> {
   const runtime = configuredClients.get(client);
   if (!runtime || runtime.closed) {
@@ -646,6 +637,17 @@ function claimCodexAppServerThreadOwnership(
       }
     },
   };
+}
+
+/** Standalone incognito compaction retains its separately owned subscription. */
+export function revertCodexAppServerLiveThreadSkillsCatalog(
+  client: CodexAppServerClient,
+  threadId: string,
+): void {
+  const runtime = configuredClients.get(client);
+  if (runtime && !runtime.closed) {
+    revertRetainedThreadSkillsCatalog(runtime, threadId);
+  }
 }
 
 /** Distinguish active claimed ownership from an already-evicted idle subscription. */

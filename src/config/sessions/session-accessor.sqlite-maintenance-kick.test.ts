@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as logging from "../../logging/logger.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -63,6 +64,86 @@ function createStore(pruneAfterMs = 1_000, key = sessionKey) {
   };
   return { database, request, scope, storePath, updatedAt };
 }
+
+it("captures warn-mode age facts without constructing or dispatching reclamation", async () => {
+  const { request, storePath } = createStore();
+  request.maintenanceConfig.mode = "warn";
+  const capture = vi.spyOn(ageFacts, "captureSessionEntryMaintenanceAgeFact");
+  const plans = vi.spyOn(reclamation, "createSessionMaintenancePlanningOperation");
+  kickSessionEntryMaintenanceAfterWrite(request);
+  await yieldToEventLoop();
+  expect(capture).toHaveBeenCalledTimes(1);
+  expect(plans).not.toHaveBeenCalled();
+  expect(reclamation.runSqliteSessionReclamation).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(30 * 60 * 1_000);
+  expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();
+  expect(capture).toHaveBeenCalledTimes(1);
+});
+
+it("coalesces rejected plans behind write quiet, caps retries, and resumes on a new write", async () => {
+  const { request, scope, storePath, updatedAt } = createStore();
+  const victimKey = "agent:main:replan-victim";
+  runOpenClawAgentWriteTransaction((owner) => {
+    writeSessionEntry(owner, victimKey, { sessionId: "victim", updatedAt: updatedAt - 2_000 });
+  }, scope);
+  const logger = logging.getChildLogger({ subsystem: "session-sqlite" });
+  vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
+  const warn = vi.spyOn(logger, "warn");
+  const createPlan = reclamation.createSessionMaintenancePlanningOperation;
+  let rejections = 0;
+  const plans = vi
+    .spyOn(reclamation, "createSessionMaintenancePlanningOperation")
+    .mockImplementation((params) => {
+      const operation = createPlan(params);
+      if (rejections < 3) {
+        queueMicrotask(() => {
+          rejections += 1;
+          runOpenClawAgentWriteTransaction((owner) => {
+            writeSessionEntry(owner, sessionKey, {
+              sessionId: "age-kick",
+              updatedAt: Date.now(),
+              label: `write-${rejections}`,
+            });
+          }, scope);
+          kickSessionEntryMaintenanceAfterWrite(request);
+        });
+      }
+      return operation;
+    });
+  kickSessionEntryMaintenanceAfterWrite(request);
+  await yieldToEventLoop();
+  expect(plans).toHaveBeenCalledTimes(1);
+  expect(loadSessionEntry({ sessionKey: victimKey, storePath })?.archivedAt).toBeUndefined();
+
+  for (let write = 0; write < 5; write += 1) {
+    await vi.advanceTimersByTimeAsync(999);
+    kickSessionEntryMaintenanceAfterWrite(request);
+  }
+  expect(plans).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(1_000);
+  await yieldToEventLoop();
+  expect(plans).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(2_000);
+  await yieldToEventLoop();
+  expect(plans).toHaveBeenCalledTimes(3);
+  expect(warn).toHaveBeenCalledWith(
+    "SQLite automatic session maintenance paused after repeated input changes",
+    expect.objectContaining({ rejections: 3, error: expect.any(Error) }),
+  );
+  await vi.advanceTimersByTimeAsync(30 * 60 * 1_000);
+  expect(plans).toHaveBeenCalledTimes(3);
+  expect(loadSessionEntry({ sessionKey: victimKey, storePath })?.archivedAt).toBeUndefined();
+
+  kickSessionEntryMaintenanceAfterWrite(request);
+  await yieldToEventLoop();
+  expect(plans).toHaveBeenCalledTimes(3);
+  await vi.advanceTimersByTimeAsync(1_000);
+  await yieldToEventLoop();
+  expect(plans).toHaveBeenCalledTimes(4);
+  expect(loadSessionEntry({ sessionKey: victimKey, storePath })).toMatchObject({
+    archiveReason: "age-retention",
+  });
+});
 
 it("archives an entry at its age boundary without another write", async () => {
   const { request, storePath } = createStore();
@@ -332,6 +413,8 @@ it.each(
   kickSessionEntryMaintenanceAfterWrite(request);
   await yieldToEventLoop();
   expect(changed).toBe(true);
+  await vi.advanceTimersByTimeAsync(1_000);
+  await yieldToEventLoop();
   expect(loadSessionEntry({ sessionKey: victimKey, storePath })).toMatchObject({
     archivedAt: expect.any(Number),
     archiveReason: mutation === "insert" ? "active-session-cap" : "age-retention",
@@ -430,6 +513,10 @@ it.runIf(process.platform !== "win32").each(["before preparation", "after prepar
     try {
       kickSessionEntryMaintenanceAfterWrite(request);
       await yieldToEventLoop();
+      if (when === "after preparation") {
+        await vi.advanceTimersByTimeAsync(1_000);
+        await yieldToEventLoop();
+      }
       expect(dispatch).toHaveBeenCalledTimes(1);
       expect(replaced).toBe(false);
       expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();

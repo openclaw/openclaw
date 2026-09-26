@@ -354,6 +354,7 @@ export async function defaultPersistDigest(params: {
           sessionKey: params.sessionKey,
           agentId: params.agentId,
           storePath: params.storePath,
+          facts: { kind: "unchanged" },
         }),
     },
   );

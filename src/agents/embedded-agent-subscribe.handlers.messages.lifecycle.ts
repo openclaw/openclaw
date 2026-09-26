@@ -94,14 +94,17 @@ export function handleMessageEnd(
   }
   ctx.noteLastAssistant(assistantMessage);
   if (suppressVisibleAssistantOutput) {
-    appendRawStream(() => ({
-      ts: Date.now(),
-      event: "assistant_message_end",
-      runId: ctx.params.runId,
-      sessionId: (ctx.params.session as { id?: string }).id,
-      rawText: coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)),
-      rawThinking: extractAssistantThinking(assistantMessage),
-    }));
+    appendRawStream(
+      () => ({
+        ts: Date.now(),
+        event: "assistant_message_end",
+        runId: ctx.params.runId,
+        sessionId: (ctx.params.session as { id?: string }).id,
+        rawText: coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)),
+        rawThinking: extractAssistantThinking(assistantMessage),
+      }),
+      ctx.params.sessionKey,
+    );
     emitAssistantCommentaryStreamData(ctx, assistantMessage, true);
     // Commentary-tagged tool turns can still carry durable reasoning under /reasoning on.
     const suppressedTrimmedReasoning = ctx.state.includeReasoning
@@ -129,14 +132,17 @@ export function handleMessageEnd(
     (rawText ??= coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)));
   const snapshot = extractAssistantStreamSnapshot(ctx, assistantMessage);
   const rawVisibleText = snapshot.text;
-  appendRawStream(() => ({
-    ts: Date.now(),
-    event: "assistant_message_end",
-    runId: ctx.params.runId,
-    sessionId: (ctx.params.session as { id?: string }).id,
-    rawText: getRawText(),
-    rawThinking: extractAssistantThinking(assistantMessage),
-  }));
+  appendRawStream(
+    () => ({
+      ts: Date.now(),
+      event: "assistant_message_end",
+      runId: ctx.params.runId,
+      sessionId: (ctx.params.session as { id?: string }).id,
+      rawText: getRawText(),
+      rawThinking: extractAssistantThinking(assistantMessage),
+    }),
+    ctx.params.sessionKey,
+  );
   warnIfAssistantEmittedSuspiciousText(ctx, assistantMessage);
   const messageToolText = extractStandaloneMessageToolText(rawVisibleText, {
     allowRoutedReply: isOpenAiCompletionsAssistantMessage(assistantMessage),

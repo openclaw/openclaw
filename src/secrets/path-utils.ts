@@ -5,12 +5,8 @@ import type { ConcreteConfigPathSegment } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "./shared.js";
 
-function parseArrayIndexSegment(segment: string): number | undefined {
-  return parseConfigPathArrayIndex(segment);
-}
-
 function requireArrayIndexSegment(segment: string, pathLabel: string): number {
-  const index = parseArrayIndexSegment(segment);
+  const index = parseConfigPathArrayIndex(segment);
   if (index === undefined) {
     throw new Error(`Invalid array index segment "${segment}" at ${pathLabel}.`);
   }
@@ -88,7 +84,7 @@ export function getPath(root: unknown, segments: string[]): unknown {
   let cursor: unknown = root;
   for (const segment of segments) {
     if (Array.isArray(cursor)) {
-      const arrayIndex = parseArrayIndexSegment(segment);
+      const arrayIndex = parseConfigPathArrayIndex(segment);
       if (arrayIndex === undefined) {
         return undefined;
       }

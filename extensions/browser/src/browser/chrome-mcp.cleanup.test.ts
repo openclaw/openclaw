@@ -17,7 +17,8 @@ import {
   setChromeMcpSessionFactoryForTest,
 } from "./chrome-mcp-session.js";
 
-vi.mock("../logging/subsystem.js", () => ({
+vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>()),
   createSubsystemLogger: () => ({ child: () => ({ warn: vi.fn() }) }),
 }));
 

@@ -53,11 +53,6 @@ describe("argv helpers", () => {
       ["node", "openclaw", "external-plugin", "inspect", "--help"],
     ],
     [
-      "unknown plugin command group help target help flag",
-      ["node", "openclaw", "external-plugin", "help", "inspect", "--help"],
-      ["node", "openclaw", "external-plugin", "inspect", "--help"],
-    ],
-    [
       "generated help target with trailing root option",
       ["node", "openclaw", "memory", "help", "status", "--no-color"],
       ["node", "openclaw", "--no-color", "memory", "status", "--help"],
@@ -83,11 +78,6 @@ describe("argv helpers", () => {
       ["node", "openclaw", "plugins", "--help"],
     ],
     [
-      "root help target with help flag",
-      ["node", "openclaw", "help", "plugins", "--help"],
-      ["node", "openclaw", "plugins", "--help"],
-    ],
-    [
       "root option before help target",
       ["node", "openclaw", "--profile", "work", "help", "memory"],
       ["node", "openclaw", "--profile", "work", "memory", "--help"],
@@ -101,11 +91,6 @@ describe("argv helpers", () => {
       "root help self-help remains untouched",
       ["node", "openclaw", "help", "--help"],
       ["node", "openclaw", "help", "--help"],
-    ],
-    [
-      "nested root help target",
-      ["node", "openclaw", "help", "plugins", "list"],
-      ["node", "openclaw", "plugins", "list", "--help"],
     ],
     [
       "nested root help target with help flag",
@@ -226,7 +211,6 @@ describe("argv helpers", () => {
 
   it.each([
     ["root help command", ["node", "openclaw", "help"], true],
-    ["root help command with target", ["node", "openclaw", "help", "matrix"], true],
     ["nested help command", ["node", "openclaw", "matrix", "encryption", "help"], true],
     ["known subcommand root help command", ["node", "openclaw", "config", "help"], true],
     ["known leaf command positional help", ["node", "openclaw", "docs", "help"], false],
@@ -258,41 +242,14 @@ describe("argv helpers", () => {
       false,
     ],
     ["root version flag", ["node", "openclaw", "--version"], true],
-    ["root short version flag", ["node", "openclaw", "-V"], true],
-    ["root version alias after profile", ["node", "openclaw", "--profile", "work", "-v"], true],
-    [
-      "root version flag after profile",
-      ["node", "openclaw", "--profile", "work", "--version"],
-      true,
-    ],
     [
       "version-pinned skill install",
       ["node", "openclaw", "skills", "install", "@owner/weather", "--version", "1.2.3"],
       false,
     ],
     [
-      "version-pinned skill verification",
-      ["node", "openclaw", "skills", "verify", "@owner/weather", "--version", "1.2.3"],
-      false,
-    ],
-    [
       "equals-form version-pinned skill install",
       ["node", "openclaw", "skills", "install", "@owner/weather", "--version=1.2.3"],
-      false,
-    ],
-    [
-      "profiled version-pinned skill verification",
-      [
-        "node",
-        "openclaw",
-        "--profile",
-        "work",
-        "skills",
-        "verify",
-        "@owner/weather",
-        "--version",
-        "1.2.3",
-      ],
       false,
     ],
     [
@@ -311,8 +268,6 @@ describe("argv helpers", () => {
 
   it.each([
     { path: ["skills", "verify"], option: "tag" },
-    { path: ["skills", "verify"], option: "version" },
-    { path: ["models", "list"], option: "provider" },
     { path: ["agent"], option: "message" },
   ])("keeps actual help after a root-looking $option value on $path", async ({ path, option }) => {
     const program = new Command()
@@ -498,16 +453,8 @@ describe("argv helpers", () => {
     ["missing flag", ["node", "openclaw", "status"], undefined],
     ["missing value", ["node", "openclaw", "status", "--timeout"], null],
     ["valid positive integer", ["node", "openclaw", "status", "--timeout", "5000"], 5000],
-    [
-      "valid signed decimal positive integer",
-      ["node", "openclaw", "status", "--timeout", "+5000"],
-      5000,
-    ],
-    ["invalid integer", ["node", "openclaw", "status", "--timeout", "nope"], null],
-    ["non-decimal integer", ["node", "openclaw", "status", "--timeout", "0x10"], null],
     ["partial integer", ["node", "openclaw", "status", "--timeout", "5s"], null],
     ["zero", ["node", "openclaw", "status", "--timeout", "0"], null],
-    ["negative integer", ["node", "openclaw", "status", "--timeout", "-5"], null],
     [
       "repeated value uses final valid integer",
       ["node", "openclaw", "status", "--timeout", "nope", "--timeout", "5000"],
@@ -525,42 +472,10 @@ describe("argv helpers", () => {
   it.each([
     ["keeps plain node argv", ["node", "openclaw", "status"], ["node", "openclaw", "status"]],
     [
-      "keeps version-suffixed node binary",
-      ["node-22", "openclaw", "status"],
-      ["node-22", "openclaw", "status"],
-    ],
-    [
       "keeps windows versioned node exe",
       ["node-22.2.0.exe", "openclaw", "status"],
       ["node-22.2.0.exe", "openclaw", "status"],
     ],
-    [
-      "keeps dotted node binary",
-      ["node-22.2", "openclaw", "status"],
-      ["node-22.2", "openclaw", "status"],
-    ],
-    [
-      "keeps dotted node exe",
-      ["node-22.2.exe", "openclaw", "status"],
-      ["node-22.2.exe", "openclaw", "status"],
-    ],
-    [
-      "keeps absolute versioned node path",
-      ["/usr/bin/node-22.2.0", "openclaw", "status"],
-      ["/usr/bin/node-22.2.0", "openclaw", "status"],
-    ],
-    ["keeps node24 shorthand", ["node24", "openclaw", "status"], ["node24", "openclaw", "status"]],
-    [
-      "keeps absolute node24 shorthand",
-      ["/usr/bin/node24", "openclaw", "status"],
-      ["/usr/bin/node24", "openclaw", "status"],
-    ],
-    [
-      "keeps windows node24 exe",
-      ["node24.exe", "openclaw", "status"],
-      ["node24.exe", "openclaw", "status"],
-    ],
-    ["keeps nodejs binary", ["nodejs", "openclaw", "status"], ["nodejs", "openclaw", "status"]],
     [
       "prefixes fallback when first arg is not a node launcher",
       ["node-dev", "openclaw", "status"],

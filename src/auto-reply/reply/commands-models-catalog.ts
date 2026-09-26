@@ -86,10 +86,6 @@ export type ModelsRuntimeChoice = {
   description: string;
 };
 
-function isModelsBrowseVisibleProvider(provider: string): boolean {
-  return !isRetiredModelPickerProvider(provider);
-}
-
 function buildRuntimeChoice(params: { cfg: OpenClawConfig; runtime: string }): ModelsRuntimeChoice {
   const id = normalizeRuntimeChoiceId(params.runtime);
   const label = resolveAgentRuntimeLabel({ config: params.cfg, resolvedHarness: id });
@@ -136,8 +132,10 @@ export async function loadModelsProviderData(
     ...(agentId ? { agentId } : {}),
     ...(agentDir ? { agentDir } : {}),
     ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
-    readOnly: false,
+    readOnly: true,
   });
+  // The owner records refresh outcomes; a sent menu must not wait for acquisition or be rewritten.
+  void published.loadFullModelCatalog?.().catch(() => undefined);
   return projectPreparedModelsProviderData(published.config, agentId, options, published);
 }
 
@@ -229,6 +227,7 @@ async function projectPreparedModelsProviderData(
     catalog,
     defaultProvider: resolvedDefault.provider,
     defaultModel: resolvedDefault,
+    selectedModel: resolvedDefault,
     agentId,
     workspaceDir,
     view: options.view,
@@ -283,7 +282,7 @@ async function projectPreparedModelsProviderData(
   const byProvider = new Map<string, Set<string>>();
   const add = (p: string, m: string) => {
     const key = normalizeProviderId(p);
-    if (!isModelsBrowseVisibleProvider(key)) {
+    if (isRetiredModelPickerProvider(key)) {
       return;
     }
     if (
@@ -335,23 +334,14 @@ async function projectPreparedModelsProviderData(
   };
 
   const addModelConfigEntries = () => {
-    const modelConfig = cfg.agents?.defaults?.model;
-    if (typeof modelConfig === "string") {
-      addRawModelRef(modelConfig);
-    } else if (modelConfig && typeof modelConfig === "object") {
-      addRawModelRef(modelConfig.primary);
-      for (const fallback of modelConfig.fallbacks ?? []) {
-        addRawModelRef(fallback);
-      }
-    }
-
-    const imageConfig = cfg.agents?.defaults?.imageModel;
-    if (typeof imageConfig === "string") {
-      addRawModelRef(imageConfig);
-    } else if (imageConfig && typeof imageConfig === "object") {
-      addRawModelRef(imageConfig.primary);
-      for (const fallback of imageConfig.fallbacks ?? []) {
-        addRawModelRef(fallback);
+    for (const modelConfig of [cfg.agents?.defaults?.model, cfg.agents?.defaults?.imageModel]) {
+      if (typeof modelConfig === "string") {
+        addRawModelRef(modelConfig);
+      } else if (modelConfig && typeof modelConfig === "object") {
+        addRawModelRef(modelConfig.primary);
+        for (const fallback of modelConfig.fallbacks ?? []) {
+          addRawModelRef(fallback);
+        }
       }
     }
   };
@@ -395,7 +385,7 @@ async function projectPreparedModelsProviderData(
 
   const pendingProviders = decisions.snapshot.pendingProviders?.filter(
     (provider) =>
-      isModelsBrowseVisibleProvider(provider) &&
+      !isRetiredModelPickerProvider(provider) &&
       (options.view === "all" ||
         visibilityPolicy.allowAny ||
         [...visibilityPolicy.allowedKeys].some((key) => key.startsWith(`${provider}/`))),

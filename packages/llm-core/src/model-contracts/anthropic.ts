@@ -124,7 +124,7 @@ export function resolveClaudeOpus5ModelIdentity(ref: ClaudeModelRef): string | u
 /** Resolve the Opus 5.5 contract without matching other Opus 5 generations. */
 export function resolveClaudeOpus55ModelIdentity(ref: ClaudeModelRef): string | undefined {
   const normalized = resolveClaudeModelIdentity(ref);
-  if (normalized === "opus-5-5") {
+  if (normalized === "opus" || normalized === "opus-5-5") {
     return "claude-opus-5-5";
   }
   return /^claude-opus-5-5(?=$|[^a-z0-9])/.test(normalized) ? normalized : undefined;

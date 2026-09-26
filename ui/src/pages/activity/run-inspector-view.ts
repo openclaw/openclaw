@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
 import type {
   ExecutionIdentityContextV1,
   PrincipalRefV1,
@@ -56,18 +56,9 @@ function evidenceStateLabel(state: EvidenceState): string {
 }
 
 function stateReason(label: string, state: EvidenceState): string | undefined {
-  switch (state) {
-    case "absent":
-      return t("activity.runInspector.reasons.absent", { label: label.toLowerCase() });
-    case "unknown":
-      return t("activity.runInspector.reasons.unknown", { label: label.toLowerCase() });
-    case "unsupported":
-      return t("activity.runInspector.reasons.unsupported", { label: label.toLowerCase() });
-    case "present":
-      return undefined;
-  }
-  const unreachable: never = state;
-  return unreachable;
+  return state === "present"
+    ? undefined
+    : t(`activity.runInspector.reasons.${state}`, { label: label.toLowerCase() });
 }
 
 function principalValues(principal: PrincipalRefV1 | undefined): FactValue[] {
@@ -92,6 +83,10 @@ function principalValues(principal: PrincipalRefV1 | undefined): FactValue[] {
   ];
 }
 
+function optionalReferenceValue(label: string, value: string | undefined): FactValue[] {
+  return value ? [{ label, value, mono: true }] : [];
+}
+
 function renderFact(fact: IdentityFact) {
   const values = fact.values ?? [];
   const reason = fact.reason ?? stateReason(fact.label, fact.state);
@@ -101,6 +96,7 @@ function renderFact(fact: IdentityFact) {
         <span>${fact.label}</span>
         <span
           class="run-inspector__state run-inspector__state--${fact.state}"
+          role="img"
           aria-label=${t("activity.runInspector.evidenceStateLabel", {
             state: evidenceStateLabel(fact.state),
           })}
@@ -156,15 +152,10 @@ function identityFacts(context: ExecutionIdentityContextV1, basePath: string): I
           value: context.ingress.boundary,
           mono: true,
         },
-        ...(context.ingress.sourceRef
-          ? [
-              {
-                label: t("activity.runInspector.values.sourceReference"),
-                value: context.ingress.sourceRef,
-                mono: true,
-              },
-            ]
-          : []),
+        ...optionalReferenceValue(
+          t("activity.runInspector.values.sourceReference"),
+          context.ingress.sourceRef,
+        ),
       ],
     },
     {
@@ -186,15 +177,10 @@ function identityFacts(context: ExecutionIdentityContextV1, basePath: string): I
       state: sponsor?.state ?? "absent",
       values: [
         ...principalValues(sponsor?.principal),
-        ...(sponsor?.relationshipRef
-          ? [
-              {
-                label: t("activity.runInspector.values.relationshipReference"),
-                value: sponsor.relationshipRef,
-                mono: true,
-              },
-            ]
-          : []),
+        ...optionalReferenceValue(
+          t("activity.runInspector.values.relationshipReference"),
+          sponsor?.relationshipRef,
+        ),
       ],
     },
     {
@@ -206,15 +192,10 @@ function identityFacts(context: ExecutionIdentityContextV1, basePath: string): I
           value: context.agentDefinition.definitionRef,
           mono: true,
         },
-        ...(context.agentDefinition.revisionRef
-          ? [
-              {
-                label: t("activity.runInspector.values.revisionReference"),
-                value: context.agentDefinition.revisionRef,
-                mono: true,
-              },
-            ]
-          : []),
+        ...optionalReferenceValue(
+          t("activity.runInspector.values.revisionReference"),
+          context.agentDefinition.revisionRef,
+        ),
       ],
     },
     {
@@ -295,33 +276,18 @@ function identityFacts(context: ExecutionIdentityContextV1, basePath: string): I
                   },
                 ]
               : []),
-            ...(lineage.parentExecutionId
-              ? [
-                  {
-                    label: t("activity.runInspector.values.parentExecutionReference"),
-                    value: lineage.parentExecutionId,
-                    mono: true,
-                  },
-                ]
-              : []),
-            ...(lineage.parentContextId
-              ? [
-                  {
-                    label: t("activity.runInspector.values.parentContextReference"),
-                    value: lineage.parentContextId,
-                    mono: true,
-                  },
-                ]
-              : []),
-            ...(lineage.delegationRef
-              ? [
-                  {
-                    label: t("activity.runInspector.values.delegationReference"),
-                    value: lineage.delegationRef,
-                    mono: true,
-                  },
-                ]
-              : []),
+            ...optionalReferenceValue(
+              t("activity.runInspector.values.parentExecutionReference"),
+              lineage.parentExecutionId,
+            ),
+            ...optionalReferenceValue(
+              t("activity.runInspector.values.parentContextReference"),
+              lineage.parentContextId,
+            ),
+            ...optionalReferenceValue(
+              t("activity.runInspector.values.delegationReference"),
+              lineage.delegationRef,
+            ),
             ...principalValues(lineage.parentAgentPrincipal),
           ]
         : [],
@@ -332,42 +298,14 @@ function identityFacts(context: ExecutionIdentityContextV1, basePath: string): I
 
 function diagnosticCopy(result: RunInspectorResult) {
   const kind = classifyRunInspection(result);
-  switch (kind) {
-    case "not-found":
-      return {
-        title: t("activity.runInspector.diagnostic.notFound.title"),
-        description: t("activity.runInspector.diagnostic.notFound.description"),
-      };
-    case "expired":
-      return {
-        title: t("activity.runInspector.diagnostic.expired.title"),
-        description: t("activity.runInspector.diagnostic.expired.description"),
-      };
-    case "corrupt":
-      return {
-        title: t("activity.runInspector.diagnostic.corrupt.title"),
-        description: t("activity.runInspector.diagnostic.corrupt.description"),
-      };
-    case "ambiguous":
-      return {
-        title: t("activity.runInspector.diagnostic.ambiguous.title"),
-        description: t("activity.runInspector.diagnostic.ambiguous.description"),
-      };
-    case "unsupported":
-      return {
-        title: t("activity.runInspector.diagnostic.unsupported.title"),
-        description: t("activity.runInspector.diagnostic.unsupported.description"),
-      };
-    case "unknown":
-      return {
-        title: t("activity.runInspector.diagnostic.unknown.title"),
-        description: t("activity.runInspector.diagnostic.unknown.description"),
-      };
-    case "present":
-      return null;
+  if (kind === "present") {
+    return null;
   }
-  const unreachable: never = kind;
-  return unreachable;
+  const key = kind === "not-found" ? "notFound" : kind;
+  return {
+    title: t(`activity.runInspector.diagnostic.${key}.title`),
+    description: t(`activity.runInspector.diagnostic.${key}.description`),
+  };
 }
 
 function renderUnavailableResult(
@@ -500,21 +438,27 @@ function renderReady(
 }
 
 function renderPanel(
-  title: string,
-  description: string,
-  options: {
-    action?: { label: string; onClick: () => void };
-    role?: "alert" | "status";
-  } = {},
+  props: RunInspectorProps,
+  state: Exclude<RunInspectorState, { status: "ready" }>,
 ) {
+  const key = state.status === "loading" && state.waitingForGateway ? "waiting" : state.status;
+  const action =
+    state.status === "error"
+      ? state.recovery === "restart"
+        ? { label: t("activity.runInspector.restart"), onClick: props.onRestart }
+        : { label: t("activity.runInspector.retry"), onClick: props.onRetry }
+      : undefined;
   return html`
-    <div class="run-inspector__panel" role=${options.role ?? "status"}>
-      <h3>${title}</h3>
-      <p>${description}</p>
+    <div
+      class="run-inspector__panel"
+      role=${state.status === "error" || state.status === "unauthorized" ? "alert" : "status"}
+    >
+      <h3>${t(`activity.runInspector.panels.${key}.title`)}</h3>
+      <p>${t(`activity.runInspector.panels.${key}.description`)}</p>
       ${
-        options.action
-          ? html`<button type="button" class="btn" @click=${options.action.onClick}>
-              ${options.action.label}
+        action
+          ? html`<button type="button" class="btn" @click=${action.onClick}>
+              ${action.label}
             </button>`
           : nothing
       }
@@ -524,67 +468,17 @@ function renderPanel(
 
 export function renderRunInspector(props: RunInspectorProps) {
   const state = props.state;
-  let content: TemplateResult;
-  switch (state.status) {
-    case "empty":
-      content = renderPanel(
-        t("activity.runInspector.panels.empty.title"),
-        t("activity.runInspector.panels.empty.description"),
-      );
-      break;
-    case "loading":
-      content = renderPanel(
-        state.waitingForGateway
-          ? t("activity.runInspector.panels.waiting.title")
-          : t("activity.runInspector.panels.loading.title"),
-        state.waitingForGateway
-          ? t("activity.runInspector.panels.waiting.description")
-          : t("activity.runInspector.panels.loading.description"),
-      );
-      break;
-    case "disconnected":
-      content = renderPanel(
-        t("activity.runInspector.panels.disconnected.title"),
-        t("activity.runInspector.panels.disconnected.description"),
-      );
-      break;
-    case "unauthorized":
-      content = renderPanel(
-        t("activity.runInspector.panels.unauthorized.title"),
-        t("activity.runInspector.panels.unauthorized.description"),
-        { role: "alert" },
-      );
-      break;
-    case "unsupported":
-      content = renderPanel(
-        t("activity.runInspector.panels.unsupported.title"),
-        t("activity.runInspector.panels.unsupported.description"),
-      );
-      break;
-    case "error":
-      content = renderPanel(
-        t("activity.runInspector.panels.error.title"),
-        t("activity.runInspector.panels.error.description"),
-        {
-          action:
-            state.recovery === "restart"
-              ? { label: t("activity.runInspector.restart"), onClick: props.onRestart }
-              : { label: t("activity.runInspector.retry"), onClick: props.onRetry },
-          role: "alert",
-        },
-      );
-      break;
-    case "ready":
-      content = renderReady(
-        state,
-        props.basePath,
-        props.selector,
-        props.selectorId,
-        props.onLoadMoreDecisions,
-        props.onLoadMoreExecutions,
-      );
-      break;
-  }
+  const content =
+    state.status === "ready"
+      ? renderReady(
+          state,
+          props.basePath,
+          props.selector,
+          props.selectorId,
+          props.onLoadMoreDecisions,
+          props.onLoadMoreExecutions,
+        )
+      : renderPanel(props, state);
 
   return html`
     <section

@@ -12,7 +12,7 @@ import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { scrollState } from "./scroll-state.ts";
 import {
   composerDisclosure,
-  type ComposerProgressRunLifecycle,
+  type ComposerProgressDisclosureContext,
 } from "./session-progress-disclosure-controller.ts";
 
 type SessionProgressCardPlacement = "board" | "composer";
@@ -251,12 +251,6 @@ function progressStepMarker(status: PresentedProgressStepStatus, sessionStatus?:
   return status satisfies never;
 }
 
-function currentProgressPosition(steps: readonly ProgressCardStep[]): number {
-  const current = currentProgressStep(steps);
-  const index = current ? steps.indexOf(current) : -1;
-  return Math.max(1, index + 1);
-}
-
 function promoteFirstProgressBar(sanitizedHtml: string): string {
   const template = document.createElement("template");
   template.innerHTML = sanitizedHtml;
@@ -343,12 +337,6 @@ function renderSteps(card: ProgressCard, hasActiveRun: boolean, sessionStatus?: 
   </ol>`;
 }
 
-function renderBody(card: ProgressCard, hasActiveRun: boolean, sessionStatus?: SessionRunStatus) {
-  return html`<div class="session-progress-card__body">
-    ${renderProgressCardMarkdown(card.markdown)} ${renderSteps(card, hasActiveRun, sessionStatus)}
-  </div>`;
-}
-
 export function renderSessionProgressCard(
   card: ProgressCard | null | undefined,
   placement: SessionProgressCardPlacement,
@@ -358,7 +346,7 @@ export function renderSessionProgressCard(
   endedAt?: number,
   hasActiveRun = true,
   collapseComposerByDefault = false,
-  composerRunLifecycle?: ComposerProgressRunLifecycle,
+  composerDisclosureContext?: ComposerProgressDisclosureContext,
   refreshAction?: SessionProgressCardRefreshAction,
 ) {
   if (!card) {
@@ -403,7 +391,6 @@ export function renderSessionProgressCard(
   const activityKey = terminalTimestamp
     ? ACTIVITY_LABEL_KEYS[sessionStatus!]
     : "sessionProgressCard.activity.updated";
-  const accessibleLabel = countLabel;
   const lastActivity = progressActivityTime(activityTimestamp, activityKey);
   const dismissible = Boolean(
     onDismiss && card.steps?.length && card.steps.every((step) => step.status === "completed"),
@@ -426,14 +413,8 @@ export function renderSessionProgressCard(
   if (placement === "composer") {
     const steps = card.steps ?? [];
     const currentStep = currentProgressStep(steps);
-    const currentPosition = currentProgressPosition(steps);
+    const currentPosition = Math.max(1, currentStep ? steps.indexOf(currentStep) + 1 : 0);
     const complete = steps.length > 0 && steps.every((step) => step.status === "completed");
-    const composerCountLabel = counts
-      ? t("sessionProgressCard.countLabel", {
-          completed: String(counts.completed),
-          total: String(counts.total),
-        })
-      : t("sessionProgressCard.noteLabel");
     const stepLabel = currentStep?.step ?? t("sessionProgressCard.noteLabel");
     const terminalOutcomeKey = effectiveSessionStatus
       ? TERMINAL_OUTCOME_LABEL_KEYS[effectiveSessionStatus]
@@ -466,10 +447,9 @@ export function renderSessionProgressCard(
       data-progress-card-placement="composer"
       data-complete=${String(complete)}
       ${composerDisclosure(
-        composerRunLifecycle?.sessionIdentity ?? card.sessionKey,
-        !complete && !collapseComposerByDefault,
-        collapseComposerByDefault,
-        composerRunLifecycle,
+        composerDisclosureContext?.sessionIdentity ?? card.sessionKey,
+        !collapseComposerByDefault,
+        composerDisclosureContext,
       )}
     >
       <summary class="session-progress-card__summary" aria-label=${summaryLabel}>
@@ -530,7 +510,7 @@ export function renderSessionProgressCard(
       <div
         class="session-progress-card__body"
         role="region"
-        aria-label=${composerCountLabel}
+        aria-label=${countLabel}
         ${scrollState()}
       >
         ${renderProgressCardMarkdown(card.markdown)}
@@ -541,7 +521,7 @@ export function renderSessionProgressCard(
   return html`<section
     class="session-progress-card session-progress-card--${placement}"
     data-progress-card-placement=${placement}
-    aria-label=${accessibleLabel}
+    aria-label=${countLabel}
   >
     <div class="session-progress-card__heading">
       <span>${t("sessionProgressCard.title")}</span>
@@ -551,6 +531,9 @@ export function renderSessionProgressCard(
         >${dismiss}
       </span>
     </div>
-    ${renderBody(card, hasCurrentRunActivity, effectiveSessionStatus)}
+    <div class="session-progress-card__body">
+      ${renderProgressCardMarkdown(card.markdown)}
+      ${renderSteps(card, hasCurrentRunActivity, effectiveSessionStatus)}
+    </div>
   </section>`;
 }

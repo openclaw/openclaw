@@ -272,6 +272,7 @@ class CloudWorkerRepositories extends OpenClawLightDomContentsElement {
                 control: html` <button
                     class="btn btn--sm"
                     type="button"
+                    aria-label=${`${t("cloudWorkersPage.editAction")}: ${mapping.repository}`}
                     ?disabled=${!editable}
                     @click=${() => this.openEditor(mapping)}
                   >
@@ -280,6 +281,7 @@ class CloudWorkerRepositories extends OpenClawLightDomContentsElement {
                   <button
                     class="btn btn--sm danger"
                     type="button"
+                    aria-label=${`${t("common.delete")}: ${mapping.repository}`}
                     ?disabled=${!editable}
                     @click=${() => void this.save((base) => buildCloudWorkerRepositoryDeletePatch(base, mapping))}
                   >

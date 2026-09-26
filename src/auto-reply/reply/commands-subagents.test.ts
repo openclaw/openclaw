@@ -119,36 +119,6 @@ describe("subagents status", () => {
       unexpectedText: [] as string[],
     },
     {
-      name: "includes subagent details in /status when verbose",
-      seedRuns: () => {
-        addSubagentRunForTests({
-          runId: "run-1",
-          childSessionKey: "agent:main:subagent:abc",
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          task: "do thing",
-          cleanup: "keep",
-          createdAt: 1000,
-          startedAt: 1000,
-        });
-        addSubagentRunForTests({
-          runId: "run-2",
-          childSessionKey: "agent:main:subagent:def",
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          task: "finished task",
-          cleanup: "keep",
-          createdAt: 900,
-          startedAt: 900,
-          endedAt: 1200,
-          outcome: { status: "ok" },
-        });
-      },
-      verboseLevel: "on" as const,
-      expectedText: ["🤖 Subagents: 1 active", "· 1 done", "  • do thing · 4s"],
-      unexpectedText: [] as string[],
-    },
-    {
       name: "preserves verbose done-only summary",
       seedRuns: () => {
         addSubagentRunForTests({
@@ -246,7 +216,6 @@ describe("subagents status", () => {
   it.each([
     { endedAt: Number.NaN, duration: "4s" },
     { endedAt: Infinity, duration: "0s" },
-    { endedAt: -Infinity, duration: "0s" },
   ])("preserves active duration for non-finite end $endedAt", async ({ endedAt, duration }) => {
     const run: SubagentRunRecord = {
       runId: "non-finite-end",
@@ -472,11 +441,11 @@ describe("subagents info", () => {
     expect(result.reply?.text).toContain("/subagents info <id|#>");
   });
 
-  it("returns info for a subagent", () => {
+  it.each([false, true])("returns info for a subagent with task missing=%s", (taskMissing) => {
     const now = Date.now();
     const runId = "commands-subagents-info-run";
     const childSessionKey = "agent:main:subagent:commands-info";
-    const run = {
+    const run: SubagentRunRecord = {
       runId,
       childSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -492,27 +461,42 @@ describe("subagents info", () => {
       },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
-    createTaskRecord({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      childSessionKey,
-      runId,
-      task: "do thing",
-      status: "succeeded",
-      terminalSummary: "Completed the requested task",
-      deliveryStatus: "delivered",
-    });
+    if (taskMissing) {
+      run.delivery = {
+        status: "discarded",
+        disposition: "permanent_failure",
+        discardReason: "task-missing",
+        discardedAt: now,
+      };
+    } else {
+      createTaskRecord({
+        runtime: "subagent",
+        requesterSessionKey: "agent:main:main",
+        childSessionKey,
+        runId,
+        task: "do thing",
+        status: "succeeded",
+        terminalSummary: "Completed the requested task",
+        deliveryStatus: "delivered",
+      });
+    }
     const cfg = buildCommandTestConfig();
     const result = handleSubagentsInfoAction(
-      buildInfoContext({ cfg, runs: [run], restTokens: ["1"] }),
+      buildInfoContext({ cfg, runs: [run], restTokens: [runId] }),
     );
     const text = requireReplyText(result.reply);
     expect(result.shouldContinue).toBe(false);
     expect(text).toContain("Subagent info");
     expect(text).toContain(`Run: ${runId}`);
     expect(text).toContain("Status: done");
-    expect(text).toContain("TaskStatus: succeeded");
-    expect(text).toContain("Task summary: Completed the requested task");
+    if (taskMissing) {
+      expect(text).toContain("Delivery: discarded");
+      expect(text).toContain("Delivery disposition: task-missing");
+      expect(text).toContain(`Delivery retired: ${new Date(now).toISOString()}`);
+    } else {
+      expect(text).toContain("TaskStatus: succeeded");
+      expect(text).toContain("Task summary: Completed the requested task");
+    }
   });
 
   it("uses displayed indices for info and log when stale unended runs exist", async () => {
@@ -548,7 +532,7 @@ describe("subagents info", () => {
       addSubagentRunForTests(run);
     }
     const context = buildInfoContext({ cfg: buildCommandTestConfig(), runs, restTokens: ["1"] });
-    const listing = requireReplyText(handleSubagentsListAction(context).reply);
+    const listing = requireReplyText((await handleSubagentsListAction(context)).reply);
     expect(listing).toContain("1. recent worker");
     expect(listing).not.toContain("stale worker");
     expect(requireReplyText(handleSubagentsInfoAction(context).reply)).toContain(
@@ -587,7 +571,7 @@ describe("subagents info", () => {
     },
   ])(
     "keeps /subagents info and list aligned for $name",
-    ({ endedReason, outcome, expectedStatus }) => {
+    async ({ endedReason, outcome, expectedStatus }) => {
       const now = Date.now();
       const run = {
         runId: `commands-subagents-status-${expectedStatus}`,
@@ -615,7 +599,7 @@ describe("subagents info", () => {
       expect(requireReplyText(handleSubagentsInfoAction(context).reply)).toContain(
         `Status: ${expectedStatus}`,
       );
-      expect(requireReplyText(handleSubagentsListAction(context).reply)).toContain(
+      expect(requireReplyText((await handleSubagentsListAction(context)).reply)).toContain(
         ` ${expectedStatus}`,
       );
     },

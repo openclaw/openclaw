@@ -6,6 +6,7 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { isGatewaySuspendControlAvailable } from "../infra/gateway-suspend-coordinator.js";
 import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
 import {
   getGatewaySuspendAdmissionPhase,
@@ -36,11 +37,11 @@ import { normalizePluginNodeCapabilityScopedUrl } from "./plugin-node-capability
 import {
   getCachedPluginGatewayAuthBypassPaths,
   shouldEnforceDefaultPluginGatewayAuth,
-  type PluginGatewayDispatchContext,
   type ResolvePluginNodeCapabilityRoute,
 } from "./server-http-plugin-auth.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { rejectGatewayUpgradeServiceUnavailable } from "./server/http-work-admission.js";
+import type { PluginHttpUpgradeHandler } from "./server/plugins-http.js";
 import { resolvePluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import type { PluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
@@ -50,14 +51,6 @@ import {
   type GatewayIngressWebSocket,
   type GatewayWsClient,
 } from "./server/ws-types.js";
-
-type PluginHttpUpgradeHandler = (
-  req: IncomingMessage,
-  socket: import("node:stream").Duplex,
-  head: Buffer,
-  pathContext?: PluginRoutePathContext,
-  dispatchContext?: PluginGatewayDispatchContext,
-) => Promise<boolean>;
 
 const getPluginNodeCapabilityAuthModule = createLazyRuntimeModule(
   () => import("./server/plugin-node-capability-auth.js"),
@@ -134,10 +127,7 @@ function handleBudgetedGatewayWebSocketUpgrade(params: {
   if (
     isGatewayWorkAdmissionClosed() &&
     !allowsRestartStartupPreauth &&
-    (ingressName === "Worker" ||
-      isGatewayRestartDraining() ||
-      (getGatewaySuspendAdmissionPhase() !== "draining" &&
-        getGatewaySuspendAdmissionPhase() !== "prepared"))
+    (ingressName === "Worker" || !isGatewaySuspendControlAvailable())
   ) {
     rejectGatewayUpgradeServiceUnavailable(socket, `${ingressName} websocket admission closed`);
     return;
@@ -390,7 +380,7 @@ export function attachGatewayUpgradeHandler(opts: {
         rejectUpgradeAuth(socket, { ok: false, reason: ingressAttribution.reason });
         return;
       }
-      if (requestPath === "/desktop/observe") {
+      if (requestPath === "/desktop/observe" || requestPath === "/desktop/audio") {
         if (!opts.desktopSessionRegistry) {
           rejectGatewayUpgradeServiceUnavailable(socket, "desktop observe unavailable");
           return;
@@ -400,6 +390,11 @@ export function attachGatewayUpgradeHandler(opts: {
         // drained Gateway would keep accepting new desktop streams.
         if (isGatewayWorkAdmissionClosed()) {
           rejectGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
+          return;
+        }
+        if (requestPath === "/desktop/audio") {
+          const { handleDesktopAudioUpgrade } = await import("./desktop/audio-bridge.js");
+          handleDesktopAudioUpgrade(req, socket, head);
           return;
         }
         const { handleDesktopObserveUpgrade } = await import("./desktop/observe-bridge.js");

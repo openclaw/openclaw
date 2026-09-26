@@ -46,7 +46,10 @@ struct RootSidebar: View {
         .foregroundStyle(OpenClawSidebarPalette.text)
         .background(OpenClawSidebarPalette.background)
         .onChange(of: self.isDismissButtonEnabled) { _, isVisible in
-            if !isVisible { self.presentedAttention = nil }
+            if !isVisible {
+                self.presentedAttention = nil
+                self.isSearchFocused = false
+            }
         }
         .sheet(isPresented: self.$showsPagesEditor) {
             RootSidebarPagesEditor(
@@ -683,15 +686,10 @@ struct RootSidebar: View {
                 canDelete: ChatSessionSidebarModel.canDeleteSession(
                     key: session.key,
                     mainSessionKey: self.resolvedMainSessionKey),
-                actions: CommandSessionActions(
-                    rename: { self.patchSession(session, label: .some($0)) },
-                    moveToGroup: { self.patchSession(session, category: .some($0)) },
-                    setColor: { self.patchSession(session, color: .some($0)) },
-                    togglePinned: { self.patchSession(session, pinned: session.pinned != true) },
-                    toggleUnread: { self.patchSession(session, unread: session.unread != true) },
-                    fork: { self.forkSession(session) },
-                    toggleArchived: { self.patchSession(session, archived: true) },
-                    delete: { self.deleteSession(session) }))
+                actions: .gateway(
+                    session: session,
+                    performMutation: self.performSessionMutation,
+                    fork: { self.forkSession(session) }))
             .accessibilityValue(Self.sessionAccessibilityValue(
                 isPinned: session.pinned == true,
                 isUnread: session.unread == true))
@@ -808,41 +806,14 @@ struct RootSidebar: View {
         return String(localized: "Connection")
     }
 
-    private func patchSession(
-        _ session: OpenClawChatSessionEntry,
-        label: String?? = nil,
-        category: String?? = nil,
-        color: String?? = nil,
-        pinned: Bool? = nil,
-        archived: Bool? = nil,
-        unread: Bool? = nil)
+    private func performSessionMutation(
+        resetActiveSessionKey: String?,
+        _ operation: @escaping CommandSessionActions.Mutation)
     {
         Task {
             do {
-                try await self.appModel.makeChatTransport().patchSession(
-                    key: session.key,
-                    expectedSessionID: archived == nil ? nil : session.sessionId,
-                    label: label,
-                    category: category,
-                    color: color,
-                    pinned: pinned,
-                    archived: archived,
-                    unread: unread)
-                if archived == true, session.key == self.appModel.chatSessionKey {
-                    self.appModel.focusChatSession(nil)
-                }
-                await self.model.refreshSessions(appModel: self.appModel)
-            } catch {
-                self.model.reportSessionError(error)
-            }
-        }
-    }
-
-    private func deleteSession(_ session: OpenClawChatSessionEntry) {
-        Task {
-            do {
-                try await self.appModel.makeChatTransport().deleteSession(key: session.key)
-                if session.key == self.appModel.chatSessionKey {
+                try await operation(self.appModel.makeChatTransport())
+                if resetActiveSessionKey == self.appModel.chatSessionKey {
                     self.appModel.focusChatSession(nil)
                 }
                 await self.model.refreshSessions(appModel: self.appModel)

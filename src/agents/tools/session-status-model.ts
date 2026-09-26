@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { patchSessionEntryWithKey, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { hasOperatorToolGatewayAuthority } from "../../gateway/operator-invocation-authority.js";
 import { withSessionStatusModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import type { SessionsPatchResult } from "../../gateway/session-utils.types.js";
@@ -18,7 +19,7 @@ import {
 } from "../model-selection.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import { loadPublishedPreparedModelCatalog } from "../prepared-model-catalog.js";
-import { normalizeToolModelOverride } from "./common.js";
+import { normalizeToolModelOverride, ToolAuthorizationError } from "./common.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import type { resolveSessionStatusEntry } from "./session-status-session-resolve.js";
 
@@ -136,6 +137,9 @@ export async function patchSessionStatusModel(params: {
   gatewayCall?: AgentToolGatewayRequestCaller;
 }): Promise<{ resolved: ResolvedStatusSession; changedModel: boolean }> {
   const { cfg, agentId, resolved } = params;
+  if (hasOperatorToolGatewayAuthority() && !params.gatewayCall) {
+    throw new ToolAuthorizationError("Operator model selection requires a current Gateway.");
+  }
   if (params.gatewayCall) {
     const gatewayCall = params.gatewayCall;
     const { result, applied } = await withSessionStatusModelPatchOrigin(() =>

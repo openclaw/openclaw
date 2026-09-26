@@ -217,9 +217,21 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/agents/embedded-agent-runner/run.harness-auth-failover.test.ts", 8],
   ["src/agents/embedded-agent-runner/run.shared-integration.test.ts", 77],
   ["src/gateway/dashboard-session-title.test.ts", 23],
+  // Three one-worker Testbox runs: rounded median case sums for relative packing.
+  ["src/gateway/server.sessions.create.accounts.test.ts", 20],
+  ["src/gateway/server.sessions.create.authority.test.ts", 13],
+  ["src/gateway/server.sessions.create.dispatch.test.ts", 14],
+  ["src/gateway/server.sessions.create.forks.test.ts", 19],
+  ["src/gateway/server.sessions.create.incognito.test.ts", 3],
+  ["src/gateway/server.sessions.create.lifecycle.test.ts", 4],
+  ["src/gateway/server.sessions.create.models.test.ts", 17],
+  ["src/gateway/server.sessions.create.spawn.test.ts", 11],
+  ["src/gateway/server.sessions.create.stores.test.ts", 14],
+  ["src/gateway/server.sessions.create.workspace-policy.test.ts", 24],
+  ["src/gateway/server.sessions.create.worktree-selection.test.ts", 22],
+  ["src/gateway/server.sessions.create.worktrees.test.ts", 23],
   // Two-run median case-body anchors from main runs 33504478720/33509347578.
   // These balance files; membership-specific wrapper spans own admission.
-  ["src/gateway/server.sessions.create.test.ts", 52],
   ["src/gateway/server.sessions.archive-worktree-lifecycle.test.ts", 34],
   ["src/gateway/server.sessions.delete-worktree-lifecycle.test.ts", 31],
   ["src/gateway/server.chat.gateway-server-chat-b.test.ts", 37],

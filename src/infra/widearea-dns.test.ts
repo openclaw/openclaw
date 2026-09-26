@@ -17,8 +17,8 @@ import {
 
 const replaceFileAtomicSyncMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./replace-file.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./replace-file.js")>()),
+vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/atomic")>()),
   replaceFileAtomicSync: replaceFileAtomicSyncMock,
 }));
 

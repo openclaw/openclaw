@@ -67,18 +67,7 @@ export type SessionsCleanupOptions = SessionStoreSelectionOptions & {
 
 type SessionsCleanupRunResult = {
   mode: ResolvedSessionMaintenanceConfig["mode"];
-  previewResults: Array<{
-    summary: SessionCleanupSummary;
-    beforeStore: Record<string, SessionEntry>;
-    missingKeys: Set<string>;
-    modelRunPrunedKeys: Set<string>;
-    archivedKeys?: Set<string>;
-    capArchivedKeys?: Set<string>;
-    ageArchivedKeys?: Set<string>;
-    staleKeys: Set<string>;
-    cappedKeys: Set<string>;
-    dmScopeRetiredKeys: Set<string>;
-  }>;
+  previewResults: Array<Awaited<ReturnType<typeof previewStoreCleanup>>>;
   appliedSummaries: SessionCleanupSummary[];
 } & ({ failure?: never } | { failure: SessionsCleanupFailure });
 
@@ -362,30 +351,14 @@ async function previewStoreCleanup(params: {
   });
   const archived = totalArchived - capArchived;
   const entryCleanupArtifactPaths = new Set<string>();
-  addEntryArtifactPathsToSet({
-    paths: entryCleanupArtifactPaths,
-    store: beforeStore,
-    storePath: params.target.storePath,
-    keys: modelRunPrunedKeys,
-  });
-  addEntryArtifactPathsToSet({
-    paths: entryCleanupArtifactPaths,
-    store: beforeStore,
-    storePath: params.target.storePath,
-    keys: staleKeys,
-  });
-  addEntryArtifactPathsToSet({
-    paths: entryCleanupArtifactPaths,
-    store: beforeStore,
-    storePath: params.target.storePath,
-    keys: cappedKeys,
-  });
-  addEntryArtifactPathsToSet({
-    paths: entryCleanupArtifactPaths,
-    store: beforeStore,
-    storePath: params.target.storePath,
-    keys: dmScopeRetiredKeys,
-  });
+  for (const keys of [modelRunPrunedKeys, staleKeys, cappedKeys, dmScopeRetiredKeys]) {
+    addEntryArtifactPathsToSet({
+      paths: entryCleanupArtifactPaths,
+      store: beforeStore,
+      storePath: params.target.storePath,
+      keys,
+    });
+  }
   const diskBudgetPreview = fs.existsSync(resolveCleanupSqlitePath(params.target))
     ? await inspectSqliteSessionHistoryDiskBudget({
         agentId: params.target.agentId,
@@ -546,16 +519,6 @@ export async function runSessionsCleanup(params: {
         });
         await yieldToEventLoop();
         const postApplyStore = loadCleanupSessionStore(target, { createIfMissing: true });
-        const appliedUnreferencedArtifacts =
-          mode === "warn"
-            ? null
-            : await pruneUnreferencedSessionArtifacts({
-                store: postApplyStore,
-                storePath: target.storePath,
-                olderThanMs: maintenance.pruneAfterMs,
-                dryRun: false,
-              });
-        const removedSessionKeys = new Set(lifecycleResult.removedSessionKeys);
         const unreferencedArtifacts =
           mode === "warn"
             ? {
@@ -564,12 +527,13 @@ export async function runSessionsCleanup(params: {
                 freedBytes: 0,
                 olderThanMs: maintenance.pruneAfterMs,
               }
-            : (appliedUnreferencedArtifacts ?? {
-                scannedFiles: 0,
-                removedFiles: 0,
-                freedBytes: 0,
+            : await pruneUnreferencedSessionArtifacts({
+                store: postApplyStore,
+                storePath: target.storePath,
                 olderThanMs: maintenance.pruneAfterMs,
+                dryRun: false,
               });
+        const removedSessionKeys = new Set(lifecycleResult.removedSessionKeys);
         const appliedDiskBudget = await enforceSqliteSessionHistoryDiskBudget({
           agentId: target.agentId,
           storePath: target.storePath,

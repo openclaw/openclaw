@@ -2,11 +2,8 @@ import {
   type WorkerAdmissionHandshake,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import {
-  StaleWorkerBuildError,
-  verifyWorkerAdmissionHandshake,
-  type ExpectedWorkerBuild,
-} from "./admission.js";
+import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
+import { StaleWorkerBuildError, type ExpectedWorkerBuild } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import {
   createWorkerCredentialMaterial,
@@ -36,11 +33,11 @@ type WorkerCredentialBrokerOptions = {
   tunnelManager?: Pick<WorkerTunnelManager, "stop">;
   workerCredentialTtlMs?: number;
   generateWorkerCredential?: (bytes: number) => string;
-  liveEvents?: Pick<WorkerLiveEventReceiver, "bindSession" | "rotateCredential">;
+  liveEvents?: Pick<WorkerLiveEventReceiver, "rotateCredential">;
   placementStore?: WorkerSessionPlacementGate;
   now: () => number;
   isStopping: () => boolean;
-  cancelInferenceEnvironment: (environmentId: string) => void;
+  cancelInferenceEnvironment: (environmentId: string) => Promise<void>;
   inState: (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) => boolean;
   move: (
     record: WorkerEnvironmentRecord,
@@ -56,7 +53,6 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
   const { store } = options;
   const tunnels = options.tunnelManager;
   const now = options.now;
-  const inference = { cancelEnvironment: options.cancelInferenceEnvironment };
   const inState = options.inState;
   const move = options.move;
   const serviceError = options.serviceError;
@@ -106,7 +102,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
   ): Promise<{ credentialHash: string; grant: MintedWorkerCredential }> => {
     const previous = store.getCredential(request.environmentId);
     if (previous) {
-      inference.cancelEnvironment(request.environmentId);
+      await options.cancelInferenceEnvironment(request.environmentId);
     }
     const material = credentialMaterial(claim);
     const credential = {
@@ -263,16 +259,12 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
       } catch {
         throw serviceError("invalid_state", "Current worker build identity is unavailable");
       }
-      if (
-        !current.bootstrapReceipt ||
-        !verifyWorkerAdmissionHandshake(current.bootstrapReceipt, currentBuild)
-      ) {
+      if (!current.bootstrapReceipt || !sameWorkerBuild(current.bootstrapReceipt, currentBuild)) {
         throw new StaleWorkerBuildError();
       }
       const material = credentialMaterial();
-      let attached: WorkerEnvironmentRecord;
       try {
-        attached = await store.transition({
+        await store.transition({
           environmentId: request.environmentId,
           from: current.state,
           to: "attached",
@@ -293,24 +285,6 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
           throw serviceError("invalid_state", error.message);
         }
         throw error;
-      }
-      if (options.liveEvents) {
-        let liveSessionBound: boolean;
-        try {
-          liveSessionBound = options.liveEvents.bindSession({
-            environmentId: attached.environmentId,
-            runEpoch: attached.ownerEpoch,
-            sessionId: request.sessionId,
-          });
-        } catch {
-          liveSessionBound = false;
-        }
-        if (!liveSessionBound) {
-          await move(attached, "idle");
-          // Preserve the bounded attachment error after rollback fences the old worker.
-          await tunnels?.stop(request.environmentId, current.ownerEpoch).catch(() => undefined);
-          throw serviceError("invalid_state", "Attached session target is unavailable");
-        }
       }
       pendingCredentials.delete(request.environmentId);
       await tunnels?.stop(request.environmentId, current.ownerEpoch);

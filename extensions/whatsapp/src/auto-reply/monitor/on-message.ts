@@ -11,18 +11,18 @@ import {
 import type { getReplyFromConfig, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute, buildGroupHistoryKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
 import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
-import { normalizeE164 } from "../../text-runtime.js";
 import { buildMentionConfig } from "../mentions.js";
 import type { MentionConfig } from "../mentions.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { maybeBroadcastMessage } from "./broadcast.js";
-import type { GroupHistoryEntry } from "./group-gating.js";
 import { applyGroupGating } from "./group-gating.js";
+import type { GroupHistoryEntry } from "./inbound-context.js";
 import { updateLastRouteInBackground } from "./last-route.js";
 import { resolvePeerId } from "./peer.js";
 import { processMessage } from "./process-message.js";
@@ -48,9 +48,6 @@ export function createWebOnMessageHandler(params: {
   buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
   dispatchReplyFromConfig?: NonNullable<ChannelInboundTurnPlan["dispatchReplyFromConfig"]>;
 }) {
-  const hasExplicitlyPassedInboundAccess = (msg: AdmittedWebInboundMessage): boolean =>
-    msg.admission.ingress.decision === "allow";
-
   const withDirectSenderPeer = (
     msg: AdmittedWebInboundMessage,
     peerId: string,
@@ -92,7 +89,7 @@ export function createWebOnMessageHandler(params: {
       statusReactionController?: StatusReactionController | null;
     },
   ) => {
-    const processParams: Parameters<typeof processMessage>[0] = {
+    return processMessage({
       cfg,
       msg,
       route,
@@ -108,30 +105,12 @@ export function createWebOnMessageHandler(params: {
       backgroundTasks: params.backgroundTasks,
       buildContext: params.buildContext,
       dispatchReplyFromConfig: params.dispatchReplyFromConfig,
-    };
-    if (opts?.groupHistory !== undefined) {
-      processParams.groupHistory = opts.groupHistory;
-    }
-    if (opts?.suppressGroupHistoryClear !== undefined) {
-      processParams.suppressGroupHistoryClear = opts.suppressGroupHistoryClear;
-    }
-    if (opts?.preflightAudioTranscript !== undefined) {
-      processParams.preflightAudioTranscript = opts.preflightAudioTranscript;
-    }
-    if (opts?.ackAlreadySent === true) {
-      processParams.ackAlreadySent = true;
-    }
-    if (opts?.ackReaction !== undefined) {
-      processParams.ackReaction = opts.ackReaction;
-    }
-    if (opts?.statusReactionController !== undefined) {
-      processParams.statusReactionController = opts.statusReactionController;
-    }
-    return processMessage(processParams);
+      ...opts,
+    });
   };
 
   return async (normalizedMsg: AdmittedWebInboundMessage) => {
-    const canRunDirectEarlyAudioPreflight = hasExplicitlyPassedInboundAccess(normalizedMsg);
+    const canRunDirectEarlyAudioPreflight = normalizedMsg.admission.ingress.decision === "allow";
     const cfg = params.loadConfig?.() ?? params.cfg;
     const peerId = resolvePeerId(normalizedMsg);
     const msg = withDirectSenderPeer(normalizedMsg, peerId);
@@ -323,10 +302,9 @@ export function createWebOnMessageHandler(params: {
       // message first; configured ACP routes also wait for backend readiness.
       recordAcceptedConfiguredGroupRoute = recordGroupRoute;
 
-      let gating = await applyGroupGating({
+      const gatingParams = {
         cfg,
         msg,
-        deferMissingMention: hasAudioBody && Boolean(msg.payload.media?.path),
         groupHistoryKey,
         agentId: route.agentId,
         sessionKey: route.sessionKey,
@@ -339,6 +317,10 @@ export function createWebOnMessageHandler(params: {
         groupMemberNames: params.groupMemberNames,
         logVerbose,
         replyLogger: params.replyLogger,
+      };
+      let gating = await applyGroupGating({
+        ...gatingParams,
+        deferMissingMention: hasAudioBody && Boolean(msg.payload.media?.path),
       });
       if (
         !gating.shouldProcess &&
@@ -347,23 +329,10 @@ export function createWebOnMessageHandler(params: {
       ) {
         await runAudioPreflightOnce();
         gating = await applyGroupGating({
-          cfg,
-          msg,
+          ...gatingParams,
           ...(typeof preflightAudioTranscript === "string"
             ? { mentionText: preflightAudioTranscript }
             : {}),
-          groupHistoryKey,
-          agentId: route.agentId,
-          sessionKey: route.sessionKey,
-          baseMentionConfig,
-          providerMentionPatterns: account.mentionPatterns,
-          authDir: account.authDir,
-          selfChatMode: account.selfChatMode,
-          groupHistories: params.groupHistories,
-          groupHistoryLimit: params.groupHistoryLimit,
-          groupMemberNames: params.groupMemberNames,
-          logVerbose,
-          replyLogger: params.replyLogger,
         });
       }
       if (!gating.shouldProcess) {

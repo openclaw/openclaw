@@ -1,7 +1,7 @@
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Frame, Page } from "playwright-core";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { snapshotRoleViaCdpSession } from "./cdp-role-snapshot.js";
 import {
   buildRoleSnapshotFromAiSnapshot,

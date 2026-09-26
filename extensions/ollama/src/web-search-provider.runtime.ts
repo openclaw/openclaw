@@ -1,4 +1,3 @@
-// Ollama web-search runtime implements provider integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   isNonSecretApiKeyMarker,
@@ -60,10 +59,6 @@ type OllamaWebSearchAttempt = {
   path: string;
   apiKey?: string;
 };
-
-async function readOllamaWebSearchResponse(response: Response): Promise<OllamaWebSearchResponse> {
-  return await readProviderJsonResponse<OllamaWebSearchResponse>(response, "Ollama web search");
-}
 
 function isOllamaCloudBaseUrl(baseUrl: string): boolean {
   try {
@@ -249,7 +244,10 @@ async function runOllamaWebSearch(params: {
         }
         throw error;
       }
-      payload = await readOllamaWebSearchResponse(response);
+      payload = await readProviderJsonResponse<OllamaWebSearchResponse>(
+        response,
+        "Ollama web search",
+      );
       params.signal?.throwIfAborted();
       break;
     } catch (error) {

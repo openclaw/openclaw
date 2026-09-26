@@ -2,6 +2,7 @@
  * Session-owned browser tabs. Host-local durable ownership is canonical in
  * plugin SQLite; all other tabs remain process-local.
  */
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   type CleanupKind,
   type CloseParams,
@@ -66,10 +67,7 @@ async function performVolatileCleanup(
       continue;
     }
 
-    let complete!: (operation: Promise<number>) => void;
-    const cleanup = new Promise<number>((resolve) => {
-      complete = resolve;
-    });
+    const { promise: cleanup, resolve: complete } = createDeferred<number>();
     // Preparation and dispatch share one reservation, including reentrant closers.
     // Completion retires only the acquired registrations.
     const owner = { registrations: volatileRegistrationsForTarget(targetKey), promise: cleanup };

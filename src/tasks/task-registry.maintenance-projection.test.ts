@@ -11,7 +11,11 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -20,6 +24,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
 import { getDetachedTaskLifecycleRuntime } from "./detached-task-runtime.js";
+import { getTaskExecutionObservation } from "./task-execution-observation.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "./task-executor-create.async.js";
 import { readResidentTaskFlow } from "./task-flow-registry.js";
 import { loadTaskFlowRegistryStateFromSqliteReadOnly } from "./task-flow-registry.store.sqlite.js";
@@ -36,11 +41,13 @@ import {
   runTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
 import { getTaskRegistryStore, onTaskRegistryChange } from "./task-registry.store.js";
+import { deleteTaskRowsWithDeliveryState } from "./task-registry.store.kernel.js";
 import { loadTaskRegistryStateFromSqliteReadOnly } from "./task-registry.store.sqlite.js";
 import {
   createTaskFixture,
   reloadTaskRegistryFromStoreAsync,
 } from "./task-registry.test-support.js";
+import { bindTaskRunOwner } from "./task-run-owner.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskFlowRegistryForTests,
@@ -72,6 +79,44 @@ afterEach(async () => {
 });
 
 describe("task maintenance session metadata", () => {
+  it("retains a CLI task until its live run owner releases it", async () => {
+    await withMaintenanceState("openclaw-task-maintenance-run-owner-", async () => {
+      resetTaskRegistryForTests({ persist: false });
+      configureTaskRegistryMaintenance({ runtimeAuthoritative: true });
+      const task = createTaskFixture("cli", {
+        runId: "retained-native-command",
+        task: "Background command after its foreground turn",
+        notifyPolicy: "silent",
+        lastEventAt: Date.now() - 40 * 60_000,
+      });
+      const release = bindTaskRunOwner(task, async () => ({
+        ok: false,
+        error: "No cancellation requested in this scenario.",
+      }));
+      try {
+        expect(reconcileInspectableTasks()).toContainEqual(
+          expect.objectContaining({ taskId: task.taskId, status: "running" }),
+        );
+        expect(getTaskExecutionObservation(task)).toEqual({ state: "running" });
+        expect(getTaskExecutionObservation({ ...task, runId: "replacement-command" })).toEqual({
+          state: "unknown",
+        });
+        expect((await runTaskRegistryMaintenance()).reconciled).toBe(0);
+        expect(getTaskById(task.taskId)?.status).toBe("running");
+
+        release();
+        expect(getTaskExecutionObservation(task)).toEqual({ state: "unknown" });
+        expect((await runTaskRegistryMaintenance()).reconciled).toBe(1);
+        expect(getTaskById(task.taskId)).toMatchObject({
+          status: "lost",
+          error: "backing session missing",
+        });
+      } finally {
+        release();
+      }
+    });
+  });
+
   it.each(["publication", "coordinator hold"] as const)(
     "retains task payloads without synchronous refreshes during %s",
     async (boundary) => {
@@ -404,7 +449,9 @@ describe("task maintenance session metadata", () => {
             task,
             ...(deliveryState ? { deliveryState: { ...deliveryState, taskId: task.taskId } } : {}),
           });
-          store.deleteTaskWithDeliveryState(created.taskId);
+          runOpenClawStateWriteTransaction(() =>
+            deleteTaskRowsWithDeliveryState(openOpenClawStateDatabase().db, created.taskId),
+          );
           await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
         }
         await loadTaskAcpSessionCloser();

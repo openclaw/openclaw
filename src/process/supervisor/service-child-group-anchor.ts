@@ -1,10 +1,11 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { closeSync, createWriteStream } from "node:fs";
 import { Socket } from "node:net";
 import { pipeline, type Readable } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
 import type { SpawnStdioEntry } from "../spawn-secret-input.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import { hasLiveOwnedProcessGroupMembers } from "./service-child-group-ownership.js";
@@ -394,7 +395,7 @@ export function runServiceChildGroupAnchor(): void {
     const { stdio, lineageFd, inheritedLineageFds } = commandStdio(start);
     workerLineageFds = inheritedLineageFds;
     try {
-      command = spawn(start.command, start.args, {
+      command = spawnWithInheritedOomScore(start.command, start.args, {
         cwd: start.cwd,
         env: start.env,
         argv0: start.argv0,

@@ -1,6 +1,5 @@
 // Verifies managed local provider services start, lease, probe, and stop safely.
 import { spawn } from "node:child_process";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
@@ -11,11 +10,13 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { killPidIfAlive, readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
+import { agentProcessTestEntrypoints } from "./process-runtime.test-support.js";
 import { hasLocalServiceProcessExited } from "./provider-local-service-process.js";
 import {
   attachModelProviderLocalService,
@@ -23,15 +24,14 @@ import {
   ensureModelProviderLocalService,
   ensureProviderLocalService,
   getManagedProviderLocalServiceDiagnosticsForTest,
-  getModelProviderLocalService,
   stopManagedProviderLocalServices,
 } from "./provider-local-service.js";
-import { createProviderLocalServiceTestFixture } from "./provider-local-service.test-support.js";
+import {
+  createProviderLocalServiceTestFixture,
+  ONE_SHOT_HOST_READY_KIND,
+  waitForReadyOneShotHostExit,
+} from "./provider-local-service.test-support.js";
 import { hasManagedProviderLocalServices } from "./provider-runtime-lifecycle.js";
-
-const ONE_SHOT_HOST_READY_TIMEOUT_MS = 30_000;
-const ONE_SHOT_HOST_EXIT_TIMEOUT_MS = 5_000;
-const ONE_SHOT_HOST_READY_KIND = "ready-for-exit";
 
 async function waitForProbeFailure(url: string): Promise<void> {
   // Idle-stop assertions wait until the local service no longer responds.
@@ -96,91 +96,10 @@ async function withSpawnReadyHealthProbe<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-async function waitForReadyOneShotHostExit(
-  child: ReturnType<typeof spawn>,
-  readStderr: () => string,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  await new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
-      clearTimeout(timeout);
-      child.off("message", onMessage);
-      child.off("error", onError);
-      child.off("exit", onExit);
-    };
-    const finish = (error?: Error) => {
-      cleanup();
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    const onMessage = (message: unknown) => {
-      if (
-        message &&
-        typeof message === "object" &&
-        (message as { kind?: unknown }).kind === ONE_SHOT_HOST_READY_KIND
-      ) {
-        finish();
-      }
-    };
-    const onError = (error: Error) => finish(error);
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      finish(
-        new Error(
-          `one-shot host exited before readiness (code=${String(code)} signal=${String(signal)})${readStderr()}`,
-        ),
-      );
-    };
-    const timeout = setTimeout(() => {
-      finish(new Error(`one-shot host did not become ready${readStderr()}`));
-    }, ONE_SHOT_HOST_READY_TIMEOUT_MS);
-
-    child.on("message", onMessage);
-    child.on("error", onError);
-    child.on("exit", onExit);
-  });
-
-  const exitPromise = waitForOneShotHostExit(child, readStderr);
-  // The fixture-owned IPC channel gates the exit deadline. Once removed,
-  // only the managed service's diagnostic pipes can keep this host alive.
-  child.disconnect();
-  return await exitPromise;
-}
-
-async function waitForOneShotHostExit(
-  child: ReturnType<typeof spawn>,
-  readStderr: () => string,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return { code: child.exitCode, signal: child.signalCode };
-  }
-  try {
-    const [code, signal] = (await once(child, "exit", {
-      signal: AbortSignal.timeout(ONE_SHOT_HOST_EXIT_TIMEOUT_MS),
-    })) as [number | null, NodeJS.Signals | null];
-    return { code, signal };
-  } catch (error) {
-    throw new Error(`one-shot host did not exit after readiness${readStderr()}`, { cause: error });
-  }
-}
-
 describe("provider local service", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const fixture = createProviderLocalServiceTestFixture();
   afterEach(fixture.cleanup);
-
-  it("attaches local service metadata to model objects", () => {
-    const model = attachModelProviderLocalService(
-      { id: "demo", provider: "local", baseUrl: "http://127.0.0.1:1/v1" },
-      { command: process.execPath, args: ["--version"] },
-    );
-
-    expect(getModelProviderLocalService(model)).toEqual({
-      command: process.execPath,
-      args: ["--version"],
-    });
-  });
 
   it("treats signaled local service children as exited", () => {
     expect(hasLocalServiceProcessExited({ exitCode: null, signalCode: "SIGTERM" })).toBe(true);
@@ -791,10 +710,10 @@ describe("provider local service", () => {
     const port = await fixture.claimPort();
     const tempDir = tempDirs.make("openclaw-local-service-unref-");
     const servicePidPath = path.join(tempDir, "service.pid");
-    const moduleUrl = new URL("./provider-local-service.ts", import.meta.url).href;
+    const moduleUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.providerLocalService);
     const script = [
       `import fs from "node:fs/promises";`,
-      `import { ensureProviderLocalService, getManagedProviderLocalServiceDiagnosticsForTest } from ${JSON.stringify(moduleUrl)};`,
+      `import { ensureProviderLocalService, getManagedProviderLocalServiceDiagnosticsForTest } from ${JSON.stringify(moduleUrl.href)};`,
       `if (!process.send) throw new Error("missing one-shot host IPC");`,
       `process.on("disconnect", () => {});`,
       `const port = ${port};`,
@@ -817,7 +736,7 @@ describe("provider local service", () => {
     ].join("\n");
     const parent = spawn(
       process.execPath,
-      ["--import", "tsx", "--input-type=module", "-e", script],
+      [...resolveRuntimeWorkerArgv(moduleUrl).slice(0, -1), "--input-type=module", "-e", script],
       {
         cwd: process.cwd(),
         stdio: ["ignore", "ignore", "pipe", "ipc"],
@@ -847,7 +766,7 @@ describe("provider local service", () => {
     const port = await fixture.claimPort();
     const tempDir = tempDirs.make("openclaw-local-service-failed-unref-");
     const servicePidPath = path.join(tempDir, "service.pid");
-    const moduleUrl = new URL("./provider-local-service.ts", import.meta.url).href;
+    const moduleUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.providerLocalService);
     const failedServiceReadyTimeoutMs = 60_000;
     const serviceScript = [
       `const fs=require("node:fs");`,
@@ -859,7 +778,7 @@ describe("provider local service", () => {
     // This preserves live-child failure cleanup without spending the deadline in wall time.
     const script = [
       `import fs from "node:fs";`,
-      `import { ensureProviderLocalService } from ${JSON.stringify(moduleUrl)};`,
+      `import { ensureProviderLocalService } from ${JSON.stringify(moduleUrl.href)};`,
       `if (!process.send) throw new Error("missing one-shot host IPC");`,
       `process.on("disconnect", () => {});`,
       `const realNow = Date.now.bind(Date);`,
@@ -894,7 +813,7 @@ describe("provider local service", () => {
     ].join("\n");
     const parent = spawn(
       process.execPath,
-      ["--import", "tsx", "--input-type=module", "-e", script],
+      [...resolveRuntimeWorkerArgv(moduleUrl).slice(0, -1), "--input-type=module", "-e", script],
       {
         cwd: process.cwd(),
         stdio: ["ignore", "ignore", "pipe", "ipc"],

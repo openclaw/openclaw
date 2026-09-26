@@ -4,13 +4,11 @@
  * Executes local shell commands with streaming output accumulation and TUI renderers.
  */
 import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
 import { formatDurationSeconds } from "../../../infra/format-time/format-duration.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.js";
 import { interactiveAgentTheme as theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
-import { executionTitleSchema } from "../../schema/typebox.js";
 import { getBashShellEnv } from "../../shell-utils.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { createLocalBashOperations, resolveBashTimeoutMs } from "./bash-local-exec.js";
@@ -19,13 +17,9 @@ import { OutputAccumulator } from "./output-accumulator.js";
 import { getTextOutput, invalidArgText, reuseTextComponent, str } from "./render-utils.js";
 import { formatFullOutputFooter, type BashToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { bashSchema } from "./tool-schemas.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
 
-const bashSchema = Type.Object({
-  title: executionTitleSchema(),
-  command: Type.String({ description: "Bash command." }),
-  timeout: Type.Optional(Type.Number({ description: "Optional timeout seconds; default none." })),
-});
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.bashToolTestApi")] = {
     resolveBashTimeoutMs,

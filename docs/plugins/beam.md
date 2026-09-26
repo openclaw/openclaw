@@ -130,6 +130,13 @@ Beam stores sanitized payloads in OpenClaw's shared SQLite-backed plugin state:
 - oldest-entry eviction when the catalog reaches its bound
 - server receipt time controls catalog ordering; clients cannot move themselves ahead with a forged timestamp
 
+The sidebar reuses an in-memory metadata inventory rather than loading every
+transcript on each poll. Uploads and deletions invalidate that inventory immediately;
+the next list shares one canonical reload. A plugin service preloads the inventory
+and refreshes it every 30 seconds to pick up changes made by other processes.
+Expired entries are hidden on every list. Transcript reads and continuation always
+read canonical storage. No stored-data migration is needed on update.
+
 The catalog is intentionally shared across the Gateway operator domain. Every client with `operator.read` can view every beamed session. Uploading or continuing requires `operator.write` or `operator.admin`; agent access policy must also allow the chosen agent. Any write-authorized operator that knows a Beam id can update that row. Uploader attribution does not grant ownership or change access. OpenClaw operator scopes are not tenant isolation; use a separate Gateway when sessions must be isolated between teams or machines.
 
 A continuation belongs to the authenticated operator who creates it. From then on it follows ordinary session sharing, sandbox, tool, and model policy for that Team agent. Access to the original Beam does not grant access to another operator's continuation.

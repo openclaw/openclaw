@@ -3,7 +3,7 @@ import OpenClawKit
 
 enum GatewayBrowserSignInCoordinator {
     static func reconnectGateway(id: String, progress: GatewayBrowserSignInProgress) async throws {
-        let profiles = try await MacGatewayProfileStore.shared.catalogProfiles()
+        let profiles = try await MacGatewayProfileStore.shared.catalogProfiles(retryKeychainAccess: true)
         guard let profile = profiles.first(where: { $0.profile.id == id }) else {
             throw MacGatewayProfileError.profileNotFound
         }

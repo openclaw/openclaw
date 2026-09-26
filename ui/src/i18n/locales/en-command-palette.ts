@@ -109,6 +109,8 @@ const enCommandPalette = {
       zoomIn: "Zoom in",
       zoomOut: "Zoom out",
       zoomReset: "Reset zoom",
+      panImageHorizontal: "Pan image horizontally",
+      panImageVertical: "Pan image vertically",
       terminalPanel: "Toggle terminal panel",
       homePanel: "Talk to your Home agent",
       workspaceFiles: "Toggle workspace files",

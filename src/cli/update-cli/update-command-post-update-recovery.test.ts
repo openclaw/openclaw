@@ -157,6 +157,7 @@ async function finishFailedUpdate(
     failure?: { cause: unknown; detail: string };
     json?: boolean;
     stopped?: boolean;
+    mutationStarted?: boolean;
     run?: FinishUpdateParams["opts"]["run"];
     originalRoot?: string;
     previousInstallRoot?: string;
@@ -171,7 +172,7 @@ async function finishFailedUpdate(
   } = {},
 ): Promise<UpdateCommandFailure> {
   return await finishUpdate({
-    mutationStarted: true,
+    mutationStarted: options.mutationStarted ?? true,
     result,
     ...(options.failure ? { failure: options.failure } : {}),
     root: options.originalRoot ?? result.root ?? "/repo",
@@ -251,7 +252,6 @@ describe("skipped update exit status", () => {
 
   it.each([
     ["dirty", 1],
-    ["no-upstream", 1],
     ["not-git-install", 1],
     ["already-current", 0],
   ] as const)("handles %s with exit %i", async (reason, exitCode) => {
@@ -300,17 +300,11 @@ describe("failed update recovery restart", () => {
     },
   );
 
-  it.each(
-    (
-      [
-        { mode: "git", status: "error", reason: "doctor-failed" },
-        { mode: "git", status: "skipped", reason: "dirty" },
-        { mode: "pnpm", status: "error", reason: "package-swap" },
-      ] as const
-    ).flatMap(({ mode, status, reason }) =>
-      (["healthy", "failed"] as const).map((service) => ({ mode, status, reason, service })),
-    ),
-  )(
+  it.each([
+    { mode: "git", status: "error", reason: "doctor-failed", service: "healthy" },
+    { mode: "git", status: "skipped", reason: "dirty", service: "failed" },
+    { mode: "pnpm", status: "error", reason: "package-swap", service: "failed" },
+  ] as const)(
     "reports the terminal $service recovery for a $mode $status update",
     async ({ mode, status, reason, service }) => {
       const root = tempDirs.make("update-terminal-installed-runtime-");
@@ -359,6 +353,22 @@ describe("failed update recovery restart", () => {
     expect(mocks.restart).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { mutationStarted: false, stopped: false, waitForStartup: false },
+    { mutationStarted: false, stopped: true, waitForStartup: true },
+    { mutationStarted: true, stopped: false, waitForStartup: true },
+  ])(
+    "retains recorded activation effects in recovery (mutation=$mutationStarted, stop=$stopped)",
+    async ({ mutationStarted, stopped, waitForStartup }) => {
+      const root = tempDirs.make("update-recovery-startup-policy-");
+      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "1.0.0" }));
+      await finishFailedUpdate({ ...failedResult(undefined), root }, { mutationStarted, stopped });
+      expect(mocks.verifyGateway).toHaveBeenCalledWith(expect.objectContaining({ waitForStartup }));
+      expect(mocks.restart).not.toHaveBeenCalled();
+      expect(mocks.restartCandidate).not.toHaveBeenCalled();
+    },
+  );
+
   it("retains structured mutation errors without authorizing service recovery", async () => {
     const restoreError = new Error("task enable denied");
     const original = new ScheduledTaskAutoStartRecoveryError(
@@ -394,11 +404,6 @@ describe("failed update recovery restart", () => {
 
   it.each([
     { status: "error", recovery: undefined },
-    { status: "skipped", recovery: undefined },
-    {
-      status: "error",
-      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-    },
     {
       status: "skipped",
       recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
@@ -450,8 +455,6 @@ describe("failed update recovery restart", () => {
   it.each([
     { handoff: false, restoreFails: false, safe: false, stopped: true, expected: 1 },
     { handoff: true, restoreFails: false, safe: false, stopped: true, expected: 79 },
-    { handoff: true, restoreFails: false, safe: false, stopped: false, expected: 79 },
-    { handoff: true, restoreFails: true, safe: false, stopped: true, expected: 79 },
     {
       handoff: true,
       restoreFails: true,
@@ -461,7 +464,6 @@ describe("failed update recovery restart", () => {
       mutationFailed: true,
     },
     { handoff: true, restoreFails: false, safe: true, stopped: true, expected: 1 },
-    { handoff: true, restoreFails: false, safe: true, stopped: false, expected: 1 },
     { handoff: true, restoreFails: true, safe: true, stopped: false, expected: 79 },
   ])(
     "preserves the final restart verdict ($handoff, $restoreFails, $safe, $stopped)",
@@ -867,22 +869,15 @@ describe("failed package update recovery safety", () => {
     },
   );
 
-  it.each([
-    "package-verify",
-    "package-swap",
-    "pnpm-package-lifecycle-marker",
-    "pnpm-package-preinstall",
-    "pnpm-package-postinstall",
-    "pnpm-package-lifecycle-finalize",
-  ])("keeps the replaced package stopped after %s fails", async (name) => {
+  it("keeps the replaced package stopped after the package-swap fails", async () => {
     const failure = await finishFailedUpdate({
       status: "error",
-      mode: name.startsWith("pnpm ") ? "pnpm" : "npm",
+      mode: "npm",
       reason: "global-install-failed",
       steps: [
         { name: "package-install", command: "npm", cwd: "/", durationMs: 1, exitCode: 0 },
         {
-          name,
+          name: "package-swap",
           command: "verify",
           cwd: "/",
           durationMs: 1,

@@ -16,13 +16,13 @@ import {
 } from "../server-methods/agent-session-reset.js";
 import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import {
+  buildAbortedAgentPayload,
   isAcceptedAgentDedupePayload,
   isPreRegistrationAbortedAgentDedupeEntryForSession,
   readGatewayDedupeEntry,
   setAbortedAgentDedupeEntries,
   setGatewayDedupeEntries,
 } from "./agent-dedupe.js";
-import { deleteGatewayDedupeEntries } from "./agent-run-dispatch.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 export type AgentDedupeLifecycle = ReturnType<typeof createAgentDedupeLifecycle>;
@@ -118,10 +118,9 @@ export function createAgentDedupeLifecycle(params: {
     ) {
       return;
     }
-    deleteGatewayDedupeEntries({
-      dedupe: params.context.dedupe,
-      keys: params.agentDedupeKeys,
-    });
+    for (const key of params.agentDedupeKeys) {
+      params.context.dedupe.delete(key);
+    }
     reserved = false;
   };
 
@@ -205,14 +204,7 @@ export function createAgentDedupeLifecycle(params: {
     params.io.emitAcceptance(
       [
         true,
-        {
-          runId: params.runId,
-          status: "timeout" as const,
-          summary: "aborted",
-          stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
-          timeoutPhase: "queue" as const,
-          providerStarted: false,
-        },
+        buildAbortedAgentPayload(params.runId, AGENT_RUN_RESTART_ABORT_STOP_REASON),
         undefined,
       ],
       { runId: params.runId },

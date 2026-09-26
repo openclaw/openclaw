@@ -12,6 +12,8 @@ import {
   sendMinimalGatewayConnectChallenge,
   sendMinimalGatewayResponse,
 } from "../../gateway/minimal-gateway.test-helpers.js";
+import { createGatewayCloseTransportError } from "../../gateway/transport-error.js";
+import { createGatewayRestartDeadline } from "./restart-health-deadline.js";
 import {
   firstCallArg,
   inspectGatewayRestartWithSnapshot,
@@ -29,42 +31,60 @@ import {
 const actualCall =
   await vi.importActual<typeof import("../../gateway/call.js")>("../../gateway/call.js");
 
+const ownedPortUsage = {
+  port: 18789,
+  status: "busy" as const,
+  listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+  hints: [],
+};
+
 describe("restart health", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
 
-  it("keeps native inspection and health RPC within one supplied allowance", async () => {
-    const service = makeGatewayService({ status: "running", pid: 8000 });
-    vi.mocked(service.readRuntime).mockImplementation(async () => {
-      monotonicClock.nowMs += 25_000;
-      return { status: "running", pid: 8000 };
-    });
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-      hints: [],
-    });
-    callGateway.mockImplementation(async (opts) => {
-      const responseMs = 10_000;
-      const allowanceMs = opts.timeoutMs ?? responseMs;
-      monotonicClock.nowMs += Math.min(allowanceMs, responseMs);
-      if (allowanceMs < responseMs) {
-        throw new Error("gateway request timeout for health");
+  it.each([false, true])(
+    "keeps native inspection and health RPC within one supplied allowance (deadline=%s)",
+    async (withDeadline) => {
+      const service = makeGatewayService({ status: "running", pid: 8000 });
+      vi.mocked(service.readRuntime).mockImplementation(async () => {
+        monotonicClock.nowMs += 25_000;
+        return { status: "running", pid: 8000 };
+      });
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+        hints: [],
+      });
+      callGateway.mockImplementation(async (opts) => {
+        const responseMs = 10_000;
+        const allowanceMs = opts.timeoutMs ?? responseMs;
+        monotonicClock.nowMs += Math.min(allowanceMs, responseMs);
+        if (allowanceMs < responseMs) {
+          throw new Error("gateway request timeout for health");
+        }
+        return gatewayHealthResponse({ server: { version: "2026.9.3" } })(opts);
+      });
+      const { inspectGatewayRestart } = await import("./restart-health.js");
+      const deadline = withDeadline
+        ? createGatewayRestartDeadline({ timeoutMs: 60_000 })
+        : undefined;
+      try {
+        const health = await inspectGatewayRestart({
+          service,
+          port: 18789,
+          expectedVersion: "2026.9.3",
+          timeoutMs: 30_000,
+          deadline,
+        });
+        expect(health.healthy).toBe(false);
+        expect(health.probeError).toBe("gateway request timeout for health");
+        expect(monotonicClock.nowMs).toBe(30_000);
+      } finally {
+        deadline?.dispose();
       }
-      return gatewayHealthResponse({ server: { version: "2026.9.3" } })(opts);
-    });
-    const { inspectGatewayRestart } = await import("./restart-health.js");
-    const health = await inspectGatewayRestart({
-      service,
-      port: 18789,
-      expectedVersion: "2026.9.3",
-      timeoutMs: 30_000,
-    });
-    expect(health.healthy).toBe(false);
-    expect(health.probeError).toBe("gateway request timeout for health");
-    expect(monotonicClock.nowMs).toBe(30_000);
-  });
+    },
+  );
 
   it("reports HTTP health and readiness independently", async () => {
     const server = createServer((request, response) => {
@@ -83,14 +103,17 @@ describe("restart health", () => {
 
     try {
       const { waitForGatewayHttpReadiness } = await import("./restart-health-probe.js");
+      const onObservation = vi.fn();
       await expect(
         waitForGatewayHttpReadiness({
           attempts: 1,
+          onObservation,
           deadlineAt: Date.now() + 1_000,
           delayMs: 0,
           port: address.port,
         }),
       ).resolves.toEqual({ healthz: 200, readyz: 503 });
+      expect(onObservation).toHaveBeenCalledExactlyOnceWith({ healthz: 200, readyz: 503 });
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
@@ -258,6 +281,37 @@ describe("restart health", () => {
     10_000,
   );
 
+  it("preserves the June stale reason through the sanitized health-probe boundary", async () => {
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+    callGateway.mockRejectedValueOnce(
+      createGatewayCloseTransportError({
+        code: 1011,
+        reason: "gateway message handler unavailable",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "Gateway target: ws://127.0.0.1:18789",
+        },
+        requestDispatched: false,
+      }),
+    );
+    const { inspectGatewayRestart } = await import("./restart-health.js");
+    const result = await inspectGatewayRestart({
+      service,
+      port: 18789,
+      expectedVersion: "2026.9.6",
+    });
+    expect(result.healthy).toBe(false);
+    expect(result.probeError).toContain("\\nGateway target:");
+    expect(result).toMatchObject({ staleConnection: "legacy-handler-unavailable" });
+  });
+
   it.each(["protocol", "transport"])(
     "bounds and redacts credential-bearing %s probe failures at their owner",
     async (failureKind) => {
@@ -297,12 +351,7 @@ describe("restart health", () => {
           server: { version: "2026.4.24", connId: "next" },
         }),
       );
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-      hints: [],
-    });
+    inspectPortUsage.mockResolvedValue(ownedPortUsage);
 
     const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyRestart({
@@ -330,12 +379,7 @@ describe("restart health", () => {
     const snapshot = await inspectGatewayRestartWithSnapshot({
       runtime: { status: "running", pid: 8000 },
       expectedVersion: "2026.4.24",
-      portUsage: {
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-        hints: [],
-      },
+      portUsage: ownedPortUsage,
     });
 
     expect(snapshot.healthy).toBe(false);
@@ -351,12 +395,7 @@ describe("restart health", () => {
         server: { version: "2026.4.23", connId: "old" },
       }),
     );
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-      hints: [],
-    });
+    inspectPortUsage.mockResolvedValue(ownedPortUsage);
 
     const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyRestart({
@@ -368,6 +407,8 @@ describe("restart health", () => {
     expect(snapshot.healthy).toBe(false);
     expect(snapshot.waitOutcome).toBe("version-mismatch");
     expect(snapshot.elapsedMs).toBe(0);
+    expect(snapshot.gatewayVersion).toBe("2026.4.23");
+    expect(snapshot.expectedVersion).toBe("2026.4.24");
     expect(snapshot.versionMismatch?.expected).toBe("2026.4.24");
     expect(snapshot.versionMismatch?.actual).toBe("2026.4.23");
     expect(sleep).not.toHaveBeenCalled();
@@ -379,12 +420,7 @@ describe("restart health", () => {
         server: { version: "2026.4.24", buildId: "old-build", connId: "old" },
       }),
     );
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-      hints: [],
-    });
+    inspectPortUsage.mockResolvedValue(ownedPortUsage);
 
     const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyRestart({
@@ -396,8 +432,15 @@ describe("restart health", () => {
     expect(snapshot.healthy).toBe(false);
     expect(snapshot.waitOutcome).toBe("build-id-mismatch");
     expect(snapshot.elapsedMs).toBe(0);
+    expect(snapshot.gatewayBuildId).toBe("old-build");
+    expect(snapshot.expectedBuildId).toBe("new-build");
     expect(snapshot.buildIdMismatch).toEqual({ expected: "new-build", actual: "old-build" });
     expect(sleep).not.toHaveBeenCalled();
+
+    const { renderRestartDiagnostics } = await import("./restart-health.js");
+    expect(renderRestartDiagnostics(snapshot)).toContain(
+      "Gateway build mismatch: expected new-build, running gateway reported old-build.",
+    );
   });
 
   it("marks matching-version restarts unhealthy when activated plugins failed to load", async () => {
@@ -429,12 +472,7 @@ describe("restart health", () => {
     const snapshot = await inspectGatewayRestartWithSnapshot({
       runtime: { status: "running", pid: 8000 },
       expectedVersion: "2026.4.24",
-      portUsage: {
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-        hints: [],
-      },
+      portUsage: ownedPortUsage,
     });
 
     expect(snapshot.healthy).toBe(false);
@@ -479,12 +517,7 @@ describe("restart health", () => {
         },
       }),
     );
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-      hints: [],
-    });
+    inspectPortUsage.mockResolvedValue(ownedPortUsage);
 
     const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyRestart({
@@ -515,12 +548,7 @@ describe("restart health", () => {
         },
       }),
     );
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-      hints: [],
-    });
+    inspectPortUsage.mockResolvedValue(ownedPortUsage);
 
     const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyRestart({

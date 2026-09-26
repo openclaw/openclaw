@@ -29,14 +29,16 @@ class OpenClawIpLocation extends OpenClawLightDomContentsElement {
 
   override willUpdate() {
     const ip = this.ip?.trim();
-    if (!ip || ip === this.requestedIp) {
+    if (ip === this.requestedIp) {
       return;
     }
     this.clearRetry();
     this.requestedIp = ip;
     this.retryAttempt = 0;
     this.location = null;
-    this.resolve(ip);
+    if (ip) {
+      this.resolve(ip);
+    }
   }
 
   private clearRetry() {

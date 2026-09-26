@@ -240,23 +240,33 @@ final sends do not trigger successful-final cleanup. An explicit supplemental
 suppression is not retried; the legacy boolean `false` supplemental result remains
 eligible for normal fallback.
 
-| Operation                 | Use                                                                                                                                                                                                                        |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `observeDelivery(result)` | Record provider-confirmed final delivery through another path, such as the source/message-tool reply owner, and retire owned temporary progress. An invisible result is ignored; a progress receipt is not final evidence. |
-| `observeSuppression()`    | Record an intentional no-visible-final outcome without quiescing or deleting the preview and without presenting a false terminal failure.                                                                                  |
-| `observeFailure()`        | Record a final dispatcher failure that occurred before the sender ran. Never infer acceptance from the error's class. A previously accepted final is not revoked.                                                          |
-| `cleanup({ failed })`     | Quiesce updates and clean eligible temporary previews. Failed/partial finals and retained or promoted previews stay protected. Cleanup failure cannot authorize resending accepted content.                                |
-| `retainPreview()`         | Transfer the artifact out of automatic cleanup, for example after an accepted continuation handoff. This does not claim final delivery.                                                                                    |
-| `reset()`                 | Start the next explicitly admitted turn or block generation. The owner fences stale awaited completions from the new generation. The transport still owns its corresponding message-identity rotation.                     |
+| Operation                                | Use                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `beginFinalDelivery()`                   | Freeze progress before awaiting provider-owned finalization. This records pending delivery, not acceptance, and does not stop the native transport.                                                                                                                                                   |
+| `observeDelivery(result, { isError })`   | Record provider-confirmed final delivery through a native or source/message-tool path and retire eligible temporary progress. An invisible result is ignored; a progress receipt is not final evidence. `isError` distinguishes an accepted error response from task success and defaults to `false`. |
+| `observeSettlement(result, { isError })` | Classify the adapter's actual `onDelivered` settlement as visible delivery, intentional suppression, or no-visible failure. Legacy `void` settlement retains its historical accepted-delivery meaning.                                                                                                |
+| `observeFailure(result?)`                | Record a final dispatcher failure. Pass a provider-confirmed accepted subset for partial delivery; never infer acceptance from the error's class. A previously completed final is not revoked.                                                                                                        |
+| `observeSuppression()`                   | Record an intentional final no-send decision, such as cancellation by an outbound modifier hook. It cannot hide an existing delivery failure or revoke accepted content.                                                                                                                              |
+| `cleanup({ failed })`                    | Quiesce updates and clean eligible temporary previews. Failed/partial finals and retained or promoted previews stay protected. Cleanup failure cannot authorize resending accepted content.                                                                                                           |
+| `retainPreview()`                        | Transfer the artifact out of automatic cleanup, for example after an accepted continuation handoff. This does not claim final delivery.                                                                                                                                                               |
+| `reset()`                                | Start the next admitted turn, assistant answer, or block generation. The owner fences stale awaited completions from the new generation. The transport still owns its corresponding message-identity rotation; advance both at the assistant boundary.                                                |
 
 The read-only `finalStarted`, `finalDelivered`, `finalSucceeded`, `finalFailed`,
-and `previewFinalized` properties are projections of that owner.
+`finalSuppressed`, and `previewFinalized` properties are projections of that owner.
 `finalDelivered` means some final content was accepted, including partial/error
 results; it does not imply completion. `finalSucceeded` requires a complete
 non-error final. `finalFailed` identifies failed or partial delivery, not a model
 error whose error-message delivery succeeded. Preserve the returned receipt.
 `previewFinalized` also covers retained artifacts and accepted replacements
 that cannot be promoted again.
+
+Use the observation operations when provider-owned pagination or deferred
+finalization cannot use the generic `deliver` algorithm. Begin before the first
+await, then report acceptance, failure, or intentional suppression at actual
+settlement. Routed channel adapters should pass their final `onDelivered`
+result to `observeSettlement`; this includes suppression before the provider
+sender runs and provider finalization that settles after the initial send call.
+Buffered content and uncertain sends are not visible-final evidence.
 
 The published `defineFinalizableLivePreviewAdapter` and
 `deliverWithFinalizableLivePreviewAdapter` helpers retain their existing

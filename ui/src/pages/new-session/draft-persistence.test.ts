@@ -1,8 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
+import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { reviewPrivateComposerDraft } from "../chat/components/private-composer-recovery-dialog.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { restoreDraft, retainDraft } from "./draft-navigation-handoff.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
@@ -16,16 +19,22 @@ type StoreReadResult =
         revision: number;
         text: string;
         mentions?: readonly HumanMention[];
+        modelSelection?: { agentId: string; model: string; thinkingLevel: string };
         attachments: unknown[];
         writeId: string;
       };
     }
-  | { status: "not-found"; revision?: number; writeId?: string };
+  | { status: "not-found"; revision?: number; writeId?: string }
+  | { status: "storage-failed" };
 
 const store = vi.hoisted(() => {
   const pendingReads: Array<(result: unknown) => void> = [];
   return {
     pendingReads,
+    hydrateDurableComposerAttachments:
+      vi.fn<
+        typeof import("../chat/durable-composer-persistence.ts").hydrateDurableComposerAttachments
+      >(),
     readDurableComposerDraft: vi.fn(
       () =>
         new Promise((resolve) => {
@@ -59,7 +68,14 @@ vi.mock("../../lib/chat/composer-draft-store.runtime.ts", () => ({
 // files' module singletons.
 vi.mock("../chat/durable-composer-persistence.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../chat/durable-composer-persistence.ts")>();
-  return { ...actual, writeDurableComposerSnapshot: store.writeDurableComposerSnapshot };
+  store.hydrateDurableComposerAttachments.mockImplementation(
+    actual.hydrateDurableComposerAttachments,
+  );
+  return {
+    ...actual,
+    writeDurableComposerSnapshot: store.writeDurableComposerSnapshot,
+    hydrateDurableComposerAttachments: store.hydrateDurableComposerAttachments,
+  };
 });
 
 async function resolvePendingRead(result: StoreReadResult) {
@@ -95,6 +111,198 @@ afterEach(() => {
 });
 
 describe("NewSessionDraftPersistence restore race", () => {
+  it("preserves a newer edit when stored attachment hydration succeeds late", async () => {
+    const flow = createFlow();
+    const hydrationEntered = createDeferred();
+    const hydration = createDeferred<[]>();
+    const restoreSelection = vi.fn();
+    flow.draftPersistence.modelSelection = {
+      read: () => undefined,
+      restore: restoreSelection,
+      retire: vi.fn(),
+    };
+    store.readDurableComposerDraft.mockResolvedValueOnce({
+      status: "found",
+      draft: {
+        revision: 7,
+        text: "@Alex stored draft",
+        mentions: [{ profileId: "old-alex", start: 0, end: 5 }],
+        modelSelection: { agentId: "main", model: "openai/stored", thinkingLevel: "low" },
+        attachments: [],
+        writeId: "stored",
+      },
+    });
+    store.hydrateDurableComposerAttachments.mockImplementationOnce(() => {
+      hydrationEntered.resolve();
+      return hydration.promise;
+    });
+    try {
+      flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
+      flow.draftPersistence.activateRoute("agent:main");
+      await hydrationEntered.promise;
+      const mentions = [{ profileId: "new-alex", start: 0, end: 5 }];
+      flow.setMessage("@Alex newer edit", mentions);
+      hydration.resolve([]);
+      // The restore registered its continuation before this await.
+      await hydration.promise;
+      expect(flow.message).toBe("@Alex newer edit");
+      expect(flow.mentions).toEqual(mentions);
+      expect(restoreSelection).not.toHaveBeenCalled();
+    } finally {
+      hydration.resolve([]);
+      await hydration.promise;
+      const submitted = flow.draftPersistence.captureSubmission();
+      flow.disconnect();
+      await Promise.all(submitted.mutation.writes);
+    }
+  });
+
+  it.each(["read", "attachments"] as const)(
+    "never flushes model-only edits after failed %s restoration",
+    async (failure) => {
+      const flow = createFlow();
+      const selection = { agentId: "main", model: "openai/retry", thinkingLevel: "high" };
+      flow.draftPersistence.modelSelection = {
+        read: () => selection,
+        restore: vi.fn(),
+        retire: vi.fn(),
+      };
+      flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
+      flow.draftPersistence.activateRoute("failed-restoration");
+      flow.draftPersistence.captureSubmission();
+      flow.draftPersistence.noteModelSelectionMutation();
+      const saved = {
+        status: "found" as const,
+        draft: { revision: 10, text: "Keep saved content", attachments: [], writeId: "saved" },
+      };
+      await resolvePendingRead(saved);
+      if (failure === "attachments") {
+        store.hydrateDurableComposerAttachments.mockRejectedValueOnce(
+          new Error("Attachment unavailable"),
+        );
+      }
+      await resolvePendingRead(failure === "read" ? { status: "storage-failed" } : saved);
+      await settle();
+      flow.draftPersistence.persistNow();
+      expect(store.writeDurableComposerSnapshot).not.toHaveBeenCalled();
+      // A later deliberate retry can rehydrate and commit the retained model intent.
+      flow.draftPersistence.noteModelSelectionMutation();
+      await resolvePendingRead(saved);
+      await vi.waitFor(() => expect(flow.message).toBe("Keep saved content"));
+      flow.draftPersistence.persistNow();
+      await vi.waitFor(() =>
+        expect(store.writeDurableComposerSnapshot).toHaveBeenLastCalledWith(
+          expect.objectContaining({ text: "Keep saved content", modelSelection: selection }),
+        ),
+      );
+      flow.disconnect();
+    },
+  );
+
+  it("rehydrates a canceled pristine read before persisting a model-only retry", async () => {
+    const flow = createFlow();
+    const selection = { agentId: "main", model: "openai/retry", thinkingLevel: "high" };
+    flow.draftPersistence.modelSelection = {
+      read: () => selection,
+      restore: vi.fn(),
+      retire: vi.fn(),
+    };
+    flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
+    flow.draftPersistence.activateRoute("canceled-pristine");
+    flow.draftPersistence.captureSubmission();
+    flow.draftPersistence.noteModelSelectionMutation();
+    // The canceled read may publish lineage, but must not authorize writing empty content.
+    await resolvePendingRead({
+      status: "found",
+      draft: { revision: 10, text: "Saved unsent message", attachments: [], writeId: "saved" },
+    });
+    await settle();
+    flow.draftPersistence.persistNow();
+    expect(store.writeDurableComposerSnapshot).not.toHaveBeenCalled();
+    await resolvePendingRead({
+      status: "found",
+      draft: { revision: 10, text: "Saved unsent message", attachments: [], writeId: "saved" },
+    });
+    await vi.waitFor(() => expect(flow.message).toBe("Saved unsent message"));
+    flow.draftPersistence.persistNow();
+    await vi.waitFor(() =>
+      expect(store.writeDurableComposerSnapshot).toHaveBeenLastCalledWith(
+        expect.objectContaining({ text: "Saved unsent message", modelSelection: selection }),
+      ),
+    );
+    flow.disconnect();
+  });
+
+  it("persists a model-only edit after a submission capture fails without consuming the draft", async () => {
+    const flow = createFlow();
+    let selected = "openai/first";
+    flow.draftPersistence.modelSelection = {
+      read: () => ({ agentId: "main", model: selected, thinkingLevel: "low" }),
+      restore: vi.fn(),
+      retire: vi.fn(),
+    };
+    flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
+    flow.draftPersistence.activateRoute("failed-submission");
+    await resolvePendingRead({ status: "not-found" });
+    await settle();
+    flow.setMessage("Still unsent");
+    flow.draftPersistence.captureSubmission();
+    // A rejected/no-result create keeps this same unsent mutation and text.
+    selected = "openai/second";
+    flow.draftPersistence.noteModelSelectionMutation();
+    flow.draftPersistence.persistNow();
+    await vi.waitFor(() =>
+      expect(store.writeDurableComposerSnapshot).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          text: "Still unsent",
+          modelSelection: expect.objectContaining({ model: selected }),
+        }),
+      ),
+    );
+    flow.disconnect();
+  });
+
+  it("retires accepted model intent only while the submitted mutation still owns the view", async () => {
+    const flow = createFlow();
+    const retire = vi.fn();
+    flow.draftPersistence.modelSelection = { read: () => undefined, restore: vi.fn(), retire };
+    flow.setMessage("Submitted draft");
+    const accepted = flow.draftPersistence.captureSubmission();
+    await flow.draftPersistence.clearSubmittedDraft(accepted);
+    expect(retire).toHaveBeenCalledTimes(1);
+    const previous = flow.draftPersistence.captureSubmission();
+    flow.setMessage("Newer draft");
+    await flow.draftPersistence.clearSubmittedDraft(previous);
+    expect(retire).toHaveBeenCalledTimes(1);
+    flow.disconnect();
+  });
+
+  it("merges a model-only edit with a message whose durable restore is still pending", async () => {
+    const flow = createFlow();
+    const selection = { agentId: "main", model: "openai/other", thinkingLevel: "low" };
+    const restoreSelection = vi.fn();
+    flow.draftPersistence.modelSelection = {
+      read: () => selection,
+      restore: restoreSelection,
+      retire: vi.fn(),
+    };
+    flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
+    flow.draftPersistence.activateRoute("model-choice");
+    flow.draftPersistence.noteModelSelectionMutation();
+    await resolvePendingRead({
+      status: "found",
+      draft: { revision: 10, text: "Keep this unsent message", attachments: [], writeId: "stored" },
+    });
+    await vi.waitFor(() => expect(flow.message).toBe("Keep this unsent message"));
+    flow.draftPersistence.persistNow();
+    await vi.waitFor(() =>
+      expect(store.writeDurableComposerSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Keep this unsent message", modelSelection: selection }),
+      ),
+    );
+    flow.disconnect();
+  });
+
   it("saves the captured normal draft after retirement settles on another route", async () => {
     let finishRetirement!: (result: {
       status: "persisted";
@@ -177,7 +385,7 @@ describe("NewSessionDraftPersistence restore race", () => {
 
   it("keeps an incognito draft private when navigation hands it to a fresh page", async () => {
     const { context, flow: source } = createDraftFixture();
-    const handoff = createChatAttachmentHandoff();
+    const handoff = createChatAttachmentHandoff(context.gateway);
     Object.assign(context, { chatAttachmentHandoff: handoff });
     source.draftPersistence.setOwner("ws://gateway.example", "principal-a");
     source.draftPersistence.selectRoute("private-route");
@@ -185,8 +393,10 @@ describe("NewSessionDraftPersistence restore race", () => {
     source.setMessage("private incognito draft");
     retainDraft(context, source, "private-route", "private-route");
     source.disconnect();
+    expect(canReloadControlUiDocument()).toBe(false);
     const target = createFlow();
     restoreDraft(context, target, "private-route", "");
+    expect(canReloadControlUiDocument()).toBe(true);
     await settle();
     if (store.pendingReads.length) {
       await resolvePendingRead({ status: "not-found", revision: Date.now() });
@@ -197,6 +407,7 @@ describe("NewSessionDraftPersistence restore race", () => {
     expect(store.writeDurableComposerSnapshot).not.toHaveBeenCalled();
     target.disconnect();
     handoff.dispose();
+    expect(canReloadControlUiDocument()).toBe(true);
   });
 
   it.each(["conflict", "late commit"])("reconciles a handed-off edit after %s", async (outcome) => {
@@ -258,9 +469,10 @@ describe("NewSessionDraftPersistence restore race", () => {
 
   it("lets durable restoration supersede a stale handoff during initial owner setup", async () => {
     const { context, flow } = createDraftFixture();
-    const handoff = createChatAttachmentHandoff();
+    const handoff = createChatAttachmentHandoff(context.gateway);
     Object.assign(context, { chatAttachmentHandoff: handoff });
     handoff.prepare({
+      reviewPrivateDraft: reviewPrivateComposerDraft,
       owner: context.gateway.snapshot.client,
       paneId: "new-session-draft",
       scopeKey: "first-owner",

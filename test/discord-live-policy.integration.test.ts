@@ -70,6 +70,7 @@ describe("Discord admission through Gateway policy publication", () => {
       artifactBasename: "api.js",
     });
     const cfg: OpenClawConfig = {
+      plugins: { allow: ["discord"] },
       channels: { discord: { token: "synthetic-token", groupPolicy: "allowlist", guilds: {} } },
       messages: { inbound: { debounceMs: 0 } },
     };
@@ -235,7 +236,7 @@ describe("Discord admission through Gateway policy publication", () => {
       await waitForFast(() =>
         expect(committed, "policy-only publication must not wait for the active turn").toBe(next),
       );
-      await pendingReload;
+      expect(await pendingReload).toBe("applied");
     };
     const activeTurn = tryBeginGatewayRootWorkAdmission();
     expect(activeTurn).not.toBeNull();

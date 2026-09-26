@@ -2,6 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import {
   sendInvalidRequest,
   sendJson,
@@ -18,7 +19,7 @@ import {
   resolveAgentIdFromModel,
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
-import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { READ_SCOPE } from "./operator-scopes.js";
 
 type OpenAiModelObject = {
   id: string;
@@ -81,9 +82,9 @@ export async function handleOpenAiModelsHttpRequest(
   }
 
   const requestedScopes = resolveSharedSecretHttpOperatorScopes(req, requestAuth);
-  const scopeAuth = authorizeOperatorScopesForMethod("models.list", requestedScopes);
-  if (!scopeAuth.allowed) {
-    sendMissingScopeForbidden(res, scopeAuth.missingScope);
+  // The compatibility catalog exposes global agent targets and keeps its general read floor.
+  if (!operatorScopeSatisfied(READ_SCOPE, requestedScopes)) {
+    sendMissingScopeForbidden(res, READ_SCOPE);
     return true;
   }
 

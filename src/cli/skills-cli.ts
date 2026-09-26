@@ -83,21 +83,16 @@ import { registerSkillsLibraryCli } from "./skills-library-cli.js";
 import { isSkillsMachineOutput } from "./skills-output-mode.js";
 import { registerSkillsSearchCli } from "./skills-search-cli.js";
 
-export type {
-  SkillInfoOptions,
-  SkillsCheckOptions,
-  SkillsListOptions,
-} from "./skills-cli.format.js";
-export { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
-
 type ResolvedClawHubSkillVerificationTarget = Extract<
   Awaited<ReturnType<typeof resolveClawHubSkillVerificationTarget>>,
   { ok: true }
 >;
 
-function formatSkillWarning(message: string): string {
-  return message.includes("╭─") ? message : theme.warn(message);
-}
+const skillInstallLogger = {
+  info: (message: string) => defaultRuntime.log(message),
+  warn: (message: string) =>
+    defaultRuntime.log(message.includes("╭─") ? message : theme.warn(message)),
+};
 
 function isClawHubSkillBlockedCliFailure(result: { code?: string; warning?: string }): boolean {
   return (
@@ -613,10 +608,7 @@ export function registerSkillsCli(program: Command) {
               ...resolveInstallPolicyWarningAcknowledgementCliOptions({
                 acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
               }),
-              logger: {
-                info: (message) => defaultRuntime.log(message),
-                warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
-              },
+              logger: skillInstallLogger,
             });
             if (!result.ok) {
               defaultRuntime.error(result.error);
@@ -651,10 +643,7 @@ export function registerSkillsCli(program: Command) {
             }),
             ...(opts.forceInstall ? { forceInstall: true } : {}),
             confirmInstall: resolveClawHubInstallConfirmation(),
-            logger: {
-              info: (message) => defaultRuntime.log(message),
-              warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
-            },
+            logger: skillInstallLogger,
           });
           if (!result.ok) {
             if (!isClawHubSkillBlockedCliFailure(result)) {
@@ -730,10 +719,7 @@ export function registerSkillsCli(program: Command) {
             ...resolveInstallPolicyWarningAcknowledgementCliOptions({
               acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
             }),
-            logger: {
-              info: (message) => defaultRuntime.log(message),
-              warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
-            },
+            logger: skillInstallLogger,
             config: target.config,
           });
           let failed = false;

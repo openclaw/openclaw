@@ -1,7 +1,7 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { readSkillCuratorReviewStatus } from "./collection-review-state.js";
+import { readSkillCuratorReviewStatusInDatabase } from "./collection-review.kernel.js";
 
 type CuratorDatabase = Pick<DB, "skill_usage" | "skill_workshop_proposals">;
 
@@ -19,7 +19,7 @@ export function readSkillCuratorStateInDatabase(
   skillFiles: readonly string[],
 ) {
   const kysely = getNodeSqliteKysely<CuratorDatabase>(database.db);
-  const reviewStatus = readSkillCuratorReviewStatus({ database });
+  const reviewStatus = readSkillCuratorReviewStatusInDatabase(database);
   const proposalRows = executeSqliteQuerySync(
     database.db,
     kysely

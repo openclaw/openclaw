@@ -11,7 +11,11 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import { buildSessionCreationStamp } from "../../../config/sessions/session-entry-provenance.js";
+import {
+  buildSessionCreationStamp,
+  inheritSessionGitContributorProfileIds,
+} from "../../../config/sessions/session-entry-provenance.js";
+import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveGatewaySessionStoreTarget } from "../../../gateway/session-utils-store-lookup.js";
@@ -24,10 +28,12 @@ import {
 } from "../../../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import {
+  isIncognitoSessionKey,
   normalizeOptionalAgentId,
   resolveAgentIdFromSessionKey,
 } from "../../../routing/session-key.js";
 import { recordSessionCreated } from "../../../sessions/session-created.js";
+import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
 import { recordSubagentSpawned } from "../../../sessions/session-state-events.js";
 import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
@@ -449,9 +455,37 @@ export async function spawnAcpDirect(
   };
   const adapter: SpawnBackendAdapter<AcpBackendState> = {
     async initialize() {
+      const parentTarget = resolveGatewaySessionStoreTarget({
+        cfg,
+        key: requesterInternalKey,
+        agentId: requesterAgentId,
+      });
+      await waitForSessionParticipantRecording({
+        agentId: requesterAgentId,
+        sessionKey: parentTarget.canonicalKey,
+        storePath: parentTarget.storePath,
+      });
+      ctx.assertActive?.();
+      const inheritedGitContributorProfileIds = isIncognitoSessionKey(requesterInternalKey)
+        ? undefined
+        : await withSessionEntryReadOnlyInWorker(
+            {
+              agentId: requesterAgentId,
+              sessionKey: parentTarget.canonicalKey,
+              storePath: parentTarget.storePath,
+            },
+            () => ctx.assertActive?.(),
+            async (read) => {
+              if (!read.ok) {
+                throw read.error;
+              }
+              return inheritSessionGitContributorProfileIds(read.value);
+            },
+          );
       const creationStamp = buildSessionCreationStamp({
         via: "spawn",
         actor: { type: "agent", id: requesterAgentId },
+        inheritedGitContributorProfileIds,
       });
       const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId });
       const childSessionPatch = admission.childSessionPatch

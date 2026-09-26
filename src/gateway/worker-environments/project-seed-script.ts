@@ -1,13 +1,17 @@
 import {
-  selectWorkspaceSeedsToPrune,
   WORKSPACE_SEED_RETENTION,
+  WORKSPACE_SEED_RETENTION_JS,
 } from "../../worker/workspace-seed-retention.js";
-import { PREPARE_PROJECT_WORKSPACE_JS } from "./project-setup-script.js";
+import {
+  PREPARE_PROJECT_WORKSPACE_JS,
+  type PreparedProjectVerification,
+} from "./project-setup-script.js";
 
 type ProjectSeedScriptInput = {
   namespace: string;
   seedKey: string;
   baseCommit: string;
+  verifiedRetained?: PreparedProjectVerification | null;
   preparation?: {
     preparationKey: string;
     cacheKey: string;
@@ -29,14 +33,13 @@ export function createProjectSeedScript(input: ProjectSeedScriptInput): string {
   return `set -eu
 node <<'PROJECT_SEED_SCRIPT'
 const fs = require("node:fs");
-const fsp = fs.promises;
 const path = require("node:path");
 const os = require("node:os");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 const input = ${JSON.stringify(input)};
 const retention = ${JSON.stringify(WORKSPACE_SEED_RETENTION)};
-const selectSeedsToPrune = ${selectWorkspaceSeedsToPrune.toString()};
+${WORKSPACE_SEED_RETENTION_JS}
 const prepareWorkspace = ${input.preparation ? PREPARE_PROJECT_WORKSPACE_JS : "undefined"};
 process.umask(0o077);
 const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key))), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" };
@@ -65,7 +68,7 @@ const ownedDirectory = (parent, target) => {
     const entries = fs.readdirSync(namespace, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => ({ name: entry.name, mtimeMs: ownedDirectory(namespace, path.join(namespace, entry.name)).mtimeMs }));
-    for (const entry of selectSeedsToPrune(entries, retention, Date.now(), input.seedKey)) {
+    for (const entry of selectWorkspaceSeedsToPrune(entries, retention, Date.now(), input.seedKey)) {
       const target = path.join(namespace, entry.name);
       if (ownedDirectory(namespace, target).mtimeMs === entry.mtimeMs) fs.rmSync(target, { recursive: true });
     }
@@ -81,6 +84,7 @@ const ownedDirectory = (parent, target) => {
   }
   try {
     const retained = input.preparation && await prepareWorkspace({ ...input, ...input.preparation }, true);
+    const retainedWorkspace = input.preparation ? { retainedWorkspace: retained ?? null } : {};
     if (!transport) {
       if (fs.existsSync(seed)) {
         ownedDirectory(namespace, seed);
@@ -88,7 +92,7 @@ const ownedDirectory = (parent, target) => {
         const preparedWorkspace = retained?.baseCommit === input.baseCommit ? retained : undefined;
         if (git(seed, ["rev-parse", "--verify", "HEAD"]) !== input.baseCommit || git(seed, ["status", "--porcelain=v1", "--untracked-files=all"])) throw new Error("Prepared project seed is not pristine");
         prune();
-        process.stdout.write(JSON.stringify({ ready: true, preparedWorkspace }));
+        process.stdout.write(JSON.stringify({ ready: true, preparedWorkspace, ...retainedWorkspace }));
         return;
       }
       // Provisioning serializes this lease. Discard only this project's abandoned staging.
@@ -99,7 +103,7 @@ const ownedDirectory = (parent, target) => {
         fs.rmSync(stale, { recursive: true });
       }
       const directory = fs.mkdtempSync(path.join(namespace, stagingPrefix));
-      process.stdout.write(JSON.stringify({ ready: false, directory, retainedCommit: retained?.baseCommit }));
+      process.stdout.write(JSON.stringify({ ready: false, directory, ...retainedWorkspace }));
       return;
     }
     const repository = path.join(directory, "repository");
@@ -142,7 +146,12 @@ const ownedDirectory = (parent, target) => {
     if (git(repository, ["status", "--porcelain=v1", "--untracked-files=all"])) throw new Error("Prepared project checkout is not pristine");
     fs.renameSync(repository, seed);
     prune();
-    process.stdout.write(JSON.stringify({ ready: true }));
+    // Repository code keeps its separate Gateway authority check. A checkout that
+    // cannot run setup can complete under this seed command's existing owner.
+    const preparedWorkspace = input.preparation && (!input.preparation.setupRecipe || input.preparation.runSetupScript === false)
+      ? await prepareWorkspace({ ...input, ...input.preparation, runSetupScript: false })
+      : undefined;
+    process.stdout.write(JSON.stringify({ ready: true, preparedWorkspace }));
   } finally { if (directory !== undefined) fs.rmSync(directory, { recursive: true, force: true }); }
 })().catch((error) => { console.error(error.message); process.exitCode = 1; });
 PROJECT_SEED_SCRIPT`;

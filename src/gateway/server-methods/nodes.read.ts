@@ -76,20 +76,18 @@ async function listNodesForClient(params: {
   client: GatewayClient | null;
   context: GatewayRequestContext;
   nodeId?: string;
-  pairedDevices: Awaited<ReturnType<typeof listDevicePairing>>["paired"];
-  pairedNodes: ReturnType<typeof projectNodePairing>["paired"];
-  pendingNodes: ReturnType<typeof projectNodePairing>["pending"];
-  connectedNodes: readonly NodeSession[];
-}): Promise<NodeListNode[]> {
-  const runtimeState = collectNodeCatalogRuntimeState(
-    params.context.nodeRegistry,
-    params.connectedNodes,
+}): Promise<{ nodes: NodeListNode[]; connectedNodes: NodeSession[] }> {
+  const devicePairing = await listDevicePairing();
+  const nodePairing = projectNodePairing(devicePairing.paired);
+  const connectedNodes = params.context.nodeRegistry.listConnectedForPairingStates(
+    projectPairedDeviceNodeBindings(devicePairing.paired),
   );
+  const runtimeState = collectNodeCatalogRuntimeState(params.context.nodeRegistry, connectedNodes);
   const catalog = createKnownNodeCatalog({
-    pairedDevices: params.pairedDevices,
-    pairedNodes: params.pairedNodes,
-    pendingNodes: params.pendingNodes,
-    connectedNodes: params.connectedNodes,
+    pairedDevices: devicePairing.paired,
+    pairedNodes: nodePairing.paired,
+    pendingNodes: nodePairing.pending,
+    connectedNodes,
     ...runtimeState,
   });
   const localNodeId = await resolveLocalNodeId().catch((error: unknown) => {
@@ -105,10 +103,13 @@ async function listNodesForClient(params: {
     node.nodeId === localNodeId ? Object.assign({}, node, { gatewayLocal: true }) : node,
   );
   if (nodeInvokePolicy.canReadPendingNodePairing(params.client)) {
-    return nodes;
+    return { nodes, connectedNodes };
   }
   const ownDeviceId = nodeReadCallerDeviceId(params.client);
-  return nodes.map((node) => safeNodeReadProjection(node, ownDeviceId)).filter(isVisibleNode);
+  return {
+    nodes: nodes.map((node) => safeNodeReadProjection(node, ownDeviceId)).filter(isVisibleNode),
+    connectedNodes,
+  };
 }
 
 function normalizePluginSurfaceRefreshParams(
@@ -233,18 +234,9 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const devicePairing = await listDevicePairing();
-      const nodePairing = projectNodePairing(devicePairing.paired);
-      const connectedNodes = context.nodeRegistry.listConnectedForPairingStates(
-        projectPairedDeviceNodeBindings(devicePairing.paired),
-      );
-      const nodes = await listNodesForClient({
+      const { nodes, connectedNodes } = await listNodesForClient({
         client,
         context,
-        pairedDevices: devicePairing.paired,
-        pairedNodes: nodePairing.paired,
-        pendingNodes: nodePairing.pending,
-        connectedNodes,
       });
       const activeNodeId = context.nodeRegistry.getActiveNode(connectedNodes)?.nodeId;
       const nodesWithPresence = activeNodeId
@@ -264,19 +256,10 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const devicePairing = await listDevicePairing();
-      const nodePairing = projectNodePairing(devicePairing.paired);
-      const connectedNodes = context.nodeRegistry.listConnectedForPairingStates(
-        projectPairedDeviceNodeBindings(devicePairing.paired),
-      );
-      const nodes = await listNodesForClient({
+      const { nodes, connectedNodes } = await listNodesForClient({
         client,
         context,
         nodeId: id,
-        pairedDevices: devicePairing.paired,
-        pairedNodes: nodePairing.paired,
-        pendingNodes: nodePairing.pending,
-        connectedNodes,
       });
       const node = nodes[0];
       if (!node) {

@@ -205,6 +205,10 @@ describe("Goal control requests", () => {
         throw new Error("ACK lost");
       },
     });
+    let renderedError: string | null | undefined;
+    host.requestUpdate = () => {
+      renderedError = host.chatError;
+    };
     Object.defineProperty(host.client, "recoveryScope", { get: () => "" });
     await mutateChatGoal(host, {
       action: "edit",
@@ -212,6 +216,9 @@ describe("Goal control requests", () => {
       objective: "Private account A edit",
     });
     const captured = chatGoalRecovery(host);
+    expect
+      .soft(renderedError)
+      .toBe("Goal update was not sent because its recovery request could not be saved.");
     expect.soft(host.request).not.toHaveBeenCalled();
     expect.soft(sessionStorage.length).toBe(0);
     // Credentials changed, but both clients lack a distinguishable scope and share a session.

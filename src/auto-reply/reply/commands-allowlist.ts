@@ -32,12 +32,6 @@ import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
 type AllowlistScope = "dm" | "group" | "all";
 type AllowlistAction = "list" | "add" | "remove";
 type AllowlistTarget = "both" | "config" | "store";
-type ResolvedAllowlistName = {
-  input: string;
-  resolved: boolean;
-  name?: string | null;
-};
-
 type AllowlistCommand =
   | {
       action: "list";
@@ -243,23 +237,9 @@ async function resolveAllowlistNames(params: {
     entries: params.entries,
   });
   return new Map(
-    (resolved ?? []).flatMap((entry: ResolvedAllowlistName) =>
+    (resolved ?? []).flatMap((entry) =>
       entry.resolved && entry.name ? [[entry.input, entry.name] as const] : [],
     ),
-  );
-}
-
-async function readAllowlistConfig(params: {
-  cfg: OpenClawConfig;
-  channelId: ChannelId;
-  accountId?: string | null;
-}) {
-  const plugin = getChannelPlugin(params.channelId);
-  return (
-    (await plugin?.allowlist?.readConfig?.({
-      cfg: params.cfg,
-      accountId: params.accountId,
-    })) ?? {}
   );
 }
 
@@ -328,11 +308,11 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
         storeReadFailed = true;
       }
     }
-    const configState = await readAllowlistConfig({
-      cfg: params.cfg,
-      channelId,
-      accountId,
-    });
+    const configState =
+      (await getChannelPlugin(channelId)?.allowlist?.readConfig?.({
+        cfg: params.cfg,
+        accountId,
+      })) ?? {};
 
     const dmAllowFrom = (configState.dmAllowFrom ?? []).map(String);
     const groupAllowFrom = (configState.groupAllowFrom ?? []).map(String);

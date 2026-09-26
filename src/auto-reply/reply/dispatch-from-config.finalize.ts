@@ -123,12 +123,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       throwIfDispatchOperationAborted();
       // Durable reasoning is a channel-owned lane; generic channels keep the
       // historical suppression unless they explicitly opt in.
-      if (reply.isReasoning === true && !state.reasoningPayloadsEnabled) {
-        await suppressPendingFinalDelivery(reply, pendingFinalOptions);
-        await heartbeatReply?.settle?.("cancelled");
-        continue;
-      }
-      if (reply.isCommentary === true && !state.commentaryPayloadsEnabled) {
+      if (
+        (reply.isReasoning === true && !state.reasoningPayloadsEnabled) ||
+        (reply.isCommentary === true && !state.commentaryPayloadsEnabled)
+      ) {
         await suppressPendingFinalDelivery(reply, pendingFinalOptions);
         await heartbeatReply?.settle?.("cancelled");
         continue;
@@ -320,6 +318,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
           accountId: replyRoute.accountId,
         });
         throwIfDispatchOperationAborted();
+        let ttsOnlyPayload: ReplyPayload | undefined;
         if (ttsSyntheticReply.mediaUrl || (deferFinalTtsText && ttsSyntheticReply.text?.trim())) {
           const ttsPayload = deferFinalTtsText
             ? ttsSyntheticReply
@@ -329,18 +328,12 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
                 spokenText: deferredTtsTextPending,
                 trustedLocalMedia: true,
               };
-          const ttsOnlyPayload =
+          ttsOnlyPayload =
             !deferFinalTtsText && turnLedger.resolveTerminalDelivery() === "delivered"
               ? markReplyPayloadAsTtsSupplement(ttsPayload, deferredTtsTextPending, {
                   visibleTextAlreadyDelivered: true,
                 })
               : ttsPayload;
-          const finalReply = await state.sendFinalPayload(ttsOnlyPayload, {
-            abortSignal: getDispatchAbortSignal(),
-            skipTts: true,
-          });
-          queuedFinal = finalReply.queuedFinal || queuedFinal;
-          routedFinalCount += finalReply.routedFinalCount;
         } else if (
           needsTtsFallback(
             Boolean(state.cleanBlockTtsDirectiveText),
@@ -348,7 +341,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             ttsSyntheticReply.text,
           )
         ) {
-          const finalReply = await state.sendFinalPayload(ttsSyntheticReply, {
+          ttsOnlyPayload = ttsSyntheticReply;
+        }
+        if (ttsOnlyPayload) {
+          const finalReply = await state.sendFinalPayload(ttsOnlyPayload, {
             abortSignal: getDispatchAbortSignal(),
             skipTts: true,
           });

@@ -1,23 +1,47 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureAgentToolExecutionBudget } from "../agents/agent-tool-source-execution-guard.js";
 import { createExternalAuthRuntime } from "../agents/auth-profiles/external-auth.js";
 import { createAuthProfileStoreRuntime } from "../agents/auth-profiles/store.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getInstallationTarget } from "./installation-target-context.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
 import {
   prepareUpdateRepairInference,
   runUpdateRepairTurn,
   withUpdateRepairEnvironment,
 } from "./update-repair-agent.runtime.js";
 
-const mocks = vi.hoisted(() => ({ entry: vi.fn(), run: vi.fn(), cleanup: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  entry: vi.fn(),
+  run: vi.fn(),
+  cleanup: vi.fn(),
+  handoff: undefined as ReturnType<typeof createManagedHandoffTestBinding> | undefined,
+}));
+vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./tmp-openclaw-dir.js")>()),
+  resolvePreferredOpenClawTmpDir: () => {
+    if (!mocks.handoff) {
+      throw new Error("Private handoff binding required");
+    }
+    mocks.handoff.assertPath();
+    return mocks.handoff.directory;
+  },
+}));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  vi.unstubAllEnvs();
+  mocks.handoff = undefined;
+});
 vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: mocks.run }));
 vi.mock("../agents/embedded-agent-runner/run-entry.js", () => ({
   runEmbeddedAgentEntry: mocks.entry,
@@ -27,6 +51,12 @@ vi.mock("../process/supervisor/index.js", () => ({
 }));
 
 beforeEach(() => {
+  mocks.handoff = createManagedHandoffTestBinding(tempDirs.make("repair-runtime-handoff-"));
+  vi.stubEnv(
+    "NODE_OPTIONS",
+    [process.env.NODE_OPTIONS, mocks.handoff.nodeOption].filter(Boolean).join(" "),
+  );
+  mocks.handoff.assertPath(resolveManagedUpdateLeaseDatabasePath());
   mocks.run.mockReset();
   mocks.cleanup.mockReset().mockResolvedValue(undefined);
   mocks.entry
@@ -169,6 +199,56 @@ describe("post-failure repair execution", () => {
       });
     },
   );
+
+  it("preserves both process and database cleanup failures and refuses clean completion", async () => {
+    await withOpenClawTestState({ layout: "home" }, async (state) => {
+      const config: OpenClawConfig = { plugins: { enabled: false } };
+      const processFailure = new Error("Synthetic process cleanup failure");
+      const databaseFailure = new Error("Synthetic database cleanup failure");
+      const close = vi.fn().mockRejectedValueOnce(databaseFailure).mockResolvedValue(undefined);
+      let resources: ReturnType<typeof getOpenClawDatabaseMaintenanceScope>;
+      mocks.run.mockImplementation(async () => {
+        resources = getOpenClawDatabaseMaintenanceScope();
+        expect(resources).toBeDefined();
+        resources!.own({}, "agent-resources", close);
+        return { meta: { durationMs: 1 } };
+      });
+      mocks.cleanup.mockRejectedValueOnce(processFailure);
+      const cleanup = createAgentCleanupScope();
+      try {
+        await expect(
+          cleanup.run(() =>
+            runUpdateRepairTurn({
+              target: { ...state, installRoot: state.workspaceDir },
+              route: {
+                runner: "embedded",
+                provider: "fixture",
+                model: "repair",
+                modelLabel: "fixture/repair",
+                agentId: "owner",
+                agentDir: state.agentDir("owner"),
+                runConfig: config,
+                sourceConfig: config,
+              },
+              modelFallbacks: [],
+              prompt: "Repair.",
+              timeoutMs: 10000,
+              maxToolCalls: 1,
+              signal: new AbortController().signal,
+            }),
+          ),
+        ).rejects.toMatchObject({
+          message: "Repair turn and database resource cleanup failed.",
+          errors: [processFailure, databaseFailure],
+        });
+        expect(cleanup.outcome).toBe("uncertain");
+        expect(close).toHaveBeenCalledOnce();
+      } finally {
+        // The fixture owns the synthetic refusal and must retire it after the assertion.
+        await resources?.close();
+      }
+    });
+  });
 
   it("refuses revoked repair authority before starting the runner", async () => {
     await withOpenClawTestState({ layout: "home" }, async (state) => {

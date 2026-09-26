@@ -6,14 +6,14 @@
  */
 import { createHash } from "node:crypto";
 import { redactCdpUrl } from "openclaw/plugin-sdk/browser-cdp";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard, isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   SsrFBlockedError,
   type SsrFPolicy,
   resolvePinnedHostnameWithPolicy,
-} from "../infra/net/ssrf.js";
-import { redactToolPayloadText } from "../logging/redact.js";
+} from "openclaw/plugin-sdk/security-runtime";
+import { fetchWithSsrFGuard, isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getHeadersWithAuth, stripCdpUrlCredentials } from "./cdp-auth.js";
 import { withManagedProxyForCdpUrl, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS } from "./cdp-timeouts.js";
@@ -63,22 +63,17 @@ export function isWebSocketUrl(url: string): boolean {
  * Chrome will reject with HTTP 400.
  */
 export function isDirectCdpWebSocketEndpoint(url: string): boolean {
-  if (!isWebSocketUrl(url)) {
-    return false;
-  }
   try {
     const parsed = new URL(url);
-    return /\/devtools\/(?:browser|page|worker|shared_worker|service_worker)\/[^/]/i.test(
-      parsed.pathname,
+    return (
+      (parsed.protocol === "ws:" || parsed.protocol === "wss:") &&
+      /\/devtools\/(?:browser|page|worker|shared_worker|service_worker)\/[^/]/i.test(
+        parsed.pathname,
+      )
     );
-    // isWebSocketUrl above already parsed the same URL successfully, so
-    // new URL(url) cannot throw here. Kept for structural symmetry with
-    // the other try/catch URL helpers.
-    /* c8 ignore start */
   } catch {
     return false;
   }
-  /* c8 ignore stop */
 }
 
 /** Restrict a trusted CDP endpoint to its configured control-plane host. */

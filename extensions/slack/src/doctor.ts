@@ -29,10 +29,8 @@ const collectSlackMutableAllowlistWarnings =
       }),
   });
 
-const SLACK_CANONICAL_CHANNEL_ID_RE = /^[CG][A-Z0-9]{8,}$/;
-const SLACK_LOWERCASE_CHANNEL_ID_RE = /^[cg][0-9][a-z0-9]{7,}$/;
-const SLACK_PREFIXED_CANONICAL_CHANNEL_ID_RE = /^channel:[CG][A-Z0-9]{8,}$/;
-const SLACK_PREFIXED_LOWERCASE_CHANNEL_ID_RE = /^channel:[cg][0-9][a-z0-9]{7,}$/;
+const SLACK_CANONICAL_CHANNEL_ID_RE = /^(?:channel:)?[CG][A-Z0-9]{8,}$/;
+const SLACK_LOWERCASE_CHANNEL_ID_RE = /^(?:channel:)?[cg][0-9][a-z0-9]{7,}$/;
 const SLACK_CANONICAL_DM_ID_RE = /^(?:channel:)?D[A-Z0-9]{8,}$/;
 const SLACK_PREFIXED_LOWERCASE_DM_ID_RE = /^channel:d[a-z0-9]{8,}$/;
 const SLACK_AMBIGUOUS_LOWERCASE_DM_ID_RE = /^d[a-z0-9]{8,}$/;
@@ -49,9 +47,7 @@ function looksLikeSlackChannelId(channelKey: string): boolean {
   return (
     (workspaceChannelId !== undefined && /^[CG]/i.test(workspaceChannelId)) ||
     SLACK_CANONICAL_CHANNEL_ID_RE.test(channelKey) ||
-    SLACK_LOWERCASE_CHANNEL_ID_RE.test(channelKey) ||
-    SLACK_PREFIXED_CANONICAL_CHANNEL_ID_RE.test(channelKey) ||
-    SLACK_PREFIXED_LOWERCASE_CHANNEL_ID_RE.test(channelKey)
+    SLACK_LOWERCASE_CHANNEL_ID_RE.test(channelKey)
   );
 }
 
@@ -174,10 +170,6 @@ function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }):
   return [...warnings];
 }
 
-function slackAccountConfigPath(accountId: string): string {
-  return accountId === "default" ? "channels.slack" : `channels.slack.accounts.${accountId}`;
-}
-
 async function collectSlackUserIdentityWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -194,7 +186,8 @@ async function collectSlackUserIdentityWarnings(params: {
     if (!account.enabled || account.identity !== "user") {
       continue;
     }
-    const path = slackAccountConfigPath(accountId);
+    const path =
+      accountId === "default" ? "channels.slack" : `channels.slack.accounts.${accountId}`;
     const mode = account.mode ?? "socket";
     if (mode === "socket" && account.appTokenStatus === "missing") {
       warnings.push(
@@ -242,8 +235,7 @@ export const slackDoctor: ChannelDoctorAdapter = {
   warnOnEmptyGroupSenderAllowlist: false,
   legacyConfigRules: SLACK_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig: normalizeSlackCompatibilityConfig,
-  collectPreviewWarnings: async ({ cfg, env }) =>
-    await collectSlackUserIdentityWarnings({ cfg, env }),
+  collectPreviewWarnings: collectSlackUserIdentityWarnings,
   collectMutableAllowlistWarnings: ({ cfg }) => [
     ...collectSlackMutableAllowlistWarnings({ cfg }),
     ...collectSlackNameKeyedChannelWarnings({ cfg }),

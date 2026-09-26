@@ -26,10 +26,7 @@ import {
   progressCardRefreshRunProjection,
 } from "../sessions/input-provenance.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
-import {
-  emitSessionTranscriptUpdate,
-  type InternalSessionTranscriptUpdate,
-} from "../sessions/transcript-events.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { installInMemoryTaskRegistryRuntime } from "../test-utils/task-registry-runtime.js";
 import {
@@ -38,6 +35,7 @@ import {
 } from "./chat-abort-lifecycle-internal.js";
 import { abortChatRunById, removeChatAbortControllerEntry } from "./chat-abort.js";
 import type { AgentEventHandlerOptions } from "./server-chat.js";
+import { registerActivitySummaryPublicationTests } from "./server-runtime-subscriptions.activity-summary.test-support.js";
 import { registerTaskEventSubscriptionTests } from "./server-runtime-subscriptions.task-events.test-support.js";
 import { registerTaskSubscriptionOwnershipTests } from "./server-runtime-subscriptions.task-ownership.test-support.js";
 import {
@@ -239,6 +237,10 @@ describe("startGatewayEventSubscriptions", () => {
     const projection = {
       capture: () => current,
       ensureMaterialized: () => prepared.promise,
+      withPreparedExactRows: async (_queries: unknown, consume: (read: unknown) => unknown) => {
+        await prepared.promise;
+        return { kind: "complete" as const, value: consume(undefined) };
+      },
       isCurrent: (record: typeof original) => record === current,
       snapshot: () => ({ row: current ? { key: "agent:main:queued", ...current } : null }),
     } as unknown as SessionRowProjection;
@@ -274,48 +276,16 @@ describe("startGatewayEventSubscriptions", () => {
     await waitForFast(() => expect(delivered).toHaveBeenCalledWith(null));
   });
 
-  it.each([false, true])(
-    "keeps activity-summary publication bound to its captured lifecycle (same-ID reset: %s)",
-    async (reset) => {
-      const prepared = createDeferred();
-      const target = { key: "agent:main:activity", agentId: "main" };
-      const original = { sessionId: "same-session", lifecycleRevision: "original" };
-      let current = original;
-      const projection = {
-        capture: () => current,
-        ensureMaterialized: () => prepared.promise,
-        isCurrent: (record: typeof original) => record === current,
-        snapshot: () => ({ row: { key: target.key, ...current } }),
-      } as unknown as SessionRowProjection;
+  registerActivitySummaryPublicationTests(
+    (projection) => {
       const params = createParams();
       unsubs = startGatewayEventSubscriptions({
         ...params,
         getSessionRowProjection: () => projection,
       });
-      const onChanged = observeActivitySummary.mock.calls[0]?.[0].onChanged;
-      if (!onChanged) {
-        throw new Error("missing activity-summary publication callback");
-      }
-      onChanged(target);
-      expect(params.broadcast).not.toHaveBeenCalled();
-      if (reset) {
-        current = { ...original, lifecycleRevision: "replacement" };
-      }
-      prepared.resolve();
-      await unsubs.agentUnsub();
-      if (reset) {
-        expect(params.broadcast).not.toHaveBeenCalled();
-      } else {
-        expect(params.broadcast).toHaveBeenCalledExactlyOnceWith(
-          "sessions.changed",
-          expect.objectContaining({
-            reason: "activity-summary",
-            session: expect.objectContaining({ key: target.key, ...original }),
-          }),
-          { sessionKeys: [target.key], agentId: target.agentId, dropIfSlow: true },
-        );
-      }
+      return { params, unsubs };
     },
+    () => observeActivitySummary.mock.calls[0]?.[0].onChanged,
   );
 
   it("broadcasts suspension immediately and stops with the gateway lifecycle", () => {
@@ -841,21 +811,6 @@ describe("startGatewayEventSubscriptions", () => {
       }
     },
   );
-
-  it("logs transcript handler failures", async () => {
-    unsubs = startGatewayEventSubscriptions(createParams());
-
-    emitSessionTranscriptUpdate({
-      sessionFile: "/tmp/sess.jsonl",
-      sessionKey: "agent:main:main",
-    } as InternalSessionTranscriptUpdate);
-
-    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(1));
-    expect(warn).toHaveBeenCalledWith(
-      "Transcript update dispatch failed",
-      expect.objectContaining({ sessionKey: "agent:main:main" }),
-    );
-  });
 
   it("logs real asynchronous transcript failures and recovers the broadcast queue", async () => {
     transcriptBroadcastMocks.useActualHandler = true;

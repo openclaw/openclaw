@@ -11,6 +11,7 @@ import {
   ReadResourceRequestSchema,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
   peekSessionMcpRuntime,
@@ -49,26 +50,17 @@ export type McpAppOperation =
   | Pick<ListResourceTemplatesRequest, "method" | "params">
   | Pick<ReadResourceRequest, "method" | "params">;
 
-function isAppCallableTool(tool: McpCatalogTool): boolean {
-  return tool.uiVisibility === undefined || tool.uiVisibility.includes("app");
+function isAppCallableTool(view: McpAppViewLease, tool: McpCatalogTool): boolean {
+  return (
+    tool.serverName === view.serverName &&
+    (tool.uiVisibility === undefined || tool.uiVisibility.includes("app")) &&
+    (view.allowedAppToolNames === undefined || view.allowedAppToolNames.has(tool.toolName))
+  );
 }
 
 function isAppCallableListedTool(tool: Tool): boolean {
-  const { _meta: metadata } = tool;
-  const ui =
-    metadata?.ui && typeof metadata.ui === "object" && !Array.isArray(metadata.ui)
-      ? (metadata.ui as { visibility?: unknown })
-      : undefined;
-  const visibility = Array.isArray(ui?.visibility)
-    ? ui.visibility.filter(
-        (entry): entry is "app" | "model" => entry === "app" || entry === "model",
-      )
-    : undefined;
-  return visibility === undefined || visibility.includes("app");
-}
-
-function isAllowedByView(view: McpAppViewLease, toolName: string): boolean {
-  return view.allowedAppToolNames === undefined || view.allowedAppToolNames.has(toolName);
+  const visibility = asOptionalRecord(tool._meta?.ui)?.visibility;
+  return !Array.isArray(visibility) || visibility.includes("app");
 }
 
 export async function requireMcpAppInteraction(view: McpAppViewLease): Promise<void> {
@@ -86,12 +78,7 @@ export async function resolveMcpAppAllowedToolNames(active: McpAppActiveView): P
   }
   const catalog = await active.runtime.getCatalog();
   return catalog.tools
-    .filter(
-      (tool) =>
-        tool.serverName === active.view.serverName &&
-        isAppCallableTool(tool) &&
-        isAllowedByView(active.view, tool.toolName),
-    )
+    .filter((tool) => isAppCallableTool(active.view, tool))
     .map((tool) => tool.toolName)
     .filter((toolName, index, all) => all.indexOf(toolName) === index)
     .toSorted();
@@ -114,7 +101,7 @@ async function requireCallableTool(
   const tool = catalog.tools.find(
     (entry) => entry.serverName === view.serverName && entry.toolName === toolName,
   );
-  if (!tool || !isAppCallableTool(tool) || !isAllowedByView(view, toolName)) {
+  if (!tool || !isAppCallableTool(view, tool)) {
     throw new Error(`MCP tool "${toolName}" is not app-callable`);
   }
 }
@@ -187,14 +174,14 @@ export async function withMcpAppActiveView<T>(
   }
 }
 
-async function withMcpAppResourceAuthority<T>(
+async function withMcpAppReadAuthority<T>(
   active: McpAppActiveView,
   operation: () => Promise<T>,
 ): Promise<T> {
   return await withMcpAppActiveView(active, "read", async () => {
     await requireMcpAppInteraction(active.view);
     const result = await operation();
-    // Resource results may contain protected data. Recheck after upstream work
+    // Read results may contain protected data. Recheck after upstream work
     // so a grant revoked in flight cannot disclose the completed response.
     await requireMcpAppInteraction(active.view);
     return result;
@@ -218,8 +205,7 @@ export async function executeMcpAppOperation(
         );
       });
     case "tools/list":
-      return await withMcpAppActiveView(active, "read", async () => {
-        await requireMcpAppInteraction(view);
+      return await withMcpAppReadAuthority(active, async () => {
         if (!runtime.listTools) {
           throw new Error("MCP tools/list is unavailable");
         }
@@ -232,25 +218,18 @@ export async function executeMcpAppOperation(
         ]);
         const allowed = new Set(
           catalog.tools
-            .filter(
-              (tool) =>
-                tool.serverName === view.serverName &&
-                isAppCallableTool(tool) &&
-                isAllowedByView(view, tool.toolName),
-            )
+            .filter((tool) => isAppCallableTool(view, tool))
             .map((tool) => tool.toolName),
         );
-        const result = {
+        return {
           ...listed,
           tools: listed.tools.filter(
             (tool) => allowed.has(tool.name.trim()) && isAppCallableListedTool(tool),
           ),
         };
-        await requireMcpAppInteraction(view);
-        return result;
       });
     case "resources/list":
-      return await withMcpAppResourceAuthority(active, async () => {
+      return await withMcpAppReadAuthority(active, async () => {
         if (!runtime.listResources) {
           throw new Error("MCP resources/list is unavailable");
         }
@@ -260,7 +239,7 @@ export async function executeMcpAppOperation(
         return Array.isArray(resources) ? { resources } : resources;
       });
     case "resources/templates/list":
-      return await withMcpAppResourceAuthority(active, async () => {
+      return await withMcpAppReadAuthority(active, async () => {
         if (!runtime.listResourceTemplates) {
           throw new Error("MCP resources/templates/list is unavailable");
         }
@@ -270,7 +249,7 @@ export async function executeMcpAppOperation(
         );
       });
     case "resources/read":
-      return await withMcpAppResourceAuthority(active, async () => {
+      return await withMcpAppReadAuthority(active, async () => {
         if (!runtime.readResource) {
           throw new Error("MCP resources/read is unavailable");
         }
@@ -284,10 +263,7 @@ export async function executeMcpAppOperation(
 }
 
 export function parseMcpAppOperation(value: unknown): McpAppOperation | undefined {
-  const method =
-    value && typeof value === "object" && !Array.isArray(value)
-      ? (value as { method?: unknown }).method
-      : undefined;
+  const method = asOptionalRecord(value)?.method;
   const schema =
     method === "tools/call"
       ? CallToolRequestSchema

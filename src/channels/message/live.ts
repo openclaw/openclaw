@@ -433,6 +433,8 @@ export type LivePreviewLifecycle<TPayload, TId> = {
   readonly finalSucceeded: boolean;
   readonly finalFailed: boolean;
   readonly finalStarted: boolean;
+  readonly finalSuppressed: boolean;
+  beginFinalDelivery: () => void;
   deliver<TEdit = never>(params: {
     kind: "tool" | "block" | "final";
     payload: TPayload;
@@ -441,9 +443,16 @@ export type LivePreviewLifecycle<TPayload, TId> = {
     deliverNormally: (payload: TPayload) => Promise<LivePreviewDeliveryResult>;
     onNormalDelivered?: () => Promise<void> | void;
   }): Promise<LivePreviewFinalizerResult<TPayload>>;
-  observeDelivery: (result: LivePreviewDeliveryResult) => Promise<void>;
+  observeDelivery: (
+    result: LivePreviewDeliveryResult,
+    options?: { isError?: boolean },
+  ) => Promise<void>;
+  observeSettlement: (
+    result: ChannelDeliveryResult | void,
+    options?: { isError?: boolean },
+  ) => Promise<void>;
+  observeFailure: (result?: ChannelDeliveryResult) => void;
   observeSuppression: () => void;
-  observeFailure: () => void;
   cleanup: (options?: { failed?: boolean }) => Promise<void>;
   retainPreview: () => void;
   reset: () => void;
@@ -506,6 +515,12 @@ export function createLivePreviewLifecycle<TPayload, TId>(
       }
     }
   };
+  const beginFinalDelivery = () => {
+    if (generation.outcome === "pending") {
+      generation.outcome = "sending";
+      options.onFinalStarted?.();
+    }
+  };
   const cleanup = async (current: PreviewGeneration<TPayload>, failed = false) => {
     if (current !== generation) {
       return;
@@ -548,6 +563,69 @@ export function createLivePreviewLifecycle<TPayload, TId>(
       onError: options.onCleanupFailure ?? warnCleanupFailure,
     });
   };
+  const observeDelivery = async (
+    result: LivePreviewDeliveryResult,
+    observation?: { isError?: boolean },
+  ) => {
+    if (!result.visibleReplySent) {
+      return;
+    }
+    const current = generation;
+    const started = current.outcome !== "pending";
+    const notify = current.outcome !== "delivered" && !observation?.isError;
+    if (current.outcome !== "delivered") {
+      current.outcome = observation?.isError ? "error" : "delivered";
+    }
+    if (current.state.phase !== "finalized") {
+      current.state = { ...current.state, phase: "cancelled", canFinalizeInPlace: false };
+    }
+    try {
+      if (!started) {
+        options.onFinalStarted?.();
+      }
+      if (notify) {
+        options.onFinalDelivered?.();
+      }
+    } catch (error) {
+      throw createChannelPartialDeliveryError(error, { ...result, visibleReplySent: true });
+    } finally {
+      await cleanup(current);
+    }
+  };
+  const observeFailure = (result?: ChannelDeliveryResult) => {
+    if (generation.outcome !== "delivered" && generation.outcome !== "error") {
+      beginFinalDelivery();
+      generation.outcome =
+        result?.visibleReplySent || hasAccepted(generation) ? "partial" : "failed";
+      void settleFinalFailure(generation);
+    }
+  };
+  const observeSuppression = () => {
+    if (!hasAccepted(generation) && generation.outcome !== "failed") {
+      beginFinalDelivery();
+      generation.outcome = "suppressed";
+    }
+  };
+  const observeSettlement = async (
+    result: ChannelDeliveryResult | void,
+    observation?: { isError?: boolean },
+  ) => {
+    const delivered =
+      result === undefined
+        ? { visibleReplySent: true as const }
+        : result.visibleReplySent === true
+          ? { ...result, visibleReplySent: true as const }
+          : undefined;
+    if (delivered) {
+      await observeDelivery(delivered, observation);
+      return;
+    }
+    if (typeof result === "object" && result.suppression) {
+      observeSuppression();
+      return;
+    }
+    observeFailure();
+  };
   return {
     get previewFinalized() {
       return (
@@ -567,13 +645,16 @@ export function createLivePreviewLifecycle<TPayload, TId>(
     get finalStarted() {
       return generation.outcome !== "pending";
     },
+    get finalSuppressed() {
+      return generation.outcome === "suppressed";
+    },
+    beginFinalDelivery,
     async deliver(params) {
       const current = generation;
       const terminal = params.kind === "final";
       const previouslyAccepted = current.outcome === "delivered";
-      if (terminal && current.outcome === "pending") {
-        current.outcome = "sending";
-        options.onFinalStarted?.();
+      if (terminal) {
+        beginFinalDelivery();
       }
       if (terminal && params.isError) {
         await settleFinalFailure(current);
@@ -635,41 +716,10 @@ export function createLivePreviewLifecycle<TPayload, TId>(
         throw error;
       }
     },
-    async observeDelivery(result) {
-      if (!result.visibleReplySent) {
-        return;
-      }
-      const current = generation;
-      const started = current.outcome !== "pending";
-      const notify = current.outcome !== "delivered";
-      current.outcome = "delivered";
-      if (current.state.phase !== "finalized") {
-        current.state = { ...current.state, phase: "cancelled", canFinalizeInPlace: false };
-      }
-      try {
-        if (!started) {
-          options.onFinalStarted?.();
-        }
-        if (notify) {
-          options.onFinalDelivered?.();
-        }
-      } catch (error) {
-        throw createChannelPartialDeliveryError(error, { ...result, visibleReplySent: true });
-      } finally {
-        await cleanup(current);
-      }
-    },
-    observeSuppression() {
-      if (!hasAccepted(generation)) {
-        generation.outcome = "suppressed";
-      }
-    },
-    observeFailure() {
-      if (!hasAccepted(generation)) {
-        generation.outcome = "failed";
-        void settleFinalFailure(generation);
-      }
-    },
+    observeDelivery,
+    observeSettlement,
+    observeFailure,
+    observeSuppression,
     async cleanup(params) {
       await cleanup(generation, params?.failed);
     },

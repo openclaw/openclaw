@@ -6,6 +6,7 @@ import type {
 import { sessionWorkspaceRoot, type WorkerSessionWorkspace } from "./session-workspace.js";
 import {
   projectWorkspaceResultConflict,
+  type WorkerWorkspaceConflictReport,
   type WorkerWorkspaceResultConflict,
 } from "./workspace-conflicts.js";
 import {
@@ -50,21 +51,21 @@ type WorkspaceResultFinalizationStore = Pick<
   | "recordWorkspaceResultConflict"
 >;
 
-type WorkspaceResultConflictReport = Required<WorkerWorkspaceResultConflict> | { cleared: true };
-
 export async function finalizeWorkspaceResultConflicts(params: {
+  assertCurrent: () => void;
   placements: WorkspaceResultFinalizationStore;
   turnClaim: WorkerSessionTurnClaim;
   conflictPaths: readonly string[];
   priorConflict: WorkerWorkspaceResultConflict | undefined;
   stagedResultRef: string | null | undefined;
   retainPriorConflict?: boolean;
-  report: (report: WorkspaceResultConflictReport) => Promise<void>;
+  report: (report: WorkerWorkspaceConflictReport) => Promise<void>;
   workspace: WorkerSessionWorkspace;
 }): Promise<{
   conflict: Required<WorkerWorkspaceResultConflict> | undefined;
   conflictRetained: boolean;
 }> {
+  params.assertCurrent();
   const retainedPriorConflict =
     params.retainPriorConflict && params.conflictPaths.length === 0
       ? params.priorConflict
@@ -85,6 +86,7 @@ export async function finalizeWorkspaceResultConflicts(params: {
     await deleteStagedWorkerWorkspaceResult({
       root: sessionWorkspaceRoot(params.workspace),
       stagedResultRef: supersededConflict.stagedResultRef,
+      assertCurrent: params.assertCurrent,
     });
   }
 
@@ -94,11 +96,14 @@ export async function finalizeWorkspaceResultConflicts(params: {
       throw new Error("Cloud workspace conflict has no staged result reference");
     }
     conflict = projectWorkspaceResultConflict(params.conflictPaths, params.stagedResultRef);
+    params.assertCurrent();
     params.placements.recordWorkspaceResultConflict(params.turnClaim, conflict);
     await params.report(conflict);
   } else if (retainedPriorConflict) {
+    params.assertCurrent();
     params.placements.recordWorkspaceResultConflict(params.turnClaim, retainedPriorConflict);
   } else if (supersededConflict) {
+    params.assertCurrent();
     params.placements.recordWorkspaceResultConflict(params.turnClaim, undefined);
     await params.report({ cleared: true });
   }
@@ -107,6 +112,7 @@ export async function finalizeWorkspaceResultConflicts(params: {
 }
 
 type StagedWorkspaceResultSettlement = {
+  assertCurrent: () => void;
   placements: WorkspaceResultFinalizationStore;
   turnClaim: WorkerSessionTurnClaim;
   workspace: WorkerSessionWorkspace;
@@ -120,8 +126,10 @@ type StagedWorkspaceResultSettlement = {
 export async function settleStagedWorkspaceResult(
   params: StagedWorkspaceResultSettlement,
 ): Promise<WorkerSessionPlacementRecord> {
+  params.assertCurrent();
   if (params.turnClaim.owner.kind === "worker") {
     await params.placements.closeWorkerTurnToolState(params.turnClaim);
+    params.assertCurrent();
   }
   const cleanupRef =
     params.workspace.kind === "local" && params.stagedResultRef && !params.conflictRetained
@@ -130,9 +138,15 @@ export async function settleStagedWorkspaceResult(
         : await moveStagedWorkerWorkspaceResultToCleanup({
             root: sessionWorkspaceRoot(params.workspace),
             stagedResultRef: params.stagedResultRef,
+            assertCurrent: params.assertCurrent,
           })
       : undefined;
+  params.assertCurrent();
   await params.beforeComplete();
+  // Explicit completion owns settlement after its final privileged effect commits.
+  if (!params.complete) {
+    params.assertCurrent();
+  }
   const completed = params.complete
     ? params.complete()
     : params.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim);

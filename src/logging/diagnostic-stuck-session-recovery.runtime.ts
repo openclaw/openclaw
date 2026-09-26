@@ -1,5 +1,4 @@
 import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
-// Stuck session recovery runtime helpers inspect embedded sessions for recovery.
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { resolveActiveEmbeddedRunRecoveryBlocker } from "../agents/embedded-agent-runner/run-state.js";
 import {
@@ -21,10 +20,8 @@ import {
 import { resolveRunStaleThresholdMs } from "./diagnostic-run-activity-snapshot.js";
 import { getDiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
-import {
-  formatStoppedCronSessionDiagnosticFields,
-  resolveCronSessionDiagnosticContext,
-} from "./diagnostic-session-context.js";
+import { isRepeatedModelRequestStalled } from "./diagnostic-session-attention.js";
+import { logWithSessionDiagnosticContext } from "./diagnostic-session-context.js";
 import {
   formatRecoveryOutcome,
   resolveStuckSessionRecoveryRef,
@@ -33,7 +30,6 @@ import {
 } from "./diagnostic-session-recovery.js";
 import { isDiagnosticSessionStateCurrent } from "./diagnostic-session-state.js";
 
-// Runtime repair path for diagnostic sessions that appear stuck in processing/waiting states.
 const STUCK_SESSION_ABORT_SETTLE_MS = 15_000;
 const STUCK_SESSION_PROGRESS_STALE_MS = 5 * 60_000;
 // Ownerless lane release shares the no-progress abort floor, then extends for
@@ -41,17 +37,14 @@ const STUCK_SESSION_PROGRESS_STALE_MS = 5 * 60_000;
 const STALE_ACTIVE_LANE_TASK_RELEASE_MS = STUCK_SESSION_PROGRESS_STALE_MS;
 const recoveriesInFlight = new Set<string>();
 
-/** Request parameters accepted by the stuck-session recovery runtime. */
-type StuckSessionRecoveryParams = StuckSessionRecoveryRequest;
-
-function resolveStaleActiveProgressAbortMs(params: StuckSessionRecoveryParams): number {
+function resolveStaleActiveProgressAbortMs(params: StuckSessionRecoveryRequest): number {
   const configured = params.staleActiveProgressAbortMs;
   return typeof configured === "number" && configured > 0
     ? configured
     : STUCK_SESSION_PROGRESS_STALE_MS;
 }
 
-function resolveStaleActiveLaneTaskReleaseMs(params: StuckSessionRecoveryParams): number {
+function resolveStaleActiveLaneTaskReleaseMs(params: StuckSessionRecoveryRequest): number {
   const compactionSafetyTimeoutMs = params.compactionSafetyTimeoutMs;
   const compactionReleaseMs =
     typeof compactionSafetyTimeoutMs === "number" && compactionSafetyTimeoutMs > 0
@@ -67,6 +60,7 @@ function isActiveRunProgressStale(params: {
   queueDepth?: number;
   staleAbortMs: number;
   allowActiveAbort?: boolean;
+  repeatedRequestNoProgressAbortMs?: number;
   /**
    * When false, staleness is evaluated even with a zero queued backlog.
    * Run-handle recovery keeps the gate so an unqueued active run is not
@@ -86,6 +80,11 @@ function isActiveRunProgressStale(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   });
+  if (params.repeatedRequestNoProgressAbortMs !== undefined) {
+    // Mechanical bytes cannot renew a semantic stall. New output or an owned
+    // wait can invalidate the evidence while recovery's runtime is loading.
+    return isRepeatedModelRequestStalled(activity, params.repeatedRequestNoProgressAbortMs);
+  }
   // A retry can start after recovery was queued. Recheck its current owner and
   // deadline here before an earlier classification is allowed to abort it.
   if (
@@ -111,7 +110,7 @@ function isActiveRunProgressStale(params: {
 }
 
 function formatRecoveryContext(
-  params: StuckSessionRecoveryParams,
+  params: StuckSessionRecoveryRequest,
   extra?: { activeSessionId?: string; lane?: string; activeCount?: number; queuedCount?: number },
 ): string {
   const fields = [
@@ -141,7 +140,7 @@ function reportRecoveryOutcome(outcome: StuckSessionRecoveryOutcome): StuckSessi
 }
 
 export async function recoverStuckDiagnosticSession(
-  params: StuckSessionRecoveryParams,
+  params: StuckSessionRecoveryRequest,
 ): Promise<StuckSessionRecoveryOutcome> {
   const key = resolveStuckSessionRecoveryRef(params);
   if (!key || recoveriesInFlight.has(key)) {
@@ -273,6 +272,7 @@ export async function recoverStuckDiagnosticSession(
         queueDepth: params.queueDepth,
         staleAbortMs: staleActiveProgressAbortMs,
         allowActiveAbort: params.allowActiveAbort,
+        repeatedRequestNoProgressAbortMs: params.repeatedRequestNoProgressAbortMs,
       });
       if (!reclaimStaleActiveRun) {
         const outcome: StuckSessionRecoveryOutcome = {
@@ -337,6 +337,7 @@ export async function recoverStuckDiagnosticSession(
         queueDepth: params.queueDepth,
         staleAbortMs: staleActiveProgressAbortMs,
         allowActiveAbort: params.allowActiveAbort,
+        repeatedRequestNoProgressAbortMs: params.repeatedRequestNoProgressAbortMs,
         // Maintenance retains its backlog gate after the safety window;
         // other abandoned reply ownership must expire even without a queue.
         requireQueueBacklog: maintenancePhase ? undefined : false,
@@ -445,16 +446,18 @@ export async function recoverStuckDiagnosticSession(
     if (aborted || forceCleared || released > 0 || clearStaleSession) {
       retireStaleFollowupDrain?.();
       const action = aborted || forceCleared ? "abort_embedded_run" : "release_lane";
-      const stoppedFields = formatStoppedCronSessionDiagnosticFields(
-        resolveCronSessionDiagnosticContext({ sessionKey: params.sessionKey, activeSessionId }),
-      );
-      diag.warn(
-        `stuck session recovery: sessionId=${params.sessionId ?? activeSessionId ?? "unknown"} sessionKey=${
-          params.sessionKey ?? "unknown"
-        } age=${Math.round(params.ageMs / 1000)}s action=${action} aborted=${aborted} drained=${drained} released=${released}${
-          stoppedFields ? ` ${stoppedFields}` : ""
-        }`,
-      );
+      void logWithSessionDiagnosticContext({
+        level: "warn",
+        sessionKey: params.sessionKey,
+        activeSessionId,
+        cronNameLabel: "stopped",
+        format: (stoppedFields) =>
+          `stuck session recovery: sessionId=${params.sessionId ?? activeSessionId ?? "unknown"} sessionKey=${
+            params.sessionKey ?? "unknown"
+          } age=${Math.round(params.ageMs / 1000)}s action=${action} aborted=${aborted} drained=${drained} released=${released}${
+            stoppedFields ? ` ${stoppedFields}` : ""
+          }`,
+      });
       return reportRecoveryOutcome(
         aborted || forceCleared
           ? {

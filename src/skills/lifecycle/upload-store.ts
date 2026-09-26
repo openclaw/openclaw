@@ -2,11 +2,11 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { DEFAULT_MAX_ARCHIVE_BYTES_ZIP } from "../../infra/archive.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createAsyncLock } from "../../infra/json-files.js";
-import { withTempWorkspace } from "../../infra/private-temp-workspace.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";

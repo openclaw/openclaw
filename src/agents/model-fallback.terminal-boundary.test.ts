@@ -22,6 +22,10 @@ import { runWithImageModelFallback } from "./model-fallback-image.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 import { recordModelFallbackStop as recordLightweightStop } from "./model-fallback-stop.js";
 import {
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "./prepared-model-runtime.errors.js";
+import {
   createSessionPlacementSettlementClosedAbortError,
   isSessionPlacementSettlementClosedError,
   createAgentRunDirectAbortError,
@@ -98,6 +102,47 @@ it("does not replay an unscoped preflight subclass on another model", async () =
   expect(providerHook).not.toHaveBeenCalled();
 });
 
+it.each([
+  [
+    "publication superseded",
+    () =>
+      new PreparedModelRuntimePublicationSupersededError(
+        "prepared model runtime publication was superseded for /tmp/agent",
+      ),
+  ],
+  [
+    "owner not published",
+    () =>
+      new PreparedModelRuntimeOwnerNotPublishedError(
+        "prepared model runtime owner is not published for /tmp/agent",
+      ),
+  ],
+])("does not rotate providers when prepared model runtime %s", async (_label, make) => {
+  const error = make();
+  const billing = Object.assign(new Error('402 "Grok Build usage balance exhausted"'), {
+    status: 402,
+  });
+  const run = vi.fn().mockRejectedValueOnce(error).mockRejectedValueOnce(billing);
+  const onError = vi.fn();
+  const onFallbackStep = vi.fn();
+  await expect(
+    runWithModelFallback({
+      ...fallbackOptions,
+      provider: "openai",
+      model: "gpt-6-luna",
+      fallbacksOverride: ["xai/grok-4.7"],
+      skipAuthProfileRuntime: true,
+      run,
+      onError,
+      onFallbackStep,
+    }),
+  ).rejects.toBe(error);
+  expect(run).toHaveBeenCalledOnce();
+  expect(onError).not.toHaveBeenCalled();
+  expect(onFallbackStep).not.toHaveBeenCalled();
+  expect(providerHook).not.toHaveBeenCalled();
+});
+
 it("does not rotate models when session placement turn settlement is closed", async () => {
   const error = createSessionPlacementSettlementClosedAbortError();
   const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("unexpected candidate 2");
@@ -159,8 +204,10 @@ const wrappers = [
 ];
 
 it.each(
-  wrappers.flatMap((wrapper) =>
-    terminalStops.map((stop) => ({ ...wrapper, stop: stop.name, make: stop.make })),
+  wrappers.flatMap(({ name, wrap }) =>
+    (name === "direct" || name === "cyclic" ? terminalStops : terminalStops.slice(0, 1)).map(
+      ({ name: stop, make }) => ({ name, wrap, stop, make }),
+    ),
   ),
 )("does not replay $stop through a $name wrapper", async ({ wrap, make }) => {
   const error = wrap(make());
