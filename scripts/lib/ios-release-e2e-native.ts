@@ -424,6 +424,8 @@ export async function createNativeDependencies(options: {
                   `platform=iOS Simulator,id=${udid}`,
                   "-resultBundlePath",
                   resultBundle,
+                  "-collect-test-diagnostics",
+                  "never",
                   `-only-testing:${test}`,
                   "test-without-building",
                 ],

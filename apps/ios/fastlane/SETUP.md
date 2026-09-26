@@ -132,6 +132,8 @@ The lane builds the UI-test products once, boots each selected simulator once, a
 
 Each screenshot gets one capture attempt. A failed capture or Xcode test result stops the lane, retaining its attempt record and any result bundle for diagnosis. CI rejects replacement captures as passing release evidence.
 
+Screenshot tests disable Xcode's verbose failure diagnostics, such as sysdiagnose, while retaining command logs, screenshots, and per-attempt result bundles.
+
 CI pins SimSlim 0.8.0 for the selected iPhone test simulator and iPhone/iPad
 screenshot devices. It disables only search and family services. Preparation
 must succeed before capture; Watch and default local runs remain stock.
@@ -193,6 +195,9 @@ slim/stock order, with both tests fresh in every arm. SimSlim keeps the existing
 conservative search/family-only profile. Neither failures nor skipped tests are
 retried or dropped. JSON reports preparation, test, arm, build, and overall
 durations; the workflow additionally records shared toolchain installation time.
+
+Qualification tests disable Xcode's verbose failure diagnostics, such as sysdiagnose,
+while retaining ordinary XCTest output, result inspection, and sanitized proof.
 
 Both comparison arms sample `simslim measure --json` every second after boot and
 preparation, through the test window only. The peak is the largest sampled

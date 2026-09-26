@@ -1048,6 +1048,11 @@ describe("native command adapter", () => {
       for (const { args: testArgs } of commands.filter(({ args }) =>
         args.includes("test-without-building"),
       )) {
+        const diagnosticsIndex = testArgs.indexOf("-collect-test-diagnostics");
+        expect(testArgs.slice(diagnosticsIndex, diagnosticsIndex + 2)).toEqual([
+          "-collect-test-diagnostics",
+          "never",
+        ]);
         expect(testArgs).not.toContain("-test-iterations");
         expect(testArgs).not.toContain("-retry-tests-on-failure");
         expect(testArgs).not.toContain("-run-tests-until-failure");
