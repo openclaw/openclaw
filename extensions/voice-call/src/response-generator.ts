@@ -158,6 +158,13 @@ function normalizeSpokenText(value: string): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+/**
+ * Raw control characters are illegal inside a JSON string, so a multi-paragraph
+ * reply makes the decode throw. Folded to spaces before decoding a captured
+ * segment; `normalizeSpokenText` collapses whitespace anyway.
+ */
+const SPOKEN_CONTROL_CHARS = new RegExp(String.raw`[\u0000-\u001f]+`, "g");
+
 function tryParseSpokenJson(text: string): string | null {
   const candidates: string[] = [];
   const trimmed = text.trim();
@@ -189,17 +196,54 @@ function tryParseSpokenJson(text: string): string | null {
     }
   }
 
-  const inlineSpokenMatch = trimmed.match(/"spoken"\s*:\s*"((?:[^"\\]|\\.)*)"/i);
-  if (!inlineSpokenMatch) {
-    return null;
+  // A single reply may contain multiple concatenated {"spoken":"..."}
+  // objects (the model sometimes splits a long answer into several JSON
+  // blocks). The JSON.parse candidates above reject that shape, so scan
+  // every inline "spoken" field and merge them, in order, into one string
+  // so the downstream chunker speaks the whole reply.
+  const inlineSpokenSegments: string[] = [];
+  let sawInlineSpoken = false;
+  let sawUndecodableSegment = false;
+  let foldedControlChars = false;
+  for (const inlineMatch of trimmed.matchAll(/"spoken"\s*:\s*"((?:[^"\\]|\\.)*)"/gi)) {
+    sawInlineSpoken = true;
+    try {
+      // A multi-paragraph reply carries literal newlines inside the JSON
+      // string, which are illegal control characters there and make the
+      // decode throw. normalizeSpokenText collapses whitespace anyway, so
+      // folding them to spaces preserves the spoken text exactly.
+      const rawSegment = inlineMatch[1] ?? "";
+      const escaped = rawSegment.replace(SPOKEN_CONTROL_CHARS, " ");
+      if (escaped !== rawSegment) {
+        foldedControlChars = true;
+      }
+      const decoded = JSON.parse(`"${escaped}"`) as string;
+      const normalized = normalizeSpokenText(decoded);
+      if (normalized) {
+        inlineSpokenSegments.push(normalized);
+      }
+    } catch (error) {
+      // Skip a malformed segment rather than dropping the whole reply.
+      sawUndecodableSegment = true;
+      console.warn("[voice-call] Skipped an undecodable inline spoken segment:", error);
+    }
   }
 
-  try {
-    const decoded = JSON.parse(`"${inlineSpokenMatch[1] ?? ""}"`) as string;
-    return normalizeSpokenText(decoded) ?? "";
-  } catch {
-    return null;
+  if (inlineSpokenSegments.length > 0) {
+    // Lengths only: spoken content must never reach the log. Recovery is
+    // otherwise invisible, so this is the only way an operator can tell a
+    // malformed reply was salvaged rather than silently dropped.
+    console.log(
+      `[voice-call] Recovered spoken text from ${inlineSpokenSegments.length} inline segment(s) [${inlineSpokenSegments
+        .map((segment) => segment.length)
+        .join(", ")}] controlCharsFolded=${foldedControlChars}`,
+    );
+    return inlineSpokenSegments.join(" ");
   }
+  // Only report deliberate silence when every segment decoded cleanly to an
+  // empty string. If a segment failed to decode, fall through to the plain
+  // text path so a parse failure never silently drops the whole reply.
+  return sawInlineSpoken && !sawUndecodableSegment ? "" : null;
 }
 
 function isLikelyMetaReasoningParagraph(paragraph: string): boolean {
