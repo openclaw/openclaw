@@ -8,7 +8,8 @@ Adds the `lobster` agent tool as an **optional** plugin tool.
 openclaw plugins install @openclaw/lobster
 ```
 
-Restart the Gateway after installing or updating the plugin.
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [apply changes and inspect](https://docs.openclaw.ai/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## What this is
 
@@ -80,6 +81,18 @@ Notes:
 - Runs Lobster in process via the published `@clawdbot/lobster/core` runtime.
 - Does not manage OAuth/tokens.
 - Uses timeouts, stdout caps, and strict JSON envelope parsing.
+
+## Managed input waits
+
+The included [Lobster skill](skills/lobster/SKILL.md) guides agents to save and
+recover review questions through session-owned Task Flow records. Start with
+`flowControllerId` and `flowGoal`, then use `status` and resume by flow ID and
+revision instead of copying tokens from chat. Structured input requires this
+managed mode; ordinary token-based approvals remain supported.
+
+See [managed Task Flow mode](https://docs.openclaw.ai/tools/lobster#managed-task-flow-mode)
+for examples, retention and execution limits. This does not add an Inbox/form UI,
+reviewer assignment, or automatic recovery after uncertain execution.
 
 ## Docs
 

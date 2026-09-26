@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
@@ -186,6 +188,45 @@ describe("lobster plugin tool", () => {
         await Promise.allSettled([execution]);
         runnerFactory.mockRestore();
       }
+    },
+  );
+
+  it.each(["inline", "workflow", "resume"])(
+    "bounds the model-visible result for an embedded %s request",
+    async (requestKind) => {
+      const runtimeResult = {
+        ok: true,
+        protocolVersion: 1,
+        status: "ok" as const,
+        output: Array.from({ length: 115 }, () => ({ a: 1 })),
+        requiresApproval: null,
+        requiresInput: null,
+      };
+      const runtime = {
+        runToolRequest: vi.fn().mockResolvedValue(runtimeResult),
+        resumeToolRequest: vi.fn().mockResolvedValue(runtimeResult),
+      };
+      const runner = lobsterRunner.createEmbeddedLobsterRunner({
+        loadRuntime: vi.fn().mockResolvedValue(runtime),
+      });
+      const tempDir = tempDirs.make("openclaw-lobster-limit-");
+      const workflowPath = path.join(tempDir, "workflow.lobster");
+      await fs.writeFile(workflowPath, "steps: []\n", "utf8");
+      const params =
+        requestKind === "resume"
+          ? { action: "resume", token: "resume-token", approve: false }
+          : {
+              action: "run",
+              pipeline: requestKind === "workflow" ? workflowPath : "exec --json=true echo bounded",
+            };
+
+      await expect(
+        createLobsterTool(fakeApi(), { runner }).execute("limit", {
+          ...params,
+          timeoutMs: 2000,
+          maxStdoutBytes: 1024,
+        }),
+      ).rejects.toThrow("lobster runtime result exceeded maxStdoutBytes");
     },
   );
 
@@ -381,7 +422,7 @@ describe("lobster plugin tool", () => {
     ],
     [
       { action: "resume", token: "resume-token-1", flowId: "flow-1", flowExpectedRevision: 1 },
-      "approve required when using managed TaskFlow resume mode",
+      "approve, responseJson, or cancel:true required when using managed TaskFlow resume mode",
     ],
   ])("requires managed TaskFlow fields", async (params, error) => {
     const runner = { run: vi.fn() };
@@ -497,6 +538,7 @@ describe("lobster plugin tool", () => {
     expect(taskFlow.tryCreateManaged).toHaveBeenCalledWith({
       controllerId: "tests/lobster",
       goal: "Run Lobster workflow",
+      status: "running",
       currentStep: "run_lobster",
       stateJson: { lane: "email" },
     });
@@ -506,6 +548,7 @@ describe("lobster plugin tool", () => {
       currentStep: "await_review",
       waitJson: {
         kind: "lobster_approval",
+        cwd: process.cwd(),
         prompt: "Approve this?",
         items: [{ id: "item-1" }],
         resumeToken: "resume-1",
@@ -536,6 +579,33 @@ describe("lobster plugin tool", () => {
     expect(runner.run).not.toHaveBeenCalled();
   });
 
+  it.each(["run", "resume"] as const)(
+    "preserves the original managed %s failure after persisting failure state",
+    async (action) => {
+      const failure = new Error("Synthetic runtime failure");
+      const runner = {
+        run: vi.fn<lobsterRunner.LobsterRunner["run"]>().mockRejectedValue(failure),
+      };
+      const taskFlow = createFakeTaskFlow();
+      const tool = createLobsterTool(fakeApi(), { runner, taskFlow });
+
+      await expect(
+        tool.execute("managed-failure", {
+          action,
+          ...(action === "run"
+            ? { pipeline: "noop", flowControllerId: "tests/lobster", flowGoal: "Synthetic flow" }
+            : { flowId: "flow-1", flowExpectedRevision: 4, approve: true }),
+        }),
+      ).rejects.toBe(failure);
+      expect(runner.run).toHaveBeenCalledTimes(1);
+      expect(taskFlow.fail).toHaveBeenCalledWith({
+        flowId: "flow-1",
+        expectedRevision: action === "run" ? 1 : 5,
+      });
+      expect(await taskFlow.get("flow-1")).toMatchObject({ status: "failed" });
+    },
+  );
+
   it("preserves explicit empty flow state in managed TaskFlow run mode", async () => {
     const runner = {
       run: vi.fn().mockResolvedValue({
@@ -559,6 +629,7 @@ describe("lobster plugin tool", () => {
     expect(taskFlow.tryCreateManaged).toHaveBeenCalledWith({
       controllerId: "tests/lobster",
       goal: "Run Lobster workflow",
+      status: "running",
       currentStep: "run_lobster",
       stateJson: {},
     });
@@ -568,8 +639,41 @@ describe("lobster plugin tool", () => {
       cwd: process.cwd(),
       timeoutMs: 20_000,
       maxStdoutBytes: 512_000,
+      beforeExecute: expect.any(Function),
     });
     expect(taskFlow.finish).toHaveBeenCalledWith({ flowId: "flow-1", expectedRevision: 1 });
+  });
+
+  it("keeps oversized completed results bounded without suggesting a checkpoint replay", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "ok",
+        output: ["x".repeat(2048)],
+        requiresApproval: null,
+      }),
+    };
+    const taskFlow = createFakeTaskFlow();
+    const result = await createLobsterTool(fakeApi(), { runner, taskFlow }).execute(
+      "large-result",
+      {
+        action: "run",
+        pipeline: "noop",
+        flowControllerId: "tests/lobster",
+        flowGoal: "Synthetic flow",
+        maxStdoutBytes: 1024,
+      },
+    );
+    expect(result).toMatchObject({
+      isError: true,
+      details: {
+        flow: { flowId: "flow-1", status: "succeeded", revision: 2 },
+        error: { message: expect.stringContaining("openclaw tasks flow show <flowId>") },
+      },
+    });
+    expect(Buffer.byteLength(JSON.stringify(result.details), "utf8")).toBeLessThan(1024);
+    expect(runner.run).toHaveBeenCalledTimes(1);
+    expect(taskFlow.finish).toHaveBeenCalledTimes(1);
   });
 
   it("rejects managed TaskFlow params when no bound taskFlow runtime is available", async () => {
@@ -609,6 +713,7 @@ describe("lobster plugin tool", () => {
       const owner = createRuntimeTaskFlow().bindSession({ sessionKey });
       return {
         get: async (id) => owner.get(id),
+        list: async () => owner.list(),
         tryCreateManaged: async (input) => owner.tryCreateManaged(input),
         resume: async (input) => owner.resume(input),
         setWaiting: async (input) => owner.setWaiting(input),
@@ -640,7 +745,7 @@ describe("lobster plugin tool", () => {
     };
     const stranger = createLobsterTool(fakeApi(), { runner, taskFlow: bind("agent:main:other") });
     await expect(stranger.execute("wrong-owner", input)).rejects.toThrow(
-      "no resumable Lobster checkpoint",
+      "No pending Lobster checkpoint",
     );
 
     const recovered = createLobsterTool(fakeApi(), { runner, taskFlow: bind(sessionKey) });
@@ -664,7 +769,7 @@ describe("lobster plugin tool", () => {
     ]);
     expect(runner.run).toHaveBeenCalledTimes(2);
     await expect(recovered.execute("replay", input)).rejects.toThrow(
-      "no resumable Lobster checkpoint",
+      "No pending Lobster checkpoint",
     );
     expect(runner.run).toHaveBeenCalledTimes(2);
   });
@@ -678,9 +783,7 @@ describe("lobster plugin tool", () => {
         requiresApproval: null,
       }),
     };
-    const taskFlow = createFakeTaskFlow();
-    const saved = await taskFlow.get("flow-1");
-    vi.mocked(taskFlow.get).mockResolvedValue(saved && { ...saved, revision: 0 });
+    const taskFlow = createFakeTaskFlow(undefined, 0);
     const tool = createLobsterTool(fakeApi(), { runner, taskFlow });
 
     const res = await tool.execute("call-managed-resume-approval-id", {
@@ -701,11 +804,12 @@ describe("lobster plugin tool", () => {
     });
     expect(runner.run).toHaveBeenCalledWith({
       action: "resume",
-      approvalId: "approval-1",
+      token: "resume-1",
       approve: true,
       cwd: process.cwd(),
       timeoutMs: 20_000,
       maxStdoutBytes: 512_000,
+      beforeExecute: expect.any(Function),
     });
     const details = requireRecord(res.details, "managed resume lobster tool details");
     expect(details.ok).toBe(true);
@@ -724,9 +828,7 @@ describe("lobster plugin tool", () => {
         requiresApproval: null,
       }),
     };
-    const taskFlow = createFakeTaskFlow();
-    const saved = await taskFlow.get("flow-1");
-    vi.mocked(taskFlow.get).mockResolvedValue(saved && { ...saved, revision: 1 });
+    const taskFlow = createFakeTaskFlow(undefined, 1);
     const tool = createLobsterTool(fakeApi(), { runner, taskFlow });
 
     await tool.execute("call-managed-resume-string-revision", {
@@ -746,11 +848,12 @@ describe("lobster plugin tool", () => {
     });
     expect(runner.run).toHaveBeenCalledWith({
       action: "resume",
-      token: " resume-1 ",
+      token: "resume-1",
       approve: true,
       cwd: process.cwd(),
       timeoutMs: 20_000,
       maxStdoutBytes: 512_000,
+      beforeExecute: expect.any(Function),
     });
   });
 

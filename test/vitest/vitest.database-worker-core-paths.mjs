@@ -731,6 +731,7 @@ export const databaseWorkerCoreTestFiles = [
   "test/plugins/codex-session-catalog-naming.test.ts",
   "test/gateway-rpc-exporters.test.ts",
   "test/scripts/mantis-telegram-proof.test.ts",
+  "test/plugins/lobster-managed-input.test.ts",
   "src/plugin-sdk/runtime-doctor-migrations.test.ts",
   "src/plugin-state/plugin-blob-store.test.ts",
   "src/plugin-state/plugin-blob-store.admission.test.ts",
