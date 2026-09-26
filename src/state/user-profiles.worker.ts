@@ -9,7 +9,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { executeUserChannelIdentityChange } from "./user-channel-identities.worker.js";
-import { listUserProfileGitHubLogins } from "./user-profile-github-identity.js";
+import { selectStoredGitHubIdentities } from "./user-profile-github-identity.js";
 import { listUserProfilesSync } from "./user-profile-identity.read.js";
 import {
   executeUserProfileWrite,
@@ -49,14 +49,26 @@ function executeUserProfileReadCommand(
   return runSqliteDeferredTransactionSync(
     database.db,
     () => {
-      const profiles = listUserProfilesSync(options).filter(
-        (profile) => profile.mergedInto === null,
+      const profiles = executeSqliteQuerySync(
+        database.db,
+        userProfilesDb(database.db)
+          .selectFrom("user_profiles")
+          .select("id")
+          .where("merged_into", "is", null)
+          .orderBy("created_at", "asc")
+          .orderBy("id", "asc")
+          .limit(command.input.limit + 1),
+      ).rows;
+      const selected = profiles.slice(0, command.input.limit);
+      const identities = selectStoredGitHubIdentities(
+        database.db,
+        selected.map(({ id }) => id),
       );
-      const logins = listUserProfileGitHubLogins(options);
       return {
-        profiles: profiles
-          .slice(0, command.input.limit)
-          .map(({ id }) => ({ id, logins: logins.get(id) ?? [] })),
+        profiles: selected.map(({ id }) => ({
+          id,
+          logins: identities.get(id)?.accounts.map((account) => account.login) ?? [],
+        })),
         truncated: profiles.length > command.input.limit,
       };
     },
