@@ -28,6 +28,7 @@ type ReleaseArtifact = {
   kind: "aab" | "apk";
   gradleTask: string;
   sourcePath: string;
+  abi?: string;
 };
 
 type CliOptions = {
@@ -245,10 +246,11 @@ function releaseArtifacts(versionName: string): ReleaseArtifact[] {
         "app-play-release.aab",
       ),
     },
-    {
+    ...[undefined, "armeabi-v7a", "arm64-v8a", "x86", "x86_64"].map((abi): ReleaseArtifact => ({
       flavorName: "third-party",
       kind: "apk",
       gradleTask: ":app:assembleThirdPartyRelease",
+      abi,
       sourcePath: join(
         androidDir,
         "app",
@@ -257,10 +259,18 @@ function releaseArtifacts(versionName: string): ReleaseArtifact[] {
         "apk",
         "thirdParty",
         "release",
-        `openclaw-${versionName}-thirdParty-release.apk`,
+        `openclaw-${versionName}-thirdParty-release${abi ? `-${abi}` : ""}.apk`,
       ),
-    },
+    })),
   ];
+}
+
+function releaseArtifactOutputPath(versionName: string, artifact: ReleaseArtifact): string {
+  const abiSuffix = artifact.abi ? `-${artifact.abi}` : "";
+  return join(
+    releaseOutputDir,
+    `openclaw-${versionName}-${artifact.flavorName}-release${abiSuffix}.${artifact.kind}`,
+  );
 }
 
 function sha256Hex(path: string): string {
@@ -405,8 +415,10 @@ function main() {
   console.log(`Android build commit: ${buildMetadata.commit}`);
   console.log(`Android build timestamp: ${buildMetadata.timestamp}`);
   for (const artifact of artifacts) {
-    console.log(`Release artifact: ${artifact.flavorName} ${artifact.kind}`);
+    const abiLabel = artifact.abi ? ` (${artifact.abi})` : "";
+    console.log(`Release artifact: ${artifact.flavorName} ${artifact.kind}${abiLabel}`);
     console.log(`Gradle task: ${artifact.gradleTask}`);
+    console.log(`Output: ${basename(releaseArtifactOutputPath(version.canonicalVersion, artifact))}`);
   }
 
   if (options.dryRun) {
@@ -420,7 +432,7 @@ function main() {
     "./gradlew",
     [
       ...androidBuildMetadataGradleArgs(buildMetadata),
-      ...artifacts.map((artifact) => artifact.gradleTask),
+      ...new Set(artifacts.map((artifact) => artifact.gradleTask)),
     ],
     {
       cwd: androidDir,
@@ -429,10 +441,7 @@ function main() {
   );
 
   for (const artifact of artifacts) {
-    const outputPath = join(
-      releaseOutputDir,
-      `openclaw-${version.canonicalVersion}-${artifact.flavorName}-release.${artifact.kind}`,
-    );
+    const outputPath = releaseArtifactOutputPath(version.canonicalVersion, artifact);
 
     copyArtifact(artifact.sourcePath, outputPath);
     verifyArtifactSignature(artifact, outputPath, expectedCertificateSha256);

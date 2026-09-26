@@ -291,7 +291,13 @@ Start a fresh app process between scenes.
 
 - Play build: `openclaw-<version>-play-release.aab`
 - Wear build: `openclaw-<version>-wear-release.aab`
-- Third-party build: `openclaw-<version>-third-party-release.apk`
+- Universal third-party build: `openclaw-<version>-third-party-release.apk`
+- ABI-specific third-party builds: `openclaw-<version>-third-party-release-<abi>.apk`,
+  where `<abi>` is `armeabi-v7a`, `arm64-v8a`, `x86`, or `x86_64`.
+
+Each APK is independently installable and uses the same application ID, version,
+and signing key. Choose the APK matching the device's ABI, or use the universal
+APK. Play and Wear bundles keep their existing Google Play delivery settings.
 
 `pnpm android:bundle:release` is an alias for the same Fastlane archive lane.
 

@@ -1,4 +1,4 @@
-import com.android.build.api.variant.impl.VariantOutputImpl
+import com.android.build.api.variant.FilterConfiguration.FilterType.ABI
 import org.gradle.api.tasks.Exec
 import org.gradle.api.tasks.PathSensitivity
 import java.security.MessageDigest
@@ -55,6 +55,7 @@ abstract class ExtractCloudflareSodium : DefaultTask() {
 
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
 val openClawAndroidApplicationId = "ai.openclaw.app"
+val openClawAndroidAbis = listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
 val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
 val openClawMobileCutterInstruction =
   "Run scripts/mobile-release-version.ts --prepare, capture the iOS release plan, then run --finalize."
@@ -258,8 +259,16 @@ android {
     buildConfigField("String", "GIT_COMMIT", "\"$openClawBuildCommit\"")
     buildConfigField("String", "BUILD_TIMESTAMP", "\"$openClawBuildTimestamp\"")
     ndk {
-      // Support all major ABIs — native libs are tiny (~47 KB per ABI)
-      abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+      abiFilters += openClawAndroidAbis
+    }
+  }
+
+  splits {
+    abi {
+      isEnable = true
+      reset()
+      include(*openClawAndroidAbis.toTypedArray())
+      isUniversalApk = true
     }
   }
 
@@ -374,20 +383,24 @@ android {
 androidComponents {
   val adbExecutable = sdkComponents.adb
   onVariants { variant ->
-    variant.outputs
-      .filterIsInstance<VariantOutputImpl>()
-      .forEach { output ->
-        val versionName = output.versionName.orNull ?: "0"
-        val buildType = variant.buildType
-        val flavorName = variant.flavorName?.takeIf { it.isNotBlank() }
-        val outputFileName =
-          if (flavorName == null) {
-            "openclaw-$versionName-$buildType.apk"
-          } else {
-            "openclaw-$versionName-$flavorName-$buildType.apk"
-          }
-        output.outputFileName = outputFileName
+    variant.outputs.forEach { output ->
+      val abi = output.filters.firstOrNull { it.filterType == ABI }?.identifier
+      // Standalone release downloads get thin APKs; debug install tasks retain one universal APK.
+      if (abi != null && (variant.buildType != "release" || variant.flavorName != "thirdParty")) {
+        output.enabled.set(false)
       }
+      val versionName = output.versionName.orNull ?: "0"
+      val buildType = variant.buildType
+      val flavorName = variant.flavorName?.takeIf { it.isNotBlank() }
+      val abiSuffix = abi?.let { "-$it" }.orEmpty()
+      val outputFileName =
+        if (flavorName == null) {
+          "openclaw-$versionName-$buildType$abiSuffix.apk"
+        } else {
+          "openclaw-$versionName-$flavorName-$buildType$abiSuffix.apk"
+        }
+      output.outputFileName.set(outputFileName)
+    }
 
     if (variant.buildType == "debug") {
       val variantNameCapitalized = variant.name.replaceFirstChar(Char::titlecase)

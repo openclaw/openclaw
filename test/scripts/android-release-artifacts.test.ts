@@ -146,13 +146,24 @@ describe("Android release artifacts", () => {
     ).toThrow("Android release builds require a clean Git checkout");
   });
 
-  it("selects only the signed third-party APK for GitHub distribution", () => {
-    const result = run(["--artifact", "third-party", "--dry-run"]);
+  it.each(["third-party", "all"])("plans distinct signed APK outputs for %s", (artifact) => {
+    const result = run(["--artifact", artifact, "--dry-run"]);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Release artifact: third-party apk");
+    const version = result.stdout.match(/^Android versionName: (.+)$/mu)?.[1];
+    expect(version).toBeDefined();
+    const outputs = Array.from(result.stdout.matchAll(/^Output: (.+)$/gmu), (match) => match[1]);
+    expect(outputs).toEqual([
+      ...(artifact === "all"
+        ? [`openclaw-${version}-wear-release.aab`, `openclaw-${version}-play-release.aab`]
+        : []),
+      `openclaw-${version}-third-party-release.apk`,
+      `openclaw-${version}-third-party-release-armeabi-v7a.apk`,
+      `openclaw-${version}-third-party-release-arm64-v8a.apk`,
+      `openclaw-${version}-third-party-release-x86.apk`,
+      `openclaw-${version}-third-party-release-x86_64.apk`,
+    ]);
     expect(result.stdout).toContain("Gradle task: :app:assembleThirdPartyRelease");
-    expect(result.stdout).not.toContain("Release artifact: play aab");
   });
 
   it("rejects unknown artifact selectors", () => {
