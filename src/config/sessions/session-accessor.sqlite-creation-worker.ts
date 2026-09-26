@@ -92,6 +92,13 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
           return { ok: false, error: created.error, phase: "entry" };
         }
         const owner = options.resolveOwnerAssignment?.();
+        const preparedTranscript = created.transcriptEvents
+          ? {
+              sessionKey: normalizedKey,
+              sessionId: created.entry.sessionId,
+              events: created.transcriptEvents,
+            }
+          : undefined;
         const labelClaim =
           options.label === undefined
             ? undefined
@@ -177,7 +184,11 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
             return undefined;
           };
           options.onPhase?.("transcript");
-          const transcriptError = withCommit ? await withCommit(initialize) : await initialize();
+          const transcriptError = preparedTranscript
+            ? undefined
+            : withCommit
+              ? await withCommit(initialize)
+              : await initialize();
           if (transcriptError !== undefined) {
             return { ok: false, error: transcriptError, phase: "transcript" };
           }
@@ -192,6 +203,7 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
             withCommit,
             ownerAssignment: owner ? { sessionKey: normalizedKey, owner } : undefined,
             labelClaim,
+            preparedTranscript,
             onLifecycleCommitted,
             checkPendingArchiveRecovery: true,
             afterCommitted: options.afterCommitted
@@ -244,14 +256,17 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
                     expectedRows: replacement.expectedRows,
                     labelOwnerKeys: replacement.labelOwnerKeys,
                     labelClaim,
+                    preparedTranscript,
                     validationKeys: [normalizedKey],
                     replacements: [{ sessionKey: normalizedKey, entry: created.entry }],
                     checkPendingArchiveRecovery: true,
-                    initializeTranscript: {
-                      sessionKey: normalizedKey,
-                      sessionId: created.entry.sessionId,
-                      cwd: options.cwd,
-                    },
+                    initializeTranscript: preparedTranscript
+                      ? undefined
+                      : {
+                          sessionKey: normalizedKey,
+                          sessionId: created.entry.sessionId,
+                          cwd: options.cwd,
+                        },
                     ...(owner ? { ownerAssignment: { sessionKey: normalizedKey, owner } } : {}),
                   },
                   assertHeld,
