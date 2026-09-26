@@ -37,7 +37,7 @@ afterEach(async () => {
   );
 });
 
-async function runReset(commandName: "new" | "reset", allowFrom: string[]) {
+async function runReset(commandName: "new" | "reset", allowFrom: string[], enabled = true) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "discord-native-reset-"));
   directories.push(home);
   const channelId = "100000000000000001";
@@ -52,7 +52,7 @@ async function runReset(commandName: "new" | "reset", allowFrom: string[]) {
     channels: {
       discord: {
         commands: { native: true },
-        guilds: { [guildId]: { channels: { [channelId]: { enabled: true } } } },
+        guilds: { [guildId]: { channels: { [channelId]: { enabled } } } },
       },
     },
   };
@@ -75,7 +75,7 @@ async function runReset(commandName: "new" | "reset", allowFrom: string[]) {
     channelId,
     guildId,
     userId,
-    interactionId: `${commandName}-${allowFrom.join("-")}`,
+    interactionId: `${commandName}-${allowFrom.join("-")}-${enabled}`,
   });
   const command = createDiscordNativeCommand({
     command: { name: commandName, description: "Reset the session.", acceptsArgs: true },
@@ -99,6 +99,15 @@ async function runReset(commandName: "new" | "reset", allowFrom: string[]) {
 describe.each(["new", "reset"] as const)(
   "Discord native /%s through the reply pipeline",
   (name) => {
+    it("preserves the session in a disabled channel without a binding", async () => {
+      const result = await runReset(name, [userId], false);
+      expect(result.replies).toEqual(["This channel is disabled."]);
+      expect(result.entry?.lifecycleRevision).toBe("before-reset");
+      expect(result.events).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "reset" })]),
+      );
+    });
+
     it.each(["", "user:", "discord:", "pk:", "<@", "<@!"])(
       "resets the channel and acknowledges a matching %s sender entry",
       async (prefix) => {
