@@ -384,7 +384,12 @@ describe("installScheduledTask", () => {
       const xml = xmlPayloadCaptures.find((entry) => entry.index === xmlIndex)?.xml;
       expect(xml).toContain("<UserId>WORKSTATION\\alice</UserId>");
       expect(xml).toContain("<LogonType>InteractiveToken</LogonType>");
-      expect(launcher).toContain(`WScript.Quit shell.Run("""${scriptPath}""", 0, True)`);
+      expect(launcher).toContain(
+        `shell.Environment("Process")("OPENCLAW_TASK_SCRIPT") = "${scriptPath}"`,
+      );
+      expect(launcher).toContain(
+        'WScript.Quit shell.Run("%OPENCLAW_TASK_LAUNCH_COMMAND%", 0, True)',
+      );
       expectTaskRunCall(xmlIndex + 2);
     });
   });
@@ -406,7 +411,7 @@ describe("installScheduledTask", () => {
       expect(scriptPath).toContain("苗振");
       expect(rawLauncher.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xfe]));
       expect(rawLauncher.subarray(2).toString("utf16le")).toContain(
-        `WScript.Quit shell.Run("""${scriptPath}""", 0, True)`,
+        `shell.Environment("Process")("OPENCLAW_TASK_SCRIPT") = "${scriptPath}"`,
       );
     });
   });
@@ -481,7 +486,12 @@ describe("installScheduledTask", () => {
         'shell.Environment("Process")("OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER") = "wscript"',
       );
       expect(launcher).toContain("WScript.Shell");
-      expect(launcher).toContain(`WScript.Quit shell.Run("""${scriptPath}""", 0, True)`);
+      expect(launcher).toContain(
+        `shell.Environment("Process")("OPENCLAW_TASK_SCRIPT") = "${scriptPath}"`,
+      );
+      expect(launcher).toContain(
+        'WScript.Quit shell.Run("%OPENCLAW_TASK_LAUNCH_COMMAND%", 0, True)',
+      );
       expectTaskRunCall(3, "OpenClaw Custom Gateway");
     });
   });

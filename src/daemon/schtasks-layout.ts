@@ -500,11 +500,6 @@ export function buildTaskScript(
   return `${lines.join("\r\n")}\r\n`;
 }
 
-function renderStartupLaunchCommand(scriptPath: string): string {
-  const cmdExePath = quoteCmdScriptArg(getWindowsCmdExePath(), { delayedExpansion: false });
-  return `start "" /min ${cmdExePath} /d /v:off /c ${quoteCmdScriptArg(scriptPath, { delayedExpansion: false })}`;
-}
-
 export function buildStartupLauncherScript(params: {
   description?: string;
   scriptPath: string;
@@ -515,7 +510,12 @@ export function buildStartupLauncherScript(params: {
     assertNoCmdLineBreak(trimmedDescription, "Startup launcher description");
     lines.push(`rem ${trimmedDescription}`);
   }
-  lines.push(renderStartupLaunchCommand(params.scriptPath));
+  lines.push(
+    renderCmdSetAssignment("OPENCLAW_TASK_SCRIPT", params.scriptPath, { delayedExpansion: false }),
+  );
+  const cmdExePath = quoteCmdScriptArg(getWindowsCmdExePath(), { delayedExpansion: false });
+  // Expand only in the nested CMD so percent tokens inside the path stay literal.
+  lines.push(`start "" /min ${cmdExePath} /d /s /v:off /c ""%%OPENCLAW_TASK_SCRIPT%%""`);
   return `${lines.join("\r\n")}\r\n`;
 }
 
@@ -540,7 +540,13 @@ export function buildHiddenLauncherScript(params: {
       `shell.Environment("Process")("${WINDOWS_TASK_LAUNCHER_ENV}") = "${WINDOWS_TASK_LAUNCHER_ACTIVE}"`,
     );
   }
-  lines.push(`WScript.Quit shell.Run(${quoteVbsString(`"${params.scriptPath}"`)}, 0, True)`);
+  const launchCommand = `"${getWindowsCmdExePath()}" /d /s /v:off /c ""%OPENCLAW_TASK_SCRIPT%""`;
+  // WScript expands the command holder; CMD expands the literal path holder once.
+  lines.push(
+    `shell.Environment("Process")("OPENCLAW_TASK_SCRIPT") = ${quoteVbsString(params.scriptPath)}`,
+    `shell.Environment("Process")("OPENCLAW_TASK_LAUNCH_COMMAND") = ${quoteVbsString(launchCommand)}`,
+    'WScript.Quit shell.Run("%OPENCLAW_TASK_LAUNCH_COMMAND%", 0, True)',
+  );
   return `${lines.join("\r\n")}\r\n`;
 }
 

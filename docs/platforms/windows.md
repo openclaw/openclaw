@@ -155,8 +155,9 @@ does not open a visible console window. If task creation is denied, OpenClaw
 falls back to a per-user Startup-folder login item.
 
 Newly generated launchers preserve literal `!`, `^`, and `%` characters in paths,
-arguments, and environment values. Status and stop continue to read older
-launchers without rewriting them.
+arguments, and environment values. Startup-folder launchers and hidden task
+wrappers keep `%NAME%` in script paths literal even when `NAME` is set. Status and
+stop continue to read older launchers without rewriting them.
 
 If you append output redirection to the `gateway.cmd` launch line, quote the
 entire target, for example `>> "%USERPROFILE%\.openclaw\logs\gateway-stdout.log" 2>&1`.

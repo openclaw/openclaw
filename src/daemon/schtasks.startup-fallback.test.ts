@@ -717,7 +717,9 @@ describe("Windows startup fallback", () => {
       });
       expect(result.scriptPath).toBe(resolveTaskScriptPath(env));
       expect(startupScript).toContain("setlocal DisableDelayedExpansion\r\n");
-      expect(startupScript).toContain(`start "" /min ${getWindowsCmdExePath()} /d /v:off /c`);
+      expect(startupScript).toContain(
+        `start "" /min ${getWindowsCmdExePath()} /d /s /v:off /c ""%%OPENCLAW_TASK_SCRIPT%%""`,
+      );
       expect(startupScript).toContain("gateway.cmd");
       expectStartupFallbackSpawn();
       expect(childUnref).toHaveBeenCalled();
@@ -743,7 +745,10 @@ describe("Windows startup fallback", () => {
       expect(startupScript).toContain("WScript.Shell");
       expect(startupScript).toContain("gateway.cmd");
       expect(startupScript).toContain(
-        `WScript.Quit shell.Run("""${result.scriptPath}""", 0, True)`,
+        `shell.Environment("Process")("OPENCLAW_TASK_SCRIPT") = "${result.scriptPath}"`,
+      );
+      expect(startupScript).toContain(
+        'WScript.Quit shell.Run("%OPENCLAW_TASK_LAUNCH_COMMAND%", 0, True)',
       );
       expectStartupFallbackSpawn();
     });

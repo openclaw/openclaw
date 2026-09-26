@@ -588,6 +588,7 @@ it.each(["canonical-wrapper", "legacy-wrapper", "malformed-args", "wrapper", "me
 it.each([
   "canonical",
   "legacy",
+  "released-waiting-launcher",
   "literal",
   "reenabled-expansion",
   "script",
@@ -633,10 +634,17 @@ it.each([
           : buildTaskScript(command)) +
         (kind === "script" ? "echo operator-private\r\n" : "");
   const launcher =
-    buildHiddenLauncherScript({ scriptPath, taskSupervisor: true }) +
-    (kind === "launcher" || kind === "planned-launcher"
-      ? 'WScript.Echo "operator-private"\r\n'
-      : "");
+    kind === "released-waiting-launcher"
+      ? [
+          'Set shell = CreateObject("WScript.Shell")',
+          'shell.Environment("Process")("OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER") = "wscript"',
+          `WScript.Quit shell.Run("""${scriptPath}""", 0, True)`,
+          "",
+        ].join("\r\n")
+      : buildHiddenLauncherScript({ scriptPath, taskSupervisor: true }) +
+        (kind === "launcher" || kind === "planned-launcher"
+          ? 'WScript.Echo "operator-private"\r\n'
+          : "");
   await fs.writeFile(scriptPath, script);
   if (kind !== "missing-launcher") {
     await fs.writeFile(hiddenPath, launcher);
@@ -679,6 +687,7 @@ it.each([
   if (
     kind === "canonical" ||
     kind === "legacy" ||
+    kind === "released-waiting-launcher" ||
     kind === "literal" ||
     kind === "missing-launcher" ||
     kind === "custom-script"

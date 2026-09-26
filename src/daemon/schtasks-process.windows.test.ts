@@ -230,6 +230,7 @@ it.skipIf(process.platform !== "win32").for(["cmd", "vbs"] as const)(
         /[&|<>^%!()"]/u,
       );
       const markerPath = path.join(root, "target-marker.txt");
+      const decoyMarkerPath = path.join(root, "decoy-marker.txt");
       const literalTarget = path.join(root, "%OPENCLAW_STARTUP_PROBE%", "target.cmd");
       const expandedTarget = path.join(root, "expanded", "target.cmd");
       for (const [target, marker] of [
@@ -237,7 +238,8 @@ it.skipIf(process.platform !== "win32").for(["cmd", "vbs"] as const)(
         [expandedTarget, "expanded"],
       ] as const) {
         await fs.mkdir(path.dirname(target));
-        await fs.writeFile(target, `@echo off\r\n> "${markerPath}" echo ${marker}\r\n`, "ascii");
+        const outputPath = marker === "literal" ? markerPath : decoyMarkerPath;
+        await fs.writeFile(target, `@echo off\r\n> "${outputPath}" echo ${marker}\r\n`, "ascii");
       }
       const wrapperPath = path.join(root, `startup-entry.${format}`);
       const wrapper = encodeWindowsLauncherScript({
@@ -296,11 +298,23 @@ it.skipIf(process.platform !== "win32").for(["cmd", "vbs"] as const)(
         const extinction = await lifetime.track(job.certify());
         let marker: string | undefined;
         let markerReadError: unknown;
+        let decoyExecuted: boolean | undefined;
+        let decoyReadError: unknown;
         if (extinction.status === "confirmed") {
           try {
             marker = (await fs.readFile(markerPath, "ascii")).trim();
           } catch (error) {
             markerReadError = error;
+          }
+          try {
+            await fs.access(decoyMarkerPath);
+            decoyExecuted = true;
+          } catch (error) {
+            if (isErrno(error) && error.code === "ENOENT") {
+              decoyExecuted = false;
+            } else {
+              decoyReadError = error;
+            }
           }
         }
         const observed = {
@@ -310,6 +324,8 @@ it.skipIf(process.platform !== "win32").for(["cmd", "vbs"] as const)(
           marker: marker?.slice(0, 128) ?? null,
           markerLength: marker?.length ?? null,
           markerReadErrorCode: isErrno(markerReadError) ? markerReadError.code : null,
+          decoyExecuted: decoyExecuted ?? null,
+          decoyReadErrorCode: isErrno(decoyReadError) ? decoyReadError.code : null,
         };
         const diagnostic = JSON.stringify({
           ...observed,
@@ -329,9 +345,11 @@ it.skipIf(process.platform !== "win32").for(["cmd", "vbs"] as const)(
         if (markerReadError !== undefined) {
           throw markerReadError;
         }
-        expect(marker, "Startup must execute the literal target, not the expanded decoy").toBe(
-          "literal",
-        );
+        if (decoyReadError !== undefined) {
+          throw decoyReadError;
+        }
+        expect(marker, "Startup must execute the literal target").toBe("literal");
+        expect(decoyExecuted, "Startup must leave the expanded decoy untouched").toBe(false);
       } finally {
         context.signal.removeEventListener("abort", stop);
         await lifetime.verifyCleanup(async () => {
