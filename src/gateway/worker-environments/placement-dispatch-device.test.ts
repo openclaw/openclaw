@@ -184,6 +184,7 @@ describe("device worker placement dispatch", () => {
       environmentId: harness.ready.environmentId,
       ownerEpoch: harness.ready.ownerEpoch,
       sessionId: REQUEST.sessionId,
+      assertCurrent: expect.any(Function),
     });
     expect(harness.environments.destroy).not.toHaveBeenCalled();
     expect(harness.placements.current()).toMatchObject({ state: "active" });

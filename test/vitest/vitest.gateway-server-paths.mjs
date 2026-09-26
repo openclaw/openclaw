@@ -216,6 +216,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/bundle.test.ts",
   "src/gateway/worker-environments/cloud-transcript-write-admission.test.ts",
   "src/gateway/worker-environments/computer-transport.test.ts",
+  "src/gateway/worker-environments/credential-attachment-authority.test.ts",
   "src/gateway/worker-environments/credential-broker.test.ts",
   "src/gateway/worker-environments/desktop-ssh-identity.test.ts",
   "src/gateway/worker-environments/environment-access.test.ts",
