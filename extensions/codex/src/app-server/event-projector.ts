@@ -319,6 +319,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
 
   recordDynamicToolCall(params: { callId: string; tool: string; arguments?: JsonValue }): void {
     this.toolTranscriptProjection.recordDynamicToolCall(params);
+    this.generatedMediaProjection.recordDynamicToolCall(params);
   }
 
   /** Projects a successful OpenClaw progress_card call through the native plan stream. */

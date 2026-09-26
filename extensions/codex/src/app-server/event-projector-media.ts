@@ -12,13 +12,17 @@ import {
 } from "openclaw/plugin-sdk/media-store";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readItemString } from "./event-projector-values.js";
-import type { CodexThreadItem, JsonObject } from "./protocol.js";
+import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
 import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
+const MAX_TOOL_OUTPUT_IMAGE_DATA_URL_HEADER_CHARS = 256;
 
 export class CodexGeneratedMediaProjection {
-  private readonly itemIds = new Set<string>();
+  private readonly mediaItemIds = new Set<string>();
+  private readonly generatedItemIds = new Set<string>();
+  private readonly hostDynamicToolCallIds = new Set<string>();
+  private readonly sourcePathByViewedImageCallId = new Map<string, string>();
   private readonly mediaByItemId = new Map<string, { mediaUrl?: string; savedPath?: string }>();
   private readonly gatewayMaterializedItemIds = new Set<string>();
   private readonly pendingMaterializationsByItemId = new Map<string, Promise<void>>();
@@ -34,16 +38,34 @@ export class CodexGeneratedMediaProjection {
   ) {}
 
   hasGeneratedMedia(): boolean {
-    return this.itemIds.size > 0;
+    return this.generatedItemIds.size > 0;
+  }
+
+  /**
+   * Host dynamic tools enforce their own outbound policy on result media, so
+   * raw Codex echoes of their call ids must never republish those bytes.
+   */
+  recordDynamicToolCall(params: { callId: string }): void {
+    this.hostDynamicToolCallIds.add(params.callId);
   }
 
   async recordNative(item: CodexThreadItem | undefined): Promise<void> {
+    if (item?.type === "imageView") {
+      // Codex tags ImageView with the raw call id and image path
+      // (view_image.rs ImageViewItem), retaining the source identity that
+      // confirmed original-path delivery matching needs.
+      const sourcePath = readItemString(item, "path")?.trim();
+      if (sourcePath) {
+        this.recordViewedImageSourcePath(item.id, sourcePath);
+      }
+      return;
+    }
     if (item?.type !== "imageGeneration") {
       return;
     }
     // Image generation is already a billable side effect even if its remote
     // artifact cannot be transferred into this gateway's media store.
-    this.itemIds.add(item.id);
+    this.generatedItemIds.add(item.id);
     const savedPath = readItemString(item, "savedPath")?.trim();
     if (savedPath) {
       this.mediaByItemId.set(item.id, { ...this.mediaByItemId.get(item.id), savedPath });
@@ -98,14 +120,19 @@ export class CodexGeneratedMediaProjection {
   }
 
   async recordRaw(item: JsonObject): Promise<void> {
-    if (readString(item, "type") !== "image_generation_call") {
+    const type = readString(item, "type");
+    if (type === "custom_tool_call_output" || type === "function_call_output") {
+      await this.recordToolOutputImages(item);
+      return;
+    }
+    if (type !== "image_generation_call") {
       return;
     }
     const result = readString(item, "result");
     if (!result) {
       return;
     }
-    const itemId = readString(item, "id") ?? `raw-image-${this.itemIds.size}`;
+    const itemId = readString(item, "id") ?? `raw-image-${this.generatedItemIds.size}`;
     await this.recordImage({
       itemId,
       result,
@@ -118,9 +145,13 @@ export class CodexGeneratedMediaProjection {
     itemId: string;
     result: string;
     revisedPrompt?: string;
-    source: "native" | "raw";
+    source: "native" | "raw" | "tool-output";
+    requireImageBytes?: boolean;
   }): Promise<void> {
-    this.itemIds.add(params.itemId);
+    this.mediaItemIds.add(params.itemId);
+    if (params.source !== "tool-output") {
+      this.generatedItemIds.add(params.itemId);
+    }
     if (this.gatewayMaterializedItemIds.has(params.itemId)) {
       return;
     }
@@ -150,13 +181,14 @@ export class CodexGeneratedMediaProjection {
     itemId: string;
     result: string;
     revisedPrompt?: string;
-    source: "native" | "raw";
+    source: "native" | "raw" | "tool-output";
+    requireImageBytes?: boolean;
   }): Promise<void> {
     const maxBytes = resolveGeneratedMediaMaxBytes(this.config, "image");
     const estimatedDecodedBytes = estimateBase64DecodedBytes(params.result);
     if (estimatedDecodedBytes !== undefined && estimatedDecodedBytes > maxBytes) {
       embeddedAgentLog.warn(
-        `codex app-server ${params.source} image generation result exceeds media limit`,
+        `codex app-server ${imageSourceDescription(params.source)} exceeds media limit`,
         {
           itemId: params.itemId,
           estimatedDecodedBytes,
@@ -167,12 +199,14 @@ export class CodexGeneratedMediaProjection {
     }
     const asset = generatedImageAssetFromBase64({
       base64: params.result,
-      index: this.itemIds.size,
+      index: this.mediaItemIds.size,
       revisedPrompt: params.revisedPrompt,
-      fileNamePrefix: "codex-image-generation",
+      defaultMimeType: params.requireImageBytes ? "application/octet-stream" : undefined,
+      fileNamePrefix:
+        params.source === "tool-output" ? "codex-tool-output-image" : "codex-image-generation",
       sniffMimeType: true,
     });
-    if (!asset) {
+    if (!asset || (params.requireImageBytes && !asset.mimeType.startsWith("image/"))) {
       return;
     }
     try {
@@ -193,7 +227,7 @@ export class CodexGeneratedMediaProjection {
       });
     } catch (error) {
       embeddedAgentLog.warn(
-        `codex app-server ${params.source} image generation result save failed`,
+        `codex app-server ${imageSourceDescription(params.source)} save failed`,
         {
           itemId: params.itemId,
           error,
@@ -263,12 +297,93 @@ export class CodexGeneratedMediaProjection {
   private recordUrl(params: { itemId: string; mediaUrl: string; replaceExisting?: boolean }): void {
     const existing = this.mediaByItemId.get(params.itemId);
     if (existing?.mediaUrl && params.replaceExisting !== true) {
-      this.itemIds.add(params.itemId);
+      this.mediaItemIds.add(params.itemId);
       return;
     }
     this.mediaByItemId.set(params.itemId, { ...existing, mediaUrl: params.mediaUrl });
-    this.itemIds.add(params.itemId);
+    this.mediaItemIds.add(params.itemId);
   }
+
+  private async recordToolOutputImages(item: JsonObject): Promise<void> {
+    if (!Array.isArray(item.output)) {
+      return;
+    }
+    const rawItemId = readString(item, "call_id") ?? readString(item, "id");
+    if (!rawItemId) {
+      return;
+    }
+    if (this.hostDynamicToolCallIds.has(rawItemId)) {
+      // The host already applied media.outbound to this dynamic tool's result;
+      // its raw echo must not bypass that decision as a host-owned attachment.
+      return;
+    }
+    for (const [index, part] of item.output.entries()) {
+      if (!isInputImagePart(part)) {
+        continue;
+      }
+      const parsed = parseToolOutputImageDataUrl(part.image_url);
+      if (!parsed) {
+        continue;
+      }
+      const itemId = `${rawItemId}:image:${index}`;
+      await this.recordImage({
+        itemId,
+        result: parsed.base64,
+        requireImageBytes: true,
+        source: "tool-output",
+      });
+      // Overlapping notifications may deliver the ImageView identity while this
+      // copy materializes, so read it after the await instead of caching it.
+      const sourcePath = this.sourcePathByViewedImageCallId.get(rawItemId);
+      if (sourcePath) {
+        this.attachViewedImageSourcePath(itemId, sourcePath);
+      }
+    }
+  }
+
+  private recordViewedImageSourcePath(callId: string, sourcePath: string): void {
+    this.sourcePathByViewedImageCallId.set(callId, sourcePath);
+    for (const itemId of this.mediaByItemId.keys()) {
+      if (itemId.startsWith(`${callId}:image:`)) {
+        this.attachViewedImageSourcePath(itemId, sourcePath);
+      }
+    }
+  }
+
+  private attachViewedImageSourcePath(itemId: string, sourcePath: string): void {
+    const media = this.mediaByItemId.get(itemId);
+    if (media?.mediaUrl && !media.savedPath) {
+      this.mediaByItemId.set(itemId, { ...media, savedPath: sourcePath });
+    }
+  }
+}
+
+function isInputImagePart(value: unknown): value is { type: "input_image"; image_url: string } {
+  return isJsonObject(value) && value.type === "input_image" && typeof value.image_url === "string";
+}
+
+function parseToolOutputImageDataUrl(value: string): { base64: string } | undefined {
+  if (value.slice(0, 5).toLowerCase() !== "data:") {
+    return undefined;
+  }
+  const commaIndex = value.indexOf(",", 5);
+  if (commaIndex < 0 || commaIndex > MAX_TOOL_OUTPUT_IMAGE_DATA_URL_HEADER_CHARS) {
+    return undefined;
+  }
+  const [rawMimeType, ...metadata] = value.slice(5, commaIndex).split(";");
+  const mimeType = rawMimeType?.trim().toLowerCase();
+  if (
+    (!mimeType?.startsWith("image/") && mimeType !== "application/octet-stream") ||
+    !metadata.some((entry) => entry.trim().toLowerCase() === "base64")
+  ) {
+    return undefined;
+  }
+  const base64 = value.slice(commaIndex + 1);
+  return base64 ? { base64 } : undefined;
+}
+
+function imageSourceDescription(source: "native" | "raw" | "tool-output"): string {
+  return source === "tool-output" ? "tool output image" : `${source} image generation result`;
 }
 
 function estimateBase64DecodedBytes(base64: string): number | undefined {
