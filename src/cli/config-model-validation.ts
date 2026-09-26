@@ -2,8 +2,11 @@ import { hasAgentRosterProperty } from "../agents/agent-scope-config.js";
 import {
   listAgentEntries,
   listAgentEntriesWithSource,
+  resolveAgentDir,
   resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -65,33 +68,23 @@ function collectTextModelConfigRefs(params: {
   path: string;
   agentId?: string;
 }): TouchedModelRef[] {
-  if (typeof params.model === "string") {
-    const value = params.model.trim();
-    return [
-      {
-        path: params.path,
-        value,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        fallback: false,
-      },
-    ];
-  }
-  if (!params.model || typeof params.model !== "object" || Array.isArray(params.model)) {
+  const stringModel = typeof params.model === "string";
+  const model = stringModel ? { primary: params.model } : params.model;
+  if (!model || typeof model !== "object" || Array.isArray(model)) {
     return [];
   }
-  const model = params.model as { primary?: unknown; fallbacks?: unknown };
+  const { primary, fallbacks } = model as { primary?: unknown; fallbacks?: unknown };
   const refs: TouchedModelRef[] = [];
-  if (typeof model.primary === "string") {
-    const value = model.primary.trim();
+  if (typeof primary === "string") {
     refs.push({
-      path: `${params.path}.primary`,
-      value,
+      path: stringModel ? params.path : `${params.path}.primary`,
+      value: primary.trim(),
       ...(params.agentId ? { agentId: params.agentId } : {}),
       fallback: false,
     });
   }
-  if (Array.isArray(model.fallbacks)) {
-    for (const [index, fallback] of model.fallbacks.entries()) {
+  if (Array.isArray(fallbacks)) {
+    for (const [index, fallback] of fallbacks.entries()) {
       if (typeof fallback !== "string") {
         continue;
       }
@@ -220,13 +213,9 @@ function collectTouchedTextModelRefs(params: {
       source.kind,
       source.kind === "entries" ? source.key : String(source.index),
     ];
-    const agentModelPath = [...agentEntryPath, "model"];
     const ownershipTouched = params.touchedPaths.some(
       (touchedPath) =>
-        isPathPrefix(touchedPath, agentEntryPath) ||
-        isPathPrefix(agentEntryPath, touchedPath) ||
-        isPathPrefix(touchedPath, agentModelPath) ||
-        isPathPrefix(agentModelPath, touchedPath),
+        isPathPrefix(touchedPath, agentEntryPath) || isPathPrefix(agentEntryPath, touchedPath),
     );
     if (!ownershipTouched) {
       continue;
@@ -424,23 +413,13 @@ function validateModelRefSyntax(
 }
 
 async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> {
-  const [agentScope, modelSelection] = await Promise.all([
-    import("../agents/agent-scope.js"),
-    import("../agents/model-selection.js"),
-  ]);
-  let modelModules:
-    | Promise<
-        [
-          typeof import("../agents/embedded-agent-runner/model.js"),
-          typeof import("../agents/prepared-model-runtime.js"),
-        ]
-      >
-    | undefined;
+  const modelSelection = await import("../agents/model-selection.js");
   const loadModelModules = () =>
-    (modelModules ??= Promise.all([
+    Promise.all([
       import("../agents/embedded-agent-runner/model.js"),
       import("../agents/prepared-model-runtime.js"),
-    ]));
+    ]);
+  let modelModules: ReturnType<typeof loadModelModules> | undefined;
 
   return async ({ config, ref }) => {
     let resolvedRef = resolveCanonicalModelRef(config, ref);
@@ -452,12 +431,10 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
       return undefined;
     }
     const targetAgentId =
-      ref.agentId ??
-      agentScope.tryResolveLegacyCompatibilityAgentId(config) ??
-      agentScope.resolveDefaultAgentId(config);
-    const agentDir = agentScope.resolveAgentDir(config, targetAgentId);
-    const workspaceDir = agentScope.resolveAgentWorkspaceDir(config, targetAgentId);
-    const [modelRuntime, preparedRuntime] = await loadModelModules();
+      ref.agentId ?? tryResolveLegacyCompatibilityAgentId(config) ?? resolveDefaultAgentId(config);
+    const agentDir = resolveAgentDir(config, targetAgentId);
+    const workspaceDir = resolveAgentWorkspaceDir(config, targetAgentId);
+    const [modelRuntime, preparedRuntime] = await (modelModules ??= loadModelModules());
 
     // Exact pins need provider hooks in their generation; a catalog-only snapshot cannot load them.
     await using lease = await preparedRuntime.acquireReadOnlyPreparedModelRuntime(
@@ -513,6 +490,14 @@ function formatModelRefError(
   return `Cannot set model reference "${authoredValue}" at ${ref.path}: ${detail} Run ${formatCliCommand("openclaw models list")} to list available models.`;
 }
 
+function materializeValidationRoster(config: OpenClawConfig): OpenClawConfig {
+  // Authored mutations need the absent-roster compatibility shape, but explicit
+  // empty or malformed rosters must remain visible to schema repair.
+  return hasAgentRosterProperty(config)
+    ? config
+    : (migratePersistedImplicitMainRoster(config).config as OpenClawConfig);
+}
+
 export async function checkTouchedTextModelRefs(params: {
   config: OpenClawConfig;
   previousConfig?: OpenClawConfig;
@@ -541,16 +526,10 @@ export async function checkTouchedTextModelRefs(params: {
   if (!modelDependenciesTouched && !touchedPaths.some(pathMayAffectTextModelRefs)) {
     return { refsChecked: 0, refsTotal: 0, errors: [] };
   }
-  // Config mutation validation sees authored pre-roster objects, unlike normal
-  // runtime callers. Materialize only the absent-roster compatibility shape;
-  // explicit empty or malformed rosters must remain visible to schema repair.
-  const config = hasAgentRosterProperty(params.config)
-    ? params.config
-    : (migratePersistedImplicitMainRoster(params.config).config as OpenClawConfig);
-  const previousConfig =
-    params.previousConfig && !hasAgentRosterProperty(params.previousConfig)
-      ? (migratePersistedImplicitMainRoster(params.previousConfig).config as OpenClawConfig)
-      : params.previousConfig;
+  const config = materializeValidationRoster(params.config);
+  const previousConfig = params.previousConfig
+    ? materializeValidationRoster(params.previousConfig)
+    : undefined;
   const validationParams = { ...params, config, previousConfig, touchedPaths };
   const authoredRefs = collectTouchedTextModelRefs(validationParams);
   const authoredValuesByPath = new Map(
@@ -595,13 +574,10 @@ export async function checkTouchedTextModelRefs(params: {
       { suppressDetail: modelEnvWasExpanded || redactDependency },
     );
   };
-  const validationRosterConfig = hasAgentRosterProperty(validationConfig)
-    ? validationConfig
-    : (migratePersistedImplicitMainRoster(validationConfig).config as OpenClawConfig);
-  const validationPreviousRosterConfig =
-    validationPreviousConfig && !hasAgentRosterProperty(validationPreviousConfig)
-      ? (migratePersistedImplicitMainRoster(validationPreviousConfig).config as OpenClawConfig)
-      : validationPreviousConfig;
+  const validationRosterConfig = materializeValidationRoster(validationConfig);
+  const validationPreviousRosterConfig = validationPreviousConfig
+    ? materializeValidationRoster(validationPreviousConfig)
+    : undefined;
   const refsByKey = new Map(
     collectTouchedTextModelRefs({
       config: validationRosterConfig,
@@ -637,12 +613,10 @@ export async function checkTouchedTextModelRefs(params: {
     // Compare effective owners independently: an agent can override an alias
     // even when it inherits the unchanged default reference text.
     const previousRefsByOwner = new Map(
-      validationPreviousRosterConfig
-        ? expandInheritedDefaultRefs(
-            validationPreviousRosterConfig,
-            collectTextModelRefs(validationPreviousRosterConfig),
-          ).map((ref) => [scopedModelRefComparisonKey(validationPreviousRosterConfig, ref), ref])
-        : [],
+      expandInheritedDefaultRefs(
+        validationPreviousRosterConfig,
+        collectTextModelRefs(validationPreviousRosterConfig),
+      ).map((ref) => [scopedModelRefComparisonKey(validationPreviousRosterConfig, ref), ref]),
     );
     for (const ref of expandInheritedDefaultRefs(
       validationRosterConfig,
@@ -654,10 +628,9 @@ export async function checkTouchedTextModelRefs(params: {
         continue;
       }
       const previousRef = previousRefsByOwner.get(key);
-      const previousResolved =
-        previousRef && validationPreviousRosterConfig
-          ? resolveCanonicalModelRef(validationPreviousRosterConfig, previousRef)
-          : undefined;
+      const previousResolved = previousRef
+        ? resolveCanonicalModelRef(validationPreviousRosterConfig, previousRef)
+        : undefined;
       const nextResolved = resolveCanonicalModelRef(validationRosterConfig, ref);
       if (
         previousRef?.value !== ref.value ||

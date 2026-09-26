@@ -23,6 +23,7 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { createDeepSeekV4OpenAICompatibleThinkingWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import { PROVIDER_LABELS } from "openclaw/plugin-sdk/provider-usage";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   applyXiaomiConnectionConfig,
   applyXiaomiTokenPlanConfig,
@@ -68,40 +69,20 @@ const XIAOMI_PROVIDER_HOOKS = {
     Boolean(resolveMiMoThinkingProfile(modelId)),
 };
 
-function trimConfiguredBaseUrl(
-  ctx: ProviderCatalogContext,
-  providerId: string,
-): string | undefined {
-  const configuredProvider = ctx.config.models?.providers?.[providerId];
-  const baseUrl =
-    typeof configuredProvider?.baseUrl === "string" ? configuredProvider.baseUrl.trim() : "";
-  return baseUrl || undefined;
-}
-
-function hasConfiguredProviderEntry(ctx: ProviderCatalogContext, providerId: string): boolean {
-  const configuredProvider = ctx.config.models?.providers?.[providerId];
-  return Boolean(configuredProvider && typeof configuredProvider === "object");
-}
-
 async function resolveXiaomiCatalog(params: {
   ctx: ProviderCatalogContext;
   providerId: string;
   buildProvider: () => ReturnType<typeof buildXiaomiProvider>;
-  requireConfiguredProvider?: boolean;
-  requireBaseUrl?: boolean;
+  requiresRegion: boolean;
 }) {
   const auth = params.ctx.resolveProviderApiKey(params.providerId);
   if (!auth.apiKey) {
     return null;
   }
-  if (
-    params.requireConfiguredProvider === true &&
-    !hasConfiguredProviderEntry(params.ctx, params.providerId)
-  ) {
-    return null;
-  }
-  const explicitBaseUrl = trimConfiguredBaseUrl(params.ctx, params.providerId);
-  if (params.requireBaseUrl === true && !explicitBaseUrl) {
+  const explicitBaseUrl = normalizeOptionalString(
+    params.ctx.config.models?.providers?.[params.providerId]?.baseUrl,
+  );
+  if (params.requiresRegion && !explicitBaseUrl) {
     return null;
   }
   return await buildOpenAICompatibleLiveProviderCatalog({
@@ -157,10 +138,6 @@ function assertCompatibleXiaomiKey(params: {
   }
 }
 
-function resolveProfileId(providerId: string): string {
-  return `${providerId}:default`;
-}
-
 async function runXiaomiApiKeyAuth(
   ctx: ProviderAuthContext,
   params: {
@@ -173,7 +150,7 @@ async function runXiaomiApiKeyAuth(
     applyConfig: (cfg: OpenClawConfig) => OpenClawConfig;
   },
 ): Promise<ProviderAuthResult> {
-  const profileId = resolveProfileId(params.providerId);
+  const profileId = `${params.providerId}:default`;
   const { apiKey, input, mode } = await captureProviderApiKey(ctx, {
     token:
       normalizeOptionalSecretInput(ctx.opts?.[params.optionKey]) ??
@@ -234,7 +211,7 @@ async function runXiaomiApiKeyAuthNonInteractive(
     expectedKind: params.expectedKind,
   });
 
-  const profileId = resolveProfileId(params.providerId);
+  const profileId = `${params.providerId}:default`;
   if (
     !(await persistProviderApiKey(ctx, profileId, {
       provider: params.providerId,
@@ -335,8 +312,7 @@ export default definePluginEntry({
               ctx,
               providerId: provider.id,
               buildProvider: provider.buildProvider,
-              requireConfiguredProvider: provider.requiresRegion,
-              requireBaseUrl: provider.requiresRegion,
+              requiresRegion: provider.requiresRegion,
             }),
         },
         staticCatalog: {

@@ -27,11 +27,10 @@ export function recentPlaces(
     if (!folder || execNode || folder === opts.workspace || !opts.allowGatewayFolder(folder)) {
       continue;
     }
-    const key = folder;
-    if (seen.has(key)) {
+    if (seen.has(folder)) {
       continue;
     }
-    seen.add(key);
+    seen.add(folder);
     places.push({ folder });
     if (places.length >= 4) {
       break;

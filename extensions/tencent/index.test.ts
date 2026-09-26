@@ -362,6 +362,7 @@ describe("tencent provider plugin", () => {
       baseUrl: "https://tokenhub.tencentmaas.com/v1",
     });
 
+    model.compat = { ...model.compat, supportsStore: false };
     const highPayload = captureTencentPayload({
       provider,
       model,
@@ -373,9 +374,27 @@ describe("tencent provider plugin", () => {
       reasoning: "none",
     });
 
-    expect(highPayload?.reasoning_effort).toBe("high");
-    expect(nonePayload?.reasoning_effort).toBe("none");
+    expect(JSON.stringify(highPayload)).toBe(
+      '{"model":"hy3","messages":[],"stream":true,"stream_options":{"include_usage":true},"max_completion_tokens":64000,"reasoning_effort":"high"}',
+    );
+    expect(JSON.stringify(nonePayload)).toBe(
+      '{"model":"hy3","messages":[],"stream":true,"stream_options":{"include_usage":true},"max_completion_tokens":64000,"reasoning_effort":"none"}',
+    );
   });
+
+  it.each(["constructor", "__proto__"])(
+    "does not treat inherited object key %s as a Tencent effort override",
+    async (reasoning) => {
+      const provider = await getTokenHubProvider();
+      const model = hyReasoningModel({
+        provider: "tencent-tokenhub",
+        id: "hy3",
+        baseUrl: "https://tokenhub.tencentmaas.com/v1",
+      });
+      const payload = captureTencentPayload({ provider, model, reasoning });
+      expect(payload?.reasoning_effort).toBe("none");
+    },
+  );
 
   it("keeps minimal reasoning enabled for TokenHub and TokenPlan hy3", async () => {
     const tokenHubProvider = await getTokenHubProvider();

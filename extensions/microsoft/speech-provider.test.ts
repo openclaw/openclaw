@@ -329,3 +329,24 @@ describe("buildMicrosoftSpeechProvider", () => {
     });
   }
 });
+
+it("preserves inherited Microsoft Talk settings and filters blank request overrides", () => {
+  const provider = buildMicrosoftSpeechProvider();
+  const params = { voiceId: " ", outputFormat: " ogg-24khz-16bit-mono-opus " };
+  const talk = provider.resolveTalkConfig?.({
+    cfg: {},
+    baseTtsConfig: { providers: { microsoft: { voice: "base-voice", pitch: "+10Hz" } } },
+    talkProviderConfig: { ...params, pitch: " ", rate: " +20% ", timeoutMs: 0 },
+    timeoutMs: 1000,
+  });
+  expect(talk).toMatchObject({
+    voice: "base-voice",
+    pitch: "+10Hz",
+    rate: "+20%",
+    outputFormat: "ogg-24khz-16bit-mono-opus",
+    timeoutMs: 0,
+  });
+  expect(provider.resolveTalkOverrides?.({ talkProviderConfig: {}, params })).toStrictEqual({
+    outputFormat: "ogg-24khz-16bit-mono-opus",
+  });
+});

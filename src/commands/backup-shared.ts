@@ -110,23 +110,14 @@ type BackupAssetCandidate = {
   exists: boolean;
 };
 
-function backupAssetPriority(kind: BackupAssetKind): number {
-  switch (kind) {
-    case "state":
-      return 0;
-    case "config":
-      return 1;
-    case "credentials":
-      return 2;
-    case "workspace":
-      return 3;
-    case "agent":
-      return 4;
-    case "managed skill":
-      return 5;
-  }
-  throw new Error("Unsupported backup asset kind");
-}
+const BACKUP_ASSET_PRIORITY = {
+  state: 0,
+  config: 1,
+  credentials: 2,
+  workspace: 3,
+  agent: 4,
+  "managed skill": 5,
+} satisfies Record<BackupAssetKind, number>;
 
 /** Format a filesystem-safe local timestamp with explicit UTC offset for backup names. */
 function formatBackupArchiveTimestamp(
@@ -462,7 +453,7 @@ function compareCandidates(left: BackupAssetCandidate, right: BackupAssetCandida
   if (depthDelta !== 0) {
     return depthDelta;
   }
-  const priorityDelta = backupAssetPriority(left.kind) - backupAssetPriority(right.kind);
+  const priorityDelta = BACKUP_ASSET_PRIORITY[left.kind] - BACKUP_ASSET_PRIORITY[right.kind];
   if (priorityDelta !== 0) {
     return priorityDelta;
   }

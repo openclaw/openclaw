@@ -12,11 +12,7 @@ import type {
 } from "./prepared-model-runtime.types.js";
 
 const manifestCatalogMock = vi.fn((): ModelCatalogEntry[] => []);
-const scopedStaticMock = vi.fn(async (): Promise<ModelCatalogSnapshot> => ({
-  entries: [],
-  routeVariants: [],
-}));
-const scopedLiveMock = vi.fn(async (): Promise<ModelCatalogSnapshot> => ({
+const scopedCatalogMock = vi.fn(async (): Promise<ModelCatalogSnapshot> => ({
   entries: [],
   routeVariants: [],
 }));
@@ -47,8 +43,7 @@ vi.mock("./prepared-model-runtime.js", async (importOriginal) => ({
   }),
 }));
 vi.mock("./prepared-model-runtime.scoped-catalog.js", () => ({
-  prepareScopedReadOnlyModelCatalog: () => scopedStaticMock(),
-  prepareScopedReadOnlyLiveModelCatalog: () => scopedLiveMock(),
+  prepareScopedReadOnlyModelCatalog: () => scopedCatalogMock(),
 }));
 
 function owner(config: OpenClawConfig, entries: ModelCatalogEntry[]): PreparedModelRuntimeSnapshot {
@@ -87,8 +82,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     manifestCatalogMock.mockReturnValue([]);
-    scopedStaticMock.mockResolvedValue({ entries: [], routeVariants: [] });
-    scopedLiveMock.mockResolvedValue({ entries: [], routeVariants: [] });
+    scopedCatalogMock.mockResolvedValue({ entries: [], routeVariants: [] });
     publishedSnapshotMock.mockReturnValue(undefined);
     preparedSnapshotMock.mockImplementation(async (input) => {
       const published = publishedSnapshotMock(input);
@@ -135,7 +129,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
       };
       publishedSnapshotMock.mockReturnValue(snapshot);
       preparedSnapshotMock.mockResolvedValue(snapshot);
-      scopedStaticMock.mockResolvedValue({
+      scopedCatalogMock.mockResolvedValue({
         entries: [{ ...missingEntry, reasoning: true, input: ["text", "image"] }],
         routeVariants: [],
       });
@@ -155,8 +149,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
         expect(catalog).toEqual([missingEntry]);
       }
       expect(manifestCatalogMock).not.toHaveBeenCalled();
-      expect(scopedStaticMock).not.toHaveBeenCalled();
-      expect(scopedLiveMock).not.toHaveBeenCalled();
+      expect(scopedCatalogMock).not.toHaveBeenCalled();
     },
   );
 
@@ -197,8 +190,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
       expect(catalog).toEqual([completedEntry]);
       expect(loadFullModelCatalog).not.toHaveBeenCalled();
       expect(manifestCatalogMock).not.toHaveBeenCalled();
-      expect(scopedStaticMock).not.toHaveBeenCalled();
-      expect(scopedLiveMock).not.toHaveBeenCalled();
+      expect(scopedCatalogMock).not.toHaveBeenCalled();
       expect(acquireSnapshotMock).not.toHaveBeenCalled();
     },
   );
@@ -218,8 +210,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
     expect(acquireSnapshotMock).not.toHaveBeenCalled();
     expect(releaseSnapshotMock).not.toHaveBeenCalled();
     expect(manifestCatalogMock).not.toHaveBeenCalled();
-    expect(scopedStaticMock).not.toHaveBeenCalled();
-    expect(scopedLiveMock).not.toHaveBeenCalled();
+    expect(scopedCatalogMock).not.toHaveBeenCalled();
   });
 
   it("rejects an owner whose configuration was replaced", async () => {
@@ -230,8 +221,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
     await expect(
       loadProviderScopedThinkingCatalog({ config, provider: entry.provider, model: entry.id }),
     ).rejects.toBeInstanceOf(PreparedModelCatalogConfigReplacedError);
-    expect(scopedStaticMock).not.toHaveBeenCalled();
-    expect(scopedLiveMock).not.toHaveBeenCalled();
+    expect(scopedCatalogMock).not.toHaveBeenCalled();
   });
 
   it("keeps native harness observations available without a published owner", async () => {
@@ -242,7 +232,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
       loadProviderScopedThinkingCatalog({ config: {}, provider: entry.provider, model: entry.id }),
     ).resolves.toEqual([nativeEntry]);
     expect(acquireSnapshotMock).not.toHaveBeenCalled();
-    expect(scopedLiveMock).not.toHaveBeenCalled();
+    expect(scopedCatalogMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -298,8 +288,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
     );
     expect(acquireSnapshotMock).not.toHaveBeenCalled();
     expect(manifestCatalogMock).not.toHaveBeenCalled();
-    expect(scopedStaticMock).not.toHaveBeenCalled();
-    expect(scopedLiveMock).not.toHaveBeenCalled();
+    expect(scopedCatalogMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -340,8 +329,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
       expect(catalog).toEqual([]);
     }
     expect(manifestCatalogMock).not.toHaveBeenCalled();
-    expect(scopedStaticMock).not.toHaveBeenCalled();
-    expect(scopedLiveMock).not.toHaveBeenCalled();
+    expect(scopedCatalogMock).not.toHaveBeenCalled();
   });
 
   it("returns the completed catalog to nonblocking readers without a refresh", async () => {

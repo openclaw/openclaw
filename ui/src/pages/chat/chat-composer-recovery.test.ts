@@ -48,8 +48,8 @@ function mount(
     assistantAgentId: "main",
   });
   controller.attach(state);
-  controller.restoreComposer();
-  controller.startComposerPersistence();
+  controller.composerPersistence.restore();
+  controller.composerPersistence.start();
   disposals.push(() => controller.hostDisconnected());
   return { state, controller, context };
 }
@@ -113,14 +113,14 @@ describe("pending send composer ownership", () => {
         owner: () => transport.client,
         region: () => region,
         presented: visible,
-        pause: () => pane.controller.pauseComposerPersistence(),
+        pause: () => pane.controller.composerPersistence.stop(),
         takeAttachmentReads: () => pane.controller.takeAttachmentReads(),
         adoptAttachmentReads: (reads) => pane.controller.adoptAttachmentReads(reads, pane.state),
         resume: (restore) => {
           if (restore) {
-            pane.controller.restoreComposer();
+            pane.controller.composerPersistence.restore();
           }
-          pane.controller.startComposerPersistence();
+          pane.controller.composerPersistence.start();
         },
       });
       handoff.claim();
@@ -135,7 +135,7 @@ describe("pending send composer ownership", () => {
     const pending = source.state.chatQueue[0]!;
     const reopen = () => mount(transport, source.context, source.state.sessionKey);
     if (lifecycle === "evicted" || lifecycle === "replaced") {
-      source.controller.persistComposerForEviction();
+      source.controller.composerPersistence.persistForRouteSwitchResult();
       source.controller.hostDisconnected();
     }
     let replacement: typeof source | undefined;
@@ -193,7 +193,7 @@ describe("pending send composer ownership", () => {
     await vi.waitFor(() =>
       expect(transport.request.mock.calls.some(([method]) => method === "chat.send")).toBe(true),
     );
-    source.controller.persistComposerForEviction();
+    source.controller.composerPersistence.persistForRouteSwitchResult();
     source.controller.hostDisconnected();
     acknowledgment.resolve({ status: "ok" });
     await send;

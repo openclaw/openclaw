@@ -142,11 +142,6 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, UR
              .callIsActive,
              .dataNotAllowed:
             return .endpointUnreachable
-        case .networkConnectionLost,
-             .secureConnectionFailed,
-             .cannotParseResponse,
-             .badServerResponse:
-            return .tlsUnavailable
         default:
             return .tlsUnavailable
         }

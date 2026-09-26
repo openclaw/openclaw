@@ -133,10 +133,7 @@ function throwUnstageableSelectedGeminiProfile(
 function requireGeminiOAuthCredential(
   credential: GeminiAuthProfileCredential | undefined,
 ): GeminiOAuthCredential | null {
-  if (!credential) {
-    return null;
-  }
-  if (credential.type !== "oauth") {
+  if (credential?.type !== "oauth") {
     return null;
   }
   if (credential.provider !== GEMINI_CLI_PROVIDER_ID) {
@@ -171,10 +168,7 @@ function requireGeminiOAuthCredential(
 function requireGeminiApiKeyCredential(
   credential: GeminiAuthProfileCredential | undefined,
 ): GeminiApiKeyCredential | null {
-  if (!credential) {
-    return null;
-  }
-  if (credential.type !== "api_key") {
+  if (credential?.type !== "api_key") {
     return null;
   }
   if (
@@ -256,9 +250,7 @@ async function buildGeminiCliSystemSettings(
   if (selectedType) {
     const security = isRecord(settings.security) ? { ...settings.security } : {};
     const auth = isRecord(security.auth) ? { ...security.auth } : {};
-    const enforcedType = normalizeOptionalString(
-      typeof auth.enforcedType === "string" ? auth.enforcedType : undefined,
-    );
+    const enforcedType = normalizeOptionalString(auth.enforcedType);
     if (enforcedType && enforcedType !== selectedType) {
       throw new Error(
         `Gemini CLI system settings enforce ${enforcedType} auth, but the selected OpenClaw profile requires ${selectedType}.`,

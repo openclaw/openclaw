@@ -18,7 +18,7 @@ import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { buildGatewayConnectionDetails, formatGatewayTransportErrorJson } from "../gateway/call.js";
 import type {
-  DevicePairingList as GatewayDevicePairingList,
+  DevicePairingList,
   DeviceTokenSummary,
   PairedDevice,
   PendingDevice,
@@ -64,8 +64,6 @@ type DevicesRpcOpts = {
   scopes?: boolean;
   name?: string;
 };
-
-type DevicePairingList = Partial<GatewayDevicePairingList>;
 
 type ApprovePairingGatewayContext = {
   originalRequest: PendingDevice | null;
@@ -575,7 +573,7 @@ async function resolveTokenManagementScopes(
     return [ADMIN_SCOPE];
   }
   const list = parseDevicePairingList(await callGatewayCli("device.pair.list", opts, {}));
-  const paired = list.paired?.find((device) => device.deviceId === target.deviceId);
+  const paired = list.paired.find((device) => device.deviceId === target.deviceId);
   if (!paired) {
     // Pairing-scoped device-token lists expose only self; a hidden target needs
     // cross-device admin authority. The server still validates existence and access.
@@ -752,7 +750,7 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
     defaultRuntime.writeJson(list);
     return;
   }
-  if (list.pending?.length) {
+  if (list.pending.length) {
     const tableWidth = getTerminalTableWidth();
     defaultRuntime.log(`${theme.heading("Pending")} ${theme.muted(`(${list.pending.length})`)}`);
     defaultRuntime.log(
@@ -787,7 +785,7 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
       }).trimEnd(),
     );
   }
-  if (list.paired?.length) {
+  if (list.paired.length) {
     const tableWidth = getTerminalTableWidth();
     const rows = list.paired.map((device) => ({
       Device: sanitizeForLog(
@@ -827,7 +825,7 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
       defaultRuntime.log(theme.warn(formatNodeApprovalNotice(notice)));
     }
   }
-  if (!list.pending?.length && !list.paired?.length) {
+  if (!list.pending.length && !list.paired.length) {
     defaultRuntime.log(theme.muted("No device pairing entries."));
   }
 }
@@ -885,8 +883,7 @@ export async function runDevicesClearCommand(opts: DevicesRpcOpts): Promise<void
   const list = parseDevicePairingList(await callGatewayCli("device.pair.list", opts, {}));
   const removedDeviceIds: string[] = [];
   const rejectedRequestIds: string[] = [];
-  const paired = Array.isArray(list.paired) ? list.paired : [];
-  for (const device of paired) {
+  for (const device of list.paired) {
     const deviceId = normalizeOptionalString(device.deviceId) ?? "";
     if (!deviceId) {
       continue;
@@ -895,8 +892,7 @@ export async function runDevicesClearCommand(opts: DevicesRpcOpts): Promise<void
     removedDeviceIds.push(deviceId);
   }
   if (opts.pending) {
-    const pending = Array.isArray(list.pending) ? list.pending : [];
-    for (const req of pending) {
+    for (const req of list.pending) {
       const requestId = normalizeOptionalString(req.requestId) ?? "";
       if (!requestId) {
         continue;

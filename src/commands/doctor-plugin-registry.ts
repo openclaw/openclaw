@@ -188,12 +188,13 @@ function listStaleManagedNpmBundledPlugins(
       if (!pluginId || pluginId !== bundled.pluginId) {
         continue;
       }
+      const version = readPackageVersion(packageDir);
       stale.push({
         pluginId,
         packageName,
         packageDir,
         npmRoot,
-        ...(readPackageVersion(packageDir) ? { version: readPackageVersion(packageDir) } : {}),
+        ...(version ? { version } : {}),
       });
     }
   }
@@ -244,17 +245,12 @@ function removeManagedNpmDependency(params: {
   const packageJson = readJsonObject(npmPackageJsonPath) ?? {};
   const dependencies = readStringMap(packageJson.dependencies);
   delete dependencies[params.packageName];
-  const nextPackageJson =
-    Object.keys(dependencies).length === 0
-      ? (() => {
-          const { dependencies: _dependencies, ...rest } = packageJson;
-          return rest;
-        })()
-      : {
-          ...packageJson,
-          dependencies,
-        };
-  writeJsonTarget(npmPackageJsonPath, nextPackageJson);
+  if (Object.keys(dependencies).length === 0) {
+    delete packageJson.dependencies;
+  } else {
+    packageJson.dependencies = dependencies;
+  }
+  writeJsonTarget(npmPackageJsonPath, packageJson);
   removeManagedNpmPackageLockDependency(params);
   fs.rmSync(params.packageDir, { recursive: true, force: true });
   const scopeDir = path.dirname(params.packageDir);
@@ -625,10 +621,6 @@ export async function maybeRepairPluginRegistryState(
   // This refresh owns the next write, so it must start from the durable ledger.
   clearLoadInstalledPluginIndexInstallRecordsCache();
 
-  const migrationParams = {
-    ...params,
-    config: params.config,
-  };
   const staleManagedNpmBundledPluginRepair = maybeRepairStaleManagedNpmBundledPlugins(params);
   const removedStaleLocalBundledPluginIds =
     await maybeRepairStaleLocalBundledPluginInstallRecords(params);
@@ -660,7 +652,7 @@ export async function maybeRepairPluginRegistryState(
   );
   if (preflight.action !== "skip-existing") {
     const result = await migratePluginRegistryForDoctor({
-      ...migrationParams,
+      ...params,
       installRecords,
     });
     if (result.migrated) {
@@ -678,7 +670,7 @@ export async function maybeRepairPluginRegistryState(
   }
 
   const index = await refreshPluginRegistry({
-    ...migrationParams,
+    ...params,
     reason: "migration",
     installRecords,
   });

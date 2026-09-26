@@ -1,4 +1,5 @@
 import { expectDefined, isRecord } from "@openclaw/normalization-core";
+import { isUiGlobalSessionKey } from "../../lib/sessions/session-key.ts";
 import type { ChatSplitColumn, ChatSplitLayout, ChatSplitPane } from "./split-layout-types.ts";
 
 export function normalizeSplitLayoutWeights(weights: number[]): number[] {
@@ -109,7 +110,7 @@ export function normalizeChatSplitLayout(value: unknown): ChatSplitLayout | unde
     ),
   );
   const allPanes = columns.flatMap((column) => column.panes);
-  if (allPanes.length < 2) {
+  if (allPanes.length < 2 && !isUiGlobalSessionKey(allPanes[0]?.sessionKey)) {
     return undefined;
   }
   const requestedActivePaneId =

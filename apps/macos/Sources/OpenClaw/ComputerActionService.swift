@@ -253,12 +253,7 @@ final class ComputerActionExecutionQueue {
             }
             self.currentActionTask = operationTask
 
-            let outcome: Result<OpenClawComputerActResult, Error>
-            do {
-                outcome = try await .success(operationTask.value)
-            } catch {
-                outcome = .failure(error)
-            }
+            let outcome = await operationTask.result
 
             let cancellation = queued.cancellationState.finish()
             if cancellation.needsRelease {

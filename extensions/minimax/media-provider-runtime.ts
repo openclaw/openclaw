@@ -1,5 +1,13 @@
 import type { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import type { fetchWithTimeoutGuarded, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowHttpError,
+  executeProviderOperationWithRetry,
+  fetchWithTimeoutGuarded,
+  type postJsonRequest,
+  type ProviderOperationRetryStage,
+  type ProviderOperationTimeoutMs,
+  type TransientProviderRetryConfig,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -47,7 +55,7 @@ export function normalizeMinimaxHexAudio(data: string, label: string): string {
   return normalized;
 }
 
-export function resolveMinimaxGuardedRequestOptions(
+function resolveMinimaxGuardedRequestOptions(
   policy: MinimaxRequestPolicy,
 ): Parameters<typeof fetchWithTimeoutGuarded>[4] | undefined {
   return policy.allowPrivateNetwork || policy.dispatcherPolicy
@@ -56,4 +64,41 @@ export function resolveMinimaxGuardedRequestOptions(
         ...(policy.dispatcherPolicy ? { dispatcherPolicy: policy.dispatcherPolicy } : {}),
       }
     : undefined;
+}
+
+export async function fetchMinimaxResponse(params: {
+  stage: ProviderOperationRetryStage;
+  url: string;
+  init?: RequestInit;
+  timeoutMs?: ProviderOperationTimeoutMs;
+  fetchFn: typeof fetch;
+  requestFailedMessage: string;
+  policy: MinimaxRequestPolicy;
+  retry?: TransientProviderRetryConfig;
+}) {
+  return await executeProviderOperationWithRetry({
+    provider: "minimax",
+    stage: params.stage,
+    retry: params.retry,
+    operation: async () => {
+      const timeoutMs =
+        typeof params.timeoutMs === "function" ? params.timeoutMs() : params.timeoutMs;
+      const result = await fetchWithTimeoutGuarded(
+        params.url,
+        params.init ?? {},
+        typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+          ? timeoutMs
+          : undefined,
+        params.fetchFn,
+        resolveMinimaxGuardedRequestOptions(params.policy),
+      );
+      try {
+        await assertOkOrThrowHttpError(result.response, params.requestFailedMessage);
+      } catch (error) {
+        await result.release();
+        throw error;
+      }
+      return result;
+    },
+  });
 }

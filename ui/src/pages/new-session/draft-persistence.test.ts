@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
@@ -112,8 +113,8 @@ afterEach(() => {
 describe("NewSessionDraftPersistence restore race", () => {
   it("preserves a newer edit when stored attachment hydration succeeds late", async () => {
     const flow = createFlow();
-    const hydrationEntered = Promise.withResolvers<void>();
-    const hydration = Promise.withResolvers<[]>();
+    const hydrationEntered = createDeferred();
+    const hydration = createDeferred<[]>();
     const restoreSelection = vi.fn();
     flow.draftPersistence.modelSelection = {
       read: () => undefined,

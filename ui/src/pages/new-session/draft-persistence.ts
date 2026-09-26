@@ -373,12 +373,11 @@ export class NewSessionDraftPersistence {
         reportDurableComposerStorageError(scope, this.onStorageError);
         return;
       }
-      const currentRevision =
-        (current.status === "found" ? current.draft.revision : current.revision) ?? 0;
-      const currentWriteId = current.status === "found" ? current.draft.writeId : current.writeId;
       if (current.status !== "found" || !submitted.writeIds.has(current.draft.writeId)) {
         return;
       }
+      const currentRevision = current.draft.revision;
+      const currentWriteId = current.draft.writeId;
       const revision = nextDraftRevision(currentRevision);
       const writeId = `clear:${revision}`;
       const { result } = await writeDurableComposerSnapshot({
@@ -542,22 +541,19 @@ export class NewSessionDraftPersistence {
   ): boolean {
     const current = this.read();
     const currentScope = this.scope();
-    if (
-      generation !== this.restoreGeneration ||
-      mutationGeneration !== this.mutationGeneration ||
-      !currentScope ||
-      durableComposerScopeIdentity(scope) !== durableComposerScopeIdentity(currentScope) ||
-      signature !==
+    return (
+      generation === this.restoreGeneration &&
+      mutationGeneration === this.mutationGeneration &&
+      currentScope !== null &&
+      durableComposerScopeIdentity(scope) === durableComposerScopeIdentity(currentScope) &&
+      signature ===
         chatAttachmentDraftSignature(
           current.message,
           current.attachments,
           undefined,
           current.mentions,
         )
-    ) {
-      return false;
-    }
-    return true;
+    );
   }
 
   private async restoreScope(

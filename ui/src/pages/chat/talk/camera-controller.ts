@@ -1,5 +1,3 @@
-import type { ReactiveController } from "lit";
-
 type RealtimeTalkCameraControllerOptions = {
   acquire: (deviceId: string | undefined, signal: AbortSignal) => Promise<MediaStream>;
   getDeviceId: () => string | undefined;
@@ -10,7 +8,7 @@ type RealtimeTalkCameraControllerOptions = {
   onReleased?: () => void;
 };
 
-export class RealtimeTalkCameraController implements ReactiveController {
+export class RealtimeTalkCameraController {
   stream: MediaStream | null = null;
   video: HTMLVideoElement | null = null;
   private setupController: AbortController | null = null;
@@ -116,9 +114,5 @@ export class RealtimeTalkCameraController implements ReactiveController {
       this.video = null;
     }
     this.options.onStream(null);
-  }
-
-  hostDisconnected(): void {
-    this.release();
   }
 }

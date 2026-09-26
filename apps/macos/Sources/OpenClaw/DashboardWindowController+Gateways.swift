@@ -13,15 +13,6 @@ enum DashboardGatewaysRequest: Equatable {
     case openSettings
 }
 
-@MainActor
-final class DashboardGatewaysMessageHandler: NSObject, WKScriptMessageHandler {
-    weak var owner: DashboardWindowController?
-
-    func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
-        self.owner?.receiveGatewaysMessage(message)
-    }
-}
-
 extension DashboardWindowController {
     static let gatewaysMessageHandlerName = "openclawGateways"
 
@@ -131,12 +122,7 @@ extension DashboardWindowController {
 
     func updateGatewaySnapshot(_ snapshot: DashboardGatewaySnapshot) {
         self.gatewaySnapshot = snapshot
-        let controller = self.webView.configuration.userContentController
-        controller.removeAllUserScripts()
-        Self.installNativeChromeScript(into: controller, url: self.currentURL)
-        Self.installNativeAppLinkScript(into: controller, url: self.currentURL)
-        Self.installNativeGatewaysScript(into: controller, url: self.currentURL, snapshot: snapshot)
-        Self.installNativeAuthScript(into: controller, url: self.currentURL, auth: self.auth)
+        self.refreshNativeScripts()
         self.webView.evaluateJavaScript(Self.scopedDashboardScript(
             Self.nativeGatewaysScriptSource(snapshot: snapshot, dispatch: true), url: self.currentURL))
     }

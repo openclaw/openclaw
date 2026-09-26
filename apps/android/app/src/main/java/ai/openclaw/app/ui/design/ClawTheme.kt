@@ -33,9 +33,6 @@ internal val clawFontFamily =
     Font(resId = R.font.manrope_700_bold, weight = FontWeight.Bold),
   )
 
-/**
- * App color tokens consumed by ClawTheme and bridged into Material components.
- */
 @Immutable
 internal data class ClawColors(
   val canvas: Color,
@@ -65,9 +62,6 @@ internal data class ClawColors(
   val codeBorder: Color,
 )
 
-/**
- * App spacing and control-size scale for Compose screens and shared controls.
- */
 @Immutable
 internal data class ClawSpacing(
   val xxxs: Dp = 4.dp,
@@ -88,9 +82,6 @@ internal data class ClawSpacing(
   val icon: Dp = 18.dp,
 )
 
-/**
- * Radius scale for rows, panels, controls, sheets, and status pills.
- */
 @Immutable
 internal data class ClawRadii(
   val row: Dp = 6.dp,
@@ -338,9 +329,6 @@ private val LocalClawSpacing = staticCompositionLocalOf { ClawSpacing() }
 private val LocalClawRadii = staticCompositionLocalOf { ClawRadii() }
 private val LocalClawTypography = staticCompositionLocalOf { clawTypography(clawFontFamily) }
 
-/**
- * Composition-local access point for OpenClaw Android design tokens.
- */
 internal object ClawTheme {
   val colors: ClawColors
     @Composable
@@ -363,9 +351,6 @@ internal object ClawTheme {
     get() = LocalClawTypography.current
 }
 
-/**
- * Installs OpenClaw design tokens and maps them into MaterialTheme for Material3 controls.
- */
 @Composable
 internal fun ClawDesignTheme(
   dark: Boolean = true,
@@ -396,73 +381,19 @@ internal fun ClawDesignTheme(
   }
 }
 
-private fun clawTypography(fontFamily: FontFamily) =
-  ClawTypography(
-    display =
-      TextStyle(
-        fontFamily = fontFamily,
-        fontWeight = FontWeight.Bold,
-        fontSize = 22.sp,
-        lineHeight = 28.sp,
-        letterSpacing = 0.sp,
-      ),
-    title =
-      TextStyle(
-        fontFamily = fontFamily,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 17.sp,
-        lineHeight = 22.sp,
-        letterSpacing = 0.sp,
-      ),
-    section =
-      TextStyle(
-        fontFamily = fontFamily,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 14.sp,
-        lineHeight = 18.sp,
-        letterSpacing = 0.sp,
-      ),
-    body =
-      TextStyle(
-        fontFamily = fontFamily,
-        fontWeight = FontWeight.Medium,
-        fontSize = 14.sp,
-        lineHeight = 19.sp,
-        letterSpacing = 0.sp,
-      ),
-    label =
-      TextStyle(
-        fontFamily = fontFamily,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 14.sp,
-        lineHeight = 18.sp,
-        letterSpacing = 0.sp,
-      ),
-    caption =
-      TextStyle(
-        fontFamily = fontFamily,
-        fontWeight = FontWeight.Medium,
-        fontSize = 12.sp,
-        lineHeight = 16.sp,
-        letterSpacing = 0.sp,
-      ),
-    captionSmall =
-      TextStyle(
-        fontFamily = fontFamily,
-        fontWeight = FontWeight.Medium,
-        fontSize = 11.sp,
-        lineHeight = 14.sp,
-        letterSpacing = 0.4.sp,
-      ),
-    mono =
-      TextStyle(
-        fontFamily = FontFamily.Monospace,
-        fontWeight = FontWeight.Medium,
-        fontSize = 13.sp,
-        lineHeight = 18.sp,
-        letterSpacing = 0.sp,
-      ),
+private fun clawTypography(fontFamily: FontFamily): ClawTypography {
+  val base = TextStyle(fontFamily = fontFamily, fontWeight = FontWeight.Medium, letterSpacing = 0.sp)
+  return ClawTypography(
+    display = base.copy(fontWeight = FontWeight.Bold, fontSize = 22.sp, lineHeight = 28.sp),
+    title = base.copy(fontWeight = FontWeight.SemiBold, fontSize = 17.sp, lineHeight = 22.sp),
+    section = base.copy(fontWeight = FontWeight.SemiBold, fontSize = 14.sp, lineHeight = 18.sp),
+    body = base.copy(fontSize = 14.sp, lineHeight = 19.sp),
+    label = base.copy(fontWeight = FontWeight.SemiBold, fontSize = 14.sp, lineHeight = 18.sp),
+    caption = base.copy(fontSize = 12.sp, lineHeight = 16.sp),
+    captionSmall = base.copy(fontSize = 11.sp, lineHeight = 14.sp, letterSpacing = 0.4.sp),
+    mono = base.copy(fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 18.sp),
   )
+}
 
 private fun materialTypography(type: ClawTypography) =
   Typography(
@@ -477,15 +408,13 @@ private fun materialTypography(type: ClawTypography) =
 private fun clawMaterialColorScheme(
   colors: ClawColors,
   dark: Boolean,
-) = if (dark) {
-  darkColorScheme(
-    // Material also uses primary for text actions; branded fills supply their Claw color pair.
-    primary = colors.text,
+) = // Material also uses primary for text actions; branded fills supply their Claw color pair.
+  (if (dark) darkColorScheme(primary = colors.text) else lightColorScheme(primary = colors.text)).copy(
     onPrimary = colors.canvas,
     primaryContainer = colors.accentSoft,
     onPrimaryContainer = colors.text,
     secondary = colors.secondary,
-    onSecondary = colors.canvas,
+    onSecondary = if (dark) colors.canvas else colors.primaryText,
     secondaryContainer = colors.accentSoft,
     onSecondaryContainer = colors.text,
     background = colors.canvas,
@@ -494,42 +423,14 @@ private fun clawMaterialColorScheme(
     onSurface = colors.text,
     surfaceVariant = colors.surfaceRaised,
     onSurfaceVariant = colors.textMuted,
-    surfaceContainerLowest = colors.canvas,
+    surfaceContainerLowest = if (dark) colors.canvas else colors.surface,
     surfaceContainerLow = colors.surface,
-    surfaceContainer = colors.surface,
-    surfaceContainerHigh = colors.surfaceRaised,
+    surfaceContainer = if (dark) colors.surface else colors.canvas,
+    surfaceContainerHigh = if (dark) colors.surfaceRaised else colors.surfacePressed,
     surfaceContainerHighest = colors.surfacePressed,
     outline = colors.borderStrong,
     outlineVariant = colors.border,
-    scrim = Color(0xCC05070B),
+    scrim = if (dark) Color(0xCC05070B) else Color(0x99101014),
     error = colors.danger,
     onError = colors.primaryText,
   )
-} else {
-  lightColorScheme(
-    primary = colors.text,
-    onPrimary = colors.canvas,
-    primaryContainer = colors.accentSoft,
-    onPrimaryContainer = colors.text,
-    secondary = colors.secondary,
-    onSecondary = colors.primaryText,
-    secondaryContainer = colors.accentSoft,
-    onSecondaryContainer = colors.text,
-    background = colors.canvas,
-    onBackground = colors.text,
-    surface = colors.surface,
-    onSurface = colors.text,
-    surfaceVariant = colors.surfaceRaised,
-    onSurfaceVariant = colors.textMuted,
-    surfaceContainerLowest = colors.surface,
-    surfaceContainerLow = colors.surface,
-    surfaceContainer = colors.canvas,
-    surfaceContainerHigh = colors.surfacePressed,
-    surfaceContainerHighest = colors.surfacePressed,
-    outline = colors.borderStrong,
-    outlineVariant = colors.border,
-    scrim = Color(0x99101014),
-    error = colors.danger,
-    onError = colors.primaryText,
-  )
-}

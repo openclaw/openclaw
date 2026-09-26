@@ -1,4 +1,3 @@
-// Pixverse setup module handles plugin onboarding behavior.
 import type {
   ProviderAuthContext,
   ProviderAuthMethod,
@@ -16,6 +15,7 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_PIXVERSE_REGION,
+  normalizePixVerseRegion,
   PIXVERSE_BASE_URL_BY_REGION,
   PIXVERSE_DEFAULT_VIDEO_MODEL_REF,
   PIXVERSE_PROVIDER_ID,
@@ -29,23 +29,6 @@ type PixVerseAuthResult = {
   configPatch: OpenClawConfig;
   notes: string[];
 };
-
-function normalizePixVerseRegion(value: unknown): PixVerseApiRegion | undefined {
-  const region = normalizeOptionalString(value)?.toLowerCase();
-  switch (region) {
-    case "cn":
-    case "china":
-    case "mainland":
-    case "pai":
-      return "cn";
-    case "global":
-    case "intl":
-    case "international":
-      return "international";
-    default:
-      return undefined;
-  }
-}
 
 function pixVerseRegionNote(region: PixVerseApiRegion): string {
   const label = region === "cn" ? "CN" : "International";

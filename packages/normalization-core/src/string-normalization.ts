@@ -114,10 +114,7 @@ export function normalizeCsvOrLooseStringList(value: unknown): string[] {
     return normalizeStringEntries(value);
   }
   if (typeof value === "string") {
-    return value
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    return normalizeStringEntries(value.split(","));
   }
   return [];
 }

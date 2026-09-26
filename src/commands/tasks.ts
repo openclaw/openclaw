@@ -1,6 +1,3 @@
-// Human-facing background task commands.
-// Handles task listing/show/cancel/notify/audit plus registry maintenance for tasks, flows, and sessions.
-
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
@@ -124,10 +121,6 @@ async function tryCancelGatewayOwnedTaskViaGateway(
   }
 }
 
-function configureTaskMaintenanceFromConfig(): void {
-  configureTaskRegistryMaintenance();
-}
-
 function truncate(value: string, maxChars: number) {
   return truncateWithMarker(value, maxChars, { marker: "…", reserve: 1, trimEnd: false });
 }
@@ -246,22 +239,17 @@ function toSystemAuditFindings(params: {
   });
 }
 
-/** Lists background tasks with optional runtime/status filters. */
 export async function tasksListCommand(
   opts: { json?: boolean; runtime?: string; status?: string },
   runtime: RuntimeEnv,
 ) {
   const runtimeFilter = parseCliEnumFilter(opts.runtime, "--runtime", TASK_RUNTIMES);
   const statusFilter = parseCliEnumFilter(opts.status, "--status", TASK_STATUS_FILTERS);
-  const tasks = reconcileInspectableTasks().filter((task) => {
-    if (runtimeFilter && task.runtime !== runtimeFilter) {
-      return false;
-    }
-    if (statusFilter && !matchesTaskStatusFilter(task, statusFilter)) {
-      return false;
-    }
-    return true;
-  });
+  const tasks = reconcileInspectableTasks().filter(
+    (task) =>
+      (!runtimeFilter || task.runtime === runtimeFilter) &&
+      (!statusFilter || matchesTaskStatusFilter(task, statusFilter)),
+  );
 
   if (opts.json) {
     writeRuntimeJson(runtime, {
@@ -293,7 +281,6 @@ export async function tasksListCommand(
   }
 }
 
-/** Shows one task record by id or lookup token. */
 export async function tasksShowCommand(
   opts: { json?: boolean; lookup: string },
   runtime: RuntimeEnv,
@@ -345,7 +332,6 @@ export async function tasksShowCommand(
   }
 }
 
-/** Updates a task's notification policy. */
 export async function tasksNotifyCommand(
   opts: { lookup: string; notify: TaskNotifyPolicy },
   runtime: RuntimeEnv,
@@ -370,7 +356,6 @@ export async function tasksNotifyCommand(
   );
 }
 
-/** Cancels a detached task run by lookup token. */
 export async function tasksCancelCommand(opts: { lookup: string }, runtime: RuntimeEnv) {
   const task = reconcileTaskLookupToken(opts.lookup);
   if (!task) {
@@ -471,7 +456,6 @@ export async function tasksDismissCommand(opts: { lookups: string[] }, runtime: 
   await runTaskRecoveryCommand("dismiss", opts.lookups, runtime);
 }
 
-/** Prints or serializes combined task/task-flow audit findings. */
 export async function tasksAuditCommand(
   opts: {
     json?: boolean;
@@ -485,11 +469,9 @@ export async function tasksAuditCommand(
     opts.severity,
     "--severity",
     TASK_SYSTEM_AUDIT_SEVERITIES,
-  ) as TaskSystemAuditSeverity | undefined;
-  const codeFilter = parseCliEnumFilter(opts.code, "--code", TASK_SYSTEM_AUDIT_CODES) as
-    | TaskSystemAuditCode
-    | undefined;
-  configureTaskMaintenanceFromConfig();
+  );
+  const codeFilter = parseCliEnumFilter(opts.code, "--code", TASK_SYSTEM_AUDIT_CODES);
+  configureTaskRegistryMaintenance();
   const auditResult = toSystemAuditFindings({
     severityFilter,
     codeFilter,
@@ -540,12 +522,11 @@ export async function tasksAuditCommand(
   }
 }
 
-/** Previews or applies task, task-flow, and backing session-registry maintenance. */
 export async function tasksMaintenanceCommand(
   opts: { json?: boolean; apply?: boolean },
   runtime: RuntimeEnv,
 ) {
-  configureTaskMaintenanceFromConfig();
+  configureTaskRegistryMaintenance();
   assertTaskFlowRegistryMaintenanceReady();
   const auditBefore = getInspectableTaskAuditSummary();
   const flowAuditBefore = getInspectableTaskFlowAuditSummary();

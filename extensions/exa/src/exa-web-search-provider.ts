@@ -1,5 +1,4 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Exa provider module implements model/runtime integration.
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
 import { createExaWebSearchProviderBase } from "./exa-web-search-provider.shared.js";
 

@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Channel login/logout command helpers for local config and gateway reconciliation.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveChannelAccount } from "../channels/account-resolution.js";
@@ -168,16 +167,6 @@ async function resolveChannelPluginForMode(
   };
 }
 
-function resolveAccountContext(
-  plugin: ChannelPlugin,
-  opts: ChannelAuthOptions,
-  cfg: OpenClawConfig,
-) {
-  const accountId =
-    normalizeOptionalString(opts.account) || resolveChannelDefaultAccountId({ plugin, cfg });
-  return { accountId };
-}
-
 function isChannelMissingFromGatewayRegistry(error: unknown): error is Error {
   const requestError = error as (Error & { gatewayCode?: unknown }) | undefined;
   return (
@@ -300,7 +289,8 @@ export async function runChannelLogin(
   }
   // Auth-only flow: do not mutate channel config here.
   setVerbose(Boolean(opts.verbose));
-  const { accountId } = resolveAccountContext(plugin, opts, cfg);
+  const accountId =
+    normalizeOptionalString(opts.account) || resolveChannelDefaultAccountId({ plugin, cfg });
   await login({
     cfg,
     accountId,
@@ -337,7 +327,8 @@ export async function runChannelLogout(
     );
   }
   // Prefer the live gateway so logout also stops any active channel runtime.
-  const { accountId } = resolveAccountContext(plugin, opts, cfg);
+  const accountId =
+    normalizeOptionalString(opts.account) || resolveChannelDefaultAccountId({ plugin, cfg });
   let result = await logoutViaGatewayRuntime({
     cfg,
     channelId: plugin.id,

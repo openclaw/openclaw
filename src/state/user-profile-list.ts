@@ -97,6 +97,12 @@ export function readResidentUserProfileId(
   }
   return resolveCatalogProfile(catalog.rows, profileId)?.id;
 }
+
+/** Committed canonical row identity is the revision of catalog-derived avatar facts. */
+export function readResidentUserProfileRevision(profileId: string, pathname: string) {
+  const catalog = profileCatalogs.get(pathname);
+  return catalog?.valid ? resolveCatalogProfile(catalog.rows, profileId) : undefined;
+}
 type ProfileCatalog = {
   rows: Map<string, ProfileDisplayRow>;
   identity: DatabasePathIdentity;

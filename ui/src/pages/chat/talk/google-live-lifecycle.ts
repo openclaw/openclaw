@@ -51,16 +51,8 @@ export class GoogleLiveConnectionLifecycle {
   private waiter: StartupWaiter | null = null;
   private error: Error | null = null;
 
-  get currentState(): GoogleLiveConnectionState {
-    return this.state;
-  }
-
   get isActive(): boolean {
     return this.state === "active";
-  }
-
-  get setupComplete(): boolean {
-    return this.state === "ready" || this.state === "active";
   }
 
   begin(socket: WebSocket): Promise<RealtimeTalkTransportStartResult> {

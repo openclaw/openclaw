@@ -11,7 +11,7 @@ struct DebugSettings: View {
     private let healthStore = HealthStore.shared
     @State private var launchAgentWriteDisabled = GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()
     @State private var launchAgentWriteError: String?
-    @State private var gatewayRootInput: String = GatewayProcessManager.shared.projectRootPath()
+    @State private var gatewayRootInput: String = CommandResolver.projectRootPath()
     @State private var sessionStorePath: String = SessionLoader.defaultStorePath
     @State private var sessionStoreSaveError: String?
     @State private var debugSendInFlight = false
@@ -691,7 +691,7 @@ struct DebugSettings: View {
     }
 
     private func saveRelayRoot() {
-        GatewayProcessManager.shared.setProjectRoot(path: self.gatewayRootInput)
+        CommandResolver.setProjectRoot(self.gatewayRootInput)
     }
 
     private func loadSessionStorePath() {

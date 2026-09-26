@@ -141,7 +141,7 @@ extension SettingsProTab {
             self.gatewaySetupCard
             self.pairedGatewaysCard
 
-            self.detailListCard {
+            Section {
                 SettingsDetailRow("Address", value: .verbatim(self.gatewayAddress))
                 SettingsDetailRow("Server", value: .verbatim(self.gatewayServer))
                 SettingsDetailRow(
@@ -481,7 +481,7 @@ extension SettingsProTab {
 
             self.diagnosticChecksCard
 
-            self.detailListCard {
+            Section {
                 SettingsDetailRow("Device", value: .verbatim(DeviceInfoHelper.deviceFamily()))
                 SettingsDetailRow(
                     "Platform",
@@ -585,7 +585,7 @@ extension SettingsProTab {
             }
 
             // Concise public details only; deep hardware identifiers live in Diagnostics.
-            detailListCard {
+            Section {
                 SettingsDetailRow("Device", value: .verbatim(DeviceInfoHelper.deviceFamily()))
                 SettingsDetailRow(
                     "iOS",

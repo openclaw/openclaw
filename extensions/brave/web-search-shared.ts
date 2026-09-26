@@ -8,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-/** Canonical config path for the Brave Search API key. */
 const BRAVE_CREDENTIAL_PATH = "plugins.entries.brave.config.webSearch.apiKey";
 
 function resolveBraveWebSearchPluginConfig(config: unknown): Record<string, unknown> | undefined {
@@ -22,9 +21,8 @@ function resolveBraveWebSearchPluginConfig(config: unknown): Record<string, unkn
   return isRecord(pluginConfig?.webSearch) ? pluginConfig.webSearch : undefined;
 }
 
-/** Resolve Brave credentials from current plugin config. */
-function resolveConfiguredBraveCredential(config: unknown): unknown {
-  return resolveBraveWebSearchPluginConfig(config)?.apiKey;
+export function resolveBraveMode(brave?: { mode?: unknown }): "web" | "llm-context" {
+  return brave?.mode === "llm-context" ? "llm-context" : "web";
 }
 
 /** Build the common Brave provider metadata without the runtime tool executor. */
@@ -46,6 +44,6 @@ export function buildBraveWebSearchProviderBase(): Omit<WebSearchProviderPlugin,
       searchCredential: { type: "top-level" },
       configuredCredential: { pluginId: "brave" },
     }),
-    getConfiguredCredentialValue: resolveConfiguredBraveCredential,
+    getConfiguredCredentialValue: (config) => resolveBraveWebSearchPluginConfig(config)?.apiKey,
   };
 }

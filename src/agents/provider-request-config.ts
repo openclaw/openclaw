@@ -193,36 +193,14 @@ export function sanitizeConfiguredProviderRequest(
     }
     const rawTls = tls as Record<string, unknown>;
     const next: ProviderRequestTlsOverride = {};
-    const ca = sanitizeConfiguredRequestString(rawTls.ca, `${pathPrefix}.ca`);
-    const cert = sanitizeConfiguredRequestString(rawTls.cert, `${pathPrefix}.cert`);
-    const key = sanitizeConfiguredRequestString(rawTls.key, `${pathPrefix}.key`);
-    const passphrase = sanitizeConfiguredRequestString(
-      rawTls.passphrase,
-      `${pathPrefix}.passphrase`,
-    );
-    const serverName = sanitizeConfiguredRequestString(
-      rawTls.serverName,
-      `${pathPrefix}.serverName`,
-    );
-    if (ca) {
-      next.ca = ca;
+    for (const key of ["ca", "cert", "key", "passphrase", "serverName"] as const) {
+      const value = sanitizeConfiguredRequestString(rawTls[key], `${pathPrefix}.${key}`);
+      if (value) {
+        next[key] = value;
+      }
     }
-    if (cert) {
-      next.cert = cert;
-    }
-    if (key) {
-      next.key = key;
-    }
-    if (passphrase) {
-      next.passphrase = passphrase;
-    }
-    if (serverName) {
-      next.serverName = serverName;
-    }
-    if (rawTls.insecureSkipVerify === true) {
-      next.insecureSkipVerify = true;
-    } else if (rawTls.insecureSkipVerify === false) {
-      next.insecureSkipVerify = false;
+    if (typeof rawTls.insecureSkipVerify === "boolean") {
+      next.insecureSkipVerify = rawTls.insecureSkipVerify;
     }
     return Object.keys(next).length > 0 ? next : undefined;
   };
@@ -277,11 +255,11 @@ export function sanitizeConfiguredModelProviderRequest(
   };
 }
 
-/** Merges provider request overrides with later entries taking precedence. */
-function mergeProviderRequestOverrides(
-  ...overrides: Array<ProviderRequestTransportOverrides | undefined>
-): ProviderRequestTransportOverrides | undefined {
-  const merged: ProviderRequestTransportOverrides = {};
+/** Merges model request overrides, preserving the latest private-network policy. */
+export function mergeModelProviderRequestOverrides(
+  ...overrides: Array<ModelProviderRequestTransportOverrides | undefined>
+): ModelProviderRequestTransportOverrides | undefined {
+  const merged: ModelProviderRequestTransportOverrides = {};
   let hasMerged = false;
   for (const current of overrides) {
     if (!current) {
@@ -300,24 +278,11 @@ function mergeProviderRequestOverrides(
     if (current.tls) {
       merged.tls = current.tls;
     }
-  }
-  return hasMerged ? merged : undefined;
-}
-
-/** Merges model request overrides, preserving the latest private-network policy. */
-export function mergeModelProviderRequestOverrides(
-  ...overrides: Array<ModelProviderRequestTransportOverrides | undefined>
-): ModelProviderRequestTransportOverrides | undefined {
-  let merged: ModelProviderRequestTransportOverrides | undefined = mergeProviderRequestOverrides(
-    ...overrides,
-  );
-  for (const current of overrides) {
-    if (current?.allowPrivateNetwork !== undefined) {
-      merged ??= {};
+    if (current.allowPrivateNetwork !== undefined) {
       merged.allowPrivateNetwork = current.allowPrivateNetwork;
     }
   }
-  return merged;
+  return hasMerged ? merged : undefined;
 }
 
 /** Normalizes provider base URLs by trimming trailing slashes. */
@@ -559,17 +524,10 @@ function toTlsConnectOptions(
     return undefined;
   }
   const next: Record<string, unknown> = {};
-  if (tls.ca) {
-    next.ca = tls.ca;
-  }
-  if (tls.cert) {
-    next.cert = tls.cert;
-  }
-  if (tls.key) {
-    next.key = tls.key;
-  }
-  if (tls.passphrase) {
-    next.passphrase = tls.passphrase;
+  for (const key of ["ca", "cert", "key", "passphrase"] as const) {
+    if (tls[key]) {
+      next[key] = tls[key];
+    }
   }
   if (tls.serverName) {
     next.servername = tls.serverName;

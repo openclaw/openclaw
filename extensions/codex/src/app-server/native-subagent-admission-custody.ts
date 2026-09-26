@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import {
   MAX_PENDING_CHILD_ADMISSION_EVIDENCE,
+  admitNativeChildModelExecution,
   consumeNativeChildModelAdmission,
   retainNativeModelSource,
   retainNativeModelExecution,
@@ -353,16 +354,11 @@ export class CodexNativeSubagentAdmissionCustody {
     if (!owner) {
       this.buffer(turnIdInput, { ...evidence, kind: "spawn" });
     } else if (childState) {
-      const known = this.dependencies.knownChild(childState.childThreadId);
-      if (known) {
-        known.configurationQualification = owner.configurationQualification;
-      }
-      childState.modelExecution ??= retainNativeModelExecution(
+      admitNativeChildModelExecution(
+        childState,
         owner,
-        childState.nativeTurnId,
-        childState.childThreadId,
+        this.dependencies.knownChild(childState.childThreadId),
       );
-      owner.onDirectChildAccepted?.();
     }
     return childState;
   }

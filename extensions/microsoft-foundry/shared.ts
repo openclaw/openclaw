@@ -1,4 +1,3 @@
-// Microsoft Foundry plugin module implements shared behavior.
 import type { AuthConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyAuthProfileConfig,
@@ -11,10 +10,11 @@ import {
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
   type ModelApi,
+  type ModelDefinitionConfig,
   type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
-  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -129,18 +129,13 @@ type FoundryConfigShape = {
   };
 };
 
-function normalizeFoundryModelName(value?: string | null): string | undefined {
-  const trimmed = normalizeLowercaseStringOrEmpty(value);
-  return trimmed || undefined;
-}
-
 function isAnthropicFoundryDeployment(modelName?: string | null): boolean {
-  const normalized = normalizeFoundryModelName(modelName);
+  const normalized = normalizeOptionalLowercaseString(modelName);
   return normalized ? normalized.startsWith("claude") : false;
 }
 
 export function usesFoundryResponsesByDefault(value?: string | null): boolean {
-  const normalized = normalizeFoundryModelName(value);
+  const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
     return false;
   }
@@ -155,7 +150,7 @@ export function usesFoundryResponsesByDefault(value?: string | null): boolean {
 }
 
 export function isFoundryMaiImageModel(value?: string | null): boolean {
-  const normalized = normalizeFoundryModelName(value);
+  const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
     return false;
   }
@@ -169,12 +164,12 @@ export function isFoundryMaiImageModel(value?: string | null): boolean {
 }
 
 function supportsFoundryReasoningContent(value?: string | null): boolean {
-  const normalized = normalizeFoundryModelName(value);
+  const normalized = normalizeOptionalLowercaseString(value);
   return normalized === "mai-ds-r1" || normalized === "mai-thinking-1";
 }
 
 function supportsFoundryImageInput(value?: string | null): boolean {
-  const normalized = normalizeFoundryModelName(value);
+  const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
     return false;
   }
@@ -189,14 +184,14 @@ function supportsFoundryImageInput(value?: string | null): boolean {
 }
 
 export function requiresFoundryEntraIdClaudeAuth(value?: string | null): boolean {
-  const normalized = normalizeFoundryModelName(value);
+  const normalized = normalizeOptionalLowercaseString(value);
   return normalized
     ? normalized === "claude-mythos-preview" || normalized.startsWith("claude-mythos-")
     : false;
 }
 
 export function requiresFoundryMandatoryAdaptiveClaudeThinking(value?: string | null): boolean {
-  const normalized = normalizeFoundryModelName(value);
+  const normalized = normalizeOptionalLowercaseString(value);
   return normalized
     ? resolveClaudeFable5ModelIdentity({ id: normalized }) !== undefined ||
         normalized === "claude-mythos-preview" ||
@@ -205,7 +200,7 @@ export function requiresFoundryMandatoryAdaptiveClaudeThinking(value?: string | 
 }
 
 function supportsFoundryManualClaudeThinking(value?: string | null): boolean {
-  const normalized = normalizeFoundryModelName(value)?.replace(/\./g, "-");
+  const normalized = normalizeOptionalLowercaseString(value)?.replace(/\./g, "-");
   return normalized
     ? /(?:^|-)claude-(?:opus-4-(?:1|5)|sonnet-4-5|haiku-4-5)(?=$|[^a-z0-9])/.test(normalized)
     : false;
@@ -232,7 +227,7 @@ function resolveFoundryModelTokenLimits(value?: string | null): {
   contextWindow: number;
   maxTokens: number;
 } {
-  const normalized = normalizeFoundryModelName(value);
+  const normalized = normalizeOptionalLowercaseString(value);
   const normalizedVersion = normalized?.replace(/\./g, "-");
   const foundryOpenAILimits = resolveFoundryOpenAIModelTokenLimits(normalized);
   if (foundryOpenAILimits) {
@@ -262,7 +257,7 @@ function resolveFoundryModelTokenLimits(value?: string | null): {
 }
 
 export function requiresFoundryMaxCompletionTokens(value?: string | null): boolean {
-  const normalized = normalizeFoundryModelName(value);
+  const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
     return false;
   }
@@ -275,7 +270,7 @@ export function requiresFoundryMaxCompletionTokens(value?: string | null): boole
 }
 
 function supportsFoundryReasoningEffort(value?: string | null): boolean {
-  const normalized = normalizeFoundryModelName(value);
+  const normalized = normalizeOptionalLowercaseString(value);
   if (
     !normalized ||
     /^gpt-5-chat(?:-|$)/u.test(normalized) ||
@@ -292,7 +287,7 @@ function supportsFoundryReasoningEffort(value?: string | null): boolean {
 }
 
 function resolveFoundryReasoningEfforts(value?: string | null): string[] | undefined {
-  const normalized = normalizeFoundryModelName(value);
+  const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized || !supportsFoundryReasoningEffort(normalized)) {
     return undefined;
   }
@@ -487,26 +482,37 @@ export function resolveFoundryModelCapabilities(
   };
 }
 
-export function mergeFoundryCanonicalModelParams(
-  params: Record<string, unknown> | undefined,
-  modelName: string,
-): Record<string, unknown> {
-  return {
-    ...params,
-    canonicalModelId: modelName,
-  };
-}
-
 export function resolveConfiguredModelNameHint(
   modelId: string,
   modelNameHint?: string | null,
 ): string | undefined {
-  const trimmedName = normalizeOptionalString(modelNameHint) ?? "";
-  if (trimmedName) {
-    return trimmedName;
-  }
-  const trimmedId = normalizeOptionalString(modelId) ?? "";
-  return trimmedId ? trimmedId : undefined;
+  return normalizeOptionalString(modelNameHint) ?? normalizeOptionalString(modelId);
+}
+
+export function buildFoundryModelConfig(
+  endpoint: string,
+  modelId: string,
+  capabilities: FoundryModelCapabilities,
+): ModelDefinitionConfig {
+  return {
+    id: modelId,
+    name: capabilities.modelName,
+    api: capabilities.api,
+    baseUrl: buildFoundryProviderBaseUrl(
+      endpoint,
+      modelId,
+      capabilities.modelName,
+      capabilities.api,
+    ),
+    reasoning: capabilities.reasoning,
+    ...(capabilities.thinkingLevelMap ? { thinkingLevelMap: capabilities.thinkingLevelMap } : {}),
+    params: { canonicalModelId: capabilities.modelName },
+    input: capabilities.input,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: capabilities.contextWindow,
+    maxTokens: capabilities.maxTokens,
+    ...(capabilities.compat ? { compat: capabilities.compat } : {}),
+  };
 }
 
 function buildFoundryProviderConfig(
@@ -534,30 +540,7 @@ function buildFoundryProviderConfig(
         deployment.modelName,
         deployment.api ?? resolvedApi,
       );
-      const modelBaseUrl = buildFoundryProviderBaseUrl(
-        endpoint,
-        deployment.name,
-        capabilities.modelName,
-        capabilities.api,
-      );
-      return Object.assign(
-        {
-          id: deployment.name,
-          name: capabilities.modelName,
-          api: capabilities.api,
-          baseUrl: modelBaseUrl,
-          reasoning: capabilities.reasoning,
-          ...(capabilities.thinkingLevelMap
-            ? { thinkingLevelMap: capabilities.thinkingLevelMap }
-            : {}),
-          params: mergeFoundryCanonicalModelParams(undefined, capabilities.modelName),
-          input: capabilities.input,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: capabilities.contextWindow,
-          maxTokens: capabilities.maxTokens,
-        },
-        capabilities.compat ? { compat: capabilities.compat } : {},
-      );
+      return buildFoundryModelConfig(endpoint, deployment.name, capabilities);
     }),
   };
 }
@@ -574,35 +557,6 @@ function resolveSelectedDeploymentModelName(params: {
     params.modelId,
     selectedDeployment?.modelName ?? params.modelNameHint,
   );
-}
-
-function isSelectedMaiImageDeployment(params: {
-  modelId: string;
-  modelNameHint?: string | null;
-  deployments?: FoundryDeploymentConfigInput[];
-}): boolean {
-  return isFoundryMaiImageModel(resolveSelectedDeploymentModelName(params));
-}
-
-function buildFoundryImageDefaultPatch(params: {
-  modelId: string;
-  modelNameHint?: string | null;
-  deployments?: FoundryDeploymentConfigInput[];
-}) {
-  if (!isSelectedMaiImageDeployment(params)) {
-    return {};
-  }
-  return {
-    agents: {
-      defaults: {
-        mediaModels: {
-          image: {
-            primary: `${PROVIDER_ID}/${params.modelId}`,
-          },
-        },
-      },
-    },
-  };
 }
 
 function buildFoundryCredentialMetadata(params: {
@@ -638,11 +592,6 @@ function buildFoundryCredentialMetadata(params: {
   return metadata;
 }
 
-/**
- * Build the plugins.allow patch so the provider is allowlisted when the
- * config already gates plugins via a non-empty allow array.  Returns an
- * empty object when no patch is needed (allowlist absent / already listed).
- */
 function buildPluginsAllowPatch(
   currentAllow: string[] | undefined,
 ): { plugins: { allow: string[] } } | Record<string, never> {
@@ -653,25 +602,6 @@ function buildPluginsAllowPatch(
     return {};
   }
   return { plugins: { allow: [...currentAllow, PROVIDER_ID] } };
-}
-
-function buildFoundryAuthOrderPatch(params: {
-  profileId: string;
-  currentProviderProfileIds?: string[];
-}): { auth: { order: Record<string, string[]> } } {
-  const nextOrder = [
-    params.profileId,
-    ...(params.currentProviderProfileIds ?? []).filter(
-      (profileId) => profileId !== params.profileId,
-    ),
-  ];
-  return {
-    auth: {
-      order: {
-        [PROVIDER_ID]: nextOrder,
-      },
-    },
-  };
 }
 
 export function listConfiguredFoundryProfileIds(config: FoundryConfigShape): string[] {
@@ -698,10 +628,8 @@ export function buildFoundryAuthResult(params: {
   currentProviderProfileIds?: string[];
   deployments?: FoundryDeploymentConfigInput[];
 }): ProviderAuthResult {
-  const imageDefaultPatch = buildFoundryImageDefaultPatch(params);
-  const defaultModel = isSelectedMaiImageDeployment(params)
-    ? undefined
-    : `${PROVIDER_ID}/${params.modelId}`;
+  const imageDeployment = isFoundryMaiImageModel(resolveSelectedDeploymentModelName(params));
+  const modelRef = `${PROVIDER_ID}/${params.modelId}`;
   return {
     profiles: [
       {
@@ -709,26 +637,25 @@ export function buildFoundryAuthResult(params: {
         credential: buildApiKeyCredential(
           PROVIDER_ID,
           params.apiKey,
-          buildFoundryCredentialMetadata({
-            authMethod: params.authMethod,
-            endpoint: params.endpoint,
-            modelId: params.modelId,
-            modelNameHint: params.modelNameHint,
-            api: params.api,
-            subscriptionId: params.subscriptionId,
-            subscriptionName: params.subscriptionName,
-            tenantId: params.tenantId,
-          }),
+          buildFoundryCredentialMetadata(params),
           params.secretInputMode ? { secretInputMode: params.secretInputMode } : undefined,
         ),
       },
     ],
     configPatch: {
-      ...buildFoundryAuthOrderPatch({
-        profileId: params.profileId,
-        currentProviderProfileIds: params.currentProviderProfileIds,
-      }),
-      ...imageDefaultPatch,
+      auth: {
+        order: {
+          [PROVIDER_ID]: [
+            params.profileId,
+            ...(params.currentProviderProfileIds ?? []).filter(
+              (profileId) => profileId !== params.profileId,
+            ),
+          ],
+        },
+      },
+      ...(imageDeployment
+        ? { agents: { defaults: { mediaModels: { image: { primary: modelRef } } } } }
+        : {}),
       models: {
         providers: {
           [PROVIDER_ID]: buildFoundryProviderConfig(
@@ -744,7 +671,7 @@ export function buildFoundryAuthResult(params: {
       },
       ...buildPluginsAllowPatch(params.currentPluginsAllow),
     },
-    ...(defaultModel ? { defaultModel } : {}),
+    ...(!imageDeployment ? { defaultModel: modelRef } : {}),
     notes: params.notes,
   };
 }
@@ -768,17 +695,13 @@ export function applyFoundryProviderConfig(
 }
 
 export function resolveFoundryTargetProfileId(config: FoundryConfigShape): string | undefined {
-  const configuredProfiles = config.auth?.profiles ?? {};
-  const configuredProfileEntries = Object.entries(configuredProfiles).filter(([, profile]) => {
-    return profile.provider === PROVIDER_ID;
-  });
-  if (configuredProfileEntries.length === 0) {
+  const profileIds = listConfiguredFoundryProfileIds(config);
+  if (profileIds.length === 0) {
     return undefined;
   }
   // Prefer the explicitly ordered profile; fall back to the sole entry when there is exactly one.
   return (
     config.auth?.order?.[PROVIDER_ID]?.find((profileId) => normalizeOptionalString(profileId)) ??
-    (configuredProfileEntries.length === 1 ? configuredProfileEntries[0]?.[0] : undefined)
+    (profileIds.length === 1 ? profileIds[0] : undefined)
   );
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

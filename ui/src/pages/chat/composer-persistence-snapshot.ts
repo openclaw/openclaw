@@ -107,6 +107,7 @@ export function captureChatComposerDraftSnapshot(
   expectedDraftRevision: number,
 ): ChatComposerDraftSnapshot {
   const scope = resolveUiConversationIdentity(state, state.sessionKey);
+  const text = normalizeChatComposerDraft(state.chatMessage);
   const goalMode = state.chatGoalDraftMode ? { ...state.chatGoalDraftMode } : undefined;
   const replyTarget = state.chatReplyTarget ? { ...state.chatReplyTarget } : undefined;
   const mentions = readHumanMentions(state.chatMessage, state.chatMentions);
@@ -127,7 +128,7 @@ export function captureChatComposerDraftSnapshot(
         scope: durableScope,
         expectedRevision: expectedDraftRevision,
         revision: draftRevision,
-        text: normalizeChatComposerDraft(state.chatMessage),
+        text,
         ...(mentions ? { mentions } : {}),
         ...(goalMode ? { goalMode } : {}),
         ...(replyTarget ? { replyTarget } : {}),
@@ -141,7 +142,7 @@ export function captureChatComposerDraftSnapshot(
     incognito: isIncognitoComposerScope(state, scope),
     awaitingDefaults: !hasUiSessionDefaults(state),
     sessionKey: state.sessionKey,
-    chatMessage: normalizeChatComposerDraft(state.chatMessage),
+    chatMessage: text,
     ...(mentions ? { mentions } : {}),
     ...(goalMode ? { goalMode } : {}),
     ...(replyTarget ? { replyTarget: { ...replyTarget } } : {}),

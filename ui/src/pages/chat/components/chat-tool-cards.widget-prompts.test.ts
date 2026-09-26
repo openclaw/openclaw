@@ -6,10 +6,10 @@
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import {
-  renderToolPreview,
   WIDGET_PROMPT_EVENT,
   type WidgetPromptEventDetail,
-} from "./chat-tool-cards.ts";
+} from "../../../components/mcp-app-security.ts";
+import { renderToolPreview } from "./widget-card.ts";
 
 function renderWidgetPreviewFrame(url: string, allowExternalEmbedUrls = false) {
   const container = document.createElement("div");

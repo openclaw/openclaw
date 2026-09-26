@@ -3557,6 +3557,9 @@ export const en: TranslationMap & {
       loading: "Loading skills…",
     },
     splitView: {
+      chooseConversation: "Choose a conversation",
+      missingOwner:
+        "Select this pane, then choose Home or a conversation in the sidebar to restore it.",
       open: "Open split view",
       splitRight: "Split right",
       splitDown: "Split down",

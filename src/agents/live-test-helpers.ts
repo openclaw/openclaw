@@ -35,12 +35,14 @@ export async function completeSimpleWithTimeout<TApi extends Api>(
   context: Parameters<typeof completeSimple<TApi>>[1],
   options: Parameters<typeof completeSimple<TApi>>[2],
   timeoutMs: number,
+  timeoutMessage = `model call timed out after ${timeoutMs}ms`,
 ): Promise<Awaited<ReturnType<typeof completeSimple<TApi>>>> {
   const controller = new AbortController();
   const abortTimer = setTimeout(() => {
     controller.abort();
   }, timeoutMs);
   abortTimer.unref?.();
+  let hardTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       completeSimple(model, context, {
@@ -48,13 +50,14 @@ export async function completeSimpleWithTimeout<TApi extends Api>(
         signal: controller.signal,
       }),
       new Promise<never>((_, reject) => {
-        const hardTimer = setTimeout(() => {
-          reject(new Error(`model call timed out after ${timeoutMs}ms`));
+        hardTimer = setTimeout(() => {
+          reject(new Error(timeoutMessage));
         }, timeoutMs);
         hardTimer.unref?.();
       }),
     ]);
   } finally {
     clearTimeout(abortTimer);
+    clearTimeout(hardTimer);
   }
 }

@@ -77,6 +77,10 @@ export async function reloadGatewayPlugins(
   params: Parameters<GatewayReloadHandlerParams["reloadPlugins"]>[0],
 ): ReturnType<GatewayReloadHandlerParams["reloadPlugins"]> {
   const restartDrainSignal = getGatewayRestartDrainSignal();
+  const drainSignal =
+    params.pluginLifecycle?.waitForDrain && params.pluginLifecycle.drainSignal
+      ? AbortSignal.any([restartDrainSignal, params.pluginLifecycle.drainSignal])
+      : restartDrainSignal;
   const { prepareGatewayPluginLoad: preparePlugins } = await loadGatewayPluginBootstrapModule();
   const {
     pluginRuntime,
@@ -158,6 +162,7 @@ export async function reloadGatewayPlugins(
   } = createPluginReloadCleanup({
     previousRegistry,
     changedPluginIds,
+    waitForDrain: params.pluginLifecycle?.waitForDrain,
     port,
     pluginWorkspaceDir,
     abortSignal: AbortSignal.any([runtime.requestEntryLifetime.signal, restartDrainSignal]),
@@ -170,6 +175,7 @@ export async function reloadGatewayPlugins(
   });
   const replacement = kernel.pluginRuntimeGeneration.reserve();
   const assertCurrent = () => {
+    drainSignal.throwIfAborted();
     params.assertInvokerOwned?.();
     if (params.isAborted?.()) {
       throw new GatewayConfigReloadSupersededError();
@@ -254,7 +260,7 @@ export async function reloadGatewayPlugins(
     });
     phase = "drain";
     replacement.setReloadStatus({ phase: "reloading", pluginIds: [...changedPluginIds] });
-    await drainRetainedWork(resourceHandoffIds, restartDrainSignal, replacement.setReloadStatus);
+    await drainRetainedWork(resourceHandoffIds, drainSignal, replacement.setReloadStatus);
     assertCurrent();
     channels.pause();
     decisionReplacement = prepareDecisionProviderReload(previousRegistry, changedPluginIds);
@@ -296,7 +302,7 @@ export async function reloadGatewayPlugins(
     });
     await drainBeforeReplacement(
       resourceHandoffIds,
-      restartDrainSignal,
+      drainSignal,
       replacement.setReloadStatus,
       assertCurrent,
     );
