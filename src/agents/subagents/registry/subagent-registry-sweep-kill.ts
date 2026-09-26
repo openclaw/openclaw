@@ -24,6 +24,7 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "./subagent-registry-helpers.js";
+import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
@@ -82,7 +83,7 @@ function isUnstableTask(task: TaskRecord | undefined) {
   );
 }
 
-export function resolveSubagentTaskForRun(
+function resolveSubagentTaskForRun(
   candidates: Iterable<SubagentRunRecord>,
   entry: SubagentRunRecord,
 ) {
@@ -114,6 +115,15 @@ export async function resolveSubagentTaskForRunAsync(
     throw new Error("Subagent task lookup generation changed during preparation");
   }
   return result;
+}
+
+/**
+ * The exact task resolution the lifecycle controller is wired with in production. It
+ * lives beside the resolver rather than in the registry module so tests can drive the
+ * real function instead of re-implementing its wiring.
+ */
+export function findSubagentTaskForRun(entry: SubagentRunRecord) {
+  return resolveSubagentTaskForRun(getSubagentRunsForChildSession(entry.childSessionKey), entry);
 }
 
 export async function reconcileDurableSubagentKillIntent(params: {

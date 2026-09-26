@@ -6,9 +6,11 @@ import { getTaskById } from "../../../tasks/runtime-internal.js";
 import { prepareTaskRegistryRead } from "../../../tasks/task-registry-read.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import type { SubagentLifecycleOptions } from "../registry/subagent-registry-lifecycle-context.js";
 import { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
+import { findSubagentTaskForRun } from "../registry/subagent-registry-sweep-kill.js";
 import { saveSubagentRegistryToSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
@@ -81,7 +83,19 @@ export function records() {
   return { queueEntry, subagent, task };
 }
 
-export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
+/**
+ * The production resolver itself, the same function `subagent-registry.ts` wires into
+ * the lifecycle controller. Tests that assert ownership behaviour need it because the
+ * task-id fixture below cannot reproduce the runtime filtering the real requester path
+ * applies.
+ */
+export const productionSubagentTaskResolver: SubagentLifecycleOptions["resolveSubagentTask"] =
+  findSubagentTaskForRun;
+
+export function requesterWakeDriver(
+  inputs: ReturnType<typeof records>[],
+  options?: { resolveSubagentTask?: SubagentLifecycleOptions["resolveSubagentTask"] },
+) {
   const wake = vi.fn<
     SubagentLifecycleController["options"]["maybeWakeRequesterAfterAllChildrenSettled"]
   >(async () => {
@@ -100,10 +114,14 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
     countPendingDescendantRuns: () => 0,
     getLatestRunForChildSession: getLatestLiveSubagentRunByChildSessionKey,
     suppressAnnounceForSteerRestart: () => false,
-    resolveSubagentTask: (entry) => ({
-      lookup: "available",
-      task: getTaskById(inputs.find((input) => input.subagent.runId === entry.runId)!.task.taskId),
-    }),
+    resolveSubagentTask:
+      options?.resolveSubagentTask ??
+      ((entry) => ({
+        lookup: "available",
+        task: getTaskById(
+          inputs.find((input) => input.subagent.runId === entry.runId)!.task.taskId,
+        ),
+      })),
     resolveSubagentTaskAsync: async (entry) => {
       const read = await prepareTaskRegistryRead();
       return read

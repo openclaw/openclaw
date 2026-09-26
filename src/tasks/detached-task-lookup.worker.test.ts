@@ -326,3 +326,69 @@ it("keeps async lookup scoped to current ACP backing and the requested subagent 
     }
   });
 });
+
+// The lifecycle delivery and completion paths resolve through the async lookup, so the
+// run-id scoping the synchronous lookup applies has to hold here too: an older foreign
+// row wins the shared preference, and selecting on it alone reported a live task absent.
+it("scopes the async run-id lookup to the requested runtime", async () => {
+  await withOpenClawTestState({ layout: "split" }, async () => {
+    try {
+      const childSessionKey = "agent:main:subagent:scoped";
+      const row = (
+        taskId: string,
+        createdAt: number,
+        overrides: Partial<TaskRecord>,
+      ): TaskRecord => ({
+        taskId,
+        createdAt,
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        scopeKind: "session",
+        task: "Run id scoping fixture",
+        status: "succeeded",
+        endedAt: createdAt + 1,
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        childSessionKey,
+        ...overrides,
+      });
+      for (const record of [
+        row("task-cron-collision", 10, { runtime: "cron", runId: "run-shared" }),
+        row("task-owned", 30, { runId: "run-shared" }),
+        row("task-cron-alone", 10, { runtime: "cron", runId: "run-foreign-only" }),
+      ]) {
+        upsertTaskWithDeliveryStateToSqlite({ task: record });
+      }
+
+      // Without this the case would be vacuous: the defect only appears when the shared
+      // preference actually selects the foreign row ahead of the surviving subagent row.
+      expect(await findTaskByRunIdAsync("run-shared")).toMatchObject({
+        taskId: "task-cron-collision",
+        runtime: "cron",
+      });
+
+      expect(
+        await findDetachedTaskRunAsync({
+          runId: "run-shared",
+          runtime: "subagent",
+          sessionKey: childSessionKey,
+          createdAtOrAfter: 0,
+        }),
+      ).toMatchObject({ lookup: "available", task: { taskId: "task-owned" } });
+
+      // A foreign row standing alone is still an absent owner for this caller, and the
+      // scoped lookup must not widen into returning another runtime's task.
+      expect(
+        await findDetachedTaskRunAsync({
+          runId: "run-foreign-only",
+          runtime: "subagent",
+          sessionKey: childSessionKey,
+          createdAtOrAfter: 0,
+        }),
+      ).toEqual({ lookup: "available", task: undefined });
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+    }
+  });
+});

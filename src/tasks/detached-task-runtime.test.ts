@@ -36,6 +36,7 @@ import {
   transitionTaskAssignment,
   tryRecoverTaskBeforeMarkLost,
 } from "./detached-task-runtime.js";
+import { registerRunIdCollisionLookupTests } from "./detached-task-runtime.run-id-collision.test-support.js";
 import { captureTaskPersistenceReceipt } from "./task-registry-records.js";
 import * as taskTransitions from "./task-registry-transition.async.js";
 import type { TaskRecord } from "./task-registry.types.js";
@@ -46,6 +47,7 @@ import {
 
 const {
   mockFindTaskByRunIdForStatus,
+  mockListTasksByRunIdForStatus,
   mockListTasksForSessionKeyForStatus,
   mockLogWarn,
   mockCreateQueuedTaskRunCore,
@@ -53,6 +55,7 @@ const {
   mockCreateRunningTaskRunCoreWithReceiptAsync,
 } = vi.hoisted(() => ({
   mockFindTaskByRunIdForStatus: vi.fn(),
+  mockListTasksByRunIdForStatus: vi.fn(() => [] as TaskRecord[]),
   mockListTasksForSessionKeyForStatus: vi.fn(() => [] as TaskRecord[]),
   mockLogWarn: vi.fn(),
   mockCreateQueuedTaskRunCore: vi.fn<typeof import("./task-executor.js").createQueuedTaskRunCore>(
@@ -87,6 +90,7 @@ vi.mock("../logging/subsystem.js", () => ({
 
 vi.mock("./task-status-access.js", () => ({
   findTaskByRunIdForStatus: mockFindTaskByRunIdForStatus,
+  listTasksByRunIdForStatus: mockListTasksByRunIdForStatus,
   listTasksForSessionKeyForStatus: mockListTasksForSessionKeyForStatus,
 }));
 
@@ -221,6 +225,8 @@ describe("detached-task-runtime", () => {
   afterEach(() => {
     resetDetachedTaskLifecycleRuntimeForTests();
     mockFindTaskByRunIdForStatus.mockReset();
+    mockListTasksByRunIdForStatus.mockReset();
+    mockListTasksByRunIdForStatus.mockReturnValue([]);
     mockListTasksForSessionKeyForStatus.mockReset();
     mockListTasksForSessionKeyForStatus.mockReturnValue([]);
     mockLogWarn.mockClear();
@@ -658,6 +664,13 @@ describe("detached-task-runtime", () => {
       }));
   });
 
+  registerRunIdCollisionLookupTests({
+    createFakeTaskRecord,
+    mockFindTaskByRunIdForStatus,
+    mockListTasksByRunIdForStatus,
+    mockListTasksForSessionKeyForStatus,
+  });
+
   it("finds a replacement task within the requested session generation", () => {
     const expected = createFakeTaskRecord({
       taskId: "task-expected",
@@ -666,15 +679,15 @@ describe("detached-task-runtime", () => {
       childSessionKey: "agent:main:subagent:expected",
       createdAt: 30,
     });
-    mockFindTaskByRunIdForStatus.mockReturnValue(
-      createFakeTaskRecord({
-        taskId: "task-other-generation",
-        runtime: "subagent",
-        runId: "run-shared",
-        childSessionKey: "agent:main:subagent:other",
-        createdAt: 10,
-      }),
-    );
+    const otherGeneration = createFakeTaskRecord({
+      taskId: "task-other-generation",
+      runtime: "subagent",
+      runId: "run-shared",
+      childSessionKey: "agent:main:subagent:other",
+      createdAt: 10,
+    });
+    mockFindTaskByRunIdForStatus.mockReturnValue(otherGeneration);
+    mockListTasksByRunIdForStatus.mockReturnValue([otherGeneration]);
     mockListTasksForSessionKeyForStatus.mockReturnValue([
       createFakeTaskRecord({
         taskId: "task-next-generation",

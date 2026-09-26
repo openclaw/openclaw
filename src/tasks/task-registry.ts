@@ -26,6 +26,7 @@ export {
   listTaskRecords,
   listTaskRecordsForOwnerTree,
   listTaskSessionActivity,
+  listTasksByRunId,
   listTasksForFlowId,
   listTasksForOwnerKey,
   listTasksForRelatedSessionKey,

@@ -10,6 +10,7 @@ import {
   findTaskByRunId,
   listTaskRecords,
   listTaskSessionActivity,
+  listTasksByRunId,
   listTasksForRelatedSessionKey,
 } from "./task-registry.js";
 import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
@@ -57,6 +58,19 @@ export async function readTaskStatusSnapshots(params: { sessionKey?: string; age
 
 export function findTaskByRunIdForStatus(runId: string): TaskRecord | undefined {
   return findTaskByRunId(runId);
+}
+
+/**
+ * Run ids are not unique across runtimes, and the preferred-row lookup deprioritizes
+ * only `cli`, so an older `cron` or `acp` row can be selected ahead of the row a
+ * runtime-scoped caller asked for. Listing the run id lets that caller match on its
+ * own runtime instead of rejecting whichever row the shared preference happened to
+ * pick. `findTaskByRunIdForStatus` is this list's first entry, so both apply the same
+ * superseded-backing filter; a raw state read would surface rows the single lookup
+ * deliberately hides.
+ */
+export function listTasksByRunIdForStatus(runId: string): TaskRecord[] {
+  return listTasksByRunId(runId);
 }
 
 /** Snapshots generated-media task ids so replay guards stay attempt-local. */

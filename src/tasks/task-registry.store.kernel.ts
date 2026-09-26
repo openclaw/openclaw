@@ -490,10 +490,15 @@ export function summarizeTaskRecordsForFlowInDatabase(db: DatabaseSync, flowId: 
   return summary;
 }
 
-export function findTaskRecordByRunIdForViewInDatabase(
+/**
+ * Run ids are not unique across runtimes, so ownership decisions need every row
+ * for the id instead of the single preferred one. Returned in lookup preference
+ * order so the first entry stays the row the shared view selects.
+ */
+export function listTaskRecordsByRunIdForViewInDatabase(
   db: DatabaseSync,
   runId: string,
-): TaskRecord | undefined {
+): TaskRecord[] {
   const queries = getTaskRegistryQueries(db);
   const read = (queries.viewRunId ??= prepareSqliteQuerySync<string, TaskRegistryRow>(
     db,
@@ -521,13 +526,15 @@ export function findTaskRecordByRunIdForViewInDatabase(
     read(runId).rows.map(rowToTaskRecord),
     (flowId) => readTaskFlowViewRecordInDatabase(db, flowId)?.syncMode === "task_mirrored",
   );
-  const selected = records.toSorted(compareTasksForRunIdLookup)[0];
-  if (!selected) {
-    return undefined;
-  }
   // Backing markers are selection inputs, never part of the public task view.
-  const { detail: _detail, ...view } = selected;
-  return view;
+  return records.toSorted(compareTasksForRunIdLookup).map(({ detail: _detail, ...view }) => view);
+}
+
+export function findTaskRecordByRunIdForViewInDatabase(
+  db: DatabaseSync,
+  runId: string,
+): TaskRecord | undefined {
+  return listTaskRecordsByRunIdForViewInDatabase(db, runId)[0];
 }
 
 function selectTaskDeliveryStateRows(db: DatabaseSync): TaskDeliveryStateRow[] {

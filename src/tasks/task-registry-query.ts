@@ -21,7 +21,7 @@ import {
   listTasksFromIndex,
   normalizeTaskTimestamps,
   compareTasksNewestFirst,
-  pickPreferredRunIdTask,
+  compareTasksForRunIdLookup,
   selectTaskRecordsForOwnerTree,
 } from "./task-registry-records.js";
 import { controlRuntimeLoader, deliveryRuntimeLoader } from "./task-registry-runtime-loaders.js";
@@ -351,29 +351,45 @@ export function getTaskById(taskId: string): TaskRecord | undefined {
   return task ? cloneTaskRecord(task) : undefined;
 }
 
-export function findTaskByRunId(runId: string): TaskRecord | undefined {
+function currentTasksByRunId(runId: string): TaskRecord[] {
   ensureTaskRegistryReady();
   const matches = getTasksByRunId(runId);
   let mirroredFlowIds: ReadonlySet<string> | undefined;
-  const task = pickPreferredRunIdTask(
-    filterCurrentTaskRunBackings(matches, (flowId) => {
-      // Admit flows only when a candidate needs them, once for this synchronous lookup.
-      mirroredFlowIds ??= getTaskMirroredFlowIds(
-        matches.flatMap((candidate) =>
-          candidate.parentFlowId ? [candidate.parentFlowId.trim()] : [],
-        ),
-      );
-      return mirroredFlowIds.has(flowId);
-    }),
-  );
+  return filterCurrentTaskRunBackings(matches, (flowId) => {
+    // Admit flows only when a candidate needs them, once for this synchronous lookup.
+    mirroredFlowIds ??= getTaskMirroredFlowIds(
+      matches.flatMap((candidate) =>
+        candidate.parentFlowId ? [candidate.parentFlowId.trim()] : [],
+      ),
+    );
+    return mirroredFlowIds.has(flowId);
+  }).toSorted(compareTasksForRunIdLookup);
+}
+
+/**
+ * Every current row for a run id, in lookup preference order. Run ids are not unique
+ * across runtimes, so a runtime-scoped caller has to see the whole set instead of the
+ * one preferred row. `findTaskByRunId` is this list's first entry, so both share the
+ * same superseded-backing filter and the same ordering.
+ */
+export function listTasksByRunId(runId: string): TaskRecord[] {
+  return currentTasksByRunId(runId).map(cloneTaskRecord);
+}
+
+export function findTaskByRunId(runId: string): TaskRecord | undefined {
+  const task = currentTasksByRunId(runId)[0];
   return task ? cloneTaskRecord(task) : undefined;
 }
 
-/** Accepted task events and ACP backing facts are prepared before selecting a run. */
-export async function findTaskByRunIdAsync(
+/**
+ * Accepted task events and ACP backing facts are prepared before selecting a run.
+ * Returned in lookup preference order so `findTaskByRunIdAsync` is its first entry and
+ * a runtime-scoped caller can match its own row without repeating this preparation.
+ */
+export async function listTasksByRunIdAsync(
   runId: string,
   prepared?: TaskRegistryRead,
-): Promise<TaskRecord | undefined> {
+): Promise<TaskRecord[]> {
   const read = prepared ?? (await prepareTaskRegistryRead());
   if (!read) {
     throw new Error("Task lookup did not stabilize. Retry the status lookup.");
@@ -386,12 +402,17 @@ export async function findTaskByRunIdAsync(
   }
   // Flow preparation can publish or replace task rows. Consume current admitted facts.
   matches = read.getTasksByRunId(runId);
-  return pickPreferredRunIdTask(
-    filterCurrentTaskRunBackings(
-      matches,
-      (flowId) => flows?.getTaskFlowById(flowId)?.syncMode === "task_mirrored",
-    ),
-  );
+  return filterCurrentTaskRunBackings(
+    matches,
+    (flowId) => flows?.getTaskFlowById(flowId)?.syncMode === "task_mirrored",
+  ).toSorted(compareTasksForRunIdLookup);
+}
+
+export async function findTaskByRunIdAsync(
+  runId: string,
+  prepared?: TaskRegistryRead,
+): Promise<TaskRecord | undefined> {
+  return (await listTasksByRunIdAsync(runId, prepared))[0];
 }
 
 export function listTasksForOwnerKey(ownerKey: string): TaskRecord[] {
