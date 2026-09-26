@@ -79,7 +79,7 @@ function createKilocodeStreamWrapper(
       onPayload(payload, payloadModel) {
         const payloadObj = asOptionalRecord(payload);
         if (payloadObj) {
-          // Keep Kilo thinking defaults overrideable by later caller/config payload hooks.
+          // Keep Kilo thinking defaults overridable by later caller/config payload hooks.
           normalizeOpenAICompatibleReasoningPayload(payloadObj, thinkingLevel);
         }
 

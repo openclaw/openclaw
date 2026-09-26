@@ -297,7 +297,7 @@ Fleet pins the official image's container paths with these environment values:
 | `XDG_CACHE_HOME`         | `/home/node/.openclaw/cache`         |
 | `OPENCLAW_GATEWAY_TOKEN` | Generated or supplied cell token     |
 
-`XDG_CACHE_HOME` is the one overrideable generated default in this table. The other listed container-path variables and `OPENCLAW_GATEWAY_TOKEN` remain Fleet-managed.
+`XDG_CACHE_HOME` is the one overridable generated default in this table. The other listed container-path variables and `OPENCLAW_GATEWAY_TOKEN` remain Fleet-managed.
 
 The official image defaults to the non-root `node` user with UID 1000. Fleet keeps the private `0700` bind mounts writable without making them world-accessible. Rootful Docker runs the cell with the invoking non-root UID and GID; rootless Docker uses container UID 0, which maps to the invoking unprivileged host user inside the daemon's user namespace. Podman uses `keep-id` with the invoking UID and GID. When Fleet itself runs as root against a rootful runtime, it retains the image user and assigns the initial mount files to UID/GID 1000.
 
