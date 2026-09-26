@@ -142,6 +142,16 @@ describe("session creation snapshot", () => {
         { ...scope, sessionKey: sibling },
         { sessionId: "sibling", updatedAt: 1, label: "taken" },
       );
+      for (const [key, label, archivedAt] of [
+        ["agent:main:archived", "archived", 1],
+        ["agent:main:spaced", " padded ", undefined],
+        ["agent:main:internal-session-effects:hidden", "hidden", undefined],
+      ] as const) {
+        replaceSessionEntrySync(
+          { ...scope, sessionKey: key },
+          { sessionId: key, updatedAt: 1, label, archivedAt },
+        );
+      }
       if (cold) {
         closeOpenClawAgentDatabasesForTest();
       }
@@ -157,35 +167,20 @@ describe("session creation snapshot", () => {
       );
       expect(result).toMatchObject({ ok: false, phase: "entry" });
       expect(loadSessionEntry({ ...scope, sessionKey: sibling })?.sessionId).toBe("sibling");
+      const database = openOpenClawAgentDatabase(scope);
+      for (const [label, expected] of [
+        ["archived", true],
+        [" padded ", true],
+        ["padded", false],
+        ["hidden", false],
+        [undefined, false],
+      ] as const) {
+        expect(readSessionCreationSnapshotInDatabase(database, key, label).labelInUse).toBe(
+          expected,
+        );
+      }
     },
   );
-
-  it("keeps archived labels occupied and ignores hidden or differently spaced labels", () => {
-    const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-label-owners-") };
-    const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
-    for (const [key, label, archivedAt] of [
-      ["agent:main:archived", "archived", 1],
-      ["agent:main:spaced", " padded ", undefined],
-      ["agent:main:internal-session-effects:hidden", "hidden", undefined],
-    ] as const) {
-      replaceSessionEntrySync(
-        { ...scope, sessionKey: key },
-        { sessionId: key, updatedAt: 1, label, archivedAt },
-      );
-    }
-    const database = openOpenClawAgentDatabase(scope);
-    for (const [label, expected] of [
-      ["archived", true],
-      [" padded ", true],
-      ["padded", false],
-      ["hidden", false],
-      [undefined, false],
-    ] as const) {
-      expect(
-        readSessionCreationSnapshotInDatabase(database, scope.sessionKey, label).labelInUse,
-      ).toBe(expected);
-    }
-  });
 
   it.each(["malformed", "mismatched-window", "mismatched-time", "nul"])(
     "preserves native warm listing but refuses corrupt worker input for a %s target",

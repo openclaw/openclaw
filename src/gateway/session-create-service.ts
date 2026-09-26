@@ -273,7 +273,7 @@ export async function createGatewaySession(
       parentSessionKey,
       !parseAgentSessionKey(parentSessionKey) &&
         ["global", "unknown"].includes(parentSessionKey.toLowerCase())
-        ? explicitAgentId
+        ? params.agentId
         : undefined,
     );
     if (!parentRequestedAgent.ok) {
