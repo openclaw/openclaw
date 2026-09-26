@@ -141,7 +141,10 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   return { health, launchAgentRecovery };
 }
 
-function formatPostUpdateGatewayRecoveryLine(platform: NodeJS.Platform): string {
+export function formatPostUpdateGatewayRecoveryInstructions(
+  result: UpdateRunResult,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
   const restartCommand = formatCliCommand("openclaw gateway restart");
   const installCommand = formatCliCommand("openclaw gateway install --force");
   const statusCommand = formatCliCommand("openclaw gateway status --deep");
@@ -154,14 +157,9 @@ function formatPostUpdateGatewayRecoveryLine(platform: NodeJS.Platform): string 
           ? "gateway Scheduled Task or Windows login item is missing, stale, or not running"
           : "local service manager reports the gateway service is missing, stale, or not running";
   const session = platform === "darwin" ? "logged-in macOS user session" : "same user account";
-  return `Recovery: run \`${restartCommand}\`; if the ${condition}, run \`${installCommand}\` from the ${session}, then rerun \`${statusCommand}\`.`;
-}
-
-export function formatPostUpdateGatewayRecoveryInstructions(
-  result: UpdateRunResult,
-  platform: NodeJS.Platform = process.platform,
-): string[] {
-  const lines = [formatPostUpdateGatewayRecoveryLine(platform)];
+  const lines = [
+    `Recovery: run \`${restartCommand}\`; if the ${condition}, run \`${installCommand}\` from the ${session}, then rerun \`${statusCommand}\`.`,
+  ];
   const beforeVersion = normalizeOptionalString(result.before?.version);
   if (isPackageManagerUpdateMode(result.mode) && beforeVersion) {
     lines.push(

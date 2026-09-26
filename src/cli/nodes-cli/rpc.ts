@@ -15,11 +15,12 @@ import {
 import { readConnectErrorDetailCode } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { readMissingScopeError } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
+import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
+import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeFromNodeList } from "../../shared/node-resolve.js";
 import { callGatewayFromCliWithTransport } from "../gateway-rpc.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
-import { parseNodeList, parsePairingList } from "./format.js";
-import type { NodeListNode, NodesRpcOpts } from "./types.js";
+import type { NodesRpcOpts } from "./types.js";
 
 const STORED_DEVICE_AUTH_FALLBACK_DETAIL_CODES = new Set([
   "AUTH_REQUIRED",
