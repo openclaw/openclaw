@@ -1896,6 +1896,7 @@
     "mac:open": "open dist/OpenClaw.app",
     "mac:package": "/bin/bash scripts/package-mac-app.sh",
     "mac:restart": "/bin/bash scripts/restart-mac.sh",
+    "mobile:release:notes": "node --import ./scripts/tsx.mjs scripts/mobile-release-notes.ts",
     "mobile:release:preflight": "node --import ./scripts/tsx.mjs scripts/mobile-release-ref.ts preflight",
     "mobile:release:record": "node --import ./scripts/tsx.mjs scripts/mobile-release-ref.ts record",
     "mobile:release:resolve": "node --import ./scripts/tsx.mjs scripts/mobile-release-ref.ts resolve",

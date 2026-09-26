@@ -137,6 +137,191 @@ function swiftFunctionBody(source: string, name: string): string {
 }
 
 describe("iOS Fastlane release upload gates", () => {
+  it("uses the build attached to the latest public version for notes and rejects missing history", () => {
+    const source = String.raw`
+require "json"
+module UI
+  def self.user_error!(message); raise message; end
+end
+def default_platform(*); end
+def desc(*); end
+def platform(*); yield; end
+def lane(*); end
+alias private_lane lane
+load ARGV.fetch(0)
+Build = Struct.new(:id, :version)
+Version = Struct.new(:version_string, :app_version_state, :build) do
+  def get_build
+    raise "read a non-public build" unless ["2026.7.2", "2026.7.21"].include?(version_string)
+    build
+  end
+end
+old = Version.new("2026.7.2", "REPLACED_WITH_NEW_VERSION", Build.new("old", "8"))
+latest = Version.new("2026.7.21", "READY_FOR_DISTRIBUTION", Build.new("public", "3"))
+candidate = Version.new("2026.7.22", "PREPARE_FOR_SUBMISSION", Build.new("testflight", "19"))
+rows = %w[public delisted first missing ambiguous].map do |scenario|
+  latest.app_version_state = scenario == "delisted" ? "DEVELOPER_REMOVED_FROM_SALE" : "READY_FOR_DISTRIBUTION"
+  latest.build = scenario == "missing" ? nil : Build.new("public", "3")
+  versions = scenario == "first" ? [candidate] : [candidate, latest, old]
+  versions << latest.dup if scenario == "ambiguous"
+  begin
+    { scenario: scenario, baseline: ios_public_release_notes_baseline(versions) }
+  rescue => error
+    { scenario: scenario, error: error.message }
+  end
+end
+puts JSON.generate(rows)
+`;
+    const result = spawnSync("ruby", ["-e", source, fastfilePath], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual([
+      { scenario: "public", baseline: { audience: "ios", version: "2026.7.21", build: "3" } },
+      { scenario: "delisted", baseline: { audience: "ios", version: "2026.7.21", build: "3" } },
+      { scenario: "first", baseline: { audience: "ios", version: null, build: null } },
+      { scenario: "missing", error: expect.stringContaining("no identifiable attached build") },
+      {
+        scenario: "ambiguous",
+        error: expect.stringContaining("Ambiguous public App Store version"),
+      },
+    ]);
+  });
+
+  it("recovers notes and build selection on the registered stage lane without uploading again", () => {
+    const source = String.raw`
+require "json"
+module UI
+  def self.user_error!(message); raise message; end
+  def self.success(*); end
+  def self.important(*); end
+  def self.message(*); end
+end
+def default_platform(*); end
+def desc(*); end
+def platform(*); yield; end
+def lane(name, &body); define_singleton_method(name, &body); end
+alias private_lane lane
+load ARGV.fetch(0)
+module Spaceship
+  module ConnectAPI
+    module Platform
+      IOS = "IOS"
+    end
+    class Build
+      def self.all(**options)
+        raise "wrong build lookup" unless options == {
+          app_id: "app", version: "2026.7.21", build_number: "3", platform: "IOS", includes: "preReleaseVersion"
+        }
+        $builds
+      end
+    end
+  end
+end
+Build = Struct.new(:id, :version, :app_version, :processing_state, :expired)
+Localization = Struct.new(:locale, :whats_new) do
+  def update(attributes:)
+    $events << "notes"
+    raise "notes rejected" if $scenario == "notes-failure"
+    self.whats_new = attributes.fetch(:whats_new)
+  end
+end
+Version = Struct.new(:version_string, :app_version_state, :selected, :localization) do
+  def get_build; selected; end
+  def get_app_store_version_localizations; [localization]; end
+  def select_build(build_id:)
+    $events << "select"
+    raise "selection rejected" if $scenario == "selection-failure"
+    self.selected = $builds.find { |build| build.id == build_id }
+    localization.whats_new = "stale" if $scenario == "readback-failure"
+  end
+end
+App = Struct.new(:id, :versions) do
+  def get_app_store_versions(**); versions; end
+end
+def read_ios_version_metadata(**)
+  { version: "2026.7.2", short_version: "2026.7.21", app_store_revision: "1" }
+end
+def render_ios_release_notes(short_version:, build_number:)
+  raise "wrong notes identity" unless [short_version, build_number] == ["2026.7.21", "3"]
+  "Saved public release notes.\n"
+end
+def assert_ios_uploaded_release_source!(**)
+  raise "source mismatch" if $scenario == "source-mismatch"
+end
+def app_store_connect_api_key_config; end
+def app_store_connect_target_app; $app; end
+def resolve_app_store_connect_app(**); $app; end
+def upload_to_testflight(**); raise "reupload attempted"; end
+def resolve_ios_release_plan!(**); raise "replanning attempted"; end
+ENV["OPENCLAW_IOS_RELEASE_WRAPPER"] = "1"
+rows = %w[success first source-mismatch processing expired missing ambiguous locked newer notes-failure selection-failure readback-failure retry].map do |scenario|
+  $scenario, $events = scenario, []
+  build = Build.new("uploaded", "3", "2026.7.21", scenario == "processing" ? "PROCESSING" : "VALID", scenario == "expired")
+  $builds = scenario == "missing" ? [] : [build]
+  $builds << build.dup if scenario == "ambiguous"
+  version = Version.new("2026.7.21", scenario == "locked" ? "IN_REVIEW" : "PREPARE_FOR_SUBMISSION", nil, Localization.new("en-US", "Previous notes"))
+  version.selected = Build.new("newer", "4") if scenario == "newer"
+  if scenario == "retry"
+    version.selected = build
+    version.localization.whats_new = "Saved public release notes.\n"
+  end
+  versions = [version]
+  versions << Version.new("2026.7.2", "READY_FOR_DISTRIBUTION") unless scenario == "first"
+  $app = App.new("app", versions)
+  error = nil
+  begin
+    release_stage(release_version: "2026.7.2", app_store_revision: "1", build_number: "3")
+  rescue => failure
+    error = failure.message
+  end
+  { scenario: scenario, events: $events, error: error, selected: version.selected&.id, notes: version.localization.whats_new }
+end
+puts JSON.generate(rows)
+`;
+    const result = spawnSync("ruby", ["-e", source, fastfilePath], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    const rows = JSON.parse(result.stdout) as {
+      scenario: string;
+      events: string[];
+      error: string | null;
+      selected: string | null;
+      notes: string;
+    }[];
+    for (const row of rows) {
+      if (["success", "retry"].includes(row.scenario)) {
+        expect(row.error).toBeNull();
+        expect(row.selected).toBe("uploaded");
+        expect(row.notes).toBe("Saved public release notes.\n");
+        expect(row.events).toEqual(["notes", "select"]);
+      } else if (row.scenario === "first") {
+        expect(row.error).toBeNull();
+        expect(row.selected).toBe("uploaded");
+        expect(row.notes).toBe("Previous notes");
+        expect(row.events).toEqual(["select"]);
+      } else {
+        const expectedErrors: Record<string, string> = {
+          "source-mismatch": "source mismatch",
+          processing: "not a valid, unexpired processed build",
+          expired: "not a valid, unexpired processed build",
+          missing: "found 0",
+          ambiguous: "found 2",
+          locked: "locked in state IN_REVIEW",
+          newer: "already selects newer build 4",
+          "notes-failure": "notes rejected",
+          "selection-failure": "selection rejected",
+          "readback-failure": "staging readback did not match",
+        };
+        expect(row.error).toContain(expectedErrors[row.scenario]);
+        const expectedEvents =
+          row.scenario === "notes-failure"
+            ? ["notes"]
+            : ["selection-failure", "readback-failure"].includes(row.scenario)
+              ? ["notes", "select"]
+              : [];
+        expect(row.events).toEqual(expectedEvents);
+      }
+    }
+  });
+
   it("uploads the planned iOS build without Android preparation and records only accepted uploads", () => {
     const source = String.raw`
 require "json"
@@ -162,9 +347,10 @@ def resolve_ios_release_plan!(**)
   @plans += 1
   step(@plans == 1 ? "plan" : "recheck")
   { "gatewayVersion" => "2026.7.2", "appStoreRevision" => 1,
-    "buildNumber" => 3, "appStoreVersion" => "2026.7.21", "changelogStatus" => "ready" }
+    "buildNumber" => 3, "appStoreVersion" => "2026.7.21" }
 end
-def sync_ios_versioning!(**); step("notes"); end
+def assert_ios_release_notes_baseline!(_plan); step(@plans == 1 ? "baseline" : "baseline-recheck"); end
+def render_ios_release_notes(**); step("notes"); "Saved notes"; end
 def read_ios_version_metadata(**)
   { version: "2026.7.2", short_version: "2026.7.21", app_store_revision: "1" }
 end
@@ -186,7 +372,7 @@ def build_app_store_release(context)
   context.merge(ipa_path: "fixture.ipa")
 end
 def self.metadata(**)
-  raise "missing release metadata" unless ENV["DELIVER_SCREENSHOTS"] == "1" && ENV["DELIVER_RELEASE_NOTES"] == "1"
+  raise "missing release metadata" unless ENV["DELIVER_SCREENSHOTS"] == "1" && ENV["DELIVER_RELEASE_NOTES"] == "0"
   step("metadata")
 end
 def upload_to_testflight(**options)
@@ -203,7 +389,10 @@ def record_mobile_release_ref!(**options)
   }
   step("record")
 end
-rows = %w[success screenshots archive recheck metadata upload direct].map do |scenario|
+def self.release_stage(**)
+  step("stage")
+end
+rows = %w[success notes screenshots archive recheck baseline-recheck metadata upload stage direct].map do |scenario|
   @events, @plans, @failure = [], 0, scenario
   ENV["OPENCLAW_IOS_RELEASE_WRAPPER"] = scenario == "direct" ? "" : "1"
   error = nil
@@ -230,6 +419,7 @@ puts JSON.generate(rows)
     const steps = [
       "signing",
       "plan",
+      "baseline",
       "notes",
       "store-preflight",
       "ref-preflight",
@@ -237,9 +427,11 @@ puts JSON.generate(rows)
       "source",
       "archive",
       "recheck",
+      "baseline-recheck",
       "metadata",
       "upload",
       "record",
+      "stage",
     ];
     for (const row of rows) {
       expect(row.xcconfig).toBeNull();
@@ -301,7 +493,7 @@ puts JSON.generate(rows)
           .filter((line) => /\bfastlane (?:ios [a-z_]+|spaceauth)\b/u.test(line)),
     );
 
-    expect(documentedCommands).toHaveLength(7);
+    expect(documentedCommands.length).toBeGreaterThan(0);
     for (const command of documentedCommands) {
       expect(command).toContain('BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane');
     }

@@ -8,7 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const script = path.join(process.cwd(), "scripts/mobile-release.mjs");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const metadataPath = "apps/ios/CHANGELOG.md";
-const uploadRef = "refs/openclaw/mobile-releases/ios/2026.9.2-8";
+const uploadRef = "refs/openclaw/mobile-releases/ios/2026.9.20-8";
 
 function git(root: string, ...args: string[]): string {
   return execFileSync("git", args, {
@@ -17,81 +17,69 @@ function git(root: string, ...args: string[]): string {
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 }
-
 function write(root: string, relative: string, contents: string): void {
   const target = path.join(root, relative);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, contents);
 }
-
-function fixture(prepareAndUpload = false, platform = "ios") {
+function fixture(platform = "ios") {
   const directory = tempDirs.make("openclaw-mobile-release-");
   const remote = path.join(directory, "origin.git");
   const root = path.join(directory, "checkout");
   const recovery = path.join(directory, "recovery");
-  const bin = path.join(directory, "bin");
-  const ghState = path.join(directory, "github.json");
-  const ghLog = path.join(directory, "github-calls.jsonl");
   const uploadAudit = path.join(directory, "upload.json");
   git(directory, "init", "--bare", "--initial-branch=main", remote);
   git(directory, "clone", remote, root);
   git(root, "config", "user.name", "Release Fixture");
   git(root, "config", "user.email", "release@example.invalid");
   git(root, "config", "commit.gpgsign", "false");
-  write(root, metadataPath, "# iOS releases\n\n## Unreleased\n\nPending release notes.\n");
+  write(root, metadataPath, "# iOS releases\n\n## Unreleased\n\nHistorical notes.\n");
   write(root, "README.md", "Original application source.\n");
+  write(root, ".gitignore", "node_modules\n");
+  write(
+    root,
+    "package.json",
+    '{"name":"mobile-release-fixture","type":"module","version":"2026.9.2"}\n',
+  );
+  write(root, "scripts/tsx.mjs", "export {};\n");
+  write(root, "node_modules/tsx/package.json", '{"name":"tsx","exports":"./index.mjs"}\n');
+  write(root, "node_modules/tsx/index.mjs", "export {};\n");
+  fs.symlinkSync(
+    path.join(process.cwd(), "node_modules/zod"),
+    path.join(root, "node_modules/zod"),
+    "dir",
+  );
+  for (const file of [
+    "scripts/mobile-release-notes.ts",
+    "scripts/lib/mobile-release-notes.ts",
+    "scripts/mobile-release-ref.ts",
+  ]) {
+    write(root, file, fs.readFileSync(path.join(process.cwd(), file), "utf8"));
+  }
   write(
     root,
     "scripts/ios-release-plan.sh",
-    'echo "Unexpected Fastlane invocation" >&2\nexit 99\n',
+    `echo '{"gatewayVersion":"2026.9.2","appStoreVersion":"2026.9.20","appStoreRevision":0,"buildNumber":8,"releaseNotesBaselines":[{"audience":"ios","version":null,"build":null}]}'\n`,
   );
-  if (prepareAndUpload) {
-    write(root, ".gitignore", "node_modules\n");
-    write(root, "package.json", '{"name":"mobile-release-fixture","type":"module"}\n');
-    write(root, "node_modules/tsx/package.json", '{"name":"tsx","exports":"./index.mjs"}\n');
-    write(root, "node_modules/tsx/index.mjs", "export {};\n");
-    write(
-      root,
-      "scripts/ios-release-plan.sh",
-      `echo '{"gatewayVersion":"2026.9.2","appStoreRevision":0,"buildNumber":8}'\n`,
-    );
-    write(
-      root,
-      "scripts/ios-release-cut.ts",
-      `import fs from "node:fs";
-const plan = JSON.parse(fs.readFileSync(process.argv[process.argv.indexOf("--plan") + 1], "utf8"));
-if (plan.gatewayVersion !== "2026.9.2" || plan.buildNumber !== 8) throw new Error("Unexpected store plan");
-fs.writeFileSync("apps/ios/CHANGELOG.md", "Prepared store metadata.\\n");
-`,
-    );
-    write(root, "scripts/ios-release-upload.sh", "exec node scripts/fixture-upload.mjs\n");
-    write(
-      root,
-      "scripts/fixture-upload.mjs",
-      `import fs from "node:fs";
+  write(root, "scripts/ios-release-upload.sh", 'exec node scripts/fixture-upload.mjs "$@"\n');
+  write(
+    root,
+    "scripts/fixture-upload.mjs",
+    `import fs from "node:fs";
 import { execFileSync } from "node:child_process";
+import { renderMobileReleaseNotes } from "./lib/mobile-release-notes.ts";
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
 const sha = git("rev-parse", "HEAD");
-const audit = {
-  sha,
-  stampedSha: process.env.GIT_COMMIT,
-  status: git("status", "--porcelain", "--untracked-files=all"),
-  remoteMain: git("ls-remote", "origin", "refs/heads/main").split(/\\s+/)[0],
-  metadata: fs.readFileSync("apps/ios/CHANGELOG.md", "utf8")
-};
-fs.writeFileSync(process.env.FIXTURE_UPLOAD_AUDIT, JSON.stringify(audit));
+const stageOnly = process.argv.includes("--stage-only");
+const notes = renderMobileReleaseNotes({ rootDir: process.cwd(), platform: "ios", version: "2026.9.20", build: "8", audience: "ios" });
+fs.appendFileSync(process.env.FIXTURE_UPLOAD_AUDIT, JSON.stringify({ sha, stageOnly, notes, stampedSha: process.env.GIT_COMMIT, status: git("status", "--porcelain", "--untracked-files=all"), remoteMain: git("ls-remote", "origin", "refs/heads/main").split(/\\s+/)[0], metadata: fs.readFileSync("apps/ios/CHANGELOG.md", "utf8") }) + "\\n");
 if (process.env.FIXTURE_UPLOAD_FAIL === "1") throw new Error("Synthetic store upload refused");
-git("push", "origin", sha + ":${uploadRef}");
-console.log("Synthetic store upload accepted");
+if (!stageOnly) git("push", "origin", sha + ":${uploadRef}");
+if (process.env.FIXTURE_STAGE_FAIL === "1") throw new Error("Synthetic metadata stage refused after upload");
+console.log(stageOnly ? "Synthetic notes staged" : "Synthetic store upload accepted");
 `,
-    );
-  }
+  );
   if (platform === "android") {
-    write(
-      root,
-      "package.json",
-      '{"name":"mobile-release-fixture","type":"module","version":"2026.9.2"}\n',
-    );
     for (const file of [
       "scripts/android-sync-versioning.ts",
       "scripts/android-version.ts",
@@ -116,7 +104,7 @@ console.log("Synthetic store upload accepted");
     write(
       root,
       "apps/android/CHANGELOG.md",
-      "## Unreleased\n\nNew store notes.\n\n## 2026.8.2\n\nPrevious APK notes.\n",
+      "## Unreleased\n\nFuture manual notes.\n\n## 2026.8.2\n\nPrevious APK notes.\n",
     );
     write(
       root,
@@ -127,7 +115,7 @@ console.log("Synthetic store upload accepted");
       root,
       "scripts/lib/android-fastlane.sh",
       `run_android_fastlane() {
-  echo '{"version":"2026.9.2","versionCode":2026090203,"wearVersionCode":2026090253}' > "\u0024{3#output_path:}"
+  echo '{"version":"2026.9.2","versionCode":2026090203,"wearVersionCode":2026090253,"releaseNotesBaselines":[{"audience":"phone","version":null,"build":null},{"audience":"wear","version":null,"build":null}]}' > "\u0024{3#output_path:}"
 }\n`,
     );
     write(root, "scripts/android-release-upload.sh", "exec ruby scripts/fixture-upload.rb\n");
@@ -155,12 +143,7 @@ def build_release_artifacts!
   raise "Archive failed" unless system("node", "--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--dry-run")
 end
 def upload_play_store_build!(metadata, **options)
-  File.write(ENV.fetch("FIXTURE_UPLOAD_AUDIT"), JSON.generate({
-    version: metadata.fetch(:version),
-    versionCode: metadata.fetch(:version_code),
-    gradleVersion: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_NAME"],
-    gradleCode: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_CODE"]
-  }))
+  File.write(ENV.fetch("FIXTURE_UPLOAD_AUDIT"), JSON.generate({ version: metadata.fetch(:version), versionCode: metadata.fetch(:version_code), gradleVersion: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_NAME"], gradleCode: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_CODE"] }) + "\n")
   raise "Record failed" unless system("git", "push", "origin", "HEAD:refs/openclaw/mobile-releases/android/2026.9.2-2026090203")
 end
 $lanes.fetch(:release_upload).call
@@ -171,70 +154,19 @@ $lanes.fetch(:release_upload).call
   git(root, "commit", "-m", "Initial source");
   git(root, "push", "origin", "main");
   const base = git(root, "rev-parse", "HEAD");
-  fs.mkdirSync(recovery);
-  fs.mkdirSync(bin);
-  const gh = path.join(bin, "gh");
-  fs.writeFileSync(
-    gh,
-    `#!${process.execPath}
-const fs = require("node:fs");
-const { execFileSync } = require("node:child_process");
-const args = process.argv.slice(2);
-const remote = process.env.FIXTURE_REMOTE;
-const statePath = process.env.FIXTURE_GH_STATE;
-fs.appendFileSync(process.env.FIXTURE_GH_LOG, JSON.stringify(args) + "\\n");
-const git = (...argv) => execFileSync("git", ["--git-dir", remote, ...argv], {
-  encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-  env: { ...process.env, GIT_AUTHOR_NAME: "GitHub Fixture", GIT_AUTHOR_EMAIL: "github@example.invalid", GIT_COMMITTER_NAME: "GitHub Fixture", GIT_COMMITTER_EMAIL: "github@example.invalid" }
-}).trim();
-const value = (flag) => args[args.indexOf(flag) + 1];
-let state = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, "utf8")) : null;
-if (args[0] === "repo" && args[1] === "view") {
-  console.log(JSON.stringify({ nameWithOwner: "fixture/openclaw" }));
-} else if (args[0] === "pr" && args[1] === "list") {
-  console.log(JSON.stringify(state ? [state] : []));
-} else if (args[0] === "pr" && args[1] === "create") {
-  if (state) throw new Error("Duplicate PR creation");
-  const branch = value("--head");
-  state = { number: 1, state: "OPEN", branch, headRefOid: git("rev-parse", "refs/heads/" + branch), url: "https://github.com/fixture/openclaw/pull/1" };
-  fs.writeFileSync(statePath, JSON.stringify(state));
-  console.log(state.url);
-} else if (args[0] === "pr" && args[1] === "merge") {
-  if (!state || state.state !== "OPEN") throw new Error("Duplicate or missing PR merge");
-  if (!args.includes("--squash") || value("--match-head-commit") !== state.headRefOid) throw new Error("Expected exact-head squash merge");
-  const parent = git("rev-parse", "refs/heads/main");
-  if (git("rev-parse", state.headRefOid + "^") !== parent) throw new Error("Finalizer did not prepare metadata on current main");
-  const tree = git("rev-parse", state.headRefOid + "^{tree}");
-  if (!args.includes("--body-file")) throw new Error("Expected merge message body file");
-  const body = fs.readFileSync(value("--body-file"), "utf8");
-  const sha = git("commit-tree", tree, "-p", parent, "-m", value("--subject"), "-m", body);
-  git("update-ref", "refs/heads/main", sha, parent);
-  state.state = "MERGED";
-  state.mergeCommit = { oid: sha };
-  fs.writeFileSync(statePath, JSON.stringify(state));
-} else if (args[0] === "pr" && args[1] === "view") {
-  console.log(JSON.stringify(state));
-} else {
-  throw new Error("Unexpected gh command: " + args.join(" "));
-}
-`,
-    { mode: 0o755 },
-  );
   const env = {
     ...process.env,
-    PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
-    FIXTURE_REMOTE: remote,
-    FIXTURE_GH_STATE: ghState,
-    FIXTURE_GH_LOG: ghLog,
     FIXTURE_UPLOAD_AUDIT: uploadAudit,
+    OPENAI_API_KEY: "synthetic-key",
     GITHUB_ACTIONS: "false",
     GITHUB_REF: "",
     GITHUB_SHA: "",
     GITHUB_RUN_ATTEMPT: "",
     GITHUB_OUTPUT: path.join(directory, "github-output.txt"),
+    GITHUB_STEP_SUMMARY: path.join(directory, "summary.md"),
   };
   const invoke = (
-    operation: "run" | "finalize",
+    operation: "run" | "stage",
     extra: string[] = [],
     overrides: Record<string, string> = {},
   ) =>
@@ -243,40 +175,20 @@ if (args[0] === "repo" && args[1] === "view") {
       [script, operation, "--platform", platform, "--recovery-dir", recovery, ...extra],
       { cwd: root, env: { ...env, ...overrides }, encoding: "utf8" },
     );
-  const calls = (): string[][] =>
-    fs.existsSync(ghLog)
-      ? fs
-          .readFileSync(ghLog, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line))
-      : [];
-  return { directory, root, remote, recovery, base, invoke, calls, uploadAudit };
+  const audit = () =>
+    fs
+      .readFileSync(uploadAudit, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+  return { directory, root, remote, recovery, base, invoke, uploadAudit, audit };
 }
 
-function prepare(f: ReturnType<typeof fixture>, unexpectedFile = false): string {
-  git(f.root, "checkout", "--detach", f.base);
-  write(f.root, metadataPath, "# iOS releases\n\n## 2026.9.20\n\nUploaded release notes.\n");
-  if (unexpectedFile) {
-    write(f.root, "README.md", "Unreviewed application change.\n");
-  }
-  git(f.root, "add", ".");
-  git(f.root, "commit", "-m", "Prepare store release\n\nMobile-Release-Platform: ios");
-  const sha = git(f.root, "rev-parse", "HEAD");
-  git(f.root, "bundle", "create", path.join(f.recovery, "release.bundle"), `${f.base}..HEAD`);
-  git(f.root, "checkout", "main");
-  return sha;
-}
-
-function advanceMain(f: ReturnType<typeof fixture>, conflict = false): string {
+function advanceMain(f: ReturnType<typeof fixture>): string {
   git(f.root, "checkout", "-b", "advance-main", f.base);
-  write(
-    f.root,
-    conflict ? metadataPath : "README.md",
-    conflict ? "# Conflicting release history\n" : "Application source advanced after upload.\n",
-  );
+  write(f.root, "README.md", "Application source advanced after planning.\n");
   git(f.root, "add", ".");
-  git(f.root, "commit", "-m", "Advance main after store preparation");
+  git(f.root, "commit", "-m", "Advance main");
   const sha = git(f.root, "rev-parse", "HEAD");
   git(f.root, "push", "origin", "HEAD:main");
   git(f.root, "checkout", "main");
@@ -284,46 +196,31 @@ function advanceMain(f: ReturnType<typeof fixture>, conflict = false): string {
 }
 
 describe("mobile release CLI", () => {
-  it("builds Android from a saved store plan without changing the APK pin and finalizes only notes", () => {
-    const f = fixture(true, "android");
-    const pinnedFiles = ["apps/android/version.json", "apps/android/Config/Version.properties"];
-    const original = pinnedFiles.map((file) => fs.readFileSync(path.join(f.root, file), "utf8"));
-    const result = f.invoke("run", ["--defer-finalization"]);
+  it("builds Android from the saved store plan and notes without changing Git or pinned metadata", () => {
+    const f = fixture("android");
+    const pinned = [
+      "apps/android/version.json",
+      "apps/android/Config/Version.properties",
+      "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+    ];
+    const original = pinned.map((file) => fs.readFileSync(path.join(f.root, file), "utf8"));
+    const result = f.invoke("run");
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("Android versionName: 2026.9.2");
     expect(result.stdout).toContain("Android versionCode: 2026090203");
-    const plan = JSON.parse(fs.readFileSync(path.join(f.recovery, "android-plan.json"), "utf8"));
-    const uploaded = git(
-      f.remote,
-      "rev-parse",
-      "refs/openclaw/mobile-releases/android/2026.9.2-2026090203",
-    );
-    expect(plan).toEqual({
-      version: "2026.9.2",
-      versionCode: 2026090203,
-      wearVersionCode: 2026090253,
-      sourceSha: uploaded,
-    });
-    expect(JSON.parse(fs.readFileSync(f.uploadAudit, "utf8"))).toMatchObject({
+    expect(f.audit()[0]).toMatchObject({
       version: "2026.9.2",
       versionCode: 2026090203,
       gradleVersion: "2026.9.2",
       gradleCode: "2026090203",
     });
-    const notesPath = "apps/android/fastlane/metadata/android/en-US/release_notes.txt";
-    expect(git(f.remote, "diff-tree", "--no-commit-id", "--name-only", "-r", uploaded)).toBe(
-      notesPath,
-    );
+    expect(
+      git(f.remote, "rev-parse", "refs/openclaw/mobile-releases/android/2026.9.2-2026090203"),
+    ).toBe(f.base);
     expect(git(f.remote, "rev-parse", "main")).toBe(f.base);
-    const finalized = f.invoke("finalize");
-    expect(finalized.status, finalized.stderr).toBe(0);
-    const landed = git(f.remote, "rev-parse", "main");
-    for (const [index, file] of pinnedFiles.entries()) {
-      expect(`${git(f.remote, "show", `${landed}:${file}`)}\n`).toBe(original[index]);
+    for (const [index, file] of pinned.entries()) {
+      expect(fs.readFileSync(path.join(f.root, file), "utf8")).toBe(original[index]);
     }
-    expect(git(f.remote, "show", `${landed}:${notesPath}`)).toBe("New store notes.");
-
-    git(f.root, "checkout", "--detach", uploaded);
     const rebuilt = spawnSync(
       process.execPath,
       ["--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--dry-run"],
@@ -333,188 +230,90 @@ describe("mobile release CLI", () => {
         env: {
           ...process.env,
           OPENCLAW_ANDROID_RELEASE_PLAN: path.join(f.recovery, "android-plan.json"),
+          OPENCLAW_MOBILE_RELEASE_NOTES: path.join(f.recovery, "release-notes.json"),
         },
       },
     );
     expect(rebuilt.status, rebuilt.stderr).toBe(0);
     expect(rebuilt.stdout).toContain("Android versionCode: 2026090203");
-    const checked = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/android-sync-versioning.ts", "--check"],
-      { cwd: f.root, encoding: "utf8" },
-    );
-    expect(checked.status, checked.stderr).toBe(0);
-    git(f.root, "checkout", "main");
-    const wrongSource = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/android-version.ts", "--for-build"],
-      {
-        cwd: f.root,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_ANDROID_RELEASE_PLAN: path.join(f.recovery, "android-plan.json"),
-        },
-      },
-    );
-    expect(wrongSource.status).toBe(1);
-    expect(wrongSource.stderr).toContain("sourceSha must match the checked-out commit");
+    expect(git(f.root, "status", "--porcelain")).toBe("");
   });
 
-  it("commits complete preparation before upload and defers all main changes until finalization", () => {
-    const f = fixture(true);
+  it("uploads the frozen main source with generated notes and leaves advanced main untouched", () => {
+    const f = fixture();
     const advanced = advanceMain(f);
-    const stale = f.invoke("run", ["--defer-finalization"]);
+    const stale = f.invoke("run");
     expect(stale.status).toBe(1);
     expect(stale.stderr).toContain("Local main differs from origin/main");
     expect(fs.existsSync(f.uploadAudit)).toBe(false);
-    expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
-    const ci = {
-      GITHUB_ACTIONS: "true",
-      GITHUB_RUN_ATTEMPT: "1",
-      GITHUB_REF: "refs/heads/main",
-      GITHUB_SHA: f.base,
-    };
-    const result = f.invoke("run", ["--defer-finalization"], ci);
+    const result = f.invoke("run", [], { GITHUB_ACTIONS: "true", GITHUB_RUN_ATTEMPT: "1" });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("Synthetic store upload accepted");
-    const audit = JSON.parse(fs.readFileSync(f.uploadAudit, "utf8"));
-    expect(audit).toMatchObject({
-      stampedSha: audit.sha,
-      status: "",
-      remoteMain: advanced,
-      metadata: "Prepared store metadata.\n",
-    });
-    expect(audit.sha).not.toBe(f.base);
+    expect(f.audit()).toEqual([
+      expect.objectContaining({
+        sha: f.base,
+        stampedSha: f.base,
+        status: "",
+        remoteMain: advanced,
+        metadata: "# iOS releases\n\n## Unreleased\n\nHistorical notes.\n",
+        notes: "Bug fixes and improvements.",
+        stageOnly: false,
+      }),
+    ]);
     expect(git(f.remote, "rev-parse", "main")).toBe(advanced);
-    expect(git(f.remote, "rev-parse", uploadRef)).toBe(audit.sha);
-    expect(git(f.remote, "rev-parse", `${audit.sha}^`)).toBe(f.base);
-    expect(git(f.remote, "diff-tree", "--no-commit-id", "--name-only", "-r", audit.sha)).toBe(
-      metadataPath,
-    );
-    expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
-    expect(fs.existsSync(path.join(f.recovery, "release.bundle"))).toBe(true);
+    expect(git(f.remote, "rev-parse", uploadRef)).toBe(f.base);
     expect(git(f.root, "rev-parse", "HEAD")).toBe(f.base);
-    expect(f.calls()).toEqual([]);
-
-    const failedRecovery = path.join(f.directory, "failed-recovery");
-    const failed = f.invoke("run", ["--recovery-dir", failedRecovery], {
-      ...ci,
-      FIXTURE_UPLOAD_FAIL: "1",
-    });
-    expect(failed.status).toBe(1);
-    expect(failed.stderr).toContain("Synthetic store upload refused");
-    expect(fs.existsSync(path.join(failedRecovery, "source"))).toBe(true);
-    expect(fs.existsSync(path.join(failedRecovery, "release.bundle"))).toBe(true);
-    expect(git(f.remote, "rev-parse", "main")).toBe(advanced);
-    expect(f.calls()).toEqual([]);
+    expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
+    expect(fs.existsSync(path.join(f.recovery, "release-notes.json"))).toBe(true);
+    expect(fs.existsSync(path.join(f.recovery, "release.bundle"))).toBe(false);
+    expect(git(f.remote, "for-each-ref", "--format=%(refname)", "refs/heads")).toBe(
+      "refs/heads/main",
+    );
+    const repeated = f.invoke("run", [], { GITHUB_ACTIONS: "true", GITHUB_RUN_ATTEMPT: "2" });
+    expect(repeated.stderr).toContain("Do not rerun the upload job");
+    expect(f.audit()).toHaveLength(1);
   });
 
-  it("requires upload proof, reapplies metadata to advanced main, and finalizes only once", () => {
+  it("retains a failed upload attempt and refuses staging without proof of accepted upload", () => {
     const f = fixture();
-    const source = prepare(f);
-    const missing = f.invoke("finalize");
-    expect(missing.status).toBe(1);
-    expect(missing.stderr).toContain("no successful upload record");
-    expect(f.calls()).toEqual([]);
-    expect(git(f.remote, "rev-parse", "main")).toBe(f.base);
-
-    git(f.root, "push", "origin", `${source}:${uploadRef}`);
-    const advanced = advanceMain(f);
-    fs.unlinkSync(path.join(f.recovery, "release.bundle"));
-    const result = f.invoke("finalize", ["--source-sha", source]);
-    expect(result.status, result.stderr).toBe(0);
-    const landed = git(f.remote, "rev-parse", "main");
-    expect(git(f.remote, "rev-list", "--parents", "-n", "1", landed)).toBe(`${landed} ${advanced}`);
-    expect(git(f.remote, "show", `${landed}:README.md`)).toBe(
-      "Application source advanced after upload.",
-    );
-    expect(git(f.remote, "show", `${landed}:${metadataPath}`)).toContain("Uploaded release notes.");
-    expect(git(f.remote, "show", "-s", "--format=%B", landed)).toContain(
-      `Mobile-Release-Source: ${source}`,
-    );
-    expect(git(f.remote, "rev-parse", uploadRef)).toBe(source);
-    expect(git(f.root, "rev-parse", "HEAD")).toBe(f.base);
-    expect(fs.existsSync(path.join(f.recovery, "finalize"))).toBe(false);
-    const mutations = f.calls().filter((args) => args[1] === "create" || args[1] === "merge");
-    expect(mutations.map((args) => args[1])).toEqual(["create", "merge"]);
-
-    const retry = f.invoke("finalize", ["--source-sha", source]);
-    expect(retry.status, retry.stderr).toBe(0);
-    expect(retry.stdout).toContain("already recorded on main");
-    expect(git(f.remote, "rev-parse", "main")).toBe(landed);
-    expect(f.calls().filter((args) => args[1] === "create" || args[1] === "merge")).toEqual(
-      mutations,
-    );
-  });
-
-  it("refuses preparation commits that include application changes before creating a PR", () => {
-    const f = fixture();
-    const source = prepare(f, true);
-    git(f.root, "push", "origin", `${source}:${uploadRef}`);
-    const result = f.invoke("finalize");
+    const result = f.invoke("run", [], { FIXTURE_UPLOAD_FAIL: "1" });
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("unexpected file: README.md");
-    expect(f.calls()).toEqual([]);
+    expect(result.stderr).toContain("Synthetic store upload refused");
+    expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(true);
+    expect(fs.existsSync(path.join(f.recovery, "release-notes.json"))).toBe(true);
+    const recovery = f.invoke("stage");
+    expect(recovery.status).toBe(1);
+    expect(recovery.stderr).toContain("No matching upload record");
+    expect(f.audit()).toHaveLength(1);
     expect(git(f.remote, "rev-parse", "main")).toBe(f.base);
   });
 
-  it("retains a real metadata conflict and finalizes its explicit resolution on retry", () => {
+  it("recovers only iOS metadata staging using frozen notes and never uploads twice", () => {
     const f = fixture();
-    const source = prepare(f);
-    git(f.root, "push", "origin", `${source}:${uploadRef}`);
-    const advanced = advanceMain(f, true);
-    const result = f.invoke("finalize");
+    const result = f.invoke("run", [], { FIXTURE_STAGE_FAIL: "1" });
     expect(result.status).toBe(1);
-    const worktree = path.join(f.recovery, "finalize");
-    expect(fs.existsSync(worktree)).toBe(true);
-    expect(git(worktree, "rev-parse", "CHERRY_PICK_HEAD")).toBe(source);
-    expect(git(worktree, "diff", "--name-only", "--diff-filter=U")).toBe(metadataPath);
-    expect(f.calls().some((args) => args[1] === "create" || args[1] === "merge")).toBe(false);
-    expect(git(f.remote, "rev-parse", "main")).toBe(advanced);
-    expect(git(f.remote, "rev-parse", uploadRef)).toBe(source);
-
-    write(worktree, metadataPath, "# Conflicting release history\n\nUploaded release notes.\n");
-    git(worktree, "add", metadataPath);
-    git(worktree, "-c", "core.editor=true", "cherry-pick", "--continue");
-    git(
-      worktree,
-      "commit",
-      "--amend",
-      "-m",
-      `Resolve release metadata\n\nMobile-Release-Platform: ios\nMobile-Release-Source: ${source}`,
-    );
-    const retry = f.invoke("finalize");
-    expect(retry.status, retry.stderr).toBe(0);
-    const landed = git(f.remote, "rev-parse", "main");
-    expect(git(f.remote, "rev-list", "--parents", "-n", "1", landed)).toBe(`${landed} ${advanced}`);
-    expect(git(f.remote, "show", `${landed}:${metadataPath}`)).toBe(
-      "# Conflicting release history\n\nUploaded release notes.",
-    );
-    expect(git(f.remote, "rev-parse", uploadRef)).toBe(source);
-    expect(fs.existsSync(worktree)).toBe(false);
-    expect(
-      f
-        .calls()
-        .filter((args) => args[1] === "create" || args[1] === "merge")
-        .map((args) => args[1]),
-    ).toEqual(["create", "merge"]);
+    expect(result.stderr).toContain("Synthetic metadata stage refused after upload");
+    expect(git(f.remote, "rev-parse", uploadRef)).toBe(f.base);
+    const notes = fs.readFileSync(path.join(f.recovery, "release-notes.json"), "utf8");
+    const recovery = f.invoke("stage", [], { OPENAI_API_KEY: "" });
+    expect(recovery.status, recovery.stderr).toBe(0);
+    expect(f.audit().map((entry) => entry.stageOnly)).toEqual([false, true]);
+    expect(fs.readFileSync(path.join(f.recovery, "release-notes.json"), "utf8")).toBe(notes);
+    expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
+    expect(git(f.remote, "rev-parse", "main")).toBe(f.base);
   });
 
-  it("rejects dirty and non-main checkouts before creating a release worktree or calling Fastlane", () => {
+  it("rejects dirty, non-main, and missing-key releases before creating a worktree or calling Fastlane", () => {
     const f = fixture();
     write(f.root, "uncommitted.txt", "Unrelated local work.\n");
-    const dirty = f.invoke("run", ["--defer-finalization"]);
-    expect(dirty.status).toBe(1);
-    expect(dirty.stderr).toContain("require a clean checkout");
+    expect(f.invoke("run").stderr).toContain("require a clean checkout");
     fs.unlinkSync(path.join(f.root, "uncommitted.txt"));
     git(f.root, "checkout", "-b", "feature");
-    const branch = f.invoke("run", ["--defer-finalization"]);
-    expect(branch.status).toBe(1);
-    expect(branch.stderr).toContain("Start a release from a clean, current main");
-    expect(`${dirty.stderr}${branch.stderr}`).not.toContain("Unexpected Fastlane invocation");
+    expect(f.invoke("run").stderr).toContain("Start a release from a clean, current main");
+    git(f.root, "checkout", "main");
+    expect(f.invoke("run", [], { OPENAI_API_KEY: "" }).stderr).toContain(
+      "OPENAI_API_KEY is required",
+    );
     expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
-    expect(git(f.root, "branch", "--show-current")).toBe("feature");
-    expect(f.calls()).toEqual([]);
+    expect(fs.existsSync(f.uploadAudit)).toBe(false);
   });
 });

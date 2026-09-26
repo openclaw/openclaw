@@ -240,11 +240,11 @@ tasks still require explicit `openclawBuildCommit` and
 Android release archives use the pinned version in `apps/android/version.json`.
 Run **Android Store Release** from `main` without input parameters, or run
 `pnpm android:release:upload` from a clean local `main` matching `origin/main`.
-The pipeline selects unused phone and Wear build numbers from Google Play,
-prepares Android metadata from the root Gateway version and Android changelog,
-and commits changed preparation locally before uploading. After success it opens
-a metadata-only PR for squash auto-merge after the existing review and CI gates.
-The uploaded source SHA remains immutable; failed uploads do not change `main`.
+The pipeline selects unused phone and Wear build numbers from Google Play and
+generates OpenAI release notes from changes since each form factor's public
+release. It saves the plan and notes as release artifacts and uploads the selected
+clean source commit. Tracked version defaults and notes stay unchanged; the flow
+creates no preparation commits or follow-up PRs.
 
 For local preparation or inspection:
 
@@ -314,8 +314,8 @@ fallback upload path after `pnpm android:release:upload` fails.
 Agent-driven Google Play uploads must use `pnpm android:release:upload` as the
 only release path. If that command fails, stop and fix the failing screenshot,
 metadata, signing, validation, archive, or upload step and inspect the store
-outcome before trying again. If only Git finalization failed, use
-[finalization recovery](VERSIONING.md#git-finalization-and-recovery) without another upload.
+outcome before trying again. Keep the saved plan and generated notes for
+investigation or [local archive replay](VERSIONING.md#archive-a-saved-store-release).
 Do not upload archived artifacts through direct Fastlane lanes, Gradle artifacts,
 Google Play API commands, or Play Console mutation commands.
 

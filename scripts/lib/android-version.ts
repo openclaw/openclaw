@@ -260,8 +260,6 @@ function syncFile(params: {
 export function syncAndroidVersioning(params?: {
   mode?: SyncAndroidVersioningMode;
   rootDir?: string;
-  releaseVersion?: string;
-  notesOnly?: boolean;
 }): {
   updatedPaths: string[];
 } {
@@ -270,26 +268,10 @@ export function syncAndroidVersioning(params?: {
   const version = resolveAndroidVersion(rootDir);
   const changelogContent = readFileSync(version.changelogPath, "utf8");
   const nextVersionProperties = renderAndroidVersionProperties(version);
-  const notesVersion = params?.releaseVersion
-    ? normalizePinnedAndroidVersion(params.releaseVersion)
-    : version.canonicalVersion;
-  let acceptedStoreNotes: string | undefined;
-  if (mode === "check" && !params?.releaseVersion) {
-    // Store releases can update notes without advancing the independent APK pin.
-    // A repository check accepts either channel; upload checks select one version explicitly.
-    const storeVersion = resolveGatewayVersionForAndroidRelease(rootDir).pinnedAndroidVersion;
-    const storeNotes = findAndroidReleaseNotes(storeVersion, changelogContent);
-    if (readFileSync(version.releaseNotesPath, "utf8") === storeNotes) {
-      acceptedStoreNotes = storeNotes;
-    }
-  }
-  const nextReleaseNotes =
-    acceptedStoreNotes ??
-    renderAndroidReleaseNotes({ canonicalVersion: notesVersion }, changelogContent);
+  const nextReleaseNotes = renderAndroidReleaseNotes(version, changelogContent);
   const updatedPaths: string[] = [];
 
   if (
-    !params?.notesOnly &&
     syncFile({
       mode,
       path: version.versionPropertiesPath,

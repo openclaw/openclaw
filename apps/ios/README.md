@@ -120,7 +120,7 @@ Release behavior:
 - App Store release uses manual `Apple Distribution` signing with profile names pinned in `apps/ios/Config/AppStoreSigning.json`.
 - Fastlane owns one-time Developer Portal setup, encrypted `match` signing sync to the repo/branch pinned in `apps/ios/Config/AppStoreSigning.json`, and release handling.
 - App Store release also switches the app to `OpenClawPushMode=appStore`, which derives relay transport, official distribution, the canonical production relay, production APNs, production relay profile, `appleStrict` proof, and the App-Attest-capable entitlement file.
-- `pnpm ios:release:upload` generates App Store screenshots, archives and validates the IPA, uploads release notes and the rendered `apps/ios/APP-REVIEW-NOTES-APPLE.md` attachment, uploads the IPA, and waits for Apple processing.
+- `pnpm ios:release:upload` generates reviewed notes and App Store screenshots, archives and validates the IPA, stages screenshots and the rendered `apps/ios/APP-REVIEW-NOTES-APPLE.md` attachment, uploads the IPA, waits for Apple processing, then stages the saved notes and selects the build.
 - Agent-driven App Store uploads must use `pnpm ios:release:upload` as the only release path. If that command fails, stop and fix the failing screenshot, metadata, archive, validation, or upload step before trying again.
 - Do not treat `pnpm ios:release:archive`, `asc builds upload`, `asc release stage`, `asc publish appstore`, direct Fastlane lanes, or App Store Connect mutation commands as fallback upload paths after `pnpm ios:release:upload` fails.
 - The release archive is validated before upload by inspecting the exported IPA's signed entitlements, embedded App Store profile, and push mode. The upload fails if the IPA is not an App Store production relay build.
@@ -128,7 +128,7 @@ Release behavior:
 - Before submitting a HealthKit-enabled build, the release owner must update the public privacy policy and App Store Connect privacy details for the Health & Fitness aggregates shared with the user's configured AI provider.
 - The release flow does not modify `apps/ios/.local-signing.xcconfig` or `apps/ios/LocalSigning.xcconfig`.
 - Release uploads derive the gateway from root `package.json` and the App Store revision/build from live App Store Connect state.
-- `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source.
+- `apps/ios/CHANGELOG.md` remains historical documentation; store notes come from the saved Git-history artifact.
 - The gateway version must use CalVer like `2026.7.2`.
 - Gateway `2026.7.2`, App Store revision `1` becomes:
   - `CFBundleShortVersionString = 2026.7.21`
@@ -183,11 +183,12 @@ run the same entry point from a clean local `main` matching `origin/main`:
 pnpm ios:release:upload
 ```
 
-The entry point selects the live App Store plan, cuts iOS release notes, and
-commits changed notes locally before building. It uploads that prepared commit,
-then opens a metadata-only PR for squash auto-merge after the existing review
-and CI gates pass. The uploaded source SHA stays immutable. Failed uploads leave
-`main` unchanged. App Review submission remains manual.
+The entry point freezes the live App Store plan and unchanged source SHA,
+generates reviewed release notes from changes since the latest public build,
+and saves the text as a release artifact. After upload and Apple processing, it
+stages those notes and selects the exact build for manual App Review submission.
+It does not create commits or metadata PRs. Notes generation requires
+`OPENAI_API_KEY`; see [release notes](VERSIONING.md#release-notes).
 
 ## Maintainer Quick Release Checklist
 
@@ -228,15 +229,16 @@ pnpm ios:release:plan -- --json
 pnpm ios:release:upload
 ```
 
-If upload succeeds but Git finalization fails, rerun only the finalization job
-or CLI operation. Follow [Git finalization and recovery](VERSIONING.md#git-finalization-and-recovery);
-do not upload another build to repair repository bookkeeping.
+If processing succeeds but notes or build selection fails, use
+[staging recovery](VERSIONING.md#staging-recovery) with the saved artifacts.
+Do not upload another build to retry staging.
 
 ## iOS Versioning Workflow
 
 - Release gateway and local default version: root `package.json`.
 - App Store revision and build: deterministic App Store Connect plan.
-- iOS-only changelog: `apps/ios/CHANGELOG.md`.
+- Store release notes: reviewed `release-notes.json` artifact from Git history.
+- Historical human-maintained notes: `apps/ios/CHANGELOG.md`.
 - Generated local artifacts: `apps/ios/build/Version.xcconfig`,
   `apps/ios/build/AppStoreRelease.xcconfig`, and `apps/ios/SwiftSources.input.xcfilelist`.
 
@@ -248,11 +250,10 @@ pnpm ios:version:check
 pnpm ios:release:plan -- --json
 ```
 
-Add notes under `## Unreleased`, commit the app changes, then run
-`pnpm ios:release:upload`. Its `pnpm ios:release:cut` step moves those notes into
-the planned encoded heading. Failed, processing, and complete Apple-visible
-uploads all advance the next numeric build. After App Store distribution, the
-planner allocates the next revision automatically.
+Land the app changes, then run `pnpm ios:release:upload`. No changelog cut is
+required. Failed, processing, and complete Apple-visible uploads all advance
+the next numeric build. After App Store distribution, the planner allocates the
+next revision automatically.
 
 See `apps/ios/VERSIONING.md` for the detailed spec.
 

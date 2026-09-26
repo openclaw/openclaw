@@ -176,13 +176,10 @@ export function syncIosVersioning(params?: {
 } {
   const rootDir = path.resolve(params?.rootDir ?? ".");
   const releaseVersion = params?.releaseVersion;
-  const version = resolveIosVersion(rootDir, {
+  resolveIosVersion(rootDir, {
     appStoreRevision: params?.appStoreRevision,
     releaseVersion,
   });
-  const changelogContent = readFileSync(version.changelogPath, "utf8");
-  renderIosReleaseNotes(version, changelogContent);
-
   return { updatedPaths: [] };
 }
 

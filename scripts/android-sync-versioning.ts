@@ -7,24 +7,23 @@ export { parseVersionSyncArgs as parseArgs } from "./lib/version-script-args.ts"
 
 function printUsage(): void {
   process.stdout.write(
-    "Usage: node --import tsx scripts/android-sync-versioning.ts [--write|--check] [--notes-only] [--version YYYY.M.PATCH] [--root dir]\n",
+    "Usage: node --import tsx scripts/android-sync-versioning.ts [--write|--check] [--root dir]\n",
   );
 }
 
 function main(argv = process.argv.slice(2)): number {
-  const notesOnly = argv.includes("--notes-only");
-  const options = parseVersionSyncArgs(argv.filter((arg) => arg !== "--notes-only"));
+  const options = parseVersionSyncArgs(argv);
   if (options.help) {
     printUsage();
     return 0;
   }
 
-  const result = syncAndroidVersioning({
-    mode: options.mode,
-    rootDir: options.rootDir,
-    releaseVersion: options.releaseVersion ?? undefined,
-    notesOnly,
-  });
+  if (options.releaseVersion) {
+    throw new Error(
+      "Android version sync uses the pinned version; store notes come from the release artifact.",
+    );
+  }
+  const result = syncAndroidVersioning({ mode: options.mode, rootDir: options.rootDir });
 
   if (options.mode === "check") {
     process.stdout.write("Android versioning artifacts are up to date.\n");

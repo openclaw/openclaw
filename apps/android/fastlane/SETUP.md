@@ -109,35 +109,32 @@ pnpm android:release:upload
 ## GitHub Actions release
 
 Run **Android Store Release** from `main` in GitHub Actions without input parameters. The workflow
-prepares a release from the root Gateway version and Android changelog, queries
-Google Play for unused phone/Wear build numbers, and prepares a clean source
-commit locally before signing. Preparation writes and commits only generated
-release notes when they change. It keeps `version.json` and
-`Config/Version.properties` unchanged and passes the saved plan through
+plans a release from the root Gateway version, queries Google Play for unused
+phone/Wear build numbers, and generates OpenAI release notes from source changes
+since each form factor's public production release. It keeps tracked version
+defaults and notes unchanged and passes the saved plan through
 `OPENCLAW_ANDROID_RELEASE_PLAN` to select the build version and codes at runtime.
-The local CLI uses the same flow. Android preparation is independent of iOS.
+`OPENCLAW_MOBILE_RELEASE_NOTES` selects the saved generated notes artifact. The
+local CLI uses the same flow. Android preparation is independent of iOS.
 
 The environment supplies these secrets:
 
 - `GH_APP_PRIVATE_KEY`
 - `MATCH_PASSWORD`
 - `GOOGLE_PLAY_JSON_KEY_DATA`
+- `OPENAI_API_KEY`
 
 The workflow uses the locked Fastlane bundle and the existing signing assets.
 The upload lane commits phone and Wear bundles, metadata, and screenshots in one
 Play edit to `internal` and `wear:internal`, then records the release commit at
 `refs/openclaw/mobile-releases/android/<version-name>-<phone-version-code>`.
-After upload, a separate finalization job opens a release-notes-only PR and requests
-squash auto-merge under the existing `main` review and CI gates. The uploaded
-source SHA stays immutable; failed uploads leave `main` unchanged. Production
-promotion remains manual.
+The source SHA stays immutable and no preparation commit or follow-up PR is
+created. Production promotion remains manual.
 
-If only finalization fails, rerun only **Finalize Android release on main** or
-use the [finalization recovery commands](../VERSIONING.md#git-finalization-and-recovery).
-The recovery artifact retains the source bundle and `android-plan.json` for 30
-days. Keep the plan as well as the source when you need to archive the same store
-version again. Git finalization can also use the full uploaded source SHA. Do
-not rerun the upload to repair Git bookkeeping.
+The release artifacts retain `android-plan.json` and `release-notes.json` for 30
+days. Keep the plan and notes and use their recorded source commit for
+[archive replay](../VERSIONING.md#archive-a-saved-store-release). Inspect a failed
+or uncertain store outcome before starting another upload.
 
 The Fastlane planner can be inspected without publishing:
 
@@ -147,11 +144,14 @@ bundle _4.0.21_ exec fastlane android release_plan output_path:/tmp/android-rele
 ```
 
 It lists uploaded APK and AAB version codes in a temporary edit and always aborts
-that edit. The JSON contains `version`, `versionCode`, and `wearVersionCode`.
-The release command generates notes for that version and adds `sourceSha` to
-`android-plan.json` after preparing the clean source commit. The build validates
-that SHA before using the plan; the planner's initial output alone is not a
-complete archive-replay plan.
+that edit. The JSON contains `version`, `versionCode`, `wearVersionCode`, and
+`releaseNotesBaselines`. Baselines identify the actual public phone and Wear
+version codes, independent of internal uploads; release names are not identities.
+Staged, halted, and ambiguous public releases stop planning. The release command
+adds the selected `sourceSha` and generates notes for that source. The build
+validates the source and notes artifact before using the plan; the planner's
+initial output alone is not a complete archive-replay plan. Upload checks the
+production baselines again immediately before uploading the bundles.
 
 Direct Fastlane entry point:
 
@@ -175,8 +175,8 @@ Release rules:
 - `apps/android/version.json` supplies the pinned defaults for APK publication and ordinary archives.
 - `apps/android/Config/Version.properties` is generated from that source and supplies Gradle's defaults. Store releases override them at runtime without writing either file.
 - The root `package.json` supplies the Gateway version for automatic preparation.
-- `apps/android/CHANGELOG.md` supplies hand-authored Android release notes, selecting the exact release version's section first, then `Unreleased`.
-- `apps/android/fastlane/metadata/android/en-US/release_notes.txt` is generated for the pin by `pnpm android:version:sync`, or for the planned version during store release preparation.
+- `apps/android/CHANGELOG.md` supplies hand-authored notes for pinned APK/archive defaults, selecting the exact pinned version's section first, then `Unreleased`.
+- `apps/android/fastlane/metadata/android/en-US/release_notes.txt` is generated for the pin by `pnpm android:version:sync`. Store uploads use separate generated phone and Wear notes from `OPENCLAW_MOBILE_RELEASE_NOTES` and leave this file unchanged.
 - `apps/android/Config/ReleaseSigning.json` pins the encrypted Android signing assets in the shared signing repo.
 - `apkCertificateSha256` in that manifest pins the upload certificate accepted for standalone release APKs; rotate it only with the encrypted keystore.
 - `MATCH_PASSWORD` enables Fastlane to pull encrypted Android signing assets into `apps/android/build/release-signing/` before release validation or archive builds.
@@ -184,14 +184,14 @@ Release rules:
 - Phone `versionCode` uses `YYYYMMDDNN`, where `NN` is `01` through `49`; the matching Wear APK adds `50` and uses `51` through `99`.
 - `pnpm android:version:pin` writes the Android version and synchronizes its properties and notes.
 - `pnpm android:version:sync` regenerates properties and notes from the Android pin and changelog.
-- `pnpm android:version:check` validates properties against the pin and accepts release notes for either the pin or current root package version, without changing files. Store uploads strictly validate notes for their selected version.
-- `pnpm android:release:preflight` validates Google Play auth, Android release signing, synced Android metadata, release notes, and prints the package/track/version/versionCode that will be uploaded.
+- `pnpm android:version:check` validates properties and notes against the pin without changing files.
+- `pnpm android:release:preflight` requires the saved store plan and generated notes, validates Google Play auth, production baselines, signing, and release identity, and prints the package/track/version/versionCode that will be uploaded.
 - `pnpm android:release:signing:sync:pull` pulls encrypted Android signing assets from `apps-signing`.
 - `pnpm android:release:signing:sync:push` creates or refreshes encrypted Android signing assets in `apps-signing`.
 - `pnpm android:screenshots` builds and installs the phone and Wear OS debug
   apps, launches deterministic screenshot scenes, and writes Play-ready JPEGs
   to the matching `phoneScreenshots` and `wearScreenshots` metadata folders.
-- `pnpm android:release:archive` builds the signed phone Play AAB, Wear AAB, and third-party APK into `apps/android/build/release-artifacts/`. It uses pinned defaults unless `OPENCLAW_ANDROID_RELEASE_PLAN` selects a saved plan matching the source commit.
+- `pnpm android:release:archive` builds the signed phone Play AAB, Wear AAB, and third-party APK into `apps/android/build/release-artifacts/`. It uses pinned defaults unless `OPENCLAW_ANDROID_RELEASE_PLAN` selects a saved plan matching the source commit; replay also requires the saved `OPENCLAW_MOBILE_RELEASE_NOTES` artifact.
 - `pnpm android:release:upload` commits the phone AAB, Wear AAB, metadata, and screenshots in one Google Play edit across the configured phone and `wear:` form-factor tracks. The default tracks are `internal` and `wear:internal`.
 - Stable GitHub Release APK publication is separate from Google Play: `OpenClaw Release Publish` dispatches `.github/workflows/android-release.yml`, whose protected `android-release` environment provides `MATCH_PASSWORD`; the repository GitHub App reads the encrypted signing repo.
 - Production promotion remains manual in Google Play Console.

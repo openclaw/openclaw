@@ -189,6 +189,7 @@ describe("iOS release shell wrapper arguments", () => {
     fastlaneExit: number;
     bundleGemfile?: string;
     changeDirectoryAfterSource?: boolean;
+    uploadArgs?: string[];
   }) {
     const binDir = tempDirs.make("openclaw-fastlane-test-");
     const bundle = path.join(binDir, "bundle");
@@ -203,17 +204,22 @@ describe("iOS release shell wrapper arguments", () => {
         "shift 3\n" +
         'exec fastlane "$@"\n',
     );
-    writeFileSync(fastlane, `#!/usr/bin/env bash\nexit ${options.fastlaneExit}\n`);
+    writeFileSync(
+      fastlane,
+      `#!/usr/bin/env bash\nprintf '%s\\n' "$*"\nexit ${options.fastlaneExit}\n`,
+    );
     chmodSync(bundle, 0o755);
     chmodSync(fastlane, 0o755);
     return spawnSync(
       BASH_BIN,
-      [
-        "-c",
-        options.changeDirectoryAfterSource
-          ? "source scripts/lib/ios-fastlane.sh; cd apps/ios; run_ios_fastlane ios release_plan"
-          : "source scripts/lib/ios-fastlane.sh; run_ios_fastlane ios release_plan",
-      ],
+      options.uploadArgs
+        ? ["scripts/ios-release-upload.sh", ...options.uploadArgs]
+        : [
+            "-c",
+            options.changeDirectoryAfterSource
+              ? "source scripts/lib/ios-fastlane.sh; cd apps/ios; run_ios_fastlane ios release_plan"
+              : "source scripts/lib/ios-fastlane.sh; run_ios_fastlane ios release_plan",
+          ],
       {
         cwd: process.cwd(),
         env: {
@@ -226,6 +232,25 @@ describe("iOS release shell wrapper arguments", () => {
       },
     );
   }
+
+  it("routes stage recovery to the non-uploading lane with the saved identity", () => {
+    const result = runSharedFastlane({
+      fastlaneExit: 0,
+      uploadArgs: [
+        "--stage-only",
+        "--version",
+        "2026.7.2",
+        "--revision",
+        "1",
+        "--build-number",
+        "3",
+      ],
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(
+      "ios release_stage release_version:2026.7.2 app_store_revision:1 build_number:3\n",
+    );
+  });
 
   it("preserves Fastlane failures through the pinned shared runner", () => {
     const result = runSharedFastlane({ fastlaneExit: 37 });

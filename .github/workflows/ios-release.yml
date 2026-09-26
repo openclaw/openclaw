@@ -13,10 +13,6 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.21.0"
-  GIT_AUTHOR_NAME: github-actions[bot]
-  GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
-  GIT_COMMITTER_NAME: github-actions[bot]
-  GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
 
 jobs:
   release:
@@ -27,8 +23,6 @@ jobs:
     runs-on: xcode-27
     timeout-minutes: 360
     environment: ios-store-release
-    outputs:
-      recovery_artifact_id: ${{ steps.recovery.outputs.artifact-id }}
     steps:
       - name: Checkout current main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -144,22 +138,24 @@ jobs:
           APP_STORE_CONNECT_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_KEY_CONTENT }}
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           GH_TOKEN: ${{ github.token }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
           SCAN_APP_NAME: OpenClaw
           SCAN_DEPLOYMENT_TARGET_VERSION: "18.0"
         run: |
           set -euo pipefail
           gh auth setup-git
-          pnpm ios:release:upload -- --defer-finalization \
+          pnpm ios:release:upload -- \
             --recovery-dir "$RUNNER_TEMP/ios-release-recovery"
 
-      - name: Retain prepared release for Git recovery
-        id: recovery
+      - name: Retain release plan and notes
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ios-release-recovery-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/ios-release-recovery/release.bundle
+          path: |
+            ${{ runner.temp }}/ios-release-recovery/ios-plan.json
+            ${{ runner.temp }}/ios-release-recovery/release-notes.json
           if-no-files-found: error
           retention-days: 30
 
@@ -171,58 +167,7 @@ jobs:
           name: ios-release-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/ios-release-recovery/artifacts/*.ipa
-            ${{ runner.temp }}/ios-release-recovery/artifacts/*.aab
-            ${{ runner.temp }}/ios-release-recovery/artifacts/*.apk
             ${{ runner.temp }}/ios-release-recovery/artifacts/*.sha256
           if-no-files-found: ignore
           compression-level: 0
           retention-days: 30
-
-  finalize:
-    name: Finalize iOS release on main
-    needs: release
-    permissions:
-      contents: read
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    environment: ios-store-release
-    steps:
-      - name: Checkout current main
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: main
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          package-manager-cache: false
-
-      - name: Download exact release recovery bundle
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          artifact-ids: ${{ needs.release.outputs.recovery_artifact_id }}
-          merge-multiple: true
-          path: ${{ runner.temp }}/ios-release-recovery
-
-      - name: Create release finalization token
-        id: release-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: "2729701"
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-          owner: openclaw
-          repositories: openclaw
-          permission-contents: write
-          permission-pull-requests: write
-
-      - name: Publish preparation changes with linear history
-        env:
-          GH_TOKEN: ${{ steps.release-token.outputs.token }}
-        run: |
-          set -euo pipefail
-          gh auth setup-git
-          node scripts/mobile-release.mjs finalize --platform ios \
-            --recovery-dir "$RUNNER_TEMP/ios-release-recovery"

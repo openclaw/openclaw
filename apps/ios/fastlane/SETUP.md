@@ -142,11 +142,11 @@ From a clean local `main` matching `origin/main`, upload to App Store Connect:
 pnpm ios:release:upload
 ```
 
-The entry point plans and cuts iOS release notes automatically, commits changed
-notes locally for clean build provenance, and uploads the prepared commit.
-After success it opens a metadata-only PR for squash auto-merge under the
-existing `main` gates. The uploaded source SHA remains immutable. Failed uploads
-leave `main` unchanged. Direct Fastlane upload is disabled.
+The entry point plans the release, generates reviewed notes from changes since
+the latest public build, and uploads the unchanged source SHA. It saves the
+notes artifact without editing tracked files or creating commits. After Apple
+processing it stages the saved notes and selects the build. Direct Fastlane
+upload is disabled. Notes generation requires `OPENAI_API_KEY`.
 
 ## Native release qualification
 
@@ -204,19 +204,19 @@ labels and bounded exit/error diagnostics rather than raw logs or setup codes.
 
 ## GitHub Actions
 
-Run **iOS Store Release** from `main` using the `ios-store-release` environment for
-upload and Git finalization. The workflow has no input parameters and uses
-the same `pnpm ios:release:upload` entry point. It installs the pinned build
-tools, uses readonly encrypted signing assets and a job-owned temporary
-keychain, and uploads screenshots, release notes, the App Review PDF attachment,
-and the IPA. A separate finalization job opens the metadata PR and waits for
-squash merging. App Review submission remains manual. If only finalization
-fails, rerun that job or use the
-[shared recovery commands](../VERSIONING.md#git-finalization-and-recovery); do not repeat the upload.
+Run **iOS Store Release** from `main` using the `ios-store-release` environment.
+The workflow has no input parameters and uses the same
+`pnpm ios:release:upload` entry point. It installs the pinned build tools, uses
+readonly encrypted signing assets and a job-owned temporary keychain, and
+uploads screenshots, the App Review PDF attachment, and the IPA. After Apple
+processing it stages the saved release notes and selects the exact build.
+App Review submission remains manual. For a failure after upload, use
+[staging recovery](../VERSIONING.md#staging-recovery); do not repeat the upload.
 
 Repository/environment secrets required by name:
 
 - `GH_APP_PRIVATE_KEY`
+- `OPENAI_API_KEY`
 - `MATCH_PASSWORD`
 - `APP_STORE_CONNECT_ISSUER_ID`
 - `APP_STORE_CONNECT_KEY_ID`
@@ -262,16 +262,16 @@ Versioning rules:
 
 - App Store release uploads derive the gateway from root `package.json` and revision/build state from App Store Connect
 - The planner accepts checked `--version`, `--revision`, and `--build-number` overrides; no release arguments are required
-- `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source
+- Store notes come from the saved, reviewed Git-history artifact; `apps/ios/CHANGELOG.md` remains historical documentation
 - Gateway versions use CalVer: `YYYY.M.PATCH`
 - Fastlane appends one unpadded revision digit: gateway `YYYY.M.PATCH`, revision `R`, becomes `YYYY.M.PATCHR`
 - Gateway `2026.7.2`, revision `1` sets `CFBundleShortVersionString` to `2026.7.21`
 - Fastlane resolves `CFBundleVersion` from the maximum awaiting, processing, failed, or complete build-upload record plus one
-- The release entry point runs `pnpm ios:release:cut` automatically and persists the exact encoded heading only after upload succeeds
-- `pnpm ios:version:check` validates that release notes can be generated from the iOS changelog
+- The notes baseline is the build attached to the latest public App Store version, independent of later TestFlight uploads
+- `pnpm ios:version:check` validates version inputs without requiring changelog notes
 - The release flow regenerates `apps/ios/OpenClaw.xcodeproj` from `apps/ios/project.yml` before archiving
 - Local App Store signing uses a temporary generated xcconfig with profile names from `apps/ios/Config/AppStoreSigning.json` and leaves local development signing overrides untouched
 - App Store release uses `OpenClawPushMode=appStore`, which derives the canonical production hosted relay, production APNs, production relay profile, and `appleStrict` proof. The release lane rejects custom production relay URL overrides.
 - The exported IPA is validated before upload by inspecting its push mode, signed entitlements, and embedded App Store profile.
-- `pnpm ios:release:upload` generates and uploads screenshots, release notes, and the App Review PDF attachment before uploading the IPA, waits for build processing, and does not submit for App Review or upload the App Store Connect `Notes` field
+- `pnpm ios:release:upload` stages screenshots and the App Review PDF attachment before uploading the IPA, waits for processing, then stages saved notes and selects the build. It does not submit for App Review or upload the App Store Connect `Notes` field
 - See `apps/ios/VERSIONING.md` for the detailed workflow

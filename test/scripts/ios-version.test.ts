@@ -9,6 +9,7 @@ import {
   renderIosReleaseNotes,
   resolveGatewayVersionForIosRelease,
   resolveIosVersion,
+  syncIosVersioning,
 } from "../../scripts/lib/ios-version.ts";
 import { extractChangelogSection } from "../../scripts/lib/mobile-changelog.ts";
 import { installIosFixtureCleanup, writeIosFixture } from "./ios-version.test-support.ts";
@@ -16,6 +17,15 @@ import { installIosFixtureCleanup, writeIosFixture } from "./ios-version.test-su
 installIosFixtureCleanup();
 
 describe("resolveIosVersion", () => {
+  it("checks archive version inputs without requiring changelog release notes", () => {
+    const rootDir = writeIosFixture({ packageVersion: "2026.7.2", changelog: "" });
+    fs.rmSync(path.join(rootDir, "apps/ios/CHANGELOG.md"));
+    expect(syncIosVersioning({ rootDir, appStoreRevision: 1 })).toEqual({ updatedPaths: [] });
+    expect(() => syncIosVersioning({ rootDir, appStoreRevision: 10 })).toThrow(
+      "Expected an integer from 0 to 9",
+    );
+  });
+
   it("writes shared full commit and UTC timestamp settings for iOS builds", () => {
     const script = fs.readFileSync("scripts/ios-write-version-xcconfig.sh", "utf8");
 

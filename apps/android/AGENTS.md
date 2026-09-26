@@ -4,8 +4,9 @@ Root rules still apply. This file adds the Android release guardrails.
 
 ## Google Play Releases
 
-- Agent-driven Google Play uploads must use only `pnpm android:release:upload`. The no-input **Android Store Release** GitHub Action calls this owner to prepare a clean release commit and upload it.
-- Android release notes and pinned metadata belong to `apps/android`. Keep preparation independent of iOS and preserve the separate Gateway APK publication workflow at `.github/workflows/android-release.yml`.
+- Agent-driven Google Play uploads must use only `pnpm android:release:upload`. The no-input **Android Store Release** GitHub Action calls this owner to plan, generate notes, and upload the selected clean source commit without preparation commits or finalization PRs.
+- Google Play releases use the saved Android plan and generated notes artifact. Notes compare the selected source with the public phone and Wear releases, and upload revalidates those baselines. Do not substitute tracked changelog notes or the latest internal build as the store baseline.
+- Android pinned metadata and changelog sync remain the defaults for ordinary archives and Gateway APK publication. Store releases leave them unchanged. Keep preparation independent of iOS and preserve `.github/workflows/android-release.yml`.
 - If `pnpm android:release:upload` exits non-zero, stop immediately and report the failing step.
 - After a failed `pnpm android:release:upload`, do not continue with `pnpm android:release:archive`, `pnpm android:release:metadata`, `fastlane android play_store`, `fastlane android metadata`, direct Gradle release artifacts plus Google Play upload commands, Google Play API mutation commands, or mobile release ref recording.
 - Do not promote an Android release to production. Production promotion stays manual in Google Play Console unless the user explicitly asks to promote a specific already-prepared release after the failed state has been reported.

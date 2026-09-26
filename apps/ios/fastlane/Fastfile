@@ -828,38 +828,19 @@ def release_signing_check!
   sync_app_store_signing!(readonly: true)
 end
 
-def render_ios_release_notes(release_version:, app_store_revision:)
-  script_path = File.join(repo_root, "scripts", "ios-version.ts")
-  args = [
-    "node",
-    "--import",
-    "tsx",
-    script_path,
-    "--field",
-    "releaseNotes"
-  ]
-  args.push("--version", release_version) if env_present?(release_version)
-  args.push("--revision", app_store_revision) if env_present?(app_store_revision)
+def render_ios_release_notes(short_version:, build_number:)
   stdout, stderr, status = Open3.capture3(
-    *args,
+    "node", "--import", File.join(repo_root, "scripts", "tsx.mjs"),
+    File.join(repo_root, "scripts", "mobile-release-notes.ts"), "render",
+    "--platform", "ios", "--version", short_version.to_s,
+    "--build", build_number.to_s, "--audience", "ios",
     chdir: repo_root
   )
-  return stdout if status.success?
+  return stdout.delete_suffix("\n") if status.success?
 
   detail = stderr.to_s.strip
   detail = stdout.to_s.strip if detail.empty?
-  UI.user_error!("Failed to render iOS release notes: #{detail}")
-end
-
-def release_notes_metadata_path(release_version:, app_store_revision:)
-  temp_root = Dir.mktmpdir("openclaw-release-notes")
-  target_dir = File.join(temp_root, "en-US")
-  FileUtils.mkdir_p(target_dir)
-  File.write(
-    File.join(target_dir, "release_notes.txt"),
-    render_ios_release_notes(release_version: release_version, app_store_revision: app_store_revision)
-  )
-  temp_root
+  UI.user_error!("Failed to render saved iOS release notes: #{detail}")
 end
 
 def app_review_notes_markdown_path
@@ -893,7 +874,7 @@ def assert_no_app_review_notes_field_metadata!(metadata_path)
   end
 end
 
-def public_metadata_path(release_version: nil, app_store_revision: nil)
+def public_metadata_path
   source = File.join(__dir__, "metadata")
   temp_root = Dir.mktmpdir("openclaw-app-store-metadata")
   Dir.children(source).each do |entry|
@@ -904,14 +885,6 @@ def public_metadata_path(release_version: nil, app_store_revision: nil)
     FileUtils.cp_r(source_entry, File.join(temp_root, entry))
   end
   Dir[File.join(temp_root, "*", "release_notes.txt")].each { |path| FileUtils.rm_f(path) }
-  if release_notes_upload_requested?
-    target_dir = File.join(temp_root, "en-US")
-    FileUtils.mkdir_p(target_dir)
-    File.write(
-      File.join(target_dir, "release_notes.txt"),
-      render_ios_release_notes(release_version: release_version, app_store_revision: app_store_revision)
-    )
-  end
   temp_root
 end
 
@@ -1304,6 +1277,20 @@ def release_source_clean?
   status.success? && stdout.strip.empty?
 end
 
+def ios_public_release_notes_baseline(versions)
+  public_versions = versions.select { |version| RELEASED_APP_STORE_VERSION_STATES.include?(app_store_version_state(version)) }
+  return { audience: "ios", version: nil, build: nil } if public_versions.empty?
+
+  latest = public_versions.max_by { |version| Gem::Version.new(version.version_string) }
+  matches = public_versions.select { |version| version.version_string == latest.version_string }
+  UI.user_error!("Ambiguous public App Store version #{latest.version_string}.") unless matches.length == 1
+  build = latest.get_build
+  unless build && env_present?(build.id.to_s) && build.version.to_s.match?(/\A[1-9]\d*\z/)
+    UI.user_error!("Public App Store version #{latest.version_string} has no identifiable attached build; cannot determine release notes baseline.")
+  end
+  { audience: "ios", version: latest.version_string, build: build.version.to_s }
+end
+
 def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, build_number: nil)
   gateway_metadata = read_ios_version_metadata
   if env_present?(release_version.to_s)
@@ -1338,7 +1325,7 @@ def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, bui
     explicitBuildNumber: env_present?(build_number.to_s) ? build_number.to_s : nil,
     explicitRevision: env_present?(app_store_revision.to_s) ? app_store_revision.to_s : nil,
     gatewayVersion: gateway_metadata[:version],
-    rootDir: repo_root,
+    releaseNotesBaselines: [ios_public_release_notes_baseline(versions)],
     sourceClean: release_source_clean?,
     sourceSha: release_git_sha
   }
@@ -1369,31 +1356,13 @@ rescue JSON::ParserError => e
   UI.user_error!("Invalid JSON from iOS release planner: #{e.message}")
 end
 
-def sync_ios_versioning!(release_version: nil, app_store_revision: nil)
-  script_path = File.join(repo_root, "scripts", "ios-sync-versioning.ts")
-  args = [
-    "node",
-    "--import",
-    "tsx",
-    script_path,
-    "--check",
-  ]
-  args.push("--version", release_version) if env_present?(release_version)
-  args.push("--revision", app_store_revision) if env_present?(app_store_revision)
-  stdout, stderr, status = Open3.capture3(
-    *args,
-    chdir: repo_root
-  )
-  return if status.success?
-
-  detail = stderr.to_s.strip
-  detail = stdout.to_s.strip if detail.empty?
-  check_command = if env_present?(release_version) && env_present?(app_store_revision)
-                    "pnpm ios:version:check -- --version #{release_version} --revision #{app_store_revision}"
-                  else
-                    "pnpm ios:version:check"
-                  end
-  UI.user_error!("iOS versioning inputs are invalid. Run `#{check_command}`.\n#{detail}")
+def assert_ios_release_notes_baseline!(plan)
+  path = ENV["OPENCLAW_IOS_RELEASE_PLAN"].to_s
+  UI.user_error!("Missing frozen iOS release plan; use pnpm ios:release:upload.") if path.empty?
+  frozen_plan = JSON.parse(File.read(path))
+  unless frozen_plan.fetch("releaseNotesBaselines") == plan.fetch("releaseNotesBaselines")
+    UI.user_error!("The public iOS release changed after notes generation; stop and start a new release attempt before uploading.")
+  end
 end
 
 def shell_join(parts)
@@ -1579,6 +1548,60 @@ def record_mobile_release_ref!(platform:, version:, build: nil, version_code: ni
     version_code: version_code,
     sha: sha
   )
+end
+
+def assert_ios_uploaded_release_source!(short_version:, build_number:)
+  stdout, stderr, status = Open3.capture3(
+    "node", "--import", File.join(repo_root, "scripts", "tsx.mjs"), mobile_release_ref_script,
+    "resolve", "--platform", "ios", "--version", short_version,
+    "--build", build_number, "--root", repo_root,
+    chdir: repo_root
+  )
+  UI.user_error!("Cannot verify uploaded iOS build source: #{stderr.strip}") unless status.success?
+  recorded_sha = stdout.split.first
+  unless recorded_sha == release_git_sha
+    UI.user_error!("Uploaded iOS build source #{recorded_sha} does not match this checkout; recover the original release source before staging.")
+  end
+  verify_apple_release_source!(recorded_sha)
+end
+
+def stage_ios_app_store_release!(short_version:, build_number:, notes:)
+  app = app_store_connect_target_app
+  builds = Spaceship::ConnectAPI::Build.all(
+    app_id: app.id, version: short_version, build_number: build_number,
+    platform: Spaceship::ConnectAPI::Platform::IOS, includes: "preReleaseVersion"
+  )
+  unless builds.length == 1
+    UI.user_error!("Expected one processed iOS build #{short_version} (#{build_number}); found #{builds.length}. No upload was attempted.")
+  end
+  build = builds.first
+  unless build.app_version == short_version && build.version.to_s == build_number && build.processing_state == "VALID" && build.expired == false
+    UI.user_error!("iOS build #{short_version} (#{build_number}) is not a valid, unexpired processed build. No upload was attempted.")
+  end
+  version = preflight_app_store_version!(short_version: short_version)
+  UI.user_error!("Missing editable App Store version #{short_version}; restore it before retrying staging.") unless version
+  selected_build = version.get_build
+  if selected_build && selected_build.version.to_i > build_number.to_i
+    UI.user_error!("App Store version #{short_version} already selects newer build #{selected_build.version}; refusing to replace it with #{build_number}.")
+  end
+  # Match deliver's first-version contract: Apple has no What's New field on
+  # the sole App Store version. The saved artifact still retains its notes.
+  first_version = app.get_app_store_versions(filter: { platform: Spaceship::ConnectAPI::Platform::IOS }, includes: nil).length == 1
+  if first_version
+    UI.important("This is the first App Store version; Apple does not accept What's New. Saved notes remain in the release artifact.")
+  else
+    localizations = version.get_app_store_version_localizations.select { |localization| localization.locale == "en-US" }
+    UI.user_error!("Expected one en-US App Store localization for #{short_version}; found #{localizations.length}.") unless localizations.length == 1
+    localizations.first.update(attributes: { whats_new: notes })
+  end
+  version.select_build(build_id: build.id)
+
+  saved_notes = version.get_app_store_version_localizations.select { |localization| localization.locale == "en-US" }
+  notes_match = first_version || (saved_notes.length == 1 && saved_notes.first.whats_new == notes)
+  unless version.get_build&.id == build.id && notes_match
+    UI.user_error!("App Store staging readback did not match build #{short_version} (#{build_number}) and saved notes; retry staging without uploading again.")
+  end
+  !first_version
 end
 
 def validate_app_store_ipa!(ipa_path, expected_commit:, expected_build_timestamp:)
@@ -1893,15 +1916,10 @@ platform :ios do
         app_store_revision: app_store_revision,
         build_number: explicit_build_number
       )
+      assert_ios_release_notes_baseline!(release_plan)
       release_version = release_plan.fetch("gatewayVersion")
       app_store_revision = release_plan.fetch("appStoreRevision").to_s
       explicit_build_number = release_plan.fetch("buildNumber").to_s
-      if release_plan.fetch("changelogStatus") != "ready"
-        UI.user_error!(
-          "iOS release notes are not cut for #{release_plan.fetch("appStoreVersion")}. " \
-          "Run `pnpm ios:release:upload` to prepare notes before uploading."
-        )
-      end
     else
       if release_version.empty?
         UI.user_error!("Missing iOS gateway version. Use explicit --version and --revision for local archive validation.")
@@ -1910,10 +1928,6 @@ platform :ios do
         UI.user_error!("Missing iOS App Store revision. Use explicit --version and --revision for local archive validation.")
       end
     end
-    sync_ios_versioning!(
-      release_version: release_version,
-      app_store_revision: app_store_revision
-    )
     version_metadata = read_ios_version_metadata(
       release_version: release_version,
       app_store_revision: app_store_revision
@@ -2026,6 +2040,7 @@ platform :ios do
       app_store_revision: options[:app_store_revision],
       build_number: options[:build_number]
     )
+    render_ios_release_notes(short_version: context[:short_version], build_number: context[:build_number])
     release_sha = context[:git_commit]
     preflight_app_store_version!(short_version: context[:short_version])
     ensure_mobile_release_ref_available!(
@@ -2048,17 +2063,20 @@ platform :ios do
     # Release operations have one active uploader by policy. This final read
     # catches human state changes before the first App Store mutation; it is
     # not a cross-uploader lock.
-    resolve_ios_release_plan!(
+    current_plan = resolve_ios_release_plan!(
       release_version: context[:version],
       app_store_revision: context[:app_store_revision],
       build_number: context[:build_number]
     )
 
+    assert_ios_release_notes_baseline!(current_plan)
+
     ENV["DELIVER_SCREENSHOTS"] = "1"
-    ENV["DELIVER_RELEASE_NOTES"] = "1"
+    ENV["DELIVER_RELEASE_NOTES"] = "0"
     metadata(
       release_version: context[:version],
-      app_store_revision: context[:app_store_revision]
+      app_store_revision: context[:app_store_revision],
+      review_attachment: true
     )
 
     upload_to_testflight(
@@ -2076,10 +2094,36 @@ platform :ios do
       sha: release_sha
     )
 
+    release_stage(
+      release_version: context[:version],
+      app_store_revision: context[:app_store_revision],
+      build_number: context[:build_number]
+    )
     UI.success("Uploaded iOS App Store build: version=#{build[:version]} short=#{build[:short_version]} build=#{build[:build_number]}")
     UI.important("App Review submission remains manual in App Store Connect.")
   ensure
     ENV.delete("XCODE_XCCONFIG_FILE")
+  end
+
+  desc "Stage saved release notes and select an already uploaded iOS build without uploading again"
+  lane :release_stage do |options|
+    unless ENV["OPENCLAW_IOS_RELEASE_WRAPPER"] == "1"
+      UI.user_error!("Use `node scripts/mobile-release.mjs stage --platform ios --recovery-dir DIR` to recover release staging.")
+    end
+    release_version = options[:release_version].to_s.strip
+    app_store_revision = options[:app_store_revision].to_s.strip
+    build_number = options[:build_number].to_s.strip
+    if release_version.empty? || app_store_revision.empty? || !build_number.match?(/\A[1-9]\d*\z/)
+      UI.user_error!("Staging requires the saved gateway version, App Store revision, and build number.")
+    end
+    version = read_ios_version_metadata(release_version: release_version, app_store_revision: app_store_revision)
+    notes = render_ios_release_notes(short_version: version[:short_version], build_number: build_number)
+    assert_ios_uploaded_release_source!(short_version: version[:short_version], build_number: build_number)
+    app_store_connect_api_key_config
+    notes_staged = stage_ios_app_store_release!(short_version: version[:short_version], build_number: build_number, notes: notes)
+    notes_result = notes_staged ? "saved notes staged" : "first-version notes retained in the artifact"
+    UI.success("Selected iOS build #{version[:short_version]} (#{build_number}); #{notes_result}.")
+    UI.important("App Review submission remains manual in App Store Connect.")
   end
 
   desc "Upload App Store metadata, App Review PDF attachment, and optionally screenshots"
@@ -2093,10 +2137,6 @@ platform :ios do
     if app_store_revision.empty?
       UI.user_error!("Missing iOS App Store revision. Use `pnpm ios:release:upload -- --version YYYY.M.PATCH --revision N`.")
     end
-    sync_ios_versioning!(
-      release_version: release_version,
-      app_store_revision: app_store_revision
-    )
     version_metadata = read_ios_version_metadata(
       release_version: release_version,
       app_store_revision: app_store_revision
@@ -2118,20 +2158,12 @@ platform :ios do
     end
 
     assert_no_app_review_notes_field_metadata!(File.join(__dir__, "metadata"))
-    metadata_path = public_metadata_path(
-      release_version: release_version,
-      app_store_revision: app_store_revision
-    )
-    skip_metadata = ENV["DELIVER_METADATA"] != "1"
-    if release_notes_upload_requested? && skip_metadata
-      metadata_path = release_notes_metadata_path(
-        release_version: release_version,
-        app_store_revision: app_store_revision
-      )
-      skip_metadata = false
-    end
+    UI.user_error!("Stage saved release notes with the release_stage lane after upload.") if release_notes_upload_requested?
+    metadata_path = ENV["DELIVER_METADATA"] == "1" ? public_metadata_path : Dir.mktmpdir("openclaw-app-store-metadata")
+    FileUtils.mkdir_p(File.join(metadata_path, "en-US")) if options[:review_attachment]
+    skip_metadata = ENV["DELIVER_METADATA"] != "1" && !options[:review_attachment]
     assert_no_app_review_notes_field_metadata!(metadata_path) unless skip_metadata
-    app_review_attachment_file = skip_metadata ? nil : generate_app_review_notes_pdf!
+    app_review_attachment_file = (options[:review_attachment] || !skip_metadata) ? generate_app_review_notes_pdf! : nil
 
     deliver_options = {
       api_key: api_key,
