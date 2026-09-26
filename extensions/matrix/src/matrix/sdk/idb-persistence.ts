@@ -199,24 +199,33 @@ async function restoreIndexedDatabases(snapshot: IdbDatabaseSnapshot[]): Promise
       }
     });
     const db = await idbReq(request);
-    for (const storeSnap of dbSnap.stores) {
-      if (storeSnap.records.length === 0) {
-        continue;
-      }
-      const tx = db.transaction(storeSnap.name, "readwrite");
-      const store = tx.objectStore(storeSnap.name);
-      for (const rec of storeSnap.records) {
-        if (storeSnap.keyPath !== null) {
-          store.put(rec.value);
-        } else {
-          store.put(rec.value, rec.key);
+    try {
+      for (const storeSnap of dbSnap.stores) {
+        if (storeSnap.records.length === 0) {
+          continue;
         }
+        const tx = db.transaction(storeSnap.name, "readwrite");
+        const store = tx.objectStore(storeSnap.name);
+        for (const rec of storeSnap.records) {
+          if (storeSnap.keyPath !== null) {
+            store.put(rec.value);
+          } else {
+            store.put(rec.value, rec.key);
+          }
+        }
+        await new Promise<void>((resolve, reject) => {
+          tx.addEventListener("complete", () => resolve(), { once: true });
+          // Failed requests abort the transaction instead of emitting complete.
+          tx.addEventListener(
+            "abort",
+            () => reject(toErrorObject(tx.error, "IndexedDB restore transaction aborted")),
+            { once: true },
+          );
+        });
       }
-      await new Promise<void>((resolve) => {
-        tx.addEventListener("complete", () => resolve(), { once: true });
-      });
+    } finally {
+      db.close();
     }
-    db.close();
   }
 }
 
@@ -226,29 +235,39 @@ function resolveDefaultIdbSnapshotPath(): string {
   return path.join(stateDir, "matrix", "crypto-idb-snapshot.json");
 }
 
+async function readCanonicalSnapshotJson(
+  snapshotPath: string,
+  stateRuntime: MatrixSnapshotStateRuntime,
+): Promise<string | null> {
+  let storedSnapshotJson: string | null;
+  try {
+    storedSnapshotJson = await readMatrixIdbSnapshotJson(path.dirname(snapshotPath), stateRuntime);
+  } catch (err) {
+    if (fs.existsSync(snapshotPath)) {
+      throwLegacySnapshotMigrationRequired();
+    }
+    throw err;
+  }
+  throwIfLegacySnapshotNeedsDoctor(snapshotPath, storedSnapshotJson);
+  return storedSnapshotJson;
+}
+
 // Production callers pass MatrixStoragePaths.idbSnapshotPath; explicit paths only isolate tests.
 export async function restoreIdbFromDisk(
   snapshotPath?: string,
   stateRuntime?: MatrixSnapshotStateRuntime,
 ): Promise<boolean> {
   const resolvedPath = snapshotPath ?? resolveDefaultIdbSnapshotPath();
-  const storageRootDir = path.dirname(resolvedPath);
   let callbackStarted = false;
   try {
     const snapshotStateRuntime = stateRuntime ?? getMatrixRuntime().state;
     // withFileLock is acquire-or-throw; it never skips the callback on contention.
     return await withFileLock(resolvedPath, MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS, async () => {
       callbackStarted = true;
-      let storedSnapshotJson: string | null;
-      try {
-        storedSnapshotJson = await readMatrixIdbSnapshotJson(storageRootDir, snapshotStateRuntime);
-      } catch (err) {
-        if (fs.existsSync(resolvedPath)) {
-          throwLegacySnapshotMigrationRequired();
-        }
-        throw err;
-      }
-      throwIfLegacySnapshotNeedsDoctor(resolvedPath, storedSnapshotJson);
+      const storedSnapshotJson = await readCanonicalSnapshotJson(
+        resolvedPath,
+        snapshotStateRuntime,
+      );
       if (!storedSnapshotJson) {
         return false;
       }
@@ -295,16 +314,7 @@ export async function persistIdbToDisk(params?: {
       async () => {
         callbackStarted = true;
         const storageRootDir = path.dirname(snapshotPath);
-        let storedSnapshotJson: string | null;
-        try {
-          storedSnapshotJson = await readMatrixIdbSnapshotJson(storageRootDir, stateRuntime);
-        } catch (err) {
-          if (fs.existsSync(snapshotPath)) {
-            throwLegacySnapshotMigrationRequired();
-          }
-          throw err;
-        }
-        throwIfLegacySnapshotNeedsDoctor(snapshotPath, storedSnapshotJson);
+        await readCanonicalSnapshotJson(snapshotPath, stateRuntime);
         const snapshot = await dumpIndexedDatabases(params?.databasePrefix);
         if (params?.abortSignal?.aborted || snapshot.length === 0) {
           return 0;

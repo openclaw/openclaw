@@ -343,13 +343,13 @@ describe("telegram ingress worker retry policy", () => {
     expect(secondCall - firstCall).toBe(1000);
   });
 
-  it("retries a non-json getUpdates 502 response as a server error", async () => {
+  it.each([
+    { name: "non-JSON", response: () => htmlResponse(502, "<html>Bad Gateway</html>") },
+    { name: "JSON-null", response: () => jsonResponse(502, null) },
+  ])("retries a $name getUpdates 502 response as a server error", async ({ response }) => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
-    const runtime = createRuntime([
-      htmlResponse(502, "<html>Bad Gateway</html>"),
-      jsonResponse(200, { ok: true, result: [] }),
-    ]);
+    const runtime = createRuntime([response(), jsonResponse(200, { ok: true, result: [] })]);
 
     expect(runtime.calls).toHaveLength(1);
     await flushRuntime();

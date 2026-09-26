@@ -173,11 +173,10 @@ export function splitTelegramRichMessageTextChunks(params: {
     blockLimit: TELEGRAM_RICH_BLOCK_LIMIT,
     textLimit: params.textLimit,
   }).map((blocks, index) => {
-    const plainText = inputRichBlocksToPlainText(blocks);
-    return {
-      richMessage: toRichMessage(blocks, plainText, chunkOptions),
-      plainText,
-      degradationReasons: index === 0 ? plan.degradationReasons : [],
-    };
+    const chunk = buildTelegramRichBlocksPlan(blocks, chunkOptions);
+    if (index === 0) {
+      chunk.degradationReasons = plan.degradationReasons;
+    }
+    return chunk;
   });
 }

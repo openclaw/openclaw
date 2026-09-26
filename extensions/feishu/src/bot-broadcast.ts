@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
@@ -34,14 +35,11 @@ export function createFeishuBroadcastIngressSettlement(params: {
   let finalizing = false;
   let deferred = false;
   let replayReleased = false;
-  let resolveSettlement: () => void;
-  const settlement = new Promise<void>((resolve) => {
-    resolveSettlement = resolve;
-  });
-  params.trackTask?.(settlement);
+  const settlement = createDeferred<void>();
+  params.trackTask?.(settlement.promise);
   const finishSettlement = () => {
     if (![...lanes].some((lane) => lane.adopting)) {
-      resolveSettlement();
+      settlement.resolve();
     }
   };
 
@@ -224,17 +222,14 @@ export function createFeishuBroadcastIngressSettlement(params: {
           },
         },
         onDispatchComplete: async (dispatched) => {
-          if (!dispatched && lane.status === "pending") {
-            const error = new Error("feishu broadcast lane was not dispatched");
-            lane.status = "failed";
-            failures.push(error);
-            releaseLane(error);
-            return;
-          }
           if (lane.status !== "pending") {
             return;
           }
-          const error = new Error("feishu broadcast dispatch returned before turn adoption");
+          const error = new Error(
+            dispatched
+              ? "feishu broadcast dispatch returned before turn adoption"
+              : "feishu broadcast lane was not dispatched",
+          );
           lane.status = "failed";
           failures.push(error);
           releaseLane(error);

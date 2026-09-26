@@ -3,21 +3,12 @@
 // See PROPOSAL.md for the incident background.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FeishuStatusSink } from "./monitor.js";
 import { getGatewayPort } from "./monitor.webhook.test-helpers.js";
 
-type StatusPatch = {
-  connected?: boolean;
-  lifecycle?: "ready" | "recovering" | "blocked";
-  terminalDisconnect?: boolean;
-  lastConnectedAt?: number | null;
-  lastEventAt?: number | null;
-  lastTransportActivityAt?: number | null;
-  lastError?: string | null;
-};
+type StatusPatch = Parameters<FeishuStatusSink>[0];
 
-type StatusSink = (patch: StatusPatch) => void;
-
-function createRecordingSink(): { sink: StatusSink; calls: StatusPatch[] } {
+function createRecordingSink(): { sink: FeishuStatusSink; calls: StatusPatch[] } {
   const calls: StatusPatch[] = [];
   return {
     sink: (patch) => {
@@ -270,7 +261,7 @@ describe("FeishuStatusSink type contract", () => {
     // Verifies the type signature allows the patterns we use. A compile-time
     // check via tsserver; the runtime assertion is the call must not throw.
     const recorder = createRecordingSink();
-    const sink: StatusSink = recorder.sink;
+    const sink: FeishuStatusSink = recorder.sink;
     sink({ lastEventAt: 12345 });
     expect(recorder.calls).toEqual([{ lastEventAt: 12345 }]);
   });

@@ -143,7 +143,7 @@ async function fetchJson(params: {
     ).toString("utf8");
     let json: TelegramGetUpdatesJson;
     try {
-      json = JSON.parse(raw) as TelegramGetUpdatesJson;
+      json = (JSON.parse(raw) as TelegramGetUpdatesJson | null) ?? {};
     } catch (err) {
       if (!response.ok) {
         throw createTelegramGetUpdatesError({
@@ -343,11 +343,7 @@ const runtimePort =
     ? null
     : ({
         postMessage(message) {
-          Reflect.apply(
-            Reflect.get(workerPort, "postMessage") as (value: unknown) => void,
-            workerPort,
-            [message],
-          );
+          workerPort.postMessage(message, []);
         },
         onMessage(listener) {
           workerPort.on("message", listener);

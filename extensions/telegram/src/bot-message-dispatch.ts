@@ -9,11 +9,7 @@ import {
   deliverFallback,
   finalizePendingAnswerBlockDraft,
 } from "./bot-message-dispatch-delivery.js";
-import {
-  cleanupDrafts,
-  createDraftState,
-  waitForDraftEvents,
-} from "./bot-message-dispatch-draft.js";
+import { cleanupDrafts, createDraftState } from "./bot-message-dispatch-draft.js";
 import { createProgressState, settleFailedFinalDelivery } from "./bot-message-dispatch-progress.js";
 import { createReplyState } from "./bot-message-dispatch-reply.js";
 import {
@@ -401,7 +397,7 @@ export const dispatchTelegramMessage = async (
     } finally {
       // Stop producers before draining drafts, finalizing accepted text, and cleaning previews.
       turn.progressCompositor.cancel();
-      await waitForDraftEvents(turn);
+      await turn.draftEventQueue;
       try {
         await finalizePendingAnswerBlockDraft(turn);
       } catch (err) {

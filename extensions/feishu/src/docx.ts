@@ -7,7 +7,7 @@ import type { OpenClawPluginApi } from "../runtime-api.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { createFeishuClient } from "./client.js";
-import { FeishuDocSchema } from "./doc-schema.js";
+import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
 import { BATCH_SIZE, insertBlocksInBatches } from "./docx-batch-insert.js";
 import { updateColorText } from "./docx-color-text.js";
 import {
@@ -66,22 +66,6 @@ const BLOCK_TYPE_NAMES: Record<number, string> = {
 // Block types that cannot be created via documentBlockChildren.create API
 const UNSUPPORTED_CREATE_TYPES = new Set([31, 32]);
 
-function cleanBlocksForInsert(blocks: FeishuDocxBlock[]): {
-  cleaned: FeishuDocxBlock[];
-  skipped: string[];
-} {
-  const skipped: string[] = [];
-  const cleaned = blocks.filter((block) => {
-    if (UNSUPPORTED_CREATE_TYPES.has(block.block_type)) {
-      const typeName = BLOCK_TYPE_NAMES[block.block_type] || `type_${block.block_type}`;
-      skipped.push(typeName);
-      return false;
-    }
-    return true;
-  });
-  return { cleaned, skipped };
-}
-
 const MAX_CONVERT_RETRY_DEPTH = 8;
 
 async function convertMarkdown(client: Lark.Client, markdown: string) {
@@ -121,17 +105,6 @@ type DriveMediaUploadAllPayload = NonNullable<
   Parameters<Lark.Client["drive"]["media"]["uploadAll"]>[0]
 >;
 type DriveMediaUploadFile = NonNullable<NonNullable<DriveMediaUploadAllPayload["data"]>["file"]>;
-
-function normalizeInsertedChildBlocks(
-  children: string[] | FeishuDocxBlockChild[] | undefined,
-): FeishuDocxBlockChild[] {
-  if (!Array.isArray(children)) {
-    return [];
-  }
-  return children.filter(
-    (child): child is FeishuDocxBlockChild => typeof child === "object" && child !== null,
-  );
-}
 
 // Convert API may return `blocks` in a non-render order.
 // Reconstruct the document tree using first_level_block_ids plus children/parent links,
@@ -220,32 +193,26 @@ async function insertBlocks(
   docToken: string,
   blocks: FeishuDocxBlock[],
   parentBlockId?: string,
-  index?: number,
-): Promise<{ children: FeishuDocxBlockChild[]; skipped: string[] }> {
-  const { cleaned, skipped } = cleanBlocksForInsert(blocks);
+): Promise<FeishuDocxBlockChild[]> {
+  const cleaned = blocks.filter((block) => !UNSUPPORTED_CREATE_TYPES.has(block.block_type));
   const blockId = parentBlockId ?? docToken;
-
-  if (cleaned.length === 0) {
-    return { children: [], skipped };
-  }
 
   // Insert blocks one at a time to preserve document order.
   // The batch API (sending all children at once) does not guarantee ordering
   // because Feishu processes the batch asynchronously.  Sequential single-block
   // inserts (each appended to the end) produce deterministic results.
   const allInserted: FeishuDocxBlockChild[] = [];
-  for (const [offset, block] of cleaned.entries()) {
+  for (const block of cleaned) {
     const res = await client.docx.documentBlockChildren.create({
       path: { document_id: docToken, block_id: blockId },
       data: {
         children: [block as DocxChildrenCreateChild],
-        ...(index !== undefined ? { index: index + offset } : {}),
       },
     });
     assertFeishuApiSuccess(res);
     allInserted.push(...(res.data?.children ?? []));
   }
-  return { children: allInserted, skipped };
+  return allInserted;
 }
 
 async function convertMarkdownWithFallback(
@@ -451,25 +418,30 @@ async function processImages(
   return processed;
 }
 
-async function convertInsertAndProcessDocx(params: {
-  client: Lark.Client;
-  docToken: string;
-  markdown: string;
-  maxBytes: number;
-  imageReadTimeoutMs: number;
-  logger?: Logger;
-  target?: { parentBlockId: string; index: number };
-  onConverted: (blockCount: number) => Promise<void> | void;
-}) {
-  const { client, docToken, logger, target } = params;
+async function editDoc(
+  client: Lark.Client,
+  params: Extract<FeishuDocParams, { action: "write" | "append" | "insert" }>,
+  maxBytes: number,
+  imageReadTimeoutMs: number,
+  logger?: Logger,
+) {
+  const docToken = params.doc_token;
+  const target =
+    params.action === "insert"
+      ? await resolveInsertTarget(client, docToken, params.after_block_id)
+      : undefined;
   logger?.info?.("feishu_doc: Converting markdown...");
   const { blocks, firstLevelBlockIds, images } = await chunkedConvertMarkdown(
     client,
-    createDocxMarkdownPlan(params.markdown).chunks,
+    createDocxMarkdownPlan(params.content).chunks,
   );
-  await params.onConverted(blocks.length);
+  // Complete fallible conversion before deleting existing content.
+  const deleted = params.action === "write" ? await clearDocumentContent(client, docToken) : 0;
   if (blocks.length === 0) {
-    return { blocks, inserted: [], imagesProcessed: 0 };
+    if (params.action !== "write") {
+      throw new Error("Content is empty");
+    }
+    return { success: true, blocks_deleted: deleted, blocks_added: 0, images_processed: 0 };
   }
 
   const { orderedBlocks, rootIds } = normalizeConvertedBlockTree(blocks, firstLevelBlockIds);
@@ -493,12 +465,18 @@ async function convertInsertAndProcessDocx(params: {
     docToken,
     images,
     inserted,
-    params.maxBytes,
-    params.imageReadTimeoutMs,
+    maxBytes,
+    imageReadTimeoutMs,
   );
   logger?.info?.(`feishu_doc: Done (${blocks.length} blocks, ${imagesProcessed} images)`);
 
-  return { blocks, inserted, imagesProcessed };
+  return {
+    success: true,
+    ...(params.action === "write" ? { blocks_deleted: deleted } : {}),
+    blocks_added: blocks.length,
+    images_processed: imagesProcessed,
+    ...(params.action !== "write" ? { block_ids: inserted.map((b) => b.block_id) } : {}),
+  };
 }
 
 async function uploadImageBlock(
@@ -590,7 +568,7 @@ async function uploadFileBlock(
     converted.blocks,
     converted.firstLevelBlockIds,
   );
-  const { children: inserted } = await insertBlocks(client, docToken, orderedBlocks, blockId);
+  const inserted = await insertBlocks(client, docToken, orderedBlocks, blockId);
 
   const placeholderBlock = inserted[0];
   if (!placeholderBlock?.block_id) {
@@ -733,78 +711,7 @@ async function createDoc(
   };
 }
 
-async function writeDoc(
-  client: Lark.Client,
-  docToken: string,
-  markdown: string,
-  maxBytes: number,
-  imageReadTimeoutMs: number,
-  logger?: Logger,
-) {
-  let deleted = 0;
-  const { blocks, imagesProcessed } = await convertInsertAndProcessDocx({
-    client,
-    docToken,
-    markdown,
-    maxBytes,
-    imageReadTimeoutMs,
-    logger,
-    // Complete fallible conversion before deleting existing content so an
-    // unsupported oversized construct cannot leave the document empty.
-    onConverted: async () => {
-      deleted = await clearDocumentContent(client, docToken);
-    },
-  });
-
-  return {
-    success: true,
-    blocks_deleted: deleted,
-    blocks_added: blocks.length,
-    images_processed: imagesProcessed,
-  };
-}
-
-async function appendDoc(
-  client: Lark.Client,
-  docToken: string,
-  markdown: string,
-  maxBytes: number,
-  imageReadTimeoutMs: number,
-  logger?: Logger,
-  target?: { parentBlockId: string; index: number },
-) {
-  const { blocks, inserted, imagesProcessed } = await convertInsertAndProcessDocx({
-    client,
-    docToken,
-    markdown,
-    maxBytes,
-    imageReadTimeoutMs,
-    logger,
-    target,
-    onConverted: (blockCount) => {
-      if (blockCount === 0) {
-        throw new Error("Content is empty");
-      }
-    },
-  });
-
-  return {
-    success: true,
-    blocks_added: blocks.length,
-    images_processed: imagesProcessed,
-    block_ids: inserted.map((b) => b.block_id),
-  };
-}
-
-async function insertDoc(
-  client: Lark.Client,
-  docToken: string,
-  markdown: string,
-  afterBlockId: string,
-  maxBytes: number,
-  imageReadTimeoutMs: number,
-  logger?: Logger,
-) {
+async function resolveInsertTarget(client: Lark.Client, docToken: string, afterBlockId: string) {
   const { block } = await getBlock(client, docToken, afterBlockId);
   const parentId = block?.parent_id ?? docToken;
 
@@ -846,20 +753,23 @@ async function insertDoc(
         `Use list_blocks to verify the block ID.`,
     );
   }
-  return appendDoc(client, docToken, markdown, maxBytes, imageReadTimeoutMs, logger, {
+  return {
     parentBlockId: parentId,
     index: blockIndex + 1,
-  });
+  };
 }
 
 async function createTable(
   client: Lark.Client,
-  docToken: string,
-  rowSize: number,
-  columnSize: number,
-  parentBlockId?: string,
-  columnWidth?: number[],
+  params: Extract<FeishuDocParams, { action: "create_table" | "create_table_with_values" }>,
 ) {
+  const {
+    doc_token: docToken,
+    row_size: rowSize,
+    column_size: columnSize,
+    parent_block_id: parentBlockId,
+    column_width: columnWidth,
+  } = params;
   if (columnWidth && columnWidth.length !== columnSize) {
     throw new Error("column_width length must equal column_size");
   }
@@ -886,7 +796,25 @@ async function createTable(
   assertFeishuApiSuccess(res);
 
   const tableBlock = res.data?.children?.find((b) => b.block_type === 31);
-  const cells = normalizeInsertedChildBlocks(tableBlock?.children);
+  if (params.action === "create_table_with_values") {
+    const tableBlockId = tableBlock?.block_id;
+    if (!tableBlockId) {
+      throw new Error("create_table succeeded but table_block_id is missing");
+    }
+    const written = await writeTableCells(client, docToken, tableBlockId, params.values);
+    return {
+      success: true,
+      table_block_id: tableBlockId,
+      row_size: rowSize,
+      column_size: columnSize,
+      cells_written: written.cells_written,
+    };
+  }
+  const cells = Array.isArray(tableBlock?.children)
+    ? tableBlock.children.map((child: string | FeishuDocxBlockChild) =>
+        typeof child === "string" ? child : child?.block_id,
+      )
+    : [];
 
   return {
     success: true,
@@ -894,7 +822,7 @@ async function createTable(
     row_size: rowSize,
     column_size: columnSize,
     // row-major cell ids, if API returns them directly
-    table_cell_block_ids: cells.map((c) => c.block_id).filter(Boolean),
+    table_cell_block_ids: normalizeChildIds(cells).filter(Boolean),
     raw_children_count: res.data?.children?.length ?? 0,
   };
 }
@@ -969,39 +897,6 @@ async function writeTableCells(
     table_block_id: tableBlockId,
     cells_written: written,
     table_size: { rows, cols },
-  };
-}
-
-async function createTableWithValues(
-  client: Lark.Client,
-  docToken: string,
-  rowSize: number,
-  columnSize: number,
-  values: string[][],
-  parentBlockId?: string,
-  columnWidth?: number[],
-) {
-  const created = await createTable(
-    client,
-    docToken,
-    rowSize,
-    columnSize,
-    parentBlockId,
-    columnWidth,
-  );
-
-  const tableBlockId = created.table_block_id;
-  if (!tableBlockId) {
-    throw new Error("create_table succeeded but table_block_id is missing");
-  }
-
-  const written = await writeTableCells(client, docToken, tableBlockId, values);
-  return {
-    success: true,
-    table_block_id: tableBlockId,
-    row_size: rowSize,
-    column_size: columnSize,
-    cells_written: written.cells_written,
   };
 }
 
@@ -1120,39 +1015,9 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
           case "read":
             return json(await readDoc(client, p.doc_token));
           case "write":
-            return json(
-              await writeDoc(
-                client,
-                p.doc_token,
-                p.content,
-                mediaMaxBytes,
-                imageReadTimeoutMs,
-                api.logger,
-              ),
-            );
           case "append":
-            return json(
-              await appendDoc(
-                client,
-                p.doc_token,
-                p.content,
-                mediaMaxBytes,
-                imageReadTimeoutMs,
-                api.logger,
-              ),
-            );
           case "insert":
-            return json(
-              await insertDoc(
-                client,
-                p.doc_token,
-                p.content,
-                p.after_block_id,
-                mediaMaxBytes,
-                imageReadTimeoutMs,
-                api.logger,
-              ),
-            );
+            return json(await editDoc(client, p, mediaMaxBytes, imageReadTimeoutMs, api.logger));
           case "create":
             return json(
               await createDoc(client, p.title, p.folder_token, {
@@ -1169,30 +1034,10 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
           case "delete_block":
             return json(await deleteBlock(client, p.doc_token, p.block_id));
           case "create_table":
-            return json(
-              await createTable(
-                client,
-                p.doc_token,
-                p.row_size,
-                p.column_size,
-                p.parent_block_id,
-                p.column_width,
-              ),
-            );
+          case "create_table_with_values":
+            return json(await createTable(client, p));
           case "write_table_cells":
             return json(await writeTableCells(client, p.doc_token, p.table_block_id, p.values));
-          case "create_table_with_values":
-            return json(
-              await createTableWithValues(
-                client,
-                p.doc_token,
-                p.row_size,
-                p.column_size,
-                p.values,
-                p.parent_block_id,
-                p.column_width,
-              ),
-            );
           case "upload_image":
             return json(
               await uploadImageBlock(

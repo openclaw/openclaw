@@ -7,32 +7,14 @@ import { createFeishuToolClient } from "./tool-account.js";
 import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as json } from "./tool-result.js";
 
-type LarkResponse<T = unknown> = { code?: number; msg?: string; data?: T };
 type BitableRecordCreatePayload = NonNullable<
   Parameters<Lark.Client["bitable"]["appTableRecord"]["create"]>[0]
 >;
 type BitableRecordFields = NonNullable<NonNullable<BitableRecordCreatePayload["data"]>["fields"]>;
 
-class LarkApiError extends Error {
-  readonly code: number;
-  readonly api: string;
-  readonly context?: Record<string, unknown>;
-  constructor(code: number, message: string, api: string, context?: Record<string, unknown>) {
-    super(`[${api}] code=${code} message=${message}`);
-    this.name = "LarkApiError";
-    this.code = code;
-    this.api = api;
-    this.context = context;
-  }
-}
-
-function ensureLarkSuccess<T>(
-  res: LarkResponse<T>,
-  api: string,
-  context?: Record<string, unknown>,
-): asserts res is LarkResponse<T> & { code: 0 } {
+function ensureLarkSuccess(res: { code?: number; msg?: string }, api: string): void {
   if (res.code !== 0) {
-    throw new LarkApiError(res.code ?? -1, res.msg ?? "unknown error", api, context);
+    throw new Error(`[${api}] code=${res.code ?? -1} message=${res.msg ?? "unknown error"}`);
   }
 }
 
@@ -82,7 +64,7 @@ async function getAppTokenFromWiki(client: Lark.Client, nodeToken: string): Prom
   const res = await client.wiki.space.getNode({
     params: { token: nodeToken },
   });
-  ensureLarkSuccess(res, "wiki.space.getNode", { nodeToken });
+  ensureLarkSuccess(res, "wiki.space.getNode");
 
   const node = res.data?.node;
   if (!node) {
@@ -108,7 +90,7 @@ async function getBitableMeta(client: Lark.Client, url: string) {
   const res = await client.bitable.app.get({
     path: { app_token: appToken },
   });
-  ensureLarkSuccess(res, "bitable.app.get", { appToken });
+  ensureLarkSuccess(res, "bitable.app.get");
 
   // List tables if no table_id specified
   let tables: { table_id: string; name: string }[] = [];
@@ -189,7 +171,7 @@ async function cleanupNewBitable(
     if (primaryField?.field_id) {
       try {
         const newFieldName = tableName.length <= 20 ? tableName : "Name";
-        await client.bitable.appTableField.update({
+        const response = await client.bitable.appTableField.update({
           path: {
             app_token: appToken,
             table_id: tableId,
@@ -200,6 +182,7 @@ async function cleanupNewBitable(
             type: 1,
           },
         });
+        ensureLarkSuccess(response, "bitable.appTableField.update");
         cleanedFields++;
       } catch (err) {
         logger.debug(`Failed to rename primary field: ${String(err)}`);
@@ -214,13 +197,14 @@ async function cleanupNewBitable(
     for (const field of defaultFieldsToDelete) {
       if (field.field_id) {
         try {
-          await client.bitable.appTableField.delete({
+          const response = await client.bitable.appTableField.delete({
             path: {
               app_token: appToken,
               table_id: tableId,
               field_id: field.field_id,
             },
           });
+          ensureLarkSuccess(response, "bitable.appTableField.delete");
           cleanedFields++;
         } catch (err) {
           logger.debug(`Failed to delete default field ${field.field_name}: ${String(err)}`);
@@ -243,18 +227,20 @@ async function cleanupNewBitable(
 
     if (emptyRecordIds.length > 0) {
       try {
-        await client.bitable.appTableRecord.batchDelete({
+        const response = await client.bitable.appTableRecord.batchDelete({
           path: { app_token: appToken, table_id: tableId },
           data: { records: emptyRecordIds },
         });
+        ensureLarkSuccess(response, "bitable.appTableRecord.batchDelete");
         cleanedRows = emptyRecordIds.length;
       } catch {
         // Fallback: delete one by one if batch API is unavailable
         for (const recordId of emptyRecordIds) {
           try {
-            await client.bitable.appTableRecord.delete({
+            const response = await client.bitable.appTableRecord.delete({
               path: { app_token: appToken, table_id: tableId, record_id: recordId },
             });
+            ensureLarkSuccess(response, "bitable.appTableRecord.delete");
             cleanedRows++;
           } catch (err) {
             logger.debug(`Failed to delete empty row ${recordId}: ${String(err)}`);
@@ -279,7 +265,7 @@ async function createApp(
       ...(folderToken && { folder_token: folderToken }),
     },
   });
-  ensureLarkSuccess(res, "bitable.app.create", { name, folderToken });
+  ensureLarkSuccess(res, "bitable.app.create");
 
   const appToken = res.data?.app?.app_token;
   if (!appToken) {
@@ -458,7 +444,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
       const res = await client.bitable.appTableField.list({
         path: { app_token: appToken, table_id: tableId },
       });
-      ensureLarkSuccess(res, "bitable.appTableField.list", { appToken, tableId });
+      ensureLarkSuccess(res, "bitable.appTableField.list");
 
       const fields = res.data?.items ?? [];
       return {
@@ -493,7 +479,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
           ...(pageToken && { page_token: pageToken }),
         },
       });
-      ensureLarkSuccess(res, "bitable.appTableRecord.list", { appToken, tableId, pageSize });
+      ensureLarkSuccess(res, "bitable.appTableRecord.list");
 
       return {
         records: res.data?.items ?? [],
@@ -514,7 +500,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
       const res = await client.bitable.appTableRecord.get({
         path: { app_token: appToken, table_id: tableId, record_id: recordId },
       });
-      ensureLarkSuccess(res, "bitable.appTableRecord.get", { appToken, tableId, recordId });
+      ensureLarkSuccess(res, "bitable.appTableRecord.get");
 
       return {
         record: res.data?.record,
@@ -533,7 +519,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
         path: { app_token: appToken, table_id: tableId },
         data: { fields },
       });
-      ensureLarkSuccess(res, "bitable.appTableRecord.create", { appToken, tableId });
+      ensureLarkSuccess(res, "bitable.appTableRecord.create");
 
       return {
         record: res.data?.record,
@@ -552,7 +538,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
         path: { app_token: appToken, table_id: tableId, record_id: recordId },
         data: { fields },
       });
-      ensureLarkSuccess(res, "bitable.appTableRecord.update", { appToken, tableId, recordId });
+      ensureLarkSuccess(res, "bitable.appTableRecord.update");
 
       return {
         record: res.data?.record,
@@ -593,12 +579,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
           ...(property && { property }),
         },
       });
-      ensureLarkSuccess(res, "bitable.appTableField.create", {
-        appToken,
-        tableId,
-        fieldName,
-        fieldType,
-      });
+      ensureLarkSuccess(res, "bitable.appTableField.create");
 
       return {
         field_id: res.data?.field?.field_id,

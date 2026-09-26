@@ -1,10 +1,10 @@
 // Telegram tests cover format.wrap md plugin behavior.
 import { describe, expect, it } from "vitest";
+import { wrapFileReferencesInHtml } from "./format-html-text.js";
 import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
   renderTelegramHtmlText,
-  wrapFileReferencesInHtml,
 } from "./format.js";
 
 type TelegramChunk = ReturnType<typeof markdownToTelegramChunks>[number];

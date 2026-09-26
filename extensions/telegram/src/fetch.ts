@@ -317,22 +317,6 @@ function resolveWrappedFetch(fetchImpl: typeof fetch): typeof fetch {
   return resolveFetch(fetchImpl) ?? fetchImpl;
 }
 
-function logResolverNetworkDecisions(params: {
-  autoSelectDecision: ReturnType<typeof resolveTelegramAutoSelectFamilyDecision>;
-  dnsDecision: ReturnType<typeof resolveTelegramDnsResultOrderDecision>;
-}): void {
-  if (params.autoSelectDecision.value !== null) {
-    const sourceLabel = params.autoSelectDecision.source
-      ? ` (${params.autoSelectDecision.source})`
-      : "";
-    log.debug(`autoSelectFamily=${params.autoSelectDecision.value}${sourceLabel}`);
-  }
-  if (params.dnsDecision.value !== null) {
-    const sourceLabel = params.dnsDecision.source ? ` (${params.dnsDecision.source})` : "";
-    log.debug(`dnsResultOrder=${params.dnsDecision.value}${sourceLabel}`);
-  }
-}
-
 function collectErrorCodes(err: unknown): Set<string> {
   const codes = new Set<string>();
   for (const current of collectErrorGraphCandidates(err, (candidate) => [
@@ -504,10 +488,14 @@ export function resolveTelegramTransport(
   const dnsDecision = resolveTelegramDnsResultOrderDecision({
     network: options?.network,
   });
-  logResolverNetworkDecisions({
-    autoSelectDecision,
-    dnsDecision,
-  });
+  for (const [name, decision] of [
+    ["autoSelectFamily", autoSelectDecision],
+    ["dnsResultOrder", dnsDecision],
+  ] as const) {
+    if (decision.value !== null) {
+      log.debug(`${name}=${decision.value}${decision.source ? ` (${decision.source})` : ""}`);
+    }
+  }
 
   const effectiveProxyFetch =
     proxyFetch ??
@@ -690,6 +678,21 @@ export function resolveTelegramTransport(
       getTelegramRequestAuthority(init),
     );
     const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+    const captureResponse = (response: Response, fallbackAttempt?: number) => {
+      // Finalization retains capture failures; observe Promises returned by the SDK view.
+      void captureHttpExchangeAsync({
+        url: resolveRequestUrl(input),
+        method: init?.method ?? "GET",
+        requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
+        requestBody: init?.body ?? null,
+        response,
+        flowId: randomUUID(),
+        meta: {
+          subsystem: "telegram-fetch",
+          ...(fallbackAttempt === undefined ? {} : { fallbackAttempt }),
+        },
+      }).catch(() => {});
+    };
     const callerProvidedDispatcher = Boolean(
       (init as RequestInitWithDispatcher | undefined)?.dispatcher,
     );
@@ -716,16 +719,7 @@ export function resolveTelegramTransport(
       try {
         const response = await requestFetch(input, init);
         signal?.throwIfAborted();
-        // Finalization retains capture failures; observe Promises returned by the SDK view.
-        void captureHttpExchangeAsync({
-          url: resolveRequestUrl(input),
-          method: init?.method ?? "GET",
-          requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
-          requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
-          response,
-          flowId: randomUUID(),
-          meta: { subsystem: "telegram-fetch" },
-        }).catch(() => {});
+        captureResponse(response);
         return response;
       } catch (caught) {
         signal?.throwIfAborted();
@@ -758,18 +752,7 @@ export function resolveTelegramTransport(
       try {
         const response = await requestFetch(input, init, attempt.createDispatcher(freshConnection));
         signal?.throwIfAborted();
-        void captureHttpExchangeAsync({
-          url: resolveRequestUrl(input),
-          method: init?.method ?? "GET",
-          requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
-          requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
-          response,
-          flowId: randomUUID(),
-          meta:
-            attemptIndex === startIndex
-              ? { subsystem: "telegram-fetch" }
-              : { subsystem: "telegram-fetch", fallbackAttempt: attemptIndex },
-        }).catch(() => {});
+        captureResponse(response, attemptIndex === startIndex ? undefined : attemptIndex);
         recordSuccessfulAttempt(attemptIndex);
         return response;
       } catch (caught) {

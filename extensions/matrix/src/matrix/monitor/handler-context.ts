@@ -312,7 +312,9 @@ export async function resolveMatrixInboundContext(config: {
   );
   if (shouldAckReaction && messageId) {
     loadMatrixSendModule()
-      .then(({ reactMatrixMessage }) => reactMatrixMessage(roomId, messageId, ackReaction, client))
+      .then(({ reactMatrixMessage }) =>
+        reactMatrixMessage(roomId, messageId, ackReaction, { client }),
+      )
       .catch((err: unknown) => {
         logVerboseMessage(`matrix react failed for room ${roomId}: ${String(err)}`);
       });

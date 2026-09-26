@@ -62,40 +62,6 @@ function shouldRetryTimedOutTelegramControlRequest(method: string | null): boole
   return method !== null && TELEGRAM_TIMEOUT_FALLBACK_METHODS.has(method);
 }
 
-export function resolveTelegramClientTimeoutSeconds(params: {
-  value: unknown;
-  minimum?: number;
-}): number | undefined {
-  const { value, minimum } = params;
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  const configured = Math.max(1, Math.floor(value));
-  if (typeof minimum !== "number" || !Number.isFinite(minimum)) {
-    return configured;
-  }
-  return Math.max(configured, Math.max(1, Math.floor(minimum)));
-}
-
-export function resolveTelegramClientTimeoutMinimumSeconds(
-  values: readonly (number | undefined)[],
-) {
-  let minimum: number | undefined;
-  for (const value of values) {
-    if (typeof value !== "number" || !Number.isFinite(value)) {
-      continue;
-    }
-    const normalized = Math.max(1, Math.ceil(value));
-    minimum = minimum === undefined ? normalized : Math.max(minimum, normalized);
-  }
-  return minimum;
-}
-
-export function resolveTelegramOutboundClientTimeoutFloorSeconds(timeoutSeconds: unknown) {
-  const timeoutMs = resolveTelegramRequestTimeoutMs("sendmessage", timeoutSeconds);
-  return timeoutMs === undefined ? undefined : timeoutMs / 1000;
-}
-
 export function createTelegramClientFetch(params: {
   fetchImpl?: TelegramClientFetch;
   timeoutSeconds?: unknown;

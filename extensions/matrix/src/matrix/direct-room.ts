@@ -1,14 +1,8 @@
-import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeNullableString,
+  normalizeTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixClient } from "./sdk.js";
-
-function normalizeJoinedMatrixMembers(joinedMembers: unknown): string[] {
-  if (!Array.isArray(joinedMembers)) {
-    return [];
-  }
-  return joinedMembers
-    .map((entry) => normalizeNullableString(entry))
-    .filter((entry): entry is string => Boolean(entry));
-}
 
 export function isStrictDirectMembership(params: {
   selfUserId?: string | null;
@@ -32,7 +26,7 @@ export async function readJoinedMatrixMembers(
   roomId: string,
 ): Promise<string[] | null> {
   try {
-    return normalizeJoinedMatrixMembers(await client.getJoinedRoomMembers(roomId));
+    return normalizeTrimmedStringList(await client.getJoinedRoomMembers(roomId));
   } catch {
     return null;
   }

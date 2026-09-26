@@ -110,10 +110,7 @@ export function isFeishuGroupReadAllowed(
   if (group?.enabled === false) {
     return false;
   }
-  if (current) {
-    return true;
-  }
-  if (policy === "open") {
+  if (current || policy === "open") {
     return true;
   }
   const explicitlyConfigured = hasExplicitFeishuGroupConfig({
@@ -148,13 +145,15 @@ function isDmUniversallyAllowed(account: ResolvedFeishuAccount): boolean {
   return compileAllowlist(normalizeFeishuAllowlist(account.config.allowFrom)).wildcard;
 }
 
-export function assertFeishuChatReadAllowed(params: {
+type FeishuChatReadParams = {
   cfg: OpenClawConfig;
   account: ResolvedFeishuAccount;
   chatId: string;
   chatType?: FeishuChatType;
   ctx: FeishuReadContext;
-}): string {
+};
+
+export function assertFeishuChatReadAllowed(params: FeishuChatReadParams): string {
   const authorization = resolveFeishuChatReadPreliminaryAuthorization(params);
   if (authorization.decision !== "allow") {
     throw new ToolAuthorizationError("Feishu read target is not allowed.");
@@ -164,13 +163,7 @@ export function assertFeishuChatReadAllowed(params: {
 
 type FeishuChatReadPreliminaryDecision = "allow" | "deny" | "needs-metadata";
 
-export function resolveFeishuChatReadPreliminaryAuthorization(params: {
-  cfg: OpenClawConfig;
-  account: ResolvedFeishuAccount;
-  chatId: string;
-  chatType?: FeishuChatType;
-  ctx: FeishuReadContext;
-}): {
+export function resolveFeishuChatReadPreliminaryAuthorization(params: FeishuChatReadParams): {
   chatId: string;
   decision: FeishuChatReadPreliminaryDecision;
 } {
@@ -247,15 +240,12 @@ export type FeishuChatMemberReadAuthorization =
       memberIdType: "open_id" | "user_id";
     };
 
-export function authorizeFeishuChatMemberRead(params: {
-  cfg: OpenClawConfig;
-  account: ResolvedFeishuAccount;
-  chatId: string;
-  chatType?: FeishuChatType;
-  ctx: FeishuReadContext;
-  memberId?: string;
-  memberIdType?: "open_id" | "user_id" | "union_id";
-}): FeishuChatMemberReadAuthorization {
+export function authorizeFeishuChatMemberRead(
+  params: FeishuChatReadParams & {
+    memberId?: string;
+    memberIdType?: "open_id" | "user_id" | "union_id";
+  },
+): FeishuChatMemberReadAuthorization {
   const chatId = assertFeishuChatReadAllowed(params);
   const chatType = normalizeFeishuChatType(params.chatType);
   if (chatType === "group") {

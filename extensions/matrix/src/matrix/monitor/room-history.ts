@@ -228,7 +228,8 @@ export function createRoomHistoryTracker(
     if (limit <= 0 || queue.entries.length === 0) {
       return [];
     }
-    const wm = startAbsOverride ?? agentWatermarks.get(wmKey(agentId, roomId, threadRootId)) ?? 0;
+    const key = wmKey(agentId, roomId, threadRootId);
+    const wm = startAbsOverride ?? agentWatermarks.get(key) ?? 0;
     // startAbs: the first absolute index the agent hasn't seen yet
     const startAbs = Math.max(wm, queue.baseIndex);
     const startRel = startAbs - queue.baseIndex;
@@ -238,29 +239,38 @@ export function createRoomHistoryTracker(
     );
     const available = queue.entries
       .slice(startRel, endRel)
-      .filter(
-        (entry) =>
-          !entry.discarded &&
-          !entry.reserved &&
-          !entry.consumedBy?.has(wmKey(agentId, roomId, threadRootId)),
-      );
+      .filter((entry) => !entry.discarded && !entry.reserved && !entry.consumedBy?.has(key));
     return available.length > limit ? available.slice(-limit) : available;
   }
 
-  function prepareTriggerInternal(
+  function prepareTrigger(
     agentId: string,
     roomId: string,
     limit: number,
     entry: HistoryEntry,
     threadRootId?: string,
+    reservedSlot?: ReservedHistorySlot,
   ): PreparedTriggerResult {
+    let slot = reservedSlot;
     const queue = getScopedQueue(roomId, threadRootId);
+    if (slot) {
+      const rel = slot.slotIdx - queue.baseIndex;
+      if (queue.generation !== slot.queueGeneration || rel < 0 || rel >= queue.entries.length) {
+        slot = undefined;
+      }
+    }
     const retryKey = preparedTriggerKey(agentId, entry.messageId);
     if (retryKey) {
       const prepared = queue.preparedTriggers.get(retryKey);
       if (prepared) {
+        if (slot) {
+          discardPending(roomId, slot, threadRootId);
+        }
         return rememberPreparedTrigger(queue, retryKey, prepared);
       }
+    }
+    if (slot) {
+      queue.entries[slot.slotIdx - queue.baseIndex] = entry;
     }
     const prepared = {
       history: computePendingHistory(
@@ -268,11 +278,13 @@ export function createRoomHistoryTracker(
         agentId,
         roomId,
         limit,
-        undefined,
-        undefined,
+        slot?.slotIdx,
+        slot?.watermarkIdx,
         threadRootId,
       ),
-      ...appendToQueue(queue, entry),
+      ...(slot
+        ? { snapshotIdx: slot.slotIdx + 1, queueGeneration: queue.generation }
+        : appendToQueue(queue, entry)),
     };
     if (retryKey) {
       return rememberPreparedTrigger(queue, retryKey, prepared);
@@ -297,6 +309,15 @@ export function createRoomHistoryTracker(
     queue.entries[rel] = entry;
   }
 
+  function discardPending(roomId: string, slot: ReservedHistorySlot, threadRootId?: string) {
+    finalizePending(
+      roomId,
+      slot,
+      { sender: "", body: "", messageId: undefined, discarded: true },
+      threadRootId,
+    );
+  }
+
   return {
     recordPending(roomId: string, entry: HistoryEntry, threadRootId?: string) {
       const queue = getScopedQueue(roomId, threadRootId);
@@ -315,70 +336,8 @@ export function createRoomHistoryTracker(
 
     finalizePending,
 
-    discardPending(roomId: string, slot: ReservedHistorySlot, threadRootId?: string) {
-      finalizePending(
-        roomId,
-        slot,
-        {
-          sender: "",
-          body: "",
-          messageId: undefined,
-          discarded: true,
-        },
-        threadRootId,
-      );
-    },
-
-    prepareTrigger: prepareTriggerInternal,
-
-    prepareReservedTrigger(
-      agentId: string,
-      roomId: string,
-      limit: number,
-      slot: ReservedHistorySlot,
-      entry: HistoryEntry,
-      threadRootId?: string,
-    ) {
-      const queue = findScopedQueue(roomId, threadRootId);
-      if (!queue || queue.generation !== slot.queueGeneration) {
-        return prepareTriggerInternal(agentId, roomId, limit, entry, threadRootId);
-      }
-      const rel = slot.slotIdx - queue.baseIndex;
-      if (rel < 0 || rel >= queue.entries.length) {
-        return prepareTriggerInternal(agentId, roomId, limit, entry, threadRootId);
-      }
-      const retryKey = preparedTriggerKey(agentId, entry.messageId);
-      if (retryKey) {
-        const prepared = queue.preparedTriggers.get(retryKey);
-        if (prepared) {
-          queue.entries[rel] = {
-            sender: "",
-            body: "",
-            messageId: undefined,
-            discarded: true,
-          };
-          return rememberPreparedTrigger(queue, retryKey, prepared);
-        }
-      }
-      queue.entries[rel] = entry;
-      const prepared = {
-        history: computePendingHistory(
-          queue,
-          agentId,
-          roomId,
-          limit,
-          slot.slotIdx,
-          slot.watermarkIdx,
-          threadRootId,
-        ),
-        snapshotIdx: slot.slotIdx + 1,
-        queueGeneration: queue.generation,
-      };
-      if (retryKey) {
-        return rememberPreparedTrigger(queue, retryKey, prepared);
-      }
-      return prepared;
-    },
+    discardPending,
+    prepareTrigger,
 
     consumeHistory(
       agentId: string,

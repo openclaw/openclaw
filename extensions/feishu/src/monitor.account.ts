@@ -1,7 +1,11 @@
 import * as crypto from "node:crypto";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
-import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeOptionalString,
+  readStringValue as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import {
@@ -28,11 +32,7 @@ import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
 import { getFeishuSequentialKey } from "./sequential-key.js";
 import { createFeishuThreadBindingManager } from "./thread-bindings.js";
-import {
-  normalizeFeishuEventChatType,
-  type FeishuChatType,
-  type ResolvedFeishuAccount,
-} from "./types.js";
+import { normalizeFeishuEventChatType, type ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
 
@@ -120,9 +120,7 @@ export async function resolveReactionSyntheticEvent(
     return null;
   }
 
-  const fallbackChatType = reactedMsg.chatType;
-  const normalizedEventChatType = normalizeFeishuEventChatType(event.chat_type);
-  const resolvedChatType = normalizedEventChatType ?? fallbackChatType;
+  const resolvedChatType = normalizeFeishuEventChatType(event.chat_type) ?? reactedMsg.chatType;
   if (!resolvedChatType) {
     logger?.(
       `feishu[${accountId}]: skipping reaction ${emoji} on ${messageId} without chat type context`,
@@ -132,7 +130,6 @@ export async function resolveReactionSyntheticEvent(
 
   const syntheticChatIdRaw = event.chat_id ?? reactedMsg.chatId;
   const syntheticChatId = syntheticChatIdRaw?.trim() ? syntheticChatIdRaw : `p2p:${senderId}`;
-  const syntheticChatType: FeishuChatType = resolvedChatType;
   return {
     sender: {
       sender_id: {
@@ -149,7 +146,7 @@ export async function resolveReactionSyntheticEvent(
       ...(reactedMsg.rootId ? { root_id: reactedMsg.rootId } : {}),
       ...(reactedMsg.threadId ? { thread_id: reactedMsg.threadId } : {}),
       chat_id: syntheticChatId,
-      chat_type: syntheticChatType,
+      chat_type: resolvedChatType,
       message_type: "text",
       content: JSON.stringify({
         text:
@@ -198,8 +195,7 @@ function parseFeishuBotRemovedChatId(value: unknown): string | null {
 
 function firstString(...values: unknown[]): string | undefined {
   for (const value of values) {
-    const stringValue = readString(value);
-    const trimmed = stringValue?.trim();
+    const trimmed = normalizeOptionalString(value);
     if (trimmed) {
       return trimmed;
     }
@@ -291,16 +287,11 @@ function registerEventHandlers(
     }
     const task = params.task();
     context.trackTask(task);
-    if (fireAndForget) {
-      void task.catch((err: unknown) => {
-        error(`${params.errorMessage}: ${String(err)}`);
-      });
-      return;
-    }
-    try {
-      await task;
-    } catch (err) {
+    const handled = task.catch((err: unknown) => {
       error(`${params.errorMessage}: ${String(err)}`);
+    });
+    if (!fireAndForget) {
+      await handled;
     }
   };
 

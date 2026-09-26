@@ -43,12 +43,6 @@ function resolveTelegramPollThreadSpec(
     : undefined;
 }
 
-/**
- * Send a sticker to a Telegram chat by file_id.
- * @param to - Chat ID or username (e.g., "123456789" or "@username")
- * @param fileId - Telegram file_id of the sticker to send
- * @param opts - Optional configuration
- */
 export async function sendStickerTelegram(
   to: string,
   fileId: string,
@@ -92,12 +86,6 @@ type TelegramPollOpts = TelegramThreadedSendOpts &
     isAnonymous?: boolean;
   };
 
-/**
- * Send a poll to a Telegram chat.
- * @param to - Chat ID or username (e.g., "123456789" or "@username")
- * @param poll - Poll input with question, options, maxSelections, and optional durationHours
- * @param opts - Optional configuration
- */
 export async function sendPollTelegram(
   to: string,
   poll: PollInput,

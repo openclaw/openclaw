@@ -15,39 +15,40 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import {
+  deleteMatrixMessage,
+  editMatrixMessage,
+  readMatrixMessage,
+  readMatrixMessages,
+  sendMatrixMessage,
+} from "./matrix/actions/messages.js";
+import { pinMatrixMessage, unpinMatrixMessage, listMatrixPins } from "./matrix/actions/pins.js";
+import { voteMatrixPoll } from "./matrix/actions/polls.js";
+import {
+  listMatrixEmojis,
+  listMatrixReactions,
+  removeMatrixReactions,
+} from "./matrix/actions/reactions.js";
+import { getMatrixMemberInfo, getMatrixRoomInfo } from "./matrix/actions/room.js";
+import type { MatrixMessageSummary } from "./matrix/actions/types.js";
+import {
   bootstrapMatrixVerification,
   acceptMatrixVerification,
   cancelMatrixVerification,
   confirmMatrixVerificationReciprocateQr,
   confirmMatrixVerificationSas,
-  deleteMatrixMessage,
-  editMatrixMessage,
   generateMatrixVerificationQr,
   getMatrixEncryptionStatus,
   getMatrixRoomKeyBackupStatus,
   getMatrixVerificationStatus,
-  getMatrixMemberInfo,
-  getMatrixRoomInfo,
   getMatrixVerificationSas,
-  listMatrixEmojis,
-  listMatrixPins,
-  listMatrixReactions,
   listMatrixVerifications,
   mismatchMatrixVerificationSas,
-  pinMatrixMessage,
-  readMatrixMessage,
-  readMatrixMessages,
   requestMatrixVerification,
   restoreMatrixRoomKeyBackup,
-  removeMatrixReactions,
   scanMatrixVerificationQr,
-  sendMatrixMessage,
   startMatrixVerification,
-  unpinMatrixMessage,
-  voteMatrixPoll,
   verifyMatrixRecoveryKey,
-} from "./matrix/actions.js";
-import type { MatrixMessageSummary } from "./matrix/actions/types.js";
+} from "./matrix/actions/verification.js";
 import { withAuthorizedMatrixReadTarget } from "./matrix/read-policy.js";
 import type { MatrixClient } from "./matrix/sdk.js";
 import { reactMatrixMessage } from "./matrix/send.js";
