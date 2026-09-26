@@ -10,6 +10,7 @@ import { isPathInside } from "../infra/path-guards.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { retainPluginSourceCaptureInstance } from "./plugin-source-capture-directory.js";
 import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
+import { isPluginSourceEntry } from "./plugin-source-file.js";
 import { verifyPluginSourceInputs, type PluginSourceInput } from "./plugin-source-verification.js";
 
 export type PluginDependencyResolution = { root: string; lookupDirectory: string };
@@ -341,7 +342,7 @@ function visitPluginPackageTargetFiles(params: {
         throw new Error(`Plugin source contains a directory cycle: ${source}`);
       }
       ancestors.add(real);
-      for (const name of fs.readdirSync(input).toSorted()) {
+      for (const name of fs.readdirSync(input).filter(isPluginSourceEntry).toSorted()) {
         visit(path.join(source, name));
       }
       ancestors.delete(real);

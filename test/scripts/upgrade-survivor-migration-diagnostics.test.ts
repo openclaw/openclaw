@@ -412,8 +412,17 @@ it.each(["input", "output", "entries", "symlink", "directory-symlink", "malforme
   },
 );
 
-it("publishes bounded and redacted baseline Gateway, Cron run, and agent-turn failures", () => {
+it("publishes bounded and redacted Gateway, Cron run, agent-turn, and update no-op failures", () => {
   const f = fixture();
+  write(path.join(f.artifacts, "update-noop.json"), {
+    status: "error",
+    reason: "second update failed",
+    warning: `token=${secret}`,
+  });
+  fs.writeFileSync(
+    path.join(f.artifacts, "update-noop.err"),
+    `No-op update refused: token=${secret}\n` + "Update diagnostic line\n".repeat(1000),
+  );
   fs.mkdirSync(path.join(f.artifacts, "missing-load-path"));
   for (const name of baselineGatewayLogs) {
     fs.writeFileSync(path.join(f.artifacts, name), `Baseline startup failed: token=${secret}\n`);
@@ -435,6 +444,17 @@ it("publishes bounded and redacted baseline Gateway, Cron run, and agent-turn fa
     );
   }
   const report = capture(f);
+  expect(JSON.parse(report.logs["update-noop.json"])).toMatchObject({
+    status: "error",
+    reason: "second update failed",
+  });
+  expect(report.logs["update-noop.err"]).toContain("No-op update refused");
+  expect(Buffer.byteLength(JSON.stringify(report.logs["update-noop.err"]))).toBeLessThanOrEqual(
+    16 * 1024,
+  );
+  expect(report.omissions["update-noop.err"]).toBe(
+    "redacted output truncated at a complete line (16 KiB)",
+  );
   for (const name of baselineGatewayLogs) {
     expect(report.logs[name]).toContain("Baseline startup failed");
   }
@@ -762,6 +782,8 @@ it("omits unsafe migration files and oversized registration collections without 
   fs.symlinkSync(f.root, path.join(f.artifacts, "missing-load-path"));
   fs.symlinkSync(outside, path.join(f.artifacts, "backup-rollback-create.json"));
   fs.writeFileSync(path.join(f.artifacts, "backup-rollback.json"), "x".repeat(262145));
+  fs.symlinkSync(outside, path.join(f.artifacts, "update-noop.json"));
+  fs.writeFileSync(path.join(f.artifacts, "update-noop.err"), "x".repeat(262145));
   fs.writeFileSync(
     path.join(f.artifacts, "sibling-registrations.jsonl"),
     Array.from({ length: 129 }, () =>
@@ -779,6 +801,10 @@ it("omits unsafe migration files and oversized registration collections without 
   expect(report.omissions["backup-rollback-create.json"]).toBe("missing or unsafe file");
   expect(report.logs["backup-rollback.json"]).toBeNull();
   expect(report.omissions["backup-rollback.json"]).toBe("input exceeds cap; omitted whole");
+  expect(report.logs["update-noop.json"]).toBeNull();
+  expect(report.omissions["update-noop.json"]).toBe("missing or unsafe file");
+  expect(report.logs["update-noop.err"]).toBeNull();
+  expect(report.omissions["update-noop.err"]).toBe("input exceeds cap; omitted whole");
   for (const section of ["sessions", "archives", "sibling", "doctor"]) {
     expect(report.migration[section].availability).toBe("unavailable");
   }
@@ -800,6 +826,8 @@ it("does not reuse sibling or startup observations when an attempt fails before 
     ["out", "err"].map((extension) => `legacy-operator-${stage}-turn.${extension}`),
   );
   const logs = [
+    "update-noop.json",
+    "update-noop.err",
     ...turnLogs,
     ...baselineCronRunLogs,
     ...baselineGatewayLogs,

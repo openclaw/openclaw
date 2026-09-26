@@ -84,6 +84,9 @@ const servingAncestorMaintenanceCases = [
   { platform: "linux", identity: "different run", phase: "prepare", authorized: false },
   { platform: "linux", identity: "stale start identity", phase: "prepare", authorized: false },
   { platform: "linux", identity: "parent lease", phase: "prepare", authorized: false },
+  { platform: "linux", identity: "missing run", phase: "inspect", authorized: false },
+  { platform: "linux", identity: "different run", phase: "inspect", authorized: false },
+  { platform: "linux", identity: "missing lease", phase: "inspect", authorized: false },
 ] as const;
 
 it.runIf(process.platform === "linux" || process.platform === "darwin").each(
@@ -186,6 +189,8 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
       await withEnvAsync(
         {
           OPENCLAW_UPDATE_RUN_HANDOFF: identity === "missing marker" ? undefined : "1",
+          OPENCLAW_UPDATE_RUN_ID:
+            identity === "missing run" ? undefined : phase === "inspect" ? runId : randomUUID(),
           [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]:
             identity === "missing metadata" ? undefined : metaPath,
           OPENCLAW_SERVICE_MARKER: inherited ? "openclaw" : undefined,
@@ -214,7 +219,8 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
             shouldRestart: true,
             jsonMode: true,
             phase,
-            updateRun: { runId, env: process.env },
+            // Candidate admission inspects before supplying the ledger run context.
+            updateRun: phase === "inspect" ? undefined : { runId, env: process.env },
             handoffFromGateway: async () => false,
           });
           expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");

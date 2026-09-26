@@ -53,13 +53,13 @@ export function clearMainSessionRecoveryAfterAgentRun(
   entry: SessionEntry,
   clearForceSafeTools: boolean | undefined,
 ): void {
-  const aborted = entry.abortedLastRun === true;
-  if (clearForceSafeTools && !aborted) {
+  if (entry.abortedLastRun === true) {
+    return;
+  }
+  if (clearForceSafeTools) {
     entry.restartRecoveryForceSafeTools = undefined;
   }
-  if (!aborted) {
-    Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
-  }
+  Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
 }
 
 export type { MainRecoveryStateFields };
