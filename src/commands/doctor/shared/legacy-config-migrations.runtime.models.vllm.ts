@@ -273,7 +273,7 @@ function removeLegacyVllmQwenThinkingParams(params: Record<string, unknown>): vo
   }
 }
 
-export function applyLegacyVllmQwenThinkingFormat(params: {
+function applyLegacyVllmQwenThinkingFormat(params: {
   sourcePath: string;
   legacyParams: Record<string, unknown>;
   target: { model: Record<string, unknown>; index: number };

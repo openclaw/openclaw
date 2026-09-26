@@ -413,26 +413,6 @@ export async function collectChannelStatus(params: {
   };
 }
 
-export async function noteChannelStatus(params: {
-  cfg: OpenClawConfig;
-  prompter: WizardPrompter;
-  options?: SetupChannelsOptions;
-  accountOverrides?: Partial<Record<ChannelChoice, string>>;
-  installedPlugins?: ChannelSetupPlugin[];
-  resolveAdapter?: (channel: ChannelChoice) => ChannelSetupWizardAdapter | undefined;
-}): Promise<void> {
-  const { statusLines } = await collectChannelStatus({
-    cfg: params.cfg,
-    options: params.options,
-    accountOverrides: params.accountOverrides ?? {},
-    installedPlugins: params.installedPlugins,
-    resolveAdapter: params.resolveAdapter,
-  });
-  if (statusLines.length > 0) {
-    await params.prompter.note(statusLines.join("\n"), t("wizard.channels.statusTitle"));
-  }
-}
-
 export async function noteChannelPrimer(
   prompter: WizardPrompter,
   channels: Array<{ id: ChannelChoice; blurb: string; label: string }>,
