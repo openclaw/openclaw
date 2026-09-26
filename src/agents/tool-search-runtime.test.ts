@@ -595,6 +595,41 @@ describe("Tool Search input schemas", () => {
     expect(target.execute).not.toHaveBeenCalled();
   });
 
+  it("runs the target tool's prepareArguments before catalog input validation", async () => {
+    // #158631: the catalog dispatch bypasses the agent loop, where a tool's
+    // prepareArguments normally runs, so argument aliases must be honored here.
+    const target = fakeTool(
+      "aliased_search",
+      Type.Object(
+        { query: Type.String(), minScore: Type.Optional(Type.Number()) },
+        { additionalProperties: false },
+      ),
+    );
+    target.prepareArguments = (args: unknown) => {
+      const params =
+        typeof args === "object" && args !== null && !Array.isArray(args)
+          ? { ...(args as Record<string, unknown>) }
+          : {};
+      if (params.minScore === undefined && params.min_score !== undefined) {
+        params.minScore = params.min_score;
+      }
+      delete params.min_score;
+      return params;
+    };
+    const { runtime } = createRuntime([target]);
+
+    await expect(
+      runtime.call("aliased_search", { query: "orchid", min_score: 0.3 }),
+    ).resolves.toMatchObject({
+      result: { details: { input: { query: "orchid", minScore: 0.3 } } },
+    });
+    expect(target.execute).toHaveBeenCalledOnce();
+    expect(vi.mocked(target.execute).mock.calls[0]?.[1]).toEqual({
+      query: "orchid",
+      minScore: 0.3,
+    });
+  });
+
   it("does not apply a parent tool's schema to nested wrapped tool calls", async () => {
     const nested = fakeTool(
       "nested_instruction",

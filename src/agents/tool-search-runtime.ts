@@ -507,7 +507,12 @@ export class ToolSearchRuntime {
   ) => {
     this.pluginRuntimeRefresh.assertCurrent();
     catalog.callCount += 1;
-    const normalizedInput = input ?? {};
+    const rawInput = input ?? {};
+    // The catalog dispatch path bypasses the agent loop, which is where a
+    // tool's prepareArguments normalizer runs before validation. Run it here
+    // so contracts like memory_search's snake_case aliases hold on every
+    // dispatch surface (#158631).
+    const normalizedInput = entry.tool.prepareArguments?.(rawInput) ?? rawInput;
     const parentId = sanitizeToolCallIdPart(options?.parentToolCallId ?? "direct");
     const toolCallId = `tool_search_code:${parentId}:${entry.name}:${++this.callSequence}`;
     bindJoinedCollectorInvocation(entry.tool, toolCallId);
