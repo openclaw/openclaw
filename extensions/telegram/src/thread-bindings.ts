@@ -1,4 +1,4 @@
-import { readAcpSessionEntryAsync } from "openclaw/plugin-sdk/acp-runtime";
+import * as acpRuntime from "openclaw/plugin-sdk/acp-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   registerSessionBindingAdapter,
@@ -109,7 +109,13 @@ async function initializeThreadBindingManager(
   }
 
   const staleSessionKeys = new Set<string>();
+  const readAcpSessionEntryAsync = acpRuntime.readAcpSessionEntryAsync;
   for (const targetSessionKey of acpSessionKeys) {
+    if (typeof readAcpSessionEntryAsync !== "function") {
+      throw new Error(
+        "ACP thread binding reconciliation requires asynchronous metadata reads. Upgrade the OpenClaw host.",
+      );
+    }
     const sessionEntry = await readAcpSessionEntryAsync({ sessionKey: targetSessionKey });
     if (!sessionEntry || sessionEntry.storeReadFailed) {
       continue;
