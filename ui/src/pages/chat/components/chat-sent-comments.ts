@@ -1,4 +1,4 @@
-import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
+import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
@@ -9,7 +9,16 @@ import {
   renderCommentPreviewRow,
   type CommentPreview,
 } from "./chat-comment-preview.ts";
-import type { AssistantAttachmentItem, AttachmentItem } from "./chat-message-media.ts";
+import {
+  needsAttachmentSourceAdmission,
+  renderChatAttachmentAdmission,
+  type AttachmentAdmission,
+} from "./chat-message-attachment-admission.ts";
+import type {
+  AssistantAttachmentItem,
+  AttachmentItem,
+  ImageRenderOptions,
+} from "./chat-message-media.ts";
 
 export function isSentCommentAttachment(item: AssistantAttachmentItem): item is AttachmentItem {
   return (
@@ -25,12 +34,39 @@ type SentCommentSource = {
   src?: string;
   sizeBytes?: number;
   pending?: boolean;
-  fallback: TemplateResult | typeof nothing;
+  fallback: unknown;
 };
+
+export function renderSentCommentAttachments(
+  comments: AttachmentItem[],
+  options: ImageRenderOptions,
+  resolve: (item: AttachmentItem) => SentCommentSource,
+) {
+  if (comments.length === 0) {
+    return nothing;
+  }
+  const renderComments = (admission?: AttachmentAdmission) => html`<openclaw-chat-sent-comments
+    .sources=${comments.map((item) =>
+      admission?.observeElement
+        ? { identity: item.attachment.url, pending: true, fallback: nothing }
+        : resolve(item),
+    )}
+    .scope=${JSON.stringify([options.sessionKey, options.agentId, options.connectionEpoch, options.resourceBasePath, options.authToken, options.policyKey])}
+    .admission=${admission}
+  ></openclaw-chat-sent-comments>`;
+  return comments.some((item) => needsAttachmentSourceAdmission(item.attachment))
+    ? renderChatAttachmentAdmission({
+        attachments: comments.map((item) => item.attachment),
+        options,
+        render: renderComments,
+      })
+    : renderComments();
+}
 
 class ChatSentComments extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) sources: SentCommentSource[] = [];
   @property() scope = "";
+  @property({ attribute: false }) admission?: AttachmentAdmission;
   @state() private revealed = false;
   @state() private comments: Array<CommentPreview | null | undefined> = [];
   private key = "";
@@ -96,8 +132,11 @@ class ChatSentComments extends OpenClawLightDomContentsElement {
             </ol>`,
             () => {
               this.revealed = true;
+              this.admission?.onAdmit();
             },
             true,
+            undefined,
+            this.admission?.observeElement,
           )
         : nothing
     }

@@ -15,7 +15,7 @@ import {
 import {
   renderChatAttachmentAdmission,
   shouldDeferAttachmentCard,
-  type AttachmentCardAdmission,
+  type AttachmentAdmission,
 } from "./chat-message-attachment-admission.ts";
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES,
@@ -50,7 +50,7 @@ import {
 } from "./chat-message-media.ts";
 import { renderMessageVideoPreview } from "./chat-message-video-preview.ts";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
-import { isSentCommentAttachment } from "./chat-sent-comments.ts";
+import { isSentCommentAttachment, renderSentCommentAttachments } from "./chat-sent-comments.ts";
 import type { AttachmentSidebarState, SidebarContent } from "./chat-sidebar-content-types.ts";
 
 type OmittedMediaItem = Extract<MessageContentItem, { type: "omitted_media" }>;
@@ -397,7 +397,7 @@ export function renderAssistantAttachments(
   }
   const comments = inlinePlayback ? [] : attachments.filter(isSentCommentAttachment);
   const files = attachments.filter((item) => inlinePlayback || !isSentCommentAttachment(item));
-  const sources = comments.map((item) => {
+  const resolveComment = (item: AttachmentItem) => {
     const resolved = resolveAttachmentSource(item.attachment, options);
     return {
       identity: item.attachment.url,
@@ -420,20 +420,13 @@ export function renderAssistantAttachments(
         "card",
       ),
     };
-  });
+  };
   const hasPreviewChips =
     !inlinePlayback && (comments.length > 0 || files.some(isSentPastedTextAttachment));
   return html`<div
     class="chat-assistant-attachments ${hasPreviewChips ? "chat-assistant-attachments--preview-chips" : ""}"
   >
-    ${
-      comments.length
-        ? html`<openclaw-chat-sent-comments
-            .sources=${sources}
-            .scope=${JSON.stringify([options.sessionKey, options.agentId, options.connectionEpoch, options.resourceBasePath, options.authToken, options.policyKey])}
-          ></openclaw-chat-sent-comments>`
-        : nothing
-    }
+    ${renderSentCommentAttachments(comments, options, resolveComment)}
     ${files.map((item) =>
       renderMessageAttachment(
         item,
@@ -458,7 +451,7 @@ export function renderMessageAttachment(
   onAssistantAttachmentLoaded?: () => void,
   presentation: "inline" | "card" | "preview" = "inline",
 ) {
-  const renderContent = (admission?: AttachmentCardAdmission) =>
+  const renderContent = (admission?: AttachmentAdmission) =>
     renderMessageAttachmentContent(
       item,
       options,
@@ -471,7 +464,7 @@ export function renderMessageAttachment(
     return renderContent();
   }
   return html`${renderChatAttachmentAdmission({
-    attachment: item.attachment,
+    attachments: [item.attachment],
     options,
     render: renderContent,
   })}`;
@@ -483,7 +476,7 @@ function renderMessageAttachmentContent(
   onOpenSidebar?: (content: SidebarContent) => void,
   onAssistantAttachmentLoaded?: () => void,
   presentation: "inline" | "card" | "preview" = "inline",
-  admission?: AttachmentCardAdmission,
+  admission?: AttachmentAdmission,
 ) {
   const { onRequestOpenImage, onOpenImage, resolveArtifactDownload } = options;
   if (item.type === "attachment_error") {
@@ -498,7 +491,7 @@ function renderMessageAttachmentContent(
   const { attachment } = item;
   const pastedText = presentation === "card" && isSentPastedTextAttachment(item);
   const imageAttachment = resolveAttachmentImageKind(attachment) === "svg";
-  const resolved = admission?.observeCard
+  const resolved = admission?.observeElement
     ? undefined
     : resolveAttachmentSource(attachment, options);
   if (
@@ -593,6 +586,7 @@ function renderMessageAttachmentContent(
       .sizeBytes=${media?.sizeBytes ?? attachment.sizeBytes}
       .scope=${JSON.stringify([attachment.url, options.sessionKey, options.agentId, options.connectionEpoch, options.resourceBasePath, options.authToken, options.policyKey])}
       .onOpen=${openAttachmentSidebar}
+      .admission=${admission}
     ></openclaw-chat-pasted-text>`;
   }
   const card = renderCompactAttachmentCard(
@@ -607,8 +601,8 @@ function renderMessageAttachmentContent(
       onExpand: openAttachmentSidebar,
       voiceNote: attachment.isVoiceNote === true,
     },
-    admission?.observeCard,
-    admission?.onFocus,
+    admission?.observeElement,
+    admission?.onAdmit,
   );
   if (admission && !media) {
     return card;
