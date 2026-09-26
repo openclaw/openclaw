@@ -61,6 +61,7 @@ describe("MattermostConfigSchema", () => {
       streaming: {
         mode: "progress",
         progress: {
+          finalDelivery: "separate",
           label: "Shelling",
           maxLines: 4,
           toolProgress: false,
@@ -75,6 +76,24 @@ describe("MattermostConfigSchema", () => {
       },
     });
     expect(result.success).toBe(true);
+  });
+
+  it("accepts both progress final-delivery policies and rejects unknown values", () => {
+    expect(
+      MattermostConfigSchema.safeParse({
+        streaming: { mode: "progress", progress: { finalDelivery: "in-place" } },
+      }).success,
+    ).toBe(true);
+    expect(
+      MattermostConfigSchema.safeParse({
+        streaming: { mode: "progress", progress: { finalDelivery: "separate" } },
+      }).success,
+    ).toBe(true);
+    expect(
+      MattermostConfigSchema.safeParse({
+        streaming: { mode: "progress", progress: { finalDelivery: "replace" } },
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects retired scalar streaming and flat delivery keys", () => {

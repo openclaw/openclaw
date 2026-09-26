@@ -12,6 +12,7 @@ import {
 
 const MATTERMOST_STREAM_MAX_CHARS = 4000;
 const DEFAULT_THROTTLE_MS = 1000;
+export const MATTERMOST_PROGRESS_POST_TYPE = "custom_openclaw_progress";
 
 type MattermostDraftPublishedPart = {
   messageId: string;
@@ -42,6 +43,7 @@ type MattermostDraftStream = {
   clear: () => Promise<void>;
   deleteCurrentMessage: () => Promise<void>;
   discardPending: () => Promise<void>;
+  retainTerminalText: (text: string) => Promise<boolean>;
   seal: () => Promise<void>;
   stop: () => Promise<void>;
   forceNewMessage: () => Promise<void>;
@@ -111,6 +113,7 @@ export function createMattermostDraftStream(params: {
   throttleMs?: number;
   renderText?: (text: string) => string;
   chunkText?: (text: string) => string[];
+  postType?: string;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): MattermostDraftStream {
@@ -125,6 +128,17 @@ export function createMattermostDraftStream(params: {
     if (terminalAcceptedDeliveryError !== undefined) {
       throw terminalAcceptedDeliveryError;
     }
+  };
+  const latchAcceptedDeliveryFailure = (error: unknown): Error | undefined => {
+    if (!isChannelPartialDeliveryError(error)) {
+      return undefined;
+    }
+    const acceptedDeliveryError = toErrorObject(error, "Mattermost accepted delivery failed");
+    // An accepted post without a usable id cannot be updated or deleted safely.
+    // Stop and retain the receipt failure before any caller can retry the create.
+    streamState.stopped = true;
+    terminalAcceptedDeliveryError = acceptedDeliveryError;
+    return acceptedDeliveryError;
   };
   type DraftGeneration = {
     postId?: string;
@@ -172,6 +186,7 @@ export function createMattermostDraftStream(params: {
           channelId: params.channelId,
           message: normalized,
           rootId: params.rootId,
+          postType: params.postType,
         });
         target.postId = sent.id;
         target.lastProviderText = sent.message ?? normalized;
@@ -181,13 +196,8 @@ export function createMattermostDraftStream(params: {
     } catch (err) {
       // Stop immediately so a discarded background failure cannot queue a second visible post.
       streamState.stopped = true;
-      const acceptedDeliveryError = isChannelPartialDeliveryError(err)
-        ? toErrorObject(err, "Mattermost accepted delivery failed")
-        : undefined;
-      if (acceptedDeliveryError) {
-        // Warning handlers can synchronously re-enter finalization; retain the failure first.
-        terminalAcceptedDeliveryError = acceptedDeliveryError;
-      }
+      // Warning handlers can synchronously re-enter finalization; retain the failure first.
+      const acceptedDeliveryError = latchAcceptedDeliveryFailure(err);
       params.warn?.(
         `mattermost stream preview failed: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -282,6 +292,7 @@ export function createMattermostDraftStream(params: {
             channelId: params.channelId,
             message: firstChunk,
             rootId: params.rootId,
+            postType: params.postType,
           });
           recordPublishedAssistantPart(firstPost.id, firstPost.message ?? firstChunk, 0);
         }
@@ -290,6 +301,7 @@ export function createMattermostDraftStream(params: {
             channelId: params.channelId,
             message: chunk,
             rootId: params.rootId,
+            postType: params.postType,
           });
           recordPublishedAssistantPart(post.id, post.message ?? chunk, publishedAssistantOffset);
         }
@@ -297,14 +309,8 @@ export function createMattermostDraftStream(params: {
           sealedAssistantTexts.push({ text: assistantText, requiresBlockBoundary: true });
         }
       } catch (err) {
-        const acceptedDeliveryError = isChannelPartialDeliveryError(err)
-          ? toErrorObject(err, "Mattermost accepted delivery failed")
-          : undefined;
-        if (acceptedDeliveryError) {
-          // Publish terminal state before warning hooks can re-enter update or forceNewMessage.
-          streamState.stopped = true;
-          terminalAcceptedDeliveryError = acceptedDeliveryError;
-        }
+        // Publish terminal state before warning hooks can re-enter update or forceNewMessage.
+        const acceptedDeliveryError = latchAcceptedDeliveryFailure(err);
         const publishedAssistantPrefix = assistantText?.slice(0, publishedAssistantOffset).trim();
         if (publishedAssistantPrefix) {
           // A later physical chunk failed after this exact source prefix became durable.
@@ -336,6 +342,39 @@ export function createMattermostDraftStream(params: {
     await operation();
     await currentGeneration.ready;
     assertNoAcceptedDeliveryFailure();
+  };
+  const retainTerminalText = async (text: string) => {
+    assertNoAcceptedDeliveryFailure();
+    await discardPending();
+    await currentGeneration.ready;
+    assertNoAcceptedDeliveryFailure();
+    const rendered = params.renderText?.(text) ?? text;
+    const normalized = normalizeMattermostDraftText(rendered, maxChars);
+    if (!normalized) {
+      return false;
+    }
+    if (currentGeneration.postId) {
+      const updated = await updateMattermostPost(params.client, currentGeneration.postId, {
+        message: normalized,
+      });
+      currentGeneration.lastProviderText = updated.message ?? normalized;
+      currentGeneration.lastSentText = normalized;
+      return true;
+    }
+    try {
+      const sent = await createMattermostPost(params.client, {
+        channelId: params.channelId,
+        message: normalized,
+        rootId: params.rootId,
+        postType: params.postType,
+      });
+      currentGeneration.postId = sent.id;
+      currentGeneration.lastProviderText = sent.message ?? normalized;
+      currentGeneration.lastSentText = normalized;
+      return true;
+    } catch (error) {
+      throw latchAcceptedDeliveryFailure(error) ?? error;
+    }
   };
   const discardPending = settleOperation(stopForClear);
   const clear = async () => {
@@ -422,6 +461,7 @@ export function createMattermostDraftStream(params: {
     clear,
     deleteCurrentMessage,
     discardPending,
+    retainTerminalText,
     seal: settleOperation(sealLifecycle),
     stop: settleOperation(stopLifecycle),
     forceNewMessage,

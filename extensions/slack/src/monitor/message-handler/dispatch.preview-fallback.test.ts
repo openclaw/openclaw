@@ -970,7 +970,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
         }
         mockedQueuedDispatchCounts[entry.kind] += 1;
         const dispatcher = createReplyDispatcher({
-          deliver: params.delivery.deliver,
+          deliver: emitCompactProgressScenario.bindDelivery(params.delivery),
           onError: params.delivery.onError,
         });
         if (entry.kind === "tool") {

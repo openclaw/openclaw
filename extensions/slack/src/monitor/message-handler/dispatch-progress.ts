@@ -445,6 +445,10 @@ export function createSlackProgressRuntime(runtimeParams: {
           }
         : undefined,
     cleanupUndelivered: true,
+    finalDelivery:
+      isProgressMode && !useDraftProgressCard && !useNativeProgressStreaming
+        ? "separate"
+        : "in-place",
     onFinalStarted: () => progressDraft.markFinalReplyStarted(),
     onFinalDelivered: () => progressDraft.markFinalReplyDelivered(),
     onCleanupFailure: (error) =>

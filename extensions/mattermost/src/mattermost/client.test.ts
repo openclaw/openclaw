@@ -817,6 +817,60 @@ describe("createMattermostPost", () => {
     ).resolves.toMatchObject({ id: "post-123" });
   });
 
+  it("sends channel_id and message", async () => {
+    const { mockFetch, calls } = createMockFetch({ body: { id: "post1" } });
+    const client = createMattermostClient({
+      baseUrl: "http://localhost:8065",
+      botToken: "tok",
+      fetchImpl: mockFetch,
+    });
+
+    await createMattermostPost(client, {
+      channelId: "ch123",
+      message: "Hello world",
+    });
+
+    const body = parseRequestJson(requireRequestCall(calls).init);
+    expect(body.channel_id).toBe("ch123");
+    expect(body.message).toBe("Hello world");
+  });
+
+  it("includes rootId when provided", async () => {
+    const { mockFetch, calls } = createMockFetch({ body: { id: "post2" } });
+    const client = createMattermostClient({
+      baseUrl: "http://localhost:8065",
+      botToken: "tok",
+      fetchImpl: mockFetch,
+    });
+
+    await createMattermostPost(client, {
+      channelId: "ch123",
+      message: "Reply",
+      rootId: "root456",
+    });
+
+    const body = parseRequestJson(requireRequestCall(calls).init);
+    expect(body.root_id).toBe("root456");
+  });
+
+  it("includes a custom post type atomically when provided", async () => {
+    const { mockFetch, calls } = createMockFetch({ body: { id: "post-progress" } });
+    const client = createMattermostClient({
+      baseUrl: "http://localhost:8065",
+      botToken: "tok",
+      fetchImpl: mockFetch,
+    });
+
+    await createMattermostPost(client, {
+      channelId: "ch123",
+      message: "Working",
+      postType: "custom_openclaw_progress",
+    });
+
+    const body = parseRequestJson(requireRequestCall(calls).init);
+    expect(body.type).toBe("custom_openclaw_progress");
+  });
+
   it("includes fileIds when provided", async () => {
     const { mockFetch, calls } = createMockFetch({ body: { id: "post3" } });
     const client = createMattermostClient({

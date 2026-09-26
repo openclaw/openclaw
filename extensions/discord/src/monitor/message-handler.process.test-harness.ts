@@ -347,13 +347,18 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
               cfg,
               dispatcherOptions: {
                 ...plan.dispatcherOptions,
-                deliver: (payload, info) => {
+                deliver: async (payload, info) => {
                   const providerInfo = {
                     ...info,
                     onPlatformSendDispatch: async () => undefined,
                     assertPlatformSendAuthorized: () => undefined,
                   };
-                  return delivery.deliverWithProviderMessageSending(payload, providerInfo);
+                  const result = await delivery.deliverWithProviderMessageSending(
+                    payload,
+                    providerInfo,
+                  );
+                  await delivery.onDelivered?.(payload, providerInfo, result);
+                  return result;
                 },
                 onError: delivery.onError,
               },

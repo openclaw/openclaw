@@ -27,6 +27,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MattermostPost } from "./client.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
 import { registerMattermostBlockProgressTests } from "./monitor.block-progress.test-support.js";
+import { bindTestDeliveryObserver } from "./monitor.delivery.test-support.js";
+import type { ObservedTestDelivery } from "./monitor.delivery.test-support.js";
 import { monitorMattermostProvider } from "./monitor.js";
 import { registerMattermostPreviewDeliveryTests } from "./monitor.preview-delivery.test-support.js";
 import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
@@ -177,6 +179,7 @@ vi.mock("./client.js", async () => {
 vi.mock("./draft-stream.js", async () => {
   const actual = await vi.importActual<typeof import("./draft-stream.js")>("./draft-stream.js");
   return {
+    MATTERMOST_PROGRESS_POST_TYPE: actual.MATTERMOST_PROGRESS_POST_TYPE,
     createMattermostDraftStream: mockState.createMattermostDraftStream,
     createMattermostDraftPreviewBoundaryController:
       actual.createMattermostDraftPreviewBoundaryController,
@@ -340,14 +343,11 @@ function createRuntimeCore(
       route: { agentId: string; sessionKey: string };
       ctxPayload: { SessionKey?: string };
       dispatcherOptions?: Record<string, unknown>;
-      delivery: {
-        observeMessageSent?: true;
-        deliver: (
-          payload: ReplyPayload,
-          info: { kind: "tool" | "block" | "final" },
-        ) => Promise<unknown>;
-        onError?: unknown;
-      };
+      delivery: ObservedTestDelivery<
+        ReplyPayload,
+        { kind: "tool" | "block" | "final" },
+        unknown
+      > & { observeMessageSent?: true };
       replyOptions?: Record<string, unknown>;
       record?: {
         groupResolution?: unknown;
@@ -368,7 +368,7 @@ function createRuntimeCore(
       });
       const prepared = mockState.createReplyDispatcherWithTyping({
         ...turn.dispatcherOptions,
-        deliver: turn.delivery.deliver,
+        deliver: bindTestDeliveryObserver(turn.delivery),
         onError: turn.delivery.onError,
       }) as { dispatcher: unknown; replyOptions?: Record<string, unknown> };
       const dispatchResult = await mockState.dispatchInboundMessage({

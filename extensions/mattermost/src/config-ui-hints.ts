@@ -23,4 +23,8 @@ export const mattermostChannelConfigUiHints = {
     },
     progress: {},
   }),
+  "streaming.progress.finalDelivery": {
+    label: "Mattermost Progress Final Delivery",
+    help: 'Choose whether progress mode finalizes the draft "in-place" (default) or sends a normal final post and removes the temporary progress post after confirmed delivery ("separate").',
+  },
 } satisfies Record<string, ChannelConfigUiHint>;

@@ -43,15 +43,15 @@ export function registerMattermostPreviewDeliveryTests<Socket extends PreviewSoc
     mockState,
   } = harness;
   it.each([
-    { toolProgress: undefined, label: "Working", mode: "progress" },
-    { toolProgress: false, label: "Working", mode: "progress" },
-    { toolProgress: true, label: "Working", mode: "progress" },
-    { toolProgress: false, label: false, mode: "progress" },
-    { toolProgress: true, label: false, mode: "partial" },
-    { toolProgress: true, label: false, mode: "block" },
+    { toolProgress: undefined, label: "Working", mode: "progress", finalDelivery: undefined },
+    { toolProgress: false, label: "Working", mode: "progress", finalDelivery: "in-place" },
+    { toolProgress: true, label: "Working", mode: "progress", finalDelivery: "separate" },
+    { toolProgress: false, label: false, mode: "progress", finalDelivery: "separate" },
+    { toolProgress: true, label: false, mode: "partial", finalDelivery: undefined },
+    { toolProgress: true, label: false, mode: "block", finalDelivery: undefined },
   ] as const)(
-    "keeps Mattermost $mode progress with $toolProgress and label $label",
-    async ({ toolProgress, label, mode }) => {
+    "keeps Mattermost $mode progress with $toolProgress, label $label, and final delivery $finalDelivery",
+    async ({ toolProgress, label, mode, finalDelivery }) => {
       const socket = new FakeWebSocket();
       const abortController = new AbortController();
       mockState.abortController = abortController;
@@ -86,6 +86,7 @@ export function registerMattermostPreviewDeliveryTests<Socket extends PreviewSoc
             streaming: {
               mode,
               progress: {
+                ...(finalDelivery ? { finalDelivery } : {}),
                 label,
                 toolProgress,
               },
@@ -233,6 +234,11 @@ export function registerMattermostPreviewDeliveryTests<Socket extends PreviewSoc
 
       const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
       expect(replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
+      expect(mockState.createMattermostDraftStream.mock.calls.at(-1)?.[0]?.postType).toBe(
+        mode === "progress" && finalDelivery === "separate"
+          ? "custom_openclaw_progress"
+          : undefined,
+      );
       if (label === false) {
         expect(firstPlanRetractionDeletes).toBe(1);
         expect(resumedProgress).toContain("▸ Resume");
@@ -270,6 +276,109 @@ export function registerMattermostPreviewDeliveryTests<Socket extends PreviewSoc
       expect(updates.join("\n")).not.toContain("<progress");
     },
   );
+
+  it.each([
+    { name: "an absent finalDelivery value", finalDelivery: undefined, separate: false },
+    { name: 'finalDelivery="in-place"', finalDelivery: "in-place", separate: false },
+    { name: 'finalDelivery="separate"', finalDelivery: "separate", separate: true },
+  ] as const)("applies $name at the Mattermost delivery boundary", async (testCase) => {
+    const progressConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "open",
+          streaming: {
+            mode: "progress",
+            progress: {
+              ...(testCase.finalDelivery ? { finalDelivery: testCase.finalDelivery } : {}),
+              label: "Working",
+            },
+          },
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(progressConfig);
+    const draftStream = {
+      update: vi.fn(),
+      updateAssistantText: vi.fn(),
+      flush: vi.fn(async () => {}),
+      postId: vi.fn(() => "preview-policy"),
+      clear: vi.fn(async () => {}),
+      discardPending: vi.fn(async () => {}),
+      seal: vi.fn(async () => {}),
+      deleteCurrentMessage: vi.fn(async () => {}),
+      forceNewMessage: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      settleBoundaries: vi.fn(async () => {}),
+      resolveFinalText: vi.fn((text: string) => ({
+        kind: "full" as const,
+        text,
+        publishedParts: [],
+      })),
+    };
+    mockState.createMattermostDraftStream.mockReturnValue(draftStream);
+    mockState.updateMattermostPost.mockResolvedValue({
+      id: "preview-policy",
+      message: "Final answer",
+    });
+    mockState.sendMessageMattermost.mockResolvedValue({
+      content: "Final answer",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "mattermost", channelId: "chan-1", messageId: "final-policy" }],
+        kind: "text",
+      }),
+    });
+
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    mockState.dispatchInboundMessage.mockImplementation(async () => {
+      const dispatcherOptions =
+        mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
+      await dispatcherOptions?.deliver({ text: "Final answer" }, { kind: "final" });
+      abortController.abort();
+    });
+
+    const monitor = startTestMonitor(progressConfig, abortController, socket);
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+    await emitMattermostChannelPost(socket, {
+      id: `post-policy-${testCase.finalDelivery ?? "absent"}`,
+      message: "run this",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.createMattermostDraftStream.mock.calls.at(-1)?.[0]?.postType).toBe(
+      testCase.separate ? "custom_openclaw_progress" : undefined,
+    );
+    if (testCase.separate) {
+      expect(mockState.updateMattermostPost).not.toHaveBeenCalled();
+      expect(mockState.sendMessageMattermost).toHaveBeenCalledOnce();
+      expect(draftStream.discardPending).toHaveBeenCalled();
+      expect(draftStream.clear).toHaveBeenCalled();
+      expect(draftStream.discardPending.mock.invocationCallOrder[0]).toBeLessThan(
+        mockState.sendMessageMattermost.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(mockState.sendMessageMattermost.mock.invocationCallOrder[0]).toBeLessThan(
+        draftStream.clear.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+    } else {
+      expect(mockState.updateMattermostPost).toHaveBeenCalledWith({}, "preview-policy", {
+        message: "Final answer",
+      });
+      expect(mockState.sendMessageMattermost).not.toHaveBeenCalled();
+      expect(draftStream.flush).toHaveBeenCalledOnce();
+      expect(draftStream.seal).toHaveBeenCalledOnce();
+      expect(draftStream.clear).not.toHaveBeenCalled();
+    }
+  });
 
   it("finalizes only the current block when the terminal reply is cumulative", async () => {
     const blockConfig: OpenClawConfig = {

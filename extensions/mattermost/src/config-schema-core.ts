@@ -72,6 +72,7 @@ const MattermostNetworkSchema = z
 const MattermostStreamingModeSchema = z.enum(["off", "partial", "block", "progress"]);
 const MattermostStreamingProgressSchema = z
   .object({
+    finalDelivery: z.enum(["in-place", "separate"]).optional(),
     label: z.union([z.string(), z.literal(false)]).optional(),
     labels: z.array(z.string()).optional(),
     maxLines: z.number().int().positive().optional(),

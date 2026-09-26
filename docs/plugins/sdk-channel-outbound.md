@@ -209,13 +209,17 @@ provider artifact; returning `false` means deletion was not confirmed.
 Native streams without a deletable preview omit `draft` rather than supplying
 no-op operations.
 
-| Option               | Meaning                                                                                                                    |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `retainOnError`      | Keep the preview after an accepted error final. Defaults to `false`; use the channel's existing error presentation policy. |
-| `cleanupUndelivered` | Allow cleanup of unused previews when no final was delivered and the turn did not fail. Defaults to `false`.               |
-| `onFinalStarted`     | Synchronously stop progress producers when final delivery begins.                                                          |
-| `onFinalDelivered`   | Synchronously observe completion of a non-error final. Partial acceptance does not trigger this notification.              |
-| `onCleanupFailure`   | Report cleanup failure without replacing an accepted delivery result. The default emits a generic warning.                 |
+| Option                           | Meaning                                                                                                                                                         |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `finalDelivery`                  | Use `"in-place"` (default) to allow preview promotion or `"separate"` to force the authoritative final through normal delivery before cleanup.                  |
+| `retainOnError`                  | Keep the preview after an accepted error final. Defaults to `false`; use the channel's existing error presentation policy.                                      |
+| `cleanupUndelivered`             | Allow cleanup of unused previews when no final was delivered and the turn did not fail. Defaults to `false`.                                                    |
+| `onFinalStarted`                 | Synchronously stop progress producers when final delivery begins.                                                                                               |
+| `onFinalDelivered`               | Synchronously observe completion of a non-error final. Partial acceptance does not trigger this notification.                                                   |
+| `onFinalFailure`                 | Present a provider-owned terminal failure state. Core deduplicates it across delivery, dispatcher, and turn failure paths and settles it during cleanup.        |
+| `onFinalFailureError`            | Report failure to present the terminal state. If no final became visible, that presentation error is propagated instead of silently completing the delivery.    |
+| `onDiscardPendingPartialFailure` | Report a partial progress-receipt failure isolated by `finalDelivery: "separate"`. Non-partial settlement failures and the default in-place path remain strict. |
+| `onCleanupFailure`               | Report cleanup failure without replacing an accepted delivery result. The default emits a generic warning.                                                      |
 
 Call `deliver({ kind, payload, isError, adapter, deliverNormally, onNormalDelivered })`
 at the actual delivery boundary. `deliverNormally` returns a
@@ -236,15 +240,16 @@ final sends do not trigger successful-final cleanup. An explicit supplemental
 suppression is not retried; the legacy boolean `false` supplemental result remains
 eligible for normal fallback.
 
-| Operation                              | Use                                                                                                                                                                                                                                                                                                   |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `beginFinalDelivery()`                 | Freeze progress before awaiting provider-owned finalization. This records pending delivery, not acceptance, and does not stop the native transport.                                                                                                                                                   |
-| `observeDelivery(result, { isError })` | Record provider-confirmed final delivery through a native or source/message-tool path and retire eligible temporary progress. An invisible result is ignored; a progress receipt is not final evidence. `isError` distinguishes an accepted error response from task success and defaults to `false`. |
-| `observeFailure(result?)`              | Record a final dispatcher failure. Pass a provider-confirmed accepted subset for partial delivery; never infer acceptance from the error's class. A previously completed final is not revoked.                                                                                                        |
-| `observeSuppression()`                 | Record an intentional final no-send decision, such as cancellation by an outbound modifier hook. It cannot hide an existing delivery failure or revoke accepted content.                                                                                                                              |
-| `cleanup({ failed })`                  | Quiesce updates and clean eligible temporary previews. Failed/partial finals and retained or promoted previews stay protected. Cleanup failure cannot authorize resending accepted content.                                                                                                           |
-| `retainPreview()`                      | Transfer the artifact out of automatic cleanup, for example after an accepted continuation handoff. This does not claim final delivery.                                                                                                                                                               |
-| `reset()`                              | Start the next admitted turn, assistant answer, or block generation. The owner fences stale awaited completions from the new generation. The transport still owns its corresponding message-identity rotation; advance both at the assistant boundary.                                                |
+| Operation                                | Use                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `beginFinalDelivery()`                   | Freeze progress before awaiting provider-owned finalization. This records pending delivery, not acceptance, and does not stop the native transport.                                                                                                                                                   |
+| `observeDelivery(result, { isError })`   | Record provider-confirmed final delivery through a native or source/message-tool path and retire eligible temporary progress. An invisible result is ignored; a progress receipt is not final evidence. `isError` distinguishes an accepted error response from task success and defaults to `false`. |
+| `observeSettlement(result, { isError })` | Classify the adapter's actual `onDelivered` settlement as visible delivery, intentional suppression, or no-visible failure. Legacy `void` settlement retains its historical accepted-delivery meaning.                                                                                                |
+| `observeFailure(result?)`                | Record a final dispatcher failure. Pass a provider-confirmed accepted subset for partial delivery; never infer acceptance from the error's class. A previously completed final is not revoked.                                                                                                        |
+| `observeSuppression()`                   | Record an intentional final no-send decision, such as cancellation by an outbound modifier hook. It cannot hide an existing delivery failure or revoke accepted content.                                                                                                                              |
+| `cleanup({ failed })`                    | Quiesce updates and clean eligible temporary previews. Failed/partial finals and retained or promoted previews stay protected. Cleanup failure cannot authorize resending accepted content.                                                                                                           |
+| `retainPreview()`                        | Transfer the artifact out of automatic cleanup, for example after an accepted continuation handoff. This does not claim final delivery.                                                                                                                                                               |
+| `reset()`                                | Start the next admitted turn, assistant answer, or block generation. The owner fences stale awaited completions from the new generation. The transport still owns its corresponding message-identity rotation; advance both at the assistant boundary.                                                |
 
 The read-only `finalStarted`, `finalDelivered`, `finalSucceeded`, `finalFailed`,
 `finalSuppressed`, and `previewFinalized` properties are projections of that owner.
@@ -258,7 +263,10 @@ that cannot be promoted again.
 Use the observation operations when provider-owned pagination or deferred
 finalization cannot use the generic `deliver` algorithm. Begin before the first
 await, then report acceptance, failure, or intentional suppression at actual
-settlement. Buffered content and uncertain sends are not visible-final evidence.
+settlement. Routed channel adapters should pass their final `onDelivered`
+result to `observeSettlement`; this includes suppression before the provider
+sender runs and provider finalization that settles after the initial send call.
+Buffered content and uncertain sends are not visible-final evidence.
 
 The published `defineFinalizableLivePreviewAdapter` and
 `deliverWithFinalizableLivePreviewAdapter` helpers retain their existing
