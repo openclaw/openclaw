@@ -249,6 +249,19 @@ reserved workflow safety.
 Trusted policies may set `matcher` to the same canonical tool-id list accepted
 by `before_tool_call`. Omit the matcher to retain match-all behavior.
 
+When trusted-policy approval completes inline, ordinary `before_tool_call`
+hooks receive an isolated copy of the approved parameters. Calls with unchanged
+parameters remain allowed, subject to ordinary vetoes and later execution
+checks. An ordinary hook that transforms those parameters must return
+`requireApproval` with its final `params` so the replacement receives separate
+approval. Without that approval request, the changed call is blocked with
+`Tool call parameters changed after trusted approval`.
+
+When upgrading plugins that combine trusted approval with ordinary parameter
+rewrites, update the transforming hook to request separate approval. The first
+approval does not authorize the replacement arguments. This inline boundary
+does not change the narrower native-relay contracts described above.
+
 ### Exec environment hook
 
 `resolve_exec_env` lets plugins contribute environment variables to OpenClaw
