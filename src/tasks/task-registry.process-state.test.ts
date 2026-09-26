@@ -1,7 +1,12 @@
 // Verifies process-state persistence across fresh task registry module loads.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
+import type { TaskRecord } from "./task-registry.types.js";
+import { resetTaskRegistryForTests } from "./task-runtime.test-helpers.js";
 
 describe("task registry process state", () => {
   it("shares state across duplicate module instances", async () => {
@@ -115,5 +120,57 @@ describe("task registry process state", () => {
       firstStore.resetTaskRegistryRuntimeForTests();
       secondStore.resetTaskRegistryRuntimeForTests();
     }
+  });
+
+  it("keeps published rows when a stale module instance restores from its own store", async () => {
+    // Non-isolated workers reset the module graph per file while timers and promise
+    // chains from an earlier file keep their old module instance alive. Its late
+    // readiness check must not replace rows the live instance published.
+    const tasks = new Map<string, TaskRecord>(
+      ["task-a", "task-b", "task-c"].map((taskId, index) => [
+        taskId,
+        {
+          taskId,
+          runtime: "cli",
+          requesterSessionKey: "agent:main:main",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          runId: `run-${taskId}`,
+          task: `Task ${index}`,
+          status: "succeeded",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "done_only",
+          createdAt: index + 1,
+          lastEventAt: index + 1,
+        } satisfies TaskRecord,
+      ]),
+    );
+    await withTestDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+        const liveStore = await import("./task-registry.store.js");
+        const liveRegistry = await import("./task-registry.js");
+        resetTaskRegistryForTests({ persist: false });
+        // Both instances must observe one open database identity, as a running Gateway does.
+        openOpenClawStateDatabase();
+        liveStore.configureTaskRegistryRuntime({
+          store: createInMemoryTaskRegistryStore({ tasks, deliveryStates: new Map() }),
+        });
+        const expected = liveRegistry.listTaskRecords().map((task) => task.taskId);
+        expect(expected).toHaveLength(tasks.size);
+
+        vi.resetModules();
+        const staleRegistry = await import("./task-registry.js");
+        const staleStore = await import("./task-registry.store.js");
+        try {
+          staleRegistry.ensureTaskRegistryReady();
+          expect(liveRegistry.listTaskRecords().map((task) => task.taskId)).toEqual(expected);
+          expect(staleRegistry.listTaskRecords().map((task) => task.taskId)).toEqual(expected);
+        } finally {
+          resetTaskRegistryForTests({ persist: false });
+          liveStore.resetTaskRegistryRuntimeForTests();
+          staleStore.resetTaskRegistryRuntimeForTests();
+        }
+      });
+    });
   });
 });

@@ -168,10 +168,10 @@ const defaultTaskRegistryStore: TaskRegistryStore = {
   close: closeTaskRegistryDatabase,
 };
 
-let configuredTaskRegistryStore: TaskRegistryStore = defaultTaskRegistryStore;
-
 export function getTaskRegistryStore(): TaskRegistryStore {
-  return configuredTaskRegistryStore;
+  // Latch one default so duplicate module instances compare the same store identity.
+  const state = getTaskRegistryProcessState();
+  return (state.store ??= defaultTaskRegistryStore);
 }
 
 export function getTaskRegistryObservers(): TaskRegistryObservers | null {
@@ -192,7 +192,7 @@ export function configureTaskRegistryRuntime(params: {
   observers?: TaskRegistryObservers | null;
 }) {
   if (params.store) {
-    configuredTaskRegistryStore = params.store;
+    getTaskRegistryProcessState().store = params.store;
   }
   if ("observers" in params) {
     getTaskRegistryProcessState().observers = params.observers ?? null;
@@ -200,9 +200,10 @@ export function configureTaskRegistryRuntime(params: {
 }
 
 export function resetTaskRegistryRuntimeForTests() {
-  configuredTaskRegistryStore.close?.();
-  configuredTaskRegistryStore = defaultTaskRegistryStore;
-  getTaskRegistryProcessState().observers = null;
+  const state = getTaskRegistryProcessState();
+  getTaskRegistryStore().close?.();
+  state.store = defaultTaskRegistryStore;
+  state.observers = null;
 }
 
 const storeLog = createSubsystemLogger("tasks/registry");
