@@ -5,7 +5,8 @@ import path from "node:path";
 import { brotliCompressSync, brotliDecompressSync, gunzipSync, gzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { handleControlUiHttpRequest, type ControlUiRootState } from "./control-ui.js";
+import { handleControlUiHttpRequest } from "./control-ui.js";
+import type { ControlUiRootState } from "./server-control-ui-root.js";
 
 const assetBody = Buffer.from('console.log("conditional fixture");\n');
 const modifiedAt = new Date("2024-01-01T00:00:00.000Z");

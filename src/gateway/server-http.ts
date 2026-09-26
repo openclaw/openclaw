@@ -38,7 +38,6 @@ import {
 } from "./control-ui-routing.js";
 import { isControlUiSharePath } from "./control-ui-share.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
-import type { ControlUiRootState } from "./control-ui.js";
 import {
   classifyGatewayProbePath,
   classifyMcpAppStandalonePath,
@@ -65,6 +64,7 @@ import {
   handleProviderOAuthCallback,
   PROVIDER_OAUTH_CALLBACK_PATH,
 } from "./provider-browser-auth.js";
+import type { ControlUiRootState } from "./server-control-ui-root.js";
 import {
   getControlUiModule,
   getControlUiPluginAssetsModule,

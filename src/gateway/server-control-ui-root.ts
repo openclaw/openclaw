@@ -17,18 +17,34 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
-import { createControlUiAssetRetention } from "./control-ui-asset-retention.js";
-import type { ControlUiFileRead, ControlUiFileSnapshot } from "./control-ui-file.js";
+import {
+  createControlUiAssetRetention,
+  type ControlUiAssetRetention,
+} from "./control-ui-asset-retention.js";
+import type {
+  ControlUiFileRead,
+  ControlUiFileSnapshot,
+  ControlUiPreparedFile,
+  ControlUiRootAsset,
+} from "./control-ui-file.js";
 import { isControlUiCompressibleAsset } from "./control-ui-static.js";
-import type { ControlUiRootState } from "./control-ui.js";
+
+export type ControlUiRootState =
+  | {
+      kind: "bundled";
+      path: string;
+      realPath?: string;
+      retainedAssets?: ControlUiAssetRetention;
+      publicAssetBuildId?: string;
+    }
+  | { kind: "resolved"; path: string; realPath?: string }
+  | { kind: "invalid"; path: string }
+  | { kind: "preparing" }
+  // The document route is unauthenticated; build diagnostics stay in Gateway logs.
+  | { kind: "failed" }
+  | { kind: "missing" };
 
 type ReadyRoot = Extract<ControlUiRootState, { path: string; kind: "bundled" | "resolved" }>;
-type PreparedFile = Omit<ControlUiFileSnapshot, "body"> & { body?: Buffer };
-export type ControlUiRootAsset = {
-  file: PreparedFile;
-  br?: PreparedFile | Error | null;
-  gzip?: PreparedFile | Error | null;
-};
 type RootFiles = {
   controller: AbortController;
   pending: Map<string, Promise<ControlUiRootAsset | null>>;
@@ -93,7 +109,9 @@ export function readControlUiRootAsset(
     maxPendingTasks: 2_048,
     maxPendingBytes: 8 * 1024 * 1024,
   }));
-  const read = async (input: Omit<ControlUiFileRead, "readBody">): Promise<PreparedFile | null> => {
+  const read = async (
+    input: Omit<ControlUiFileRead, "readBody">,
+  ): Promise<ControlUiPreparedFile | null> => {
     const file = await pool.run(
       { ...input, readBody },
       {

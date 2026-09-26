@@ -10,9 +10,9 @@ import {
 } from "../infra/http-content-encoding.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import type { ControlUiRootAsset } from "./control-ui-file.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
 import { matchesHttpIfModifiedSince } from "./http-conditional.js";
-import type { ControlUiRootAsset } from "./server-control-ui-root.js";
 
 const CONTROL_UI_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 const CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES = 4;

@@ -56,7 +56,6 @@ import {
   type AssistantMediaSession,
   type AssistantMediaReader,
 } from "./assistant-media-policy.js";
-import type { ControlUiAssetRetention } from "./control-ui-asset-retention.js";
 import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
 import {
   buildControlUiRootAssetPath,
@@ -78,6 +77,7 @@ import {
   buildControlUiCspHeader,
   computeInlineScriptHashes,
 } from "./control-ui-csp.js";
+import type { ControlUiRootAsset } from "./control-ui-file.js";
 import {
   isReadHttpMethod,
   respondNotFound as respondControlUiNotFound,
@@ -110,7 +110,7 @@ import {
 } from "./http-image-response.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-utils.js";
-import { readControlUiRootAsset, type ControlUiRootAsset } from "./server-control-ui-root.js";
+import { readControlUiRootAsset, type ControlUiRootState } from "./server-control-ui-root.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
 const ROOT_PREFIX = "/";
@@ -130,21 +130,6 @@ type ControlUiRequestOptions = Partial<GatewayHttpRequestAuthOptions> & {
   agentId?: string;
   root?: ControlUiRootState;
 };
-
-export type ControlUiRootState =
-  | {
-      kind: "bundled";
-      path: string;
-      realPath?: string;
-      retainedAssets?: ControlUiAssetRetention;
-      publicAssetBuildId?: string;
-    }
-  | { kind: "resolved"; path: string; realPath?: string }
-  | { kind: "invalid"; path: string }
-  | { kind: "preparing" }
-  // The document route is unauthenticated; build diagnostics stay in Gateway logs.
-  | { kind: "failed" }
-  | { kind: "missing" };
 
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
 /** Anchors bundled assets before deep-linked documents begin preloading. */

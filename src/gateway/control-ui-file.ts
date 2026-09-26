@@ -16,6 +16,13 @@ export type ControlUiFileSnapshot = {
   body?: Uint8Array;
 };
 
+export type ControlUiPreparedFile = Omit<ControlUiFileSnapshot, "body"> & { body?: Buffer };
+export type ControlUiRootAsset = {
+  file: ControlUiPreparedFile;
+  br?: ControlUiPreparedFile | Error | null;
+  gzip?: ControlUiPreparedFile | Error | null;
+};
+
 export function readControlUiFile(input: ControlUiFileRead): ControlUiFileSnapshot | null {
   const opened = openRootFileSync({
     absolutePath: input.filePath,
