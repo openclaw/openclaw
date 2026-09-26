@@ -57,23 +57,59 @@ describe.each(["all", "selected"] as const)("created initial target in %s mode",
         harness.updateTab(101, { pendingUrl: url });
         harness.updateTab(101, { url, pendingUrl: undefined });
         if (failGrouping) {
+          harness.updateTab(101, { groupId: 7 });
           throw new Error("group failed");
         }
         return await group(params);
       });
       expect(await harness.command({ type: "createTab", url })).toMatchObject({
-        type: failGrouping ? "error" : "result",
+        type: "result",
       });
-      if (failGrouping) {
-        expect(harness.tabsRemove).toHaveBeenCalledExactlyOnceWith(101);
-      } else {
-        expect(harness.debuggerAttach).toHaveBeenCalledExactlyOnceWith({ tabId: 101 }, "1.3");
-        expect(await harness.command({ type: "closeTab", tabId: 101 })).toMatchObject({
-          type: "result",
-        });
-      }
+      expect(harness.debuggerAttach).toHaveBeenCalledExactlyOnceWith({ tabId: 101 }, "1.3");
+      expect(await harness.command({ type: "closeTab", tabId: 101 })).toMatchObject({
+        type: "result",
+      });
     },
   );
+
+  it("rejects a renamed fallback group before debugger I/O", async () => {
+    if (mode !== "selected") {
+      return;
+    }
+    const harness = await createHarness(mode);
+    harness.tabsGroup.mockImplementationOnce(async () => {
+      harness.updateTab(101, { groupId: 7 });
+      throw new Error("group identity unavailable");
+    });
+    expect(await harness.command({ type: "createTab", url: "about:blank" })).toMatchObject({
+      type: "result",
+    });
+    harness.tabGroupsGet.mockResolvedValue({ id: 7, title: "Renamed", windowId: 1 });
+    harness.debuggerSendCommand.mockClear();
+    expect(
+      await harness.command({ type: "cdp", tabId: 101, method: "Runtime.evaluate" }),
+    ).toMatchObject({ type: "error" });
+    expect(harness.debuggerSendCommand).not.toHaveBeenCalled();
+  });
+
+  it("accepts delayed confirmation of the intended existing group", async () => {
+    if (mode !== "selected") {
+      return;
+    }
+    const harness = await createHarness(mode);
+    harness.tabGroupsQuery.mockResolvedValue([{ id: 7, windowId: 1 }]);
+    harness.tabsGroup.mockImplementationOnce(async () => {
+      harness.updateTab(101, { groupId: 7 }, false);
+      throw new Error("group identity unavailable");
+    });
+    harness.debuggerAttach.mockImplementationOnce(async () => {
+      harness.updateTab(101, { groupId: 7 });
+    });
+    expect(await harness.command({ type: "createTab", url: "about:blank" })).toMatchObject({
+      type: "result",
+    });
+  });
+
   it.each([false, true])(
     "accepts initial HTTP redirects (attach failure: %s) without reclaiming a changed destination",
     async (failAttach) => {

@@ -1,4 +1,4 @@
-import { ACCESS_MODE_ALL, ACCESS_MODE_SELECTED } from "./relay-core.js";
+import { ACCESS_MODE_ALL, ACCESS_MODE_SELECTED, OPENCLAW_TAB_GROUP_TITLE } from "./relay-core.js";
 import { addTabToOpenClawGroup } from "./relay-tab-groups.js";
 import { TAB_SCOPED_COMMANDS } from "./tab-access-command-scope.js";
 import { createTabDocumentProvenance } from "./tab-document-provenance.js";
@@ -35,6 +35,44 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
   let storageChain = Promise.resolve();
   const addTabToGroup = (tabId, created) =>
     addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, created });
+  const isSelected = async (tab) => {
+    const created = createdTabs.get(tab?.id);
+    if (created?.groupFallback) {
+      const sameWindow = tab?.windowId === created.tab.windowId;
+      const sameGroup = tab?.groupId === created.groupId;
+      if (!sameWindow || !sameGroup) {
+        created.groupFallback = false;
+        invalidateTab(tab.id);
+        return false;
+      }
+      let currentGroup;
+      try {
+        currentGroup = await chromeApi.tabGroups.get(created.groupId);
+      } catch {
+        currentGroup = undefined;
+      }
+      const groupTitleAuthorized =
+        currentGroup?.title === OPENCLAW_TAB_GROUP_TITLE && currentGroup.windowId === tab.windowId;
+      const unnamedCreationFallbackAuthorized =
+        created.initialGroup &&
+        currentGroup?.title === "" &&
+        currentGroup.windowId === tab.windowId &&
+        !created.groupFallbackRequiresOpenClawTitle;
+      if (!groupTitleAuthorized && !unnamedCreationFallbackAuthorized) {
+        created.groupFallback = false;
+        invalidateTab(tab.id);
+        return false;
+      }
+      return true;
+    }
+    const selected = await isSelectedTab(tab);
+    if (created?.handedOff && !created.initialBlank && !created.groupFallback) {
+      if (selected) {
+        createdTabs.delete(tab.id);
+      }
+    }
+    return selected;
+  };
 
   const documents = createTabDocumentProvenance({
     access: {
@@ -50,9 +88,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         const created = createdTabs.get(tabId);
         if (created?.initialBlank && url !== "about:blank") {
           created.initialBlank = false;
-          if (created.handedOff) {
-            createdTabs.delete(tabId);
-          } else {
+          if (!created.handedOff) {
             invalidateTab(tabId);
           }
         }
@@ -105,7 +141,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         invalidateTab(tab.id);
       }
       created.initialBlank = false;
-      if (created.handedOff) {
+      if (created.handedOff && !created.groupFallback) {
         createdTabs.delete(tab.id);
         if (!created.isCurrent()) {
           invalidateTab(tab.id);
@@ -188,12 +224,14 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     // Handoff retires the creator's epoch gate, not its initial-blank record.
     // Commands and attachments retain their own epochs after re-selection.
     const created = createdTabs.get(tabId);
+    const creatorIsCurrent =
+      !created || (created.handedOff && !created.initialBlank) || created.isCurrent();
     return (
       epochMatches(tabId, epoch, groupId) &&
+      creatorIsCurrent &&
       (!created ||
-        (created.isCurrent() &&
-          (created.handedOff ||
-            (groupRevocations.isCreationCurrent(created) && epochMatches(tabId, created.epoch)))))
+        created.handedOff ||
+        (groupRevocations.isCreationCurrent(created) && epochMatches(tabId, created.epoch)))
     );
   }
 
@@ -210,12 +248,25 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         pending.changedDocuments.add(tabId);
       }
     }
+    const created = createdTabs.get(tabId);
+    if (
+      created?.handedOff &&
+      created.groupFallback &&
+      typeof change.groupId === "number" &&
+      change.groupId !== created.groupId
+    ) {
+      // Fallback is only a create-time exception. A later group change is a
+      // real ACL signal and must revoke the exception rather than extending it.
+      created.groupFallback = false;
+      invalidateTab(tabId);
+    }
     const accessChanged =
       typeof change.url === "string" ||
       change.status === "loading" ||
-      (mode === ACCESS_MODE_SELECTED && typeof change.groupId === "number") ||
+      (mode === ACCESS_MODE_SELECTED &&
+        typeof change.groupId === "number" &&
+        !created?.groupFallback) ||
       (typeof tab?.pendingUrl === "string" && !eligibilityForTab(tab).eligible);
-    const created = createdTabs.get(tabId);
     if (!created) {
       return accessChanged;
     }
@@ -229,20 +280,32 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       eligibilityForTab(tab);
     }
     if (!created.handedOff && typeof change.groupId === "number") {
+      if (created.groupFallback && change.groupId === created.groupId) {
+        return false;
+      }
       if (
         created.grouping &&
         change.groupId >= 0 &&
-        (created.expectedGroupId === undefined || created.expectedGroupId === change.groupId) &&
         epochIsCurrent(tabId, created.epoch) &&
         tab?.id === tabId
       ) {
-        created.groupId = change.groupId;
-        if (created.initialGroup) {
-          created.namingGroup = change.groupId;
+        if (created.groupOperationGroupId === undefined) {
+          // Chrome can emit membership before tabs.group() resolves. Defer
+          // ownership until the operation result is available; do not revoke
+          // the in-flight creation on an event that may be its own result.
+          created.pendingGroupId = change.groupId;
+          return false;
         }
-        created.expectedGroupId = change.groupId;
-        created.grouping = false;
-        return false;
+        if (created.groupOperationGroupId === change.groupId) {
+          created.pendingGroupId = undefined;
+          created.groupId = change.groupId;
+          if (created.initialGroup) {
+            created.namingGroup = change.groupId;
+          }
+          created.expectedGroupId = change.groupId;
+          created.grouping = false;
+          return false;
+        }
       }
       invalidateTab(tabId);
     }
@@ -276,8 +339,13 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       handedOff: false,
       groupId: tab.groupId,
       grouping: false,
+      groupFallback: false,
+      groupFallbackRequiresOpenClawTitle: false,
       expectedGroupId: undefined,
+      groupOperationGroupId: undefined,
+      pendingGroupId: undefined,
       namingGroup: undefined,
+      revokeCreation: () => invalidateTab(tab.id),
       initialGroup: false,
       assertCurrent: () => {
         assertAttachment?.();
@@ -353,7 +421,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       }
       throw error;
     } finally {
-      if (!created.handedOff || !created.initialBlank) {
+      if (!created.handedOff || (!created.initialBlank && !created.groupFallback)) {
         if (createdTabs.get(tab.id) === created) {
           createdTabs.delete(tab.id);
           if (!created.handedOff) {
@@ -443,6 +511,10 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       tabId,
       controlledBlank: documents.get(tabId)?.controlledBlank === true,
     });
+    const created = createdTabs.get(tabId);
+    if (created) {
+      created.groupFallback = false;
+    }
     invalidateTab(tabId);
     return token;
   }
@@ -459,7 +531,10 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
 
   function renewTabAccess(tabId, attachedEpoch, observedTab, change) {
     const tab = documents.resolveTabUpdate(tabId, observedTab, change);
-    const selectedGroupChange = mode === ACCESS_MODE_SELECTED && typeof change.groupId === "number";
+    const selectedGroupChange =
+      mode === ACCESS_MODE_SELECTED &&
+      typeof change.groupId === "number" &&
+      !createdTabs.get(tabId)?.groupFallback;
     const blankObservers =
       !selectedGroupChange &&
       !attachedEpoch &&
@@ -528,7 +603,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       return { accessible: false, eligible: false, denied: false, reason: eligibility.reason, tab };
     }
     const denied = mode === ACCESS_MODE_ALL && deniedTabIds.has(tabId);
-    const selected = mode === ACCESS_MODE_SELECTED ? await isSelectedTab(tab) : true;
+    const selected = mode === ACCESS_MODE_SELECTED ? await isSelected(tab) : true;
     // A lookup can observe removal before its event. Retire the same private
     // authority now, including the creator's right to roll back this tab.
     if (!selected && (document || createdTabs.get(tabId)?.epoch === epoch)) {
@@ -548,7 +623,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         return { accessible: false, eligible: false, denied, reason: "revoked", tab: current };
       }
       const currentEligible = eligibilityForTab(current).eligible;
-      const currentSelected = await isSelectedTab(current);
+      const currentSelected = await isSelected(current);
       if (!currentSelected && (document || createdTabs.get(tabId)?.epoch === epoch)) {
         invalidateTab(tabId);
       }
@@ -639,7 +714,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
           if (!deniedTabIds.has(tab.id)) {
             accessible.push(tab);
           }
-        } else if (await isSelectedTab(tab)) {
+        } else if (await isSelected(tab)) {
           accessible.push(tab);
         }
       }
