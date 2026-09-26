@@ -465,55 +465,13 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     height: 16px;
   }
 
-  /* Log stream */
-  .log-stream {
-    border-radius: var(--radius-md);
-    max-height: 380px;
-  }
-
-  .content:has(openclaw-logs-page) {
-    display: block;
-    overflow-y: auto;
-  }
-
-  .content:has(openclaw-logs-page) > openclaw-router-outlet,
-  .content openclaw-logs-page,
   .content .settings-workspace--fill-height,
-  .content .settings-workspace--fill-height > .settings-workspace__body,
-  .content .settings-workspace--fill-height .logs-card {
+  .content .settings-workspace--fill-height > .settings-workspace__body {
     display: block;
     height: auto;
     min-height: 0;
     flex: initial;
     overflow-y: visible;
-  }
-
-  .content .settings-workspace--fill-height .log-stream {
-    flex: none;
-    min-height: 200px;
-    max-height: 380px;
-  }
-
-  .log-row {
-    grid-template-columns: 1fr;
-    gap: 4px;
-    padding: 8px;
-  }
-
-  .log-time {
-    font-size: 12px; /* was 10px */
-  }
-
-  .log-level {
-    font-size: 12px; /* was 9px */
-  }
-
-  .log-subsystem {
-    font-size: 12px; /* was 11px */
-  }
-
-  .log-message {
-    font-size: 12px;
   }
 
   /* Lists */
