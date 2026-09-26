@@ -43,7 +43,7 @@ export function ensureSessionEntryInTransaction(
   entry: SessionEntry,
   initialWriterRunId?: string,
 ): InitialSessionEntryCommit {
-  const identityKeys = collectSessionEntryLookupKeys(database, resolved.sessionKey);
+  const identityKeys = collectSessionEntryLookupKeys(resolved.sessionKey);
   const previous = readSessionIdentitySnapshot(database, identityKeys);
   const existing = readSessionEntryRow(database, resolved.sessionKey)?.entry;
   if (existing) {

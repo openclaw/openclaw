@@ -169,7 +169,7 @@ export function resolveDeliveryProvenCanonicalSessionKey(
     : normalizedKey;
 }
 
-export function collectSessionEntryLookupKeys(_database: unknown, sessionKey: string): string[] {
+export function collectSessionEntryLookupKeys(sessionKey: string): string[] {
   const trimmedKey = sessionKey.trim();
   return trimmedKey
     ? [

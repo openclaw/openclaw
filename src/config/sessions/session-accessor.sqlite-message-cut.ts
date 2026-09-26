@@ -157,8 +157,8 @@ async function mutateSqliteSessionAtMessage(
             assertPreparedCurrent?.();
             params.commitGuard?.();
             const identityKeys = uniqueStrings([
-              ...collectSessionEntryLookupKeys(database, sourceKey),
-              ...collectSessionEntryLookupKeys(database, targetKey),
+              ...collectSessionEntryLookupKeys(sourceKey),
+              ...collectSessionEntryLookupKeys(targetKey),
             ]);
             previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
             const mutationResult = mutateSqliteSessionAtMessageInTransaction(database, resolved, {

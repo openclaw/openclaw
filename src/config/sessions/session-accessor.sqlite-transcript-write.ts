@@ -164,7 +164,7 @@ export async function replaceSessionWithBranchedTranscript(
           throw new Error(`Branched session was not persisted: ${cause.code}`, { cause });
         }
         assertLockedTranscriptWriteAllowed(database, resolved, fencedScope);
-        const identityKeys = collectSessionEntryLookupKeys(database, resolved.sessionKey);
+        const identityKeys = collectSessionEntryLookupKeys(resolved.sessionKey);
         const previous = readSessionIdentitySnapshot(database, identityKeys);
         writeSessionEntry(database, resolved.sessionKey, {
           ...projectCanonicalSessionEntryShape({ ...fresh }),
@@ -305,7 +305,7 @@ export async function trimTranscriptForManualCompact(
         if (!freshEntry || freshEntry.sessionId !== resolved.sessionId) {
           throw new Error(`SQLite session changed before compacting ${resolved.sessionId}`);
         }
-        const identityKeys = collectSessionEntryLookupKeys(writeDatabase, resolved.sessionKey);
+        const identityKeys = collectSessionEntryLookupKeys(resolved.sessionKey);
         const previousIdentity = readSessionIdentitySnapshot(writeDatabase, identityKeys);
         replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, retainedEvents);
         const nextEntry = cloneSessionEntry(freshEntry);

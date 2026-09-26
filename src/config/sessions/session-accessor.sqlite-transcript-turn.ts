@@ -342,7 +342,7 @@ export async function appendExpectedSessionTranscriptTurn(
             : appendedEntry;
         let publishIdentity: (() => void) | undefined;
         if (initialEntry || next !== appendedEntry) {
-          const identityKeys = collectSessionEntryLookupKeys(transactionDb, resolved.sessionKey);
+          const identityKeys = collectSessionEntryLookupKeys(resolved.sessionKey);
           const previousIdentity = readSessionIdentitySnapshot(
             transactionDb,
             identityKeys.filter((key) => key !== resolved.sessionKey),

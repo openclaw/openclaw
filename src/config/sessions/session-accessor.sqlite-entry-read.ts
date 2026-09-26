@@ -276,7 +276,7 @@ function scanSessionEntryRows(
   | undefined {
   return runSqliteReadOperationSync(database.db, () => {
     assertCanonicalSqliteSessionKeysCurrent(database);
-    const lookupKeys = collectSessionEntryLookupKeys(database, sessionKey);
+    const lookupKeys = collectSessionEntryLookupKeys(sessionKey);
     const firstLookupKey = lookupKeys[0];
     if (firstLookupKey === undefined) {
       return undefined;

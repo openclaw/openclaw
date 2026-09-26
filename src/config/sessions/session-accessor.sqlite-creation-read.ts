@@ -54,7 +54,7 @@ export function readSessionCreationSnapshotInDatabase(
         projection: "list",
         fullEntryKeys: [
           normalizeStoreSessionKey(sessionKey),
-          ...collectSessionEntryLookupKeys(database, sessionKey),
+          ...collectSessionEntryLookupKeys(sessionKey),
         ],
       });
       const facts: CreationFacts = { targetEntry: undefined, labels: new Set() };
