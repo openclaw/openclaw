@@ -44,6 +44,7 @@ describe("ClickClack account resolution", () => {
           groups: {
             " chn_1 ": {
               requireMention: true,
+              requireMentionInBotThreads: false,
               mentionPatterns: ["@root-bot"],
             },
           },
@@ -64,6 +65,7 @@ describe("ClickClack account resolution", () => {
     expect(account.groups).toEqual({
       chn_1: {
         requireMention: false,
+        requireMentionInBotThreads: false,
         mentionPatterns: ["@root-bot"],
       },
     });

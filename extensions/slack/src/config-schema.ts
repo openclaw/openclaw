@@ -48,6 +48,7 @@ const SlackPresenceEventsSchema = z
 
 const SlackChannelSchema = buildGroupEntrySchema(
   {
+    requireMentionInBotThreads: z.boolean().optional(),
     ignoreOtherMentions: z.boolean().optional(),
     replyToMode: ReplyToModeSchema.optional(),
     allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
@@ -108,6 +109,7 @@ const SlackAccountSchema = z
     botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
     dangerouslyAllowNameMatching: ChannelDangerouslyAllowNameMatchingSchema,
     requireMention: z.boolean().optional(),
+    requireMentionInBotThreads: z.boolean().optional(),
     implicitMentions: ChannelImplicitMentionsSchema.optional(),
     unfurlLinks: z.boolean().optional(),
     unfurlMedia: z.boolean().optional(),

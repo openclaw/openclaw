@@ -13,6 +13,7 @@ import { markClickClackDiscussionChannelRevoked } from "./discussions/revoked-ch
 import { handleClickClackInbound } from "./inbound.js";
 import {
   createInboundRuntime,
+  publishInboundAccountConfig as publishAccountConfig,
   createInboundMessage as createMessage,
   createInboundDiscussionBinding,
   createInboundDiscussionConfig,
@@ -79,6 +80,8 @@ function createAgentAccount(
     ...overrides,
     config: {
       ...base.config,
+      workspace: overrides.workspace ?? base.workspace,
+      botUserId: overrides.botUserId,
       ...overrides.config,
     },
   };
@@ -118,11 +121,12 @@ describe("handleClickClackInbound", () => {
       agentActivity: false,
       commandMenu: true,
       discussions: { enabled: false, workspace: "wsp_1", section: "Sessions" },
-      config: {},
+      config: { workspace: "wsp_1" },
       requireMention: false,
       mentionPatterns: [],
       groups: {},
     } satisfies ResolvedClickClackAccount;
+    publishAccountConfig(runtime, account, cfg);
 
     await handleClickClackInbound({
       account,
@@ -173,6 +177,7 @@ describe("handleClickClackInbound", () => {
       agentId: "service-bot",
       replyMode: "model",
     });
+    publishAccountConfig(runtime, account);
 
     await handleClickClackInbound({
       account,
@@ -205,13 +210,15 @@ describe("handleClickClackInbound", () => {
       audit: { caller: { kind: "plugin", id: "clickclack" } },
     });
     setClickClackRuntime(runtime);
+    const account = createAgentAccount({
+      accountId: "service",
+      agentId: "service-bot",
+      replyMode: "model",
+    });
+    publishAccountConfig(runtime, account);
 
     await handleClickClackInbound({
-      account: createAgentAccount({
-        accountId: "service",
-        agentId: "service-bot",
-        replyMode: "model",
-      }),
+      account,
       config: {} satisfies CoreConfig,
       message: createMessage({ body: "hello bot" }),
     });
@@ -238,12 +245,14 @@ describe("handleClickClackInbound", () => {
         },
       },
     } satisfies CoreConfig;
+    const account = createAgentAccount({
+      allowFrom: ["usr_owner"],
+      config: { allowFrom: ["usr_owner"] },
+    });
+    publishAccountConfig(runtime, account, cfg);
 
     await handleClickClackInbound({
-      account: createAgentAccount({
-        allowFrom: ["usr_owner"],
-        config: { allowFrom: ["usr_owner"] },
-      }),
+      account,
       config: cfg,
       message: createMessage(),
     });
@@ -266,11 +275,11 @@ describe("handleClickClackInbound", () => {
         allow: ["*"],
       },
     } satisfies CoreConfig;
+    const account = createAgentAccount({ toolsAllow: ["message"] });
+    publishAccountConfig(runtime, account, cfg);
 
     await handleClickClackInbound({
-      account: createAgentAccount({
-        toolsAllow: ["message"],
-      }),
+      account,
       config: cfg,
       message: createMessage(),
     });
@@ -295,25 +304,31 @@ describe("handleClickClackInbound", () => {
         },
       },
     } satisfies CoreConfig;
+    const defaultAccount = createAgentAccount();
+    const nativeProgressAccount = createAgentAccount({ nativeProgress: true });
+    const agentActivityAccount = createAgentAccount({ agentActivity: true });
 
+    publishAccountConfig(runtime, defaultAccount, cfg);
     await handleClickClackInbound({
-      account: createAgentAccount(),
+      account: defaultAccount,
       config: cfg,
       message: createMessage({
         id: VALID_MESSAGE_ID,
         thread_root_id: VALID_MESSAGE_ID,
       }),
     });
+    publishAccountConfig(runtime, nativeProgressAccount, cfg);
     await handleClickClackInbound({
-      account: createAgentAccount({ nativeProgress: true }),
+      account: nativeProgressAccount,
       config: cfg,
       message: createMessage({
         id: SECOND_VALID_MESSAGE_ID,
         thread_root_id: SECOND_VALID_MESSAGE_ID,
       }),
     });
+    publishAccountConfig(runtime, agentActivityAccount, cfg);
     await handleClickClackInbound({
-      account: createAgentAccount({ agentActivity: true }),
+      account: agentActivityAccount,
       config: cfg,
       message: createMessage({
         id: THIRD_VALID_MESSAGE_ID,
@@ -340,9 +355,11 @@ describe("handleClickClackInbound", () => {
   it("maps the authoritative message id to the agent run and correlates the final reply", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
+    const account = createAgentAccount();
+    publishAccountConfig(runtime, account);
 
     await handleClickClackInbound({
-      account: createAgentAccount(),
+      account,
       config: {} as CoreConfig,
       message: createMessage({
         id: VALID_MESSAGE_ID,
@@ -368,9 +385,11 @@ describe("handleClickClackInbound", () => {
   it("routes media replies through required durable delivery", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
+    const account = createAgentAccount();
+    publishAccountConfig(runtime, account);
 
     await handleClickClackInbound({
-      account: createAgentAccount(),
+      account,
       config: {} as CoreConfig,
       message: createMessage({
         id: VALID_MESSAGE_ID,
@@ -404,9 +423,11 @@ describe("handleClickClackInbound", () => {
   it("does not derive a run id from a noncanonical message id", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
+    const account = createAgentAccount({ nativeProgress: true });
+    publishAccountConfig(runtime, account);
 
     await handleClickClackInbound({
-      account: createAgentAccount({ nativeProgress: true }),
+      account,
       config: {} as CoreConfig,
       message: createMessage({ id: "msg_invalid" }),
     });
@@ -429,12 +450,14 @@ describe("handleClickClackInbound", () => {
         },
       },
     } satisfies CoreConfig;
+    const account = createAgentAccount({
+      allowFrom: ["dm:usr_owner"],
+      config: { allowFrom: ["dm:usr_owner"] },
+    });
+    publishAccountConfig(runtime, account, cfg);
 
     await handleClickClackInbound({
-      account: createAgentAccount({
-        allowFrom: ["dm:usr_owner"],
-        config: { allowFrom: ["dm:usr_owner"] },
-      }),
+      account,
       config: cfg,
       message: createMessage({
         channel_id: "",
@@ -469,9 +492,11 @@ describe("handleClickClackInbound", () => {
         },
       ],
     } satisfies CoreConfig;
+    const account = createAgentAccount({ agentId: "service-bot" });
+    publishAccountConfig(runtime, account, cfg);
 
     await handleClickClackInbound({
-      account: createAgentAccount({ agentId: "service-bot" }),
+      account,
       config: cfg,
       message: createMessage({
         channel_id: undefined,
@@ -701,6 +726,8 @@ describe("handleClickClackInbound", () => {
   it("quarantines unbound channel events while a create outcome is ambiguous", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
+    const account = createAgentAccount({ replyMode: "model" });
+    publishAccountConfig(runtime, account);
     const sessionKey = "agent:research:pending";
     const generation = await reserveDiscussionBindingGeneration({
       runtime,
@@ -725,7 +752,7 @@ describe("handleClickClackInbound", () => {
     });
 
     await handleClickClackInbound({
-      account: createAgentAccount({ replyMode: "model" }),
+      account,
       config: {} satisfies CoreConfig,
       message: createMessage({ channel_id: "chn_unknown", body: "Maybe managed" }),
     });
@@ -787,9 +814,11 @@ describe("handleClickClackInbound", () => {
         },
       ],
     } satisfies CoreConfig;
+    const account = createAgentAccount({ agentId: "SERVICE-BOT" });
+    publishAccountConfig(runtime, account, cfg);
 
     await handleClickClackInbound({
-      account: createAgentAccount({ agentId: "SERVICE-BOT" }),
+      account,
       config: cfg,
       message: createMessage({
         channel_id: undefined,
@@ -817,12 +846,14 @@ describe("handleClickClackInbound", () => {
         },
       },
     } satisfies CoreConfig;
+    const account = createAgentAccount({
+      allowFrom: ["usr_owner"],
+      config: { allowFrom: ["usr_owner"] },
+    });
+    publishAccountConfig(runtime, account, cfg);
 
     await handleClickClackInbound({
-      account: createAgentAccount({
-        allowFrom: ["usr_owner"],
-        config: { allowFrom: ["usr_owner"] },
-      }),
+      account,
       config: cfg,
       message: createMessage({
         author_id: "usr_attacker",

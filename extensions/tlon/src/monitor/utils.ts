@@ -1,14 +1,11 @@
 import { resolveAllowlistMatchByCandidates } from "openclaw/plugin-sdk/allow-from";
 import {
   formatAgentEnvelope,
-  implicitMentionKindWhen,
   resolveEnvelopeFormatOptions,
-  resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  resolveChannelImplicitMentions,
-  type ChannelIngressContextBinding,
-  type StableChannelIngressIdentityParams,
+import type {
+  ChannelIngressContextBinding,
+  StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Tlon helper module supports utils behavior.
@@ -144,6 +141,18 @@ export function stripBotMention(messageText: string, botShipName: string): strin
   return messageText.replace(normalizeShip(botShipName), "").trim();
 }
 
+export function extractDmPartnerShip(whom: unknown): string {
+  const raw =
+    typeof whom === "string"
+      ? whom
+      : whom && typeof whom === "object" && "ship" in whom && typeof whom.ship === "string"
+        ? whom.ship
+        : "";
+  const normalized = normalizeShip(raw);
+  // Keep DM routing strict: accept only patp-like values.
+  return /^~?[a-z-]+$/i.test(normalized) ? normalized : "";
+}
+
 const tlonIngressIdentity = {
   key: "sender-ship",
   normalize: normalizeShip,
@@ -212,37 +221,6 @@ export async function resolveTlonCommandAuthorizationWithIngress(params: {
     groupPolicy: "open",
     allowFrom: normalizedOwner ? [normalizedOwner] : [],
     command: {},
-  });
-}
-
-export function resolveTlonGroupMentionDecision(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  wasMentioned: boolean;
-  botParticipatedInThread: boolean;
-}) {
-  const implicitMentions = resolveChannelImplicitMentions({
-    cfg: params.cfg,
-    channel: "tlon",
-    accountId: params.accountId,
-  });
-  return resolveInboundMentionDecision({
-    facts: {
-      canDetectMention: true,
-      wasMentioned: params.wasMentioned,
-      implicitMentionKinds: implicitMentionKindWhen(
-        "bot_thread_participant",
-        params.botParticipatedInThread,
-      ),
-    },
-    policy: {
-      isGroup: true,
-      requireMention: true,
-      implicitMentions,
-      allowTextCommands: false,
-      hasControlCommand: false,
-      commandAuthorized: false,
-    },
   });
 }
 

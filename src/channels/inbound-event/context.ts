@@ -75,7 +75,7 @@ type BuildChannelInboundEventAccess = {
     mentionedUserIds?: string[];
     mentionedSubteamIds?: string[];
     mentionSource?: MentionSource;
-    implicitMentionKinds?: InboundImplicitMentionKind[];
+    implicitMentionKinds?: readonly InboundImplicitMentionKind[];
     requireMention?: boolean;
     effectiveWasMentioned?: boolean;
   };

@@ -112,28 +112,29 @@ id (`wsp_...`), slug, or name; the gateway resolves it to the id at startup.
 
 ### Account config keys
 
-| Key                     | Default             | Notes                                                                                                                 |
-| ----------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `baseUrl`               | none (required)     | Public ClickClack URL used for browser-facing links.                                                                  |
-| `apiBaseUrl`            | `baseUrl`           | Optional server-to-server endpoint for REST and realtime WebSocket traffic.                                           |
-| `token`                 | none                | Bot token as a plain string or secret ref (`source: "env" \| "file" \| "exec" \| "store"`).                           |
-| `tokenFile`             | none                | Path to a bot-token file; takes precedence over `token`.                                                              |
-| `workspace`             | none (required)     | Workspace id, slug, or name.                                                                                          |
-| `replyMode`             | `"agent"`           | `"agent"` runs the full agent pipeline; `"model"` sends short direct model completions.                               |
-| `defaultTo`             | `"channel:general"` | Target used when an outbound path gives no target.                                                                    |
-| `allowFrom`             | `["*"]`             | User-id allowlist for inbound DMs and channel messages.                                                               |
-| `allowBots`             | `false`             | Admit messages authored by other ClickClack bots: `true` for all allowed bot messages or `"mentions"` in groups only. |
-| `botLoopProtection`     | built-in defaults   | Sliding-window bot-pair loop guard applied to admitted bot messages.                                                  |
-| `botUserId`             | auto-detected       | Resolved from the bot token identity at startup.                                                                      |
-| `agentId`               | route default       | Pin this account's inbound messages to one agent.                                                                     |
-| `toolsAllow`            | none                | Tool allowlist for agent replies from this account.                                                                   |
-| `model`, `systemPrompt` | none                | Used by `replyMode: "model"` completions.                                                                             |
-| `commandMenu`           | `true`              | Publish native commands to ClickClack composer autocomplete.                                                          |
-| `reconnectMs`           | `1500`              | Realtime reconnect delay (100 to 60000).                                                                              |
-| `discussions`           | disabled            | Managed per-session channel settings; see [Session discussions](#session-discussions).                                |
-| `requireMention`        | `false`             | Require a direct mention before dispatching group messages. See [Group mention gating](#group-mention-gating).        |
-| `mentionPatterns`       | `[]`                | Mention patterns for this account in group channels. See [Group mention gating](#group-mention-gating).               |
-| `groups`                | `{}`                | Per-channel group policy overrides keyed by ClickClack channel ID. See [Group mention gating](#group-mention-gating). |
+| Key                          | Default             | Notes                                                                                                                 |
+| ---------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `baseUrl`                    | none (required)     | Public ClickClack URL used for browser-facing links.                                                                  |
+| `apiBaseUrl`                 | `baseUrl`           | Optional server-to-server endpoint for REST and realtime WebSocket traffic.                                           |
+| `token`                      | none                | Bot token as a plain string or secret ref (`source: "env" \| "file" \| "exec" \| "store"`).                           |
+| `tokenFile`                  | none                | Path to a bot-token file; takes precedence over `token`.                                                              |
+| `workspace`                  | none (required)     | Workspace id, slug, or name.                                                                                          |
+| `replyMode`                  | `"agent"`           | `"agent"` runs the full agent pipeline; `"model"` sends short direct model completions.                               |
+| `defaultTo`                  | `"channel:general"` | Target used when an outbound path gives no target.                                                                    |
+| `allowFrom`                  | `["*"]`             | User-id allowlist for inbound DMs and channel messages.                                                               |
+| `allowBots`                  | `false`             | Admit messages authored by other ClickClack bots: `true` for all allowed bot messages or `"mentions"` in groups only. |
+| `botLoopProtection`          | built-in defaults   | Sliding-window bot-pair loop guard applied to admitted bot messages.                                                  |
+| `botUserId`                  | auto-detected       | Resolved from the bot token identity at startup.                                                                      |
+| `agentId`                    | route default       | Pin this account's inbound messages to one agent.                                                                     |
+| `toolsAllow`                 | none                | Tool allowlist for agent replies from this account.                                                                   |
+| `model`, `systemPrompt`      | none                | Used by `replyMode: "model"` completions.                                                                             |
+| `commandMenu`                | `true`              | Publish native commands to ClickClack composer autocomplete.                                                          |
+| `reconnectMs`                | `1500`              | Realtime reconnect delay (100 to 60000).                                                                              |
+| `discussions`                | disabled            | Managed per-session channel settings; see [Session discussions](#session-discussions).                                |
+| `requireMention`             | `false`             | Require a direct mention before dispatching group messages. See [Group mention gating](#group-mention-gating).        |
+| `requireMentionInBotThreads` | unset               | Override mention gating in threads started by this account's bot. See [Bot-created threads](#bot-created-threads).    |
+| `mentionPatterns`            | `[]`                | Mention patterns for this account in group channels. See [Group mention gating](#group-mention-gating).               |
+| `groups`                     | `{}`                | Per-channel group policy overrides keyed by ClickClack channel ID. See [Group mention gating](#group-mention-gating). |
 
 ### Keep an auth-gated public hostname
 
@@ -448,14 +449,32 @@ Requirements and behavior:
 
 By default, every group message in ClickClack dispatches to every enabled ClickClack account in the same workspace. This behavior is backward compatible. Add `requireMention: true` to an account to require a direct mention before the agent pipeline runs.
 
-The effective policy is resolved in this order:
+Each group policy field is resolved in this order:
 
 1. Exact channel entry in `groups` (keyed by ClickClack channel ID).
 2. Wildcard `"*"` entry in `groups`.
-3. Account-level `requireMention` / `mentionPatterns`.
+3. Account-level value, inheriting the top-level ClickClack value when omitted.
 4. Backward-compatible default (`{ requireMention: false, mentionPatterns: [] }`).
 
 DMs are never gated by `requireMention`. When a DM arrives, the mention gate is skipped entirely.
+
+### Bot-created threads
+
+Set `requireMentionInBotThreads: false` to let people reply without mentioning
+the bot in threads it started, while keeping `requireMention: true` for other
+channel messages. You can set this option at the account level or in an exact
+channel or wildcard `groups` entry, using the same precedence above.
+
+OpenClaw applies this override only when it verifies that the native thread's
+root message was authored by the receiving account's bot in the same workspace
+and channel. Threads started by someone else, or whose root cannot be verified,
+keep the ordinary `requireMention` behavior. Participating in a thread does not
+make the bot its creator.
+
+Setting `requireMentionInBotThreads: true` requires a mention in those threads
+even when `requireMention` is `false`. Omitting the option preserves the existing
+mention policy. DMs, sender access rules, and `allowBots` restrictions are
+unchanged; `allowBots: "mentions"` still requires a mention from another bot.
 
 ### Mention detection
 
@@ -505,6 +524,7 @@ classification.
       token: { source: "env", provider: "default", id: "CLICKCLACK_BOT_TOKEN" },
       workspace: "default",
       requireMention: true,
+      requireMentionInBotThreads: false,
       mentionPatterns: ["\\bBlackbird\\b"],
       allowBots: "mentions",
       allowFrom: ["usr_trusted_bot"],
@@ -518,7 +538,8 @@ classification.
 }
 ```
 
-Multiple accounts in the same workspace evaluate the same message independently. Accounts with `requireMention: true` reject an unmentioned message while an account with `requireMention: false` may process it.
+Multiple accounts in the same workspace evaluate the same message independently,
+using each account's resolved mention policy and bot identity.
 
 ### Migration warning
 

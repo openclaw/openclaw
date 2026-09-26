@@ -14,6 +14,7 @@ import {
   withMSTeamsConnectorHandoff,
   type MSTeamsSendHandoff,
 } from "./send-handoff.js";
+import { recordMSTeamsSentMessage } from "./sent-message-cache.js";
 
 type MSTeamsAccountRef = {
   id?: string;
@@ -266,6 +267,16 @@ export async function sendMSTeamsActivityWithReference(
       isTargeted && activities.createTargeted
         ? await activities.createTargeted(activityWithRef)
         : await activities.create(activityWithRef);
+    const conversationId = ref.conversation.id.split(";")[0] ?? ref.conversation.id;
+    // The effective Connector destination proves whether this send created a channel root.
+    if (
+      res.id &&
+      activityWithRef.type === "message" &&
+      ref.conversation.conversationType === "channel" &&
+      ref.conversation.id === conversationId
+    ) {
+      recordMSTeamsSentMessage(conversationId, res.id, ref.bot.id);
+    }
     return { ...activityWithRef, ...res };
   });
 }

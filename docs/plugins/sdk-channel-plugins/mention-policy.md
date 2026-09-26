@@ -27,6 +27,7 @@ Good fit for plugin-local logic:
 - reply-to-bot detection
 - quoted-bot detection
 - thread-participation checks
+- bot-owned thread detection and channel-specific config inheritance
 - service/system-message exclusions
 - platform-native caches needed to prove bot participation
 
@@ -133,3 +134,40 @@ bundled channel plugins that already depend on runtime injection:
 If you only need `implicitMentionKindWhen` and `resolveInboundMentionDecision`,
 import from `openclaw/plugin-sdk/channel-mention-gating` to avoid loading
 unrelated inbound runtime helpers.
+
+## Bot-owned threads
+
+Channels with native thread ownership can expose `requireMentionInBotThreads`.
+An omitted value preserves the channel's existing mention behavior. `false`
+allows messages without a mention in threads started by the configured bot.
+`true` requires a mention there, including when the ordinary `requireMention`
+setting is `false`; replying to or quoting the bot and prior bot participation
+do not satisfy that requirement. Explicit mentions, native mention evidence,
+and authorized command bypass retain their ordinary behavior.
+
+The plugin owns proof that the current bot started the thread and resolves the
+most specific config value before calling `resolveBotThreadMentionPolicy` from
+`openclaw/plugin-sdk/channel-mention-gating`. Bot participation alone is not
+ownership. For unknown ownership, foreign threads, and ordinary channel
+messages, pass `isBotOwnedThread: false` to preserve existing behavior.
+
+Apply the helper after gathering mention evidence and before the shared decision:
+
+```typescript
+const threadPolicy = resolveBotThreadMentionPolicy({
+  isBotOwnedThread,
+  requireMentionInBotThreads,
+  requireMention,
+  implicitMentionKinds: facts.implicitMentionKinds,
+});
+
+const decision = resolveInboundMentionDecision({
+  facts: { ...facts, implicitMentionKinds: threadPolicy.implicitMentionKinds },
+  policy: { ...policy, requireMention: threadPolicy.requireMention },
+});
+```
+
+This override changes mention admission only. Preserve the existing sender
+allowlists, channel access policy, and command authorization. Channels without
+reliable native ownership evidence should not infer ownership from cached
+participation or expose an override they cannot enforce.

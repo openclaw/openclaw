@@ -19,6 +19,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   settleInboundWork,
   startInboxMonitor,
+  waitForInboundWorkDrained,
   waitForMessageCalls,
   type InboxMonitorOptions,
   type InboxOnMessage,
@@ -399,6 +400,7 @@ describe("web monitor inbox socket lifecycle", () => {
       upsertId: "local-timeout-terminal",
       retryPolicy: fastReconnectPolicy(2),
     });
+    await waitForInboundWorkDrained();
     vi.useFakeTimers();
     try {
       sock.sendMessage.mockImplementationOnce(() => new Promise(() => {}));

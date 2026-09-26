@@ -7,6 +7,7 @@ import type {
 
 export type MatrixRawEvent = {
   event_id: string;
+  room_id?: string;
   sender: string;
   type: string;
   origin_server_ts: number;

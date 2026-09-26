@@ -51,6 +51,8 @@ export type MSTeamsReplyStyle = "thread" | "top-level";
 export type MSTeamsChannelConfig = {
   /** Require @mention to respond. Default: true. */
   requireMention?: boolean;
+  /** Override mention gating in channel threads rooted at this bot's message. */
+  requireMentionInBotThreads?: boolean;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -118,6 +120,8 @@ export type MSTeamsConfig = Omit<
     graphMediaFallback?: boolean;
     /** Default: require @mention to respond in channels/groups. */
     requireMention?: boolean;
+    /** Override mention gating in channel threads rooted at this bot's message. */
+    requireMentionInBotThreads?: boolean;
     /** Default reply style: "thread" replies to the message, "top-level" posts a new message. */
     replyStyle?: MSTeamsReplyStyle;
     /** Per-team config. Key is team ID (from the /team/ URL path segment). */

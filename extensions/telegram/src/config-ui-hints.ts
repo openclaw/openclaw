@@ -7,6 +7,10 @@ const observedGroupHistoryHint = {
 const observedDmHistoryHint = {
   help: "Automatic observed-DM context uses a default of 10 and a maximum of 200 messages; 0 disables that extra context. The JSON integer maximum selects the 10-message default. Session transcript trimming separately counts user turns, where 0 means no trimming. The observed-message cap does not rewrite saved values.",
 };
+const botThreadMentionHint = {
+  label: "Telegram Bot Topic Mention Requirement",
+  help: "Override mention gating in forum topics created by this bot. False allows unmentioned messages; true requires a mention even for replies to the bot. Topic settings override group settings. Omit to preserve existing behavior. Unknown or evicted topic ownership keeps the normal policy. Telegram privacy mode must allow ordinary group messages; sender and visible-reply policies still apply.",
+};
 
 export const telegramChannelConfigUiHints = {
   historyLimit: observedGroupHistoryHint,
@@ -15,6 +19,10 @@ export const telegramChannelConfigUiHints = {
   "accounts.*.dmHistoryLimit": observedDmHistoryHint,
   "dms.*.historyLimit": observedDmHistoryHint,
   "accounts.*.dms.*.historyLimit": observedDmHistoryHint,
+  "groups.*.requireMentionInBotThreads": botThreadMentionHint,
+  "groups.*.topics.*.requireMentionInBotThreads": botThreadMentionHint,
+  "accounts.*.groups.*.requireMentionInBotThreads": botThreadMentionHint,
+  "accounts.*.groups.*.topics.*.requireMentionInBotThreads": botThreadMentionHint,
   "": {
     label: "Telegram",
     help: "Telegram channel provider configuration including auth tokens, retry behavior, and message rendering controls. Use this section to tune bot behavior for Telegram-specific API semantics.",

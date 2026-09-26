@@ -10,6 +10,7 @@ export type {
 } from "../channels/mention-gating.js";
 export {
   implicitMentionKindWhen,
+  resolveBotThreadMentionPolicy,
   resolveInboundMentionDecision,
 } from "../channels/mention-gating.js";
 export {

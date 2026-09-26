@@ -6,6 +6,7 @@ import {
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import type {
   OpenClawConfig,
@@ -47,6 +48,7 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
+import { resolveTelegramForumTopicMetadata } from "./forum-topic-metadata.js";
 import { resolveTelegramGroupIngestEnabled } from "./group-config-helpers.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 
@@ -94,6 +96,8 @@ export function createTelegramInboundMedia({
   params: Pick<
     RegisterTelegramHandlerParams,
     | "accountId"
+    | "ownerAgentId"
+    | "telegramDeps"
     | "bot"
     | "opts"
     | "runtime"
@@ -106,6 +110,8 @@ export function createTelegramInboundMedia({
 }): TelegramInboundMedia {
   const {
     accountId,
+    ownerAgentId,
+    telegramDeps,
     bot,
     opts,
     runtime,
@@ -166,12 +172,47 @@ export function createTelegramInboundMedia({
       agentId: sessionState.agentId,
       cfg: authorization.authorizationCfg,
     });
-    const requireMention = firstDefined(
+    const configuredRequireMention = firstDefined(
       authorization.topicConfig?.requireMention,
       activationOverride,
       authorization.groupConfig?.requireMention,
       resolveGroupRequireMention(chatId, authorization.authorizationCfg),
     );
+    const requireMentionInBotThreads = firstDefined(
+      authorization.topicConfig?.requireMentionInBotThreads,
+      authorization.groupConfig?.requireMentionInBotThreads,
+    );
+    let creatorUserId: number | undefined;
+    if (
+      threadSpec.scope === "forum" &&
+      threadSpec.id !== undefined &&
+      requireMentionInBotThreads !== undefined
+    ) {
+      const topicScope = telegramDeps.resolveStorePath(
+        authorization.authorizationCfg.session?.store,
+        {
+          agentId: ownerAgentId,
+        },
+      );
+      ({ creatorUserId } = await resolveTelegramForumTopicMetadata({
+        msg,
+        threadId: threadSpec.id,
+        scope: topicScope,
+      }));
+    }
+    const replyToBotMessage = ctx.me?.id != null && msg.reply_to_message?.from?.id === ctx.me.id;
+    const { requireMention: threadRequireMention, implicitMentionKinds } =
+      resolveBotThreadMentionPolicy({
+        isBotOwnedThread: ctx.me?.id !== undefined && creatorUserId === ctx.me.id,
+        requireMentionInBotThreads,
+        requireMention: Boolean(configuredRequireMention),
+        implicitMentionKinds: implicitMentionKindWhen(
+          "reply_to_bot",
+          replyToBotMessage && !isTelegramForumServiceMessage(msg.reply_to_message),
+        ),
+      });
+    const requireMention =
+      sessionState.bindingMode.kind === "plugin-owned-runtime" ? false : threadRequireMention;
     const botUsername = ctx.me?.username?.trim().toLowerCase();
     const hasControlCommandInMessage = hasControlCommand(
       textParts.text,
@@ -230,11 +271,6 @@ export function createTelegramInboundMedia({
         canResolveExplicit: Boolean(botUsername),
       },
     });
-    const replyToBotMessage = ctx.me?.id != null && msg.reply_to_message?.from?.id === ctx.me.id;
-    const implicitMentionKinds = implicitMentionKindWhen(
-      "reply_to_bot",
-      replyToBotMessage && !isTelegramForumServiceMessage(msg.reply_to_message),
-    );
     const decision = resolveInboundMentionDecision({
       facts: {
         canDetectMention: Boolean(botUsername) || mentionRegexes.length > 0,
