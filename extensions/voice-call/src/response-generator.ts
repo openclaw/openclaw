@@ -249,6 +249,30 @@ function sanitizePlainSpokenText(text: string): string | null {
   return normalizeSpokenText(paragraphs.join(" "));
 }
 
+/**
+ * What a single payload can contribute to the spoken turn.
+ *
+ * `silence` is reserved for a payload that parsed as a spoken contract and
+ * deliberately carried no words. It must stay distinct from `none`: a payload
+ * whose entire body is filtered away (a fenced code block, say) is nonempty on
+ * the wire but leaves the caller nothing to hear, and reporting that as
+ * intentional silence is how a turn ends in dead air.
+ */
+function readPayloadSpokenOutcome(payload: VoiceResponsePayload): "speech" | "silence" | "none" {
+  if (payload.isError || payload.isReasoning) {
+    return "none";
+  }
+  const rawText = payload.text?.trim() ?? "";
+  if (!rawText) {
+    return "none";
+  }
+  const structured = tryParseSpokenJson(rawText);
+  if (structured !== null) {
+    return structured.length > 0 ? "speech" : "silence";
+  }
+  return sanitizePlainSpokenText(rawText) ? "speech" : "none";
+}
+
 function extractSpokenTextFromPayloads(payloads: VoiceResponsePayload[]): string | null {
   const spokenSegments: string[] = [];
 
@@ -277,6 +301,28 @@ function extractSpokenTextFromPayloads(payloads: VoiceResponsePayload[]): string
   }
 
   return spokenSegments.length > 0 ? spokenSegments.join(" ").trim() : null;
+}
+
+/** Provider rate limiting, as it appears in an error payload's text. */
+const RATE_LIMITED_ERROR = /\b429\b|rate.?limit|too many requests/i;
+
+/**
+ * Failure description for a turn that produced nothing the caller could hear.
+ *
+ * The provider's own error text is deliberately not returned verbatim: it is
+ * unbounded third-party prose, so it is classified here and discarded. Rate
+ * limiting is the one category worth carrying across the boundary, because it
+ * is the only failure with useful caller advice — wait and retry, rather than
+ * a generic apology. The returned wording is what the spoken notice keys on,
+ * so it must stay recognisable to `generationFailureNotice`.
+ */
+function describeNoOutputFailure(payloads: VoiceResponsePayload[]): string {
+  const rateLimited = payloads.some(
+    (payload) => payload.isError && RATE_LIMITED_ERROR.test(payload.text ?? ""),
+  );
+  return rateLimited
+    ? "Response generation produced no output: rate limited (429)"
+    : "Response generation produced no output";
 }
 
 async function deliverEarlyText(
@@ -536,7 +582,32 @@ export async function generateVoiceResponse(
           extractSpokenTextFromPayloads(blockReplyPayloads);
 
         if (!text && result.meta?.aborted) {
-          return { text: null, deliveredEarly: false, error: "Response generation was aborted" };
+          return { text: null, deliveredEarly, error: "Response generation was aborted" };
+        }
+
+        // SAFETY: same run payloads the extractor above already reads as VoiceResponsePayload[].
+        const runPayloads = (result.payloads ?? []) as VoiceResponsePayload[];
+        // Only an explicit empty spoken contract counts as deliberate silence.
+        // Testing raw payload text instead would treat content that sanitizing
+        // removes entirely as an intentional pause, and the caller would be left
+        // with neither speech nor a failure notice.
+        const deliberateSilence = runPayloads.some(
+          (payload) => readPayloadSpokenOutcome(payload) === "silence",
+        );
+        if (!text && !deliberateSilence) {
+          // The provider failed or refused without producing anything the caller
+          // could hear: no payloads at all, or only error/reasoning payloads,
+          // which the extractor filters out. Report it as an error so the caller
+          // is told something went wrong instead of being left in dead air.
+          //
+          // A turn where the model intentionally stays silent still carries a
+          // speakable payload (the `{"spoken":""}` text itself), so deliberate
+          // silence does not reach this branch.
+          return {
+            text: null,
+            deliveredEarly,
+            error: describeNoOutputFailure(runPayloads),
+          };
         }
 
         return { text, deliveredEarly };

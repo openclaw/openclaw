@@ -592,6 +592,46 @@ describe("generateVoiceResponse", () => {
     expect(result.text).toBe("Fenced JSON works.");
   });
 
+  it("reports an error when a run yields nothing the caller could hear", async () => {
+    // Two shapes leave nothing to say: no payloads at all, and a payload whose
+    // entire body sanitizing removes. Neither may pass as deliberate silence,
+    // or the turn ends in dead air instead of a spoken failure notice.
+    for (const payloads of [[], [{ text: "```js\nconst x = 1;\n```" }]]) {
+      const { result } = await runGenerateVoiceResponse(payloads);
+      expect(result.error).toBe("Response generation produced no output");
+    }
+  });
+
+  it("reports an error when the run produces only an error payload", async () => {
+    // The extractor filters error payloads out, so a nonempty error payload
+    // still leaves the caller with nothing to hear.
+    const { result } = await runGenerateVoiceResponse([
+      { text: "Upstream provider is unavailable", isError: true },
+    ]);
+
+    expect(result.text).toBeNull();
+    expect(result.error).toBe("Response generation produced no output");
+  });
+
+  it("classifies rate limiting without echoing the provider's error text", async () => {
+    // The spoken notice offers "try again in a little while" only for rate
+    // limiting, so the category has to survive the trip out of the generator.
+    // The provider's own prose is unbounded third-party text: matched, never
+    // carried, which the org identifier below asserts.
+    const errorText = "429 slow down, org org_secret123 exceeded its quota";
+    const { result } = await runGenerateVoiceResponse([{ text: errorText, isError: true }]);
+    expect(result.text).toBeNull();
+    expect(result.error).toBe("Response generation produced no output: rate limited (429)");
+    expect(result.error).not.toContain("org_secret123");
+  });
+
+  it("keeps deliberate silence silent rather than reporting an error", async () => {
+    const { result } = await runGenerateVoiceResponse([{ text: '{"spoken":""}' }]);
+
+    expect(result.text).toBeNull();
+    expect(result.error).toBeUndefined();
+  });
+
   it("returns silence for an explicit empty spoken contract response", async () => {
     const { result } = await runGenerateVoiceResponse([{ text: '{"spoken":""}' }]);
 

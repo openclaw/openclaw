@@ -43,6 +43,7 @@ import { normalizeProxyIp } from "./proxy-ip.js";
 import { resolveCallAgentId } from "./resolve-call-agent-id.js";
 import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
 import type { WebhookResponsePayload } from "./webhook.types.js";
+import { createAutoResponseSpeaker } from "./webhook/auto-response-speech.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
 import {
@@ -1117,18 +1118,16 @@ export class VoiceCallWebhookServer {
     }
 
     const response = this.manager.createAutoResponseGuard(call);
-    const speakResponse = async (text: string): Promise<boolean> => {
-      if (!response.isCurrent()) {
-        this.logger.info(`Discarding superseded automatic reply ${callId}`);
-        return false;
-      }
-      this.logger.info(`AI response queued ${callId} chars=${text.length}`);
-      const result = await this.manager.speak(callId, text, {
-        listenAfterPlayback: true,
-        isCurrent: response.isCurrent,
-      });
-      return result.success;
-    };
+    const speaker = createAutoResponseSpeaker({
+      callId,
+      isCurrent: response.isCurrent,
+      logger: this.logger,
+      deliver: (text) =>
+        this.manager.speak(callId, text, {
+          listenAfterPlayback: true,
+          isCurrent: response.isCurrent,
+        }),
+    });
     try {
       const { generateVoiceResponse } = await loadResponseGeneratorModule();
       if (!response.isCurrent()) {
@@ -1148,19 +1147,19 @@ export class VoiceCallWebhookServer {
         agentId: resolveCallAgentId(call, effectiveConfig),
         transcript: call.transcript,
         userMessage,
-        onEarlyText: speakResponse,
+        onEarlyText: speaker.speak,
       });
 
       if (result.error) {
-        this.logger.error(`Response generation error: ${result.error}`);
+        await speaker.reportFailure(`Response generation error: ${result.error}`, result.error);
         return;
       }
 
       if (result.text && !result.deliveredEarly) {
-        await speakResponse(result.text);
+        await speaker.speak(result.text);
       }
     } catch (err) {
-      this.logger.error(`Auto-response error: ${String(err)}`);
+      await speaker.reportFailure(`Auto-response error: ${String(err)}`, String(err));
     } finally {
       response.release();
     }
