@@ -113,6 +113,7 @@ describe("Reef capacity-parked delivery recovery (production connection path)", 
     const bob = reefKeys();
     const idA = "01JZ00000000000000000002A1";
     const idC = "01JZ00000000000000000002C1";
+    const cfg = config();
     const stores = flowStores(2);
     await stores.delivered.add("occupied-1");
     await stores.delivered.add("occupied-2");
@@ -125,8 +126,8 @@ describe("Reef capacity-parked delivery recovery (production connection path)", 
     const relay = transport();
     const onIngress = vi.fn(async () => {});
     const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trust({ alice: peerTrust(alice), carol: peerTrust(carol) }).store,
+      config: cfg,
+      trust: trust(stores.runtime, cfg, { alice: peerTrust(alice), carol: peerTrust(carol) }),
       keys: bob,
       transport: relay as unknown as ReefTransportClient, // SAFETY: ack-recording mock satisfies the client contract
       guard: guard(allow),
@@ -187,7 +188,9 @@ describe("Reef capacity-parked delivery recovery (production connection path)", 
     const alice = generateIdentity();
     const bob = reefKeys();
     const id = "01JZ00000000000000000002D1";
+    const cfg = config();
     const stores = flowStores();
+    trust(stores.runtime, cfg, { alice: peerTrust(alice) });
     // Crash window: inbound handling had not run, so no in-flight record
     // exists; the restart re-classifies the entry from persisted markers and
     // re-ingresses exactly once.
@@ -199,10 +202,11 @@ describe("Reef capacity-parked delivery recovery (production connection path)", 
     const onIngress = vi.fn(async () => {});
     // Restart: a fresh flow over freshly opened store handles for the same
     // persisted state directory (production SQLite replay and delivered stores).
-    const reopened = openStores(reopenRuntime(stores.stateDir), reefKeys());
+    const reopenedRuntime = reopenRuntime(stores.stateDir);
+    const reopened = openStores(reopenedRuntime, reefKeys());
     const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trust({ alice: peerTrust(alice) }).store,
+      config: cfg,
+      trust: trust(reopenedRuntime, cfg, {}),
       keys: bob,
       transport: relay as unknown as ReefTransportClient, // SAFETY: ack-recording mock satisfies the client contract
       guard: guard(allow),
@@ -244,6 +248,7 @@ describe("Reef capacity-parked delivery recovery (production connection path)", 
     const alice = generateIdentity();
     const bob = reefKeys();
     const id = "01JZ00000000000000000002E1";
+    const cfg = config();
     const stores = flowStores(1);
     await stores.delivered.add("occupied"); // delivered namespace full
     const entries = new Map<number, InboxEntry>([
@@ -253,8 +258,8 @@ describe("Reef capacity-parked delivery recovery (production connection path)", 
     const relay = transport();
     const onIngress = vi.fn(async () => {});
     const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trust({ alice: peerTrust(alice) }).store,
+      config: cfg,
+      trust: trust(stores.runtime, cfg, { alice: peerTrust(alice) }),
       keys: bob,
       transport: relay as unknown as ReefTransportClient, // SAFETY: ack-recording mock satisfies the client contract
       guard: guard(allow),
@@ -293,12 +298,13 @@ describe("Reef capacity-parked delivery recovery (production connection path)", 
       defaultTtlMs: REEF_DELIVERED_TTL_MS,
     });
     raw.delete("occupied");
-    const reopened = openStores(reopenRuntime(stores.stateDir), reefKeys(), {
+    const reopenedRuntime = reopenRuntime(stores.stateDir);
+    const reopened = openStores(reopenedRuntime, reefKeys(), {
       deliveredMaxEntries: 1,
     });
     const restartedFlow = new ReefMessageFlow({
-      config: config(),
-      trust: trust({ alice: peerTrust(alice) }).store,
+      config: cfg,
+      trust: trust(reopenedRuntime, cfg, {}),
       keys: bob,
       transport: relay as unknown as ReefTransportClient, // SAFETY: ack-recording mock satisfies the client contract
       guard: guard(allow),
@@ -331,6 +337,7 @@ describe("Reef capacity-parked delivery recovery (production connection path)", 
     const alice = generateIdentity();
     const bob = reefKeys();
     const id = "01JZ00000000000000000002E1";
+    const cfg = config();
     const stores = flowStores();
     const raw = stores.runtime.state.openSyncKeyedStore<{ id: string }>({
       namespace: REEF_DELIVERED_NAMESPACE,
@@ -346,8 +353,8 @@ describe("Reef capacity-parked delivery recovery (production connection path)", 
     const relay = transport();
     const onIngress = vi.fn(async () => {});
     const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trust({ alice: peerTrust(alice) }).store,
+      config: cfg,
+      trust: trust(stores.runtime, cfg, { alice: peerTrust(alice) }),
       keys: bob,
       transport: relay as unknown as ReefTransportClient, // SAFETY: ack-recording mock satisfies the client contract
       guard: guard(allow),

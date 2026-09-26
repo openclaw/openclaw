@@ -1,6 +1,6 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalBytes,
   generateIdentity,
@@ -12,15 +12,20 @@ import { ReefMessageFlow } from "./flow.js";
 import {
   allow,
   config,
+  flowStores,
   guard,
   peerTrust,
   reefKeys,
+  resetFlowStoresForTests,
   transport,
   trust,
 } from "./flow.test-helpers.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
 import { createReefRuntimeAuthority, getActiveReef } from "./runtime.js";
 import type { ReefTransportClient } from "./transport.js";
+
+beforeEach(resetFlowStoresForTests);
+afterEach(resetFlowStoresForTests);
 
 describe("reefOutboundAdapter", () => {
   it("delegates delivery to the Gateway that owns the active encrypted flow", () => {
@@ -126,38 +131,41 @@ describe("reefOutboundAdapter", () => {
       }),
     };
     const relay = transport();
+    const stores = flowStores();
+    const cfg = config();
     const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trust({ alice: peerTrust(generateIdentity()) }).store,
+      config: cfg,
+      trust: trust(stores.runtime, cfg, { alice: peerTrust(generateIdentity()) }),
       keys: reefKeys(),
       transport: relay as unknown as ReefTransportClient,
       guard: classifier,
       audit: new MemoryAuditStore(new Uint8Array(32).fill(9)),
       replay: new MemoryReplayStore(),
-      // The send path consults the review store before classifying.
-      reviews: { lookupDecision: async () => "none", request: async () => undefined } as never,
-      delivered: {} as never,
+      ...stores,
       authoritySignal: firstAuthority.signal,
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
-    firstAuthority.activate({ flow, friends: {}, reviews: {} } as never);
-    const stale = reefMessageAdapter.send.text({ cfg: {}, to: "reef:alice", text: "stale" });
-    await vi.waitFor(() => expect(classifier.classify).toHaveBeenCalledOnce());
-
+    firstAuthority.activate({ flow, friends: {}, reviews: stores.reviews } as never);
+    const stale = reefMessageAdapter.send
+      .text({ cfg: {}, to: "reef:alice", text: "stale" })
+      .catch((error: unknown) => error);
     const replacementAuthority = createReefRuntimeAuthority();
     const replacement = { flow: {}, friends: {}, reviews: {} } as never;
-    replacementAuthority.activate(replacement);
     try {
+      await vi.waitFor(() => expect(classifier.classify).toHaveBeenCalledOnce());
+      replacementAuthority.activate(replacement);
       guardPaused.resolve();
-      const staleResult = await stale.catch((error: unknown) => error);
+      const staleResult = await stale;
 
       expect(relay.sendEnvelope).not.toHaveBeenCalled();
       expect(staleResult).toBeInstanceOf(PlatformMessageNotDispatchedError);
       expect(getActiveReef()).toBe(replacement);
     } finally {
-      replacementAuthority.release();
       firstAuthority.release();
+      replacementAuthority.release();
+      guardPaused.resolve();
+      await stale;
     }
   });
 
@@ -202,33 +210,38 @@ describe("reefOutboundAdapter", () => {
   });
 
   it("terminally rejects unapproved Reef peers", async () => {
+    const stores = flowStores();
+    const cfg = config();
     const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trust({}).store,
+      config: cfg,
+      trust: trust(stores.runtime, cfg, {}),
       keys: reefKeys(),
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
       audit: new MemoryAuditStore(new Uint8Array(32).fill(9)),
       replay: new MemoryReplayStore(),
-      reviews: {} as never,
-      delivered: {} as never,
+      ...stores,
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
-    createReefRuntimeAuthority().activate({ flow, friends: {}, reviews: {} } as never);
+    const authority = createReefRuntimeAuthority();
+    authority.activate({ flow, friends: {}, reviews: stores.reviews } as never);
+    try {
+      const error = await reefMessageAdapter.send
+        .text({ cfg: {}, to: "reef:Alice", text: "hello" })
+        .catch((caught: unknown) => caught);
 
-    const error = await reefMessageAdapter.send
-      .text({ cfg: {}, to: "reef:Alice", text: "hello" })
-      .catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
-    expect(error).toMatchObject({
-      cause: {
-        name: "ReefOutboundRejectedError",
-        message: expect.stringContaining("not approved"),
-      },
-      retryable: false,
-    });
+      expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+      expect(error).toMatchObject({
+        cause: {
+          name: "ReefOutboundRejectedError",
+          message: expect.stringContaining("not approved"),
+        },
+        retryable: false,
+      });
+    } finally {
+      authority.release();
+    }
   });
 
   it("keeps guard availability failures retryable before dispatch", async () => {
