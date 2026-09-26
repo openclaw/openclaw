@@ -4,7 +4,8 @@ use super::{
     AppView,
     agent_browser::AgentBrowser,
     webview_surface::{
-        WebViewEvent, WebViewRetirement, WebViewSpec, WebViewStores, WebViewSurface,
+        ControlUiCommand, WebViewEvent, WebViewRetirement, WebViewSpec, WebViewStores,
+        WebViewSurface,
     },
 };
 use crate::{
@@ -295,6 +296,27 @@ struct PreferredBrowser {
 }
 
 impl AppView {
+    pub(super) fn open_system_busyness(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.session.is_none() || self.web.auth.is_none() {
+            self.open_settings(window, cx);
+            return;
+        }
+        let path = self.web.page_path.clone();
+        let label = self.web.page_label.clone();
+        self.open_control_page(&path, &label, window, cx);
+        let result = self.prepare_web_surfaces().and_then(|()| {
+            self.web
+                .settings
+                .as_ref()
+                .ok_or_else(|| "The Gateway's Control UI is not ready.".to_owned())?
+                .request_control_command(ControlUiCommand::SystemBusyness)
+        });
+        if let Err(error) = result {
+            self.web.error = Some(error);
+        }
+        cx.notify();
+    }
+
     pub(super) fn panel_context(&self) -> Option<PanelContext> {
         Some(PanelContext {
             agent: self.chat.selected_agent.clone().unwrap_or_else(|| {

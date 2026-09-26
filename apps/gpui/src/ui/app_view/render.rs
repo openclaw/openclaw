@@ -81,6 +81,14 @@ impl Render for AppView {
                 this.navigate_session(1, window, cx)
             }))
             .on_action(cx.listener(|this, _: &crate::Escape, window, cx| this.escape(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &crate::SignOutGateway, window, cx| {
+                    this.sign_out(window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &crate::SystemBusyness, window, cx| {
+                this.open_system_busyness(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &crate::OpenSettings, window, cx| {
                 this.open_settings(window, cx)
             }))

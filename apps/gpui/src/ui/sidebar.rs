@@ -303,15 +303,22 @@ impl AppView {
             .and_then(|person| person.name.clone().or(person.email.clone()))
             .or_else(|| self.access_identity.clone())
             .unwrap_or_else(|| "Owner".into());
-        let status = if self.session.is_some() {
-            self.profile.as_ref().map(|profile| profile.name.clone())
-        } else {
-            Some(if self.connecting {
-                "Connecting…".into()
-            } else {
-                "Offline".into()
-            })
-        };
+        let status = self
+            .profile
+            .as_ref()
+            .map(|profile| profile.name.clone())
+            .or_else(|| {
+                Some(
+                    if self.connecting {
+                        "Connecting…"
+                    } else if self.session.is_some() {
+                        "Gateway"
+                    } else {
+                        "Offline"
+                    }
+                    .into(),
+                )
+            });
         let avatar = self
             .sidebar_state
             .people

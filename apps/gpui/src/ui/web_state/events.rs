@@ -237,6 +237,7 @@ impl AppView {
             "k" => self.open_palette(window, cx),
             "n" => self.new_chat(window, cx),
             "o" if shift && !alt => self.new_chat(window, cx),
+            "d" if shift && !alt => self.open_system_busyness(window, cx),
             "b" => self.toggle_sidebar(cx),
             "r" => self.manual_refresh(cx),
             "[" => self.navigate_session(-1, window, cx),

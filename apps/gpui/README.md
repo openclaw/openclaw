@@ -31,6 +31,40 @@ proof, use the isolated procedure in [Isolated proof](#isolated-proof).
 macOS is the current development target. Linux and Windows builds and native
 interactions have not been verified.
 
+### macOS app bundle and Dock icon
+
+From the repository root, run:
+
+```sh
+apps/gpui/scripts/bundle-macos.sh
+```
+
+The helper builds release and creates `apps/gpui/target/release/OpenClaw GPUI.app`.
+An optional argument selects another `.app` output path; move an existing output
+aside before rebuilding. It reads the version and target directory from Cargo,
+sets the bundle identifier to `ai.openclaw.gpui`, and defaults the binary and
+bundle's minimum macOS version to 12.0. Set `MACOSX_DEPLOYMENT_TARGET` to override
+that minimum consistently for both.
+
+The bundle icon reuses `apps/macos/Sources/OpenClaw/Resources/OpenClaw.icns`,
+converted through `iconutil` with its original resolutions. The same artwork is
+embedded in the executable and installed as the runtime Dock icon, so raw debug
+launches also have the OpenClaw icon. Installing the icon does not activate the app.
+
+The helper does not sign or launch the bundle. Unsigned builds are for isolated
+development only; do not run them against saved Keychain items. If signing is
+needed, use the repository's existing Developer ID flow rather than a separate
+signer:
+
+```sh
+SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+  scripts/codesign-mac-app.sh "apps/gpui/target/release/OpenClaw GPUI.app"
+```
+
+See [macOS signing](../../docs/platforms/mac/signing.md) for that flow's
+prerequisites. Follow [Isolated proof](#isolated-proof) for test launches; bundle
+assembly and icon inspection do not require starting the app.
+
 ## Features
 
 | Area | Available behavior |
@@ -494,10 +528,17 @@ actual verification results; these instructions do not assert that proof passed.
 ## Known limits
 
 This native chat shell embeds Control UI administration pages and conversation panels.
-Separate native administration pages are not implemented. Saved Gateways open
-independent windows; duplicate windows for the same profile are not supported.
-The Mac app's Option-modified `New <name> Window` menu item is intentionally
-omitted because GPUI's native menu API has no alternate-item contract. Sidebar
+Separate native administration pages are not implemented. Saved Gateways open or
+focus their most recently used window; holding Option in the native Gateways menu
+shows **New <name> Window** for an independent window. Command+1…9 selects a
+Gateway, and Command+Option+1…9 opens another window. The primary Gateway comes
+first; a checkmark follows the active Gateway window. Native macOS rows retain
+accessible exact names with status images and, on macOS 14+, Primary/status
+subtitles. The Swift app’s custom version/latency cards are not reproduced.
+The footer identity menu uses the same profile/status owner, opens Gateway windows,
+and persists **Set as primary…** through the existing profile store.
+**Gateway settings…** opens Manage Gateways. **OpenClaw → Sign Out of Gateway…**
+retains native account and web-store sign-out independently of the identity menu. Sidebar
 images load only from authenticated Gateway avatar routes or supported inline
 agent images; third-party image URLs use the same fallback policy as the web.
 Plugin theme hats and system-agent mascot branding are not reproduced natively.
@@ -517,9 +558,12 @@ report, separately from unit tests or protocol fixture results.
 ## Embedded Settings and conversation panels
 
 The sidebar navigation and identity menu open the connected Gateway's matching
-Control UI routes in the main content area. **Settings…** and **Cmd+,** open its
+Control UI routes in the main content area. **Settings…** and **Cmd+Shift+,** open its
 appearance settings. The conversation sidebar remains native;
-**Done** in the main breadcrumb bar or Escape returns to chat. The Gateway must serve the Control UI
+**Done** in the main breadcrumb bar or Escape returns to chat. **System busyness** (Cmd+Shift+D) invokes the Control UI’s existing debug overlay.
+**Pair device** opens Devices settings, where the existing **Pair device** button
+opens the pairing dialog; the web app has no native pairing command to invoke directly.
+The Gateway must serve the Control UI
 from this worktree for the new panel route to be available.
 
 The right-hand panel dock has a native tab strip, picker, close controls, a resize

@@ -27,6 +27,11 @@ pub struct WebViewSpec {
     pub background: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum ControlUiCommand {
+    SystemBusyness,
+}
+
 #[derive(Clone, Debug)]
 pub enum WebViewEvent {
     Title(String),
@@ -257,6 +262,8 @@ struct SurfaceState {
     error: Option<String>,
     creating: bool,
     retired: bool,
+    pending_control_command: Option<ControlUiCommand>,
+    control_command_reply: Option<async_channel::Receiver<bool>>,
 }
 
 impl Drop for SurfaceState {
@@ -301,6 +308,8 @@ impl WebViewSurface {
             error: None,
             creating: false,
             retired: false,
+            pending_control_command: None,
+            control_command_reply: None,
         })));
         if measure {
             surface.begin_open(false);
@@ -356,6 +365,8 @@ impl WebViewSurface {
         let mut state = self.0.borrow_mut();
         state.present = present;
         if !present {
+            state.pending_control_command = None;
+            state.control_command_reply = None;
             state.set_visible(false);
         }
     }
@@ -374,7 +385,33 @@ impl WebViewSurface {
     }
 
     pub fn drain_events(&self) -> Vec<WebViewEvent> {
-        let state = self.0.borrow();
+        let mut state = self.0.borrow_mut();
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        let ready = state.events.ready.get() && state.events.presentation.borrow().ready;
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if state.present
+            && !state.retired
+            && ready
+            && let Some(command) = state.pending_control_command.take()
+            && let Some(view) = &state.view
+        {
+            match native::control_command(view, &state.spec, state.events.wake.clone(), command) {
+                Ok(reply) => state.control_command_reply = Some(reply),
+                Err(error) => state.events.push(WebViewEvent::Error(error)),
+            }
+        }
+        if let Some(handled) = state
+            .control_command_reply
+            .as_ref()
+            .and_then(|reply| reply.try_recv().ok())
+        {
+            state.control_command_reply = None;
+            if !handled {
+                state.events.push(WebViewEvent::Error(
+                    "The Control UI changed before opening System busyness. Try again.".into(),
+                ));
+            }
+        }
         let mut events = std::mem::take(&mut *state.events.queue.borrow_mut());
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(view) = &state.view {
@@ -440,6 +477,8 @@ impl WebViewSurface {
             return Err("Embedded panels must stay on their Gateway".into());
         }
         state.spec.url = url.to_owned();
+        state.pending_control_command = None;
+        state.control_command_reply = None;
         state.error = None;
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(view) = &state.view {
@@ -463,6 +502,25 @@ impl WebViewSurface {
             }
         }
         Ok(())
+    }
+
+    pub(super) fn request_control_command(&self, command: ControlUiCommand) -> Result<(), String> {
+        let mut state = self.0.borrow_mut();
+        if state.spec.auth.is_none() || state.spec.background || state.retired {
+            return Err("Open the Gateway's Control UI before using this action.".into());
+        }
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            state.pending_control_command = Some(command);
+            state.control_command_reply = None;
+            let _ = state.events.wake.try_send(());
+            Ok(())
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            let _ = command;
+            Err("Open System busyness from the Control UI in your browser.".into())
+        }
     }
 
     pub fn request_link(
@@ -514,6 +572,8 @@ impl WebViewSurface {
         let visible = state.visible;
         state.present = false;
         state.retired = true;
+        state.pending_control_command = None;
+        state.control_command_reply = None;
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         let view = state.view.take();
         drop(state);
