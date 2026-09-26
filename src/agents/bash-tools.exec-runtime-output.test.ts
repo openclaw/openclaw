@@ -209,6 +209,30 @@ describe("exec notifyOnExit suppression", () => {
   });
 });
 
+describe("runExecProcess onUpdate binding", () => {
+  it("does not throw when onUpdate is a truthy non-function", async () => {
+    supervisorMock.spawn.mockResolvedValue(successfulSupervisorRun());
+
+    await expect(
+      runExecProcess({
+        command: "echo test",
+        workdir: "/tmp",
+        env: { PATH: "/usr/bin" },
+        pathPrepend: [],
+        usePty: false,
+        warnings: [],
+        maxOutput: 1000,
+        pendingMaxOutput: 1000,
+        notifyOnExit: false,
+        timeoutSec: null,
+        onUpdate: { content: [] } as never,
+      }),
+    ).resolves.toMatchObject({ sessionId: expect.any(String) });
+
+    expect(supervisorMock.spawn).toHaveBeenCalledOnce();
+  });
+});
+
 describe("runExecProcess POSIX command wrapper", () => {
   it("normalizes non-finite and oversized exec timeouts before spawning", async () => {
     supervisorMock.spawn.mockResolvedValue(successfulSupervisorRun());
