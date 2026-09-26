@@ -60,6 +60,12 @@ import {
   resolveFeishuAccount,
   resolveFeishuRuntimeAccount,
 } from "./accounts.js";
+import {
+  readFirstString,
+  resolveFeishuActionTarget,
+  resolveFeishuMessageId,
+  resolveFeishuReactionMessageId,
+} from "./action-params.js";
 import { feishuApprovalAuth } from "./approval-auth.js";
 import { FEISHU_CARD_INTERACTION_VERSION } from "./card-interaction.js";
 import { normalizeFeishuChatType, resolveFeishuChatType } from "./chat-type.js";
@@ -728,23 +734,6 @@ function jsonActionResult(details: Record<string, unknown>) {
   };
 }
 
-function readFirstString(
-  params: Record<string, unknown>,
-  keys: string[],
-  fallback?: string | null,
-): string | undefined {
-  for (const key of keys) {
-    const value = params[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  if (typeof fallback === "string" && fallback.trim()) {
-    return fallback.trim();
-  }
-  return undefined;
-}
-
 const UNRESOLVED_RESPONSE_PREFIX_VAR_PATTERN = /\{[a-zA-Z][a-zA-Z0-9.]*\}/;
 
 function resolveFeishuMessageActionResponsePrefix(ctx: ChannelMessageActionContext) {
@@ -781,13 +770,6 @@ function readOptionalPositiveInteger(
   return undefined;
 }
 
-function resolveFeishuActionTarget(ctx: {
-  params: Record<string, unknown>;
-  toolContext?: { currentChannelId?: string } | null;
-}): string | undefined {
-  return readFirstString(ctx.params, ["to", "target"], ctx.toolContext?.currentChannelId);
-}
-
 function resolveFeishuChatId(ctx: {
   params: Record<string, unknown>;
   toolContext?: { currentChannelId?: string } | null;
@@ -807,10 +789,6 @@ function resolveFeishuChatId(ctx: {
     return normalizeFeishuTarget(raw) ?? undefined;
   }
   return raw;
-}
-
-function resolveFeishuMessageId(params: Record<string, unknown>): string | undefined {
-  return readFirstString(params, ["messageId", "message_id", "replyTo", "reply_to"]);
 }
 
 function resolveFeishuMessageReadTarget(ctx: {
@@ -1629,7 +1607,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
 
           if (ctx.action === "react") {
             return withFeishuRequestContext(assertDirectAdapterHandoff, async () => {
-              const messageId = resolveFeishuMessageId(ctx.params);
+              const messageId = resolveFeishuReactionMessageId(ctx);
               if (!messageId) {
                 throw new Error("Feishu reaction requires messageId.");
               }
@@ -1686,7 +1664,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           }
 
           if (ctx.action === "reactions") {
-            const messageId = resolveFeishuMessageId(ctx.params);
+            const messageId = resolveFeishuReactionMessageId(ctx);
             if (!messageId) {
               throw new Error("Feishu reactions lookup requires messageId.");
             }
