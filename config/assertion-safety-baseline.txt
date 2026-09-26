@@ -1199,7 +1199,6 @@ extensions/volcengine/tts.ts	2
 extensions/voyage/embedding-batch.ts	1
 extensions/vydra/shared.ts	2
 extensions/web-readability/web-content-extractor.ts	2
-extensions/webhooks/src/http.ts	5
 extensions/whatsapp/src/account-config.ts	1
 extensions/whatsapp/src/agent-tools-call.ts	1
 extensions/whatsapp/src/agent-tools-login.ts	6
@@ -3380,7 +3379,6 @@ ui/src/components/login-gate.ts	2
 ui/src/components/markdown-assistant-transcript.ts	1
 ui/src/components/markdown-code-blocks.ts	1
 ui/src/components/markdown-parser.ts	4
-ui/src/components/markdown-streaming.ts	1
 ui/src/components/mcp-app-theme.ts	1
 ui/src/components/mcp-app-view.ts	8
 ui/src/components/mcp-server-form.ts	1

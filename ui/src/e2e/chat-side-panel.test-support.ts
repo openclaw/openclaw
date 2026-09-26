@@ -55,7 +55,7 @@ export async function focusChatSidePanel(page: Page): Promise<void> {
 
 export async function restoreChatAsMain(page: Page): Promise<void> {
   const side = page.locator('[data-region-header="side"]');
-  await side.getByRole("tab", { name: "Chat", exact: true }).click();
+  await side.locator('wa-tab[panel="conversation"]').click();
   await page.locator(".chat-panel-swap").click();
   await page.locator('.sidebar-region__primary[data-region="main"]').waitFor();
 }

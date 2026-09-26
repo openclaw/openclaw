@@ -78,7 +78,7 @@ type SessionFactsRequest = {
   agentId: string;
   storageReady?: Promise<void>;
 };
-type SessionFactsRead<Facts extends PreparedSessionMutationFacts> = {
+export type SessionFactsRead<Facts extends PreparedSessionMutationFacts> = {
   readonly storageTarget: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath">;
   bindCreation(this: void, operation: SessionEntryCreationOperation): void;
   readCurrent(this: void, cfg: OpenClawConfig): Facts;

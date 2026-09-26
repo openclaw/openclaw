@@ -28,6 +28,7 @@ import {
 } from "../../../state/openclaw-state-worker-error.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { SubagentRunIdLookup } from "./subagent-run-id-lookup.js";
 import { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
 
 type SubagentRunChange<T> = { entry: T | undefined; committed: boolean };
@@ -35,8 +36,13 @@ type SubagentRunChange<T> = { entry: T | undefined; committed: boolean };
 export type SubagentRunPublication = { committed?: boolean; databasePath?: string };
 
 type SubagentRunsCacheState<T extends SubagentRunReadRecord> = (
-  | { snapshot: Map<string, T>; lookup?: SubagentSessionReadLookup; replacementPending?: true }
-  | { snapshot?: undefined; lookup?: never; replacementPending?: never }
+  | {
+      snapshot: Map<string, T>;
+      lookup?: SubagentSessionReadLookup;
+      runIdLookup?: SubagentRunIdLookup;
+      replacementPending?: true;
+    }
+  | { snapshot?: undefined; lookup?: never; runIdLookup?: never; replacementPending?: never }
 ) & {
   changes?: Map<string, SubagentRunChange<T>>;
   admission?: OpenClawStateDatabaseReadAdmission;
@@ -73,6 +79,15 @@ export function getSessionListLookup<T extends SubagentRunReadRecord>(
 
 export function indexedSnapshotRows<T>(snapshot: Map<string, T>, keys: readonly string[]): T[] {
   return keys.map((key) => expectDefined(snapshot.get(key), "indexed subagent cache entry"));
+}
+
+export function getPersistedRunIdLookup<T extends SubagentRunReadRecord>(
+  cache: SubagentRunsCache<T>,
+  snapshot: Map<string, T>,
+): SubagentRunIdLookup {
+  return cache.state.snapshot === snapshot
+    ? (cache.state.runIdLookup ??= new SubagentRunIdLookup(snapshot))
+    : new SubagentRunIdLookup(snapshot);
 }
 
 export function shouldReadPersistedSubagentRuns(): boolean {
@@ -212,9 +227,11 @@ export function rememberSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
     return;
   }
   const lookup = previous.lookup;
+  const runIdLookup = previous.runIdLookup;
   const changes = previous.changes ?? new Map<string, SubagentRunChange<T>>();
   // A failed projection/update cannot leave derived membership ahead of its Map.
   previous.lookup = undefined;
+  previous.runIdLookup = undefined;
   for (const runId of new Set(changedRunIds)) {
     const entry = runs.get(runId);
     if (entry) {
@@ -228,6 +245,7 @@ export function rememberSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
       changes.delete(runId);
     }
     lookup?.set(runId, snapshot.get(runId));
+    runIdLookup?.set(runId, snapshot.get(runId));
   }
   cache.state = {
     snapshot,
@@ -235,6 +253,7 @@ export function rememberSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
     changes: changes.size ? changes : undefined,
     ...(previous.replacementPending ? { replacementPending: true } : {}),
     ...(lookup ? { lookup } : {}),
+    ...(runIdLookup ? { runIdLookup } : {}),
   };
 }
 
@@ -539,11 +558,15 @@ export function mergeSelectedFullRuns(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   persisted: Map<string, SubagentRunRecord>,
   matches: (entry: SubagentRunReadRecord) => boolean,
-  { context, fresh = false }: { context?: OpenClawStateWorkerContext; fresh?: boolean } = {},
+  {
+    context,
+    fresh = false,
+    runIds,
+  }: { context?: OpenClawStateWorkerContext; fresh?: boolean; runIds?: ReadonlySet<string> } = {},
 ): Map<string, SubagentRunRecord> {
   const current = context && !fresh ? acceptedFullSnapshot(cache, context) : undefined;
   const merged = new Map<string, SubagentRunRecord>();
-  for (const [runId, entry] of current ?? persisted) {
+  for (const [runId, entry] of selectedEntries(current ?? persisted, runIds)) {
     if (matches(entry)) {
       merged.set(runId, current ? structuredClone(entry) : entry);
     }
@@ -564,13 +587,15 @@ export function mergeSelectedFullRuns(
           merged.delete(runId);
         }
       }
-      for (const [runId, entry] of state.snapshot) {
+      for (const [runId, entry] of selectedEntries(state.snapshot, runIds)) {
         if (!state.changes?.get(runId)?.committed && matches(entry)) {
           merged.set(runId, structuredClone(entry));
         }
       }
     }
-    for (const [runId, { entry, committed }] of state.changes ?? []) {
+    for (const [runId, { entry, committed }] of state.changes
+      ? selectedEntries(state.changes, runIds)
+      : []) {
       if (fresh && committed) {
         continue;
       }
@@ -581,7 +606,7 @@ export function mergeSelectedFullRuns(
       }
     }
   }
-  for (const [runId, entry] of inMemoryRuns) {
+  for (const [runId, entry] of selectedEntries(inMemoryRuns, runIds)) {
     if (matches(entry)) {
       merged.set(runId, entry);
     } else {
@@ -589,4 +614,20 @@ export function mergeSelectedFullRuns(
     }
   }
   return merged;
+}
+
+function* selectedEntries<T>(
+  rows: ReadonlyMap<string, T>,
+  runIds?: ReadonlySet<string>,
+): Iterable<[string, T]> {
+  if (!runIds) {
+    yield* rows;
+    return;
+  }
+  for (const runId of runIds) {
+    const entry = rows.get(runId);
+    if (entry !== undefined) {
+      yield [runId, entry];
+    }
+  }
 }

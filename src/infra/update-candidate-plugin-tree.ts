@@ -284,15 +284,24 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     if (path.basename(directory) === "node_modules") {
       moduleOwners.add(directory);
     }
-    await discoverHoistedDependencies(directory);
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    // Listing names are only absence hints: retain canonical reads for filesystem aliases.
+    const mayContain = (name: string) =>
+      entries.some(
+        (entry) => entry.name.toLowerCase() === name || /[^\x20-\x7e]|[. ]$/u.test(entry.name),
+      );
+    if (mayContain("package.json")) {
+      await discoverHoistedDependencies(directory);
+    }
     // Read before link discovery, so custom external stores retain their owner.
-    const modules = await readRuntimeModulesManifest(path.join(directory, ".modules.yaml"));
+    const modules = mayContain(".modules.yaml")
+      ? await readRuntimeModulesManifest(path.join(directory, ".modules.yaml"))
+      : null;
     if (typeof modules?.manifest.virtualStoreDir === "string") {
       const store = await fs.realpath(path.resolve(directory, modules.manifest.virtualStoreDir));
       stores.add(store);
       addRoot(store);
     }
-    const entries = await fs.readdir(directory, { withFileTypes: true });
     // Register identities before visiting siblings: a physical module directory
     // may sort before the node_modules alias that establishes its ownership.
     for (const entry of entries) {

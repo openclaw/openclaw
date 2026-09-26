@@ -11,7 +11,12 @@ import type { PluginRuntime } from "../runtime-api.js";
 import { nostrPlugin } from "./channel.js";
 import { nostrOutboundAdapter, startNostrGatewayAccount } from "./gateway.js";
 import { setNostrRuntime } from "./runtime.js";
-import { TEST_RESOLVED_PRIVATE_KEY, buildResolvedNostrAccount } from "./test-fixtures.js";
+import {
+  NOSTR_SANITIZER_CASES,
+  TEST_RESOLVED_PRIVATE_KEY,
+  buildResolvedNostrAccount,
+  createMockNostrBus,
+} from "./test-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
   normalizePubkey: vi.fn((value: string) => `normalized-${value.toLowerCase()}`),
@@ -53,14 +58,8 @@ function installOutboundRuntime(convertMarkdownTables = vi.fn((text: string) => 
 }
 
 async function startOutboundAccount(accountId?: string) {
-  const sendDm = vi.fn(async () => "a".repeat(64));
-  const bus = {
-    sendDm,
-    close: vi.fn(async () => {}),
-    getMetrics: vi.fn(() => ({ counters: {} })),
-    publishProfile: vi.fn(),
-    getProfileState: vi.fn(async () => null),
-  };
+  const bus = createMockNostrBus("a".repeat(64));
+  const { sendDm } = bus;
   mocks.startNostrBus.mockResolvedValueOnce(bus as unknown);
   const abort = new AbortController();
   const context = createStartAccountContext({
@@ -93,46 +92,17 @@ describe("nostr outbound cfg threading", () => {
     mocks.startNostrBus.mockReset();
   });
 
-  it.each([
-    {
-      name: "strips an internal tool-failure banner",
-      text: "Done.\n⚠️ 🛠️ `search repos (agent)` failed",
-      expected: "Done.",
+  it.each(NOSTR_SANITIZER_CASES)(
+    "$name through the Nostr outbound sanitizer",
+    ({ text, expected }) => {
+      const sanitizeText = nostrPlugin.outbound?.sanitizeText;
+      expect(sanitizeText).toBeTypeOf("function");
+      if (!sanitizeText) {
+        throw new Error("Expected Nostr outbound assistant-visible text sanitizer");
+      }
+      expect(sanitizeText({ text, payload: { text } })).toBe(expected);
     },
-    {
-      name: "strips internal tool-call XML",
-      text: '<tool_call>{"name":"read","arguments":{"path":"private"}}</tool_call>Done.',
-      expected: "Done.",
-    },
-    {
-      name: "strips multiline tool-response scaffolding",
-      text: [
-        "Before",
-        "<function_response>",
-        "private output",
-        "</function_response>",
-        "After",
-      ].join("\n"),
-      expected: "Before\n\nAfter",
-    },
-    {
-      name: "suppresses an internal-trace-only reply",
-      text: "⚠️ 🛠️ `search repos (agent)` failed",
-      expected: "",
-    },
-    {
-      name: "preserves ordinary visible prose",
-      text: "The relay has two active subscriptions.",
-      expected: "The relay has two active subscriptions.",
-    },
-  ])("$name through the Nostr outbound sanitizer", ({ text, expected }) => {
-    const sanitizeText = nostrPlugin.outbound?.sanitizeText;
-    expect(sanitizeText).toBeTypeOf("function");
-    if (!sanitizeText) {
-      throw new Error("Expected Nostr outbound assistant-visible text sanitizer");
-    }
-    expect(sanitizeText({ text, payload: { text } })).toBe(expected);
-  });
+  );
 
   it.each([
     {
