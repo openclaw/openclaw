@@ -34,6 +34,7 @@ vi.mock("../plugins/runtime/generation-scope.js", async () => {
   mocks.readGeneration = () => generation.getStore() ?? mocks.publishedGeneration;
   return {
     getPluginRuntimeGenerationRegistry: () => undefined,
+    runOutsidePluginRuntimeGenerationScope: (run: () => unknown) => generation.exit(run),
     withPluginRuntimeGenerationScope: (snapshot: { testGeneration?: string }, run: () => unknown) =>
       generation.run(snapshot.testGeneration ?? "unknown", run),
   };

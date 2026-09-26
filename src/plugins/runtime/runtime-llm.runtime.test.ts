@@ -39,6 +39,7 @@ function configWithPluginPolicy(pluginId: string, llm: PluginEntryConfig["llm"])
 
 function createPreparedModel(
   modelId = "gpt-5.5",
+  provider = "openai",
 ): Extract<
   Awaited<ReturnType<typeof hoisted.acquireSimpleCompletionModelForAgent>>,
   { model: unknown }
@@ -46,12 +47,12 @@ function createPreparedModel(
   return {
     async [Symbol.asyncDispose]() {},
     selection: {
-      provider: "openai",
+      provider,
       modelId,
       agentDir: "/tmp/openclaw-agent",
     },
     model: {
-      provider: "openai",
+      provider,
       id: modelId,
       name: modelId,
       api: "openai",
@@ -122,24 +123,29 @@ function expectSingleLogPayload(
 }
 
 function primeCompletionMocks() {
-  hoisted.acquireSimpleCompletionModelForAgent.mockResolvedValue(createPreparedModel());
-  hoisted.resolveSimpleCompletionSelectionForAgent.mockImplementation(
-    (params: { modelRef?: string; agentId: string }) => {
-      if (!params.modelRef) {
-        return {
-          provider: "openai",
-          modelId: "gpt-5.5",
-          agentDir: `/tmp/${params.agentId}`,
-        };
-      }
-      const slash = params.modelRef.indexOf("/");
+  // The acquisition owner returns the model it selected for the same request.
+  const resolveSelection = (params: { modelRef?: string; agentId: string }) => {
+    if (!params.modelRef) {
       return {
-        provider: slash > 0 ? params.modelRef.slice(0, slash) : "openai",
-        modelId: slash > 0 ? params.modelRef.slice(slash + 1) : params.modelRef,
+        provider: "openai",
+        modelId: "gpt-5.5",
         agentDir: `/tmp/${params.agentId}`,
       };
+    }
+    const slash = params.modelRef.indexOf("/");
+    return {
+      provider: slash > 0 ? params.modelRef.slice(0, slash) : "openai",
+      modelId: slash > 0 ? params.modelRef.slice(slash + 1) : params.modelRef,
+      agentDir: `/tmp/${params.agentId}`,
+    };
+  };
+  hoisted.acquireSimpleCompletionModelForAgent.mockImplementation(
+    async (params: { modelRef?: string; agentId: string }) => {
+      const selection = resolveSelection(params);
+      return createPreparedModel(selection.modelId, selection.provider);
     },
   );
+  hoisted.resolveSimpleCompletionSelectionForAgent.mockImplementation(resolveSelection);
   hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
     content: [{ type: "text", text: "done" }],
     responseModel: "gpt-5.5-2026-08-01",
@@ -333,7 +339,7 @@ describe("runtime.llm.complete", () => {
     });
 
     hoisted.acquireSimpleCompletionModelForAgent.mockResolvedValue(
-      createPreparedModel("openrouter/gpt-5.4-mini"),
+      createPreparedModel("openrouter/gpt-5.4-mini", "openrouter"),
     );
     hoisted.resolveSimpleCompletionSelectionForAgent.mockImplementation(
       (params: { agentId: string }) => ({

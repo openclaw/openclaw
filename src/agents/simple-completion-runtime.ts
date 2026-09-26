@@ -15,7 +15,10 @@ import {
   resolveProviderRuntimePluginHandle,
 } from "../plugins/provider-hook-runtime.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
-import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import {
+  runOutsidePluginRuntimeGenerationScope,
+  withPluginRuntimeGenerationScope,
+} from "../plugins/runtime/generation-scope.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -586,13 +589,22 @@ export async function acquireSimpleCompletionModelWithSelection(
       ? { shorthandModelIds: [tentativeRequest.shorthandModelId] }
       : {}),
   });
-  let metadataSnapshot = resolvePluginMetadataSnapshot({
-    config: params.cfg,
-    env: process.env,
-    workspaceDir,
-    pluginIdScope,
-    allowWorkspaceScopedCurrent: true,
-  });
+  // A completion admitted here is new host-owned work: an inherited generation may
+  // already be retired, so select metadata from the committed inventory. Caller
+  // authority, cancellation, and the retirement guards are unchanged.
+  const resolveCommittedMetadataSnapshot = (
+    scope: ReturnType<typeof createAgentRuntimeMetadataPluginIdScope>,
+  ) =>
+    runOutsidePluginRuntimeGenerationScope(() =>
+      resolvePluginMetadataSnapshot({
+        config: params.cfg,
+        env: process.env,
+        workspaceDir,
+        pluginIdScope: scope,
+        allowWorkspaceScopedCurrent: true,
+      }),
+    );
+  let metadataSnapshot = resolveCommittedMetadataSnapshot(pluginIdScope);
   const resolveSelection = () => {
     const request = resolveRequest(metadataSnapshot);
     return request ? { ...request.selection, agentDir } : null;
@@ -618,42 +630,40 @@ export async function acquireSimpleCompletionModelWithSelection(
       : {}),
   });
   if (canonicalPluginIdScope.key !== pluginIdScope.key) {
-    metadataSnapshot = resolvePluginMetadataSnapshot({
-      config: params.cfg,
-      env: process.env,
-      workspaceDir,
-      pluginIdScope: canonicalPluginIdScope,
-      allowWorkspaceScopedCurrent: true,
-    });
+    metadataSnapshot = resolveCommittedMetadataSnapshot(canonicalPluginIdScope);
     selection = resolveSelection();
     if (!selection) {
       return { error: `No model configured for agent ${agentId}.` };
     }
   }
-  const acquired = await acquirePreparedSimpleCompletionModel(
-    { ...params, agentId, agentDir, pluginMetadataSnapshot: metadataSnapshot },
-    [{ provider: selection.provider, modelId: selection.modelId }],
-    (context) =>
-      prepareSimpleCompletionModelCore(
-        {
-          cfg: params.cfg,
-          agentId: params.agentId,
-          provider: selection.provider,
-          modelId: selection.modelId,
-          modelIdSource: "selected",
-          agentDir: selection.agentDir,
-          profileId: selection.profileId,
-          preferredProfile: params.preferredProfile,
-          allowMissingApiKeyModes: params.allowMissingApiKeyModes,
-          ...(params.allowBundledStaticCatalogFallback !== undefined
-            ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
-            : {}),
-          skipAgentDiscovery: params.skipAgentDiscovery,
-          bindAuthOwner: params.bindAuthOwner,
-          signal: params.signal,
-        },
-        context,
-      ),
+  // Prepare the admitted generation outside any inherited frame, then re-enter it
+  // explicitly for model materialization below.
+  const acquired = await runOutsidePluginRuntimeGenerationScope(() =>
+    acquirePreparedSimpleCompletionModel(
+      { ...params, agentId, agentDir, pluginMetadataSnapshot: metadataSnapshot },
+      [{ provider: selection.provider, modelId: selection.modelId }],
+      (context) =>
+        prepareSimpleCompletionModelCore(
+          {
+            cfg: params.cfg,
+            agentId: params.agentId,
+            provider: selection.provider,
+            modelId: selection.modelId,
+            modelIdSource: "selected",
+            agentDir: selection.agentDir,
+            profileId: selection.profileId,
+            preferredProfile: params.preferredProfile,
+            allowMissingApiKeyModes: params.allowMissingApiKeyModes,
+            ...(params.allowBundledStaticCatalogFallback !== undefined
+              ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
+              : {}),
+            skipAgentDiscovery: params.skipAgentDiscovery,
+            bindAuthOwner: params.bindAuthOwner,
+            signal: params.signal,
+          },
+          context,
+        ),
+    ),
   );
   return { ...acquired, selection };
 }
