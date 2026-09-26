@@ -346,6 +346,7 @@ export type SessionExactEntriesWorkerResult = {
   replacement?: SessionEntryReplacementState & { databaseIdentity: string };
   creation?: import("./session-accessor.sqlite-creation-read.js").SessionCreationSnapshot & {
     databaseIdentity: string;
+    databasePath: string;
   };
   sharing?: {
     source: { agentId: string; path: string };
