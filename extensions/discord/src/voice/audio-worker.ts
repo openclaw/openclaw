@@ -76,7 +76,11 @@ export class DiscordAudioWorker {
   }
 
   async connect(): Promise<void> {
-    const deadline = Date.now() + this.options.connectTimeoutMs;
+    // Monotonic clock: Date.now() is wall-clock and can jump on NTP sync / DST / manual
+    // time changes, while AbortSignal.timeout consumes a monotonic libuv timer. Mixing the
+    // two lets clock skew enlarge or shrink the remaining budget and misjudge readiness.
+    // Math.floor keeps the budget an integer (performance.now is sub-millisecond).
+    const deadline = performance.now() + this.options.connectTimeoutMs;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       if (this.stopped) {
         return;
@@ -112,7 +116,7 @@ export class DiscordAudioWorker {
           this.sdk.VoiceConnectionStatus.Ready,
           AbortSignal.any([
             this.stopAbort.signal,
-            AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+            AbortSignal.timeout(Math.max(1, Math.floor(deadline - performance.now()))),
           ]),
         );
         if (this.stopped) {
@@ -142,7 +146,7 @@ export class DiscordAudioWorker {
         if (
           attempt === 0 &&
           !this.stopped &&
-          Date.now() < deadline &&
+          performance.now() < deadline &&
           error instanceof Error &&
           error.message.toLowerCase().includes("operation was aborted")
         ) {

@@ -821,7 +821,7 @@ defineDiscordVoiceTests(
 
     it("does not retry an aborted voice connection readiness wait after the timeout budget is spent", async () => {
       const nowSpy = vi
-        .spyOn(Date, "now")
+        .spyOn(performance, "now")
         .mockReturnValueOnce(0)
         .mockReturnValueOnce(0)
         .mockReturnValueOnce(30_000);
