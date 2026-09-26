@@ -428,6 +428,46 @@ export async function prepareReplyAgentPayloads(state: {
       ]
     : [];
 
+  const diagnosticUsage = runResult.meta?.agentMeta?.diagnosticUsage ?? usage;
+  if (isDiagnosticsEnabled(cfg) && hasBillableUsage(diagnosticUsage)) {
+    const contextUsedTokens = deriveContextPromptTokens({
+      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+      promptTokens,
+      usage,
+    });
+    const costUsd = estimateAggregateUsageCost({
+      usage: diagnosticUsage,
+      provider: providerUsed,
+      model: modelUsed,
+      config: cfg,
+      agentDir: followupRun.run.agentDir,
+    });
+    emitTrustedDiagnosticEvent({
+      type: "model.usage",
+      ...(runResult.diagnosticTrace
+        ? {
+            trace: freezeDiagnosticTraceContext(
+              createChildDiagnosticTraceContext(runResult.diagnosticTrace),
+            ),
+          }
+        : {}),
+      sessionKey,
+      sessionId: followupRun.run.sessionId,
+      channel: replyToChannel,
+      agentId: followupRun.run.agentId,
+      provider: providerUsed,
+      model: modelUsed,
+      usage: toDiagnosticUsage(diagnosticUsage),
+      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+      context: {
+        limit: contextTokensUsed,
+        ...(contextUsedTokens !== undefined ? { used: contextUsedTokens } : {}),
+      },
+      costUsd,
+      durationMs: Date.now() - runStartedAt,
+    });
+  }
+
   // Drain any late tool/block deliveries before deciding there's "nothing to send".
   // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
   // keep the typing indicator stuck.
@@ -633,46 +673,6 @@ export async function prepareReplyAgentPayloads(state: {
     }
   }
   await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
-
-  const diagnosticUsage = runResult.meta?.agentMeta?.diagnosticUsage ?? usage;
-  if (isDiagnosticsEnabled(cfg) && hasBillableUsage(diagnosticUsage)) {
-    const contextUsedTokens = deriveContextPromptTokens({
-      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-      promptTokens,
-      usage,
-    });
-    const costUsd = estimateAggregateUsageCost({
-      usage: diagnosticUsage,
-      provider: providerUsed,
-      model: modelUsed,
-      config: cfg,
-      agentDir: followupRun.run.agentDir,
-    });
-    emitTrustedDiagnosticEvent({
-      type: "model.usage",
-      ...(runResult.diagnosticTrace
-        ? {
-            trace: freezeDiagnosticTraceContext(
-              createChildDiagnosticTraceContext(runResult.diagnosticTrace),
-            ),
-          }
-        : {}),
-      sessionKey,
-      sessionId: followupRun.run.sessionId,
-      channel: replyToChannel,
-      agentId: followupRun.run.agentId,
-      provider: providerUsed,
-      model: modelUsed,
-      usage: toDiagnosticUsage(diagnosticUsage),
-      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-      context: {
-        limit: contextTokensUsed,
-        ...(contextUsedTokens !== undefined ? { used: contextUsedTokens } : {}),
-      },
-      costUsd,
-      durationMs: Date.now() - runStartedAt,
-    });
-  }
 
   const responseUsageSessionRaw =
     activeSessionEntry?.responseUsage ??
