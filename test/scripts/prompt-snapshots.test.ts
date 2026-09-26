@@ -83,7 +83,7 @@ describe("happy path prompt snapshots", () => {
   it("reconstructs complete Codex tool catalogs from readable full-tool overrides", async () => {
     const scenarios = [
       { name: "telegram-direct", replacements: [] },
-      { name: "discord-group", replacements: [] },
+      { name: "discord-group", replacements: ["sessions_spawn"] },
       { name: "heartbeat-turn", replacements: ["openclaw_direct"] },
     ];
 
