@@ -6,7 +6,10 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
-import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
+import {
+  registerOpenClawAgentDatabaseIdentity,
+  type OpenClawAgentDatabaseIdentity,
+} from "./openclaw-agent-db-identity.js";
 import { classifyOpenClawAgentDatabaseReadError } from "./openclaw-agent-db-read-error.js";
 import {
   assertCanonicalAgentPersistenceVersion,
@@ -23,6 +26,7 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js
 export type OpenClawAgentReadOnlyDatabase = {
   agentId: string;
   db: DatabaseSync;
+  identity: OpenClawAgentDatabaseIdentity;
   path: string;
 };
 
@@ -112,8 +116,8 @@ export function openOpenClawAgentDatabaseReadOnly(
     closed = true;
   };
   try {
-    registerOpenClawAgentDatabaseIdentity(db);
-    const database = { agentId, db, path: pathname, close };
+    const identity = registerOpenClawAgentDatabaseIdentity(db);
+    const database = { agentId, db, identity, path: pathname, close };
     if (!hasOpenClawAgentReadOnlySchema(database)) {
       close();
       return { found: false, reason: "schema-missing" };

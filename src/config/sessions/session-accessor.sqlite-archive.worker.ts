@@ -15,7 +15,6 @@ import {
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -381,7 +380,7 @@ export function publishTranscriptArchiveInWorker(
       (database) => {
         if (
           plan.databaseIdentity !== undefined &&
-          readOpenClawAgentDatabaseIdentity(database).identity !== plan.databaseIdentity
+          database.identity !== plan.databaseIdentity
         ) {
           throw new Error("SQLite archive publication database was replaced");
         }
