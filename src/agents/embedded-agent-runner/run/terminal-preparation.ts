@@ -188,11 +188,15 @@ export function prepareEmbeddedRunTerminal(input: {
       ),
     } satisfies Omit<AgentRunTerminalReceipt, "terminalDisposition">,
   });
-  // A yielded attempt ends before message_end. Its aborted tool-call assistant,
-  // not an earlier completed cycle, owns paused-turn classification.
-  const payloadAssistant = attempt.yieldDetected
-    ? attempt.lastAssistant
-    : input.currentAttemptCompletedAssistant;
+  const cleanYield = attempt.yieldDetected && input.terminalState.outcome.status === "ok";
+  // Yield cleanup can abort the tool-call assistant before message_end. The
+  // canonical successful pause owns that outcome, not the cleanup error text
+  // or an earlier completed cycle. Keep this attempt's streamed text below.
+  const payloadAssistant = cleanYield
+    ? undefined
+    : attempt.yieldDetected
+      ? attempt.lastAssistant
+      : input.currentAttemptCompletedAssistant;
   const payloads = buildEmbeddedRunPayloads({
     assistantTexts: attempt.assistantTexts,
     answerSegments: attempt.answerSegments,
@@ -203,10 +207,7 @@ export function prepareEmbeddedRunTerminal(input: {
     currentAssistant: attempt.yieldDetected ? null : (payloadAssistant ?? null),
     // A clean yield is a handoff, not a terminal tool failure. Keep the error
     // on the attempt for diagnostics without turning the pause into a warning.
-    lastToolError:
-      attempt.yieldDetected && input.terminalState.outcome.status === "ok"
-        ? undefined
-        : attempt.lastToolError,
+    lastToolError: cleanYield ? undefined : attempt.lastToolError,
     config: runParams.config,
     isCronTrigger: runParams.trigger === "cron",
     isHeartbeatTrigger: runParams.trigger === "heartbeat",
