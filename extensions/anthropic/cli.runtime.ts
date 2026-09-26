@@ -13,7 +13,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasClaudeRawToolInvocation } from "./cli-output.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { prepareClaudeCliTransportArgs } from "./cli-runtime-args.js";
-import { createClaudeCliTransport } from "./cli-transport.js";
+import { createClaudeCliTransport, writeClaudeCliSettingsFile } from "./cli-transport.js";
 import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
@@ -387,10 +387,12 @@ export async function* executeClaudeCli(
     // Adopt the process's exact MCP capture before prompt dispatch or native tool callbacks.
     capability?.activate(session.handle);
     if (!session.transport) {
-      const { args, excludeDynamicSections } = prepareClaudeCliTransportArgs(context);
+      const { args, excludeDynamicSections, settings } = prepareClaudeCliTransportArgs(context);
+      const settingsFile = settings && (await writeClaudeCliSettingsFile(settings));
       session.transport = createClaudeCliTransport({
         context,
         args,
+        settingsFile,
         secretInput,
         currentContext: () => session.currentTurn?.context,
         initialize: {

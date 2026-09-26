@@ -1,4 +1,5 @@
 import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const PROTOCOL_FLAGS = new Set([
   "-p",
@@ -24,6 +25,36 @@ const PROTOCOL_VALUE_FLAGS = new Set([
   "--system-prompt",
 ]);
 const TOOL_FLAGS = new Set(["--tools", "--allowedTools", "--allowed-tools"]);
+// Windows rejects command lines over 32,767 UTF-16 code units. Installs with many MCP
+// servers can admit enough OpenClaw tools to reach that with this one argument.
+const WINDOWS_INLINE_ALLOWED_TOOLS_CHARS = 8_192;
+
+/** Claude honors only the last --settings value, so admitted tools join its inline JSON. */
+function moveAllowedToolsToSettings(args: string[], approvedTools: string[]) {
+  const index = args.findLastIndex((arg) => arg === "--settings" || arg.startsWith("--settings="));
+  const inline =
+    index < 0
+      ? "{}"
+      : args[index] === "--settings"
+        ? args[index + 1]
+        : args[index]!.slice("--settings=".length);
+  let settings: unknown;
+  try {
+    settings = JSON.parse(inline ?? "");
+  } catch {
+    // Settings file paths and malformed JSON reach Claude Code as given.
+    return undefined;
+  }
+  if (!isRecord(settings)) {
+    return undefined;
+  }
+  if (index >= 0) {
+    args.splice(index, args[index] === "--settings" ? 2 : 1);
+  }
+  const permissions = isRecord(settings.permissions) ? settings.permissions : {};
+  const allow = Array.isArray(permissions.allow) ? permissions.allow : [];
+  return { ...settings, permissions: { ...permissions, allow: [...allow, ...approvedTools] } };
+}
 
 /** Keep prepared CLI arguments, replacing only transport and admission-owned policy. */
 export function prepareClaudeCliTransportArgs(context: CliBackendExecuteContext) {
@@ -108,11 +139,18 @@ export function prepareClaudeCliTransportArgs(context: CliBackendExecuteContext)
   if (tools) {
     args.push("--tools", tools.join(","));
   }
+  let settings: Record<string, unknown> | undefined;
   if (approvedTools.length) {
-    args.push("--allowedTools", approvedTools.join(","));
+    const allowed = approvedTools.join(",");
+    if (process.platform === "win32" && allowed.length > WINDOWS_INLINE_ALLOWED_TOOLS_CHARS) {
+      settings = moveAllowedToolsToSettings(args, approvedTools);
+    }
+    if (!settings) {
+      args.push("--allowedTools", allowed);
+    }
   }
   if (context.sessionId) {
     args.push(context.useResume ? "--resume" : "--session-id", context.sessionId);
   }
-  return { args, excludeDynamicSections };
+  return { args, excludeDynamicSections, settings };
 }
