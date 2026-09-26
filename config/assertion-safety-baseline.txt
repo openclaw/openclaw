@@ -727,8 +727,8 @@ extensions/msteams/src/msteams-ingress.ts	1
 extensions/msteams/src/outbound.ts	1
 extensions/msteams/src/polls.ts	1
 extensions/msteams/src/probe.ts	1
-extensions/msteams/src/qa/adapter.runtime.ts	2
-extensions/msteams/src/qa/bot-framework-server.ts	3
+extensions/msteams/src/qa/adapter.runtime.ts	1
+extensions/msteams/src/qa/bot-framework-server.ts	2
 extensions/msteams/src/qa/private-runtime.ts	1
 extensions/msteams/src/reply-stream-controller.ts	1
 extensions/msteams/src/sdk-proactive.ts	3
