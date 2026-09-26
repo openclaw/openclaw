@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { isToolCallXmlArtifact } from "../../shared/text/tool-call-xml.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   copyReplyPayloadMetadata,
@@ -130,6 +131,13 @@ export function normalizeReplyPayloadOutcome(
       text = stripped.text;
     }
 
+    if (text && isToolCallXmlArtifact(text)) {
+      if (!hasContent("") && !hasSpeechContent) {
+        return suppress("silent");
+      }
+      // An artifact is not a caption; retain independently deliverable content.
+      text = "";
+    }
     if (text && isInternalFormattingArtifact(text) && !hasContent("")) {
       return suppress("silent");
     }
