@@ -273,51 +273,63 @@ describe("native assignment completion custody", () => {
         completionDeliveryRetryDelaysMs: [1],
         completionDeliveryMaxRetries: 1,
       });
-      const owner = await registerParent(monitor);
-      const other = await registerParent(monitor);
-      other.bindTurn("other-turn");
-      // Native spawn evidence can arrive before the admitting turn/start response.
-      await client.notify({
-        method: "item/completed",
-        params: {
-          threadId: "parent-thread",
-          turnId: "parent-turn",
-          item: directSpawnItem("v2", "parent-thread", "child-thread"),
-        },
-      });
-      owner.bindTurn("parent-turn");
-      await owner.unregister();
-      expect(first.live()).toHaveLength(1);
-      await other.unregister();
-      expect(second.live()).toHaveLength(0);
-      await client.notify(nativeCompletionNotification({ agentPath: "/root/child-thread" }));
-      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledOnce();
-      expect(first.holds).toContain(
-        runtime.deliverAgentHarnessTaskCompletion.mock.calls[0]![0].completionCustody,
-      );
-      expect(first.executions.size).toBe(0);
-      if (ending === "closed") {
-        monitor.dispose();
+      try {
+        const owner = await registerParent(monitor);
+        const other = await registerParent(monitor);
+        other.bindTurn("other-turn");
+        // Native spawn evidence can arrive before the admitting turn/start response.
+        await client.notify({
+          method: "item/completed",
+          params: {
+            threadId: "parent-thread",
+            turnId: "parent-turn",
+            item: directSpawnItem("v2", "parent-thread", "child-thread"),
+          },
+        });
+        owner.bindTurn("parent-turn");
+        await owner.unregister();
         expect(first.live()).toHaveLength(1);
-        runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
-          delivered: true,
-          path: "direct",
-        });
-        await vi.advanceTimersByTimeAsync(1);
-      } else if (ending === "retry") {
-        runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
-          delivered: true,
-          path: "direct",
-        });
-        await vi.advanceTimersByTimeAsync(1);
-      } else if (ending === "exhausted") {
-        await vi.advanceTimersByTimeAsync(1);
-        expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
-          expect.objectContaining({ deliveryStatus: "failed" }),
+        await other.unregister();
+        expect(second.live()).toHaveLength(0);
+        await client.notify(nativeCompletionNotification({ agentPath: "/root/child-thread" }));
+        expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledOnce();
+        expect(first.holds).toContain(
+          runtime.deliverAgentHarnessTaskCompletion.mock.calls[0]![0].completionCustody,
         );
+        expect(first.executions.size).toBe(0);
+        if (ending === "closed") {
+          monitor.dispose();
+          expect(first.live()).toHaveLength(1);
+          runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
+            delivered: true,
+            path: "direct",
+          });
+          await vi.advanceTimersByTimeAsync(1);
+        } else if (ending === "retry") {
+          runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
+            delivered: true,
+            path: "direct",
+          });
+          await vi.advanceTimersByTimeAsync(1);
+        } else if (ending === "exhausted") {
+          await vi.advanceTimersByTimeAsync(1);
+          expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(2);
+          expect(first.live()).toHaveLength(1);
+          // Exhausted delivery still owns the asynchronous failed-status settlement.
+          await vi.advanceTimersToNextTimerAsync();
+          await first.released;
+          expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
+            expect.objectContaining({ deliveryStatus: "failed" }),
+          );
+          expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(2);
+        }
+        expect(first.live()).toHaveLength(0);
+      } finally {
+        monitor.retireParent("parent-thread");
+        monitor.dispose();
+        first.root.release();
+        second.root.release();
       }
-      expect(first.live()).toHaveLength(0);
-      monitor.dispose();
     },
   );
 

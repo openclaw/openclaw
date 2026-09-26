@@ -481,7 +481,6 @@ describe("minimal npm extended-stable workflow", () => {
 
   it("lets protected tooling promote only the canonical immutable extended-stable candidate", () => {
     const parsed = workflow();
-    const releaseDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
     const input = parsed.on?.workflow_dispatch?.inputs?.release_candidate_branch;
     expect(input).toMatchObject({ default: "", required: false, type: "string" });
 
@@ -509,12 +508,6 @@ describe("minimal npm extended-stable workflow", () => {
 
     const recheck = step(parsed.jobs?.publish_openclaw_npm, "Recheck npm release request");
     expect(recheck.env?.NPM_WORKFLOW_REF).toBe(validate.env?.NPM_WORKFLOW_REF);
-    expect(releaseDocs).toContain('--ref "$PUBLISH_REF"');
-    expect(releaseDocs).toContain(
-      "The parent derives the canonical `extended-stable/YYYY.M.33` branch",
-    );
-    expect(releaseDocs).toContain('git tag "$PUBLISH_REF" "$TOOLING_SHA"');
-    expect(releaseDocs).toContain("The helper dispatches from an immutable `release-ci/*` ref");
   });
 
   it.each([

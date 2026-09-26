@@ -1,18 +1,18 @@
 // Runs the repository check lanes selected by CLI arguments.
 import { performance } from "node:perf_hooks";
-import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mts";
+import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 
-type CheckCommand = { name: string; args: string[] };
+type CheckCommand = { name: string; args: string[]; usesBase?: boolean };
 type RunManagedCheck = (options: { args: string[]; bin: string }) => Promise<number>;
 
 export const PREFLIGHT_CHECKS: CheckCommand[] = [
   { name: "conflict markers", args: ["check:no-conflict-markers"] },
   { name: "script TypeScript erasability", args: ["check:script-erasability"] },
-  { name: "line-cap growth ratchet", args: ["check:line-cap-ratchet"] },
-  { name: "max-lines suppression ratchet", args: ["check:max-lines-ratchet"] },
-  { name: "assertion SAFETY comment ratchet", args: ["check:assertion-safety"] },
+  { name: "line-cap growth ratchet", args: ["check:line-cap-ratchet"], usesBase: true },
+  { name: "max-lines suppression ratchet", args: ["check:max-lines-ratchet"], usesBase: true },
+  { name: "assertion SAFETY comment ratchet", args: ["check:assertion-safety"], usesBase: true },
   { name: "changelog attributions", args: ["check:changelog-attributions"] },
   { name: "database-first legacy-store guard", args: ["check:database-first-legacy-stores"] },
   { name: "doctor deprecation registry", args: ["check:doctor-deprecation-registry"] },
@@ -45,11 +45,12 @@ export const PREFLIGHT_CHECKS: CheckCommand[] = [
  */
 export function usage() {
   return [
-    "Usage: node --import tsx scripts/check.mts [--timed] [--include-architecture] [--include-test-types]",
+    "Usage: node --import tsx scripts/check.mts [--base <ref>] [--timed] [--include-architecture] [--include-test-types]",
     "",
     "Runs the local check graph: guard preflights, typecheck, lint, and policy guards.",
     "",
     "Options:",
+    "  --base <ref>            Compare ratchets against the fork with this Git ref.",
     "  --timed                 Print timing summary even when checks pass.",
     "  --include-architecture  Run architecture import-cycle checks instead of runtime cycles.",
     "  --include-test-types    Typecheck production and test sources.",
@@ -63,8 +64,9 @@ export function usage() {
 function parseCheckArgs(argv: string[]) {
   return parseFlagArgs(
     argv,
-    { help: false, includeArchitecture: false, includeTestTypes: false, timed: false },
+    { base: "", help: false, includeArchitecture: false, includeTestTypes: false, timed: false },
     [
+      stringFlag("--base", "base", { rejectShortOptions: true }),
       booleanFlag("--timed", "timed", true, { repeatable: true }),
       booleanFlag("--include-architecture", "includeArchitecture", true, { repeatable: true }),
       booleanFlag("--include-test-types", "includeTestTypes", true, { repeatable: true }),
@@ -125,7 +127,11 @@ export async function main(argv = process.argv.slice(2)) {
     {
       name: "preflight guards",
       parallel: true,
-      commands: PREFLIGHT_CHECKS,
+      commands: PREFLIGHT_CHECKS.map((command) =>
+        command.usesBase && args.base
+          ? { name: command.name, args: [...command.args, "--base", args.base] }
+          : command,
+      ),
     },
     {
       name: "typecheck",

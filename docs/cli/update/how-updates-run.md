@@ -159,6 +159,18 @@ literal dynamic imports to shared source modules include those modules and their
 package metadata in the private copy. Unrelated repository files remain outside
 the snapshot.
 
+Plugin dependency inventory skips incidental Git runtime transaction directories
+named `<destination>.openclaw-update-<UUID>.tmp`. Their candidate and rollback
+contents stay untouched; explicitly referenced dependencies still undergo normal
+validation. Other temporary directories remain plugin inputs. This prevents an
+abandoned transaction's relocated links from blocking an unrelated update.
+
+This inventory runs in the installed updater. An older updater that fails with
+`Cannot privately copy plugin dependency` inside one of these transaction
+directories needs the installation's [manual update method](/install/updating/update-methods)
+before it can use the fix. Preserve transaction contents until any active update
+or rollback has been reconciled.
+
 When a published updater omitted shared modules from an external plugin copy,
 the new version’s Doctor can complete the private copy before loading plugin repair
 hooks. Recovery requires the original path retained by that updater and matching

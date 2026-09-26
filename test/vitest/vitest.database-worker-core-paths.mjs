@@ -653,6 +653,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/meeting-bot/participation.test.ts",
   "src/memory/memory-artifact-provenance.test.ts",
   "src/plugin-sdk/agent-harness-task-runtime.persistence.test.ts",
+  "src/plugin-sdk/agent-harness-task-runtime.worker.test.ts",
   "src/plugin-sdk/memory-host-core.test.ts",
   "src/plugin-sdk/memory-host-event-export.test.ts",
   "src/plugin-sdk/memory-host-events.test.ts",

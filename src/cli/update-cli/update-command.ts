@@ -1,5 +1,4 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
@@ -16,6 +15,7 @@ import {
   type UpdateCommandOptions,
 } from "./shared.js";
 import { withUpdateCandidateAdmission } from "./update-command-candidate-admission.js";
+import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 import {
   captureUpdateCommandExecutorAuthority,
   type UpdateCommandExecutor,
@@ -393,13 +393,8 @@ async function runResolvedUpdate(
     !legacyConfigPlan &&
     !run.candidateAdmissionChecks?.includes("config")
   ) {
-    return await refuseUpdate(
-      "invalid-config",
-      [
-        "Config is invalid; cannot set update channel.",
-        ...formatConfigIssueLines(configSnapshot.issues, "-"),
-      ].join("\n"),
-    );
+    const failure = createUpdateConfigFailure(configSnapshot);
+    return await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
   }
   const schemaPreflight = await preflightUpdateCommandSchemas({
     ...target,

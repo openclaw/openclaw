@@ -2123,12 +2123,12 @@ async function main() {
     const train = version && classifyReleaseTrain(version);
     if (train === "unsupported-extended-stable-correction") {
       throw new Error(
-        `Extended-stable correction suffixes are invalid (${options.tag}); use a new monthly maintenance patch. See the monthly Gateway extended-stable procedure in docs/reference/RELEASING.md.`,
+        `Extended-stable correction suffixes are invalid (${options.tag}); use a new monthly maintenance patch. See the monthly Gateway extended-stable procedure in .agents/skills/release-openclaw-maintainer/references/extended-stable-publish.md.`,
       );
     }
     if (options.npmDistTag === "extended-stable" || train === "extended-stable") {
       throw new Error(
-        "Fresh extended-stable checklist launches are not supported. Use the monthly Gateway extended-stable procedure in docs/reference/RELEASING.md: Full Release Validation, then the separate plugin npm and core npm publication owners.",
+        "Fresh extended-stable checklist launches are not supported. Use the monthly Gateway extended-stable procedure in .agents/skills/release-openclaw-maintainer/references/extended-stable-publish.md: Full Release Validation, then the separate plugin npm and core npm publication owners.",
       );
     }
   }

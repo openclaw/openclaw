@@ -18,6 +18,7 @@ import {
 import {
   assertTaskRegistryOwnerCurrent,
   ensureTaskRegistryReadyAsync,
+  isTaskRegistryResidentReady,
   prepareTaskRegistryProjectionAsync,
   tasks,
   taskIdsByOwnerKey,
@@ -25,6 +26,7 @@ import {
 } from "./task-registry-state.js";
 import {
   getTaskRegistryProcessState,
+  getTasksByRunId,
   matchesScope,
   taskIdsInScope,
   type PendingTaskRegistryMutation,
@@ -132,6 +134,49 @@ function isTaskRegistryReadCurrent(taskId: string, mode: "identity" | "settled")
 /** Inspect resident settlement inside an already admitted synchronous read batch. */
 export function isTaskRegistryTaskSettled(taskId: string): boolean {
   return !hasPendingTaskRegistryEvents(taskId) && isTaskRegistryReadCurrent(taskId, "settled");
+}
+
+/** Pin known identity before yielding; cold or uncertain projections use normal preparation. */
+function captureResidentTaskRegistryRunCandidates(runId: string): TaskRecord[] | undefined {
+  const normalized = runId.trim();
+  if (
+    !isTaskRegistryResidentReady() ||
+    getTaskRegistryProcessState().projection.dirty ||
+    !isTaskRegistryReadScopeCurrent("runId", normalized)
+  ) {
+    return undefined;
+  }
+  const candidates = getTasksByRunId(normalized);
+  return candidates.every((task) => isTaskRegistryReadCurrent(task.taskId, "identity"))
+    ? candidates.map(cloneTaskRecord)
+    : undefined;
+}
+
+/**
+ * Retain the first usable run selection before joining the external read fence.
+ * Cold state linearizes at its first SQL snapshot. A receipt-free call cannot
+ * identify an assignment replaced before that read; producer receipts can.
+ */
+export async function captureTaskRegistryRunSelection(
+  runId: string,
+  matches: (task: Readonly<TaskRecord>) => boolean,
+): Promise<TaskRecord[]> {
+  const normalized = runId.trim();
+  const resident = captureResidentTaskRegistryRunCandidates(normalized);
+  if (resident) {
+    return resident.filter(matches);
+  }
+  const context = captureOpenClawStateWorkerContext();
+  const store = getTaskRegistryStore();
+  const snapshot = await store.loadMutationSnapshotAsync(
+    context,
+    { taskId: "", runId: normalized },
+    { missingDatabase: "empty" },
+  );
+  assertTaskRegistryOwnerCurrent(context, store);
+  return [...snapshot.tasks.values()]
+    .filter((task) => task.runId?.trim() === normalized && matches(task))
+    .map(cloneTaskRecord);
 }
 
 type TaskRegistryReadOwner = {
