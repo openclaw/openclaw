@@ -32,6 +32,16 @@ function mockPerplexityResponseOnce(body: unknown): void {
   );
 }
 
+function agentResponse(content: string, citations: string[] = []) {
+  return {
+    status: "completed",
+    output: [
+      { type: "search_results", results: citations.map((url) => ({ url })) },
+      { type: "message", content: [{ type: "output_text", text: content }] },
+    ],
+  };
+}
+
 function createConfiguredPerplexityTool(
   structured: boolean,
   apiKey = directPerplexityApiKey,
@@ -236,7 +246,7 @@ describe("perplexity web search provider", () => {
   it.each([
     { name: "native Search API", webSearch: { apiKey: "pplx-test" } },
     {
-      name: "chat completions",
+      name: "Agent API",
       webSearch: { apiKey: "pplx-test", baseUrl: "https://api.perplexity.ai" },
     },
   ])("does not start an already canceled $name request", async ({ webSearch }) => {
@@ -260,8 +270,8 @@ describe("perplexity web search provider", () => {
   it.each([
     { name: "native Search API", structured: true, ttl: 0 },
     { name: "native Search API", structured: true, ttl: 1 },
-    { name: "chat completions", structured: false, ttl: 0 },
-    { name: "chat completions", structured: false, ttl: 1 },
+    { name: "Agent API", structured: false, ttl: 0 },
+    { name: "Agent API", structured: false, ttl: 1 },
   ])(
     "applies the current cache TTL of $ttl minutes to $name results",
     async ({ name, structured, ttl }) => {
@@ -270,10 +280,7 @@ describe("perplexity web search provider", () => {
         mockPerplexityResponseOnce(
           structured
             ? { results: [{ title: result, url: `https://example.test/${result}` }] }
-            : {
-                choices: [{ message: { content: result } }],
-                citations: [`https://example.test/${result}`],
-              },
+            : agentResponse(result, [`https://example.test/${result}`]),
         );
       }
 
@@ -308,14 +315,13 @@ describe("perplexity web search provider", () => {
   );
 
   it.each([
-    { name: "missing choices", response: {} },
-    { name: "whitespace content", response: { choices: [{ message: { content: " \n " } }] } },
-  ])("rejects and does not cache chat-completions $name", async ({ name, response }) => {
+    { name: "missing output", response: { status: "completed" } },
+    { name: "whitespace content", response: agentResponse(" \n ") },
+  ])("rejects and does not cache Agent API $name", async ({ name, response }) => {
     mockPerplexityResponseOnce(response);
-    mockPerplexityResponseOnce({
-      choices: [{ message: { content: "  Recovered grounded answer  " } }],
-      citations: ["https://example.test/recovered"],
-    });
+    mockPerplexityResponseOnce(
+      agentResponse("  Recovered grounded answer  ", ["https://example.test/recovered"]),
+    );
 
     const tool = createConfiguredPerplexityTool(false);
     const args = { query: `perplexity empty answer ${name}` };
@@ -328,6 +334,31 @@ describe("perplexity web search provider", () => {
     expect(recovered.citations).toEqual(["https://example.test/recovered"]);
     expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["failed", "incomplete", "in_progress", "queued", "cancelled", undefined])(
+    "rejects and does not cache Agent API status %s even when output text exists",
+    async (status) => {
+      mockPerplexityResponseOnce({
+        ...agentResponse("Do not accept this text"),
+        status,
+        ...(status === "failed" ? { error: { message: "agent execution failed" } } : {}),
+      });
+      mockPerplexityResponseOnce(agentResponse("Recovered grounded answer"));
+
+      const tool = createConfiguredPerplexityTool(false);
+      const args = { query: `perplexity Agent API status ${status ?? "missing"}` };
+      await expect(tool.execute(args)).rejects.toThrow(
+        status === "failed"
+          ? 'Perplexity Agent API returned status "failed": agent execution failed.'
+          : `Perplexity Agent API returned status ${JSON.stringify(status ?? "missing")}.`,
+      );
+
+      await expect(tool.execute(args)).resolves.toMatchObject({
+        content: expect.stringContaining("Recovered grounded answer"),
+      });
+      expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("caps returned and cached results when the Perplexity Search API exceeds the requested count", async () => {
     mockPerplexityResponseOnce({
@@ -356,28 +387,14 @@ describe("perplexity web search provider", () => {
   });
 
   it.each([
-    { name: "chat completions", structured: false, expectedRequests: 1 },
+    { name: "Agent API", structured: false, expectedRequests: 1 },
     { name: "native Search API", structured: true, expectedRequests: 2 },
   ])(
     "uses count as a cache dimension only when $name sends it upstream",
     async ({ name, structured, expectedRequests }) => {
       const response = structured
         ? { results: [] }
-        : {
-            choices: [
-              {
-                message: {
-                  content: "Grounded answer",
-                  annotations: [
-                    {
-                      type: "url_citation",
-                      url_citation: { url: "https://example.test/citation" },
-                    },
-                  ],
-                },
-              },
-            ],
-          };
+        : agentResponse("Grounded answer", ["https://example.test/citation"]);
       mockPerplexityResponseOnce(response);
       if (structured) {
         mockPerplexityResponseOnce(response);
@@ -406,7 +423,7 @@ describe("perplexity web search provider", () => {
   it.each([
     { name: "native Search API", webSearch: { apiKey: "pplx-test" } },
     {
-      name: "chat completions",
+      name: "Agent API",
       webSearch: { apiKey: "pplx-test", baseUrl: "https://api.perplexity.ai" },
     },
   ])("cancels an in-flight $name request", async ({ name, webSearch }) => {
@@ -455,6 +472,7 @@ describe("perplexity web search provider", () => {
       source: "config",
       url: "https://openrouter.ai/api/v1/chat/completions",
       model: "perplexity/sonar-pro",
+      transport: "chat_completions",
     },
     {
       name: "unrecognized configured key",
@@ -469,6 +487,7 @@ describe("perplexity web search provider", () => {
       fallbackEnvVar: "PERPLEXITY_API_KEY",
       url: "https://openrouter.ai/api/v1/chat/completions",
       model: "perplexity/sonar-pro",
+      transport: "chat_completions",
     },
     {
       name: "native environment source ahead of key prefix",
@@ -484,6 +503,7 @@ describe("perplexity web search provider", () => {
       fallbackEnvVar: "OPENROUTER_API_KEY",
       url: "https://openrouter.ai/api/v1/chat/completions",
       model: "perplexity/sonar-pro",
+      transport: "chat_completions",
     },
     {
       name: "resolved direct SecretRef",
@@ -497,14 +517,16 @@ describe("perplexity web search provider", () => {
       source: "secretRef",
       url: "https://openrouter.ai/api/v1/chat/completions",
       model: "perplexity/sonar-pro",
+      transport: "chat_completions",
     },
     {
       name: "explicit direct base URL",
       key: directPerplexityApiKey,
       source: "config",
       overrides: { baseUrl: " https://api.perplexity.ai/ " },
-      url: "https://api.perplexity.ai/chat/completions",
-      model: "sonar-pro",
+      url: "https://api.perplexity.ai/v1/agent",
+      preset: "low",
+      transport: "agent_api",
     },
     {
       name: "explicit remote base URL",
@@ -513,14 +535,53 @@ describe("perplexity web search provider", () => {
       overrides: { baseUrl: "https://search.example/v1/" },
       url: "https://search.example/v1/chat/completions",
       model: "perplexity/sonar-pro",
+      transport: "chat_completions",
     },
     {
       name: "explicit model",
       key: directPerplexityApiKey,
       source: "config",
       overrides: { model: " perplexity/sonar-reasoning-pro " },
-      url: "https://api.perplexity.ai/chat/completions",
-      model: "sonar-reasoning-pro",
+      url: "https://api.perplexity.ai/v1/agent",
+      preset: "medium",
+      transport: "agent_api",
+    },
+    {
+      name: "explicit basic Sonar model",
+      key: directPerplexityApiKey,
+      source: "config",
+      overrides: { model: "sonar" },
+      url: "https://api.perplexity.ai/v1/agent",
+      preset: "fast",
+      transport: "agent_api",
+    },
+    {
+      name: "explicit deep-research model",
+      key: directPerplexityApiKey,
+      source: "config",
+      overrides: { model: "sonar-deep-research" },
+      url: "https://api.perplexity.ai/v1/agent",
+      preset: "high",
+      transport: "agent_api",
+    },
+    {
+      name: "explicit Agent API model",
+      key: directPerplexityApiKey,
+      source: "config",
+      overrides: { model: " perplexity/openai/gpt-5.4-mini " },
+      url: "https://api.perplexity.ai/v1/agent",
+      agentModel: "openai/gpt-5.4-mini",
+      transport: "agent_api",
+    },
+    {
+      name: "explicit Anthropic Agent API model",
+      key: directPerplexityApiKey,
+      source: "config",
+      overrides: { model: "anthropic/claude-sonnet-4-6" },
+      url: "https://api.perplexity.ai/v1/agent",
+      agentModel: "anthropic/claude-sonnet-4-6",
+      maxOutputTokens: 4096,
+      transport: "agent_api",
     },
     {
       name: "blank overrides",
@@ -565,8 +626,9 @@ describe("perplexity web search provider", () => {
           config,
           resolvedCredential: { value: key, source, fallbackEnvVar },
         });
-        const chat = "model" in entry;
-        expect(metadata).toEqual({ perplexityTransport: chat ? "chat_completions" : "search_api" });
+        const synthesized = "transport" in entry;
+        const transport = synthesized ? entry.transport : "search_api";
+        expect(metadata).toEqual({ perplexityTransport: transport });
         if (source === "secretRef") {
           provider.setConfiguredCredentialValue?.(config, key);
         }
@@ -577,13 +639,17 @@ describe("perplexity web search provider", () => {
         if (!tool) {
           throw new Error("Expected Perplexity tool");
         }
-        if (chat) {
+        if (synthesized) {
           expect(tool.parameters).not.toHaveProperty("properties.country");
         } else {
           expect(tool.parameters).toHaveProperty("properties.country");
         }
         mockPerplexityResponseOnce(
-          chat ? { choices: [{ message: { content: "Grounded answer" } }] } : { results: [] },
+          transport === "agent_api"
+            ? agentResponse("Grounded answer")
+            : transport === "chat_completions"
+              ? { choices: [{ message: { content: "Grounded answer" } }] }
+              : { results: [] },
         );
         const query = `routing ${entry.name}`;
         await tool.execute({ query });
@@ -594,12 +660,47 @@ describe("perplexity web search provider", () => {
         expect(request.url).toBe(url);
         expect(new Headers(request.init.headers).get("authorization")).toBe(`Bearer ${key}`);
         expect(JSON.parse(request.init.body as string)).toEqual(
-          chat
-            ? { model: entry.model, messages: [{ role: "user", content: query }] }
-            : { query, max_results: 5 },
+          transport === "agent_api"
+            ? "preset" in entry
+              ? { preset: entry.preset, input: query }
+              : {
+                  model: entry.agentModel,
+                  input: query,
+                  tools: [{ type: "web_search" }],
+                  instructions:
+                    "You must use the web_search tool before answering. Answer only from source-grounded search results.",
+                  ...("maxOutputTokens" in entry
+                    ? { max_output_tokens: entry.maxOutputTokens }
+                    : {}),
+                }
+            : transport === "chat_completions"
+              ? { model: entry.model, messages: [{ role: "user", content: query }] }
+              : { query, max_results: 5 },
         );
       },
     );
+  });
+
+  it("moves direct Perplexity freshness into the Agent API web-search tool", async () => {
+    mockPerplexityResponseOnce(agentResponse("Fresh grounded answer"));
+    const tool = createConfiguredPerplexityTool(false);
+
+    await tool.execute({ query: "recent OpenClaw news", freshness: "week" });
+
+    const [request] = withTrustedWebSearchEndpointMock.mock.calls[0] as [
+      { url: string; init: RequestInit },
+    ];
+    expect(request.url).toBe("https://api.perplexity.ai/v1/agent");
+    expect(JSON.parse(request.init.body as string)).toEqual({
+      preset: "low",
+      input: "recent OpenClaw news",
+      tools: [
+        {
+          type: "web_search",
+          filters: { search_recency_filter: "week" },
+        },
+      ],
+    });
   });
 
   it("sends official date filter fields in the Search API request body", async () => {

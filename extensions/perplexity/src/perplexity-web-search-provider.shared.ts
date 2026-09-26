@@ -20,7 +20,7 @@ const PERPLEXITY_ONBOARDING_SCOPES: Array<"text-inference"> = ["text-inference"]
 const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
 const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
-export type PerplexityTransport = "search_api" | "chat_completions";
+export type PerplexityTransport = "search_api" | "agent_api" | "chat_completions";
 export type PerplexityConfig = {
   apiKey?: string;
   baseUrl?: string;
@@ -129,9 +129,12 @@ export function resolvePerplexityRuntime(
     source: auth.source,
     baseUrl,
     model: normalizeOptionalString(perplexity?.model) || DEFAULT_PERPLEXITY_MODEL,
-    transport:
-      hasPerplexityLegacyOverride(perplexity) || !isDirectPerplexityBaseUrl(baseUrl)
-        ? "chat_completions"
-        : "search_api",
+    transport: hasPerplexityLegacyOverride(perplexity)
+      ? isDirectPerplexityBaseUrl(baseUrl)
+        ? "agent_api"
+        : "chat_completions"
+      : isDirectPerplexityBaseUrl(baseUrl)
+        ? "search_api"
+        : "chat_completions",
   };
 }

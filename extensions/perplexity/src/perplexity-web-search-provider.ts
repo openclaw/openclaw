@@ -32,7 +32,7 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
     },
   };
 
-  if (transport !== "chat_completions") {
+  if (transport !== "chat_completions" && transport !== "agent_api") {
     properties.country = {
       type: "string",
       description: "Native Perplexity Search API only. 2-letter country code.",
@@ -88,9 +88,11 @@ function createPerplexityToolDefinition(
 
   return {
     description:
-      schemaTransport === "chat_completions"
-        ? "Search the web using Perplexity Sonar via Perplexity/OpenRouter chat completions. Returns AI-synthesized answers with citations from web-grounded search."
-        : "Search the web using Perplexity. Runtime routing decides between native Search API and Sonar chat-completions compatibility. Structured filters are available on the native Search API path.",
+      schemaTransport === "agent_api"
+        ? "Search the web using Perplexity Agent API. Returns an AI-synthesized answer with citations from web-grounded search."
+        : schemaTransport === "chat_completions"
+          ? "Search the web using Perplexity Sonar through an OpenRouter-compatible chat-completions endpoint. Returns an AI-synthesized answer with citations."
+          : "Search the web using Perplexity. Runtime routing chooses the native Search API, Agent API compatibility, or OpenRouter chat completions. Structured filters are available on the native Search API path.",
     parameters: createPerplexityParameters(schemaTransport),
     execute: async (args, context) => {
       context?.signal?.throwIfAborted();

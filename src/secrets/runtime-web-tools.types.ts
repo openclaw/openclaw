@@ -26,7 +26,7 @@ export type RuntimeWebSearchMetadata = {
   /** Source that supplied the selected provider credential, or why it is unavailable. */
   selectedProviderKeySource?: "config" | "secretRef" | "env" | "missing";
   /** Perplexity transport chosen from provider config or runtime default. */
-  perplexityTransport?: "search_api" | "chat_completions";
+  perplexityTransport?: "search_api" | "agent_api" | "chat_completions";
   diagnostics: RuntimeWebDiagnostic[];
 };
 
