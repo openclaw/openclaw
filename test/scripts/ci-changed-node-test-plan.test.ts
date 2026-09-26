@@ -2604,7 +2604,7 @@ describe("CI changed Node test plan", () => {
         );
         const preparedFiles = ordinaryFiles === 5 ? files.length : runtimeFiles.length;
         expect(prepared[0]?.predictedSeconds).toBe(
-          100 + Math.ceil(preparedFiles * (worker ? 17.31 : 2.49)),
+          60 + Math.ceil(preparedFiles * (worker ? 17.31 : 2.49)),
         );
         for (const group of groups) {
           expect(group.includePatterns!.length).toBeLessThanOrEqual(

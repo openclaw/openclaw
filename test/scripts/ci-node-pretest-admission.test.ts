@@ -48,9 +48,9 @@ function plan(runnerBackend = "blacksmith") {
 
 describe("compact node prerequisite admission", () => {
   it.each([
-    { name: "agentic-agents-core-models", measured: 123, blacksmith: [41, 123], hybrid: [81, 107] },
-    { name: "core-unit-fast-1", measured: 100, blacksmith: [68, 100], hybrid: [59, 87] },
-    { name: "core-runtime-hooks", measured: 80, blacksmith: [19, 80], hybrid: [17, 70] },
+    { name: "agentic-agents-core-models", measured: 123, blacksmith: [41, 123], hybrid: [81, 123] },
+    { name: "core-unit-fast-1", measured: 100, blacksmith: [68, 100], hybrid: [59, 100] },
+    { name: "core-runtime-hooks", measured: 80, blacksmith: [19, 80], hybrid: [17, 80] },
     {
       name: "core-runtime-infra-process",
       measured: undefined,
@@ -80,7 +80,11 @@ describe("compact node prerequisite admission", () => {
     ]);
     const jobs = plan();
     expect(jobs).toHaveLength(1);
-    expect(jobs[0]).toMatchObject({ predictedSeconds: 276, pretestBuildMode: "runtime" });
+    expect(jobs[0]).toMatchObject({
+      predictedSeconds: 236,
+      predictedTestSeconds: 176,
+      pretestBuildMode: "runtime",
+    });
     expect(jobs[0]?.groups.map((group) => group.shard_name).toSorted()).toEqual([
       "runtime-a",
       "runtime-b",
@@ -97,7 +101,7 @@ describe("compact node prerequisite admission", () => {
     expect(jobs.map((job) => [job.pretestBuildMode, job.predictedSeconds])).toEqual(
       expect.arrayContaining([
         ["private-qa", 180],
-        ["runtime", 200],
+        ["runtime", 160],
       ]),
     );
   });
@@ -122,7 +126,7 @@ describe("compact node prerequisite admission", () => {
     ]);
     const jobs = plan();
     expect(jobs).toHaveLength(2);
-    expect(jobs.map((job) => job.predictedSeconds).toSorted((a, b) => a! - b!)).toEqual([220, 270]);
+    expect(jobs.map((job) => job.predictedSeconds).toSorted((a, b) => a! - b!)).toEqual([180, 270]);
     const runtime = jobs.find((job) => job.pretestBuildMode === "runtime");
     expect(runtime?.groups.map((group) => group.shard_name).toSorted()).toEqual([
       "runtime-a",
@@ -148,7 +152,8 @@ describe("compact node prerequisite admission", () => {
       if (jobs.length === 1) {
         expect(jobs[0]).toMatchObject({
           planConcurrency: 2,
-          predictedSeconds: profile === "hybrid" ? 261 : 300,
+          predictedSeconds: 300,
+          predictedTestSeconds: 180,
           runner: "blacksmith-32vcpu-ubuntu-2404",
         });
         expect(jobs[0]?.pretestBuildMode).toBeUndefined();
@@ -157,9 +162,9 @@ describe("compact node prerequisite admission", () => {
   });
 
   it.each([
-    { profile: "blacksmith", expected: 110, changed: 114 },
-    { profile: "hybrid", expected: 109, changed: 112 },
-    { profile: "github", expected: 170, changed: 174 },
+    { profile: "blacksmith", expected: 70, changed: 74 },
+    { profile: "hybrid", expected: 70, changed: 74 },
+    { profile: "github", expected: 106, changed: 110 },
   ])(
     "preserves direct $profile test measurements while adding the prerequisite",
     ({ profile, expected, changed }) => {

@@ -91,6 +91,8 @@ it("keeps UI fallback with its complete canonical owners beside precise core cha
     changedPaths: paths,
     compactMode: "pull-request",
     runnerBackend: "hybrid",
+    includeReleaseOnlyPluginShards: false,
+    includeReleaseOnlyToolingShards: true,
     includeReleaseOnlyRuntimeTests: false,
   });
   const uiOwners = full.filter((shard) =>
@@ -175,6 +177,9 @@ it("keeps UI fallback with its complete canonical owners beside precise core cha
   const preciseOwners = createNodeTestShardBundles({
     compactMode: "pull-request",
     runnerBackend: "hybrid",
+    includeReleaseOnlyPluginShards: false,
+    includeReleaseOnlyToolingShards: true,
+    includeProofTests: false,
     includeReleaseOnlyRuntimeTests: true,
   });
   for (const job of precise ?? []) {
