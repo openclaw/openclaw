@@ -19,6 +19,7 @@ import { seedInstalledPluginIndex } from "../../../plugins/test-helpers/installe
 import { convergePluginReleaseCohort } from "../../../plugins/update-cohort.js";
 import { closeOpenClawStateDatabaseByPath } from "../../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
+import { repairMissingConfiguredPluginInstalls } from "./missing-configured-plugin-install.js";
 import { runPostCorePluginConvergence } from "./post-core-plugin-convergence.js";
 
 const mocks = vi.hoisted(() => ({
@@ -348,4 +349,361 @@ describe("post-core convergence on source checkouts", () => {
       }
     },
   );
+});
+
+const DISCORD_CORE_VERSION = "2026.9.6";
+const DISCORD_CHANNEL_CONFIG: OpenClawConfig = {
+  channels: { discord: { enabled: true, token: "x" } },
+};
+
+function writeDiscordPackage(root: string, version: string, layout: "source" | "published"): void {
+  writeJson(path.join(root, "package.json"), {
+    name: "@openclaw/discord",
+    version,
+    type: "module",
+    openclaw: { extensions: ["./index.js"] },
+  });
+  writeJson(path.join(root, "openclaw.plugin.json"), {
+    id: "discord",
+    version,
+    channels: ["discord"],
+    configSchema: { type: "object" },
+    ...(layout === "published"
+      ? { channelConfigs: { discord: { schema: { type: "object" } } } }
+      : {}),
+  });
+  fs.writeFileSync(
+    path.join(root, "index.js"),
+    'export default { id: "discord", register() {} };\n',
+  );
+}
+
+describe("post-core convergence of abandoned source-checkout path records", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  async function seedAbandonedCheckout(
+    options: { hardlinkedManifest?: boolean; checkoutLayout?: "source" | "published" } = {},
+  ) {
+    const root = tempDirs.make("openclaw-abandoned-checkout-");
+    const hostRoot = path.join(root, "host");
+    const checkout = path.join(root, "checkout");
+    const stateDir = path.join(root, "state");
+    const checkoutPluginDir = path.join(checkout, "extensions", "discord");
+    const npmDir = path.join(stateDir, "npm", "node_modules", "@openclaw", "discord");
+    mocks.hostRoot = hostRoot;
+    writeJson(path.join(hostRoot, "package.json"), {
+      name: "openclaw",
+      version: DISCORD_CORE_VERSION,
+    });
+    fs.mkdirSync(path.join(hostRoot, "dist", "extensions"), { recursive: true });
+    writeJson(path.join(checkout, "package.json"), { name: "openclaw" });
+    fs.mkdirSync(path.join(checkout, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(checkout, "src"), { recursive: true });
+    fs.writeFileSync(path.join(checkout, "pnpm-workspace.yaml"), "packages: []\n");
+    writeDiscordPackage(checkoutPluginDir, "2026.9.2", options.checkoutLayout ?? "source");
+    if (options.hardlinkedManifest) {
+      fs.linkSync(
+        path.join(checkoutPluginDir, "openclaw.plugin.json"),
+        path.join(root, "manifest-link.json"),
+      );
+    }
+    const env: NodeJS.ProcessEnv = {
+      HOME: root,
+      OPENCLAW_HOME: root,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_VERSION: DISCORD_CORE_VERSION,
+      OPENCLAW_COMPATIBILITY_HOST_VERSION: DISCORD_CORE_VERSION,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(hostRoot, "dist", "extensions"),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      OPENCLAW_DEV_SOURCE_ROOT: undefined,
+    };
+    for (const [key, value] of Object.entries(env)) {
+      vi.stubEnv(key, value);
+    }
+    mocks.getRuntimeConfig.mockReturnValue(DISCORD_CHANNEL_CONFIG);
+    const records: Record<string, PluginInstallRecord> = {
+      discord: {
+        source: "path",
+        sourcePath: checkoutPluginDir,
+        installPath: checkoutPluginDir,
+        spec: "@openclaw/discord@2026.9.2",
+        version: "2026.9.2",
+      },
+    };
+    const metadata = {
+      name: "@openclaw/discord",
+      version: DISCORD_CORE_VERSION,
+      resolvedSpec: `@openclaw/discord@${DISCORD_CORE_VERSION}`,
+    };
+    mocks.resolveNpmSpecMetadata.mockResolvedValue({ ok: true, metadata });
+    mocks.installPluginFromNpmSpec.mockImplementation(async (installOptions) => {
+      writeDiscordPackage(npmDir, DISCORD_CORE_VERSION, "published");
+      await installOptions.onBeforePluginArtifactCommit?.({
+        pluginId: "discord",
+        stagedArtifactDir: npmDir,
+        mode: "install",
+        sourceRecord: { source: "npm", spec: installOptions.spec, ...metadata },
+      });
+      return {
+        ok: true,
+        pluginId: "discord",
+        targetDir: npmDir,
+        version: DISCORD_CORE_VERSION,
+        extensions: ["./index.js"],
+        npmResolution: metadata,
+      };
+    });
+    await withPluginCache(createPluginCache(), async () => {
+      await seedInstalledPluginIndex(records, { config: DISCORD_CHANNEL_CONFIG, env });
+    });
+    return { env, records, checkout, checkoutPluginDir, npmDir };
+  }
+
+  async function runUpdateFlow(params: {
+    flow: string;
+    cfg: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    records: Record<string, PluginInstallRecord>;
+  }) {
+    return await withPluginCache(createPluginCache(), async () => {
+      if (params.flow === "doctor") {
+        return {
+          convergence: await runPostCorePluginConvergence({
+            cfg: params.cfg,
+            env: params.env,
+            compatibilityHostVersion: DISCORD_CORE_VERSION,
+          }),
+        };
+      }
+      const cohort = await convergePluginReleaseCohort({
+        config: { ...params.cfg, plugins: { ...params.cfg.plugins, installs: params.records } },
+        channel: "stable",
+        coreVersion: DISCORD_CORE_VERSION,
+        timeoutMs: 60_000,
+        env: params.env,
+      });
+      const convergence = await runPostCorePluginConvergence({
+        cfg: cohort.config,
+        env: params.env,
+        compatibilityHostVersion: DISCORD_CORE_VERSION,
+        baselineInstallRecords: cohort.config.plugins?.installs ?? {},
+      });
+      return { cohort, convergence };
+    });
+  }
+
+  it.each(["update repair", "doctor"])(
+    "replaces a source-checkout Discord path record with the official package after its load path is removed (%s)",
+    async (flow) => {
+      const { env, records, checkoutPluginDir, npmDir } = await seedAbandonedCheckout();
+      try {
+        const { convergence } = await runUpdateFlow({
+          flow,
+          cfg: DISCORD_CHANNEL_CONFIG,
+          env,
+          records,
+        });
+
+        expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledTimes(1);
+        expect(mocks.installPluginFromNpmSpec.mock.calls[0]?.[0]).toMatchObject({
+          spec: `@openclaw/discord@${DISCORD_CORE_VERSION}`,
+          expectedPluginId: "discord",
+          trustedSourceLinkedOfficialInstall: true,
+        });
+        expect(convergence.installRecords.discord).toMatchObject({
+          source: "npm",
+          spec: "@openclaw/discord",
+          installPath: npmDir,
+          version: DISCORD_CORE_VERSION,
+        });
+        expect(convergence.repairedPluginIds).toEqual(["discord"]);
+        expect(convergence.changes).toContain(
+          `Replaced source-checkout copy of plugin "discord" with @openclaw/discord@${DISCORD_CORE_VERSION}.`,
+        );
+        expect(readPersistedInstalledPluginIndexInstallRecords({ env })?.discord?.source).toBe(
+          "npm",
+        );
+        expect(fs.existsSync(path.join(checkoutPluginDir, "openclaw.plugin.json"))).toBe(true);
+      } finally {
+        closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(env));
+      }
+    },
+  );
+
+  it.each([
+    {
+      guard: "plugins.load.paths selects the checkout copy",
+      hardlinkedManifest: false,
+      plugins: (checkout: string) => ({
+        load: { paths: [path.join(checkout, "extensions", "discord")] },
+      }),
+    },
+    {
+      guard: "plugins.load.paths contains a checkout copy whose manifest discovery rejects",
+      hardlinkedManifest: true,
+      plugins: (checkout: string) => ({ load: { paths: [path.join(checkout, "extensions")] } }),
+    },
+    {
+      guard: "plugins.load.paths selects an entry file inside a checkout copy discovery rejects",
+      hardlinkedManifest: true,
+      plugins: (checkout: string) => ({
+        load: { paths: [path.join(checkout, "extensions", "discord", "index.js")] },
+      }),
+    },
+    {
+      guard: "plugins.load.paths selects another Discord copy",
+      hardlinkedManifest: false,
+      plugins: (checkout: string) => {
+        const selectedCopy = path.join(path.dirname(checkout), "selected-discord");
+        writeDiscordPackage(selectedCopy, DISCORD_CORE_VERSION, "published");
+        return { load: { paths: [selectedCopy] } };
+      },
+    },
+    {
+      guard: "plugins.entries.discord.enabled is false",
+      hardlinkedManifest: false,
+      plugins: () => ({ entries: { discord: { enabled: false } } }),
+    },
+  ])("keeps the Discord path record while $guard", async ({ hardlinkedManifest, plugins }) => {
+    const { env, records, checkout } = await seedAbandonedCheckout({ hardlinkedManifest });
+    try {
+      await runUpdateFlow({
+        flow: "update repair",
+        cfg: { ...DISCORD_CHANNEL_CONFIG, plugins: plugins(checkout) },
+        env,
+        records,
+      });
+      expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+      expect(readPersistedInstalledPluginIndexInstallRecords({ env })?.discord).toEqual(
+        records.discord,
+      );
+
+      const { convergence } = await runUpdateFlow({
+        flow: "update repair",
+        cfg: DISCORD_CHANNEL_CONFIG,
+        env,
+        records,
+      });
+      expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledTimes(1);
+      expect(convergence.repairedPluginIds).toEqual(["discord"]);
+    } finally {
+      closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(env));
+    }
+  });
+
+  it.each([
+    {
+      failure: "the package install fails",
+      checkoutLayout: "source" as const,
+      update: undefined,
+      installerWarning: `Failed to replace source-checkout copy of plugin "discord" with @openclaw/discord: npm install failed: EACCES`,
+    },
+    {
+      failure: "the beta registry cannot be reached for a copy with channel metadata",
+      checkoutLayout: "published" as const,
+      update: { channel: "beta" as const },
+      installerWarning:
+        "Could not resolve @openclaw/discord@beta: getaddrinfo ENOTFOUND registry.npmjs.org",
+    },
+  ])(
+    "retains the path record with a retry warning when $failure",
+    async ({ checkoutLayout, update, installerWarning }) => {
+      const { env, records, checkoutPluginDir } = await seedAbandonedCheckout({ checkoutLayout });
+      mocks.installPluginFromNpmSpec.mockResolvedValue({
+        ok: false,
+        error: "npm install failed: EACCES",
+      });
+      mocks.resolveNpmSpecMetadata.mockResolvedValue({
+        ok: false,
+        category: "metadata-env",
+        error: "getaddrinfo ENOTFOUND registry.npmjs.org",
+      });
+      const retryWarning = `Plugin "discord" still uses the OpenClaw source-checkout copy at ${checkoutPluginDir}. Run openclaw plugins install @openclaw/discord --force to replace it.`;
+      try {
+        const { convergence } = await runUpdateFlow({
+          flow: "doctor",
+          cfg: { ...DISCORD_CHANNEL_CONFIG, update },
+          env,
+          records,
+        });
+
+        expect(convergence.installRecords.discord).toEqual(records.discord);
+        expect(readPersistedInstalledPluginIndexInstallRecords({ env })?.discord).toEqual(
+          records.discord,
+        );
+        expect(convergence.errored).toBe(false);
+        expect(convergence.warnings).toEqual(
+          [installerWarning, retryWarning].map((message) => ({
+            kind: "repair",
+            pluginId: "discord",
+            reason: message,
+            message,
+            guidance: ["Run `openclaw update repair` to retry plugin repair."],
+          })),
+        );
+      } finally {
+        closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(env));
+      }
+    },
+  );
+
+  it("defers the replacement while the core package swap is in progress", async () => {
+    const { env, records } = await seedAbandonedCheckout();
+    try {
+      await withPluginCache(createPluginCache(), async () => {
+        await repairMissingConfiguredPluginInstalls({
+          cfg: DISCORD_CHANNEL_CONFIG,
+          env: {
+            ...env,
+            OPENCLAW_UPDATE_IN_PROGRESS: "1",
+            OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+          },
+        });
+      });
+      expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+      expect(readPersistedInstalledPluginIndexInstallRecords({ env })?.discord).toEqual(
+        records.discord,
+      );
+
+      const { convergence } = await runUpdateFlow({
+        flow: "doctor",
+        cfg: DISCORD_CHANNEL_CONFIG,
+        env,
+        records,
+      });
+      expect(convergence.repairedPluginIds).toEqual(["discord"]);
+    } finally {
+      closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(env));
+    }
+  });
+
+  it("converges once and leaves the replacement alone on the next repair", async () => {
+    const { env, records } = await seedAbandonedCheckout();
+    try {
+      await runUpdateFlow({ flow: "doctor", cfg: DISCORD_CHANNEL_CONFIG, env, records });
+      const { convergence } = await runUpdateFlow({
+        flow: "doctor",
+        cfg: DISCORD_CHANNEL_CONFIG,
+        env,
+        records,
+      });
+
+      expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledTimes(1);
+      expect(convergence.repairedPluginIds).toBeUndefined();
+      expect(convergence.installRecords.discord).toMatchObject({
+        source: "npm",
+        version: DISCORD_CORE_VERSION,
+      });
+    } finally {
+      closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(env));
+    }
+  });
 });

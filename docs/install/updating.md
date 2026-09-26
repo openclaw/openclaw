@@ -227,6 +227,10 @@ shadows, and record a `plugin-operator-managed` warning in the outcome and updat
 history. Verify that copy against the updated OpenClaw version, or remove its
 path from `plugins.load.paths` to use the managed installation again. This does
 not grant the local copy trusted plugin privileges.
+Once no load path selects it, Doctor plugin convergence (`openclaw update repair`,
+`openclaw doctor --fix`, and startup or migration checkpoints) replaces an official
+plugin's leftover OpenClaw source-checkout install with the official package; if
+that install fails, it keeps the checkout copy and warns with the reinstall command.
 An explicit package artifact (for example, a tarball path or URL) is validated
 and installed even when its version matches; matching versions do not prove
 that two artifacts contain the same code.

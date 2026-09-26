@@ -4,6 +4,14 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizeBundledLookupPath } from "./bundled-load-path-aliases.js";
 import { resolveBundledPluginSources, type BundledPluginSource } from "./bundled-sources.js";
+import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
+import { isSourceCheckoutBundledPath } from "./install-source-spec.js";
+import {
+  getOfficialExternalPluginCatalogEntry,
+  resolveOfficialExternalPluginId,
+  resolveOfficialExternalPluginInstall,
+  resolveOfficialExternalPluginLabel,
+} from "./official-external-plugin-catalog.js";
 
 /** Stale install record that points at old compiled bundled plugin output. */
 export type StaleLocalBundledPluginInstallRecord = {
@@ -101,6 +109,64 @@ export function listStaleLocalBundledPluginInstallRecords(params: {
   }
 
   return stale;
+}
+
+/** Path record that points at another OpenClaw source checkout's copy of an official plugin the running core does not bundle. */
+export type ObsoleteSourceCheckoutPluginInstallRecord = {
+  pluginId: string;
+  record: PluginInstallRecord;
+  checkoutPluginDir: string;
+  official: { label: string; npmSpec?: string; clawhubSpec?: string; expectedIntegrity?: string };
+};
+
+/** Lists path records whose checkout copy has an official package replacement. */
+export function listObsoleteSourceCheckoutPluginInstallRecords(params: {
+  installRecords: Record<string, PluginInstallRecord>;
+  currentBundledPluginIds: ReadonlySet<string>;
+  env: NodeJS.ProcessEnv;
+}): ObsoleteSourceCheckoutPluginInstallRecord[] {
+  const obsolete: ObsoleteSourceCheckoutPluginInstallRecord[] = [];
+  for (const [pluginId, record] of Object.entries(params.installRecords).toSorted(
+    ([left], [right]) => left.localeCompare(right),
+  )) {
+    if (record.source !== "path" || params.currentBundledPluginIds.has(pluginId)) {
+      continue;
+    }
+    const recordedDirs = [record.installPath, record.sourcePath]
+      .filter((value): value is string => Boolean(value?.trim()))
+      .map((value) => path.resolve(resolveUserPath(value, params.env)));
+    const checkoutPluginDir = recordedDirs[0];
+    // Checkout proof is the only provenance; a deleted or arbitrary directory never qualifies.
+    if (
+      !checkoutPluginDir ||
+      recordedDirs.some(
+        (dir) => path.basename(dir) !== pluginId || !isSourceCheckoutBundledPath(dir),
+      ) ||
+      isBundledPluginInsideDevSourceRoot({ rootDir: checkoutPluginDir, env: params.env })
+    ) {
+      continue;
+    }
+    const entry = getOfficialExternalPluginCatalogEntry(pluginId);
+    const install =
+      entry && resolveOfficialExternalPluginId(entry) === pluginId
+        ? resolveOfficialExternalPluginInstall(entry)
+        : null;
+    if (!entry || (!install?.npmSpec && !install?.clawhubSpec)) {
+      continue;
+    }
+    obsolete.push({
+      pluginId,
+      record,
+      checkoutPluginDir,
+      official: {
+        label: resolveOfficialExternalPluginLabel(entry),
+        npmSpec: install.npmSpec,
+        clawhubSpec: install.clawhubSpec,
+        expectedIntegrity: install.expectedIntegrity,
+      },
+    });
+  }
+  return obsolete;
 }
 
 /** Removes stale compiled bundled plugin path records from an install record map. */

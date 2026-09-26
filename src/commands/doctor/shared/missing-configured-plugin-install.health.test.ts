@@ -1,8 +1,9 @@
 // Register suite mocks before imports that read the install catalog.
 import "./missing-configured-plugin-install.suite.test-support.js";
+import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const { mocks, testEnv, tempDirs, setupPluginInstallSuite } =
   await import("./missing-configured-plugin-install.suite.test-support.js");
@@ -135,6 +136,95 @@ describe("configured plugin install health findings", () => {
       action: "would-defer-configured-plugin-install-repair",
       target: "discord",
       dryRunSafe: true,
+    });
+  });
+
+  it("reports a configured plugin still recorded at an abandoned source-checkout copy", async () => {
+    const catalog = await vi.importActual<
+      typeof import("../../../plugins/official-external-plugin-catalog.js")
+    >("../../../plugins/official-external-plugin-catalog.js");
+    mocks.resolveOfficialExternalPluginId.mockImplementation(
+      catalog.resolveOfficialExternalPluginId,
+    );
+    mocks.resolveOfficialExternalPluginInstall.mockReturnValue(
+      catalog.resolveOfficialExternalPluginInstall(
+        expectDefined(catalog.getOfficialExternalPluginCatalogEntry("discord"), "discord entry"),
+      ),
+    );
+    mocks.resolveOfficialExternalPluginLabel.mockImplementation(
+      catalog.resolveOfficialExternalPluginLabel,
+    );
+    const checkout = tempDirs.make("openclaw-doctor-checkout-");
+    fs.writeFileSync(path.join(checkout, "package.json"), JSON.stringify({ name: "openclaw" }));
+    fs.writeFileSync(path.join(checkout, "pnpm-workspace.yaml"), "packages: []\n");
+    fs.mkdirSync(path.join(checkout, ".git"));
+    fs.mkdirSync(path.join(checkout, "src"));
+    const checkoutPluginDir = path.join(checkout, "extensions", "discord");
+    fs.mkdirSync(checkoutPluginDir, { recursive: true });
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+      discord: {
+        source: "path",
+        sourcePath: checkoutPluginDir,
+        installPath: checkoutPluginDir,
+        spec: "@openclaw/discord@2026.9.2",
+      },
+    });
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "global",
+          rootDir: checkoutPluginDir,
+          source: path.join(checkoutPluginDir, "index.ts"),
+          channels: ["discord"],
+        },
+      ],
+      diagnostics: [
+        {
+          level: "warn",
+          pluginId: "discord",
+          source: path.join(checkoutPluginDir, "openclaw.plugin.json"),
+          message: "channel plugin manifest declares discord without channelConfigs metadata",
+        },
+      ],
+    });
+
+    const {
+      configuredPluginInstallIssueToHealthFinding,
+      configuredPluginInstallIssueToRepairEffect,
+      detectConfiguredPluginInstallHealthIssues,
+    } = await import("./missing-configured-plugin-install.js");
+    const issues = await detectConfiguredPluginInstallHealthIssues({
+      cfg: { channels: { discord: { enabled: true, token: "x" } } },
+      env: testEnv,
+    });
+
+    expect(issues).toEqual([
+      {
+        kind: "obsolete-source-checkout-install",
+        pluginId: "discord",
+        installPath: checkoutPluginDir,
+        installSpec: "@openclaw/discord",
+        installSource: "path",
+      },
+    ]);
+    const issue = expectDefined(issues[0], "obsolete checkout issue");
+    expect(configuredPluginInstallIssueToHealthFinding(issue)).toEqual({
+      checkId: "core/doctor/configured-plugin-installs",
+      severity: "warning",
+      message:
+        "Configured plugin discord still uses an OpenClaw source-checkout copy that this install does not bundle.",
+      target: "discord",
+      source: "path",
+      path: checkoutPluginDir,
+      fixHint:
+        "Run `openclaw plugins install @openclaw/discord --force` to reinstall the configured plugin package.",
+    });
+    expect(configuredPluginInstallIssueToRepairEffect(issue)).toEqual({
+      kind: "package",
+      action: "would-reinstall-configured-plugin",
+      target: "discord",
+      dryRunSafe: false,
     });
   });
 

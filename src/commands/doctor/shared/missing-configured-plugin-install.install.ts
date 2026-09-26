@@ -73,6 +73,9 @@ function formatInstalledConfiguredPluginChange(params: {
   installSpec: string;
   repairReason?: InstallCandidateRepairReason;
 }): string {
+  if (params.repairReason === "obsolete-source-checkout") {
+    return `Replaced source-checkout copy of plugin "${params.pluginId}" with ${params.installSpec}.`;
+  }
   return params.repairReason === "stale-version-bound-runtime"
     ? `Refreshed stale configured plugin "${params.pluginId}" from ${params.installSpec}.`
     : `Installed missing configured plugin "${params.pluginId}" from ${params.installSpec}.`;
@@ -318,7 +321,9 @@ async function installCandidatePackage(
       warnings: [
         ...warnings,
         ...channelNotices,
-        `Failed to install missing configured plugin "${candidate.pluginId}" from ${installedSource.spec}: ${installResult.error}`,
+        params.repairReason === "obsolete-source-checkout"
+          ? `Failed to replace source-checkout copy of plugin "${candidate.pluginId}" with ${installedSource.spec}: ${installResult.error}`
+          : `Failed to install missing configured plugin "${candidate.pluginId}" from ${installedSource.spec}: ${installResult.error}`,
       ],
       failedPluginId: candidate.pluginId,
     };

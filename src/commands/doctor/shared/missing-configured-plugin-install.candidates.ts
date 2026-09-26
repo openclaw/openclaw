@@ -45,6 +45,7 @@ import {
   collectConfiguredPluginIds,
   collectEffectiveConfiguredChannelOwnerPluginIds,
 } from "./missing-configured-plugin-install.ids.js";
+import { collectObsoleteSourceCheckoutInstalls } from "./missing-configured-plugin-install.obsolete-source-checkout.js";
 
 export type DownloadableInstallCandidate = {
   pluginId: string;
@@ -142,6 +143,22 @@ export async function resolveConfiguredPluginInstallContext(params: {
       }
     }
   }
+  const obsoleteSourceCheckoutInstalls = collectObsoleteSourceCheckoutInstalls({
+    records,
+    currentBundledPluginIds: new Set(currentBundledPlugins.map((plugin) => plugin.id)),
+    loadPaths: params.cfg.plugins?.load?.paths ?? [],
+    env: params.env,
+    isRepairTarget: (pluginId) =>
+      !operatorManagedPluginIds.has(pluginId) &&
+      !params.blockedPluginIds?.has(pluginId) &&
+      isConfiguredPluginRepairTarget({
+        pluginId,
+        configuredPluginIds: params.configuredPluginIds,
+        configuredChannelIds: params.configuredChannelIds,
+        configuredChannelOwnerPluginIds,
+      }),
+    resolvePathIdentity,
+  });
   const currentVersion = params.coreVersion ?? resolveCompatibilityHostVersion(params.env);
   const updateChannel = resolveRegistryUpdateChannel({
     configChannel: normalizeUpdateChannel(params.cfg.update?.channel),
@@ -253,6 +270,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
     installedPluginIdsWithRepairablePackages,
     installedPluginMissingRequiredDependencies,
     officialReplacementPluginIds,
+    obsoleteSourceCheckoutInstalls,
   };
 }
 

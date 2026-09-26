@@ -32,7 +32,9 @@ import {
 } from "./missing-configured-plugin-install.ids.js";
 import { isTrustedOfficialInstallRecordForCandidate } from "./missing-configured-plugin-install.records.js";
 
-export type InstallCandidateRepairReason = "stale-version-bound-runtime";
+export type InstallCandidateRepairReason =
+  | "stale-version-bound-runtime"
+  | "obsolete-source-checkout";
 type InstallContext = Awaited<ReturnType<typeof resolveConfiguredPluginInstallContext>>;
 
 export function resolveRecordedInstallCandidate(params: {
@@ -104,6 +106,7 @@ export function resolveConfiguredPluginCandidateRepair(params: {
     | "installedPluginIdsWithStaleVersionBoundRuntimePackages"
     | "installedPluginIdsWithRepairablePackageDiagnostics"
     | "configuredPluginIdsWithStaleDescriptors"
+    | "obsoleteSourceCheckoutInstalls"
   >;
 }):
   | { shouldReplaceBrokenOfficialInstall: boolean; repairReason?: InstallCandidateRepairReason }
@@ -111,6 +114,10 @@ export function resolveConfiguredPluginCandidateRepair(params: {
   const { candidate, context } = params;
   if (context.bundledPluginsById.has(candidate.pluginId)) {
     return undefined;
+  }
+  if (context.obsoleteSourceCheckoutInstalls.has(candidate.pluginId)) {
+    // Installing beside the record keeps the operator's checkout; replacement would remove it.
+    return { shouldReplaceBrokenOfficialInstall: false, repairReason: "obsolete-source-checkout" };
   }
   const shouldReplaceBrokenOfficialInstall = context.officialReplacementPluginIds.has(
     candidate.pluginId,

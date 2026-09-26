@@ -266,6 +266,7 @@ async function repairMissingPluginInstallsWithLease(
     installedPluginIdsWithRepairablePackages,
     installedPluginMissingRequiredDependencies,
     officialReplacementPluginIds,
+    obsoleteSourceCheckoutInstalls,
   } = await resolveConfiguredPluginInstallContext({
     cfg: params.cfg,
     env,
@@ -345,6 +346,7 @@ async function repairMissingPluginInstallsWithLease(
     // A later failed attempt does not resolve an earlier consent refusal.
     let outcome = failedPlugins.get(pluginId);
     const retainedEnabledInstall =
+      !obsoleteSourceCheckoutInstalls.has(pluginId) &&
       (code === PLUGIN_CAPABILITY_CONSENT_REQUIRED ||
         code === PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE) &&
       knownIds.has(pluginId) &&
@@ -440,6 +442,7 @@ async function repairMissingPluginInstallsWithLease(
       !operatorManagedPluginIds.has(pluginId) &&
       !deferredPluginIds.has(pluginId) &&
       !officialReplacementPluginIds.has(pluginId) &&
+      !obsoleteSourceCheckoutInstalls.has(pluginId) &&
       Object.hasOwn(nextRecords, pluginId) &&
       !bundledPluginsById.has(pluginId) &&
       ((params.pluginIds.has(pluginId) &&
@@ -590,19 +593,25 @@ async function repairMissingPluginInstallsWithLease(
     }),
   );
   const installCandidatePluginIds = new Set([...missingPluginIds, ...officialReplacementPluginIds]);
-  for (const candidate of collectDownloadableInstallCandidates({
-    cfg: params.cfg,
-    env,
-    missingPluginIds: installCandidatePluginIds,
-    configuredPluginIds: params.pluginIds,
-    configuredChannelIds: params.channelIds,
-    configuredChannelOwnerPluginIds,
-    blockedPluginIds: new Set([
-      ...(params.blockedPluginIds ?? []),
-      ...deferredPluginIds,
-      ...operatorManagedPluginIds,
-    ]),
-  })) {
+  for (const candidate of [
+    ...[...obsoleteSourceCheckoutInstalls]
+      .filter(([pluginId]) => !deferredPluginIds.has(pluginId))
+      .map(([, obsolete]) => obsolete.candidate),
+    ...collectDownloadableInstallCandidates({
+      cfg: params.cfg,
+      env,
+      missingPluginIds: installCandidatePluginIds,
+      configuredPluginIds: params.pluginIds,
+      configuredChannelIds: params.channelIds,
+      configuredChannelOwnerPluginIds,
+      blockedPluginIds: new Set([
+        ...(params.blockedPluginIds ?? []),
+        ...deferredPluginIds,
+        ...operatorManagedPluginIds,
+        ...obsoleteSourceCheckoutInstalls.keys(),
+      ]),
+    }),
+  ]) {
     const repair = resolveConfiguredPluginCandidateRepair({
       candidate,
       records: nextRecords,
@@ -614,6 +623,7 @@ async function repairMissingPluginInstallsWithLease(
         installedPluginIdsWithStaleVersionBoundRuntimePackages,
         installedPluginIdsWithRepairablePackageDiagnostics,
         configuredPluginIdsWithStaleDescriptors,
+        obsoleteSourceCheckoutInstalls,
       },
     });
     if (!repair) {
@@ -682,7 +692,17 @@ async function repairMissingPluginInstallsWithLease(
       failedPlugins.delete(candidate.pluginId);
     }
     if (installed.failedPluginId) {
-      recordFailure(installed.failedPluginId, installed.warnings, installed.code);
+      const obsolete = obsoleteSourceCheckoutInstalls.get(installed.failedPluginId);
+      recordFailure(
+        installed.failedPluginId,
+        obsolete
+          ? [
+              ...installed.warnings,
+              `Plugin "${installed.failedPluginId}" still uses the OpenClaw source-checkout copy at ${obsolete.checkoutPluginDir}. Run ${formatCliCommand(`openclaw plugins install ${obsolete.candidate.npmSpec ?? obsolete.candidate.clawhubSpec} --force`, env)} to replace it.`,
+            ]
+          : installed.warnings,
+        installed.code,
+      );
     } else {
       for (const message of installed.warnings) {
         warn(message);

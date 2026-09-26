@@ -29,7 +29,8 @@ type ConfiguredPluginInstallHealthIssue =
       kind:
         | "missing-installed-payload"
         | "repairable-installed-plugin"
-        | "stale-version-bound-runtime";
+        | "stale-version-bound-runtime"
+        | "obsolete-source-checkout-install";
       pluginId: string;
       installPath?: string;
       installSpec?: string;
@@ -105,6 +106,7 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     installedPluginIdsWithRepairablePackages: repairableInstalledPluginIds,
     installedPluginMissingRequiredDependencies,
     officialReplacementPluginIds,
+    obsoleteSourceCheckoutInstalls,
   } = await resolveConfiguredPluginInstallContext({
     cfg: params.cfg,
     env,
@@ -149,8 +151,23 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     }
   }
 
+  for (const [pluginId, obsolete] of obsoleteSourceCheckoutInstalls) {
+    if (deferredPluginIds.has(pluginId)) {
+      continue;
+    }
+    issues.push({
+      kind: "obsolete-source-checkout-install",
+      pluginId,
+      installPath: obsolete.checkoutPluginDir,
+      installSpec: obsolete.candidate.npmSpec ?? obsolete.candidate.clawhubSpec,
+      installSource: "path",
+    });
+    reportedPluginIds.add(pluginId);
+  }
+
   const missingRecordedPluginIds = Object.keys(records).filter(
     (pluginId) =>
+      !obsoleteSourceCheckoutInstalls.has(pluginId) &&
       !operatorManagedPluginIds.has(pluginId) &&
       !deferredPluginIds.has(pluginId) &&
       !officialReplacementPluginIds.has(pluginId) &&
@@ -313,6 +330,13 @@ const CONFIGURED_PLUGIN_INSTALL_ISSUE_DETAILS = {
       `Configured plugin ${pluginId} has a repairable package install problem.`,
     fixHint: null,
     action: "would-repair-configured-plugin-install",
+    dryRunSafe: false,
+  },
+  "obsolete-source-checkout-install": {
+    message: (pluginId: string) =>
+      `Configured plugin ${pluginId} still uses an OpenClaw source-checkout copy that this install does not bundle.`,
+    fixHint: null,
+    action: "would-reinstall-configured-plugin",
     dryRunSafe: false,
   },
   "stale-version-bound-runtime": {
