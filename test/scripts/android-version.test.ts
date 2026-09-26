@@ -1,5 +1,6 @@
 // Android Version tests cover android version script behavior.
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -272,6 +273,59 @@ describe("renderAndroidReleaseNotes", () => {
 });
 
 describe("syncAndroidVersioning", () => {
+  it("prepares store notes independently of APK defaults and validates the selected upload notes", () => {
+    const rootDir = writeAndroidFixture({
+      version: "2026.6.2",
+      versionCode: 2026060201,
+      packageVersion: "2026.9.2",
+      changelog: "## 2026.6.2\n\nAPK notes.\n\n## 2026.9.2\n\nStore notes.\n",
+      releaseNotes: "APK notes.\n",
+    });
+    syncAndroidVersioning({ rootDir });
+    const pinned = resolveAndroidVersion(rootDir);
+    const original = [pinned.versionFilePath, pinned.versionPropertiesPath].map((file) =>
+      fs.readFileSync(file, "utf8"),
+    );
+    expect(syncAndroidVersioning({ mode: "check", rootDir }).updatedPaths).toEqual([]);
+    expect(
+      syncAndroidVersioning({ rootDir, notesOnly: true, releaseVersion: "2026.9.2" }).updatedPaths,
+    ).toEqual([pinned.releaseNotesPath]);
+    expect(
+      [pinned.versionFilePath, pinned.versionPropertiesPath].map((file) =>
+        fs.readFileSync(file, "utf8"),
+      ),
+    ).toEqual(original);
+    expect(syncAndroidVersioning({ mode: "check", rootDir }).updatedPaths).toEqual([]);
+    expect(() =>
+      syncAndroidVersioning({ mode: "check", rootDir, releaseVersion: "2026.6.2" }),
+    ).toThrow("Android release notes is stale");
+    expect(
+      syncAndroidVersioning({ mode: "check", rootDir, releaseVersion: "2026.9.2" }).updatedPaths,
+    ).toEqual([]);
+    fs.writeFileSync(pinned.releaseNotesPath, "Unrelated notes.\n");
+    expect(() => syncAndroidVersioning({ mode: "check", rootDir })).toThrow(
+      "Android release notes is stale",
+    );
+  });
+
+  it.each(["2026.6.2", "2026.9.2"])(
+    "checks valid %s notes when the other channel has no notes",
+    (version) => {
+      const rootDir = writeAndroidFixture({
+        version: "2026.6.2",
+        versionCode: 2026060201,
+        packageVersion: "2026.9.2",
+        changelog: `## ${version}\n\nSelected notes.\n`,
+        releaseNotes: "Selected notes.\n",
+        versionProperties: renderAndroidVersionProperties({
+          canonicalVersion: "2026.6.2",
+          versionCode: 2026060201,
+        }),
+      });
+      expect(syncAndroidVersioning({ mode: "check", rootDir }).updatedPaths).toEqual([]);
+    },
+  );
+
   it("syncs generated Gradle version properties and Fastlane release notes", () => {
     const rootDir = writeAndroidFixture({
       version: "2026.6.2",

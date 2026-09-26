@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { renderAndroidVersionProperties } from "../../scripts/lib/android-version.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const script = path.join(process.cwd(), "scripts/mobile-release.mjs");
@@ -23,7 +24,7 @@ function write(root: string, relative: string, contents: string): void {
   fs.writeFileSync(target, contents);
 }
 
-function fixture(prepareAndUpload = false) {
+function fixture(prepareAndUpload = false, platform = "ios") {
   const directory = tempDirs.make("openclaw-mobile-release-");
   const remote = path.join(directory, "origin.git");
   const root = path.join(directory, "checkout");
@@ -82,6 +83,87 @@ fs.writeFileSync(process.env.FIXTURE_UPLOAD_AUDIT, JSON.stringify(audit));
 if (process.env.FIXTURE_UPLOAD_FAIL === "1") throw new Error("Synthetic store upload refused");
 git("push", "origin", sha + ":${uploadRef}");
 console.log("Synthetic store upload accepted");
+`,
+    );
+  }
+  if (platform === "android") {
+    write(
+      root,
+      "package.json",
+      '{"name":"mobile-release-fixture","type":"module","version":"2026.9.2"}\n',
+    );
+    for (const file of [
+      "scripts/android-sync-versioning.ts",
+      "scripts/android-version.ts",
+      "scripts/lib/android-version.ts",
+      "scripts/lib/mobile-changelog.ts",
+      "scripts/lib/release-version.mjs",
+      "scripts/lib/version-script-args.ts",
+      "scripts/lib/arg-utils.mts",
+      "scripts/lib/arg-utils.runtime.mjs",
+      "apps/android/scripts/build-release-artifacts.ts",
+      "apps/android/Config/ReleaseSigning.json",
+      "apps/android/fastlane/Fastfile",
+    ]) {
+      write(root, file, fs.readFileSync(path.join(process.cwd(), file), "utf8"));
+    }
+    write(root, "apps/android/version.json", '{"version":"2026.8.2","versionCode":2026080201}\n');
+    write(
+      root,
+      "apps/android/Config/Version.properties",
+      renderAndroidVersionProperties({ canonicalVersion: "2026.8.2", versionCode: 2026080201 }),
+    );
+    write(
+      root,
+      "apps/android/CHANGELOG.md",
+      "## Unreleased\n\nNew store notes.\n\n## 2026.8.2\n\nPrevious APK notes.\n",
+    );
+    write(
+      root,
+      "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+      "Previous APK notes.\n",
+    );
+    write(
+      root,
+      "scripts/lib/android-fastlane.sh",
+      `run_android_fastlane() {
+  echo '{"version":"2026.9.2","versionCode":2026090203,"wearVersionCode":2026090253}' > "\u0024{3#output_path:}"
+}\n`,
+    );
+    write(root, "scripts/android-release-upload.sh", "exec ruby scripts/fixture-upload.rb\n");
+    write(
+      root,
+      "scripts/fixture-upload.rb",
+      String.raw`
+$LOADED_FEATURES << "supply.rb"
+module UI
+  def self.user_error!(message); raise message; end
+  def self.success(message); end
+  def self.important(message); end
+end
+def default_platform(name); end
+def platform(name); yield; end
+def desc(text); end
+$lanes = {}
+def lane(name, &block); $lanes[name] = block; end
+def sh(command); raise "Command failed" unless system(*Shellwords.split(command)); end
+load "apps/android/fastlane/Fastfile"
+def validate_android_release_preflight!(metadata); end
+def capture_android_screenshots!; end
+def screenshots; $lanes.fetch(:screenshots).call; end
+def build_release_artifacts!
+  raise "Archive failed" unless system("node", "--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--dry-run")
+end
+def upload_play_store_build!(metadata, **options)
+  File.write(ENV.fetch("FIXTURE_UPLOAD_AUDIT"), JSON.generate({
+    version: metadata.fetch(:version),
+    versionCode: metadata.fetch(:version_code),
+    gradleVersion: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_NAME"],
+    gradleCode: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_CODE"]
+  }))
+  raise "Record failed" unless system("git", "push", "origin", "HEAD:refs/openclaw/mobile-releases/android/2026.9.2-2026090203")
+end
+$lanes.fetch(:release_upload).call
 `,
     );
   }
@@ -158,7 +240,7 @@ if (args[0] === "repo" && args[1] === "view") {
   ) =>
     spawnSync(
       process.execPath,
-      [script, operation, "--platform", "ios", "--recovery-dir", recovery, ...extra],
+      [script, operation, "--platform", platform, "--recovery-dir", recovery, ...extra],
       { cwd: root, env: { ...env, ...overrides }, encoding: "utf8" },
     );
   const calls = (): string[][] =>
@@ -202,6 +284,83 @@ function advanceMain(f: ReturnType<typeof fixture>, conflict = false): string {
 }
 
 describe("mobile release CLI", () => {
+  it("builds Android from a saved store plan without changing the APK pin and finalizes only notes", () => {
+    const f = fixture(true, "android");
+    const pinnedFiles = ["apps/android/version.json", "apps/android/Config/Version.properties"];
+    const original = pinnedFiles.map((file) => fs.readFileSync(path.join(f.root, file), "utf8"));
+    const result = f.invoke("run", ["--defer-finalization"]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Android versionName: 2026.9.2");
+    expect(result.stdout).toContain("Android versionCode: 2026090203");
+    const plan = JSON.parse(fs.readFileSync(path.join(f.recovery, "android-plan.json"), "utf8"));
+    const uploaded = git(
+      f.remote,
+      "rev-parse",
+      "refs/openclaw/mobile-releases/android/2026.9.2-2026090203",
+    );
+    expect(plan).toEqual({
+      version: "2026.9.2",
+      versionCode: 2026090203,
+      wearVersionCode: 2026090253,
+      sourceSha: uploaded,
+    });
+    expect(JSON.parse(fs.readFileSync(f.uploadAudit, "utf8"))).toMatchObject({
+      version: "2026.9.2",
+      versionCode: 2026090203,
+      gradleVersion: "2026.9.2",
+      gradleCode: "2026090203",
+    });
+    const notesPath = "apps/android/fastlane/metadata/android/en-US/release_notes.txt";
+    expect(git(f.remote, "diff-tree", "--no-commit-id", "--name-only", "-r", uploaded)).toBe(
+      notesPath,
+    );
+    expect(git(f.remote, "rev-parse", "main")).toBe(f.base);
+    const finalized = f.invoke("finalize");
+    expect(finalized.status, finalized.stderr).toBe(0);
+    const landed = git(f.remote, "rev-parse", "main");
+    for (const [index, file] of pinnedFiles.entries()) {
+      expect(`${git(f.remote, "show", `${landed}:${file}`)}\n`).toBe(original[index]);
+    }
+    expect(git(f.remote, "show", `${landed}:${notesPath}`)).toBe("New store notes.");
+
+    git(f.root, "checkout", "--detach", uploaded);
+    const rebuilt = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--dry-run"],
+      {
+        cwd: f.root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_ANDROID_RELEASE_PLAN: path.join(f.recovery, "android-plan.json"),
+        },
+      },
+    );
+    expect(rebuilt.status, rebuilt.stderr).toBe(0);
+    expect(rebuilt.stdout).toContain("Android versionCode: 2026090203");
+    const checked = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/android-sync-versioning.ts", "--check"],
+      { cwd: f.root, encoding: "utf8" },
+    );
+    expect(checked.status, checked.stderr).toBe(0);
+    git(f.root, "checkout", "main");
+    const wrongSource = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/android-version.ts", "--for-build"],
+      {
+        cwd: f.root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_ANDROID_RELEASE_PLAN: path.join(f.recovery, "android-plan.json"),
+        },
+      },
+    );
+    expect(wrongSource.status).toBe(1);
+    expect(wrongSource.stderr).toContain("sourceSha must match the checked-out commit");
+  });
+
   it("commits complete preparation before upload and defers all main changes until finalization", () => {
     const f = fixture(true);
     const advanced = advanceMain(f);

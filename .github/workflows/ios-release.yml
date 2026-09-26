@@ -1,4 +1,4 @@
-name: iOS Release
+name: iOS Store Release
 
 on:
   workflow_dispatch: {}

@@ -238,7 +238,7 @@ tasks still require explicit `openclawBuildCommit` and
 `openclawBuildTimestamp` properties so signed artifacts remain reproducible.
 
 Android release archives use the pinned version in `apps/android/version.json`.
-Run **Android Release** from `main` without input parameters, or run
+Run **Android Store Release** from `main` without input parameters, or run
 `pnpm android:release:upload` from a clean local `main` matching `origin/main`.
 The pipeline selects unused phone and Wear build numbers from Google Play,
 prepares Android metadata from the root Gateway version and Android changelog,

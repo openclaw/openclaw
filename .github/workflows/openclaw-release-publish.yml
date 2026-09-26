@@ -1209,7 +1209,7 @@ jobs:
         if: ${{ failure() }}
         run: |
           echo "::warning::Android approval or dispatch failed; inspect the native publication job. Core publication remains independent."
-          echo "- Android APK: approval or dispatch failed; inspect Android Release runs before retrying." >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Android APK: approval or dispatch failed; inspect Android APK Artifact Publish runs before retrying." >> "${GITHUB_STEP_SUMMARY}"
 
   publish:
     name: Publish plugins, then OpenClaw

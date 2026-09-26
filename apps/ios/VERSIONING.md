@@ -44,7 +44,7 @@ exact versions again; all future uploads use the appended single-digit format.
 
 ## Release commands
 
-Run **iOS Release** in GitHub Actions from `main`, or use the same release entry
+Run **iOS Store Release** in GitHub Actions from `main`, or use the same release entry
 point from a clean local `main` checkout that matches `origin/main`:
 
 ```bash
@@ -189,7 +189,7 @@ Connect accepts the upload. Existing refs are immutable.
 ## Normal workflow
 
 1. Add iOS release notes under `## Unreleased` and commit the app changes.
-2. Run **iOS Release** from `main`, or run `pnpm ios:release:upload` locally.
+2. Run **iOS Store Release** from `main`, or run `pnpm ios:release:upload` locally.
 3. The pipeline prepares and commits notes locally, uploads the planned build,
    and persists those notes only after success.
 4. If preparation or upload fails, stop and inspect the failing step and store

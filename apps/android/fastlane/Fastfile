@@ -150,7 +150,7 @@ def plan_android_release!
   gateway = JSON.parse(stdout)
   version = gateway.fetch("pinnedAndroidVersion")
   base_code = gateway.fetch("versionCode") - 1
-  pinned = read_android_version_metadata
+  pinned = read_android_version_metadata(for_build: false)
   UI.user_error!("Gateway version #{version} precedes the pinned Android release #{pinned.fetch(:version)}.") if pinned.fetch(:version_code) / 100 > base_code / 100
   next_build = pinned.fetch(:version_code) / 100 == base_code / 100 ? pinned.fetch(:version_code) % 100 : 1
 
@@ -179,12 +179,13 @@ def plan_android_release!
   { version: version, versionCode: phone_code, wearVersionCode: wear_version_code(phone_code) }
 end
 
-def read_android_version_metadata
+def read_android_version_metadata(for_build: true)
   stdout, stderr, status = Open3.capture3(
     "node",
     "--import",
     "tsx",
     File.join(repo_root, "scripts", "android-version.ts"),
+    *(for_build ? ["--for-build"] : []),
     "--json",
     "--root",
     repo_root
@@ -200,13 +201,20 @@ def read_android_version_metadata
   version_code = parsed.fetch("versionCode").to_i
   UI.user_error!("Android version helper returned incomplete metadata.") if version.empty? || version_code <= 0
 
+  if for_build
+    ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_NAME"] = version
+    ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_CODE"] = version_code.to_s
+  end
+
   { version: version, version_code: version_code }
 rescue JSON::ParserError => e
   UI.user_error!("Invalid JSON from Android version helper: #{e.message}")
 end
 
-def sync_android_versioning!
-  sh(shell_join(["node", "--import", "tsx", File.join(repo_root, "scripts", "android-sync-versioning.ts"), "--check", "--root", repo_root]))
+def sync_android_versioning!(for_upload: true)
+  version = read_android_version_metadata
+  selected_version = for_upload || env_present?(ENV["OPENCLAW_ANDROID_RELEASE_PLAN"]) ? ["--version", version.fetch(:version)] : []
+  sh(shell_join(["node", "--import", "tsx", File.join(repo_root, "scripts", "android-sync-versioning.ts"), "--check", *selected_version, "--root", repo_root]))
 end
 
 def android_release_notes_path
@@ -655,7 +663,7 @@ platform :android do
 
   desc "Build signed Android release artifacts locally without uploading"
   lane :play_store_archive do
-    sync_android_versioning!
+    sync_android_versioning!(for_upload: false)
     prepare_android_release_signing!
     build_release_artifacts!
   end

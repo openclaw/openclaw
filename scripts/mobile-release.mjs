@@ -6,11 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 const releasePaths = {
   ios: ["apps/ios/CHANGELOG.md"],
-  android: [
-    "apps/android/version.json",
-    "apps/android/Config/Version.properties",
-    "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
-  ],
+  android: ["apps/android/fastlane/metadata/android/en-US/release_notes.txt"],
 };
 
 function run(command, args, cwd, options = {}) {
@@ -159,6 +155,7 @@ function prepareAndUpload(root, platform, recovery, releaseArgs) {
   try {
     bridgeLocalTools(root, source, platform);
     let uploadArgs = releaseArgs;
+    let androidPlanPath;
     if (platform === "ios") {
       const planPath = path.join(recovery, "ios-plan.json");
       const planText = run(
@@ -183,6 +180,7 @@ function prepareAndUpload(root, platform, recovery, releaseArgs) {
       ];
     } else {
       const planPath = path.join(recovery, "android-plan.json");
+      androidPlanPath = planPath;
       run(
         "/bin/bash",
         [
@@ -200,11 +198,10 @@ function prepareAndUpload(root, platform, recovery, releaseArgs) {
         [
           "--import",
           "tsx",
-          "scripts/android-pin-version.ts",
+          "scripts/android-sync-versioning.ts",
+          "--notes-only",
           "--version",
           plan.version,
-          "--version-code",
-          String(plan.versionCode),
         ],
         source,
         { stdio: "inherit" },
@@ -225,6 +222,16 @@ function prepareAndUpload(root, platform, recovery, releaseArgs) {
       assertPreparation(source, sha, platform);
     }
     clean(source);
+    if (androidPlanPath) {
+      const plan = JSON.parse(fs.readFileSync(androidPlanPath, "utf8"));
+      fs.writeFileSync(
+        androidPlanPath,
+        `${JSON.stringify({ ...plan, sourceSha: sha }, null, 2)}\n`,
+        {
+          mode: 0o600,
+        },
+      );
+    }
     git(
       source,
       "bundle",
@@ -238,7 +245,12 @@ function prepareAndUpload(root, platform, recovery, releaseArgs) {
     console.log(`Prepared ${platform} release source ${sha}. Recovery: ${recovery}`);
     run("/bin/bash", [`scripts/${platform}-release-upload.sh`, ...uploadArgs], source, {
       stdio: "inherit",
-      env: { ...process.env, GIT_COMMIT: sha, GIT_SHA: sha },
+      env: {
+        ...process.env,
+        GIT_COMMIT: sha,
+        GIT_SHA: sha,
+        ...(androidPlanPath ? { OPENCLAW_ANDROID_RELEASE_PLAN: androidPlanPath } : {}),
+      },
     });
     console.log(`Verified uploaded release: ${uploadedRef(root, platform, sha)}`);
     uploaded = true;

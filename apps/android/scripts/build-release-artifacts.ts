@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Android release helper that builds signed release artifacts from the pinned
+ * Android release helper that builds signed release artifacts from the selected
  * version metadata, verifies signatures, and writes SHA-256 checksum files.
  */
 
@@ -20,7 +20,7 @@ import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   syncAndroidVersioning,
-  resolveAndroidVersion,
+  resolveAndroidBuildVersion,
 } from "../../../scripts/lib/android-version.ts";
 
 type ReleaseArtifact = {
@@ -393,8 +393,12 @@ function main() {
     return;
   }
 
-  syncAndroidVersioning({ mode: "check", rootDir });
-  const version = resolveAndroidVersion(rootDir);
+  const version = resolveAndroidBuildVersion(rootDir);
+  syncAndroidVersioning({
+    mode: "check",
+    rootDir,
+    releaseVersion: process.env.OPENCLAW_ANDROID_RELEASE_PLAN ? version.canonicalVersion : undefined,
+  });
   const buildMetadata = resolveAndroidBuildMetadata();
   const artifacts = releaseArtifacts(version.canonicalVersion).filter(
     (artifact) => options.artifact === "all" || artifact.flavorName === options.artifact,
@@ -420,6 +424,8 @@ function main() {
     "./gradlew",
     [
       ...androidBuildMetadataGradleArgs(buildMetadata),
+      `-POPENCLAW_ANDROID_VERSION_NAME=${version.canonicalVersion}`,
+      `-POPENCLAW_ANDROID_VERSION_CODE=${version.versionCode}`,
       ...artifacts.map((artifact) => artifact.gradleTask),
     ],
     {

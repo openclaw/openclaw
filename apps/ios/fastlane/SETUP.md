@@ -172,7 +172,7 @@ Gateway, and fresh setup code. Chat uses the deterministic local
 `openai/ios-e2e` provider fixture. Native Overview runs with Control UI disabled;
 this is not screenshot mode or a substitute for external-provider validation.
 
-The stock gate runs in **iOS Release** after native tool setup and before signing
+The stock gate runs in **iOS Store Release** after native tool setup and before signing
 assets are accessed. It qualifies the checked-out `main` commit used for release
 preparation and records the installed Xcode version and build without requiring
 a specific Xcode version. Manual CI also requires the stock gate when
@@ -204,7 +204,7 @@ labels and bounded exit/error diagnostics rather than raw logs or setup codes.
 
 ## GitHub Actions
 
-Run **iOS Release** from `main` using the `ios-store-release` environment for
+Run **iOS Store Release** from `main` using the `ios-store-release` environment for
 upload and Git finalization. The workflow has no input parameters and uses
 the same `pnpm ios:release:upload` entry point. It installs the pinned build
 tools, uses readonly encrypted signing assets and a job-owned temporary

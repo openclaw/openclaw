@@ -176,7 +176,7 @@ pnpm ios:release:archive -- --version 2026.7.2 --revision 1
 This command is for local archive validation only. It is not a fallback upload
 path after `pnpm ios:release:upload` fails.
 
-Run **iOS Release** in GitHub Actions from `main`, with no input parameters, or
+Run **iOS Store Release** in GitHub Actions from `main`, with no input parameters, or
 run the same entry point from a clean local `main` matching `origin/main`:
 
 ```bash

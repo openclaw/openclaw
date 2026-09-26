@@ -1,4 +1,5 @@
 // Android Version script supports OpenClaw repository automation.
+import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { extractChangelogSection } from "./mobile-changelog.ts";
@@ -175,6 +176,35 @@ export function resolveAndroidVersion(rootDir = path.resolve(".")): ResolvedAndr
   };
 }
 
+export function resolveAndroidBuildVersion(
+  rootDir = path.resolve("."),
+  planPath = process.env.OPENCLAW_ANDROID_RELEASE_PLAN,
+): ResolvedAndroidVersion {
+  const pinned = resolveAndroidVersion(rootDir);
+  if (!planPath) {
+    return pinned;
+  }
+  const plan = JSON.parse(readFileSync(planPath, "utf8")) as {
+    version: string;
+    versionCode: number;
+    wearVersionCode: number;
+    sourceSha: string;
+  };
+  const canonicalVersion = normalizePinnedAndroidVersion(plan.version);
+  const versionCode = normalizeAndroidVersionCode(plan.versionCode, canonicalVersion);
+  if (plan.wearVersionCode !== versionCode + 50) {
+    throw new Error("Android release plan Wear versionCode must equal the phone code plus 50.");
+  }
+  const head = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: rootDir,
+    encoding: "utf8",
+  }).trim();
+  if (!/^[a-f0-9]{40}$/u.test(plan.sourceSha) || plan.sourceSha !== head) {
+    throw new Error("Android release plan sourceSha must match the checked-out commit.");
+  }
+  return { ...pinned, canonicalVersion, versionCode };
+}
+
 export function renderAndroidVersionProperties(
   version: Pick<ResolvedAndroidVersion, "canonicalVersion" | "versionCode">,
 ): string {
@@ -185,7 +215,17 @@ export function renderAndroidReleaseNotes(
   version: Pick<ResolvedAndroidVersion, "canonicalVersion">,
   changelogContent: string,
 ): string {
-  const candidateHeadings = [version.canonicalVersion, "Unreleased"];
+  const notes = findAndroidReleaseNotes(version.canonicalVersion, changelogContent);
+  if (notes) {
+    return notes;
+  }
+  throw new Error(
+    `Unable to find Android changelog notes for ${version.canonicalVersion}. Add a matching section to ${ANDROID_CHANGELOG_FILE}.`,
+  );
+}
+
+function findAndroidReleaseNotes(version: string, changelogContent: string): string | undefined {
+  const candidateHeadings = [version, "Unreleased"];
 
   for (const heading of candidateHeadings) {
     const body = extractChangelogSection(changelogContent, heading);
@@ -194,9 +234,7 @@ export function renderAndroidReleaseNotes(
     }
   }
 
-  throw new Error(
-    `Unable to find Android changelog notes for ${version.canonicalVersion}. Add a matching section to ${ANDROID_CHANGELOG_FILE}.`,
-  );
+  return undefined;
 }
 
 function syncFile(params: {
@@ -222,6 +260,8 @@ function syncFile(params: {
 export function syncAndroidVersioning(params?: {
   mode?: SyncAndroidVersioningMode;
   rootDir?: string;
+  releaseVersion?: string;
+  notesOnly?: boolean;
 }): {
   updatedPaths: string[];
 } {
@@ -230,10 +270,26 @@ export function syncAndroidVersioning(params?: {
   const version = resolveAndroidVersion(rootDir);
   const changelogContent = readFileSync(version.changelogPath, "utf8");
   const nextVersionProperties = renderAndroidVersionProperties(version);
-  const nextReleaseNotes = renderAndroidReleaseNotes(version, changelogContent);
+  const notesVersion = params?.releaseVersion
+    ? normalizePinnedAndroidVersion(params.releaseVersion)
+    : version.canonicalVersion;
+  let acceptedStoreNotes: string | undefined;
+  if (mode === "check" && !params?.releaseVersion) {
+    // Store releases can update notes without advancing the independent APK pin.
+    // A repository check accepts either channel; upload checks select one version explicitly.
+    const storeVersion = resolveGatewayVersionForAndroidRelease(rootDir).pinnedAndroidVersion;
+    const storeNotes = findAndroidReleaseNotes(storeVersion, changelogContent);
+    if (readFileSync(version.releaseNotesPath, "utf8") === storeNotes) {
+      acceptedStoreNotes = storeNotes;
+    }
+  }
+  const nextReleaseNotes =
+    acceptedStoreNotes ??
+    renderAndroidReleaseNotes({ canonicalVersion: notesVersion }, changelogContent);
   const updatedPaths: string[] = [];
 
   if (
+    !params?.notesOnly &&
     syncFile({
       mode,
       path: version.versionPropertiesPath,
