@@ -23,13 +23,17 @@ async function createDeepgramRealtimeServer(params: {
     params.onRequest?.(new URL(request.url ?? "/", "http://127.0.0.1"), request.headers);
     params.onConnection?.(ws);
   });
-  await new Promise<void>((resolve) => wss.once("listening", resolve));
+  await new Promise<void>((resolve) => {
+    wss.once("listening", resolve);
+  });
   const port = (wss.address() as AddressInfo).port;
   cleanup = async () => {
     for (const ws of wss.clients) {
       ws.terminate();
     }
-    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      wss.close(() => resolve());
+    });
   };
   return { baseUrl: `http://127.0.0.1:${port}/deepgram/v1` };
 }
