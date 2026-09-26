@@ -2473,7 +2473,7 @@ src/gateway/server-methods/chat-transcript-persistence.ts	4
 src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/config-write-flow.ts	1
 src/gateway/server-methods/config.ts	4
-src/gateway/server-methods/cron.ts	4
+src/gateway/server-methods/cron.ts	3
 src/gateway/server-methods/device-scope-upgrade.ts	2
 src/gateway/server-methods/devices.ts	4
 src/gateway/server-methods/doctor.ts	3
@@ -3269,7 +3269,7 @@ ui/src/app/native-web-chrome.ts	2
 ui/src/app/overlays.ts	1
 ui/src/app/server-prefs-state.ts	10
 ui/src/app/server-prefs.ts	6
-ui/src/app/settings.ts	6
+ui/src/app/settings.ts	2
 ui/src/app/stale-chunk-reload.ts	1
 ui/src/app/startup-settings.ts	1
 ui/src/app/user-profile.ts	2
@@ -3372,10 +3372,9 @@ ui/src/pages/activity/view.ts	2
 ui/src/pages/agents/agents-page.ts	1
 ui/src/pages/agents/memory/memory-panel.ts	2
 ui/src/pages/agents/memory/view.ts	1
-ui/src/pages/agents/model-config.ts	3
+ui/src/pages/agents/model-config.ts	2
 ui/src/pages/agents/panels-overview.ts	3
 ui/src/pages/agents/panels-status-files.ts	1
-ui/src/pages/channels/view.config.ts	1
 ui/src/pages/channels/view.detail.ts	1
 ui/src/pages/channels/view.nostr-profile-form.ts	4
 ui/src/pages/channels/view.nostr.ts	5
@@ -3443,15 +3442,13 @@ ui/src/pages/config/memory-page.ts	2
 ui/src/pages/config/security.ts	1
 ui/src/pages/config/settings-search.ts	1
 ui/src/pages/config/settings-select-row.ts	1
-ui/src/pages/config/talk-page.ts	1
 ui/src/pages/config/view-appearance-preferences.ts	2
-ui/src/pages/config/view-appearance.ts	1
 ui/src/pages/config/view-diff.ts	4
 ui/src/pages/config/view-schema.ts	2
 ui/src/pages/config/view.ts	5
 ui/src/pages/connection/view.ts	3
 ui/src/pages/cron/view-runs.ts	3
-ui/src/pages/cron/view.ts	6
+ui/src/pages/cron/view.ts	4
 ui/src/pages/custodian/custodian-surface.ts	2
 ui/src/pages/custodian/session-lifecycle.ts	1
 ui/src/pages/debug/view.ts	3

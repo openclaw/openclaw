@@ -7,7 +7,7 @@ import type {
   ReadSessionMessagesAroundIdResult,
   ReadSessionMessagesResult,
 } from "../../gateway/session-transcript-read-kernel.js";
-import { prepareGatewaySessionStoreReadSources } from "../../gateway/session-utils-store-sources.js";
+import { prepareGatewaySessionStoreReadSourcesAsync } from "../../gateway/session-utils-store-sources.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -359,60 +359,62 @@ export async function readSessionHistoryPageInWorker(
       agentId: databaseOptions.agentId,
       path: resolveOpenClawAgentSqlitePath(databaseOptions),
     };
-    const sourceReads = prepareGatewaySessionStoreReadSources({
-      cfg,
-      currentSource,
-      env,
-      registryPath: stateContext.admission.databasePath,
-    });
-    const assertStateCurrent = () => {
-      signal?.throwIfAborted();
-      stateContext.maintenanceScope?.assertAdmission();
-      stateContext.admission.assertCurrent();
-      sourceReads.assertCurrent();
-    };
-    assertStateCurrent();
-    const target: Omit<PreparedSessionHistoryReadTarget, "database"> = {
-      transcript: {
-        agentId: resolved.agentId,
-        sessionId: resolved.sessionId,
-        ...(normalizedSessionKey ? { sessionKey: normalizedSessionKey } : {}),
-        storePath: capturedScope.storePath,
-        sessionFile: sessionKey ?? resolved.sessionId,
-      },
-      stateDatabase: {
-        path: stateContext.admission.databasePath,
-        environment: stateContext.environment,
-      },
-      sourceDatabases: sourceReads.sources,
-      ...(entryValidationKey ? { entryValidationKey } : {}),
-    };
-    const input: SessionTranscriptHistoryWorkerInput = {
-      kind: "history-page",
-      database: currentSource,
-      request: capturedRequest,
-      target,
-      ...(admission ? { admission } : {}),
-    };
-    const key = JSON.stringify(input);
-    const metadataInput: SessionColdMetadataWorkerInput = {
-      kind: "cold-metadata",
-      database: currentSource,
-      sessionId: resolved.sessionId,
-      env,
-    };
-    const metadataKey = JSON.stringify(metadataInput);
-    const additionalBytes = (key.length + metadataKey.length) * 2 - inputBytes;
-    if (pendingHistoryBytes + additionalBytes > DEFAULT_WORKER_PENDING_BYTES) {
-      throw new WorkerTaskError("worker task capacity reached", "overloaded");
-    }
-    pendingHistoryBytes += additionalBytes;
-    inputBytes += additionalBytes;
     const preparedTarget = resolved;
     const acquired = await withSessionHistoryWorkerDatabase(databaseOptions, async (owner) => {
+      const sourceReads = await prepareGatewaySessionStoreReadSourcesAsync({
+        cfg,
+        currentSource,
+        env,
+        registryPath: stateContext.admission.databasePath,
+      });
+      const assertStateCurrent = () => {
+        signal?.throwIfAborted();
+        stateContext.maintenanceScope?.assertAdmission();
+        stateContext.admission.assertCurrent();
+        sourceReads.assertSourceCurrent();
+      };
+      assertStateCurrent();
+      const target: Omit<PreparedSessionHistoryReadTarget, "database"> = {
+        transcript: {
+          agentId: preparedTarget.agentId,
+          sessionId: preparedTarget.sessionId,
+          ...(normalizedSessionKey ? { sessionKey: normalizedSessionKey } : {}),
+          storePath: capturedScope.storePath,
+          sessionFile: sessionKey ?? preparedTarget.sessionId,
+        },
+        stateDatabase: {
+          path: stateContext.admission.databasePath,
+          environment: stateContext.environment,
+        },
+        ...(sourceReads.request
+          ? { sourceDiscovery: sourceReads.request }
+          : { sourceDatabases: {} }),
+        ...(entryValidationKey ? { entryValidationKey } : {}),
+      };
+      const input: SessionTranscriptHistoryWorkerInput = {
+        kind: "history-page",
+        database: currentSource,
+        request: capturedRequest,
+        target,
+        ...(admission ? { admission } : {}),
+      };
+      const key = JSON.stringify(input);
+      const metadataInput: SessionColdMetadataWorkerInput = {
+        kind: "cold-metadata",
+        database: currentSource,
+        sessionId: preparedTarget.sessionId,
+        env,
+      };
+      const metadataKey = JSON.stringify(metadataInput);
+      const additionalBytes = (key.length + metadataKey.length) * 2 - inputBytes;
+      if (pendingHistoryBytes + additionalBytes > DEFAULT_WORKER_PENDING_BYTES) {
+        throw new WorkerTaskError("worker task capacity reached", "overloaded");
+      }
+      pendingHistoryBytes += additionalBytes;
+      inputBytes += additionalBytes;
       const assertCurrent = () => {
-        assertStateCurrent();
         owner.assertCurrent();
+        assertStateCurrent();
       };
       let result: SessionHistoryWorkerResult;
       const readOnly =
@@ -480,12 +482,20 @@ export async function readSessionHistoryPageInWorker(
           throw error;
         }
       }
-      return { result, assertCurrent: owner.assertCurrent };
+      await sourceReads.revalidate(() => {
+        owner.assertCurrent();
+        assertStateCurrent();
+      });
+      return {
+        result,
+        assertCurrent: () => {
+          owner.assertCurrent();
+          assertStateCurrent();
+          sourceReads.assertCurrent();
+        },
+      };
     });
-    const assertCurrent = () => {
-      acquired.assertCurrent();
-      assertStateCurrent();
-    };
+    const assertCurrent = () => acquired.assertCurrent();
     assertCurrent();
     const result = acquired.result;
     if (result.kind !== capturedRequest.kind) {

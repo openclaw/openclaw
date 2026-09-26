@@ -9,6 +9,7 @@ import { writeGatewayRestartIntentSync } from "../../infra/restart-intent.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { runGatewayLoop } from "./run-loop.js";
 
 const root = process.argv[2]!;
@@ -26,6 +27,8 @@ process.on("message", (message) => {
   }
 });
 const cron = new CronService({
+  scheduler: createTestGatewayScheduler(),
+  nowMs: () => Date.now(),
   storePath: path.join(root, "state", "cron", "jobs.json"),
   cronEnabled: false,
   defaultAgentId: "main",

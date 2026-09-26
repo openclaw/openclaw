@@ -5,6 +5,7 @@ import { FAILOVER_REASONS } from "../../packages/gateway-protocol/src/failover-r
 import { cronTaskRecordToRunLogEntry } from "../tasks/cron-task-record.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { seedTaskRegistryRowsForTests } from "../test-utils/task-registry-sqlite.js";
 import {
@@ -136,6 +137,7 @@ describe("cron task run history", () => {
         const storePath = state.path("cron", "jobs.json");
         let now = Date.parse("2026-07-12T12:00:00.000Z");
         const cron = new CronService({
+          scheduler: createTestGatewayScheduler(),
           storePath,
           cronEnabled: true,
           cronConfig: { triggers: { enabled: true } },

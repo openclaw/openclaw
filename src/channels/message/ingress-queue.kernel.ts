@@ -4,6 +4,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -437,7 +438,8 @@ export function pruneChannelIngressInDatabase(
 ): number {
   const kysely = getQueue(db);
   const protectedIds = (input.options.protectIds ?? []).map((id) => id.trim()).filter(Boolean);
-  const protectedSet = new Set(protectedIds);
+  // Native text rows cannot match an unpaired surrogate through JS string equality.
+  const protectedMaxIds = protectedIds.filter((id) => id.isWellFormed());
   let deleted = 0;
   const policies = [
     {
@@ -474,34 +476,30 @@ export function pruneChannelIngressInDatabase(
     if (policy.max === undefined) {
       continue;
     }
+    // Protected rows occupy their original retention slots.
+    const candidates = kysely
+      .selectFrom("channel_ingress_events")
+      .select("event_id")
+      .where("queue_name", "=", input.queueName)
+      .where("status", "=", policy.status)
+      .orderBy("updated_at", "desc")
+      .orderBy("event_id", "desc")
+      .limit(500)
+      .offset(Math.max(0, Math.floor(policy.max)));
+    let query = kysely
+      .deleteFrom("channel_ingress_events")
+      .where("queue_name", "=", input.queueName)
+      .where("status", "=", policy.status)
+      .where("event_id", "in", candidates);
+    if (protectedMaxIds.length) {
+      query = query.where("event_id", "not in", sqliteStringSet(protectedMaxIds));
+    }
     while (true) {
-      // Protected rows occupy their original retention slots.
-      const rows = executeSqliteQuerySync(
-        db,
-        kysely
-          .selectFrom("channel_ingress_events")
-          .select("event_id")
-          .where("queue_name", "=", input.queueName)
-          .where("status", "=", policy.status)
-          .orderBy("updated_at", "desc")
-          .orderBy("event_id", "desc")
-          .limit(500)
-          .offset(Math.max(0, Math.floor(policy.max))),
-      ).rows;
-      const ids = rows.map((row) => row.event_id).filter((id) => !protectedSet.has(id));
-      if (!ids.length) {
+      const removed = affectedRows(executeSqliteQuerySync(db, query));
+      if (!removed) {
         break;
       }
-      deleted += affectedRows(
-        executeSqliteQuerySync(
-          db,
-          kysely
-            .deleteFrom("channel_ingress_events")
-            .where("queue_name", "=", input.queueName)
-            .where("status", "=", policy.status)
-            .where("event_id", "in", ids),
-        ),
-      );
+      deleted += removed;
     }
   }
   return deleted;

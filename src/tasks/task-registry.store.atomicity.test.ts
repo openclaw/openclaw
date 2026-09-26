@@ -94,7 +94,7 @@ describe("task-registry store atomicity", () => {
                   taskId: existing.taskId,
                   notifyPolicy: "state_changes",
                 })
-              : applyTaskRegistryMaintenanceRetention(existing, Date.now(), new Set(), () => {});
+              : applyTaskRegistryMaintenanceRetention(existing, Date.now(), new Map(), () => {});
           };
           const { db } = openOpenClawStateDatabase();
           const failingStatement =

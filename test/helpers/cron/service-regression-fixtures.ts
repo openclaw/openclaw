@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../../src/config/cron-limits.js";
 import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store-writer-state.js";
 import { createRunningCronServiceState } from "../../../src/cron/service.test-harness.js";
 import { createCronServiceState, type CronServiceDeps } from "../../../src/cron/service/state.js";
@@ -12,6 +13,7 @@ import { resetAgentEventsForTest } from "../../../src/infra/agent-events.js";
 import { getTotalQueueSize } from "../../../src/process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../../src/process/command-queue.test-support.js";
 import { useFrozenTime, useRealTime } from "../../../src/test-utils/frozen-time.js";
+import { createTestGatewayScheduler } from "../../../src/test-utils/gateway-scheduler-clock.js";
 import { createDeferred } from "../promise.js";
 
 const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1_000;
@@ -33,19 +35,31 @@ export const noopLogger = {
   trace: () => {},
 };
 
-type CronRegressionDefaults = "cronEnabled" | "log" | "enqueueSystemEvent" | "requestHeartbeat";
+type CronRegressionDefaults =
+  | "scheduler"
+  | "cronEnabled"
+  | "log"
+  | "enqueueSystemEvent"
+  | "requestHeartbeat";
 
 export function createCronRegressionState(
   deps: Omit<CronServiceDeps, CronRegressionDefaults> &
-    Partial<Pick<CronServiceDeps, CronRegressionDefaults>>,
+    Partial<Pick<CronServiceDeps, CronRegressionDefaults>> & { testAdmissionLimit?: number },
 ) {
-  return createCronServiceState({
+  const { testAdmissionLimit, ...stateParams } = deps;
+  const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     cronEnabled: true,
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
-    ...deps,
+    ...stateParams,
   });
+  if (testAdmissionLimit !== undefined) {
+    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - testAdmissionLimit;
+  }
+  return state;
 }
 
 export function setupCronRegressionFixtures(options?: { prefix?: string; baseTimeIso?: string }) {

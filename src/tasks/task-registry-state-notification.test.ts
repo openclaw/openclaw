@@ -756,7 +756,7 @@ describe("task state notification acknowledgements", () => {
           throw new Error("Expected the terminal task before retention");
         }
         expect(
-          await applyTaskRegistryMaintenanceRetention(expired, Date.now(), new Set(), () => {}),
+          await applyTaskRegistryMaintenanceRetention(expired, Date.now(), new Map(), () => {}),
         ).toBe("pruned");
       }
       const beforeAck = stored(task.taskId);

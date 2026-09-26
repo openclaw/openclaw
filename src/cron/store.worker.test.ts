@@ -7,6 +7,7 @@ import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CronService } from "./service.js";
@@ -287,6 +288,8 @@ it.each([true, false])(
       store.jobs[0]!.declarationKey = "agent:main:callback-save";
       await saveCronJobsStore(storePath, store);
       const service = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled,
         defaultAgentId: "main",

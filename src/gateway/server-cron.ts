@@ -67,6 +67,7 @@ import type {
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   resolveHeartbeatForWake,
   resolveHeartbeatTimeoutOverrideSeconds,
@@ -389,6 +390,7 @@ function isCommandCronJob(job: CronJob | null | undefined): boolean {
 
 /** Build the cron service state used by Gateway startup and lazy cron loading. */
 export function buildGatewayCronService(params: {
+  scheduler: GatewayScheduler;
   cfg: OpenClawConfig;
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
@@ -751,6 +753,7 @@ export function buildGatewayCronService(params: {
   };
 
   const cron = new CronService({
+    scheduler: params.scheduler,
     storePath,
     cronEnabled,
     cronConfig: params.cfg.cron,

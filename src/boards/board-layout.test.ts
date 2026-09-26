@@ -3,6 +3,19 @@ import { applyBoardOps, BoardValidationError, normalizeBoardLayout } from "./boa
 
 type BoardLayout = Parameters<typeof normalizeBoardLayout>[0];
 
+function makeWidget(name: string, tabId: string, position: number): BoardLayout["widgets"][number] {
+  return {
+    name,
+    tabId,
+    position,
+    contentKind: "html",
+    sizeW: 6,
+    sizeH: 4,
+    grantState: "none",
+    revision: 1,
+  };
+}
+
 function layout(): BoardLayout {
   return {
     tabs: [
@@ -10,36 +23,9 @@ function layout(): BoardLayout {
       { tabId: "two", title: "Two", position: 8, chatDock: "bottom" },
     ],
     widgets: [
-      {
-        name: "alpha",
-        tabId: "one",
-        contentKind: "html",
-        sizeW: 6,
-        sizeH: 4,
-        position: 3,
-        grantState: "none",
-        revision: 1,
-      },
-      {
-        name: "beta",
-        tabId: "one",
-        contentKind: "html",
-        sizeW: 6,
-        sizeH: 4,
-        position: 9,
-        grantState: "none",
-        revision: 1,
-      },
-      {
-        name: "gamma",
-        tabId: "two",
-        contentKind: "html",
-        sizeW: 6,
-        sizeH: 4,
-        position: 2,
-        grantState: "none",
-        revision: 1,
-      },
+      makeWidget("alpha", "one", 3),
+      makeWidget("beta", "one", 9),
+      makeWidget("gamma", "two", 2),
     ],
   };
 }

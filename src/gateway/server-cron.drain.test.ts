@@ -9,6 +9,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
 import { waitForActiveCronTaskRuns } from "../cron/service/active-run-cancellation.js";
 import * as cronStore from "../cron/store.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 
 const { cancelAllMock, getRuntimeConfigMock, stopAllMock } = vi.hoisted(() => ({
   cancelAllMock: vi.fn<() => Promise<void>>(),
@@ -50,6 +54,7 @@ import { buildGatewayCronService } from "./server-cron.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 
 type StartedGatewayCron = {
+  clock: ReturnType<typeof createGatewaySchedulerClock>;
   state: ReturnType<typeof buildGatewayCronService>;
   cfg: OpenClawConfig;
   stateDir: string;
@@ -66,7 +71,9 @@ async function startGatewayCron(
     cron: { enabled, triggers: { enabled: true } },
   };
   getRuntimeConfigMock.mockReturnValue(cfg);
+  const clock = createGatewaySchedulerClock(Date.now());
   const state = buildGatewayCronService({
+    scheduler: createTestGatewayScheduler(clock.clock),
     cfg,
     deps: {} as CliDeps,
     broadcast,
@@ -81,7 +88,7 @@ async function startGatewayCron(
     sessionTarget: "main",
     wakeMode: "next-heartbeat",
   });
-  return { state, cfg, stateDir };
+  return { state, cfg, stateDir, clock };
 }
 
 async function cleanGatewayCron({ state, stateDir }: StartedGatewayCron): Promise<void> {
@@ -133,7 +140,7 @@ describe("gateway cron stop-and-drain automation ownership", () => {
         const job = await original.state.cron.add({
           name: "finalization drain",
           enabled: true,
-          schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
+          schedule: { kind: "at", at: new Date(original.clock.clock.now() - 1_000).toISOString() },
           payload: { kind: "command", argv: [process.execPath, "-e", "process.exit(0)"] },
           sessionTarget: "isolated",
           wakeMode: "next-heartbeat",
@@ -201,7 +208,7 @@ describe("gateway cron stop-and-drain automation ownership", () => {
         const job = await original.state.cron.add({
           name: "one-shot binding",
           enabled: true,
-          schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
+          schedule: { kind: "at", at: new Date(original.clock.clock.now() - 1_000).toISOString() },
           payload: { kind: "command", argv: [process.execPath, "-e", "process.exit(0)"] },
           sessionTarget: "isolated",
           wakeMode: "next-heartbeat",

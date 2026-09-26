@@ -371,7 +371,7 @@ async function persist(pending: PendingEvent): Promise<void> {
     runId: input.expectedTask.runId,
     childSessionKey: input.expectedTask.childSessionKey,
   };
-  let flowEffectsSettled = false;
+  let flowHookEntered = false;
   let publicationFailure: { error: unknown } | undefined;
   try {
     try {
@@ -431,12 +431,12 @@ async function persist(pending: PendingEvent): Promise<void> {
               ) {
                 clearTaskActivity(taskId);
               }
+              flowHookEntered = true;
               await finishTaskMutation(context, store, flowStore, taskId, {
                 operation: "update",
                 assertCurrent: assertCurrentOwners,
               });
               assertCurrentOwners();
-              flowEffectsSettled = true;
             }
           },
           forcePublish: () => pending.publication?.task,
@@ -522,7 +522,7 @@ async function persist(pending: PendingEvent): Promise<void> {
       throw publicationFailure.error;
     }
   } finally {
-    if (!flowEffectsSettled && pending.committedTarget && pending.phase.kind !== "consumed") {
+    if (!flowHookEntered && pending.committedTarget && pending.phase.kind !== "consumed") {
       const current = tasks.get(taskId);
       if (
         current &&
