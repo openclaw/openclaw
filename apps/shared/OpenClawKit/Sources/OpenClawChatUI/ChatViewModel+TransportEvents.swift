@@ -107,6 +107,7 @@ extension OpenClawChatViewModel {
             self.invalidateIncompleteLiveRunUsage()
             self.turnToolCallsById = [:]
             self.updateStreamingAssistantText(nil)
+            self.liveWorkingCommentary = nil
             let context = self.beginHistoryRequest()
             // Question refresh is best-effort and must not delay transcript
             // recovery behind a slow gateway round trip.
@@ -680,7 +681,9 @@ extension OpenClawChatViewModel {
         }
 
         let isSelectedPendingRun = isPendingRun && self.liveUsageRunID == evt.runId
-        guard isSelectedPendingRun || isLegacySessionStream else { return }
+        let isSelectedAdvertisedPreamble = evt.stream == "item" && isAdvertisedRun &&
+            self.liveUsageRunID == evt.runId && evt.data["kind"]?.value as? String == "preamble"
+        guard isSelectedPendingRun || isSelectedAdvertisedPreamble || isLegacySessionStream else { return }
         self.invalidateRunSnapshots()
         self.logDiagnostic(
             "chat.ui event agent stream=\(evt.stream) "
@@ -716,7 +719,16 @@ extension OpenClawChatViewModel {
                 markdown: explanation?.isEmpty == false ? explanation : nil,
                 steps: steps))
         case "item":
-            self.handleAgentActivityItem(evt)
+            if evt.data["kind"]?.value as? String == "preamble" {
+                if let commentary = ChatWorkingCommentary.completedItem(evt),
+                   let sequence = evt.seq,
+                   self.acceptLiveRunSequence(runID: evt.runId, sequence: sequence)
+                {
+                    self.liveWorkingCommentary = commentary
+                }
+            } else {
+                self.handleAgentActivityItem(evt)
+            }
         case "tool":
             guard let phase = evt.data["phase"]?.value as? String else { return }
             guard let name = evt.data["name"]?.value as? String else { return }
@@ -1533,6 +1545,7 @@ extension OpenClawChatViewModel {
         self.pendingRunOwnerTasks.removeAll()
         self.pendingRunOwnerArmIDs.removeAll()
         self.pendingRuns.removeAll()
+        self.liveWorkingCommentary = nil
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
         if !runIds.isEmpty, let hapticEvent {
             self.haptics.perform(hapticEvent)
