@@ -8,6 +8,12 @@ commands. GitHub's `npm-release` environment must be approved by
 receipt lets npm and ClawHub children skip their human gates. npm trusted
 publishers use `npm-publish`, which admits only protected `release-publish/*`
 tags. Direct human npm recovery keeps a separate `npm-release` approval job.
+Branch-based manual npm recovery (for example `--ref main`) is retired: mint or
+reuse the protected tooling tag with `pnpm release:publish-preflight ...
+--workflow-sha <tooling-sha>` (`ensureReleasePublishToolingTag`), then dispatch
+the npm child with `--ref release-publish/<tooling-sha12>-<epoch>`. On the
+receipt route each final `npm publish` re-verifies that the parent attempt is
+still live; a parent that completed, with any conclusion, refuses publication.
 
 The regular and extended-stable publish parent runs from the protected
 `release-publish/<tooling-sha12>-<epoch>` tag minted at the pinned Tooling SHA;

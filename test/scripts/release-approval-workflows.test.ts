@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { validateReleasePublishParentRun } from "../../scripts/release-tooling-identity.mjs";
 
 type WorkflowStep = {
   name: string;
@@ -247,6 +248,101 @@ describe("release approval workflow contracts", () => {
       );
       expect(checkout?.with?.ref).toBe("${{ github.workflow_sha }}");
       expect(names.indexOf(checkout!.name)).toBeLessThan(names.indexOf(wait!.name));
+    },
+  );
+
+  it.each([
+    [
+      "openclaw-npm-release",
+      "validate_publish_request",
+      "Publish",
+      "RELEASE_PUBLISH_PARENT_STATE_POLICY",
+    ],
+    [
+      "plugin-npm-release",
+      "validate_release_publish_approval",
+      "Publish with trusted publisher",
+      "OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY",
+    ],
+    [
+      "plugin-npm-release",
+      "validate_release_publish_approval",
+      "Publish approved bootstrap tarball",
+      "RELEASE_PUBLISH_PARENT_STATE_POLICY",
+    ],
+  ] as const)(
+    "%s %s re-verifies a live parent before npm publish on the receipt route (%s)",
+    (workflow, validationId, stepName, policyVariable) => {
+      const job = requireJob(
+        workflow,
+        workflow === "openclaw-npm-release" ? "publish_openclaw_npm" : "publish_plugins_npm",
+      );
+      const publish = job.steps.find((step) => step.name === stepName);
+      const policyExpression = publish?.env?.[policyVariable];
+      if (!publish?.run || !policyExpression) {
+        throw new Error(`${workflow} ${stepName} has no parent state policy`);
+      }
+      const policyFor = (parentApproval: string, actor: string) =>
+        runInNewContext(policyExpression.replace(/^\$\{\{|\}\}$/gu, ""), {
+          github: { actor },
+          inputs: { release_publish_run_id: "67890" },
+          needs: { [validationId]: { outputs: { parent_approval: parentApproval } } },
+        });
+      const bot = "github-actions[bot]";
+      const receiptPolicy = policyFor("receipt", bot);
+      expect(receiptPolicy).toBe("active");
+      expect(policyFor("", "release-manager")).toBe("manual-recovery");
+      if (workflow === "plugin-npm-release") {
+        // Human-approved bot children keep the existing finish-after-failure contract.
+        expect(policyFor("", bot)).toBe("active-or-failure");
+      }
+
+      const sha = "a".repeat(40);
+      const ref = `release-publish/${sha.slice(0, 12)}-123`;
+      const verifyParent = (status: string, conclusion: string | null) =>
+        validateReleasePublishParentRun({
+          identity: { ref, fullRef: `refs/tags/${ref}`, sha },
+          releasePublishFullRef: `refs/tags/${ref}`,
+          releasePublishParentStatePolicy: receiptPolicy,
+          releasePublishRef: ref,
+          releasePublishRunAttempt: "2",
+          releasePublishRunId: "67890",
+          repository: "openclaw/openclaw",
+          run: {
+            id: 67890,
+            run_attempt: 2,
+            repository: { full_name: "openclaw/openclaw" },
+            path: `.github/workflows/openclaw-release-publish.yml@refs/tags/${ref}`,
+            event: "workflow_dispatch",
+            head_branch: ref,
+            head_sha: sha,
+            status,
+            conclusion,
+          },
+        });
+      // The parent failed after the child's authorization wait: refuse before npm I/O.
+      expect(() => verifyParent("completed", "failure")).toThrow(
+        "release publish parent run state is not allowed by active",
+      );
+      expect(() => verifyParent("completed", "success")).toThrow();
+      expect(() => verifyParent("in_progress", null)).not.toThrow();
+
+      const script = publish.run;
+      const mutation =
+        workflow === "openclaw-npm-release"
+          ? /verify_release_tooling_identity\n\s*bash scripts\/openclaw-npm-publish\.sh --publish/gu
+          : null;
+      if (mutation) {
+        const publishes = script.match(/bash scripts\/openclaw-npm-publish\.sh --publish/gu) ?? [];
+        expect(publishes.length).toBeGreaterThan(0);
+        expect(script.match(mutation)).toHaveLength(publishes.length);
+      } else {
+        const verified = script.indexOf(
+          `--release-publish-parent-state-policy "$${policyVariable}"`,
+        );
+        expect(verified).toBeGreaterThan(-1);
+        expect(verified).toBeLessThan(script.indexOf("npm publish"));
+      }
     },
   );
 
