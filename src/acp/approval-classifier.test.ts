@@ -1,6 +1,8 @@
 /** Tests ACP tool approval classification and spoofing backstops. */
+import { AgentSideConnection, ClientSideConnection, ndJsonStream } from "@agentclientprotocol/sdk";
 import { describe, expect, it } from "vitest";
 import { classifyAcpToolApproval } from "./approval-classifier.js";
+import { resolvePermissionRequest } from "./client-helpers.js";
 
 function classify(params: {
   title: string;
@@ -10,7 +12,7 @@ function classify(params: {
   cwd?: string;
 }) {
   return classifyAcpToolApproval({
-    cwd: params.cwd ?? "/workspace",
+    cwd: params.cwd ?? (process.platform === "win32" ? "C:\\workspace" : "/workspace"),
     toolCall: {
       title: params.title,
       locations: params.locations,
@@ -45,18 +47,21 @@ describe("classifyAcpToolApproval", () => {
     });
   });
 
-  it("does not auto-approve reads outside cwd", () => {
-    expect(
-      classify({
-        title: "read: ~/.ssh/id_rsa",
-        rawInput: { path: "~/.ssh/id_rsa" },
-      }),
-    ).toEqual({
-      toolName: "read",
-      approvalClass: "other",
-      autoApprove: false,
-    });
-  });
+  it.each(["~/.ssh/id_rsa", "~\\.ssh\\id_rsa", "~/Desktop/secret.txt", "~\\Desktop\\secret.txt"])(
+    "does not auto-approve home-relative reads outside cwd (%s)",
+    (pathInput) => {
+      expect(
+        classify({
+          title: `read: ${pathInput}`,
+          rawInput: { path: pathInput },
+        }),
+      ).toEqual({
+        toolName: "read",
+        approvalClass: "other",
+        autoApprove: false,
+      });
+    },
+  );
 
   it.each([
     "file:///outside/marker.txt",
@@ -80,11 +85,20 @@ describe("classifyAcpToolApproval", () => {
     });
   });
 
-  it.each([
-    "file:///workspace/src/index.ts",
-    "FILE:///workspace/src/index.ts",
-    "file:/workspace/src/index.ts",
-  ])("auto-approves in-cwd file URL %s", (fileUrl) => {
+  const inCwdFileUrls =
+    process.platform === "win32"
+      ? [
+          "file:///C:/workspace/src/index.ts",
+          "FILE:///C:/workspace/src/index.ts",
+          "file:/C:/workspace/src/index.ts",
+        ]
+      : [
+          "file:///workspace/src/index.ts",
+          "FILE:///workspace/src/index.ts",
+          "file:/workspace/src/index.ts",
+        ];
+
+  it.each(inCwdFileUrls)("auto-approves in-cwd file URL %s", (fileUrl) => {
     expect(
       classify({
         title: "read: ignored-by-raw-input",
@@ -282,5 +296,95 @@ describe("classifyAcpToolApproval", () => {
       approvalClass: "unknown",
       autoApprove: false,
     });
+  });
+
+  it("exercises registered ClientSideConnection requestPermission callback on Windows over ACP stream", async () => {
+    const cwd = process.platform === "win32" ? "C:\\workspace" : "/workspace";
+    const logs: string[] = [];
+    const log = (msg: string) => {
+      logs.push(msg);
+    };
+
+    let promptCalled1 = false;
+    let promptedTool1: string | undefined;
+    let promptedTitle1: string | undefined;
+
+    const clientToServer = new TransformStream<Uint8Array, Uint8Array>();
+    const serverToClient = new TransformStream<Uint8Array, Uint8Array>();
+
+    const clientStream = ndJsonStream(clientToServer.writable, serverToClient.readable);
+    const serverStream = ndJsonStream(serverToClient.writable, clientToServer.readable);
+
+    const client = new ClientSideConnection(
+      () => ({
+        sessionUpdate: async () => {},
+        requestPermission: async (params) => {
+          return resolvePermissionRequest(params, {
+            cwd,
+            log,
+            prompt: async (toolName, toolTitle) => {
+              promptCalled1 = true;
+              promptedTool1 = toolName;
+              promptedTitle1 = toolTitle;
+              return false;
+            },
+          });
+        },
+      }),
+      clientStream,
+    );
+
+    const agent = new AgentSideConnection(
+      () => ({
+        initialize: async (params) => ({
+          protocolVersion: params.protocolVersion,
+          agentCapabilities: {},
+        }),
+        newSession: async () => ({ sessionId: "sess-1" }),
+        prompt: async () => ({ stopReason: "end_turn" }),
+      }),
+      serverStream,
+    );
+
+    // Case 1: Outside-workspace Windows home-relative path (~\.ssh\id_rsa)
+    const res1 = await agent.requestPermission({
+      sessionId: "sess-1",
+      toolCall: {
+        toolCallId: "call_home_ssh",
+        title: "read: ~\\.ssh\\id_rsa",
+        status: "pending",
+        rawInput: { path: "~\\.ssh\\id_rsa" },
+      },
+      options: [
+        { kind: "allow_once", name: "Allow once", optionId: "allow" },
+        { kind: "reject_once", name: "Reject once", optionId: "reject" },
+      ],
+    });
+
+    expect(promptCalled1).toBe(true);
+    expect(promptedTool1).toBe("read");
+    expect(promptedTitle1).toBe("read: ~\\.ssh\\id_rsa");
+    expect(res1).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+    expect(logs).toContain("\n[permission requested] read: ~\\.ssh\\id_rsa (read) [other]");
+
+    // Case 2: Normal in-workspace read (<workspace>\src\index.ts)
+    let promptCalled2 = false;
+    const res2 = await agent.requestPermission({
+      sessionId: "sess-1",
+      toolCall: {
+        toolCallId: "call_in_workspace",
+        title: "read: src\\index.ts",
+        status: "pending",
+        rawInput: { path: "src\\index.ts" },
+      },
+      options: [
+        { kind: "allow_once", name: "Allow once", optionId: "allow" },
+        { kind: "reject_once", name: "Reject once", optionId: "reject" },
+      ],
+    });
+
+    expect(promptCalled2).toBe(false);
+    expect(res2).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+    expect(logs).toContain("[permission auto-approved] read (readonly_scoped)");
   });
 });
