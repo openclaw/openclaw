@@ -11,6 +11,7 @@ import net from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import { URL } from "node:url";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { sanitizeForwardedResponseHeaders } from "../shared/http-header-sanitize.js";
 import { ensureDebugProxyCa } from "./ca.js";
 import type { DebugProxySettings } from "./env.js";
 import { redactedCaptureHeaders } from "./header-redaction.js";
@@ -330,7 +331,10 @@ export async function startDebugProxyServer(params: {
             });
             finishProxyResponseAfterUpstreamError(res);
           });
-          res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+          res.writeHead(
+            upstreamRes.statusCode ?? 502,
+            sanitizeForwardedResponseHeaders(upstreamRes.headers),
+          );
         },
       );
       req.on("data", (chunk) => {
