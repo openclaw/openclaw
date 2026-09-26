@@ -24,6 +24,19 @@ export type WhatsAppNormalizedInboundMessage = {
   access: AcceptedInboundAccessControlResult;
 };
 
+/**
+ * Raised when a direct (non-group) inbound message's sender identity cannot be
+ * resolved right now, such as a missing or transiently failing LID→phone
+ * mapping. Unlike a genuine non-message, this is recoverable: the durable
+ * ingress drain retries identity preparation instead of completing the claim.
+ */
+class WhatsAppIngressIdentityUnavailableError extends Error {
+  constructor(jid: string) {
+    super(`WhatsApp inbound sender identity unavailable for ${jid}`);
+    this.name = "WhatsAppIngressIdentityUnavailableError";
+  }
+}
+
 export function createWhatsAppInboundMessageNormalizer(options: {
   cfg: OpenClawConfig;
   loadConfig?: () => OpenClawConfig;
@@ -77,7 +90,12 @@ export function createWhatsAppInboundMessageNormalizer(options: {
     const participantJid = msg.key?.participant ?? undefined;
     const from = group ? remoteJid : await socketSession.resolveInboundJid(remoteJid);
     if (!from) {
-      return null;
+      // A direct message whose sender identity cannot be resolved right now (a
+      // missing or transiently failing LID→phone mapping) must not be treated
+      // as a non-message and silently dropped. Throwing routes it through the
+      // established "durable drain will normalize again" retry path so the
+      // message survives once the mapping becomes available.
+      throw new WhatsAppIngressIdentityUnavailableError(remoteJid);
     }
     const senderE164 = group
       ? participantJid

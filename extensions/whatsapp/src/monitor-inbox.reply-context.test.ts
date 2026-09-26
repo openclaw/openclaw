@@ -148,6 +148,42 @@ describe("web monitor inbox reply context", () => {
     await listener.close();
   });
 
+  it("retries a direct DM whose LID identity is transiently unresolvable instead of dropping it", async () => {
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const getPNForLID = sock.signalRepository.lidMapping.getPNForLID;
+    // The live admission-time preparation fails once (transient LID lookup
+    // error / mapping not yet hydrated); the durable drain retries and the
+    // mapping resolves on the second attempt.
+    let lookupAttempts = 0;
+    getPNForLID.mockReset();
+    getPNForLID.mockImplementation(async () => {
+      lookupAttempts += 1;
+      if (lookupAttempts === 1) {
+        throw new Error("transient LID mapping lookup failure");
+      }
+      return "999:0@s.whatsapp.net";
+    });
+
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("lid-retry"),
+        remoteJid: "999@lid",
+        text: "ping",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(getPNForLID).toHaveBeenCalledTimes(2);
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.payload.body).toBe("ping");
+    expect(inbound.admission?.conversation.id).toBe("+999");
+    await listener.close();
+  });
+
   it("resolves LID JIDs via authDir mapping files", async () => {
     const onMessage = vi.fn(async () => {});
     fsSync.writeFileSync(

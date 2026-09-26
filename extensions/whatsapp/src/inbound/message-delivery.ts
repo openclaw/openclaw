@@ -560,9 +560,18 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       }
       if (result.kind === "durable" && result.queueResult.kind === "completed") {
         finishPreparation(undefined);
-        const inbound = await normalizeInboundMessage(msg);
-        if (inbound) {
-          await maybeMarkNonSelfChatReadReceipt(inbound, buildReadReceiptTarget(inbound));
+        try {
+          const inbound = await normalizeInboundMessage(msg);
+          if (inbound) {
+            await maybeMarkNonSelfChatReadReceipt(inbound, buildReadReceiptTarget(inbound));
+          }
+        } catch (error) {
+          // The message is already completed; an unresolvable sender identity
+          // only prevents the read receipt, and the batch must keep processing.
+          inboundLogger.warn(
+            { error: formatError(error) },
+            "skipped read receipt for completed WhatsApp inbound with unresolvable identity",
+          );
         }
       } else if (result.kind === "durable" && result.queueResult.kind === "accepted") {
         if (skipRecentOutboundEcho) {
