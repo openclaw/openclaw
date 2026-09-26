@@ -912,3 +912,32 @@ test.each([
     expect(remove).toHaveBeenCalledOnce();
   },
 );
+
+test("process poll rejects the undeclared timeoutMs parameter instead of ignoring the wait", async () => {
+  const sessionId = "sess-undeclared-timeout-ms";
+  const { processTool } = createProcessSessionHarness(sessionId);
+
+  // The schema declares `timeout`; `timeoutMs` used to be accepted and dropped, so a poll that
+  // asked to wait returned immediately with a success result.
+  await expect(
+    processTool.execute("toolcall-undeclared-timeout-ms", {
+      action: "poll",
+      sessionId,
+      timeoutMs: 30_000,
+    } as never),
+  ).rejects.toThrow('process parameter "timeoutMs" is unsupported; use "timeout" instead');
+});
+
+test("process poll still tolerates unrelated model-added parameters", async () => {
+  const sessionId = "sess-tolerated-extra-param";
+  const { processTool } = createProcessSessionHarness(sessionId);
+
+  // The guard above is scoped to one undeclared name; extra keys stay tolerated.
+  const poll = await processTool.execute("toolcall-tolerated-extra-param", {
+    action: "poll",
+    sessionId,
+    description: "model-added explanation",
+  } as never);
+
+  expect(pollStatus(poll)).toBe("running");
+});
