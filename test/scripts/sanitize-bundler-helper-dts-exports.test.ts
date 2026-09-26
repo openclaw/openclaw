@@ -11,10 +11,13 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const roots = useAutoCleanupTempDirTracker(afterEach);
 
 describe("sanitizeBundlerHelperDtsExports", () => {
-  it("flags and removes an undeclared __exportAll named export", () => {
+  it.each([
+    { name: "literal", helper: "__exportAll" },
+    { name: "escaped", helper: String.raw`\u005f_exportAll` },
+  ])("flags and removes an undeclared $name helper export", ({ helper }) => {
     const source = [
       "export declare const keepMe: number;",
-      "export { keepMe as km, __exportAll as ud, alsoKeep as ak };",
+      `export { keepMe as km, ${helper} as ud, alsoKeep as ak };`,
       "export declare const alsoKeep: string;",
       "",
     ].join("\n");
@@ -27,7 +30,7 @@ describe("sanitizeBundlerHelperDtsExports", () => {
     expect(sanitized.removed).toEqual([{ name: "__exportAll", line: 2 }]);
     expect(sanitized.sourceText).toContain("keepMe as km");
     expect(sanitized.sourceText).toContain("alsoKeep as ak");
-    expect(sanitized.sourceText).not.toContain("__exportAll");
+    expect(sanitized.sourceText).not.toContain(helper);
     expect(findUndeclaredBundlerHelperDtsExports(sanitized.sourceText)).toEqual([]);
   });
 
@@ -51,20 +54,23 @@ describe("sanitizeBundlerHelperDtsExports", () => {
     expect(sanitizeBundlerHelperDtsExports(source).sourceText).toBe(source);
   });
 
-  it("removes generated helper aliases from mixed imports", () => {
+  it.each([
+    { name: "literal", helper: "__exportAll" },
+    { name: "escaped", helper: String.raw`\u005f_exportAll` },
+  ])("removes generated $name helper aliases from mixed imports", ({ helper }) => {
     const source = [
-      'import { keep as k, ud as __exportAll } from "./helper.js";',
+      `import { keep as k, ud as ${helper} } from "./helper.js";`,
       "export { keep as k };",
       "",
     ].join("\n");
     const sanitized = sanitizeBundlerHelperDtsExports(source);
     expect(sanitized.sourceText).toContain('import { keep as k } from "./helper.js";');
-    expect(sanitized.sourceText).not.toContain("__exportAll");
+    expect(sanitized.sourceText).not.toContain(helper);
 
     const onlyHelper = sanitizeBundlerHelperDtsExports(
-      'import { ud as __exportAll } from "./helper.js";\nexport {};\n',
+      `import { ud as ${helper} } from "./helper.js";\nexport {};\n`,
     );
-    expect(onlyHelper.sourceText).not.toContain("__exportAll");
+    expect(onlyHelper.sourceText).not.toContain(helper);
   });
 
   it("clears the published 2026.8.2 undeclared __exportAll export shape", () => {
