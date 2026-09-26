@@ -46,6 +46,13 @@ function hasOutstandingCompletion(entry: SubagentRunRecord): boolean {
   if (entry.requesterSettleWake) {
     return true;
   }
+  // finalizeResumedAnnounceGiveUp records a terminal "failed" delivery and
+  // closes cleanup bookkeeping in the same flow; no write path re-drives that
+  // row afterward (resume returns early once cleanupCompletedAt is durable).
+  // Rendering it as outstanding would re-inject the dead entry every turn.
+  if (entry.delivery?.status === "failed" && typeof entry.cleanupCompletedAt === "number") {
+    return false;
+  }
   return (
     entry.completion?.required === true &&
     entry.delivery?.disposition !== "intentional_non_delivery" &&

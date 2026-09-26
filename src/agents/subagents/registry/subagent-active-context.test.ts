@@ -385,4 +385,81 @@ describe("buildActiveSubagentRuntimeContext", () => {
     expect(laterParentTurn).toContain("run-later-parent-turn");
     expect(laterParentTurn).toContain('taskName_json="summarize_inbox"');
   });
+
+  it("stops rendering a failed delivery as awaiting once cleanup bookkeeping closed", () => {
+    // Shape from #154834: finalizeResumedAnnounceGiveUp wrote a terminal
+    // delivery failure, completed cleanup bookkeeping, and the settle wake has
+    // since cleared. No write path re-drives this row, so the awaiting-delivery
+    // block must not re-inject it on every later parent turn.
+    const endedAt = Date.now() - 90_000;
+    addSubagentRunForTests({
+      runId: "run-giveup-dead-delivery",
+      childSessionKey: "agent:main:subagent:giveup-dead-delivery",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "message-tool-only delivery task",
+      expectsCompletionMessage: true,
+      cleanup: "keep",
+      createdAt: endedAt - 120_000,
+      startedAt: endedAt - 120_000,
+      endedAt,
+      outcome: { status: "error" as const, error: "FailoverError: LLM request failed" },
+      endedReason: "subagent-error",
+      completion: { required: true, resultText: null },
+      delivery: {
+        status: "failed",
+        attemptCount: 3,
+        lastError: "completion agent did not use the message tool for message-tool-only delivery",
+      },
+      cleanupHandled: true,
+      cleanupCompletedAt: endedAt + 60_000,
+      endedHookEmittedAt: endedAt + 60_000,
+    } satisfies SubagentRunRecordOverrides);
+
+    const prompt = buildActiveSubagentRuntimeContext({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+    });
+
+    // The time-bounded recently-completed block may still surface the row as
+    // recovery evidence; the unbounded awaiting-delivery block must not.
+    expect(prompt).not.toContain("## Child results awaiting delivery");
+    expect(prompt).not.toContain("requester_continuation=");
+    expect(prompt).not.toContain('run_json="run-giveup-dead-delivery"');
+  });
+
+  it("keeps an in-flight failed delivery visible until cleanup closes it", () => {
+    // A failed delivery whose cleanup has not durably completed can still be
+    // resumed or re-driven after a restart, so it must stay an outstanding
+    // obligation for the requesting agent (#154834 fix keeps this shape).
+    const endedAt = Date.now() - 30_000;
+    addSubagentRunForTests({
+      runId: "run-failed-cleanup-open",
+      childSessionKey: "agent:main:subagent:failed-cleanup-open",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "recoverable delivery task",
+      expectsCompletionMessage: true,
+      cleanup: "keep",
+      createdAt: endedAt - 60_000,
+      startedAt: endedAt - 60_000,
+      endedAt,
+      outcome: { status: "error" as const, error: "FailoverError: LLM request failed" },
+      completion: { required: true, resultText: null },
+      delivery: { status: "failed", attemptCount: 1, lastError: "delivery retry pending" },
+      cleanupHandled: false,
+    } satisfies SubagentRunRecordOverrides);
+
+    const prompt = buildActiveSubagentRuntimeContext({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+    });
+
+    expect(prompt).toContain("## Child results awaiting delivery");
+    expect(prompt).toContain('run_json="run-failed-cleanup-open"');
+    expect(prompt).toContain("delivery=failed");
+    expect(prompt).toContain("requester_continuation=none");
+  });
 });
