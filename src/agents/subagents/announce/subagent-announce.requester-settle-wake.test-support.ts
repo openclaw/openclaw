@@ -78,6 +78,13 @@ export const deliverSpy = vi.fn(async (_params: Record<string, unknown>): Promis
   path: "direct",
 }));
 
+/** Outcome a batch at the attempt cap must close with, whatever its status is. */
+export const exhaustedAttemptOutcome: Result = {
+  delivered: false,
+  path: "none",
+  error: "requester settle wake attempts exhausted",
+};
+
 export function deliveredCallArg(): Record<string, unknown> {
   const call = deliverSpy.mock.calls[0]?.[0];
   if (!call) {

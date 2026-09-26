@@ -478,20 +478,24 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       return false;
     }
 
+    // A restart or an ambiguous delivery can leave a row at the cap in
+    // "dispatching". That state must exhaust like any other, or the batch
+    // replays one attempt key forever without ever completing.
+    if (state.attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS) {
+      completeBatch(settledBatch, state, {
+        delivered: false,
+        path: "none",
+        error: state.lastError ?? "requester settle wake attempts exhausted",
+      });
+      return false;
+    }
+
     let attemptIndex: number;
     if (state.status === "dispatching") {
       // Ambiguous delivery reuses its attempt key. Completed-turn RPC replay
       // is Gateway-local; the key alone is not a cross-restart delivery receipt.
       attemptIndex = Math.max(0, state.attemptCount - 1);
     } else {
-      if (state.attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS) {
-        completeBatch(settledBatch, state, {
-          delivered: false,
-          path: "none",
-          error: state.lastError ?? "requester settle wake attempts exhausted",
-        });
-        return false;
-      }
       attemptIndex = state.attemptCount;
       state = {
         status: "dispatching",

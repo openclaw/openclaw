@@ -103,6 +103,45 @@ function wakeParams(
   };
 }
 
+/**
+ * Re-admits one restart-stuck batch `admissions` times, like repeated cold
+ * drains, with no wall-clock waits. The row is restored at the attempt cap in
+ * "dispatching" (a restart between the capped dispatch and its outcome) and the
+ * delivery keeps deferring, which spends no attempt: every drain therefore
+ * reuses the same attempt key unless the cap guard covers that status too.
+ */
+export async function drainRestarts(
+  settle: typeof maybeWakeRequesterAfterAllChildrenSettled,
+  params: typeof wakeParams,
+  admissions = 3,
+): Promise<boolean[]> {
+  const wake = { status: "dispatching" as const, attemptCount: 3, batchRunIds: ["run-a", "run-b"] };
+  registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(
+    ["run-a", "run-b"].map((runId) =>
+      makeSettledChild({ runId, requesterSettleWake: { ...wake } }),
+    ),
+  );
+  deliverSpy.mockResolvedValue({
+    delivered: false,
+    path: "direct",
+    reason: "requester_turn_pending",
+  });
+  const wakes: boolean[] = [];
+  vi.useFakeTimers({ now: 0 });
+  try {
+    for (let index = 0; index < admissions; index += 1) {
+      wakes.push(await settle(params()));
+      // REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[0]; the deferral deadline it writes.
+      await vi.advanceTimersByTimeAsync(30_000);
+    }
+  } finally {
+    vi.useRealTimers();
+    // Restore the shared default delivery without clearing recorded calls.
+    deliverSpy.mockResolvedValue({ delivered: true, path: "direct" });
+  }
+  return wakes;
+}
+
 beforeEach(() => {
   findTranscriptEventMock.mockReset().mockResolvedValue(undefined);
   deliverSpy.mockClear();
