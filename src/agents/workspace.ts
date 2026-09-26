@@ -3,11 +3,11 @@
  * creates and reads AGENTS/SOUL/TOOLS-style bootstrap files while guarding
  * filesystem boundaries and recently-attested workspaces.
  */
-import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Minimatch } from "minimatch";
 import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
@@ -125,10 +125,6 @@ async function isGeneratedTemplateContent(fileName: string, content: string): Pr
   return retired !== undefined && retired.includes(sha256Hex(content));
 }
 
-function sha256Hex(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
-}
-
 function loadTemplate(name: string): Promise<string> {
   return getOrCreatePromise(
     workspaceTemplateCache,
@@ -171,11 +167,9 @@ export type ExtraBootstrapLoadDiagnostic = {
 /** Set of recognized bootstrap filenames for runtime validation */
 const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set(WORKSPACE_BOOTSTRAP_FILENAMES);
 
-const OPTIONAL_BOOTSTRAP_FILENAMES: ReadonlySet<string> = new Set([
-  DEFAULT_SOUL_FILENAME,
-  DEFAULT_IDENTITY_FILENAME,
-  DEFAULT_USER_FILENAME,
-]);
+const OPTIONAL_BOOTSTRAP_FILENAMES: ReadonlySet<string> = new Set(
+  WORKSPACE_ONBOARDING_PROFILE_FILENAMES,
+);
 
 /**
  * Bootstrap files whose absence is a normal workspace state rather than a fault:
@@ -300,31 +294,20 @@ async function workspaceRequiredBootstrapLooksCustomized(
   dir: string,
   opts?: { generatedHashes?: ReadonlyMap<string, string> },
 ): Promise<boolean> {
-  const fileNames = [DEFAULT_AGENTS_FILENAME];
   const generatedHashes = opts?.generatedHashes;
   if (generatedHashes && generatedHashes.size > 0) {
-    for (const fileName of fileNames) {
-      const filePath = path.join(dir, fileName);
-      const generatedHash = generatedHashes.get(fileName);
-      try {
-        const content = await fs.readFile(filePath, "utf-8");
-        const contentHash = sha256Hex(content);
-        if (
-          contentHash !== generatedHash &&
-          !(await isGeneratedTemplateContent(fileName, content))
-        ) {
-          return true;
-        }
-      } catch {
-        // Missing generated files are not customization evidence.
-      }
+    try {
+      const content = await fs.readFile(path.join(dir, DEFAULT_AGENTS_FILENAME), "utf-8");
+      return (
+        sha256Hex(content) !== generatedHashes.get(DEFAULT_AGENTS_FILENAME) &&
+        !(await isGeneratedTemplateContent(DEFAULT_AGENTS_FILENAME, content))
+      );
+    } catch {
+      // Missing generated files are not customization evidence.
+      return false;
     }
-    return false;
   }
-  const fileDiffs = await Promise.all(
-    fileNames.map((fileName) => fileContentDiffersFromTemplate(dir, fileName)),
-  );
-  return fileDiffs.some(Boolean);
+  return fileContentDiffersFromTemplate(dir, DEFAULT_AGENTS_FILENAME);
 }
 
 async function workspaceAttestedGeneratedFilesIntact(
@@ -342,8 +325,7 @@ async function workspaceAttestedGeneratedFilesIntact(
     }
     try {
       const content = await fs.readFile(path.join(dir, fileName), "utf-8");
-      const contentHash = createHash("sha256").update(content).digest("hex");
-      if (contentHash !== generatedHash) {
+      if (sha256Hex(content) !== generatedHash) {
         return false;
       }
     } catch {
@@ -533,12 +515,7 @@ async function workspaceSetupStateHasSurvivalEvidence(params: {
     return true;
   }
   const generatedHashes = await collectGeneratedBootstrapHashes(params.dir);
-  return [
-    DEFAULT_AGENTS_FILENAME,
-    DEFAULT_SOUL_FILENAME,
-    DEFAULT_IDENTITY_FILENAME,
-    DEFAULT_USER_FILENAME,
-  ].every((fileName) => generatedHashes.has(fileName));
+  return GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES.every((fileName) => generatedHashes.has(fileName));
 }
 
 async function readCanonicalWorkspaceStateSnapshot(

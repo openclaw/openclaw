@@ -353,14 +353,14 @@ internal class WearProxyClient private constructor(
             selectReachablePhoneNodeId(
               capabilityClient
                 .getCapability(WearProtocol.PHONE_CAPABILITY, CapabilityClient.FILTER_REACHABLE)
-                .await()
+                .awaitWearTask()
                 .nodes
                 .map { node -> WearReachablePhoneNode(id = node.id, isNearby = node.isNearby) },
             )
           },
         transport =
           WearMessageTransport { nodeId, path, data ->
-            messageClient.sendMessage(nodeId, path, data).await()
+            messageClient.sendMessage(nodeId, path, data).awaitWearTask()
           },
       )
     }
@@ -598,7 +598,7 @@ internal class WearEventResyncBuffer(
   }
 }
 
-private suspend fun <T> Task<T>.await(): T =
+internal suspend fun <T> Task<T>.awaitWearTask(): T =
   suspendCancellableCoroutine { continuation ->
     addOnSuccessListener { value -> if (continuation.isActive) continuation.resume(value) }
     addOnFailureListener { error -> if (continuation.isActive) continuation.resumeWithException(error) }

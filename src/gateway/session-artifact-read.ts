@@ -13,6 +13,13 @@ import {
   ASSISTANT_DISPLAY_CONTENT_FIELD,
   readAssistantDisplayContent,
 } from "../shared/assistant-display-content.js";
+import {
+  type ArtifactDownloadResponse,
+  type ArtifactDownloadResponseRequest,
+  type PreparedArtifactDownload,
+  prepareArtifactDownload,
+  prepareArtifactDownloadResponse,
+} from "./artifact-download-projection.js";
 import { parseManagedOutgoingArtifactId } from "./managed-outgoing-artifact-id.js";
 import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
 import {
@@ -21,6 +28,7 @@ import {
   resolveBlockDownload,
   resolveMessageRunId,
   resolveMessageTaskId,
+  toArtifactSummary,
 } from "./server-methods/artifacts-content.js";
 import type { SessionTranscriptReader } from "./session-transcript-read-kernel.js";
 import {
@@ -32,6 +40,10 @@ const IMAGE_PAGE_MESSAGES = 32;
 const IMAGE_PAGE_BYTES = 256 * 1024;
 
 type SessionArtifactFilters = Pick<ArtifactsListParams, "runId" | "taskId" | "messageRole">;
+type ArtifactReaders = Pick<
+  SessionTranscriptReader,
+  "visitSessionMessagesAsync" | "readSessionMessagesPageWithStatsAsync"
+>;
 
 export type SessionArtifactReadQuery = SessionArtifactFilters &
   (
@@ -55,6 +67,17 @@ export type SessionArtifactReadQuery = SessionArtifactFilters &
         artifactId: string;
         includeData: boolean;
       }
+    | {
+        kind: "download-grant";
+        sessionKey: string;
+        artifactId: string;
+      }
+    | {
+        kind: "download-response";
+        sessionKey: string;
+        artifactId: string;
+        response: ArtifactDownloadResponseRequest;
+      }
   );
 
 export type SessionArtifactReadResult =
@@ -65,7 +88,14 @@ export type SessionArtifactReadResult =
       next?: { beforeSeq: number; imageOffset: number; readWindow: TranscriptReadWindow };
       omittedOversized?: boolean;
     }
-  | { kind: "image"; artifact?: ArtifactRecord };
+  | { kind: "image"; artifact?: ArtifactRecord }
+  | {
+      kind: "download-grant";
+      selection?:
+        | { kind: "prepared"; download: PreparedArtifactDownload }
+        | { kind: "raw"; artifact: ArtifactRecord };
+    }
+  | { kind: "download-response"; response?: ArtifactDownloadResponse };
 
 function normalizeArtifactType(value: string): string {
   const normalized = value.trim().toLowerCase();
@@ -251,40 +281,86 @@ function collectArtifactsFromMessage(params: {
   }
 }
 
-function toSummary(artifact: ArtifactRecord): ArtifactSummary {
-  const { data: _data, url: _url, ...summary } = artifact;
-  return summary;
+async function readArtifactList(
+  scope: SessionTranscriptReadScope,
+  query: Extract<SessionArtifactReadQuery, { kind: "list" }>,
+  readers: ArtifactReaders,
+): Promise<ArtifactRecord[]> {
+  const artifacts: ArtifactRecord[] = [];
+  const collection = { artifacts, count: 0 };
+  const downloadArtifactIds = query.downloadArtifactIds
+    ? new Set(query.downloadArtifactIds)
+    : undefined;
+  await readers.visitSessionMessagesAsync(scope, (message, seq) => {
+    collectArtifactsFromMessage({
+      message,
+      messageFallbackSeq: seq,
+      collection,
+      sessionKey: query.sessionKey,
+      runId: query.runId,
+      taskId: query.taskId,
+      messageRole: query.messageRole,
+      includeDownloadData: query.includeDownloadData,
+      downloadArtifactIds,
+    });
+  });
+  return artifacts;
 }
 
 /** Select transcript artifacts inside the caller's admitted read owner. */
 export async function selectSessionArtifacts(
   scope: SessionTranscriptReadScope,
   query: SessionArtifactReadQuery,
-  readers: Pick<
-    SessionTranscriptReader,
-    "visitSessionMessagesAsync" | "readSessionMessagesPageWithStatsAsync"
-  >,
+  readers: ArtifactReaders,
 ): Promise<SessionArtifactReadResult> {
+  if (query.kind === "download-grant" || query.kind === "download-response") {
+    const selection = {
+      sessionKey: query.sessionKey,
+      runId: query.runId,
+      taskId: query.taskId,
+      messageRole: query.messageRole,
+    };
+    const artifact = parseTranscriptImageArtifactId(query.artifactId)
+      ? await readTranscriptImageArtifact(
+          scope,
+          { ...selection, kind: "image", artifactId: query.artifactId, includeData: true },
+          readers,
+        )
+      : (
+          await readArtifactList(
+            scope,
+            {
+              ...selection,
+              kind: "list",
+              includeDownloadData: true,
+              downloadArtifactIds: [query.artifactId],
+            },
+            readers,
+          )
+        )[0];
+    if (query.kind === "download-response") {
+      return {
+        kind: "download-response",
+        response: artifact ? prepareArtifactDownloadResponse(artifact, query.response) : undefined,
+      };
+    }
+    if (!artifact) {
+      return { kind: "download-grant" };
+    }
+    if (parseManagedOutgoingArtifactId(artifact.id)) {
+      return {
+        kind: "download-grant",
+        selection: { kind: "raw", artifact: toArtifactSummary(artifact) },
+      };
+    }
+    const download = prepareArtifactDownload(artifact);
+    return {
+      kind: "download-grant",
+      selection: download ? { kind: "prepared", download } : { kind: "raw", artifact },
+    };
+  }
   if (query.kind === "list") {
-    const artifacts: ArtifactRecord[] = [];
-    const collection = { artifacts, count: 0 };
-    const downloadArtifactIds = query.downloadArtifactIds
-      ? new Set(query.downloadArtifactIds)
-      : undefined;
-    await readers.visitSessionMessagesAsync(scope, (message, seq) => {
-      collectArtifactsFromMessage({
-        message,
-        messageFallbackSeq: seq,
-        collection,
-        sessionKey: query.sessionKey,
-        runId: query.runId,
-        taskId: query.taskId,
-        messageRole: query.messageRole,
-        includeDownloadData: query.includeDownloadData,
-        downloadArtifactIds,
-      });
-    });
-    return { kind: "list", artifacts };
+    return { kind: "list", artifacts: await readArtifactList(scope, query, readers) };
   }
   if (query.kind === "image-page") {
     const page = await readers.readSessionMessagesPageWithStatsAsync(scope, {
@@ -316,7 +392,7 @@ export async function selectSessionArtifacts(
       });
       const images = collected
         .filter((artifact) => artifact.image)
-        .map(toSummary)
+        .map(toArtifactSummary)
         .toReversed();
       const start = query.beforeSeq === seq + 1 ? (query.imageOffset ?? 0) : 0;
       for (let index = start; index < images.length; index++) {
@@ -351,9 +427,18 @@ export async function selectSessionArtifacts(
       ...(page.omittedOversized ? { omittedOversized: true } : {}),
     };
   }
+  const artifact = await readTranscriptImageArtifact(scope, query, readers);
+  return artifact ? { kind: "image", artifact } : { kind: "image" };
+}
+
+async function readTranscriptImageArtifact(
+  scope: SessionTranscriptReadScope,
+  query: Extract<SessionArtifactReadQuery, { kind: "image" }>,
+  readers: ArtifactReaders,
+): Promise<ArtifactRecord | undefined> {
   const reference = parseTranscriptImageArtifactId(query.artifactId);
   if (!reference) {
-    return { kind: "image" };
+    return undefined;
   }
   const page = await readers.readSessionMessagesPageWithStatsAsync(scope, {
     offset: 0,
@@ -370,29 +455,26 @@ export async function selectSessionArtifacts(
     (query.runId && resolveMessageRunId(message) !== query.runId) ||
     (query.taskId && resolveMessageTaskId(message) !== query.taskId)
   ) {
-    return { kind: "image" };
+    return undefined;
   }
   const download = resolveBlockDownload(block, { includeData: query.includeData });
   if (download.mode !== "bytes") {
-    return { kind: "image" };
+    return undefined;
   }
   return {
-    kind: "image",
-    artifact: {
-      id: query.artifactId,
-      type: "image",
-      title:
-        asNonEmptyString(block.title) ??
-        asNonEmptyString(block.fileName) ??
-        asNonEmptyString(block.alt) ??
-        "Image",
-      mimeType: download.mimeType ?? "image/png",
-      sizeBytes: download.sizeBytes,
-      sessionKey: query.sessionKey,
-      messageSeq: reference.messageSeq,
-      source: "session-transcript",
-      download: { mode: "bytes" },
-      ...(download.data !== undefined ? { data: download.data } : {}),
-    },
+    id: query.artifactId,
+    type: "image",
+    title:
+      asNonEmptyString(block.title) ??
+      asNonEmptyString(block.fileName) ??
+      asNonEmptyString(block.alt) ??
+      "Image",
+    mimeType: download.mimeType ?? "image/png",
+    sizeBytes: download.sizeBytes,
+    sessionKey: query.sessionKey,
+    messageSeq: reference.messageSeq,
+    source: "session-transcript",
+    download: { mode: "bytes" },
+    ...(download.data !== undefined ? { data: download.data } : {}),
   };
 }

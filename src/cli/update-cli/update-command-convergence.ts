@@ -1,8 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import { hasDeferredUpdateModelRetirement } from "../../infra/update-deferred-model-retirement.js";
@@ -20,7 +18,10 @@ import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.j
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
-import { persistValidatedDowngradeConfig } from "./update-command-config.js";
+import {
+  capturePreUpdateSourceConfig,
+  persistValidatedDowngradeConfig,
+} from "./update-command-config.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 import {
   collectPostCorePluginAdvisories,
@@ -77,14 +78,7 @@ export async function convergeUpdatePlugins(params: {
         ? result.recovery
         : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
   });
-  const preUpdateConfig = params.configSnapshot.valid
-    ? {
-        sourceConfig: params.configSnapshot.sourceConfig,
-        authoredConfig: isRecord(params.configSnapshot.parsed)
-          ? (params.configSnapshot.parsed as OpenClawConfig) // SAFETY: valid snapshot validated this authored record.
-          : params.configSnapshot.sourceConfig,
-      }
-    : undefined;
+  const preUpdateConfig = capturePreUpdateSourceConfig(params.configSnapshot);
 
   const postUpdateInstalledVersion = await readPackageVersion(postUpdateRoot);
   assertCurrent?.();
@@ -168,6 +162,7 @@ export async function convergeUpdatePlugins(params: {
         }
         const freshProcessResult = await continuePostCoreUpdateInFreshProcess({
           root: postUpdateRoot,
+          sourceRuntimePrepared: params.result.sourceRuntimePrepared,
           channel: params.channel,
           requestedChannel: params.requestedChannel,
           opts: params.opts,
@@ -221,6 +216,7 @@ export async function convergeUpdatePlugins(params: {
         : await withPluginLifecycleLease({ assertCurrent }, (lease) =>
             completeSourceUpdateRuntime({
               root: postUpdateRoot,
+              sourceRuntimePrepared: params.result.sourceRuntimePrepared,
               timeoutMs: params.updateStepTimeoutMs,
               lease,
               beforePersistentEffect: assertCurrent,

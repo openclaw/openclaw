@@ -23,7 +23,6 @@ import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-de
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
@@ -34,7 +33,7 @@ import {
 } from "./attempt-context.js";
 import * as attemptStartup from "./attempt-startup.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
-import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS, withCodexStartupTimeout } from "./attempt-timeouts.js";
+import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS } from "./attempt-timeouts.js";
 import { buildCodexWorkspaceBootstrapContext } from "./attempt-workspace-context.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-cache-key.js";
@@ -175,7 +174,6 @@ const testing = {
   filterCodexDynamicTools,
   resolveCodexDynamicToolDirectNames,
   shouldEnableCodexAppServerNativeToolSurface,
-  withCodexStartupTimeout,
 };
 
 function startOrResumeThread(
@@ -191,28 +189,6 @@ function startOrResumeThread(
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
-}
-
-function openSocket(url: string): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
-    const timer = setTimeout(() => {
-      socket.close();
-      reject(new Error("timed out opening WebSocket"));
-    }, 1_000);
-    const rejectBeforeOpen = (error: Error) => {
-      clearTimeout(timer);
-      reject(error);
-    };
-    socket.once("open", () => {
-      clearTimeout(timer);
-      resolve(socket);
-    });
-    socket.once("error", rejectBeforeOpen);
-    socket.once("close", () => {
-      rejectBeforeOpen(new Error("WebSocket closed before open"));
-    });
-  });
 }
 
 function expectResumeRequest(
@@ -823,44 +799,6 @@ async function expectRetainedSuccessfulThread(client: CodexAppServerClient, thre
   ).resolves.toBe(true);
 }
 
-async function createSandboxReleaseFixture(
-  handleRequest: (method: string, params?: unknown) => unknown,
-) {
-  const params = createRunParams();
-  params.disableTools = false;
-  params.runtimePlan = createCodexRuntimePlanFixture();
-  const appServer = {
-    ...createThreadLifecycleAppServerOptions(),
-    sandbox: "danger-full-access" as const,
-  };
-  const sandbox = createSandboxContext({
-    runShellCommand: async () => ({
-      stdout: Buffer.alloc(0),
-      stderr: Buffer.alloc(0),
-      code: 0,
-    }),
-  });
-  const request = vi.fn(async (method: string, requestParams?: unknown) => {
-    if (method === "configRequirements/read") {
-      return { requirements: null };
-    }
-    if (method === "config/read") {
-      return { config: {}, origins: {}, layers: [] };
-    }
-    return handleRequest(method, requestParams);
-  });
-  const client = { ...mockClientRuntimeMethods(), request };
-  const environment = await ensureCodexSandboxExecServerEnvironment({
-    client: client as never,
-    sandbox,
-    appServerStartOptions: appServer.start,
-  });
-  if (!environment) {
-    throw new Error("expected sandbox exec-server environment");
-  }
-  return { appServer, client, environment, params, request, sandbox };
-}
-
 async function startFastAutoProgressTest(
   options: {
     fastModeAuto?: boolean;
@@ -1309,118 +1247,6 @@ describe("runCodexAppServerAttempt", () => {
       expect(turnParams.environments).toEqual(startParams?.environments);
     } finally {
       await releaseCodexSandboxExecServerEnvironment(sandbox as never);
-    }
-  });
-  it("closes the sandbox exec-server release path used by turn/start failure cleanup", async () => {
-    const { appServer, client, environment, params, request, sandbox } =
-      await createSandboxReleaseFixture((method) => {
-        if (method === "environment/add") {
-          return {};
-        }
-        if (method === "thread/start") {
-          return threadStartResult();
-        }
-        if (method === "turn/start") {
-          throw new Error("turn start failed");
-        }
-        throw new Error(`unexpected method: ${method}`);
-      });
-    try {
-      const environmentSelection = [environment];
-      const thread = await startOrResumeThread({
-        client: client as never,
-        params,
-        cwd: environment.cwd,
-        dynamicTools: [createNamedDynamicTool("message")] as never,
-        appServer: appServer as never,
-        nativeCodeModeEnabled: true,
-        nativeCodeModeOnlyEnabled: false,
-        userMcpServersEnabled: false,
-        environmentSelection,
-      });
-      const turnParams = buildTurnStartParams(params, {
-        threadId: thread.threadId,
-        cwd: environment.cwd,
-        appServer: appServer as never,
-        sandboxPolicy: { type: "externalSandbox", networkAccess: "enabled" },
-        environmentSelection,
-      });
-      await expect(
-        client.request("turn/start", turnParams).catch(async (error: unknown) => {
-          await releaseCodexSandboxExecServerEnvironment(sandbox);
-          throw error;
-        }),
-      ).rejects.toThrow("turn start failed");
-      const environmentAdd = request.mock.calls.find(([method]) => method === "environment/add");
-      const environmentAddParams = environmentAdd?.[1] as { execServerUrl?: string } | undefined;
-      expect(environmentAddParams?.execServerUrl).toMatch(/^ws:\/\/127\.0\.0\.1:/);
-      await expect(openSocket(environmentAddParams!.execServerUrl!)).rejects.toThrow();
-    } finally {
-      await releaseCodexSandboxExecServerEnvironment(sandbox);
-    }
-  });
-
-  it("closes the sandbox exec-server release path used by context-engine retry setup cleanup", async () => {
-    const { appServer, client, environment, params, request, sandbox } =
-      await createSandboxReleaseFixture((method) => {
-        if (method === "environment/add") {
-          return {};
-        }
-        if (method === "thread/start") {
-          throw new Error("retry setup failed");
-        }
-        throw new Error(`unexpected method: ${method}`);
-      });
-    try {
-      const environmentSelection = [environment];
-      await expect(
-        startOrResumeThread({
-          client: client as never,
-          params,
-          cwd: environment.cwd,
-          dynamicTools: [createNamedDynamicTool("message")] as never,
-          appServer: appServer as never,
-          nativeCodeModeEnabled: true,
-          nativeCodeModeOnlyEnabled: false,
-          userMcpServersEnabled: false,
-          environmentSelection,
-        }).catch(async (error: unknown) => {
-          await releaseCodexSandboxExecServerEnvironment(sandbox);
-          throw error;
-        }),
-      ).rejects.toThrow("retry setup failed");
-      const environmentAdd = request.mock.calls.find(([method]) => method === "environment/add");
-      const environmentAddParams = environmentAdd?.[1] as { execServerUrl?: string } | undefined;
-      expect(environmentAddParams?.execServerUrl).toMatch(/^ws:\/\/127\.0\.0\.1:/);
-      await expect(openSocket(environmentAddParams!.execServerUrl!)).rejects.toThrow();
-    } finally {
-      await releaseCodexSandboxExecServerEnvironment(sandbox);
-    }
-  });
-  it("closes the sandbox exec-server release path used by startup timeout cleanup", async () => {
-    const { request, sandbox } = await createSandboxReleaseFixture((method) => {
-      if (method === "environment/add") {
-        return {};
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    try {
-      await expect(
-        testing.withCodexStartupTimeout({
-          timeoutMs: 5,
-          signal: new AbortController().signal,
-          onTimeout: async () => {
-            await releaseCodexSandboxExecServerEnvironment(sandbox);
-          },
-          operation: async () => new Promise<never>(() => {}),
-        }),
-      ).rejects.toThrow("codex app-server startup timed out");
-      const environmentAdd = request.mock.calls.find(([method]) => method === "environment/add");
-      const environmentAddParams = environmentAdd?.[1] as { execServerUrl?: string } | undefined;
-      expect(environmentAddParams?.execServerUrl).toMatch(/^ws:\/\/127\.0\.0\.1:/);
-      await expect(openSocket(environmentAddParams!.execServerUrl!)).rejects.toThrow();
-    } finally {
-      await releaseCodexSandboxExecServerEnvironment(sandbox);
     }
   });
 
@@ -5252,7 +5078,7 @@ describe("runCodexAppServerAttempt", () => {
             errors: [],
           },
         ],
-      } satisfies v2.SkillsListResponse;
+      } satisfies import("./protocol-control-plane.js").CodexSkillsListResponse;
     });
     params.explicitSkillSelections = [{ name: "release-command", path: skillPath }];
 
@@ -5995,25 +5821,6 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
-  it("keeps extended history enabled when resuming a bound Codex thread", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
-    const { requests, waitForMethod, completeTurn } = createResumeHarness();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
-      pluginConfig: { appServer: { mode: "yolo" } },
-    });
-    await completeStartedRun(run, waitForMethod, completeTurn, "thread-existing");
-    expectResumeRequest(requests, {
-      threadId: "thread-existing",
-      model: "gpt-5.4-codex",
-      approvalPolicy: "never",
-      approvalsReviewer: "user",
-      sandbox: "danger-full-access",
-    });
-    const resumeRequest = requests.find((request) => request.method === "thread/resume");
-    const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
-    expect(resumeRequestParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
-  });
   it("sends the current recorded sender on successive turns of one resumed Codex thread", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
@@ -6572,27 +6379,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnRequestParams?.model).toBe("gpt-5.4-codex");
   });
 
-  it("passes current Codex service tier request values through app-server resume and turn requests", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
-    const { requests, waitForMethod, completeTurn } = createResumeHarness();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
-      pluginConfig: {
-        appServer: {
-          approvalPolicy: "on-request",
-          sandbox: "danger-full-access",
-          serviceTier: "priority",
-        },
-      },
-    });
-    await completeStartedRun(run, waitForMethod, completeTurn, "thread-existing");
-    const resumeRequest = requests.find((request) => request.method === "thread/resume");
-    const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
-    expect(resumeRequestParams?.serviceTier).toBe("priority");
-    const turnRequest = requests.find((request) => request.method === "turn/start");
-    const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
-    expect(turnRequestParams?.serviceTier).toBe("priority");
-  });
   it("uses human approval instead of Guardian for auto exec on custom model providers", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();

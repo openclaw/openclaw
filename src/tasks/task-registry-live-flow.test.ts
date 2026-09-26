@@ -527,10 +527,19 @@ it.each(["current row", "retired store", "retired admission"] as const)(
       async () => readRows(),
     );
     const releaseRead = createDeferred();
-    const asyncRead = vi.spyOn(store, "loadMutationSnapshotAsync").mockImplementation(async () => {
-      await releaseRead.promise;
-      return readRows();
-    });
+    const asyncRead = vi
+      .spyOn(store, "loadMutationSnapshotAsync")
+      .mockImplementation(async (readContext) => {
+        const admission = readContext.admission;
+        readContext.admission = {
+          ...admission,
+          get identity() {
+            return admission.identity;
+          },
+        };
+        await releaseRead.promise;
+        return readRows();
+      });
     const syncRead = vi.spyOn(store, "loadSnapshot").mockImplementation(() => {
       throw new Error("Unexpected synchronous task refresh");
     });

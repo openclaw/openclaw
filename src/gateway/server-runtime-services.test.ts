@@ -18,7 +18,10 @@ import {
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { useSpawnBrokerTestFixture } from "../process/spawn-broker/host.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { registerGatewayCronStartupTests } from "./server-runtime-services.cron.test-support.js";
 import {
   createLog,
@@ -784,13 +787,16 @@ describe("server-runtime-services", () => {
   });
 
   it("runs a scheduled idle task in an independent admitted root", async () => {
-    vi.useFakeTimers();
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
     const activeRootCounts: number[] = [];
     const run = vi.fn(async () => {
       activeRootCounts.push(getActiveGatewayRootWorkCount());
     });
 
     scheduleGatewayIdleTask({
+      id: "test:idle",
+      scheduler,
       delayMs: 25,
       retryDelayMs: 50,
       isClosing: () => false,
@@ -800,14 +806,15 @@ describe("server-runtime-services", () => {
       errorMessage: "idle task failed",
     });
 
-    await vi.advanceTimersByTimeAsync(25);
-    await waitForFast(() => expect(run).toHaveBeenCalledOnce());
+    await clock.advanceBy(25);
+    expect(run).toHaveBeenCalledOnce();
     expect(activeRootCounts).toEqual([1]);
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
   it("retries a scheduled idle task while request work is active", async () => {
-    vi.useFakeTimers();
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
     const admission = tryBeginGatewayRootWorkAdmission();
     if (!admission) {
       throw new Error("Expected request work admission");
@@ -815,6 +822,8 @@ describe("server-runtime-services", () => {
     const run = vi.fn(async () => undefined);
 
     scheduleGatewayIdleTask({
+      id: "test:idle",
+      scheduler,
       delayMs: 25,
       retryDelayMs: 50,
       isClosing: () => false,
@@ -824,17 +833,18 @@ describe("server-runtime-services", () => {
       errorMessage: "idle task failed",
     });
 
-    await vi.advanceTimersByTimeAsync(25);
+    await clock.advanceBy(25);
     expect(run).not.toHaveBeenCalled();
     admission.release();
-    await vi.advanceTimersByTimeAsync(49);
+    await clock.advanceBy(49);
     expect(run).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    await waitForFast(() => expect(run).toHaveBeenCalledOnce());
+    await clock.advanceBy(1);
+    expect(run).toHaveBeenCalledOnce();
   });
 
   it("rechecks request work after joining the admitted root set", async () => {
-    vi.useFakeTimers();
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
     const run = vi.fn(async () => undefined);
     const isBusy = vi
       .fn()
@@ -843,6 +853,8 @@ describe("server-runtime-services", () => {
       .mockReturnValue(false);
 
     scheduleGatewayIdleTask({
+      id: "test:idle",
+      scheduler,
       delayMs: 25,
       retryDelayMs: 50,
       isClosing: () => false,
@@ -852,19 +864,22 @@ describe("server-runtime-services", () => {
       errorMessage: "idle task failed",
     });
 
-    await vi.advanceTimersByTimeAsync(25);
+    await clock.advanceBy(25);
     expect(run).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(49);
+    await clock.advanceBy(49);
     expect(run).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    await waitForFast(() => expect(run).toHaveBeenCalledOnce());
+    await clock.advanceBy(1);
+    expect(run).toHaveBeenCalledOnce();
     expect(isBusy).toHaveBeenCalledTimes(4);
   });
 
   it("cancels a scheduled idle task before its delay elapses", async () => {
-    vi.useFakeTimers();
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
     const run = vi.fn(async () => undefined);
     const handle = scheduleGatewayIdleTask({
+      id: "test:idle",
+      scheduler,
       delayMs: 25,
       retryDelayMs: 50,
       isClosing: () => false,
@@ -875,7 +890,7 @@ describe("server-runtime-services", () => {
     });
 
     await handle.stop();
-    await vi.advanceTimersByTimeAsync(25);
+    await clock.advanceBy(25);
 
     expect(run).not.toHaveBeenCalled();
   });

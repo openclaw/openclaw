@@ -708,7 +708,7 @@ describe("dedicated worker websocket protocol", () => {
       agentId: "main",
       sessionKey: "agent:main:worker-suspension",
     };
-    const active = advancePlacementFixtureToActive(placements, database, session);
+    const active = await advancePlacementFixtureToActive(placements, database, session);
     const claim = await placements.claimTurn({
       ...session,
       claimId: templateClaim.claimId,

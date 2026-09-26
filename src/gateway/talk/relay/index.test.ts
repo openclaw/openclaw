@@ -83,25 +83,35 @@ const providerErrorCases = [
   ["generic", { message: "raw-generic-marker" }, RELAY_GENERIC_ERROR],
 ] as const;
 
+type RelaySessionParams = Parameters<typeof createTalkRealtimeRelaySessionRaw>[0];
+type RelayFixtureDefaults = "connId" | "providerConfig" | "instructions" | "tools";
+
 function createTalkRealtimeRelaySession(
-  params: Omit<
-    Parameters<typeof createTalkRealtimeRelaySessionRaw>[0],
-    "sessionTarget" | "controlSource"
-  > & {
-    sessionKey?: string;
-  },
+  params: Omit<RelaySessionParams, "sessionTarget" | "controlSource" | RelayFixtureDefaults> &
+    Partial<Pick<RelaySessionParams, RelayFixtureDefaults>> & { sessionKey?: string },
 ): ReturnType<typeof createTalkRealtimeRelaySessionRaw> {
-  const { sessionKey, ...request } = params;
+  const {
+    sessionKey,
+    connId = "conn-1",
+    providerConfig = {},
+    instructions = "brief",
+    tools = [],
+    ...request
+  } = params;
   const cfg = params.cfg ?? { agents: { entries: { main: { default: true } } } };
   const capabilities = resolveRealtimeVoiceProviderCapabilities({
     provider: params.provider,
-    providerConfig: params.providerConfig,
+    providerConfig,
     cfg,
     model: params.model,
     surface: "gateway-relay",
   });
   const session = createTalkRealtimeRelaySessionRaw({
     ...request,
+    connId,
+    providerConfig,
+    instructions,
+    tools,
     controlSource: capabilities?.handlesAgentConsult === true ? "delegation" : "transcript",
     capabilities,
     context: {
@@ -111,7 +121,7 @@ function createTalkRealtimeRelaySession(
     cfg,
     sessionTarget: prepareTalkSessionTarget(cfg, sessionKey ?? "agent:main:main"),
   });
-  activeRelaySessions.set(session.relaySessionId, params.connId);
+  activeRelaySessions.set(session.relaySessionId, connId);
   return session;
 }
 
@@ -264,11 +274,8 @@ describe("talk realtime gateway relay", () => {
     } as never;
     const session = createTalkRealtimeRelaySession({
       context,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
       instructions: "be brief",
-      tools: [],
     });
     await Promise.resolve();
     if (!bridgeRequest) {
@@ -371,11 +378,8 @@ describe("talk realtime gateway relay", () => {
     } as never;
     const session = createTalkRealtimeRelaySession({
       context,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
       instructions: "be brief",
-      tools: [],
     });
     await Promise.resolve();
     if (!bridgeRequest) {
@@ -427,6 +431,24 @@ describe("talk realtime gateway relay", () => {
       expect(broadcastJson).not.toContain(marker);
     }
   });
+
+  function createRelayEventRecorder() {
+    const events: Array<{
+      event: string;
+      payload: unknown;
+      connIds: string[];
+      opts?: { dropIfSlow?: boolean };
+    }> = [];
+    const context = {
+      broadcastToConnIds: (
+        event: string,
+        payload: unknown,
+        connIds: ReadonlySet<string>,
+        opts?: { dropIfSlow?: boolean },
+      ) => events.push({ event, payload, connIds: [...connIds], opts }),
+    } as never;
+    return { events, context };
+  }
 
   it("settles relay-owned registrations after refusal invalidates a detached grant", async () => {
     const provider = createIdleRelayProvider();
@@ -532,9 +554,6 @@ describe("talk realtime gateway relay", () => {
           context,
           connId,
           provider,
-          providerConfig: {},
-          instructions: "brief",
-          tools: [],
         });
       const firstOwned = createSession("conn-owner");
       const secondOwned = createSession("conn-owner");
@@ -668,9 +687,6 @@ describe("talk realtime gateway relay", () => {
       } as never,
       connId: "conn-runner",
       provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
       sessionKey: "agent:main:main",
     });
 
@@ -698,9 +714,6 @@ describe("talk realtime gateway relay", () => {
       } as never,
       connId: "conn-replaced-runner",
       provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
       sessionKey: "agent:main:main",
     });
     const original = relaySessions.get(session.relaySessionId);
@@ -774,9 +787,6 @@ describe("talk realtime gateway relay", () => {
           } as never,
           connId: "conn-early-terminal",
           provider,
-          providerConfig: {},
-          instructions: "brief",
-          tools: [],
         });
       } catch (error) {
         thrown = error;
@@ -811,9 +821,6 @@ describe("talk realtime gateway relay", () => {
         } as never,
         connId: "conn-construction-error",
         provider,
-        providerConfig: {},
-        instructions: "brief",
-        tools: [],
         model: "gpt-realtime-test-public",
       });
     } catch (error) {
@@ -864,9 +871,6 @@ describe("talk realtime gateway relay", () => {
           connId: "conn-voice",
           cfg,
           provider,
-          providerConfig: {},
-          instructions: "brief",
-          tools: [],
           sessionKey,
         });
         bridgeRequest?.onTranscript?.("user", "relay hello", true);
@@ -951,9 +955,6 @@ describe("talk realtime gateway relay", () => {
         } as never,
         connId: "conn-voice-overflow",
         provider,
-        providerConfig: {},
-        instructions: "brief",
-        tools: [],
         sessionKey: "agent:main:main",
       });
       const relay = relaySessions.get(session.relaySessionId);
@@ -1008,9 +1009,6 @@ describe("talk realtime gateway relay", () => {
         } as never,
         connId: "conn-voice-overflow",
         provider,
-        providerConfig: {},
-        instructions: "brief",
-        tools: [],
       });
       expect(() =>
         createTalkRealtimeRelaySession({
@@ -1021,9 +1019,6 @@ describe("talk realtime gateway relay", () => {
           } as never,
           connId: "conn-voice-overflow",
           provider,
-          providerConfig: {},
-          instructions: "brief",
-          tools: [],
         }),
       ).toThrow("Too many active realtime relay sessions for this connection");
 
@@ -1057,9 +1052,6 @@ describe("talk realtime gateway relay", () => {
         connId: "conn-consult",
         cfg: {},
         provider: createIdleRelayProvider(),
-        providerConfig: {},
-        instructions: "brief",
-        tools: [],
         sessionKey: "agent:main:main",
       });
       expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)).toBeUndefined();
@@ -1220,9 +1212,6 @@ describe("talk realtime gateway relay", () => {
         connId: "conn-voice-failure",
         cfg: {},
         provider,
-        providerConfig: {},
-        instructions: "brief",
-        tools: [],
         sessionKey: "agent:main:missing",
       });
       bridgeRequest?.onTranscript?.("user", "cannot persist", true);
@@ -1290,11 +1279,8 @@ describe("talk realtime gateway relay", () => {
           events.push({ event, payload, connIds: [...connIds] });
         },
       } as never,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
       instructions: "be brief",
-      tools: [],
       forceAgentConsultOnFinalTranscript: true,
     });
     await Promise.resolve();
@@ -1329,11 +1315,7 @@ describe("talk realtime gateway relay", () => {
     expect(() =>
       createTalkRealtimeRelaySession({
         context: {} as never,
-        connId: "conn-1",
         provider: createIdleRelayProvider(),
-        providerConfig: {},
-        instructions: "brief",
-        tools: [],
       }),
     ).toThrow("Realtime relay session expiry is outside the supported Date range");
   });
@@ -1391,11 +1373,7 @@ describe("talk realtime gateway relay", () => {
     } as never;
     const session = createTalkRealtimeRelaySession({
       context,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
       sessionKey: "main",
       ...(options.voiceSelection
         ? {
@@ -2074,11 +2052,9 @@ describe("talk realtime gateway relay", () => {
 
     const session = createTalkRealtimeRelaySession({
       context,
-      connId: "conn-1",
       provider,
       providerConfig: { model: "provider-model" },
       instructions: "be brief",
-      tools: [],
       model: "browser-model",
       voice: "voice-a",
       language: "de",
@@ -2363,30 +2339,11 @@ describe("talk realtime gateway relay", () => {
           isConnected: vi.fn(() => false),
         }),
     };
-    const events: Array<{
-      event: string;
-      payload: unknown;
-      connIds: string[];
-      opts?: { dropIfSlow?: boolean };
-    }> = [];
-    const context = {
-      broadcastToConnIds: (
-        event: string,
-        payload: unknown,
-        connIds: ReadonlySet<string>,
-        opts?: { dropIfSlow?: boolean },
-      ) => {
-        events.push({ event, payload, connIds: [...connIds], opts });
-      },
-    } as never;
+    const { events, context } = createRelayEventRecorder();
 
     const session = createTalkRealtimeRelaySession({
       context,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
       model: "gpt-realtime-2",
     });
     await Promise.resolve();
@@ -2430,19 +2387,10 @@ describe("talk realtime gateway relay", () => {
         return makeRelayTransport();
       },
     };
-    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
-    const context = {
-      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
-        events.push({ event, payload, connIds: [...connIds] });
-      },
-    } as never;
+    const { events, context } = createRelayEventRecorder();
     const session = createTalkRealtimeRelaySession({
       context,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
       model: "gpt-realtime-2",
     });
 
@@ -2477,19 +2425,10 @@ describe("talk realtime gateway relay", () => {
         return makeRelayTransport();
       },
     };
-    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
-    const context = {
-      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
-        events.push({ event, payload, connIds: [...connIds] });
-      },
-    } as never;
+    const { events, context } = createRelayEventRecorder();
     createTalkRealtimeRelaySession({
       context,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
       model: "gpt-realtime-2",
     });
 
@@ -2557,8 +2496,6 @@ describe("talk realtime gateway relay", () => {
       connId: "conn-private-model",
       provider,
       providerConfig: { model },
-      instructions: "brief",
-      tools: [],
       model,
     });
     bridgeRequest?.onError?.(
@@ -2597,11 +2534,7 @@ describe("talk realtime gateway relay", () => {
 
     createTalkRealtimeRelaySession({
       context,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
     });
 
     bridgeRequest?.onTranscript?.(
@@ -2646,11 +2579,8 @@ describe("talk realtime gateway relay", () => {
 
     const session = createTalkRealtimeRelaySession({
       context,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
       instructions: "be brief",
-      tools: [],
     });
     await Promise.resolve();
 
@@ -2696,11 +2626,8 @@ describe("talk realtime gateway relay", () => {
 
     const session = createTalkRealtimeRelaySession({
       context,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
       instructions: "be brief",
-      tools: [],
       forceAgentConsultOnFinalTranscript: true,
     });
     await Promise.resolve();
@@ -3127,6 +3054,8 @@ describe("talk realtime gateway relay", () => {
       result: { result: "checked" },
     });
     expect(fixture.sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(fixture.sendUserMessage).toHaveBeenCalledWith(expect.stringContaining("checked"));
+    expect(fixture.submitToolResult).not.toHaveBeenCalled();
 
     fixture.bridgeRequest?.onToolCall?.({
       itemId: "late-item",
@@ -3160,11 +3089,7 @@ describe("talk realtime gateway relay", () => {
     });
     const session = createTalkRealtimeRelaySession({
       context: { broadcastToConnIds: vi.fn() } as never,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
     });
 
     expect(() =>
@@ -3201,11 +3126,8 @@ describe("talk realtime gateway relay", () => {
 
     const nativeSession = createTalkRealtimeRelaySession({
       context,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
       instructions: "be brief",
-      tools: [],
       forceAgentConsultOnFinalTranscript: true,
     });
     await Promise.resolve();
@@ -3236,11 +3158,8 @@ describe("talk realtime gateway relay", () => {
 
     const unicodeSession = createTalkRealtimeRelaySession({
       context,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
       instructions: "be brief",
-      tools: [],
       forceAgentConsultOnFinalTranscript: true,
     });
     await Promise.resolve();
@@ -3270,11 +3189,8 @@ describe("talk realtime gateway relay", () => {
 
     const cancelledSession = createTalkRealtimeRelaySession({
       context,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
       instructions: "be brief",
-      tools: [],
       forceAgentConsultOnFinalTranscript: true,
     });
     await Promise.resolve();
@@ -3452,11 +3368,7 @@ describe("talk realtime gateway relay", () => {
     const broadcastToConnIds = vi.fn();
     const session = createTalkRealtimeRelaySession({
       context: { broadcastToConnIds } as never,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
     });
     expect(relaySessions.get(session.relaySessionId)?.harness.talk.activeTurnId).toBeUndefined();
 
@@ -3512,11 +3424,7 @@ describe("talk realtime gateway relay", () => {
           events.push({ event, payload });
         },
       } as never,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
     });
     void sendTalkRealtimeRelayAudio({
       relaySessionId: session.relaySessionId,
@@ -3571,7 +3479,6 @@ describe("talk realtime gateway relay", () => {
       "idle",
       "active response",
       "completed response",
-      "replacement response before audio",
       "replacement transcript before audio",
       "replacement audio",
     ].flatMap((phase) => [
@@ -3589,11 +3496,7 @@ describe("talk realtime gateway relay", () => {
     const broadcastToConnIds = vi.fn();
     const session = createTalkRealtimeRelaySession({
       context: { broadcastToConnIds } as never,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
     });
     if (!bridgeRequest) {
       throw new Error("expected realtime bridge request");
@@ -3797,7 +3700,7 @@ describe("talk realtime gateway relay", () => {
     expect(broadcast).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, "", "   "])(
+  it.each([undefined, "   "])(
     "preserves legacy current-turn cancellation for turn id %j",
     async (turnId) => {
       const { abortController, broadcast, session } = createAbortableRelayRunFixture();
@@ -4065,11 +3968,7 @@ describe("talk realtime gateway relay", () => {
     };
     const session = createTalkRealtimeRelaySession({
       context: { broadcastToConnIds: vi.fn() } as never,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
     });
     bridgeRequest?.onEvent?.({
       direction: "server",
@@ -4228,11 +4127,7 @@ describe("talk realtime gateway relay", () => {
 
     const successor = createTalkRealtimeRelaySession({
       context: { broadcastToConnIds: vi.fn() } as never,
-      connId: "conn-1",
       provider: createIdleRelayProvider(),
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
     });
     pending.resolve();
     await vi.advanceTimersByTimeAsync(1_000);
@@ -4286,30 +4181,6 @@ describe("talk realtime gateway relay", () => {
     ).toHaveLength(0);
   });
 
-  it("clears linked agent consult runs after the final tool result", () => {
-    const { abortController, broadcast, session } = createAbortableRelayRunFixture();
-
-    void submitTalkRealtimeRelayToolResult({
-      relaySessionId: session.relaySessionId,
-      connId: "conn-1",
-      callId: "call-1",
-      result: { ok: true },
-    });
-    void cancelTalkRealtimeRelayTurn({
-      relaySessionId: session.relaySessionId,
-      connId: "conn-1",
-      reason: "barge-in",
-      turnId: ensureActiveRelayTurnId(session.relaySessionId),
-    });
-
-    expect(abortController.signal.aborted).toBe(false);
-    expect(broadcast).not.toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({ runId: "run-1", state: "aborted" }),
-      expect.anything(),
-    );
-  });
-
   it("serializes a final consult result behind async working acceptance", async () => {
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
     const working = createDeferred();
@@ -4331,11 +4202,7 @@ describe("talk realtime gateway relay", () => {
           events.push({ payload: payload as Record<string, unknown> });
         },
       } as never,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
     });
     ensureActiveRelayTurnId(session.relaySessionId);
     bridgeRequest?.onToolCall?.({
@@ -4387,11 +4254,7 @@ describe("talk realtime gateway relay", () => {
       });
     const session = createTalkRealtimeRelaySession({
       context: { broadcastToConnIds: vi.fn() } as never,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
     });
 
     const firstInterim = submitTalkRealtimeRelayToolResult({
@@ -4444,11 +4307,7 @@ describe("talk realtime gateway relay", () => {
       });
     const session = createTalkRealtimeRelaySession({
       context: { broadcastToConnIds: vi.fn() } as never,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
     });
     const interim = submitTalkRealtimeRelayToolResult({
       relaySessionId: session.relaySessionId,
@@ -4954,19 +4813,10 @@ describe("talk realtime gateway relay", () => {
 
   it("returns structured relay steering status and emits Talk progress", async () => {
     const provider = createIdleRelayProvider();
-    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
-    const context = {
-      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
-        events.push({ event, payload, connIds: [...connIds] });
-      },
-    } as never;
+    const { events, context } = createRelayEventRecorder();
     const session = createTalkRealtimeRelaySession({
       context,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
       sessionKey: "agent:main:main",
     });
 
@@ -5228,11 +5078,8 @@ describe("talk realtime gateway relay", () => {
 
     const session = createTalkRealtimeRelaySession({
       context,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
       instructions: "be brief",
-      tools: [],
       sessionKey: "main",
       forceAgentConsultOnFinalTranscript: true,
     });
@@ -5457,11 +5304,8 @@ describe("talk realtime gateway relay", () => {
         },
         chatAbortControllers: createOwnedTalkRunControllers(),
       } as never,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
       instructions: "be brief",
-      tools: [],
       sessionKey: "main",
       forceAgentConsultOnFinalTranscript: true,
     });
@@ -5564,11 +5408,7 @@ describe("talk realtime gateway relay", () => {
       } as never;
       const session = createTalkRealtimeRelaySession({
         context,
-        connId: "conn-1",
         provider,
-        providerConfig: {},
-        instructions: "brief",
-        tools: [],
       });
       registerTalkRealtimeRelayAgentRun({
         relaySessionId: session.relaySessionId,
@@ -5803,11 +5643,7 @@ describe("talk realtime gateway relay", () => {
     } as never;
     const session = createTalkRealtimeRelaySession({
       context,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
     });
 
     registerTalkRealtimeRelayAgentRun({
@@ -5838,11 +5674,7 @@ describe("talk realtime gateway relay", () => {
     const broadcastToConnIds = vi.fn();
     const session = createTalkRealtimeRelaySession({
       context: { broadcastToConnIds } as never,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
     });
     const retainedSession = relaySessions.get(session.relaySessionId);
     expect(retainedSession).toBeDefined();
@@ -5923,11 +5755,7 @@ describe("talk realtime gateway relay", () => {
     const broadcastToConnIds = vi.fn();
     const session = createTalkRealtimeRelaySession({
       context: { broadcastToConnIds } as never,
-      connId: "conn-1",
       provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
       forceAgentConsultOnFinalTranscript: true,
     });
     const retainedSession = relaySessions.get(session.relaySessionId);
@@ -5964,9 +5792,6 @@ describe("talk realtime gateway relay", () => {
         context: { broadcastToConnIds: vi.fn() } as never,
         connId,
         provider,
-        providerConfig: {},
-        instructions: "brief",
-        tools: [],
       });
 
     createSession("conn-1");

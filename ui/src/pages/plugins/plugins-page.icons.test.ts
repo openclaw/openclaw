@@ -315,7 +315,19 @@ describe("PluginsPage icon routing", () => {
       if (method === "plugins.catalog.browse") {
         return (params as { intent?: string }).intent === "featured"
           ? { items: [] }
-          : { items: discoveryEntries };
+          : {
+              items: discoveryEntries,
+              categories: [
+                { slug: "web", label: "Web", description: "Web tools", icon: "globe", order: 1 },
+                {
+                  slug: "channels",
+                  label: "Channels",
+                  description: "Messaging",
+                  icon: "messageSquare",
+                  order: 2,
+                },
+              ],
+            };
       }
       return requestResult(method);
     });

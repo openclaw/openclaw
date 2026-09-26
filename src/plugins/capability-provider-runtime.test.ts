@@ -9,6 +9,7 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
 import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import type { PluginManifestRegistry } from "./manifest-registry.types.js";
 import {
   createPluginManifestRecordFixture,
@@ -72,11 +73,9 @@ const mocks = vi.hoisted(() => ({
   >(() => createEmptyMockManifestRegistry()),
   resolveInstalledManifestRegistryIndexFingerprint: vi.fn(() => "test-installed-index"),
   loadBundledCapabilityRuntimeRegistry: vi.fn(),
-  loadPluginRegistrySnapshot: vi.fn<
-    (_params?: unknown) => { plugins: Array<Record<string, unknown>> }
-  >(() => ({
-    plugins: [],
-  })),
+  loadPluginRegistrySnapshot: vi.fn<(_params?: unknown) => InstalledPluginIndex>(
+    () => createPluginMetadataSnapshotFixture().index,
+  ),
   withBundledPluginEnablementCompat: vi.fn(({ config }) => config),
 }));
 
@@ -121,23 +120,17 @@ vi.mock("./plugin-registry-snapshot.js", async (importOriginal) => {
   return {
     ...actual,
     loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
-    loadPluginRegistrySnapshotWithMetadata: (params?: { index?: unknown }) => {
-      const snapshot = (params?.index ?? mocks.loadPluginRegistrySnapshot(params)) as {
-        plugins?: Array<Record<string, unknown>>;
-      };
+    loadPluginRegistrySnapshotWithMetadata: (params?: { index?: InstalledPluginIndex }) => {
+      const snapshot = params?.index ?? mocks.loadPluginRegistrySnapshot(params);
       return {
         snapshot: {
           ...snapshot,
           plugins:
-            snapshot.plugins && snapshot.plugins.length > 0
+            snapshot.plugins.length > 0
               ? snapshot.plugins
-              : [
-                  {
-                    pluginId: "__test_manifest_registry_fixture__",
-                    origin: "bundled",
-                    enabled: true,
-                  },
-                ],
+              : createPluginMetadataSnapshotFixture({
+                  plugins: [{ id: "__test_manifest_registry_fixture__" }],
+                }).index.plugins,
         },
         source: params?.index ? "provided" : "derived",
         diagnostics: [],
@@ -408,7 +401,7 @@ describe("resolvePluginCapabilityProviders", () => {
       JSON.stringify(options),
     );
     mocks.loadPluginRegistrySnapshot.mockReset();
-    mocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
+    mocks.loadPluginRegistrySnapshot.mockReturnValue(createPluginMetadataSnapshotFixture().index);
     mocks.loadPluginManifestRegistryCore.mockReset();
     mocks.loadPluginManifestRegistryCore.mockReturnValue(createEmptyMockManifestRegistry());
     mocks.loadBundledCapabilityRuntimeRegistry.mockReset();
@@ -924,9 +917,11 @@ describe("resolvePluginCapabilityProviders", () => {
         }),
       },
     } as never);
-    mocks.loadPluginRegistrySnapshot.mockReturnValue({
-      plugins: [{ pluginId: "external-image", origin: "global", enabled: true }],
-    });
+    mocks.loadPluginRegistrySnapshot.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "external-image", origin: "global" }],
+      }).index,
+    );
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         createPluginManifestRecordFixture({
@@ -1264,9 +1259,11 @@ describe("resolvePluginCapabilityProviders", () => {
         synthesize: async () => ({ kind: "audio", data: Buffer.from([]), mimeType: "audio/mpeg" }),
       },
     } as never);
-    mocks.loadPluginRegistrySnapshot.mockReturnValue({
-      plugins: [{ pluginId: "fish-audio-speech", origin: "global", enabled: true }],
-    });
+    mocks.loadPluginRegistrySnapshot.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "fish-audio-speech", origin: "global" }],
+      }).index,
+    );
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         createPluginManifestRecordFixture({

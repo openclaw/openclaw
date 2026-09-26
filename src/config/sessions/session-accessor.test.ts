@@ -1451,10 +1451,10 @@ describe("session accessor seam", () => {
 
     const created = await createSessionEntryWithTranscript(
       scope,
-      ({ existingEntry, targetEntry, isLabelInUse }) => {
+      ({ existingEntry, targetEntry, labelInUse }) => {
         expect(existingEntry).toBeUndefined();
         expect(targetEntry).toBeUndefined();
-        expect(isLabelInUse("unused")).toBe(false);
+        expect(labelInUse).toBe(false);
         return {
           ok: true,
           entry: {

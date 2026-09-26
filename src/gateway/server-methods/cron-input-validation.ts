@@ -1,8 +1,15 @@
+import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
+import {
+  asOptionalObjectRecord,
+  readStringField,
+} from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertValidCronAnnounceDelivery,
   assertValidCronFailureAlert,
 } from "../../cron/delivery-channel-validation.js";
+import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
+import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { resolveFailureAlert } from "../../cron/service/failure-alerts.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import { resolveCronSessionTargetSessionKey } from "../../cron/session-target.js";
@@ -14,6 +21,52 @@ import {
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+
+/** Validate authored fields before normalization can erase blank or invalid input. */
+export function normalizeCronAddRequest(params: unknown): {
+  candidate: unknown;
+  enabledExplicit: boolean;
+} {
+  const rawParams = asOptionalObjectRecord(params);
+  for (const key of ["declarationKey", "displayName"]) {
+    const value = rawParams?.[key];
+    if (typeof value === "string" && value.trim().length === 0) {
+      throw new Error(`${key} must not be blank`);
+    }
+  }
+  const hasEnabled = Boolean(rawParams && Object.hasOwn(rawParams, "enabled"));
+  const parsedEnabled = hasEnabled ? parseBoolean(rawParams?.enabled) : undefined;
+  if (hasEnabled && parsedEnabled === undefined) {
+    throw new Error("enabled must be a boolean");
+  }
+  assertCronDeliveryInputNonBlankFields(rawParams?.delivery);
+  return {
+    candidate:
+      normalizeCronJobCreate(params, {
+        sessionContext: { sessionKey: readStringField(rawParams, "sessionKey") },
+      }) ?? params,
+    enabledExplicit: parsedEnabled !== undefined,
+  };
+}
+
+export function normalizeCronUpdateRequest(params: unknown): {
+  candidate: unknown;
+  normalizedPatch: CronJobPatch | null;
+} {
+  const rawParams = asOptionalObjectRecord(params);
+  const rawPatch = rawParams?.patch;
+  const patchFields = asOptionalObjectRecord(rawPatch);
+  const rawDisplayName = patchFields?.displayName;
+  if (typeof rawDisplayName === "string" && rawDisplayName.trim().length === 0) {
+    throw new Error("displayName must not be blank");
+  }
+  assertCronDeliveryInputNonBlankFields(patchFields?.delivery);
+  const normalizedPatch = normalizeCronJobPatch(rawPatch);
+  return {
+    candidate: normalizedPatch && rawParams ? { ...rawParams, patch: normalizedPatch } : params,
+    normalizedPatch,
+  };
+}
 
 export async function assertValidCronUpdatePatch(params: {
   cfg: OpenClawConfig;

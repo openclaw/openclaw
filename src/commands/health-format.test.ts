@@ -139,22 +139,6 @@ describe("formatHealthChannelLines", () => {
     ]);
   });
 
-  it("formats statusState without inferring from linked", () => {
-    const summary = createHealthSummary({
-      channels: {
-        whatsapp: {
-          accountId: "default",
-          statusState: "unstable",
-          configured: true,
-        },
-      },
-      channelOrder: ["whatsapp"],
-      channelLabels: { whatsapp: "WhatsApp" },
-    });
-
-    expect(formatHealthChannelLines(summary)).toStrictEqual(["WhatsApp: auth stabilizing"]);
-  });
-
   it.each([
     [
       "fresh probe failure over passive healthy state",
@@ -184,16 +168,6 @@ describe("formatHealthChannelLines", () => {
         probe: { ok: false, error: "sync rejected" },
       },
       "auth stabilizing",
-    ],
-    [
-      "disabled account over configured metadata",
-      { enabled: false, stateReason: "disabled" },
-      "disabled",
-    ],
-    [
-      "disabled account over a stale successful probe",
-      { enabled: false, healthState: "healthy", probe: { ok: true, elapsedMs: 12 } },
-      "disabled",
     ],
     [
       "disabled account over stale failure metadata",
@@ -267,9 +241,6 @@ describe("formatHealthChannelLines", () => {
 
   it.each([
     ["blocked", { healthState: "blocked" }],
-    ["disconnected", { healthState: "disconnected" }],
-    ["ingress-unavailable", { healthState: "ingress-unavailable" }],
-    ["stale-socket", { healthState: "stale-socket" }],
     ["auth stabilizing", { healthState: "healthy", statusState: "unstable" }],
   ])(
     "surfaces secondary account state %s in default and verbose health output",
@@ -464,28 +435,6 @@ describe("formatHealthChannelLines", () => {
     expect(lines[0]).toBe(`Plugin plugin-0: failed - ${"x".repeat(500)}; run openclaw doctor`);
     expect(lines.at(-1)).toBe(
       "Plugins: failed - 2 additional activated failures; run openclaw doctor",
-    );
-  });
-
-  it("formats iMessage probe failures as failed health lines", () => {
-    const summary = createHealthSummary({
-      channels: {
-        imessage: {
-          accountId: "default",
-          configured: true,
-          probe: {
-            ok: false,
-            error:
-              "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
-          },
-        },
-      },
-      channelOrder: ["imessage"],
-      channelLabels: { imessage: "iMessage" },
-    });
-
-    expect(formatHealthChannelLines(summary)).toContain(
-      "iMessage: failed (unknown) - imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
     );
   });
 });

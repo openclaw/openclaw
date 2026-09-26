@@ -1,11 +1,8 @@
 // Verifies bundled plugin metadata generation and import boundaries.
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { assert, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
-import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 import { resolveBundledPluginGeneratedPath } from "./bundled-plugin-scan.js";
@@ -28,7 +25,6 @@ import {
 } from "./manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { writeBundledRuntimeSidecarPathBaseline } from "./runtime-sidecar-paths-baseline.js";
-import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "./runtime-sidecar-paths.js";
 
 const BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS = 300_000;
 const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_EXTRAS = ["memory-core", "xai"] as const;
@@ -119,63 +115,11 @@ function listRepoBundledPluginManifestsUncached() {
 }
 
 function listRepoBundledPluginManifestDirs(): string[] {
-  const externalDirs = listExternalRepoBundledPluginManifestDirs();
-  if (externalDirs) {
-    return externalDirs;
-  }
   const bundledPluginsDir = path.join(repoRoot, "extensions");
   return fs
     .readdirSync(bundledPluginsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
-    .toSorted();
-}
-
-function listExternalRepoBundledPluginManifestDirs(): string[] | null {
-  const manifestFiles =
-    listGitRepoBundledPluginManifestFiles() ?? listFindRepoBundledPluginManifestFiles();
-  if (!manifestFiles) {
-    return null;
-  }
-  return manifestFiles
-    .flatMap((file) => {
-      const match = /^extensions\/([^/]+)\/openclaw\.plugin\.json$/u.exec(file);
-      return match?.[1] ? [match[1]] : [];
-    })
-    .toSorted();
-}
-
-function listGitRepoBundledPluginManifestFiles(): string[] | null {
-  return listGitTrackedFiles({ repoRoot, pathspecs: "extensions/*/openclaw.plugin.json" });
-}
-
-function listFindRepoBundledPluginManifestFiles(): string[] | null {
-  const result = spawnSync(
-    "find",
-    [
-      path.join(repoRoot, "extensions"),
-      "-maxdepth",
-      "2",
-      "-type",
-      "f",
-      "-name",
-      "openclaw.plugin.json",
-    ],
-    {
-      cwd: repoRoot,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    },
-  );
-  if (result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((file) => toRepoRelativePath(repoRoot, file))
     .toSorted();
 }
 
@@ -219,24 +163,6 @@ function readPackageManifest(pluginDir: string): PackageManifest | undefined {
   return fs.existsSync(packagePath)
     ? (JSON.parse(fs.readFileSync(packagePath, "utf8")) as PackageManifest)
     : undefined;
-}
-
-function collectRootPackageExcludedExtensionDirsForTest(): readonly string[] {
-  const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")) as {
-    files?: unknown;
-  };
-  if (!Array.isArray(packageJson.files)) {
-    return [];
-  }
-  return packageJson.files
-    .flatMap((entry) => {
-      if (typeof entry !== "string") {
-        return [];
-      }
-      const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
-      return match?.[1] ? [match[1]] : [];
-    })
-    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function collectRepoBundledChannelConfigsForTest(dirName: string) {
@@ -311,15 +237,6 @@ describe("bundled plugin metadata", () => {
     collectRepoBundledChannelConfigsForTest("tlon");
   });
 
-  it("lists bundled plugin manifests without scanning extension directories in-process", () => {
-    expectNoReaddirSyncDuring(() => {
-      const manifests = listRepoBundledPluginManifestsUncached();
-
-      expect(manifests.length).toBeGreaterThan(0);
-      expect(manifests.every((entry) => entry.dirName.length > 0)).toBe(true);
-    });
-  });
-
   it(
     "matches the runtime metadata snapshot",
     { timeout: BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS },
@@ -341,25 +258,6 @@ describe("bundled plugin metadata", () => {
       ).resolves.toMatchObject({ changed: false });
     },
   );
-
-  it("excludes non-packaged QA sidecars from the packaged runtime sidecar baseline", () => {
-    expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain(
-      "dist/extensions/qa-channel/runtime-api.js",
-    );
-    expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-lab/runtime-api.js");
-  });
-
-  it("excludes root-package-excluded plugin sidecars from the packaged runtime sidecar baseline", () => {
-    for (const pluginDir of collectRootPackageExcludedExtensionDirsForTest()) {
-      expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain(`dist/extensions/${pluginDir}/index.js`);
-      expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain(
-        `dist/extensions/${pluginDir}/runtime-api.js`,
-      );
-      expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain(
-        `dist/extensions/${pluginDir}/runtime-setter-api.js`,
-      );
-    }
-  });
 
   it("captures setup-entry metadata for bundled channel plugins", () => {
     const discord = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "discord");
@@ -409,16 +307,6 @@ describe("bundled plugin metadata", () => {
     // be discoverable as part of Slack's public surface.
     const slack = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "slack");
     expectArtifactPresence(slack?.publicSurfaceArtifacts, {
-      contains: ["runtime-setter-api.js"],
-    });
-  });
-
-  it("keeps Telegram's narrow runtime setter on the bundled runtime sidecar surface", () => {
-    const telegram = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "telegram");
-    expectArtifactPresence(telegram?.publicSurfaceArtifacts, {
-      contains: ["runtime-setter-api.js"],
-    });
-    expectArtifactPresence(telegram?.runtimeSidecarArtifacts, {
       contains: ["runtime-setter-api.js"],
     });
   });

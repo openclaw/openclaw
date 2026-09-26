@@ -1,5 +1,3 @@
-// Logbook analysis pipeline: frames -> observations -> revised timeline cards.
-// Pure parsing/validation lives here so tests can cover it without the SDK.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { dayKeyFor } from "./day.js";
 import { CARD_CATEGORIES } from "./prompts.js";
@@ -113,17 +111,6 @@ export function parseObservationSegments(params: {
   return segments.toSorted((a, b) => a.startMs - b.startMs);
 }
 
-type RawCard = {
-  startTime?: unknown;
-  endTime?: unknown;
-  category?: unknown;
-  title?: unknown;
-  summary?: unknown;
-  detailedSummary?: unknown;
-  distractions?: unknown;
-  appSites?: unknown;
-};
-
 type CardParseResult = { ok: true; drafts: LogbookCardDraft[] } | { ok: false; error: string };
 
 function normalizeCategory(value: unknown): string {
@@ -186,7 +173,7 @@ export function parseCardsJson(params: {
       problems.push(`Card ${index}: not an object.`);
       return;
     }
-    const raw = entry as RawCard;
+    const raw = entry as Record<string, unknown>;
     const title = typeof raw.title === "string" ? raw.title.trim() : "";
     const summary = typeof raw.summary === "string" ? raw.summary.trim() : "";
     const startMs = typeof raw.startTime === "string" ? clockToMs(params.day, raw.startTime) : null;
@@ -286,9 +273,7 @@ export function validateCardCoverage(params: {
       );
     }
   }
-  const covered = params.drafts
-    .map((draft) => ({ startMs: draft.startMs, endMs: draft.endMs }))
-    .toSorted((a, b) => a.startMs - b.startMs);
+  const covered = params.drafts.toSorted((a, b) => a.startMs - b.startMs);
   for (const span of params.requiredSpans) {
     let cursor = span.startMs;
     for (const interval of covered) {

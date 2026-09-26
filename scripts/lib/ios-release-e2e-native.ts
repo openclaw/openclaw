@@ -18,8 +18,6 @@ import {
 import { hasUnjoinedWork, runManagedCommand } from "./managed-child-process.mjs";
 
 const DEVICE_TYPE = "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro";
-const XCODE_VERSION = "27.0";
-const XCODE_BUILD = "27A266a";
 const RUNTIME_VERSION = "26.5";
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu;
 
@@ -91,8 +89,9 @@ export async function createNativeDependencies(options: {
   }
   options.proof.harnessSha = head;
   const xcodeVersion = await command("xcode-version", "xcodebuild", ["-version"]);
-  if (xcodeVersion !== `Xcode ${XCODE_VERSION}\nBuild version ${XCODE_BUILD}`) {
-    throw new OperationError("xcode-version", "unsupported");
+  const xcode = /^Xcode ([0-9.]+)\r?\nBuild version ([A-Za-z0-9]+)$/u.exec(xcodeVersion);
+  if (!xcode) {
+    throw new OperationError("xcode-version", "failed");
   }
   const binary = process.env.OPENCLAW_CI_SIMSLIM_BINARY;
   if (options.mode === "compare" && (!binary || !path.isAbsolute(binary))) {
@@ -114,8 +113,8 @@ export async function createNativeDependencies(options: {
     throw new OperationError("simulator-runtime", "not-found");
   }
   Object.assign(options.proof, {
-    xcode: XCODE_VERSION,
-    xcodeBuild: XCODE_BUILD,
+    xcode: xcode[1],
+    xcodeBuild: xcode[2],
     runtime: RUNTIME_VERSION,
     runtimeIdentifier: runtime.identifier,
     deviceType: DEVICE_TYPE,

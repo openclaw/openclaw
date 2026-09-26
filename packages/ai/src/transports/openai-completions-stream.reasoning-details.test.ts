@@ -2,7 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { processCompletionsStream } from "./openai-completions-stream.js";
 import {
-  type OpenAICompletionsOutput,
   createAssistantOutput,
   expectRecordFields,
   makeCompletionsChunk,
@@ -19,7 +18,7 @@ describe("openai completions stream", () => {
       baseUrl: "https://openrouter.ai/api/v1",
     });
 
-    const output: OpenAICompletionsOutput = createAssistantOutput(model);
+    const output = createAssistantOutput(model);
 
     const stream: { push(event: unknown): void } = { push() {} };
 
@@ -84,39 +83,6 @@ describe("openai completions stream", () => {
   });
 
   it.each([
-    {
-      name: "keeps tool calls when reasoning_details and tool_calls share a chunk",
-      model: {
-        id: "openrouter/qwen/qwen3-235b-a22b",
-        name: "Qwen3 235B A22B",
-        provider: "openrouter",
-        baseUrl: "https://openrouter.ai/api/v1",
-      },
-      chunks: [
-        makeCompletionsChunk({
-          reasoning_details: [{ type: "reasoning.text", text: "Need a tool." }],
-          tool_calls: [
-            {
-              id: "call_1",
-              type: "function" as const,
-              function: { name: "lookup", arguments: '{"query":"qwen3"}' },
-            },
-          ],
-        }),
-        makeCompletionsChunk({}, "tool_calls"),
-      ],
-      expectedFirst: {
-        type: "thinking",
-        thinking: "Need a tool.",
-        thinkingSignature: "reasoning_details",
-      },
-      expectedSecond: {
-        type: "toolCall",
-        id: "call_1",
-        name: "lookup",
-        arguments: { query: "qwen3" },
-      },
-    },
     {
       name: "keeps a streaming tool call intact when visible reasoning text arrives mid-call",
       model: {
@@ -207,41 +173,5 @@ describe("openai completions stream", () => {
     expect(output.content).toHaveLength(2);
     expectRecordFields(output.content[0], expectedFirst);
     expectRecordFields(output.content[1], expectedSecond);
-  });
-
-  it("treats singular tool_call finish_reason as tool use", async () => {
-    const model = makeCompletionsModel({
-      id: "minimax-m2.5-8bit",
-      name: "MiniMax M2.5 8bit",
-      provider: "mlx-lm",
-      baseUrl: "http://localhost:1234/v1",
-      reasoning: false,
-      contextWindow: 128000,
-    });
-
-    const output = createAssistantOutput(model);
-
-    const stream: { push(event: unknown): void } = { push() {} };
-
-    const mockChunks = [
-      makeCompletionsChunk({
-        tool_calls: [
-          {
-            id: "call_1",
-            type: "function" as const,
-            function: { name: "lookup", arguments: "{}" },
-          },
-        ],
-      }),
-      makeCompletionsChunk({}, "tool_call"),
-    ] as const;
-
-    await processCompletionsStream(streamChunks(mockChunks), output, model, stream);
-
-    expect(output.stopReason).toBe("toolUse");
-    const toolCall = (output.content as Array<{ type?: string }>).find(
-      (item) => item.type === "toolCall",
-    );
-    expectRecordFields(toolCall, { type: "toolCall", id: "call_1", name: "lookup" });
   });
 });

@@ -46,6 +46,7 @@ import {
   verifyGatewayCacheOwnership,
   verifySharedGatewayCacheOwnership,
 } from "./server-plugin-reload.cache.test-support.js";
+import { verifyCancelledDrainRollbackLease } from "./server-plugin-reload.cancel-lease.test-support.js";
 import {
   verifyDecisionSelectionIsolation,
   verifyDecisionEarlyReloadRecovery,
@@ -301,6 +302,12 @@ it.each([5_000, 15_000, 70_000])(
 
 it("keeps restored plugins serving when an expired drain observation settles late", () =>
   verifyLateActiveCallDrainObservation(createRecoveryFixture));
+
+it("keeps the lifecycle lease through cancelled drain rollback before admitting another writer", () =>
+  verifyCancelledDrainRollbackLease(
+    createRecoveryFixture,
+    makeTrackedTempDir("gateway-cancelled-drain-lease", tempDirs),
+  ));
 
 it("keeps old cleanup owned when the Gateway closes before replacement publication", () =>
   verifyPreCommitRetirementOwnership(createRecoveryFixture));

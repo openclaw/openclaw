@@ -20,6 +20,9 @@ const baselineGatewayLogs = [
   "missing-load-path/baseline-gateway.log",
   "missing-load-path/baseline-gateway-convergence-refusal.log",
 ];
+const baselineCronRunLogs = ["default", "ops"].flatMap((owner) =>
+  ["out", "err"].map((extension) => `legacy-operator-run-survivor-${owner}-owner.${extension}`),
+);
 const hash = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 
 function fixture() {
@@ -409,11 +412,17 @@ it.each(["input", "output", "entries", "symlink", "directory-symlink", "malforme
   },
 );
 
-it("publishes redacted baseline Gateway and agent-turn failures", () => {
+it("publishes bounded and redacted baseline Gateway, Cron run, and agent-turn failures", () => {
   const f = fixture();
   fs.mkdirSync(path.join(f.artifacts, "missing-load-path"));
   for (const name of baselineGatewayLogs) {
     fs.writeFileSync(path.join(f.artifacts, name), `Baseline startup failed: token=${secret}\n`);
+  }
+  for (const name of baselineCronRunLogs) {
+    fs.writeFileSync(
+      path.join(f.artifacts, name),
+      `Published Cron run failed: token=${secret}\n` + "Cron run diagnostic line\n".repeat(1000),
+    );
   }
   for (const stage of ["baseline", "candidate"]) {
     fs.writeFileSync(
@@ -428,6 +437,11 @@ it("publishes redacted baseline Gateway and agent-turn failures", () => {
   const report = capture(f);
   for (const name of baselineGatewayLogs) {
     expect(report.logs[name]).toContain("Baseline startup failed");
+  }
+  for (const name of baselineCronRunLogs) {
+    expect(report.logs[name]).toContain("Published Cron run failed");
+    expect(Buffer.byteLength(JSON.stringify(report.logs[name]))).toBeLessThanOrEqual(16 * 1024);
+    expect(report.omissions[name]).toBe("redacted output truncated at a complete line (16 KiB)");
   }
   for (const stage of ["baseline", "candidate"]) {
     expect(report.logs[`legacy-operator-${stage}-turn.err`]).toContain(
@@ -787,6 +801,7 @@ it("does not reuse sibling or startup observations when an attempt fails before 
   );
   const logs = [
     ...turnLogs,
+    ...baselineCronRunLogs,
     ...baselineGatewayLogs,
     "sibling-refusal-update.json",
     "sibling-refusal-status.json",

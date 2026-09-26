@@ -17,6 +17,21 @@ const ACTIVATION_HINT_METADATA = {
 
 export const PLUGIN_COMPAT_RECORDS = [
   {
+    code: "channel-webhook-listener-config-inputs",
+    status: "deprecated",
+    owner: "config",
+    introduced: "2026-09-26",
+    deprecated: "2026-09-26",
+    warningStarts: "2026-09-26",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Use legacyWebhook for canonical listener config. Doctor migrates stored webhookPort/webhookHost inputs; deprecated optional TypeScript properties preserve config producer source compatibility until an approved SDK major removal.",
+    docsPath: "/gateway/doctor/config-migrations#channel-webhook-listeners",
+    surfaces: ["TelegramAccountConfig.webhookPort", "TelegramAccountConfig.webhookHost"],
+    diagnostics: ["TypeScript @deprecated annotations and plugin-owned Doctor migration"],
+    tests: ["extensions/telegram/src/doctor.test.ts"],
+  },
+  {
     code: "conversation-binding-sync-mutations",
     status: "deprecated",
     owner: "channel",

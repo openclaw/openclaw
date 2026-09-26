@@ -120,18 +120,12 @@ function collectCanonicalSessionCandidateFacts(
         }
         const storedKey = resolveStoredKey(canonicalAgentId, value);
         const ownerAgentId = parseAgentSessionKey(storedKey)?.agentId ?? canonicalAgentId;
-        for (const key of [value, storedKey]) {
-          const sameStore = canonicalKeysByStoredKey.get(
-            `${target.sqlitePath}\0${ownerAgentId}\0${key}`,
-          );
-          if (sameStore?.size === 1) {
-            return [...sameStore][0];
-          }
-        }
-        for (const key of [value, storedKey]) {
-          const crossStore = canonicalKeysByStoredKey.get(`*\0${ownerAgentId}\0${key}`);
-          if (crossStore?.size === 1) {
-            return [...crossStore][0];
+        for (const sqlitePath of [target.sqlitePath, "*"]) {
+          for (const key of [value, storedKey]) {
+            const mapped = canonicalKeysByStoredKey.get(`${sqlitePath}\0${ownerAgentId}\0${key}`);
+            if (mapped?.size === 1) {
+              return [...mapped][0];
+            }
           }
         }
         return storedKey;

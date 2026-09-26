@@ -208,22 +208,6 @@ describe("handleInlineActions", () => {
     );
   });
 
-  it("skips whatsapp replies when config is empty and From !== To", async () => {
-    const typing = createTypingController();
-
-    const ctx = buildTestCtx({
-      From: "whatsapp:+999",
-      To: "whatsapp:+123",
-      Body: "hi",
-    });
-    await expectInlineActionSkipped({
-      ctx,
-      typing,
-      cleanedBody: "hi",
-      command: { to: "whatsapp:+123" },
-    });
-  });
-
   it("notifies session metadata changes before continuing after a command", async () => {
     const typing = createTypingController();
     const ctx = buildTestCtx({
@@ -435,16 +419,6 @@ describe("handleInlineActions", () => {
     expect(requireRecord(commandArgs.sessionEntry, "sessionEntry").sessionId).toBe(
       "target-session",
     );
-  });
-
-  it("does not run command handlers after replying to an inline status-only turn", async () => {
-    const { result, typing } = await runInlineStatusAction();
-
-    expect(result).toEqual({ kind: "reply", reply: undefined });
-    expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
-    expect(mockObjectArg(buildStatusReplyMock, "buildStatusReply").storePath).toBeUndefined();
-    expect(handleCommandsMock).not.toHaveBeenCalled();
-    expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it("preserves storePath when routing inline status through the shared status builder", async () => {

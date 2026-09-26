@@ -114,22 +114,9 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
 
     public func stop() -> Double? {
         let interruptedAt = self.playbackTime()
-        self.generation &+= 1
-        self.inputTask?.cancel()
-        self.inputTask = nil
-        self.inputFinished = false
-        self.scheduledBufferIDs.removeAll()
-        let waiters = self.slotWaiters
-        self.slotWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume(returning: false)
-        }
-        let continuation = self.playbackContinuation
-        self.playbackContinuation = nil
-        self.stopPlayback()
-        continuation?.resume(returning: StreamingPlaybackResult(
+        self.finish(StreamingPlaybackResult(
             finished: false,
-            interruptedAt: interruptedAt))
+            interruptedAt: interruptedAt), cancelInput: true)
         return interruptedAt
     }
 
@@ -216,8 +203,14 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
 
     private func finish(generation: UInt64, finished: Bool) {
         guard self.generation == generation else { return }
-        let interruptedAt = finished ? nil : self.playbackTime()
+        self.finish(StreamingPlaybackResult(
+            finished: finished,
+            interruptedAt: finished ? nil : self.playbackTime()))
+    }
+
+    private func finish(_ result: StreamingPlaybackResult, cancelInput: Bool = false) {
         self.generation &+= 1
+        if cancelInput { self.inputTask?.cancel() }
         self.scheduledBufferIDs.removeAll()
         let waiters = self.slotWaiters
         self.slotWaiters.removeAll()
@@ -229,9 +222,7 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
         let continuation = self.playbackContinuation
         self.playbackContinuation = nil
         self.stopPlayback()
-        continuation?.resume(returning: StreamingPlaybackResult(
-            finished: finished,
-            interruptedAt: interruptedAt))
+        continuation?.resume(returning: result)
     }
 }
 #endif

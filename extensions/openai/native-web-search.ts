@@ -1,4 +1,3 @@
-// Openai plugin module implements native web search behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
@@ -6,11 +5,6 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveNativeWebSearch } from "./native-web-search-policy.js";
 
 const OPENAI_WEB_SEARCH_TOOL = { type: "web_search" } as const;
-
-type OpenAINativeWebSearchPatchResult =
-  | "payload_not_object"
-  | "native_tool_already_present"
-  | "injected";
 
 function isNativeWebSearchTool(tool: unknown): boolean {
   return isRecord(tool) && tool.type === OPENAI_WEB_SEARCH_TOOL.type;
@@ -28,9 +22,9 @@ function raiseMinimalReasoningForOpenAINativeWebSearch(payload: Record<string, u
   reasoning.effort = "low";
 }
 
-function patchOpenAINativeWebSearchPayload(payload: unknown): OpenAINativeWebSearchPatchResult {
+function patchOpenAINativeWebSearchPayload(payload: unknown): void {
   if (!isRecord(payload)) {
-    return "payload_not_object";
+    return;
   }
 
   const existingTools = Array.isArray(payload.tools) ? payload.tools : [];
@@ -40,12 +34,11 @@ function patchOpenAINativeWebSearchPayload(payload: unknown): OpenAINativeWebSea
       payload.tools = filteredTools;
     }
     raiseMinimalReasoningForOpenAINativeWebSearch(payload);
-    return "native_tool_already_present";
+    return;
   }
 
   payload.tools = [...filteredTools, OPENAI_WEB_SEARCH_TOOL];
   raiseMinimalReasoningForOpenAINativeWebSearch(payload);
-  return "injected";
 }
 
 export function createOpenAINativeWebSearchWrapper(

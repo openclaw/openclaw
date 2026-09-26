@@ -139,6 +139,9 @@ export function createExecTool(
     );
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
+  const backgroundFollowUp = notifyOnExit
+    ? BACKGROUND_EXEC_FOLLOW_UP
+    : `${BACKGROUND_EXEC_FOLLOW_UP} Automatic completion wake is disabled (tools.exec.notifyOnExit=false). If the task needs this result, use poll with a timeout to collect it before ending the turn, unless another continuation is already arranged.`;
   const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
   const notifySessionKey = normalizeOptionalString(
     defaults?.notifySessionKey ?? defaults?.runSessionKey ?? defaults?.sessionKey,
@@ -713,7 +716,7 @@ export function createExecTool(
                     type: "text",
                     text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
                       run.session.pid ?? "n/a"
-                    }). ${BACKGROUND_EXEC_FOLLOW_UP}`,
+                    }). ${backgroundFollowUp}`,
                   },
                 ],
                 details: {
@@ -724,7 +727,7 @@ export function createExecTool(
                   cwd: run.session.cwd,
                   tail: run.session.tail,
                   // Structured callers receive details without the visible content.
-                  followUp: BACKGROUND_EXEC_FOLLOW_UP,
+                  followUp: backgroundFollowUp,
                 },
               },
           approvalReview,

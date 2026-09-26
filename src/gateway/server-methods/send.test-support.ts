@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
 import { createMessageActionClientForTests } from "./send.test-helpers.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 export const makeContext = (): GatewayRequestContext =>
   ({
@@ -12,6 +12,8 @@ export const makeContext = (): GatewayRequestContext =>
 export function createMessageMethodTestDriver(getHandlers: () => GatewayRequestHandlers) {
   async function invokeGatewayMessageMethod(params: {
     method: "message.action" | "poll" | "send";
+    client?: GatewayClient | null;
+    requestId?: string;
     request: Record<string, unknown>;
     respond: ReturnType<typeof vi.fn>;
     context: GatewayRequestContext;
@@ -24,8 +26,8 @@ export function createMessageMethodTestDriver(getHandlers: () => GatewayRequestH
       params: params.request as never,
       respond: params.respond as never,
       context: params.context,
-      req: { type: "req", id: "1", method: params.method },
-      client: null as never,
+      req: { type: "req", id: params.requestId ?? "1", method: params.method },
+      client: params.client ?? null,
       isWebchatConnect: () => false,
     });
   }

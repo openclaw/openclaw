@@ -5,6 +5,7 @@ import {
   listSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
 } from "../config/sessions/session-accessor.js";
+import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import {
@@ -25,16 +26,17 @@ const CLEANUP_RETRY_MS = 60_000;
 export function startIncognitoSessionLifetime(params: {
   context: GatewayRequestContext;
   logWarning: (message: string) => void;
+  scheduler: GatewayScheduler;
 }): GatewayPostReadySidecarHandle {
   type Deadline = {
     sessionKey: string;
     agentId: string;
-    storePath: string;
     sessionId: string;
     source: Pick<DatabaseSync, "isOpen">;
     expiresAt: number;
-    timer?: ReturnType<typeof setTimeout>;
+    job?: GatewayScheduledJob;
   };
+  const { scheduler } = params;
   const runInOwner = AsyncLocalStorage.snapshot();
   const env = { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() };
   const restartSignal = getGatewayRestartDrainSignal();
@@ -49,21 +51,20 @@ export function startIncognitoSessionLifetime(params: {
     deadline.source.isOpen;
 
   const retire = (deadline: Deadline) => {
-    if (deadline.timer) {
-      clearTimeout(deadline.timer);
-    }
+    deadline.job?.cancel();
     if (deadlines.get(deadline.sessionKey) === deadline) {
       deadlines.delete(deadline.sessionKey);
     }
   };
 
-  const schedule = (deadline: Deadline, delay = deadline.expiresAt - Date.now()) => {
-    deadline.timer = setTimeout(
-      () => {
-        deadline.timer = undefined;
+  const schedule = (deadline: Deadline, delayMs?: number) => {
+    deadline.job = scheduler.schedule({
+      id: `incognito-expiry:${deadline.sessionKey}`,
+      ...(delayMs === undefined ? { atMs: deadline.expiresAt } : { delayMs }),
+      run: () => {
         if (!current(deadline)) {
           retire(deadline);
-          return;
+          return undefined;
         }
         const operation = (async () => {
           try {
@@ -96,11 +97,9 @@ export function startIncognitoSessionLifetime(params: {
           }
         })();
         pending.add(operation);
-        void operation.finally(() => pending.delete(operation));
+        return operation.finally(() => pending.delete(operation));
       },
-      Math.max(0, delay),
-    );
-    deadline.timer.unref?.();
+    });
   };
 
   const observe = (change: SessionRowChange) => {
@@ -142,7 +141,6 @@ export function startIncognitoSessionLifetime(params: {
     const deadline: Deadline = {
       sessionKey,
       agentId,
-      storePath,
       sessionId: entry.sessionId,
       source: database.db,
       expiresAt,

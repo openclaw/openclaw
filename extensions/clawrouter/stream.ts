@@ -132,7 +132,9 @@ function withClawRouterHeaders(
   return next;
 }
 
-function createClawRouterStreamWrapper(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
+export function wrapClawRouterProviderStream(
+  ctx: ProviderWrapStreamFnContext,
+): StreamFn | undefined {
   const underlying = ctx.streamFn;
   if (!underlying) {
     return undefined;
@@ -156,10 +158,4 @@ function createClawRouterStreamWrapper(ctx: ProviderWrapStreamFnContext): Stream
       options,
     );
   };
-}
-
-export function wrapClawRouterProviderStream(
-  ctx: ProviderWrapStreamFnContext,
-): StreamFn | undefined {
-  return createClawRouterStreamWrapper(ctx);
 }

@@ -260,10 +260,6 @@ final class TailscaleService {
         }
     }
 
-    nonisolated static func fallbackTailnetIPv4() -> String? {
-        TailscaleNetwork.detectTailnetIPv4()
-    }
-
     private nonisolated static func detectAppInstallation() -> Bool {
         FileManager().fileExists(atPath: "/Applications/Tailscale.app")
     }

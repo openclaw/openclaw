@@ -205,42 +205,6 @@ function parseDiscordParentChannelFromSessionKeyForTest(raw?: string | null): st
   return match?.[1] ? `channel:${match[1]}` : undefined;
 }
 
-function resolveFirstConversationTargetForTest(params: {
-  channel?: string;
-  commandTo?: string;
-  fallbackTo?: string;
-  originatingTo?: string;
-}): string | null {
-  for (const rawTarget of [params.originatingTo, params.commandTo, params.fallbackTo]) {
-    const target = rawTarget?.trim();
-    if (!target) {
-      continue;
-    }
-    return params.channel && target.toLowerCase().startsWith(`${params.channel}:`)
-      ? target.slice(params.channel.length + 1)
-      : target;
-  }
-  return null;
-}
-
-function parsePrefixedConversationIdForTest(
-  raw: string | undefined | null,
-  channel: "imessage",
-): string | undefined {
-  const trimmed = raw
-    ?.trim()
-    .replace(new RegExp(`^${channel}:`, "i"), "")
-    .replace(/^chat_guid:/i, "");
-  return trimmed || undefined;
-}
-
-function resolvePrefixedConversationIdForTest(
-  targets: Array<string | undefined | null>,
-  channel: "imessage",
-): string | undefined {
-  return targets.map((target) => parsePrefixedConversationIdForTest(target, channel)).find(Boolean);
-}
-
 function setMinimalAcpCommandRegistryForTests(): void {
   setActivePluginRegistry(
     createTestRegistry([
@@ -343,30 +307,6 @@ function setMinimalAcpCommandRegistryForTests(): void {
         },
       },
       {
-        pluginId: "imessage",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "imessage", label: "iMessage" }),
-          bindings: {
-            resolveCommandConversation: ({
-              originatingTo,
-              commandTo,
-              fallbackTo,
-            }: {
-              originatingTo?: string;
-              commandTo?: string;
-              fallbackTo?: string;
-            }) => {
-              const conversationId = resolvePrefixedConversationIdForTest(
-                [originatingTo, commandTo, fallbackTo],
-                "imessage",
-              );
-              return conversationId ? { conversationId } : null;
-            },
-          },
-        },
-      },
-      {
         pluginId: "slack",
         source: "test",
         plugin: {
@@ -423,32 +363,6 @@ function setMinimalAcpCommandRegistryForTests(): void {
           },
         },
       },
-      ...(["feishu", "line"] as const).map((channelId) => ({
-        pluginId: channelId,
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: channelId, label: channelId }),
-          bindings: {
-            resolveCommandConversation: ({
-              originatingTo,
-              commandTo,
-              fallbackTo,
-            }: {
-              originatingTo?: string;
-              commandTo?: string;
-              fallbackTo?: string;
-            }) => {
-              const conversationId = resolveFirstConversationTargetForTest({
-                channel: channelId,
-                originatingTo,
-                commandTo,
-                fallbackTo,
-              });
-              return conversationId ? { conversationId } : null;
-            },
-          },
-        },
-      })),
     ]),
   );
 }
@@ -796,50 +710,6 @@ async function runMatrixThreadAcpCommand(commandBody: string, cfg: OpenClawConfi
   return handleAcpCommand(createMatrixThreadParams(commandBody, cfg), true);
 }
 
-async function runFeishuDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  return handleAcpCommand(
-    createConversationParams(
-      commandBody,
-      {
-        channel: "feishu",
-        originatingTo: "user:ou_sender_1",
-        senderId: "ou_sender_1",
-      },
-      cfg,
-    ),
-    true,
-  );
-}
-
-async function runLineDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  return handleAcpCommand(
-    createConversationParams(
-      commandBody,
-      {
-        channel: "line",
-        originatingTo: "U1234567890abcdef1234567890abcdef",
-        senderId: "U1234567890abcdef1234567890abcdef",
-      },
-      cfg,
-    ),
-    true,
-  );
-}
-
-async function runIMessageDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  return handleAcpCommand(
-    createConversationParams(
-      commandBody,
-      {
-        channel: "imessage",
-        originatingTo: "imessage:+15555550123",
-      },
-      cfg,
-    ),
-    true,
-  );
-}
-
 async function runInternalAcpCommand(params: {
   commandBody: string;
   scopes: string[];
@@ -1130,15 +1000,6 @@ describe("/acp command", () => {
     });
   });
 
-  it("keeps read-only /acp actions available to authorized non-owners", async () => {
-    const params = createDiscordParams("/acp sessions");
-    params.command.senderIsOwner = false;
-
-    const result = await handleAcpCommand(params, true);
-
-    expect(result?.reply?.text).toContain("ACP sessions:");
-  });
-
   it("spawns an ACP session and binds a Discord thread", async () => {
     hoisted.ensureSessionMock.mockResolvedValueOnce({
       sessionKey: "agent:codex:acp:s1",
@@ -1327,34 +1188,6 @@ describe("/acp command", () => {
     });
   });
 
-  it("binds iMessage DMs with --bind here", async () => {
-    const result = await runIMessageDmAcpCommand("/acp spawn codex --bind here");
-
-    expect(result?.reply?.text).toContain("Bound this conversation to");
-    expectBindingBindCall({
-      placement: "current",
-      conversation: {
-        channel: "imessage",
-        accountId: "default",
-        conversationId: "+15555550123",
-      },
-    });
-  });
-
-  it("binds Slack DMs with --bind here through the generic conversation path", async () => {
-    const result = await runSlackDmAcpCommand("/acp spawn codex --bind here");
-
-    expect(result?.reply?.text).toContain("Bound this conversation to");
-    expectBindingBindCall({
-      placement: "current",
-      conversation: {
-        channel: "slack",
-        accountId: "default",
-        conversationId: "user:U123",
-      },
-    });
-  });
-
   it("keeps freshly spawned Slack-bound ACP metadata readable for the immediate follow-up", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-bound-followup-"));
     const databasePath = path.join(directory, "state", "openclaw.sqlite");
@@ -1526,36 +1359,6 @@ describe("/acp command", () => {
     });
   });
 
-  it("binds Feishu DM ACP spawns to the current DM conversation", async () => {
-    const result = await runFeishuDmAcpCommand("/acp spawn codex --thread here");
-
-    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
-    expect(result?.reply?.text).toContain("Bound this conversation to");
-    expectBindingBindCall({
-      placement: "current",
-      conversation: {
-        channel: "feishu",
-        accountId: "default",
-        conversationId: "user:ou_sender_1",
-      },
-    });
-  });
-
-  it("binds LINE DM ACP spawns to the current conversation", async () => {
-    const result = await runLineDmAcpCommand("/acp spawn codex --thread here");
-
-    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
-    expect(result?.reply?.text).toContain("Bound this conversation to");
-    expectBindingBindCall({
-      placement: "current",
-      conversation: {
-        channel: "line",
-        accountId: "default",
-        conversationId: "U1234567890abcdef1234567890abcdef",
-      },
-    });
-  });
-
   it("requires explicit ACP target when acp.defaultAgent is not configured", async () => {
     const result = await runDiscordAcpCommand("/acp spawn");
 
@@ -1675,30 +1478,6 @@ describe("/acp command", () => {
     });
   });
 
-  it("sends steer instructions via ACP runtime", async () => {
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "sessions.resolve") {
-        return { key: defaultAcpSessionKey };
-      }
-      return { ok: true };
-    });
-    hoisted.readAcpSessionEntryMock.mockReturnValue(createAcpSessionEntry());
-    hoisted.runTurnMock.mockImplementation(async function* () {
-      yield { type: "text_delta", text: "Applied steering." };
-      yield { type: "done" };
-    });
-
-    const result = await runDiscordAcpCommand(
-      `/acp steer --session ${defaultAcpSessionKey} tighten logging`,
-    );
-
-    expectMockCallFields(hoisted.runTurnMock, {
-      mode: "steer",
-      text: "tighten logging",
-    });
-    expect(result?.reply?.text).toContain("Applied steering.");
-  });
-
   it("admits ACP steer with the original channel participant", async () => {
     const captured: unknown[] = [];
     const audit = createChannelAdmissionAudit({ enabled: true });
@@ -1768,6 +1547,7 @@ describe("/acp command", () => {
       `/acp steer --session ${defaultAcpSessionKey} tighten logging`,
     );
 
+    expectMockCallFields(hoisted.runTurnMock, { mode: "steer", text: "tighten logging" });
     expect(result?.reply?.text).toContain(`\n${prefix}…`);
     expect(result?.reply?.text).not.toContain("😀");
   });

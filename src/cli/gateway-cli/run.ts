@@ -1,6 +1,6 @@
 // Gateway run option resolution and local server startup command implementation.
 import fs from "node:fs";
-import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalObjectRecord, expectDefined } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -121,24 +121,12 @@ function extractGatewayMiskeys(parsed: unknown): {
   hasRemoteToken: boolean;
 } {
   // Detect common token misplacements before startup falls back to unauthenticated mode.
-  if (!parsed || typeof parsed !== "object") {
-    return { hasGatewayToken: false, hasRemoteToken: false };
-  }
-  const gateway = (parsed as Record<string, unknown>).gateway;
-  if (!gateway || typeof gateway !== "object") {
-    return { hasGatewayToken: false, hasRemoteToken: false };
-  }
-  const hasGatewayToken = "token" in (gateway as Record<string, unknown>);
-  const remote = (gateway as Record<string, unknown>).remote;
-  const hasRemoteToken =
-    remote && typeof remote === "object" ? "token" in (remote as Record<string, unknown>) : false;
-  return { hasGatewayToken, hasRemoteToken };
-}
-
-function warnInlinePasswordFlag() {
-  defaultRuntime.error(
-    "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
-  );
+  const gateway = asOptionalObjectRecord(asOptionalObjectRecord(parsed)?.gateway);
+  const remote = asOptionalObjectRecord(gateway?.remote);
+  return {
+    hasGatewayToken: gateway ? "token" in gateway : false,
+    hasRemoteToken: remote ? "token" in remote : false,
+  };
 }
 
 async function resolveGatewayPasswordOption(opts: GatewayRunOpts): Promise<string | undefined> {
@@ -158,10 +146,7 @@ function parseEnumOption<T extends string>(
   raw: string | undefined,
   allowed: readonly T[],
 ): T | null {
-  if (!raw) {
-    return null;
-  }
-  return (allowed as readonly string[]).includes(raw) ? (raw as T) : null;
+  return raw ? (allowed.find((value) => value === raw) ?? null) : null;
 }
 
 function formatModeErrorList(modes: readonly string[]): string {
@@ -176,18 +161,6 @@ function formatModeErrorList(modes: readonly string[]): string {
     return `${quoted[0]} or ${quoted[1]}`;
   }
   return `${quoted.slice(0, -1).join(", ")}, or ${quoted[quoted.length - 1]}`;
-}
-
-function shouldBlockGatewayBindWithoutExplicitAuth(params: {
-  bindHost: string;
-  hasSharedSecret: boolean;
-  resolvedAuthMode: GatewayAuthMode;
-}): boolean {
-  return (
-    !isLoopbackHost(params.bindHost) &&
-    !params.hasSharedSecret &&
-    params.resolvedAuthMode !== "trusted-proxy"
-  );
 }
 
 async function readGatewayStartupConfig(params: {
@@ -803,7 +776,9 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     return;
   }
   if (toOptionString(opts.password)) {
-    warnInlinePasswordFlag();
+    defaultRuntime.error(
+      "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
+    );
   }
   const tokenRaw = toOptionString(opts.token);
 
@@ -876,9 +851,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
         "Gateway auth is set to password, but no password is configured.",
         "Set gateway.auth.password (or OPENCLAW_GATEWAY_PASSWORD), or pass --password.",
         ...authHints,
-      ]
-        .filter(Boolean)
-        .join("\n"),
+      ].join("\n"),
     );
     defaultRuntime.exit(EXIT_CONFIG_ERROR);
     return;
@@ -889,13 +862,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     );
   }
   const healthHost = await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost);
-  if (
-    shouldBlockGatewayBindWithoutExplicitAuth({
-      bindHost: healthHost,
-      hasSharedSecret,
-      resolvedAuthMode,
-    })
-  ) {
+  if (!isLoopbackHost(healthHost) && !hasSharedSecret && resolvedAuthMode !== "trusted-proxy") {
     defaultRuntime.error(
       [
         `Refusing to bind gateway to ${bind} without auth.`,
@@ -908,9 +875,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
               "Set gateway.auth.token/password (or OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD) or pass --token/--password.",
             ]),
         ...authHints,
-      ]
-        .filter(Boolean)
-        .join("\n"),
+      ].join("\n"),
     );
     defaultRuntime.exit(EXIT_CONFIG_ERROR);
     return;

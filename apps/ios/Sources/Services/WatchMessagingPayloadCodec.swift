@@ -26,11 +26,6 @@ enum WatchMessagingPayloadCodec {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    static func exactNonEmpty(_ value: String?) -> String? {
-        guard let value, !value.isEmpty else { return nil }
-        return value
-    }
-
     static func encodeNotificationPayload(
         id: String,
         params: OpenClawWatchNotifyParams,
@@ -139,7 +134,7 @@ enum WatchMessagingPayloadCodec {
         if let sentAtMs = message.sentAtMs {
             payload["sentAtMs"] = sentAtMs
         }
-        if let resetResolutionAttemptId = exactNonEmpty(message.resetResolutionAttemptId) {
+        if let resetResolutionAttemptId = ExactOpaqueIdentifier.exact(message.resetResolutionAttemptId) {
             payload["resetResolutionAttemptId"] = resetResolutionAttemptId
         }
         return payload
@@ -206,7 +201,7 @@ enum WatchMessagingPayloadCodec {
         if let snapshotId = nonEmpty(message.snapshotId) {
             payload["snapshotId"] = snapshotId
         }
-        if let requestId = exactNonEmpty(message.requestId) {
+        if let requestId = ExactOpaqueIdentifier.exact(message.requestId) {
             payload["requestId"] = requestId
         }
         if let requestGatewayStableID = GatewayStableIdentifier.exact(message.requestGatewayStableID) {
@@ -276,13 +271,13 @@ enum WatchMessagingPayloadCodec {
 
     private static func encodeAppStatus(_ status: OpenClawWatchAppStatus) -> [String: Any] {
         var payload: [String: Any] = ["code": status.code.rawValue]
-        if let localizationKey = exactNonEmpty(status.localizationKey) {
+        if let localizationKey = ExactOpaqueIdentifier.exact(status.localizationKey) {
             payload["localizationKey"] = localizationKey
         }
         if !status.arguments.isEmpty {
             payload["arguments"] = status.arguments
         }
-        if let verbatim = exactNonEmpty(status.verbatim) {
+        if let verbatim = ExactOpaqueIdentifier.exact(status.verbatim) {
             payload["verbatim"] = verbatim
         }
         return payload
@@ -358,7 +353,7 @@ enum WatchMessagingPayloadCodec {
         else {
             return nil
         }
-        let replyId = self.exactNonEmpty(payload["replyId"] as? String) ?? UUID().uuidString
+        let replyId = ExactOpaqueIdentifier.exact(payload["replyId"] as? String) ?? UUID().uuidString
         let gatewayStableID = GatewayStableIdentifier.exact(payload["gatewayStableID"] as? String)
         let sentAtMs = (payload["sentAtMs"] as? NSNumber)?.int64Value
         return WatchExecApprovalResolveEvent(
@@ -380,7 +375,7 @@ enum WatchMessagingPayloadCodec {
         // Version-skew compat: shipped Watch binaries request snapshots without requestId or
         // heldApprovals. A missing key decodes as the shipped shape (present-but-malformed
         // still rejects); remove once the minimum paired Watch app version sends heldApprovals.
-        let requestId = self.exactNonEmpty(payload["requestId"] as? String) ?? UUID().uuidString
+        let requestId = ExactOpaqueIdentifier.exact(payload["requestId"] as? String) ?? UUID().uuidString
         let rawHeldApprovals: [Any]
         if let rawHeldApprovalsValue = payload["heldApprovals"] {
             guard let heldApprovalsArray = rawHeldApprovalsValue as? [Any] else { return nil }
@@ -398,7 +393,7 @@ enum WatchMessagingPayloadCodec {
             }
             let activeResolutionAttemptId: String?
             if let rawAttemptId = item["activeResolutionAttemptId"] {
-                guard let attemptId = exactNonEmpty(rawAttemptId as? String) else {
+                guard let attemptId = ExactOpaqueIdentifier.exact(rawAttemptId as? String) else {
                     return nil
                 }
                 activeResolutionAttemptId = attemptId

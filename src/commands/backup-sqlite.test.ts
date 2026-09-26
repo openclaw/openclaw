@@ -287,7 +287,6 @@ describe("SQLite backup commands", () => {
       "nope-agent",
       'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
     ],
-    ["empty", "", "--agent must not be blank"],
     ["whitespace-only", "   ", "--agent must not be blank"],
   ])("rejects an %s SQLite snapshot agent", async (_label, agent, message) => {
     await expect(

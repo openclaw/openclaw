@@ -15,7 +15,7 @@ import type {
   OpenClawStateReadPhase,
   OpenClawStateReadReply,
 } from "./openclaw-state-read.types.js";
-import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 
 const mock = vi.hoisted(() => ({
@@ -28,7 +28,7 @@ vi.mock("./openclaw-state-worker-context.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./openclaw-state-worker-context.js")>();
   return {
     ...actual,
-    captureOpenClawStateWorkerContext: vi.fn(actual.captureOpenClawStateWorkerContext),
+    captureOpenClawStateReadWorkerContext: vi.fn(actual.captureOpenClawStateReadWorkerContext),
   };
 });
 vi.mock("../infra/worker-task-pool.js", async (importOriginal) => ({
@@ -80,7 +80,7 @@ it.each(["retired", "different-source"] as const)(
   "maps %s captured authority before dispatching a read",
   async (kind) => {
     const options = source();
-    const context = captureOpenClawStateWorkerContext(options);
+    const context = captureOpenClawStateReadWorkerContext(options);
     if (kind === "retired") {
       await closeOpenClawStateDatabaseByPathAsync(options.path);
     }
@@ -110,7 +110,7 @@ it.each(["retired", "different-source"] as const)(
 it("maps synchronous read admission refusal once before read work", () => {
   const options = source();
   const original = new Error("original read admission refusal");
-  vi.mocked(captureOpenClawStateWorkerContext).mockImplementationOnce(() => {
+  vi.mocked(captureOpenClawStateReadWorkerContext).mockImplementationOnce(() => {
     throw original;
   });
   const { mapped, mapError } = mapper();
@@ -129,9 +129,9 @@ it.each(["read admission", "schema scope"] as const)(
     const context =
       kind === "schema scope"
         ? withExistingOpenClawStateSchema({ path: options.path }, () =>
-            captureOpenClawStateWorkerContext(options),
+            captureOpenClawStateReadWorkerContext(options),
           )
-        : captureOpenClawStateWorkerContext(options);
+        : captureOpenClawStateReadWorkerContext(options);
     if (kind === "read admission") {
       await closeOpenClawStateDatabaseByPathAsync(options.path);
     }
