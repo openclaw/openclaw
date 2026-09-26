@@ -19,7 +19,7 @@ export const UPDATE_PREFLIGHT_DETAILS = {
   "inside-gateway-service":
     "The update is running inside the Gateway's native service membership. Stopping the service would terminate this command. Run openclaw update from an independent terminal outside the service, or use the Gateway update action for a managed handoff.",
   "service-membership-unverified":
-    "Native Gateway service membership could not be verified. No service teardown was attempted. Retry from an independent terminal after restoring native process inspection, or use the Gateway update action for a managed handoff.",
+    "Native Gateway service membership could not be verified. From an interactive external shell not started by the service, run openclaw gateway stop && openclaw update --yes && openclaw gateway start. No service teardown was attempted. With native helper support (systemd-run on Linux), use openclaw gateway call update.run --params '{}' for a managed handoff.",
   "service-ancestry-unverified":
     "Process ancestry could not be fully inspected. Use the Gateway update action for a managed handoff, or retry from an independent terminal without inherited service markers.",
   "inside-triage-process-tree":

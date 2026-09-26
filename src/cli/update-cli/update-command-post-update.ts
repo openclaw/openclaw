@@ -66,7 +66,12 @@ export async function finishUpdate(
   {
     candidateRuntime = false,
     onGatewayStartAttempted: observeGatewayStartAttempted,
-  }: { candidateRuntime?: boolean; onGatewayStartAttempted?: () => void } = {},
+    deferredMaintenance,
+  }: {
+    candidateRuntime?: boolean;
+    onGatewayStartAttempted?: () => void;
+    deferredMaintenance?: string;
+  } = {},
 ): Promise<UpdateRunResult> {
   const beganSuccessfully = params.result.status === "ok";
   let gatewayStartAttempted = false;
@@ -427,6 +432,18 @@ export async function finishUpdate(
 
   const runPostUpdate = async (): Promise<UpdateRunResult> => {
     try {
+      if (params.coreAlreadyCurrent && deferredMaintenance) {
+        defaultRuntime.error(deferredMaintenance);
+        params.result.steps.push({
+          name: "current-core-maintenance",
+          command: "openclaw update",
+          cwd: params.root,
+          durationMs: 0,
+          exitCode: 0,
+          advisory: { kind: "recoverable-maintenance", message: deferredMaintenance },
+        });
+        return params.result;
+      }
       if (
         params.result.status === "error" ||
         params.result.recovery?.serviceRestartSafe === false

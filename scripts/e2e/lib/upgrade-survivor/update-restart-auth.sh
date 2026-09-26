@@ -353,8 +353,11 @@ case "$command" in
     exit 0
     ;;
   is-enabled)
-    [ "$system_scope" = 0 ] && [ "$unit_name" = openclaw-gateway.service ] &&
-      [ -f "$(unit_path)" ] && [ -L "$(dirname "$(unit_path)")/default.target.wants/openclaw-gateway.service" ] && exit 0
+    if [ "$system_scope" = 0 ] && [ "$unit_name" = openclaw-gateway.service ] &&
+      [ -f "$(unit_path)" ] && [ -L "$(dirname "$(unit_path)")/default.target.wants/openclaw-gateway.service" ]; then
+      printf 'enabled\n'
+      exit 0
+    fi
     printf 'disabled\n'
     exit 1
     ;;

@@ -322,7 +322,6 @@ it.each(["schema", "execution", "already current"] as const)(
               requestedChannel: null,
               storedChannel: null,
               controlPlaneUpdateSentinelMeta: null,
-              packageInstallSpec: params.packageInstallSpec ?? null,
               refuseUpdate,
             });
       await expect(operation.then(() => "admitted")).rejects.toMatchObject({
