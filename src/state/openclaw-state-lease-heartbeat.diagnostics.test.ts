@@ -42,9 +42,6 @@ vi.mock("../infra/state-database-coordinator.js", () => ({
   acquireStateDatabaseHandleLease: () => ({ release() {} }),
   retainHeldStateDatabaseCoordinator: () => undefined,
 }));
-vi.mock("../infra/sqlite-coordinator.js", () => ({
-  runWithSqliteCoordinator: (_handle: unknown, _label: string, run: () => unknown) => run(),
-}));
 vi.mock("../infra/sqlite-busy-timeout.js", () => ({
   runWithSqliteBusyTimeout: (_db: unknown, _ms: number, run: () => unknown) => run(),
 }));
