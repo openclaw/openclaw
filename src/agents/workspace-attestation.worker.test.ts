@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   createOpenClawTestState,
@@ -52,9 +55,13 @@ it("commits captured attestations without main-thread SQL on cold and warm write
   });
 });
 
-it.each(["transaction", "commit"] as const)(
-  "rolls back attestation when the owner retires at worker %s admission",
-  async (stage) => {
+it.each(
+  (["attestation", "alias"] as const).flatMap((operation) =>
+    (["transaction", "commit"] as const).map((stage) => ({ operation, stage })),
+  ),
+)(
+  "rolls back $operation when the owner retires at worker $stage admission",
+  async ({ operation, stage }) => {
     const input = {
       workspaceDir: state.workspaceDir,
       attestedAtMs: 1_000,
@@ -63,6 +70,8 @@ it.each(["transaction", "commit"] as const)(
     };
     await replaceWorkspaceAttestation(input);
     const before = await readWorkspaceStateSnapshot(state.workspaceDir);
+    const alias = state.path("workspace-link");
+    await fs.symlink(state.workspaceDir, alias, process.platform === "win32" ? "junction" : "dir");
     const originalAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
     let retired = false;
     vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
@@ -73,21 +82,29 @@ it.each(["transaction", "commit"] as const)(
         }, attachment),
     );
     const error = new Error("workspace owner retired");
+    const assertCurrent = () => {
+      if (retired) {
+        throw error;
+      }
+    };
     await expect(
-      replaceWorkspaceAttestation({
-        ...input,
-        attestedAtMs: 2_000,
-        nowMs: 2_000,
-        generatedHashes: new Map([["SOUL.md", "b".repeat(64)]]),
-        assertCurrent: () => {
-          if (retired) {
-            throw error;
-          }
-        },
-      }),
+      operation === "alias"
+        ? readWorkspaceStateSnapshot(alias, { assertCurrent })
+        : replaceWorkspaceAttestation({
+            ...input,
+            attestedAtMs: 2_000,
+            nowMs: 2_000,
+            generatedHashes: new Map([["SOUL.md", "b".repeat(64)]]),
+            assertCurrent,
+          }),
     ).rejects.toBe(error);
     expect(retired).toBe(true);
     expect(await readWorkspaceStateSnapshot(state.workspaceDir)).toEqual(before);
+    expect(
+      openOpenClawStateDatabase()
+        .db.prepare("SELECT alias_key FROM workspace_path_aliases WHERE alias_path = ?")
+        .get(alias),
+    ).toBeUndefined();
   },
 );
 
@@ -101,7 +118,13 @@ it("refreshes unchanged hashes so disappearance protection survives a database r
 
   const refreshedAt = startedAt + WORKSPACE_ATTESTATION_RECENT_MS - 1;
   clock.mockReturnValue(refreshedAt);
-  await ensureAgentWorkspace({ dir: state.workspaceDir });
+  const sql = observeMainThreadSql();
+  try {
+    await ensureAgentWorkspace({ dir: state.workspaceDir });
+    sql.expectIdle();
+  } finally {
+    sql.restore();
+  }
   const refreshed = (await readWorkspaceStateSnapshot(state.workspaceDir)).attestation!;
   expect(refreshed.generatedHashes).toEqual(original.generatedHashes);
   expect(refreshed.attestedAtMs).toBe(refreshedAt);

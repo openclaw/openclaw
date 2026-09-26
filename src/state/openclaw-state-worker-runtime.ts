@@ -17,6 +17,7 @@ import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.work
 import { writeSandboxRegistry } from "../agents/sandbox/registry-write.worker.js";
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import { replaceWorkspaceAttestationInDatabase } from "../agents/workspace-state-store.kernel.js";
+import { registerWorkspaceStateAliasesInDatabase } from "../agents/workspace-state-store.worker.js";
 import {
   isWorktreeRegistryReadCommand,
   executeWorktreeRegistryReadCommand,
@@ -513,6 +514,16 @@ export function executeSharedStateCommand(
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       return result;
     }, writeOptions);
+  }
+  if (command.type === "workspace.registerAliases") {
+    return registerWorkspaceStateAliasesInDatabase(
+      database,
+      command.input.workspaceDir,
+      command.input.resolution,
+      (stage) => {
+        requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
+      },
+    );
   }
   if (command.type === "sandboxRegistry.write") {
     return writeSandboxRegistry(command.input, writeOptions);

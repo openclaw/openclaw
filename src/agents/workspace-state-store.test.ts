@@ -155,11 +155,10 @@ describe("workspace state store", () => {
     );
   });
 
-  it.each(["merge", "expire", "delete", "register-alias"] as const)(
+  it.each(["merge", "expire", "delete"] as const)(
     "checks current ownership inside the %s transaction before changing state",
     async (operation) => {
       const dir = workspaceDir();
-      const alias = testState!.path("workspace-link");
       await mergeWorkspaceSetupState(dir, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
       await replaceWorkspaceAttestation({
         workspaceDir: dir,
@@ -169,7 +168,6 @@ describe("workspace state store", () => {
       });
       const before = await readWorkspaceStateSnapshot(dir);
       const db = openOpenClawStateDatabase().db;
-      fs.symlinkSync(dir, alias, process.platform === "win32" ? "junction" : "dir");
       const filePath = path.join(dir, "AGENTS.md");
       writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
       const retired = new Error("workspace owner retired");
@@ -185,15 +183,11 @@ describe("workspace state store", () => {
         expire: () =>
           clearExpiredWorkspaceStateForVanishedWorkspace(dir, 86_401_001, { assertCurrent }),
         delete: () => deleteWorkspaceState(prepareWorkspaceStateDeletion(dir), { assertCurrent }),
-        "register-alias": () => readWorkspaceStateSnapshot(alias, { assertCurrent }),
       };
 
       await expect(operations[operation]()).rejects.toBe(retired);
       expect(await readWorkspaceStateSnapshot(dir)).toEqual(before);
       expect(readWorkspaceFileCache(filePath, "identity")).toBe("cached");
-      expect(
-        db.prepare("SELECT alias_key FROM workspace_path_aliases WHERE alias_path = ?").get(alias),
-      ).toBeUndefined();
     },
   );
 

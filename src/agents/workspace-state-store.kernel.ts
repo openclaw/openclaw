@@ -97,7 +97,7 @@ export function workspacePathEntryExists(workspaceDir: string): boolean {
   }
 }
 
-type WorkspaceIdentityResolution = {
+export type WorkspaceIdentityResolution = {
   identity: WorkspaceStateIdentity;
   aliases: WorkspaceStateIdentity[];
   missingAliasKeys: string[];
@@ -299,13 +299,19 @@ export function readWorkspaceStateSnapshotFromDatabase(params: {
   };
 }
 
-export function readWorkspaceStateSnapshotForDirectoryInDatabase(params: {
+export function readWorkspaceStateForDirectoryInDatabase(params: {
   workspaceDir: string;
   database: WorkspaceStateDatabaseHandle;
-}): WorkspaceStateSnapshot {
+}): { resolution: WorkspaceIdentityResolution; snapshot: WorkspaceStateSnapshot } {
   return runSqliteDeferredTransactionSync(params.database.db, () => {
-    const { identity } = resolveWorkspaceIdentityFromDatabase(params);
-    return readWorkspaceStateSnapshotFromDatabase({ identity, database: params.database });
+    const resolution = resolveWorkspaceIdentityFromDatabase(params);
+    return {
+      resolution,
+      snapshot: readWorkspaceStateSnapshotFromDatabase({
+        identity: resolution.identity,
+        database: params.database,
+      }),
+    };
   });
 }
 

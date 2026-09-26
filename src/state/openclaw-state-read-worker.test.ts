@@ -448,6 +448,11 @@ it.each([
                           ok: true,
                           type,
                           sourceAdmitted: true,
+                          resolution: {
+                            identity: createWorkspaceStateIdentity(selector),
+                            aliases: [createWorkspaceStateIdentity(selector)],
+                            missingAliasKeys: [],
+                          },
                           snapshot: {
                             identity: createWorkspaceStateIdentity(selector),
                             setup: { version: 1 },

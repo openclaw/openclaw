@@ -10,6 +10,8 @@ import type { SubagentRegistryWrite } from "../agents/subagents/registry/subagen
 import type {
   WorkspaceAttestation,
   WorkspaceAttestationInput,
+  WorkspaceStateSnapshot,
+  WorkspaceIdentityResolution,
 } from "../agents/workspace-state-store.kernel.js";
 import type { WorktreeRegistryReadOperations } from "../agents/worktrees/registry-read.worker.js";
 import type { WorktreeRetirementOperations } from "../agents/worktrees/registry-retirement.worker.js";
@@ -154,6 +156,10 @@ export type OpenClawStateWorkerOperations = WorktreeRetirementOperations &
     "workspace.replaceAttestation": {
       input: WorkspaceAttestationInput;
       output: WorkspaceAttestation;
+    };
+    "workspace.registerAliases": {
+      input: { workspaceDir: string; resolution: WorkspaceIdentityResolution };
+      output: WorkspaceStateSnapshot;
     };
     "updateRuns.reconcileInterrupted": {
       input: InterruptedUpdateSettlement;

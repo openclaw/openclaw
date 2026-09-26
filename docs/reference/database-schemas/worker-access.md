@@ -79,6 +79,15 @@ behavior.
 
 ## Carry facts, publish after commit
 
+Workspace preparation reads current setup, attestation, and alias facts through
+the shared-state read worker. Mutable access retains the existing state owner's
+cold initialization and migration admission. A missing alias carries that read's
+resolved identity into the writer, which rereads authoritative state and checks
+live caller authority at transaction and commit admission before registering it.
+Ordinary snapshots do not acquire writer custody. Read-only inspection preserves
+its selected snapshot and never registers aliases. Disappearance protection,
+schema, stored bytes, retention, and update behavior are unchanged.
+
 Placement turn claims and releases execute through the shared-state writer,
 including their coordinator acquisition. Local turns retain durable claims:
 cloud dispatch closes admission and joins their settlement before preparing the

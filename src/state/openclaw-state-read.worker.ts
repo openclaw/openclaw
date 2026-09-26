@@ -16,7 +16,7 @@ import {
   loadSubagentRunsForSessionFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
 } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
-import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
+import { readWorkspaceStateForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
 import { readCronJobNamesInDatabase } from "../cron/store/job-name.js";
@@ -524,7 +524,7 @@ serveOwnedWorkerTasks(
                     ok: true,
                     type: command.type,
                     sourceAdmitted,
-                    snapshot: readWorkspaceStateSnapshotForDirectoryInDatabase({
+                    ...readWorkspaceStateForDirectoryInDatabase({
                       workspaceDir: command.workspaceDir,
                       database: { db, path: input.databasePath },
                     }),

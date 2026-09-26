@@ -8,7 +8,10 @@ import type {
 } from "../agents/sandbox/registry.types.js";
 import type { SubagentRunReadRecord } from "../agents/subagents/registry/subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
-import type { WorkspaceStateSnapshot } from "../agents/workspace-state-store.kernel.js";
+import type {
+  WorkspaceStateSnapshot,
+  WorkspaceIdentityResolution,
+} from "../agents/workspace-state-store.kernel.js";
 import type { readWorktreeRunLeaseStateInDatabase } from "../agents/worktrees/run-lease-owner.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import type {
@@ -522,7 +525,13 @@ export type OpenClawStateReadReply = (
       sourceAdmitted: true;
       workspaces: SessionRepositoryWorkspaceRecord[];
     }
-  | { ok: true; type: "workspace.snapshot"; sourceAdmitted: true; snapshot: WorkspaceStateSnapshot }
+  | {
+      ok: true;
+      type: "workspace.snapshot";
+      sourceAdmitted: true;
+      snapshot: WorkspaceStateSnapshot;
+      resolution: WorkspaceIdentityResolution;
+    }
   | {
       ok: true;
       type: "sandboxRegistry.list";

@@ -6,16 +6,16 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import {
-  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import type { OpenClawStateWorkerOperationOptions } from "../state/openclaw-state-worker-contract.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { resolveUserPath } from "../utils.js";
 import { retireWorkspaceFileCache } from "./workspace-file-cache.js";
@@ -24,7 +24,6 @@ import {
   resolveCanonicalWorkspacePath,
   resolveWorkspaceStateAliases,
   resolveWorkspaceStateIdentity,
-  WorkspaceAliasRepointedError,
   type WorkspaceStateIdentity,
 } from "./workspace-state-identity.js";
 import {
@@ -73,8 +72,9 @@ export async function readWorkspaceStateSnapshot(
   workspaceDir: string,
   options: OpenClawStateDatabaseOptions & WorkspaceStateOperationOptions = {},
 ): Promise<WorkspaceStateSnapshot> {
+  const capturedWorkspaceDir = path.resolve(resolveUserPath(workspaceDir));
+  const { assertCurrent } = options;
   if (options.readOnly) {
-    const capturedWorkspaceDir = path.resolve(resolveUserPath(workspaceDir));
     const reply = await executeExistingOpenClawStateRead(options, {
       type: "workspace.snapshot",
       workspaceDir: capturedWorkspaceDir,
@@ -90,56 +90,38 @@ export async function readWorkspaceStateSnapshot(
       }
     );
   }
-  const database = openOpenClawStateDatabase(options);
-  const initial = runSqliteDeferredTransactionSync(database.db, () => {
-    const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
-    return {
-      resolution,
-      snapshot: readWorkspaceStateSnapshotFromDatabase({ identity: resolution.identity, database }),
-    };
+  const context = captureOpenClawStateWorkerContext({
+    ...options,
+    path: options.database?.path ?? options.path,
   });
-  if (
-    initial.resolution.missingAliasKeys.length === 0 ||
-    (!initial.snapshot.setupExists && !initial.snapshot.attestation)
-  ) {
-    return initial.snapshot;
-  }
-  // Register a newly observed configured spelling once state proves the target
-  // identity. Later disappearance must still find the same safety evidence.
-  return runOpenClawStateWriteTransaction((writeDatabase) => {
-    options.assertCurrent?.();
-    const currentAliases = resolveWorkspaceStateAliases(workspaceDir);
-    const currentCanonicalIdentity = currentAliases.at(-1)!;
-    if (
-      workspacePathEntryExists(workspaceDir) &&
-      currentCanonicalIdentity.workspaceKey !== initial.resolution.identity.workspaceKey
-    ) {
-      throw new WorkspaceAliasRepointedError({
-        aliasPath: currentAliases[0]!.workspacePath,
-        storedWorkspacePath: initial.resolution.identity.workspacePath,
-        currentWorkspacePath: currentCanonicalIdentity.workspacePath,
-      });
-    }
-    const snapshot = readWorkspaceStateSnapshotFromDatabase({
-      identity: initial.resolution.identity,
-      database: writeDatabase,
-    });
-    if (snapshot.setupExists || snapshot.attestation) {
-      const aliases = new Map(
-        [...initial.resolution.aliases, ...currentAliases].map((alias) => [
-          alias.workspaceKey,
-          alias,
-        ]),
+  return runOpenClawStateWorkerOperation(
+    context,
+    async (scope) => {
+      // Admission still creates/migrates mutable stores; ordinary snapshots do not
+      // need writer custody. Carry their identity facts into alias registration.
+      const reply = await executeExistingOpenClawStateRead(
+        { path: context.admission.databasePath, env: context.environment },
+        { type: "workspace.snapshot", workspaceDir: capturedWorkspaceDir },
+        { current: true },
       );
-      registerWorkspaceStateAliasIdentitiesInTransaction({
-        database: writeDatabase,
-        identity: initial.resolution.identity,
-        aliases: [...aliases.values()],
-        updatedAtMs: Date.now(),
+      context.admission.assertCurrent();
+      assertCurrent?.();
+      if (!reply || !reply.ok || reply.type !== "workspace.snapshot") {
+        throw new Error("Unexpected workspace state snapshot result");
+      }
+      if (
+        reply.resolution.missingAliasKeys.length === 0 ||
+        (!reply.snapshot.setupExists && !reply.snapshot.attestation)
+      ) {
+        return reply.snapshot;
+      }
+      return scope.execute({
+        type: "workspace.registerAliases",
+        input: { workspaceDir: capturedWorkspaceDir, resolution: reply.resolution },
       });
-    }
-    return snapshot;
-  }, options);
+    },
+    workspaceStateWorkerAdmission(context, assertCurrent),
+  );
 }
 
 export async function mergeWorkspaceSetupState(
@@ -214,21 +196,28 @@ export async function replaceWorkspaceAttestation(
   return runOpenClawStateWorkerOperation(
     context,
     (scope) => scope.execute({ type: "workspace.replaceAttestation", input }),
-    {
-      assertCurrent,
-      createAdmission: () => ({
-        nativeLocations: [context.admission.databasePath],
-        admission: createSqliteWorkerOperationAdmission((request, grant) => {
-          if (request.stage !== "transaction" && request.stage !== "commit") {
-            throw new Error("Workspace attestation requires transaction admission");
-          }
-          context.admission.assertCurrent();
-          assertCurrent?.();
-          grant();
-        }),
-      }),
-    },
+    workspaceStateWorkerAdmission(context, assertCurrent),
   );
+}
+
+function workspaceStateWorkerAdmission(
+  context: OpenClawStateWorkerContext,
+  assertCurrent?: () => void,
+): OpenClawStateWorkerOperationOptions {
+  return {
+    assertCurrent,
+    createAdmission: () => ({
+      nativeLocations: [context.admission.databasePath],
+      admission: createSqliteWorkerOperationAdmission((request, grant) => {
+        if (request.stage !== "transaction" && request.stage !== "commit") {
+          throw new Error("Workspace state requires transaction admission");
+        }
+        context.admission.assertCurrent();
+        assertCurrent?.();
+        grant();
+      }),
+    }),
+  };
 }
 
 function deleteWorkspaceRows(

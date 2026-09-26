@@ -99,9 +99,13 @@ it("awaits configured Doctor workspace inspection without main-thread SQL", asyn
   }
 });
 
-it.each(["cached", "cold"] as const)(
-  "reads %s workspace state without main-thread SQL",
-  async (mode) => {
+it.each(
+  (["cached", "cold"] as const).flatMap((mode) =>
+    [true, false].map((readOnly) => ({ mode, readOnly })),
+  ),
+)(
+  "reads $mode workspace state with readOnly=$readOnly without main-thread SQL",
+  async ({ mode, readOnly }) => {
     const expected = await seed();
     const database = openOpenClawStateDatabase();
     if (mode === "cold") {
@@ -110,12 +114,14 @@ it.each(["cached", "cold"] as const)(
     const sql = observeMainThreadSql();
     const started = performance.now();
     try {
-      expect(await readWorkspaceStateSnapshot(state.workspaceDir, { readOnly: true })).toEqual(
-        expected,
-      );
+      expect(await readWorkspaceStateSnapshot(state.workspaceDir, { readOnly })).toEqual(expected);
       sql.expectIdle();
       expect(database.db.isOpen).toBe(mode === "cached");
-      console.info("workspace read", { mode, elapsedMs: Math.round(performance.now() - started) });
+      console.info("workspace read", {
+        mode,
+        readOnly,
+        elapsedMs: Math.round(performance.now() - started),
+      });
     } finally {
       sql.restore();
     }
@@ -147,6 +153,9 @@ it("keeps workspace reads on the selected composite snapshot", async () => {
     try {
       expect(await readWorkspaceStateSnapshot(state.workspaceDir, { readOnly: true })).toEqual(
         initial,
+      );
+      expect((await readWorkspaceStateSnapshot(state.workspaceDir)).setup.setupCompletedAt).toBe(
+        "2026-07-16T02:00:00.000Z",
       );
       sql.expectIdle();
     } finally {
