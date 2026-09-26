@@ -1,5 +1,7 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/tasks/task-flow-cancellation.worker.test.ts",
+  "src/tasks/task-cancellation.worker.test.ts",
   "src/acp/runtime/session-meta-list.test.ts",
   "src/agents/session-placement-admission.caller-scope.test.ts",
   "src/trajectory/runtime-store-writer.test.ts",

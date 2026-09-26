@@ -1,12 +1,7 @@
 // Lobster tests cover lobster taskflow plugin behavior.
-import { createRuntimeTaskFlow } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { LobsterRunner } from "./lobster-runner.js";
-import {
-  resumeManagedLobsterFlow,
-  runManagedLobsterFlow,
-  type BoundTaskFlow,
-} from "./lobster-taskflow.js";
+import { resumeManagedLobsterFlow, runManagedLobsterFlow } from "./lobster-taskflow.js";
 import { createFakeTaskFlow } from "./taskflow-test-helpers.js";
 
 function expectManagedFlowFailure(
@@ -309,51 +304,6 @@ describe("resumeManagedLobsterFlow", () => {
 });
 
 describe("cancelled managed Lobster flows", () => {
-  it.each(["run", "resume"])(
-    "persists a cancelled TaskFlow for a rejected Lobster %s",
-    async (action) => {
-      const legacy = createRuntimeTaskFlow().bindSession({
-        sessionKey: `agent:main:lobster-cancel-${action}`,
-      });
-      const taskFlow: BoundTaskFlow = {
-        get: async (id) => legacy.get(id),
-        tryCreateManaged: async (params) => legacy.tryCreateManaged(params),
-        resume: async (params) => legacy.resume(params),
-        setWaiting: async (params) => legacy.setWaiting(params),
-        finish: async (params) => legacy.finish(params),
-        fail: async (params) => legacy.fail(params),
-        cancel: legacy.cancel,
-      };
-      const runner = createRunner({
-        ok: true,
-        status: "cancelled",
-        output: [],
-        requiresApproval: null,
-      });
-      let result;
-      if (action === "run") {
-        result = await runManagedLobsterFlow(createRunFlowParams(taskFlow, runner));
-      } else {
-        const waitingFlow = legacy.createManaged({
-          controllerId: "tests/lobster",
-          goal: "Resume Lobster workflow",
-          status: "waiting",
-          waitJson: { kind: "lobster_approval", resumeToken: "resume-1" },
-        });
-        result = await resumeManagedLobsterFlow({
-          ...createResumeFlowParams(taskFlow, runner),
-          flowId: waitingFlow.flowId,
-          expectedRevision: waitingFlow.revision,
-        });
-      }
-
-      if (!result.ok) {
-        throw result.error;
-      }
-      expect(legacy.get(result.flow.flowId)?.status).toBe("cancelled");
-    },
-  );
-
   it.each(["unsettled", "rejected"])(
     "does not finish or fail when TaskFlow cancellation is %s",
     async (outcome) => {

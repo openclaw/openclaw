@@ -17,6 +17,7 @@ import {
   type TaskFlowRegistryRead,
 } from "./task-flow-runtime-internal.js";
 import { prepareTaskRegistryRead, type TaskRegistryRead } from "./task-registry-read.js";
+import { filterTasksByRunScope } from "./task-registry-records.js";
 import {
   ensureTaskRegistryReady,
   taskIdsByRelatedSessionKey,
@@ -38,10 +39,76 @@ export type TaskBackingRead = Pick<
   hasAuthoritativeTaskBacking(task: TaskRecord): boolean;
 };
 
-/** Side effects use both admitted projections; their synchronous guards never reopen storage. */
-export async function prepareTaskBackingRead(): Promise<TaskBackingRead | undefined> {
+function taskCancellationNeedsFlowRead(read: TaskRegistryRead, taskId: string): boolean {
+  const selected = read.getTaskById(taskId);
+  if (!selected) {
+    return false;
+  }
+  const runId = selected.runId?.trim();
+  const peers =
+    runId && (selected.runtime === "acp" || selected.runtime === "subagent")
+      ? filterTasksByRunScope(read.getTasksByRunId(runId), {
+          runtime: selected.runtime,
+          sessionKey: selected.childSessionKey,
+        })
+      : [];
+  return [selected, ...peers].some((record) => Boolean(record.parentFlowId?.trim()));
+}
+
+/** An unlinked selection can proceed independently of an unrelated broken flow registry. */
+function createUnlinkedTaskBackingRead(read: TaskRegistryRead, taskId: string): TaskBackingRead {
+  const flowRequired = () => {
+    throw new Error("Task backing flow read requires preparation.");
+  };
+  const assertCurrent = () => {
+    read.assertCurrent();
+    if (taskCancellationNeedsFlowRead(read, taskId)) {
+      flowRequired();
+    }
+  };
+  const getTaskById = (id: string) => {
+    assertCurrent();
+    const current = read.getTaskById(id);
+    if (current?.parentFlowId?.trim()) {
+      flowRequired();
+    }
+    return current;
+  };
+  return {
+    assertCurrent,
+    getTaskById,
+    getTasksByRunId(runId) {
+      assertCurrent();
+      const records = read.getTasksByRunId(runId);
+      if (records.some((record) => record.parentFlowId?.trim())) {
+        flowRequired();
+      }
+      return records;
+    },
+    getTaskFlowById: flowRequired,
+    hasAuthoritativeTaskBacking(record) {
+      const current = getTaskById(record.taskId);
+      return current !== undefined && !record.parentFlowId?.trim();
+    },
+  };
+}
+
+/** Side effects prepare the selected task's required projections before synchronous guards. */
+export async function prepareTaskBackingRead(
+  selectedTaskId?: string,
+): Promise<TaskBackingRead | undefined> {
+  let selectedRead: TaskRegistryRead | undefined;
+  if (selectedTaskId !== undefined) {
+    selectedRead = await prepareTaskRegistryRead();
+    if (!selectedRead) {
+      return undefined;
+    }
+    if (!taskCancellationNeedsFlowRead(selectedRead, selectedTaskId)) {
+      return createUnlinkedTaskBackingRead(selectedRead, selectedTaskId);
+    }
+  }
   const [taskRead, flowRead] = await Promise.allSettled([
-    prepareTaskRegistryRead(),
+    selectedRead ? Promise.resolve(selectedRead) : prepareTaskRegistryRead(),
     prepareTaskFlowRegistryRead(),
   ]);
   const errors = [taskRead, flowRead].flatMap((result) =>

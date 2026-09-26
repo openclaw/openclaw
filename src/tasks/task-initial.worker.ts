@@ -8,6 +8,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { withSharedStateWriteCoordinator } from "../state/openclaw-state-db-write-coordination.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { transitionTaskCancellationRowInDatabase } from "./task-cancellation-transition.kernel.js";
 import { maintainCronTaskInDatabase } from "./task-cron-maintenance.kernel.js";
 import {
   createInitialTaskFlowInDatabase,
@@ -56,6 +57,7 @@ export function executeTaskInitialMutation(
       () => {
         const result = operation();
         if (
+          command.type === "tasks.cancelRow" ||
           command.type === "tasks.bindRunOwner" ||
           command.type === "tasks.maintainCron" ||
           command.type === "tasks.finalizeActive" ||
@@ -116,6 +118,13 @@ export function executeTaskInitialMutation(
         return write(() => {
           let result: Result;
           switch (command.type) {
+            case "tasks.cancelRow":
+              result = transitionTaskCancellationRowInDatabase(
+                database.db,
+                command.input,
+                assertCurrent,
+              );
+              break;
             case "tasks.maintainCron":
               result = maintainCronTaskInDatabase(database.db, command.input, assertCurrent);
               break;

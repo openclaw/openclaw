@@ -6,6 +6,7 @@ import {
   sameTaskBackingInstance,
   selectCurrentCanonicalTaskBacking,
 } from "../tasks/task-backing-records.js";
+import { matchesTaskCancellationSelection } from "../tasks/task-cancellation-selection.js";
 import { prepareCronTaskMaintenance } from "../tasks/task-cron-maintenance-policy.js";
 import { restoreTaskExecutionSnapshot } from "../tasks/task-execution-owner.js";
 import {
@@ -51,7 +52,10 @@ import { captureTaskRetentionCommit } from "../tasks/task-registry-retention-rec
 import { captureTaskRetentionSource } from "../tasks/task-registry-retention-source.js";
 import { prepareTaskRetention } from "../tasks/task-registry-retention.operation.js";
 import type { TaskWorkerTransitionInput } from "../tasks/task-registry-transition.kernel.js";
-import { runTaskRecordTransitionOperation } from "../tasks/task-registry-transition.operation.js";
+import {
+  runTaskRecordTransitionOperation,
+  type TaskRecordTransitionInput,
+} from "../tasks/task-registry-transition.operation.js";
 import type { TaskRegistryStore, TaskRegistryStoreSnapshot } from "../tasks/task-registry.store.js";
 import type { TaskRegistryMutationScope } from "../tasks/task-registry.store.types.js";
 
@@ -171,7 +175,9 @@ export function createInMemoryTaskRegistryStore(
       const unsupported = (): never => {
         throw new Error("Initial flow mutations require the isolated worker fixture.");
       };
-      const transitionRecord = (transition: TaskWorkerTransitionInput) =>
+      const transitionRecord = (
+        transition: TaskRecordTransitionInput & Pick<TaskWorkerTransitionInput, "selectedTask">,
+      ) =>
         runTaskRecordTransitionOperation(transition, {
           readCurrent: () => {
             const task = this.loadSnapshot().tasks.get(transition.taskId);
@@ -262,6 +268,17 @@ export function createInMemoryTaskRegistryStore(
             });
           }
           return result.kind === "unchanged" ? result : captureTaskRetentionCommit(input, result);
+        },
+        "tasks.cancelRow": (input) => {
+          const current = this.loadSnapshot().tasks.get(input.taskId);
+          return current && matchesTaskCancellationSelection(current, input.selectedTask)
+            ? transitionRecord({
+                kind: "state",
+                taskId: input.taskId,
+                params: input.params,
+                now: input.now,
+              })
+            : null;
         },
         "tasks.transitionRunRow": (input) => transitionRecord(input),
         "tasks.bindRunOwner": (input) => transitionRecord({ kind: "run-owner", ...input }),

@@ -1,4 +1,5 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { matchesTaskCancellationSelection } from "./task-cancellation-selection.js";
 import {
   finishTaskMutation,
   retainTaskMutationFlowEffects,
@@ -29,6 +30,7 @@ export async function settleTaskRecordTransitionAsync(
     TaskInitialWorkerCommand,
     {
       type:
+        | "tasks.cancelRow"
         | "tasks.bindRunOwner"
         | "tasks.maintainCron"
         | "tasks.transitionRunRow"
@@ -48,6 +50,7 @@ export async function settleTaskRecordTransitionAsync(
   assertCurrent();
   // Activity observers may reenter persistence, so flush before worker admission.
   if (
+    command.type === "tasks.cancelRow" ||
     command.type === "tasks.settleUnstarted" ||
     command.type === "tasks.finalizeActive" ||
     (command.type === "tasks.transitionRunRow" &&
@@ -55,11 +58,14 @@ export async function settleTaskRecordTransitionAsync(
       command.input.params.status !== undefined &&
       isTerminalTaskStatus(command.input.params.status))
   ) {
-    const { expectedTask } = command.input;
+    const matchesExpected = (task: TaskRecord) =>
+      command.type === "tasks.cancelRow"
+        ? matchesTaskCancellationSelection(task, command.input.selectedTask)
+        : matchesTaskPersistenceReceipt(task, command.input.expectedTask);
     try {
       assertTaskRegistryOwnerCurrent(context, store);
       const projected = tasks.get(taskId);
-      if (projected && matchesTaskPersistenceReceipt(projected, expectedTask)) {
+      if (projected && matchesExpected(projected)) {
         flushTaskActivity(taskId);
       }
     } catch (error) {

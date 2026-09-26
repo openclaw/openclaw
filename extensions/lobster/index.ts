@@ -15,10 +15,7 @@ export default definePluginEntry({
         }
         const taskFlow =
           api.runtime && ctx.sessionKey
-            ? {
-                ...api.runtime.tasks.async.managedFlows.fromToolContext(ctx),
-                cancel: api.runtime.tasks.managedFlows.fromToolContext(ctx).cancel,
-              }
+            ? api.runtime.tasks.async.managedFlows.fromToolContext(ctx)
             : undefined;
         return createLobsterTool(api, { taskFlow }) as AnyAgentTool;
       }) as OpenClawPluginToolFactory,

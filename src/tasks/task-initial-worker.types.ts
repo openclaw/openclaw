@@ -2,6 +2,7 @@ import type {
   CreatedDetachedTaskRun,
   DetachedTaskTerminalState,
 } from "./detached-task-runtime-contract.js";
+import type { TaskCancellationRowInput } from "./task-cancellation-transition.kernel.js";
 import type { CronTaskMaintenanceInput } from "./task-cron-maintenance-policy.js";
 import type {
   InitialTaskFlowCreateInput,
@@ -30,6 +31,10 @@ import type {
 } from "./task-registry.types.js";
 
 export type TaskInitialWorkerOperations = {
+  "tasks.cancelRow": {
+    input: TaskCancellationRowInput;
+    output: TaskRecordTransitionReceipt | null;
+  };
   "tasks.maintainCron": {
     input: CronTaskMaintenanceInput;
     output: TaskRecordTransitionReceipt | null;

@@ -1,47 +1,22 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createPluginRuntimeMock,
   createRuntimeTaskFlow,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { useAutoCleanupTempDirTracker, withTempHome } from "openclaw/plugin-sdk/test-env";
 // Lobster tests cover lobster tool plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "../index.js";
-import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../runtime-api.js";
+import type { OpenClawPluginApi } from "../runtime-api.js";
 import * as lobsterRunner from "./lobster-runner.js";
 import type { BoundTaskFlow } from "./lobster-taskflow.js";
 import { createLobsterTool } from "./lobster-tool.js";
+import { fakeApi, fakeCtx } from "./lobster-tool.test-support.js";
 import { createFakeTaskFlow } from "./taskflow-test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
-
-function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi {
-  return createTestPluginApi({
-    id: "lobster",
-    name: "lobster",
-    source: "test",
-    runtime: { version: "test" } as OpenClawPluginApi["runtime"],
-    resolvePath: (p) => p,
-    ...overrides,
-  });
-}
-
-function fakeCtx(overrides: Partial<OpenClawPluginToolContext> = {}): OpenClawPluginToolContext {
-  return {
-    config: {},
-    workspaceDir: "/tmp",
-    agentDir: "/tmp",
-    agentId: "main",
-    sessionKey: "main",
-    messageChannel: undefined,
-    agentAccountId: undefined,
-    sandboxed: false,
-    ...overrides,
-  };
-}
 
 const requireRecord = createRequireRecord("record", "expected-label-record");
 
@@ -50,7 +25,6 @@ describe("lobster plugin tool", () => {
     const runtime = createPluginRuntimeMock();
     const ctx = fakeCtx();
     const bound = runtime.tasks.async.managedFlows.fromToolContext(ctx);
-    const legacy = runtime.tasks.managedFlows.fromToolContext(ctx);
     const lost = Object.assign(new Error("Worker reply was lost"), { code: "outcome-unknown" });
     const failure = new AggregateError(
       [new Error("Cleanup failed")],
@@ -59,7 +33,6 @@ describe("lobster plugin tool", () => {
     );
     vi.mocked(bound.tryCreateManaged).mockRejectedValue(failure);
     vi.mocked(runtime.tasks.async.managedFlows.fromToolContext).mockReturnValue(bound);
-    vi.mocked(runtime.tasks.managedFlows.fromToolContext).mockReturnValue(legacy);
     const runner = { run: vi.fn<lobsterRunner.LobsterRunner["run"]>() };
     const runnerFactory = vi
       .spyOn(lobsterRunner, "createEmbeddedLobsterRunner")
@@ -85,8 +58,6 @@ describe("lobster plugin tool", () => {
       ).rejects.toBe(failure);
       expect(bound.tryCreateManaged).toHaveBeenCalledTimes(1);
       expect(bound.createManaged).not.toHaveBeenCalled();
-      expect(legacy.tryCreateManaged).not.toHaveBeenCalled();
-      expect(legacy.createManaged).not.toHaveBeenCalled();
       expect(runner.run).not.toHaveBeenCalled();
     } finally {
       runnerFactory.mockRestore();

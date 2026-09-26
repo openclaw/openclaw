@@ -60,6 +60,8 @@ export async function createTaskFlowEffectsFixture(
         | TaskInitialWorkerOperations[Key]["output"]
         | Promise<TaskInitialWorkerOperations[Key]["output"]>;
     } = {
+      "tasks.cancelRow": (input) =>
+        originalCreate(context, { type: "tasks.cancelRow", input }, assertCurrent, onGranted),
       "tasks.maintainCron": (input) =>
         originalCreate(context, { type: "tasks.maintainCron", input }, assertCurrent, onGranted),
       "tasks.applyRetention": (input) =>

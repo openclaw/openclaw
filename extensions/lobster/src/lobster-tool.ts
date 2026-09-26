@@ -26,7 +26,7 @@ import {
 
 type LobsterToolOptions = {
   runner?: LobsterRunner;
-  taskFlow?: BoundTaskFlow;
+  taskFlow?: Omit<BoundTaskFlow, "cancel"> & Partial<Pick<BoundTaskFlow, "cancel">>;
 };
 
 function readOptionalTrimmedString(value: unknown, fieldName: string): string | undefined {
@@ -193,11 +193,19 @@ function resolveManagedFlowToolResult(result: ManagedLobsterFlowResult) {
   });
 }
 
-function requireTaskFlowRuntime(taskFlow: BoundTaskFlow | undefined, action: "run" | "resume") {
+function requireTaskFlowRuntime(
+  taskFlow: LobsterToolOptions["taskFlow"],
+  action: "run" | "resume",
+): asserts taskFlow is BoundTaskFlow {
   if (!taskFlow) {
     throw new Error(`Managed TaskFlow ${action} mode requires a bound taskFlow runtime`);
   }
-  return taskFlow;
+  const cancel = taskFlow.cancel;
+  if (typeof cancel !== "function") {
+    throw new Error(
+      "Managed Lobster workflows require worker-backed TaskFlow cancellation. Upgrade OpenClaw before running or resuming this managed workflow.",
+    );
+  }
 }
 
 export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolOptions) {
@@ -267,9 +275,10 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
       const taskFlow = options?.taskFlow;
       const flowParams = parseManagedFlowParams(action, params, runnerParams);
       if (flowParams?.action === "run") {
+        requireTaskFlowRuntime(taskFlow, "run");
         return resolveManagedFlowToolResult(
           await runManagedLobsterFlow({
-            taskFlow: requireTaskFlowRuntime(taskFlow, "run"),
+            taskFlow,
             config: api.config,
             runner,
             runnerParams,
@@ -282,9 +291,10 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
         );
       }
       if (flowParams?.action === "resume") {
+        requireTaskFlowRuntime(taskFlow, "resume");
         return resolveManagedFlowToolResult(
           await resumeManagedLobsterFlow({
-            taskFlow: requireTaskFlowRuntime(taskFlow, "resume"),
+            taskFlow,
             config: api.config,
             runner,
             runnerParams: flowParams.runnerParams,

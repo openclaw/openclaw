@@ -6,6 +6,7 @@ export const databaseWorkerExtensionTestRoots = [
 ];
 
 export const databaseWorkerExtensionTestFiles = [
+  "extensions/lobster/src/lobster-tool.cancellation.test.ts",
   "extensions/discord/src/durable-delivery.test.ts",
   "extensions/discord/src/monitor/monitor.test.ts",
   "extensions/imessage/src/test-plugin.test.ts",

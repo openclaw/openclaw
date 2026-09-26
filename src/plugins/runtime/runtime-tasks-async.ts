@@ -38,6 +38,7 @@ import {
   mapFlowTaskRunResult,
   mapFlowUpdateResult,
 } from "./runtime-managed-flow-result.js";
+import { cancelRuntimeTaskFlow } from "./runtime-taskflow-cancel.js";
 import type {
   BoundAsyncManagedTaskFlowsRuntime,
   BoundAsyncTaskFlowsRuntime,
@@ -234,6 +235,7 @@ function bindManagedFlows(params: Binding): BoundAsyncManagedTaskFlowsRuntime {
     finish: (input) => update("finish", input),
     fail: (input) => update("fail", input),
     requestCancel: (input) => update("requestCancel", input),
+    cancel: (input) => cancelRuntimeTaskFlow({ ...input, callerOwnerKey: binding.sessionKey }),
     async runTask(input) {
       const taskInput = structuredClone(input);
       const { store, context } = await readStore(true, true);

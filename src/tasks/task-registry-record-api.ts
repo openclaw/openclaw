@@ -78,7 +78,7 @@ export function markTaskLostById(params: {
 
 export { createTaskRecord } from "./task-registry-create.native.js";
 
-export function updateTaskStateByRunId(params: TaskRunStateTransitionParams): TaskRecord[] {
+function updateTaskStateByRunId(params: TaskRunStateTransitionParams): TaskRecord[] {
   return transitionTaskRecordsByRunNative({ kind: "state", params });
 }
 

@@ -199,7 +199,21 @@ Start agent work in the background: hook-dispatched turns for external content, 
     remain supported but are deprecated in
     favor of this opt-in surface. Their removal requires a supported external
     plugin migration and an explicitly approved Plugin SDK major release.
-    Native cancellation continues through the existing namespaces. An awaited read
+    New hosts expose `tasks.async.managedFlows.cancel({ flowId, cfg })` for
+    managed-flow cancellation. Check this optional capability before starting
+    managed work, then await its result. Released 2026.9.6 hosts expose the async
+    managed-flow namespace but do not provide this method; the package version
+    floor alone is not a capability check. Selection, intent, task-projection
+    settlement, and flow finalization use the shared worker, including flows
+    without children. Native runtime control retains its own lifecycle and
+    persistence implementation.
+    Controllers applying an outcome after awaited work should pass the original
+    returned record as `expectedFlow`; cancellation checks its identity and
+    revision before recording intent. Without it, explicit cancellation selects
+    the owner's current flow by ID.
+    The legacy `tasks.managedFlows.cancel` entry remains compatible and uses the
+    same cancellation owner. Its removal follows the external plugin migration
+    and SDK major-release contract above. An awaited read
     does not authorize a later write: retain revision checks. Async `runTask`
     rereads the canonical flow and backing inside its write admission and refuses
     a new active link when that backing has already completed. Existing terminal
@@ -209,7 +223,7 @@ Start agent work in the background: hook-dispatched turns for external content, 
     its insertion-order tie behavior.
     A worker error with code `outcome-unknown` can follow a committed write.
     The code may appear directly, in a cause, or in `AggregateError.errors` when
-    cleanup also fails. Creation and child linkage propagate these errors; reread
+    cleanup also fails. Creation, child linkage, and cancellation propagate these errors; reread
     current state before deciding whether to retry that operation.
 
     Bind Task Flow and Task Run state to a trusted, existing OpenClaw owner session.

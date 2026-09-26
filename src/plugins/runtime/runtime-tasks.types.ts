@@ -1,5 +1,6 @@
 // Runtime task types describe plugin task runtime config and invocation options.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { TaskFlowCancellationRequest } from "../../tasks/task-flow-cancellation.types.js";
 import type { TaskFlowRecord } from "../../tasks/task-flow-registry.types.js";
 import type { TaskDeliveryState, TaskRegistrySummary } from "../../tasks/task-registry.types.js";
 import type { OpenClawPluginToolContext } from "../tool-types.js";
@@ -107,6 +108,8 @@ type AsyncManagedFlowWrites = {
 
 export type BoundAsyncManagedTaskFlowsRuntime = AsyncTaskReadBinding &
   AsyncManagedFlowWrites & {
+    /** Optional for hosts/adapters shipped before worker-backed flow cancellation. */
+    cancel?: (input: TaskFlowCancellationRequest) => ReturnType<BoundTaskFlowRuntime["cancel"]>;
     get: (flowId: string) => Promise<TaskFlowRecord | undefined>;
     list: () => Promise<TaskFlowRecord[]>;
     findLatest: () => Promise<TaskFlowRecord | undefined>;

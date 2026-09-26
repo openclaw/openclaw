@@ -15,27 +15,18 @@ import {
   listTasksForFlowId,
   finalizeTaskRecordByRunId,
 } from "./runtime-internal.js";
-import {
-  hasAuthoritativeTaskBacking,
-  resolveManagedTaskBackingDetail,
-} from "./task-backing-authority.js";
-import {
-  isProvisionalSubagentKillTask,
-  isTaskFlowCancellationPending,
-} from "./task-cancellation-state.js";
+import { resolveManagedTaskBackingDetail } from "./task-backing-authority.js";
 // Executes task records through configured runtimes and updates registry state.
 import type {
   RunTaskInFlowParams,
   RunTaskInFlowResult,
 } from "./task-flow-managed-run-task.types.js";
 import { getTaskFlowByIdForOwner } from "./task-flow-owner-access.js";
-import { isTerminalTaskFlow, type TaskFlowRecord } from "./task-flow-registry.types.js";
+import { isTerminalTaskFlow } from "./task-flow-registry.types.js";
 import {
   createTaskFlowForTask,
   deleteTaskFlowRecordById,
   getTaskFlowById,
-  requestFlowCancel,
-  updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-runtime-internal.js";
 import { isOneTaskFlowEligible } from "./task-initial-flow.rules.js";
 import { withTaskRegistryMutation } from "./task-registry-state.js";
@@ -140,76 +131,6 @@ export function failTaskRunByRunIdCore(params: DetachedTaskFailParams) {
     ...params,
     status: params.status ?? "failed",
   });
-}
-
-type CancelFlowResult = {
-  found: boolean;
-  cancelled: boolean;
-  reason?: string;
-  flow?: TaskFlowRecord;
-  tasks?: TaskRecord[];
-};
-
-function markFlowCancelRequested(flow: TaskFlowRecord): TaskFlowRecord | FlowUpdateFailure {
-  if (flow.cancelRequestedAt != null) {
-    return flow;
-  }
-  const result = requestFlowCancel({
-    flowId: flow.flowId,
-    expectedRevision: flow.revision,
-  });
-  if (result.applied) {
-    return result.flow;
-  }
-  return {
-    reason: describeFlowUpdateFailure(result.reason),
-    flow: result.current ?? getTaskFlowById(flow.flowId),
-  };
-}
-
-type FlowUpdateFailure = {
-  reason: string;
-  flow?: TaskFlowRecord;
-};
-
-function describeFlowUpdateFailure(
-  reason: Exclude<ReturnType<typeof requestFlowCancel>, { applied: true }>["reason"],
-): string {
-  switch (reason) {
-    case "revision_conflict":
-      return "Flow changed while cancellation was in progress.";
-    case "persist_failed":
-      return "Flow persistence failed.";
-    case "not_found":
-      return "Flow not found.";
-    default:
-      return "Flow mutation failed.";
-  }
-}
-
-function cancelManagedFlowAfterChildrenSettle(
-  flow: TaskFlowRecord,
-  endedAt: number,
-): TaskFlowRecord | FlowUpdateFailure {
-  const result = updateFlowRecordByIdExpectedRevision({
-    flowId: flow.flowId,
-    expectedRevision: flow.revision,
-    patch: {
-      status: "cancelled",
-      blockedTaskId: null,
-      blockedSummary: null,
-      waitJson: null,
-      endedAt,
-      updatedAt: endedAt,
-    },
-  });
-  if (result.applied) {
-    return result.flow;
-  }
-  return {
-    reason: describeFlowUpdateFailure(result.reason),
-    flow: result.current ?? getTaskFlowById(flow.flowId),
-  };
 }
 
 function mapRunTaskInFlowCreateError(params: {
@@ -399,144 +320,10 @@ export function runTaskInFlowForOwner(
   );
 }
 
-export async function cancelFlowById(params: {
-  cfg: OpenClawConfig;
-  flowId: string;
-}): Promise<CancelFlowResult> {
-  const flow = getTaskFlowById(params.flowId);
-  if (!flow) {
-    return {
-      found: false,
-      cancelled: false,
-      reason: "Flow not found.",
-    };
-  }
-  if (isTerminalTaskFlow(flow)) {
-    const provisionalTasks = listTasksForFlowId(flow.flowId).filter(isProvisionalSubagentKillTask);
-    if (flow.status === "cancelled" && provisionalTasks.length > 0) {
-      for (const task of provisionalTasks) {
-        await cancelDetachedTaskRunById({ cfg: params.cfg, taskId: task.taskId });
-      }
-      const tasks = listTasksForFlowId(flow.flowId);
-      if (tasks.some(isProvisionalSubagentKillTask)) {
-        return {
-          found: true,
-          cancelled: false,
-          reason: "One or more child tasks remain provisionally cancelled.",
-          flow: getTaskFlowById(flow.flowId) ?? flow,
-          tasks,
-        };
-      }
-      const refreshedFlow = getTaskFlowById(flow.flowId) ?? flow;
-      return {
-        found: true,
-        cancelled: refreshedFlow.status === "cancelled",
-        reason:
-          refreshedFlow.status === "cancelled"
-            ? undefined
-            : `Flow is already ${refreshedFlow.status}.`,
-        flow: refreshedFlow,
-        tasks,
-      };
-    }
-    return {
-      found: true,
-      cancelled: false,
-      reason: `Flow is already ${flow.status}.`,
-      flow,
-      tasks: listTasksForFlowId(flow.flowId),
-    };
-  }
-  const linkedTasks = listTasksForFlowId(flow.flowId);
-  const activeTasks = linkedTasks.filter(isTaskFlowCancellationPending);
-  if (activeTasks.some((task) => !hasAuthoritativeTaskBacking(task))) {
-    return {
-      found: true,
-      cancelled: false,
-      reason: "Child task ownership could not be verified; no cancellation was performed.",
-      flow,
-      tasks: linkedTasks,
-    };
-  }
-  const cancelRequestedFlow = markFlowCancelRequested(flow);
-  if ("reason" in cancelRequestedFlow) {
-    return {
-      found: true,
-      cancelled: false,
-      reason: cancelRequestedFlow.reason,
-      flow: cancelRequestedFlow.flow,
-      tasks: listTasksForFlowId(flow.flowId),
-    };
-  }
-  for (const task of activeTasks) {
-    await cancelDetachedTaskRunById({
-      cfg: params.cfg,
-      taskId: task.taskId,
-    });
-  }
-  const refreshedTasks = listTasksForFlowId(flow.flowId);
-  const remainingActive = refreshedTasks.filter(isTaskFlowCancellationPending);
-  if (remainingActive.length > 0) {
-    return {
-      found: true,
-      cancelled: false,
-      reason: "One or more child tasks are still active.",
-      flow: getTaskFlowById(flow.flowId) ?? cancelRequestedFlow,
-      tasks: refreshedTasks,
-    };
-  }
-  const now = Date.now();
-  const refreshedFlow = getTaskFlowById(flow.flowId) ?? cancelRequestedFlow;
-  if (isTerminalTaskFlow(refreshedFlow)) {
-    return {
-      found: true,
-      cancelled: refreshedFlow.status === "cancelled",
-      reason:
-        refreshedFlow.status === "cancelled"
-          ? undefined
-          : `Flow is already ${refreshedFlow.status}.`,
-      flow: refreshedFlow,
-      tasks: refreshedTasks,
-    };
-  }
-  const updatedFlow = cancelManagedFlowAfterChildrenSettle(refreshedFlow, now);
-  if ("reason" in updatedFlow) {
-    return {
-      found: true,
-      cancelled: false,
-      reason: updatedFlow.reason,
-      flow: updatedFlow.flow,
-      tasks: refreshedTasks,
-    };
-  }
-  return {
-    found: true,
-    cancelled: true,
-    flow: updatedFlow,
-    tasks: refreshedTasks,
-  };
-}
-
-export async function cancelFlowByIdForOwner(params: {
-  cfg: OpenClawConfig;
-  flowId: string;
-  callerOwnerKey: string;
-}): Promise<CancelFlowResult> {
-  const flow = getTaskFlowByIdForOwner({
-    flowId: params.flowId,
-    callerOwnerKey: params.callerOwnerKey,
-  });
-  if (!flow) {
-    return {
-      found: false,
-      cancelled: false,
-      reason: "Flow not found.",
-    };
-  }
-  return cancelFlowById({
-    cfg: params.cfg,
-    flowId: flow.flowId,
-  });
+// Creation-only callers do not load cancellation and its native control stack.
+export async function cancelFlowById(params: { cfg: OpenClawConfig; flowId: string }) {
+  const runtime = await import("./task-flow-cancellation.async.js");
+  return runtime.cancelFlowById(params);
 }
 
 export async function cancelDetachedTaskRunById(params: {

@@ -13,11 +13,12 @@ export type JsonLike =
     };
 
 type RuntimeTasks = NonNullable<OpenClawPluginApi["runtime"]>["tasks"];
-export type BoundTaskFlow = Pick<
-  ReturnType<RuntimeTasks["async"]["managedFlows"]["bindSession"]>,
-  "get" | "tryCreateManaged" | "resume" | "setWaiting" | "finish" | "fail"
-> &
-  Pick<ReturnType<RuntimeTasks["managedFlows"]["bindSession"]>, "cancel">;
+export type BoundTaskFlow = Required<
+  Pick<
+    ReturnType<RuntimeTasks["async"]["managedFlows"]["bindSession"]>,
+    "get" | "tryCreateManaged" | "resume" | "setWaiting" | "finish" | "fail" | "cancel"
+  >
+>;
 
 type FlowRecord = NonNullable<Awaited<ReturnType<BoundTaskFlow["tryCreateManaged"]>>>;
 type MutationResult =
@@ -133,7 +134,11 @@ async function executeManagedLobsterFlow(
     const envelope = await params.runner.run(params.runnerParams);
     if (envelope.ok && envelope.status === "cancelled") {
       try {
-        const mutation = await params.taskFlow.cancel({ flowId: flow.flowId, cfg: params.config });
+        const mutation = await params.taskFlow.cancel({
+          flowId: flow.flowId,
+          cfg: params.config,
+          expectedFlow: flow,
+        });
         return mutation.cancelled
           ? { ok: true, envelope, flow, mutation }
           : {

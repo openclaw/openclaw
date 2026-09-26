@@ -1313,9 +1313,21 @@ and precedes restored observers; failed replies also retain settlement and
 canonical flow reconciliation. This changes no schema, update migration, or
 synchronous plugin API.
 
-Synchronous callers keep their existing transaction behavior. Native cancellation,
-child-task linkage, and compound task/subagent completion retain their existing
-owners until their complete persistence and lifecycle boundaries move together.
+Managed-flow state changes and task cancellation projections await the shared worker. The flow
+owner records cancellation intent before child dispatch, retains its original
+flow and caller identity across that wait, and rereads children before finalizing.
+Childless flows use the same finalization operation. Task cancellation preserves
+the native run's completion precedence and holds subagent cancellation custody
+through its awaited task settlement. Registered runtime adapters retain their
+ownership; the core never bypasses a claimed task. Public legacy cancellation
+entries delegate to this same owner. Native ACP session control and subagent
+kill claims, session patches, and registry persistence still contain synchronous
+database work; they are separate remaining native-control migrations. Schema, retention, stored formats, and
+update behavior are unchanged; no migration is required.
+
+Other synchronous callers keep their existing transaction behavior. Compound
+task/subagent completion retains its existing owner until its complete
+persistence and lifecycle boundary moves together.
 
 Existing asynchronous config observation, recovery health records, and config
 audit appends run their SQLite work on this same actor. Observations capture a

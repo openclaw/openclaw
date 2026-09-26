@@ -13,11 +13,25 @@ import type { DetachedTaskTerminalState } from "./detached-task-runtime-contract
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.test-support.js";
 import { resetTaskFlowRegistryForTests } from "./task-flow-registry.test-support.js";
 import type { SubagentAdminKillResult } from "./task-registry-control.types.js";
-import { createTaskRecord as createTaskRecordOrNull } from "./task-registry.js";
+import {
+  createTaskRecord as createTaskRecordOrNull,
+  finalizeTaskRecordByRunId,
+} from "./task-registry.js";
 import { configureTaskRegistryRuntime, getTaskRegistryStore } from "./task-registry.store.js";
 import type { TaskEventRecord, TaskRecord } from "./task-registry.types.js";
 
 export { reloadTaskRegistryFromStoreAsync } from "./task-registry-state.js";
+
+export function finalizeSubagentTask(
+  task: TaskRecord,
+  params: Omit<Parameters<typeof finalizeTaskRecordByRunId>[0], "runId" | "runtime">,
+) {
+  return finalizeTaskRecordByRunId({
+    runId: expectDefined(task.runId, "Expected subagent task run ID"),
+    runtime: "subagent",
+    ...params,
+  });
+}
 
 export {
   markTaskLostById,

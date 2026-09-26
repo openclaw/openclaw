@@ -17,6 +17,7 @@ import {
 import { withSharedStateWriteCoordinator } from "../state/openclaw-state-db-write-coordination.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { mapTaskFlowView } from "./task-domain-views.js";
+import { cancelTaskFlowInDatabase } from "./task-flow-cancellation.worker.js";
 import { maintainTaskFlowInDatabase } from "./task-flow-maintenance.worker.js";
 import {
   runManagedTaskInFlowInDatabase,
@@ -66,6 +67,9 @@ export function executeTaskRegistryCommand(
   options: OpenClawStateDatabaseOptions & { path: string },
   open: () => OpenClawStateDatabase,
 ): TaskRegistryWorkerOperations[keyof TaskRegistryWorkerOperations]["output"] {
+  if (command.type === "flows.cancel") {
+    return cancelTaskFlowInDatabase(open(), command.input);
+  }
   if (command.type === "flows.maintain") {
     return maintainTaskFlowInDatabase(open(), command.input);
   }
@@ -98,6 +102,7 @@ export function executeTaskRegistryCommand(
     command.type === "tasks.maintainCron" ||
     command.type === "tasks.bindRunOwner" ||
     command.type === "tasks.transitionRunRow" ||
+    command.type === "tasks.cancelRow" ||
     command.type === "tasks.updateNotificationDelivery" ||
     command.type === "tasks.acknowledgeStateChange" ||
     command.type === "tasks.createRecord" ||

@@ -1,9 +1,5 @@
 // Runtime task-flow helpers adapt plugin task descriptors into executable task flows.
-import {
-  cancelFlowByIdForOwner,
-  getFlowTaskSummary,
-  runTaskInFlowForOwner,
-} from "../../tasks/task-executor.js";
+import { getFlowTaskSummary, runTaskInFlowForOwner } from "../../tasks/task-executor.js";
 import {
   findLatestTaskFlowForOwner,
   getTaskFlowByIdForOwner,
@@ -26,6 +22,7 @@ import {
   mapFlowTaskRunResult,
   mapFlowUpdateResult,
 } from "./runtime-managed-flow-result.js";
+import { cancelRuntimeTaskFlow } from "./runtime-taskflow-cancel.js";
 import type {
   BoundTaskFlowRuntime,
   ManagedTaskFlowMutationResult,
@@ -196,7 +193,7 @@ function createBoundTaskFlowRuntime(params: {
           }),
       }),
     cancel: ({ flowId, cfg }) =>
-      cancelFlowByIdForOwner({
+      cancelRuntimeTaskFlow({
         cfg,
         flowId,
         callerOwnerKey: ownerKey,

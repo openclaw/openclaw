@@ -625,3 +625,53 @@ it.each([
     }
   },
 );
+
+it("awaits worker cancellation settlement before acknowledging the admin kill", async () => {
+  await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: rootKey,
+    defaultSessionId: "worker-settlement-session",
+  });
+  await registerSubagentRun({
+    runId: "worker-settlement-run",
+    childSessionKey: rootKey,
+    requesterSessionKey: "agent:main:main",
+    requesterAgentId: "main",
+    requesterDisplayKey: "main",
+    task: "worker cancellation settlement",
+    cleanup: "keep",
+  });
+  const entered = createDeferred();
+  const release = createDeferred();
+  let acknowledged = false;
+  const pending = killSubagentRunAdmin(
+    { cfg: getRuntimeConfig(), sessionKey: rootKey },
+    {
+      assertCurrent() {},
+      async settleResult(result, assertCurrent) {
+        expect(result.found).toBe(true);
+        entered.resolve();
+        await release.promise;
+        assertCurrent();
+      },
+    },
+  ).then((result) => {
+    acknowledged = true;
+    return result;
+  });
+  try {
+    await Promise.race([
+      entered.promise,
+      pending.then(() => {
+        throw new Error("Admin kill omitted worker settlement");
+      }),
+    ]);
+    expect(acknowledged).toBe(false);
+    release.resolve();
+    expect(await pending).toMatchObject({ found: true });
+  } finally {
+    release.resolve();
+    await pending;
+  }
+});

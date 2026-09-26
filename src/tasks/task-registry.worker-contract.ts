@@ -5,6 +5,10 @@ import type {
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type { TaskFlowView } from "../plugins/runtime/task-domain-types.js";
 import type {
+  TaskFlowCancellationInput,
+  TaskFlowCancellationReceipt,
+} from "./task-flow-cancellation.types.js";
+import type {
   TaskFlowMaintenanceInput,
   TaskFlowMaintenanceOutcome,
 } from "./task-flow-maintenance-policy.js";
@@ -84,6 +88,7 @@ export type TaskRegistryWorkerOperations = TaskInitialWorkerOperations &
         | { applied: false; reason: "persist_failed"; current?: TaskFlowRecord };
     };
     "flows.current": { input: { flowId: string }; output: TaskFlowRecord | undefined };
+    "flows.cancel": { input: TaskFlowCancellationInput; output: TaskFlowCancellationReceipt };
     "flows.maintain": { input: TaskFlowMaintenanceInput; output: TaskFlowMaintenanceOutcome };
     "tasks.get": { input: { taskId: string }; output: TaskRecord | undefined };
     "tasks.findByRunId": { input: { runId: string }; output: TaskRecord | undefined };
@@ -118,6 +123,7 @@ export function isTaskRegistryWorkerCommand(command: {
     case "tasks.applyRetention":
     case "tasks.bindRunOwner":
     case "tasks.transitionRunRow":
+    case "tasks.cancelRow":
     case "tasks.updateNotificationDelivery":
     case "tasks.acknowledgeStateChange":
     case "tasks.bindExecution":
@@ -139,6 +145,7 @@ export function isTaskRegistryWorkerCommand(command: {
     case "flows.createManaged":
     case "flows.updateManaged":
     case "flows.current":
+    case "flows.cancel":
     case "flows.maintain":
     case "tasks.get":
     case "tasks.findByRunId":

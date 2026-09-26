@@ -347,6 +347,11 @@ from before that transition. Cancellation instead reports `mutation.cancelled`.
 A workflow error is surfaced as a tool error after an attempted flow failure;
 inspect the persisted flow rather than assuming the failure write succeeded.
 
+Managed cancellation awaits the shared SQLite worker before returning its result.
+This includes an inline workflow without child tasks. Cancelling a flow with
+linked children records intent before contacting their runtimes and finalizes
+only after those children have settled; newer task or flow owners are preserved.
+
 This mode requires a non-sandboxed tool context with a bound session. It records
 a managed flow, not detached ACP/subagent tasks for each shell step. Flow state
 persists in OpenClaw SQLite; Lobster's approval checkpoint is separate and must
@@ -358,6 +363,10 @@ cancelled flows and stale revisions are rejected before workflow execution.
 Neither Task Flow nor a skill automatically replays arbitrary JavaScript. See
 [Task Flow](/automation/taskflow) for the runnable examples and child-linking
 contract.
+
+Older hosts without the async cancellation capability refuse managed run/resume
+before creating or resuming flow state or starting the workflow. Upgrade OpenClaw
+to use managed mode. Ordinary workflows remain available on the same host.
 
 ## Output envelope
 

@@ -8,7 +8,6 @@ import { getDetachedTaskLifecycleRuntime } from "./detached-task-runtime.js";
 import { createSubagentTaskBackingDetail } from "./task-backing-authority.js";
 import {
   cancelFlowById,
-  cancelFlowByIdForOwner,
   cancelDetachedTaskRunById,
   completeTaskRunByRunIdCore as completeTaskRunByRunId,
   failTaskRunByRunIdCore as failTaskRunByRunId,
@@ -32,6 +31,7 @@ import {
   expectCancelledAcpChildTask,
   resetTaskExecutorTestState,
 } from "./task-executor.test-support.js";
+import { cancelFlowByIdForOwner } from "./task-flow-cancellation.async.js";
 import { getTaskFlowById, listTaskFlowRecords, requestFlowCancel } from "./task-flow-registry.js";
 import { updateTask } from "./task-registry-mutation.js";
 import {
@@ -836,7 +836,6 @@ describe("task-executor", () => {
         expectedTaskRunId: "run-subagent-cancel",
         expectedGeneration: 1,
         expectedOwnerKey: "agent:main:main",
-        onResult: expect.any(Function),
       });
     });
   });

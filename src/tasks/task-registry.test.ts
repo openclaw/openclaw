@@ -58,18 +58,17 @@ import {
 import { createManagedTaskFlow } from "./task-flow-registry.test-support.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { getTaskActivitySnapshot } from "./task-registry-activity.js";
-import type { SubagentAdminKillParams } from "./task-registry-control.types.js";
 import {
   captureTaskDeliveryWork,
   waitForAssertion,
   waitForFast,
 } from "./task-registry-delivery.test-support.js";
 import { captureTaskRegistryReadFence } from "./task-registry-listener-state.js";
-import { updateTaskStateByRunId } from "./task-registry-record-api.js";
 import {
   readTaskRegistryRevision,
   reloadTaskRegistryFromStoreAsync,
 } from "./task-registry-state.js";
+import { transitionTaskRecordsByRunAsync } from "./task-registry-transition.async.js";
 import {
   cancelTaskById,
   finalizeTaskRecordByRunId,
@@ -110,6 +109,7 @@ import {
   createAcpTaskRecord,
   createTaskFixture,
   createTerminalSubagentKillResult,
+  finalizeSubagentTask,
   flushAsyncWork,
   withTaskRegistryTempDir,
 } from "./task-registry.test-support.js";
@@ -166,16 +166,15 @@ vi.mock("./task-registry-delivery-runtime.js", () => ({
   prepareTaskControlUiSessionUrl: async () => hoisted.resolveTaskControlUiSessionUrlMock,
 }));
 
-vi.mock("./task-registry-control.runtime.js", () => ({
-  cancelBackgroundExecSession: hoisted.cancelBackgroundExecSessionMock,
-  cancelActiveCronTaskRun: hoisted.cancelActiveCronTaskRunMock,
-  getAcpSessionManager: () => ({ cancelSession: hoisted.cancelSessionMock }),
-  killSubagentRunAdmin: async (params: SubagentAdminKillParams) => {
-    const result = await hoisted.killSubagentRunAdminMock(params);
-    params.onResult?.(result);
-    return result;
-  },
-}));
+vi.mock("./task-registry-control.runtime.js", async () => {
+  const { createSubagentAdminKillMock } = await import("./task-registry-control.test-support.js");
+  return {
+    cancelBackgroundExecSession: hoisted.cancelBackgroundExecSessionMock,
+    cancelActiveCronTaskRun: hoisted.cancelActiveCronTaskRunMock,
+    getAcpSessionManager: () => ({ cancelSession: hoisted.cancelSessionMock }),
+    killSubagentRunAdmin: createSubagentAdminKillMock(hoisted.killSubagentRunAdminMock),
+  };
+});
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   return items.filter(predicate).length;
@@ -273,13 +272,6 @@ function firstMockArg(
 }
 
 const cancelTask = (taskId: string) => cancelTaskById({ cfg: {} as never, taskId });
-
-function finalizeSubagentTask(
-  task: TaskRecord,
-  params: Omit<Parameters<typeof finalizeTaskRecordByRunId>[0], "runId" | "runtime">,
-) {
-  return finalizeTaskRecordByRunId({ runId: task.runId!, runtime: "subagent", ...params });
-}
 
 const HEARTBEAT_FLUSH_REASON = "task-registry-test-flush";
 let heartbeatWakeRequests: HeartbeatWakeRequest[] = [];
@@ -4167,12 +4159,15 @@ describe("task-registry", () => {
           detail: createAcpTaskBackingDetailForTest(instanceId),
         });
         hoisted.cancelSessionMock.mockImplementationOnce(async () => {
-          updateTaskStateByRunId({
-            runId,
-            runtime: "acp",
-            status,
-            endedAt: 200,
-            terminalSummary: "Recorded terminal result",
+          await transitionTaskRecordsByRunAsync({
+            kind: "state",
+            params: {
+              runId,
+              runtime: "acp",
+              status,
+              endedAt: 200,
+              terminalSummary: "Recorded terminal result",
+            },
           });
         });
 

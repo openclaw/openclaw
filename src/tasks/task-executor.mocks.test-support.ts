@@ -1,6 +1,5 @@
 // Register these factories before importing task runtime modules.
 import { vi } from "vitest";
-import type { SubagentAdminKillParams } from "./task-registry-control.types.js";
 
 const hoisted = vi.hoisted(() => {
   const sendMessageMock = vi.fn();
@@ -18,16 +17,15 @@ vi.mock("./task-registry-delivery-runtime.js", () => ({
   prepareTaskControlUiSessionUrl: async () => () => undefined,
 }));
 
-vi.mock("./task-registry-control.runtime.js", () => ({
-  cancelBackgroundExecSession: () => false,
-  cancelActiveCronTaskRun: () => false,
-  getAcpSessionManager: () => ({ cancelSession: hoisted.cancelSessionMock }),
-  killSubagentRunAdmin: async (params: SubagentAdminKillParams) => {
-    const result = await hoisted.killSubagentRunAdminMock(params);
-    params.onResult?.(result);
-    return result;
-  },
-}));
+vi.mock("./task-registry-control.runtime.js", async () => {
+  const { createSubagentAdminKillMock } = await import("./task-registry-control.test-support.js");
+  return {
+    cancelBackgroundExecSession: () => false,
+    cancelActiveCronTaskRun: () => false,
+    getAcpSessionManager: () => ({ cancelSession: hoisted.cancelSessionMock }),
+    killSubagentRunAdmin: createSubagentAdminKillMock(hoisted.killSubagentRunAdminMock),
+  };
+});
 
 vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({

@@ -1,6 +1,6 @@
 // Connection-bound task row codecs and SQLite operations; callers own database lifetime.
 import type { DatabaseSync } from "node:sqlite";
-import type { Insertable, Selectable } from "kysely";
+import type { Insertable, Selectable, SelectQueryBuilder } from "kysely";
 import type { ExecutionOwnerBindingResult } from "../audit/execution-owner-binding.js";
 import {
   bindExecutionOwnerLifecycleMetadata,
@@ -265,6 +265,7 @@ type TaskRegistryQueries = {
   viewPoint?: TaskRegistryQuery<string>;
   viewOwner?: TaskRegistryQuery<string>;
   viewFlow?: TaskRegistryQuery<string>;
+  flow?: TaskRegistryQuery<string>;
   viewRunId?: TaskRegistryQuery<string>;
   flowSummary?: ReturnType<
     typeof prepareSqliteQuerySync<string, { runtime: string; status: string; count: number }>
@@ -380,13 +381,18 @@ const TASK_VIEW_SELECT_COLUMNS = TASK_RUN_SELECT_COLUMNS.filter(
   (column) => column !== "detail_json",
 );
 
-function taskViewQuery(db: DatabaseSync) {
+function taskViewQuery(
+  db: DatabaseSync,
+  purpose: "presentation" | "control" = "presentation",
+): SelectQueryBuilder<TaskRegistryStoreDatabase, "task_runs", TaskRegistryRow> {
   // Public run views and summaries never expose detail. Keep large private
   // blobs out of native materialization, decoding, and worker transport.
-  return getTaskRegistryKysely(db)
-    .selectFrom("task_runs")
-    .select(TASK_VIEW_SELECT_COLUMNS)
-    .select((expression) => expression.val(null).as("detail_json"));
+  const query = getTaskRegistryKysely(db).selectFrom("task_runs");
+  return purpose === "control"
+    ? query.selectAll()
+    : query
+        .select(TASK_VIEW_SELECT_COLUMNS)
+        .select((expression) => expression.val(null).as("detail_json"));
 }
 
 function compareTaskViewOrder(left: TaskRecord, right: TaskRecord): number {
@@ -443,18 +449,18 @@ export function listTaskRecordsForOwnerReadInDatabase(
 export function listTaskRecordsForFlowReadInDatabase(
   db: DatabaseSync,
   flowId: string,
+  purpose: "presentation" | "control" = "presentation",
 ): TaskRecord[] {
   const queries = getTaskRegistryQueries(db);
-  const read = (queries.viewFlow ??= prepareSqliteQuerySync<string, TaskRegistryRow>(
-    db,
-    (parameter) =>
-      taskViewQuery(db)
-        .where(
-          "parent_flow_id",
-          "=",
-          parameter((value) => value),
-        )
-        .orderBy("task_id", "desc"),
+  const key = purpose === "control" ? "flow" : "viewFlow";
+  const read = (queries[key] ??= prepareSqliteQuerySync<string, TaskRegistryRow>(db, (parameter) =>
+    taskViewQuery(db, purpose)
+      .where(
+        "parent_flow_id",
+        "=",
+        parameter((value) => value),
+      )
+      .orderBy("task_id", "desc"),
   ));
   return read(flowId).rows.map(rowToTaskRecord).toSorted(compareTaskViewOrder);
 }

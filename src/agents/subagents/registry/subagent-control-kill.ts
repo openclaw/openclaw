@@ -76,7 +76,7 @@ type KillPublicationPreparation = {
 async function withSubagentKillScope<T>(
   params: KillSelection,
   run: (scope: KillScope, trees: KillTree[]) => Promise<T>,
-  publish?: (result: T, trees: KillTree[]) => T,
+  publish?: (result: T, trees: KillTree[]) => T | Promise<T>,
   preparePublication?: KillPublicationPreparation,
 ): Promise<T> {
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -264,7 +264,7 @@ async function withSubagentKillScope<T>(
     if (publish) {
       params.assertCurrent?.();
     }
-    outcome = { ok: true, value: publish ? publish(result, trees) : result };
+    outcome = { ok: true, value: publish ? await publish(result, trees) : result };
   } catch (error) {
     outcome = { ok: false, error };
   }
@@ -549,6 +549,8 @@ export async function killSubagentRunAdmin(
     assertCurrent: () => void;
     beforeSessionKill?: () => boolean;
     preparePublication?: KillPublicationPreparation;
+    /** Worker settlement finishes while the exact run and dispatch holds remain owned. */
+    settleResult?: (result: SubagentAdminKillResult, assertCurrent: () => void) => Promise<void>;
   },
 ): Promise<SubagentAdminKillResult> {
   const publish = (result: SubagentAdminKillResult): SubagentAdminKillResult => {
@@ -557,13 +559,24 @@ export async function killSubagentRunAdmin(
     }
     return result;
   };
+  const settle = async (result: SubagentAdminKillResult, assertCurrent: () => void) => {
+    const published = publish(result);
+    if (control?.settleResult) {
+      await control.settleResult(result, assertCurrent);
+    }
+    return published;
+  };
   const targetSessionKey = params.sessionKey.trim();
   if (!targetSessionKey) {
-    return publish({ found: false as const, killed: false as const });
+    return settle({ found: false as const, killed: false as const }, () =>
+      control?.assertCurrent(),
+    );
   }
   const entry = getLatestOwnedSubagentRun(targetSessionKey, params.agentId, params.cfg);
   if (!entry) {
-    return publish({ found: false as const, killed: false as const });
+    return settle({ found: false as const, killed: false as const }, () =>
+      control?.assertCurrent(),
+    );
   }
   const expectedRunId = params.expectedRunId?.trim();
   const expectedTaskRunId = params.expectedTaskRunId?.trim();
@@ -571,14 +584,18 @@ export async function killSubagentRunAdmin(
     (expectedRunId && entry.runId !== expectedRunId) ||
     (expectedTaskRunId && (entry.taskRunId ?? entry.runId) !== expectedTaskRunId)
   ) {
-    return publish({ found: false as const, killed: false as const });
+    return settle({ found: false as const, killed: false as const }, () =>
+      control?.assertCurrent(),
+    );
   }
   if (
     (params.expectedGeneration !== undefined && entry.generation !== params.expectedGeneration) ||
     (params.expectedOwnerKey?.trim() &&
       entry.requesterSessionKey !== params.expectedOwnerKey.trim())
   ) {
-    return publish({ found: false as const, killed: false as const });
+    return settle({ found: false as const, killed: false as const }, () =>
+      control?.assertCurrent(),
+    );
   }
 
   let rootStopSuperseded = false;
@@ -638,7 +655,7 @@ export async function killSubagentRunAdmin(
     },
     (result, [tree]) => {
       if (!result.found || !tree) {
-        return publish(result);
+        return settle(result, () => control?.assertCurrent());
       }
       // Completion can commit during the awaited handoff. Fence both the retained
       // run and its session incarnation before any synchronous result publication.
@@ -648,11 +665,20 @@ export async function killSubagentRunAdmin(
       }
       const targetState = ownsOutcome ? resolveSubagentKillTargetState(tree.entry) : undefined;
       const { errors } = collectKillErrors([tree], tree);
-      return publish({
-        ...result,
-        ...(targetState ? { targetState } : {}),
-        ...(errors.length > 0 ? { error: errors.join("; ") } : {}),
-      });
+      const assertOutcomeCurrent = () => {
+        control?.assertCurrent();
+        if (rootStopSuperseded || !tree.ownsRun() || !tree.canTraverse()) {
+          throw new Error("Subagent ownership changed during cancellation; retry.");
+        }
+      };
+      return settle(
+        {
+          ...result,
+          ...(targetState ? { targetState } : {}),
+          ...(errors.length > 0 ? { error: errors.join("; ") } : {}),
+        },
+        assertOutcomeCurrent,
+      );
     },
     control?.preparePublication,
   );

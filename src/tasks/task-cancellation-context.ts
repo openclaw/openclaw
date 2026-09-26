@@ -1,6 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { readTaskBackingInstance, sameTaskBackingInstance } from "./task-backing-records.js";
+import { captureTaskCancellationSelection } from "./task-cancellation-selection.capture.js";
+import { matchesTaskCancellationCreatedAt } from "./task-cancellation-selection.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 export type TaskCancellationTarget = Readonly<
@@ -19,20 +21,6 @@ type TaskCancellationContext = {
   prepareRead: () => Promise<void> | undefined;
 };
 
-function captureTaskSelection(task: TaskRecord) {
-  return {
-    taskId: task.taskId,
-    scopeKind: task.scopeKind,
-    ownerKey: task.ownerKey,
-    requesterAgentId: task.requesterAgentId,
-    runtime: task.runtime,
-    runId: task.runId,
-    childSessionKey: task.childSessionKey,
-    sourceId: task.sourceId,
-    createdAt: task.createdAt,
-  };
-}
-
 const contexts = resolveGlobalSingleton(Symbol.for("openclaw.taskCancellationContext"), () => ({
   caller: new AsyncLocalStorage<TaskCancellationContext>(),
   prepared: new AsyncLocalStorage<TaskCancellationControl>(),
@@ -50,7 +38,8 @@ export async function withTaskCancellationContext<T>(
   const parent = contexts.caller.getStore();
   const inherited = parent?.isActive() ? parent : undefined;
   const inheritedControl = inherited ? contexts.prepared.getStore() : undefined;
-  const selected = options.selectedTask && captureTaskSelection(options.selectedTask);
+  const selection = options.selectedTask && captureTaskCancellationSelection(options.selectedTask);
+  const selected = selection?.task;
   const selectedBacking =
     options.selectedTask && readTaskBackingInstance(options.selectedTask.detail);
   let active = true;
@@ -80,7 +69,7 @@ export async function withTaskCancellationContext<T>(
         task.runId !== selected.runId ||
         task.childSessionKey !== selected.childSessionKey ||
         task.sourceId !== selected.sourceId ||
-        task.createdAt !== selected.createdAt ||
+        !matchesTaskCancellationCreatedAt(task, selected) ||
         (selectedBacking
           ? !backing || !sameTaskBackingInstance(selectedBacking, backing)
           : backing !== undefined)
@@ -101,6 +90,7 @@ export async function withTaskCancellationContext<T>(
     return await contexts.prepared.exit(() => contexts.caller.run(context, operation));
   } finally {
     active = false;
+    selection?.release();
   }
 }
 
