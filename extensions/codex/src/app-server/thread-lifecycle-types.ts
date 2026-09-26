@@ -16,13 +16,13 @@ import type {
   CodexAppServerContextEngineBinding,
   CodexAppServerThreadBinding,
 } from "./session-binding.js";
+import type { CodexThreadConfigurationOptions } from "./thread-configuration-options.js";
 import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
 import type {
   CodexThreadLifecycleTimingTracker,
   CodexThreadLifecycleTimingOptions,
 } from "./thread-lifecycle-timing.js";
 import type { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";
-import type { CodexThreadConfigurationOptions } from "./thread-requests.js";
 
 type CodexAppServerThreadLifecycle = {
   action: "started" | "resumed" | "forked";

@@ -29,6 +29,7 @@ import type {
   CodexAppServerPendingSupervisionBranch,
   CodexAppServerThreadBinding,
 } from "./session-binding.js";
+import type { CodexThreadConfigurationOptions } from "./thread-configuration-options.js";
 import {
   CodexThreadBindingConflictError,
   CodexThreadStartRequestError,
@@ -42,7 +43,6 @@ import {
   buildThreadStartParams,
   codexThreadSandboxOrPermissions,
   resolveCodexThreadApprovalsReviewer,
-  type CodexThreadConfigurationOptions,
 } from "./thread-requests.js";
 import { projectBoundedCodexThreadHistory } from "./transcript-mirror.js";
 
