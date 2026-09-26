@@ -9,9 +9,11 @@ import { clearGitHubCredentialVerificationCache } from "./github-oauth-client.js
 
 const processMocks = vi.hoisted(() => ({ runCommandBuffered: vi.fn() }));
 const oauthMocks = vi.hoisted(() => ({ inspect: vi.fn() }));
+const authScopeMocks = vi.hoisted(() => ({ getEnv: vi.fn() }));
 
 vi.mock("../process/exec.js", () => ({ runCommandBuffered: processMocks.runCommandBuffered }));
 vi.mock("./github-oauth-records.js", () => ({ inspectGitHubOAuthRecord: oauthMocks.inspect }));
+vi.mock("./auth-profiles/store.js", () => ({ getScopedAuthProfileEnv: authScopeMocks.getEnv }));
 
 import {
   installManagedGitHubProfile,
@@ -46,6 +48,7 @@ afterEach(() => {
 describe("GitHub tool identity", () => {
   beforeEach(() => {
     clearGitHubCredentialVerificationCache();
+    authScopeMocks.getEnv.mockReset().mockReturnValue(undefined);
     vi.stubEnv("GH_TOKEN", undefined);
     vi.stubEnv("GITHUB_TOKEN", undefined);
     processMocks.runCommandBuffered.mockReset();
@@ -131,6 +134,33 @@ describe("GitHub tool identity", () => {
       localIdentityEnv: { GH_CONFIG_DIR: expectedProfileDir },
     });
   });
+
+  it.each(["system", "agent"] as const)(
+    "retains the stored %s credential root during temporary agent exec",
+    (scope) => {
+      const storedRoot = tempDirs.make("openclaw-github-stored-scope-");
+      const temporaryRoot = tempDirs.make("openclaw-github-temporary-scope-");
+      const profileId = "ghp_abababababababababababababababab";
+      const github = { profileId };
+      const config =
+        scope === "system"
+          ? { tools: { github } }
+          : { agents: { entries: { main: { tools: { github } } } } };
+      const params = { config, agentId: "main", env: { OPENCLAW_STATE_DIR: temporaryRoot } };
+      const expected = resolveManagedGitHubProfileDir({
+        agentId: "main",
+        scope,
+        profileId,
+        env: { OPENCLAW_STATE_DIR: storedRoot },
+      });
+      const unscoped = prepareGitHubToolEnvironment(params).localIdentityEnv.GH_CONFIG_DIR;
+      expect(unscoped).toContain(temporaryRoot);
+      authScopeMocks.getEnv.mockReturnValue({ OPENCLAW_STATE_DIR: storedRoot });
+      expect(prepareGitHubToolEnvironment(params).localIdentityEnv.GH_CONFIG_DIR).toBe(expected);
+      authScopeMocks.getEnv.mockReturnValue(undefined);
+      expect(prepareGitHubToolEnvironment(params).localIdentityEnv.GH_CONFIG_DIR).toBe(unscoped);
+    },
+  );
 
   it("uses distinct bounded keys for distinct normalized agent ids", () => {
     const first = resolveManagedGitHubAgentKey("Reviewer-One");

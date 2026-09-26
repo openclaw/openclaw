@@ -18,6 +18,7 @@ import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
+import { getScopedAuthProfileEnv } from "./auth-profiles/store.js";
 import { verifyGitHubCredential } from "./github-oauth-client.js";
 import { inspectGitHubOAuthRecord } from "./github-oauth-records.js";
 import {
@@ -67,7 +68,11 @@ export function resolveManagedGitHubProfileRoot(params: {
   scope: "system" | "agent" | "personal";
   env?: NodeJS.ProcessEnv;
 }): string {
-  const root = path.join(resolveStateDir(params.env), ...MANAGED_GITHUB_ROOT_SEGMENTS);
+  // Temporary agent exec state must retain the credential owner selected before isolation.
+  const root = path.join(
+    resolveStateDir(getScopedAuthProfileEnv() ?? params.env),
+    ...MANAGED_GITHUB_ROOT_SEGMENTS,
+  );
   return params.scope === "agent"
     ? path.join(root, "agents", resolveManagedGitHubAgentKey(params.agentId))
     : path.join(root, params.scope);
