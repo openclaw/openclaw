@@ -23,10 +23,6 @@ function isValidUpdateId(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-function normalizeTelegramUpdateOffsetAccountId(accountId?: string) {
-  return normalizeTelegramStateAccountId(accountId);
-}
-
 function openUpdateOffsetStore(env?: NodeJS.ProcessEnv): TelegramUpdateOffsetStore {
   return getTelegramRuntime().state.openKeyedStore<TelegramUpdateOffsetState>({
     namespace: TELEGRAM_UPDATE_OFFSET_NAMESPACE,
@@ -126,7 +122,7 @@ export async function readTelegramUpdateOffset(params: {
   env?: NodeJS.ProcessEnv;
   onRotationDetected?: (info: TelegramUpdateOffsetRotationInfo) => void | Promise<void>;
 }): Promise<number | null> {
-  const key = normalizeTelegramUpdateOffsetAccountId(params.accountId);
+  const key = normalizeTelegramStateAccountId(params.accountId);
   let storedValue: unknown;
   try {
     storedValue = await openUpdateOffsetStore(params.env).lookup(key);
@@ -161,7 +157,7 @@ export async function writeTelegramUpdateOffset(params: {
     tokenFingerprint: fingerprintFromToken(params.botToken),
   };
   await openUpdateOffsetStore(params.env).register(
-    normalizeTelegramUpdateOffsetAccountId(params.accountId),
+    normalizeTelegramStateAccountId(params.accountId),
     payload,
   );
 }
@@ -170,7 +166,5 @@ export async function deleteTelegramUpdateOffset(params: {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  await openUpdateOffsetStore(params.env).delete(
-    normalizeTelegramUpdateOffsetAccountId(params.accountId),
-  );
+  await openUpdateOffsetStore(params.env).delete(normalizeTelegramStateAccountId(params.accountId));
 }

@@ -1,3 +1,4 @@
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -54,10 +55,6 @@ function pruneProcessedCardActionTokens(now: number): void {
   }
 }
 
-function resolveProcessedCardActionTokenExpiresAt(now: number): number | undefined {
-  return resolveExpiresAtMsFromDurationMs(FEISHU_CARD_ACTION_TOKEN_TTL_MS, { nowMs: now });
-}
-
 function beginFeishuCardActionToken(params: {
   token: string;
   accountId: string;
@@ -75,7 +72,9 @@ function beginFeishuCardActionToken(params: {
     return false;
   }
   processedCardActions.delete(key);
-  const expiresAt = resolveProcessedCardActionTokenExpiresAt(now);
+  const expiresAt = resolveExpiresAtMsFromDurationMs(FEISHU_CARD_ACTION_TOKEN_TTL_MS, {
+    nowMs: now,
+  });
   if (expiresAt !== undefined) {
     processedCardActions.set(key, {
       status: "inflight",
@@ -91,7 +90,9 @@ function completeFeishuCardAction(actionId: string, accountId: string, now = Dat
     return;
   }
   const key = `${accountId}:${normalizedActionId}`;
-  const expiresAt = resolveProcessedCardActionTokenExpiresAt(now);
+  const expiresAt = resolveExpiresAtMsFromDurationMs(FEISHU_CARD_ACTION_TOKEN_TTL_MS, {
+    nowMs: now,
+  });
   if (expiresAt === undefined) {
     processedCardActions.delete(key);
     return;
@@ -205,27 +206,11 @@ function pruneChatTypeCache(now: number): void {
       resolvedChatTypeCache.delete(key);
     }
   }
-  if (resolvedChatTypeCache.size > CHAT_TYPE_CACHE_MAX_SIZE) {
-    const excess = resolvedChatTypeCache.size - CHAT_TYPE_CACHE_MAX_SIZE;
-    const iter = resolvedChatTypeCache.keys();
-    for (let i = 0; i < excess; i++) {
-      const key = iter.next().value;
-      if (key !== undefined) {
-        resolvedChatTypeCache.delete(key);
-      }
-    }
-  }
+  pruneMapToMaxSize(resolvedChatTypeCache, CHAT_TYPE_CACHE_MAX_SIZE);
 }
 
 function sanitizeLogValue(v: string): string {
   return truncateUtf16Safe(v.replace(/[\r\n]/g, " "), 500);
-}
-
-function resolveFeishuApprovalCardExpiresAt(nowRaw = Date.now()): number | undefined {
-  const now = asDateTimestampMs(nowRaw);
-  return now === undefined
-    ? undefined
-    : resolveExpiresAtMsFromDurationMs(FEISHU_APPROVAL_CARD_TTL_MS, { nowMs: now });
 }
 
 function cacheResolvedCardActionChatType(
@@ -260,12 +245,8 @@ async function resolveCardActionChatType(params: {
   const now = Date.now();
   pruneChatTypeCache(now);
   const cached = resolvedChatTypeCache.get(cacheKey);
-  const cachedExpiresAt = cached ? asDateTimestampMs(cached.expiresAt) : undefined;
-  if (cached && cachedExpiresAt !== undefined) {
-    return cached.value;
-  }
   if (cached) {
-    resolvedChatTypeCache.delete(cacheKey);
+    return cached.value;
   }
 
   try {
@@ -382,7 +363,7 @@ export async function handleFeishuCardAction(params: {
           typeof envelope.m?.prompt === "string" && envelope.m.prompt.trim()
             ? envelope.m.prompt
             : `Run \`${command}\` in this Feishu conversation?`;
-        const expiresAt = resolveFeishuApprovalCardExpiresAt();
+        const expiresAt = resolveExpiresAtMsFromDurationMs(FEISHU_APPROVAL_CARD_TTL_MS);
         if (expiresAt === undefined) {
           await sendInvalidInteractionNotice({
             cfg,

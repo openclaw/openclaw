@@ -400,7 +400,7 @@ test("sessions.create commits no child after its worker turn closes", async () =
       patch,
     });
   }
-  const turnClaim = placements.claimTurn({
+  const turnClaim = await placements.claimTurn({
     agentId: placement.agentId,
     sessionId: placement.sessionId,
     sessionKey: placement.sessionKey,
@@ -438,7 +438,7 @@ test("sessions.create commits no child after its worker turn closes", async () =
 
   try {
     await firstGuard.promise;
-    placements.releaseTurn(turnClaim);
+    await placements.releaseTurn(turnClaim);
     releaseWriter.resolve();
     await heldWriter;
 

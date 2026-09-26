@@ -11,10 +11,8 @@ import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import {
-  openOpenClawStateDatabase,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { cancelGatewayWorkerSessionWork } from "./server-worker-placement-cancel.js";
 import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
@@ -40,7 +38,7 @@ vi.mock("../config/config.js", async (importOriginal) => ({
 const roots: string[] = [];
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   lookup.value = undefined;
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
@@ -618,8 +616,8 @@ it.each(["missing", "local"] as const)(
       entry,
     );
     if (state === "local") {
-      placements.releaseTurn(
-        placements.claimTurn({
+      await placements.releaseTurn(
+        await placements.claimTurn({
           ...REQUEST,
           owner: { kind: "local" },
           claimId: "seed",
