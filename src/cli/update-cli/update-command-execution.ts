@@ -12,7 +12,6 @@ import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalizat
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
-import { isFailedUpdateStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -42,6 +41,7 @@ import type { MutableUpdateExecutionParams } from "./update-command-execution.ty
 import {
   admitSourceUpdateArtifacts,
   assertReadableGitTarget,
+  assertValidatedGitCandidate,
   recordInspectedGitTarget,
 } from "./update-command-git-admission.js";
 import { updateGitInstall } from "./update-command-git.js";
@@ -661,15 +661,7 @@ export async function executeMutableUpdate(
         invocationCwd: params.invocationCwd,
         nodeRunner: params.packageUpdateNodeRunner,
         validateCandidate: async (candidateRoot) => {
-          const steps = await validateCandidate(candidateRoot);
-          const failed = steps.find(isFailedUpdateStep);
-          if (failed) {
-            throw new UpdatePreMutationError(
-              failed.name,
-              failed.stderrTail ?? "Update checks failed.",
-              { failureFacts: failed.failureFacts },
-            );
-          }
+          assertValidatedGitCandidate(await validateCandidate(candidateRoot));
         },
         beforeGitMutation: async (target) => {
           assertReadableGitTarget(target);

@@ -1,6 +1,8 @@
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import { isFailedUpdateStep } from "../../infra/update-run-step.js";
 import type { UpdateRunnerOptions, UpdateStepProgress } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
@@ -96,6 +98,15 @@ export function assertReadableGitTarget(target: Parameters<BeforeGitMutation>[0]
     const failure = createUpdatePreflightFailure("target-git-metadata", target.metadataUnreadable);
     throw new UpdatePreMutationError("target-metadata-preflight", failure.message, {
       failureFacts: failure.failureFacts,
+    });
+  }
+}
+
+export function assertValidatedGitCandidate(steps: readonly UpdateStepResult[]): void {
+  const failed = steps.find(isFailedUpdateStep);
+  if (failed) {
+    throw new UpdatePreMutationError(failed.name, failed.stderrTail ?? "Update checks failed.", {
+      failureFacts: failed.failureFacts,
     });
   }
 }
