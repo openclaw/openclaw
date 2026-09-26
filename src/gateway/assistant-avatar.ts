@@ -1,12 +1,10 @@
 // Gateway assistant-avatar projection binds the selected value to effective metadata.
-import fs from "node:fs";
 import {
-  openLocalAgentAvatarFile,
-  type OpenedLocalAgentAvatarFile,
+  prepareLocalAgentAvatarFile,
+  type PreparedLocalAgentAvatarFile,
 } from "../agents/identity-avatar-file.js";
 import type { AgentAvatarResolution } from "../agents/identity-avatar.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import {
   hasAvatarUriScheme,
   isAvatarDataUrl,
@@ -15,8 +13,10 @@ import {
   looksLikeAvatarPath,
 } from "../shared/avatar-policy.js";
 import {
-  createGatewayAvatarDataUrlCache,
-  gatewayAvatarImageRevision,
+  gatewayAvatarFileDataUrl,
+  prepareGatewayAvatarDataUrl,
+  prepareGatewayAvatarFile,
+  type GatewayAvatarImageSource,
 } from "./assistant-avatar-cache.js";
 import { DEFAULT_ASSISTANT_IDENTITY } from "./assistant-identity.js";
 import { buildControlUiResourcePath, matchControlUiResourceUrl } from "./control-ui-contract.js";
@@ -32,25 +32,19 @@ type GatewayAssistantAvatarProjection = {
   resolution: AgentAvatarResolution | null;
 };
 
-type OpenGatewayAssistantAvatarProjection = {
+type PreparedGatewayAssistantAvatarProjection = {
   resolution: AgentAvatarResolution | null;
-  openedFile?: OpenedLocalAgentAvatarFile;
+  file?: PreparedLocalAgentAvatarFile;
+  image?: GatewayAvatarImageSource;
 };
 
-const gatewayAvatarDataUrlCache = createGatewayAvatarDataUrlCache();
-
 export function gatewayAssistantAvatarUrl(
-  projection: OpenGatewayAssistantAvatarProjection,
+  projection: PreparedGatewayAssistantAvatarProjection,
   basePath: string,
   agentId: string,
 ): string | undefined {
-  const source = projection.openedFile
-    ? { file: projection.openedFile }
-    : projection.resolution?.kind === "data"
-      ? { dataUrl: projection.resolution.url }
-      : undefined;
-  return source
-    ? `${buildControlUiResourcePath("agentAvatar", basePath, agentId)}?v=${gatewayAvatarImageRevision(source)}`
+  return projection.image
+    ? `${buildControlUiResourcePath("agentAvatar", basePath, agentId)}?v=${projection.image.revision}`
     : undefined;
 }
 
@@ -65,24 +59,22 @@ function resolveSameOriginAvatarUrl(
   return matchControlUiResourceUrl("agentAvatar", source, basePath) ? source : undefined;
 }
 
-/**
- * Resolve and open a selected local avatar for route delivery.
- * A projection with `openedFile` transfers fd ownership to the caller.
- */
-export function openGatewayAssistantAvatar(params: {
+/** Prepare a selected source; the file owner retains descriptor custody in its worker. */
+export async function prepareGatewayAssistantAvatar(params: {
   cfg: OpenClawConfig;
   identity: GatewayAssistantIdentity;
-}): OpenGatewayAssistantAvatarProjection {
+  readBody: boolean;
+}): Promise<PreparedGatewayAssistantAvatarProjection> {
   const { cfg, identity } = params;
   const source = identity.avatar;
   if (isAvatarHttpUrl(source)) {
     return { resolution: { kind: "remote", url: source, source } };
   }
-  if (isRenderableAvatarImageDataUrl(source)) {
-    return { resolution: { kind: "data", url: source, source } };
-  }
   if (isAvatarDataUrl(source)) {
-    return { resolution: { kind: "none", reason: "unsupported_data_url", source } };
+    const image = prepareGatewayAvatarDataUrl(source);
+    return image
+      ? { resolution: { kind: "data", url: source, source }, image }
+      : { resolution: { kind: "none", reason: "unsupported_data_url", source } };
   }
   if (hasAvatarUriScheme(source) && !isWindowsAbsolutePath(source)) {
     return { resolution: { kind: "none", reason: "unsupported_uri", source } };
@@ -94,23 +86,29 @@ export function openGatewayAssistantAvatar(params: {
     return { resolution: null };
   }
 
-  const opened = openLocalAgentAvatarFile({ cfg, agentId: identity.agentId, source });
-  if (!opened.ok) {
-    return { resolution: { kind: "none", reason: opened.reason, source } };
+  const prepared = await prepareLocalAgentAvatarFile({
+    cfg,
+    agentId: identity.agentId,
+    source,
+    readBody: params.readBody,
+  });
+  if (!prepared.ok) {
+    return { resolution: { kind: "none", reason: prepared.reason, source } };
   }
   return {
-    resolution: { kind: "local", filePath: opened.file.path, source },
-    openedFile: opened.file,
+    resolution: { kind: "local", filePath: prepared.file.path, source },
+    file: prepared.file,
+    image: prepareGatewayAvatarFile(prepared.file),
   };
 }
 
 /** Resolve one selected identity avatar and its matching public metadata. */
-export function resolveGatewayAssistantAvatar(params: {
+export async function resolveGatewayAssistantAvatar(params: {
   cfg: OpenClawConfig;
   identity: GatewayAssistantIdentity;
   /** Browser clients use authenticated images; native/CLI RPC retains inline avatars. */
   httpBasePath?: string;
-}): GatewayAssistantAvatarProjection {
+}): Promise<GatewayAssistantAvatarProjection> {
   const { cfg, identity } = params;
   const source = identity.avatar;
   const sameOriginAvatarUrl = resolveSameOriginAvatarUrl(
@@ -120,27 +118,27 @@ export function resolveGatewayAssistantAvatar(params: {
   if (sameOriginAvatarUrl) {
     return { avatar: sameOriginAvatarUrl, resolution: null };
   }
-  const opened = openGatewayAssistantAvatar(params);
-  if (opened.resolution?.kind === "none") {
+  const prepared = await prepareGatewayAssistantAvatar({
+    ...params,
+    readBody: params.httpBasePath === undefined,
+  });
+  if (prepared.resolution?.kind === "none") {
     return {
       avatar: identity.emoji ?? DEFAULT_ASSISTANT_IDENTITY.avatar,
-      resolution: opened.resolution,
+      resolution: prepared.resolution,
     };
   }
   if (params.httpBasePath !== undefined) {
-    if (opened.openedFile) {
-      fs.closeSync(opened.openedFile.fd);
-    }
     return {
-      avatar: gatewayAssistantAvatarUrl(opened, params.httpBasePath, identity.agentId) ?? source,
-      resolution: opened.resolution,
+      avatar: gatewayAssistantAvatarUrl(prepared, params.httpBasePath, identity.agentId) ?? source,
+      resolution: prepared.resolution,
     };
   }
-  if (!opened.openedFile) {
-    return { avatar: source, resolution: opened.resolution };
+  if (!prepared.file) {
+    return { avatar: source, resolution: prepared.resolution };
   }
 
-  const dataUrl = gatewayAvatarDataUrlCache.read(opened.openedFile);
+  const dataUrl = gatewayAvatarFileDataUrl(prepared.file);
   if (!dataUrl) {
     return {
       avatar: identity.emoji ?? DEFAULT_ASSISTANT_IDENTITY.avatar,
@@ -149,6 +147,6 @@ export function resolveGatewayAssistantAvatar(params: {
   }
   return {
     avatar: dataUrl,
-    resolution: opened.resolution,
+    resolution: prepared.resolution,
   };
 }

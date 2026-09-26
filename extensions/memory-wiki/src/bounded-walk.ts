@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   walkRootDirectory,
   type RootWalkEntry,
@@ -39,4 +40,19 @@ export async function walkMemoryWikiDirectory(
     throw error;
   }
   return entries;
+}
+
+export async function listMemoryWikiPagePaths(
+  rootDir: string,
+  relativeDir: string,
+): Promise<string[]> {
+  const entries = await walkMemoryWikiDirectory(rootDir, relativeDir);
+  return entries
+    .filter(
+      (entry) =>
+        entry.kind === "file" &&
+        entry.relativePath.endsWith(".md") &&
+        path.basename(entry.relativePath) !== "index.md",
+    )
+    .map((entry) => entry.relativePath.split(path.sep).join("/"));
 }

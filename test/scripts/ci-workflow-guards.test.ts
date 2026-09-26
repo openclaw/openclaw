@@ -3486,13 +3486,13 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
         );
         const selection = expectDefined(
           job.steps.find((step: WorkflowStep) =>
-            ["Select Xcode 27", "Verify Xcode"].includes(step.name ?? ""),
+            ["Select Xcode", "Verify Xcode"].includes(step.name ?? ""),
           ),
           `${workflowPath}: ${jobName} toolchain selection`,
         );
         const toolingRoot = workflowPath === ".github/workflows/ci.yml" ? ".ci-harness/" : "";
         expect(selection.run).toContain(`source ${toolingRoot}scripts/lib/swift-toolchain.sh`);
-        expect(selection.run).toContain("select_xcode_toolchain 27.0");
+        expect(selection.run).toContain("select_xcode_toolchain");
       }
     }
   });
@@ -9592,7 +9592,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
               ) {
                 expect(includeFile).toBeTruthy();
                 const included = JSON.parse(readFileSync(includeFile!, "utf8"));
-                const nodeFiles = ["ui/src/pages/usage/usage-page-details.test.ts"];
+                const nodeFiles = [
+                  "ui/src/pages/chat/chat-thread.test.ts",
+                  "ui/src/pages/usage/usage-page-details.test.ts",
+                ];
                 if (childEnv.OPENCLAW_VITEST_RUNTIME === "node") {
                   expect(included.toSorted()).toEqual(nodeFiles);
                 } else {

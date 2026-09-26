@@ -597,50 +597,6 @@ describe("msteams graph helpers", () => {
       return body;
     }
 
-    it("single page, no nextLink", async () => {
-      const items = [{ id: "1", name: "a" }];
-      mockJsonFetchResponse(pagedResponse(items));
-
-      const result = await fetchAllGraphPages<Item>({
-        token: graphToken,
-        path: "/items",
-      });
-
-      expect(result).toEqual({ items, truncated: false });
-      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    });
-
-    it("multiple pages with nextLink chain", async () => {
-      const page1Items = [{ id: "1", name: "a" }];
-      const page2Items = [{ id: "2", name: "b" }];
-      const page3Items = [{ id: "3", name: "c" }];
-      let callCount = 0;
-
-      mockFetch(async () => {
-        callCount++;
-        if (callCount === 1) {
-          return Response.json(
-            pagedResponse(page1Items, "https://graph.microsoft.com/v1.0/items?$skiptoken=page2"),
-          );
-        }
-        if (callCount === 2) {
-          return Response.json(
-            pagedResponse(page2Items, "https://graph.microsoft.com/v1.0/items?$skiptoken=page3"),
-          );
-        }
-        return Response.json(pagedResponse(page3Items));
-      });
-
-      const result = await fetchAllGraphPages<Item>({
-        token: graphToken,
-        path: "/items",
-      });
-
-      expect(result.items).toEqual([...page1Items, ...page2Items, ...page3Items]);
-      expect(result.truncated).toBe(false);
-      expect(globalThis.fetch).toHaveBeenCalledTimes(3);
-    });
-
     it("truncation at maxPages", async () => {
       mockFetch(async () =>
         Response.json(

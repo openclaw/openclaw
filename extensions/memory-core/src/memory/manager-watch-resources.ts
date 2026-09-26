@@ -123,34 +123,31 @@ export abstract class MemoryFileWatchResources {
   protected closeNativeMemoryWatchChildren(pair: NativeMemoryWatchPair): void {
     if (pair.treeWatchers) {
       for (const entry of pair.treeWatchers.values()) {
-        try {
-          entry.watcher.close();
-        } catch {
-          // ignore close failures
-        }
+        this.closeNativeMemoryWatcher(entry.watcher);
       }
       pair.treeWatchers.clear();
-    } else if (pair.main) {
-      try {
-        pair.main.close();
-      } catch {
-        // ignore close failures
-      }
+    } else {
+      this.closeNativeMemoryWatcher(pair.main);
     }
     pair.main = null;
   }
 
+  protected closeNativeMemoryWatcher(watcher: fsSync.FSWatcher | null): void {
+    try {
+      watcher?.close();
+    } catch {
+      // Native error/replacement cleanup tolerates already-closed handles.
+    }
+  }
+
   protected closeNativeMemoryWatchPair(pair: NativeMemoryWatchPair): void {
     this.closeNativeMemoryWatchChildren(pair);
-    if (pair.parent) {
-      try {
-        pair.parent.close();
-      } catch {
-        // ignore close failures
-      }
-      pair.parent = null;
+    this.closeNativeMemoryWatcher(pair.parent);
+    pair.parent = null;
+    const index = this.nativeMemoryWatchPairs.indexOf(pair);
+    if (index >= 0) {
+      this.nativeMemoryWatchPairs.splice(index, 1);
     }
-    this.removeNativeMemoryWatchPair(pair);
   }
 
   protected closeNativeMemoryWatchPairs(): void {
@@ -195,13 +192,6 @@ export abstract class MemoryFileWatchResources {
         "watching disabled, memory will refresh on search",
     );
     return true;
-  }
-
-  private removeNativeMemoryWatchPair(pair: NativeMemoryWatchPair): void {
-    const idx = this.nativeMemoryWatchPairs.indexOf(pair);
-    if (idx >= 0) {
-      this.nativeMemoryWatchPairs.splice(idx, 1);
-    }
   }
 
   start(): Promise<void> {

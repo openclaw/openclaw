@@ -6,6 +6,7 @@ import {
 import { createChannelIngressDrain } from "../../channels/message/ingress-drain.js";
 import {
   createTestIngressQueue,
+  observeChannelIngressQueueWrite,
   withTempState,
 } from "../../channels/message/ingress-drain.test-helpers.js";
 import type { MsgContext } from "../templating.js";
@@ -64,6 +65,7 @@ describe("dispatch retry after queued ingress abandonment", () => {
           BodyForAgent: "Please deliver this queued message",
         });
         const queue = createTestIngressQueue(stateDir, { now: () => clock });
+        const released = observeChannelIngressQueueWrite(queue, "release");
         await queue.enqueue(
           messageId,
           { text: "Please deliver this queued message" },
@@ -171,6 +173,7 @@ describe("dispatch retry after queued ingress abandonment", () => {
             await drain.waitForIdle();
             expect(lifecycles[0]?.abortSignal.aborted).toBe(true);
           }
+          await expect(released).resolves.toBe(true);
           expect(await queue.listPending()).toMatchObject([{ id: messageId, attempts: 1 }]);
           clock += 1_000;
           expect(await drain.drainOnce()).toEqual({ started: 1 });

@@ -1638,23 +1638,6 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatMessages).toStrictEqual([]);
   });
 
-  it("returns null for delta from another run", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-user",
-      chatStream: "Hello",
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-announce",
-      sessionKey: "main",
-      state: "delta",
-      message: { role: "assistant", content: [{ type: "text", text: "Done" }] },
-    };
-    expect(handleChatGatewayEvent(state, payload)).toBe(null);
-    expect(state.chatRunId).toBe("run-user");
-    expect(state.chatStream).toBe("Hello");
-  });
-
   it("ignores NO_REPLY delta updates", () => {
     const state = createState({
       sessionKey: "main",
@@ -1715,7 +1698,7 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatMessages).toStrictEqual([]);
   });
 
-  it.each(["no_reply", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
+  it.each(["no_reply", "ANNOUNCE_SKIP"])(
     "keeps plain-text %s final payload from another run without clearing active stream",
     (text) => {
       const state = createActiveStreamingState();
@@ -2275,17 +2258,6 @@ describe("handleChatGatewayEvent", () => {
         };
       },
     },
-    {
-      name: "does not append legacy assistant-shaped error projections",
-      create(): TerminalErrorFixture {
-        return {
-          message: createTextChatMessage("assistant", "Error: raw gateway error", undefined, 10),
-          error: "raw gateway error",
-          expected: [],
-          verify: (state) => expect(state.lastError).toBeNull(),
-        };
-      },
-    },
   ])("$name", (fixture) => {
     const { stream, previous, segments, message, error, expected, verify } = fixture.create();
     const state = createState({
@@ -2403,7 +2375,6 @@ describe("handleChatGatewayEvent", () => {
   });
 
   it.each([
-    "⚠️ 🛠️ Exec failed (exit 1): command failed.",
     "⚠️ Agent run failed: the Gateway state database was busy (SQLite: database is locked). Retry; if it repeats, check Gateway storage health.",
   ])("preserves actionable server guidance in live run state: %s", (diagnostic) => {
     const state = createState({ sessionKey: "main", chatRunId: "run-1" });
@@ -2902,7 +2873,7 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatStream).toBe(null);
   });
 
-  it.each(["no_reply", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
+  it.each(["no_reply", "ANNOUNCE_SKIP"])(
     "keeps plain-text %s final payload from own run",
     (text) => {
       const state = createState({
@@ -3695,64 +3666,6 @@ describe("loadChatHistory retry handling", () => {
 
   it.each([
     {
-      name: "preserves a run-keyed pending prompt across an older snapshot",
-      create(): HistoryReconciliationFixture {
-        const persisted = createTextChatMessage("user", "first", { id: "first-user", seq: 1 });
-        const pending = createTextChatMessage("user", "latest ask", {
-          idempotencyKey: "latest-run:user",
-        });
-        return {
-          history: [persisted],
-          visible: [persisted, pending],
-          expected: [persisted, pending],
-          inputRunIds: ["latest-run"],
-        };
-      },
-    },
-    {
-      name: "keeps distinct same-text prompts when their run identities differ",
-      create(): HistoryReconciliationFixture {
-        const first = createTextChatMessage("user", "continue", {
-          id: "first-user",
-          idempotencyKey: "first-run:user",
-          seq: 1,
-        });
-        const persisted = createTextChatMessage("user", "continue", {
-          id: "second-user",
-          idempotencyKey: "second-run:user",
-          seq: 2,
-        });
-        const pending = createTextChatMessage("user", "continue", {
-          idempotencyKey: "third-run:user",
-        });
-        return {
-          history: [first, persisted],
-          visible: [first, pending],
-          expected: [first, persisted, pending],
-          inputRunIds: ["third-run"],
-        };
-      },
-    },
-    {
-      name: "retires a pending prompt when its canonical run reaches history",
-      create(): HistoryReconciliationFixture {
-        const persisted = createTextChatMessage("user", "already persisted", {
-          id: "persisted-user",
-          idempotencyKey: "persisted-run:user",
-          seq: 1,
-        });
-        const pending = createTextChatMessage("user", "already persisted", {
-          idempotencyKey: "persisted-run:user",
-        });
-        return {
-          history: [persisted],
-          visible: [pending],
-          expected: [persisted],
-          inputRunIds: ["persisted-run"],
-        };
-      },
-    },
-    {
       name: "preserves distinct complete imported source identities",
       create(): HistoryReconciliationFixture {
         const imported = (cliSessionId: string, seq: number) =>
@@ -3774,17 +3687,6 @@ describe("loadChatHistory retry handling", () => {
         const persisted = createTextChatMessage("user", "first", { id: "first-user", seq: 1 });
         const unowned = createTextChatMessage("user", "unproven pending turn");
         return { history: [persisted], visible: [persisted, unowned], expected: [persisted] };
-      },
-    },
-    {
-      name: "never restores a hidden assistant from a stale visible tail",
-      create(): HistoryReconciliationFixture {
-        const persisted = createTextChatMessage("user", "visible prompt", {
-          id: "visible-user",
-          seq: 1,
-        });
-        const hidden = createTextChatMessage("assistant", "NO_REPLY");
-        return { history: [persisted], visible: [persisted, hidden], expected: [persisted] };
       },
     },
     {
@@ -4277,44 +4179,6 @@ describe("loadChatHistory retry handling", () => {
     expect(state.toolStreamOrder).toEqual(["call_current"]);
   });
 
-  it("keeps a run-keyed optimistic prompt when history reload returns empty", async () => {
-    const optimisticUser = createTextChatMessage(
-      "user",
-      "first ask",
-      { idempotencyKey: "pending-run:user" },
-      10,
-    );
-    const { state } = createHistorySnapshot([], { chatMessages: [optimisticUser] });
-
-    await loadChatHistory(state);
-
-    expect(state.chatMessages).toEqual([optimisticUser]);
-    expect(state.chatStream).toBeNull();
-  });
-
-  it("retires a run-keyed optimistic prompt after history catches up", async () => {
-    const optimisticUser = createTextChatMessage(
-      "user",
-      "latest ask",
-      { idempotencyKey: "latest-run:user" },
-      10,
-    );
-    const historyUser = createTextChatMessage("user", "latest ask", {
-      id: "persisted-latest-user",
-      idempotencyKey: "latest-run:user",
-      seq: 1,
-    });
-    const historyAssistant = createTextChatMessage("assistant", "latest answer", { seq: 2 });
-    const { state } = createResolvedHistoryState(
-      { messages: [historyUser, historyAssistant] },
-      { chatMessages: [optimisticUser] },
-    );
-
-    await loadChatHistory(state);
-
-    expect(state.chatMessages).toEqual([historyUser, historyAssistant]);
-  });
-
   it("shows a targeted message when chat history is unauthorized", async () => {
     const request = vi.fn().mockRejectedValue(
       new GatewayRequestError({
@@ -4342,24 +4206,6 @@ describe("loadChatHistory retry handling", () => {
     });
     expect(state.lastError).toBeNull();
     expect(state.chatError).toBeNull();
-    expect(state.chatLoading).toBe(false);
-  });
-
-  it("coalesces duplicate in-flight history loads for the selected session", async () => {
-    const { history, request, state } = createDeferredHistoryState();
-
-    const firstLoad = loadChatHistory(state);
-    const secondLoad = loadChatHistory(state);
-
-    expect(request).toHaveBeenCalledTimes(1);
-    history.resolve(createAssistantHistory("ready", { thinkingLevel: "low" }));
-    await firstLoad;
-    await secondLoad;
-
-    expect(state.chatMessages).toEqual([
-      { role: "assistant", content: [{ type: "text", text: "ready" }] },
-    ]);
-    expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
   });
 

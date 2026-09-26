@@ -106,61 +106,6 @@ describe("pw-tools-core browser SSRF guards", () => {
 
   it.each([
     {
-      kind: "click",
-      method: "click",
-      run: () => interactions.clickViaPlaywright({ ...strictNavigationOptions(), ref: "1" }),
-    },
-    {
-      kind: "select",
-      method: "selectOption",
-      run: () =>
-        interactions.selectOptionViaPlaywright({
-          ...strictNavigationOptions(),
-          ref: "1",
-          values: ["go"],
-        }),
-    },
-    {
-      kind: "form fill",
-      method: "fill",
-      run: () =>
-        interactions.fillFormViaPlaywright({
-          ...strictNavigationOptions(),
-          fields: [{ ref: "1", type: "text", value: "go" }],
-        }),
-    },
-    {
-      kind: "batched click",
-      method: "click",
-      run: () =>
-        interactions.batchViaPlaywright({
-          ...strictNavigationOptions(),
-          actions: [{ kind: "click", ref: "1" }],
-        }),
-    },
-  ])(
-    "re-checks $kind-triggered navigations with the session safety helper",
-    async ({ method, run }) => {
-      let currentUrl = "https://example.com";
-      installInteractionPage(
-        { url: vi.fn(() => currentUrl) },
-        {
-          [method]: vi.fn(async () => {
-            currentUrl = "https://target.example";
-          }),
-        },
-      );
-
-      await run();
-
-      expect(sessionMocks.assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
-        completedNavigationExpectation(),
-      );
-    },
-  );
-
-  it.each([
-    {
       name: "hover",
       method: "hover",
       run: async () =>

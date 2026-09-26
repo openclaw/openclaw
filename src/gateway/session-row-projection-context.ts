@@ -1,5 +1,5 @@
 import { getSubagentRegistryPublicationRevision } from "../agents/subagents/registry/subagent-registry-publication.js";
-import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
+import { createSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read-index.js";
 import type { SubagentSessionListReadView } from "../agents/subagents/registry/subagent-registry-state.js";
 import {
   buildProjectedAgentRunIndex,
@@ -29,10 +29,11 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
   let modelFactsDirty = false;
   const identityProjection = createSessionIdentityProjection();
   const initialNow = Date.now();
+  const subagentIndex = createSubagentSessionListReadIndex(subagents, initialNow);
   let current = {
     ...buildSessionListRowMetadataContext({
       now: initialNow,
-      subagentRuns: buildSubagentSessionListReadIndex(initialNow, undefined, subagents.runs()),
+      subagentRuns: subagentIndex.read(initialNow),
     }),
     identityProjection,
   };
@@ -54,19 +55,17 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
       registrySnapshot = snapshot;
     }
     const now = Date.now();
-    if (registryRevision !== revision) {
+    const previousIndexRevision = subagentIndex.revision;
+    const subagentRuns = subagentIndex.read(now);
+    const subagentChanged = previousIndexRevision !== subagentIndex.revision;
+    if (subagentChanged || registryRevision === undefined) {
       subagentRevision++;
     }
-    const subagentRuns =
-      registryRevision === revision
-        ? current.subagentRuns.atTime(now)
-        : buildSubagentSessionListReadIndex(now, undefined, subagents.runs());
     // Keep maps local to this projection; independent builders still own fresh indexes.
     const projectedAgentRuns =
       agentRunRevision === runRevision ? current.projectedAgentRuns : buildProjectedAgentRunIndex();
     const projectedSubagentActivity =
-      projectedAgentRuns === current.projectedAgentRuns &&
-      subagentRuns.latestRunsByChildSessionKey === current.subagentRuns.latestRunsByChildSessionKey
+      projectedAgentRuns === current.projectedAgentRuns && !subagentChanged
         ? current.projectedSubagentActivity
         : buildProjectedSubagentActivity(subagentRuns, projectedAgentRuns);
     current = modelFactsDirty
@@ -94,6 +93,7 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
     preparedEpoch = epoch;
   }
   return {
+    dispose: subagentIndex.dispose,
     readPrepared(epoch: number): SessionListRowContext | undefined {
       return preparedEpoch === epoch &&
         parentRevision === subagentRevision &&
@@ -126,7 +126,6 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
           profileRevision++;
           return true;
         case "subagent-runs":
-          registryRevision = undefined;
           return true;
         case "worker-environments":
         case "worker-placements":
@@ -150,15 +149,14 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
       put: (row: records.Row) => void,
       referenced: (reference: string) => records.Row | undefined,
     ) {
-      const previous = current.subagentRunsByChildSessionKey;
+      const broad = registryRevision === undefined;
       prepare(epoch);
       if (parentRevision === subagentRevision) {
         return;
       }
-      for (const key of new Set([
-        ...previous.keys(),
-        ...current.subagentRunsByChildSessionKey.keys(),
-      ])) {
+      for (const key of broad
+        ? current.subagentRunsByChildSessionKey.keys()
+        : subagentIndex.changedChildren) {
         for (const row of matching({ key })) {
           if (!row.storedEntry) {
             continue;

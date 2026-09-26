@@ -39,7 +39,6 @@ type PostCompactionGuardVerdict =
 type PostCompactionLoopGuard = {
   armPostCompaction: () => void;
   observe: (call: PostCompactionGuardObservation) => PostCompactionGuardVerdict;
-  snapshot: () => { armed: boolean; remainingAttempts: number };
 };
 
 type GuardState = {
@@ -154,12 +153,7 @@ export function createPostCompactionLoopGuard(options?: {
     return { shouldAbort: false, armed: armedAfter, remainingAttempts: state.remainingAttempts };
   };
 
-  const snapshot = () => ({
-    armed: state.remainingAttempts > 0,
-    remainingAttempts: state.remainingAttempts,
-  });
-
-  return { armPostCompaction, observe, snapshot };
+  return { armPostCompaction, observe };
 }
 
 /** Error raised when the post-compaction loop guard aborts a run. */

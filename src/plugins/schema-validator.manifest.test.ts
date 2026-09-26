@@ -2,18 +2,6 @@
 import { describe, expect, it } from "vitest";
 import { validatePluginSchemaValue } from "./schema-validator.js";
 describe("validatePluginSchemaValue", () => {
-  it("returns an error instead of throwing for a structurally invalid schema", () => {
-    const result = validatePluginSchemaValue({
-      origin: "global",
-      cacheKey: "manifest-schema.unresolved-ref",
-      schema: { type: "object", properties: { mode: { $ref: "#/$defs/Mode" } } },
-      value: {},
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.ok ? "" : result.errors[0]?.text).toContain("invalid schema");
-  });
-
   it("strips terminal control characters a manifest embedded in the thrown text", () => {
     const escape = String.fromCharCode(27);
     const result = validatePluginSchemaValue({
@@ -49,6 +37,7 @@ describe("validatePluginSchemaValue", () => {
       value: {},
     });
     expect(malformedSchema).toMatchObject({ ok: false, schemaError: true });
+    expect(malformedSchema.ok ? "" : malformedSchema.errors[0]?.text).toContain("invalid schema");
 
     const wellFormedSchemaRejectingValue = validatePluginSchemaValue({
       origin: "global",

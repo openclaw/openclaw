@@ -249,7 +249,6 @@ describe("resolveGatewayScopedTools", () => {
     ].flatMap(({ mode, resolve }) =>
       [
         { label: "ls-only", toolsAllow: ["ls"], expected: ["ls"] },
-        { label: "read-only", toolsAllow: ["read"], expected: ["read"] },
         { label: "mixed", toolsAllow: ["ls", "read"], expected: ["ls", "read"] },
         {
           label: "filesystem group",

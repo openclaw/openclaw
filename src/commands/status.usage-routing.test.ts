@@ -135,18 +135,6 @@ function usageSummary(displayName: string, usedPercent: number): UsageSummary {
 const summaries = {
   default: usageSummary("Fixture Default", 25),
   work: usageSummary("Fixture Work", 60),
-  empty: { updatedAt: 1_000, providers: [] },
-  error: {
-    updatedAt: 1_000,
-    providers: [
-      {
-        provider: "fixture",
-        displayName: "Fixture Default",
-        windows: [],
-        error: "fixture quota unavailable",
-      },
-    ],
-  },
 } satisfies Record<string, UsageSummary>;
 
 describe("status usage routing through Commander", () => {
@@ -278,18 +266,6 @@ describe("status usage routing through Commander", () => {
       line: "Window: 40% left",
     },
     { name: "full report without usage", args: ["--all"], summary: undefined },
-    {
-      name: "full report empty usage",
-      args: ["--all", "--usage"],
-      summary: summaries.empty,
-      line: "Usage: no provider usage available.",
-    },
-    {
-      name: "full report usage error",
-      args: ["--all", "--usage"],
-      summary: summaries.error,
-      line: "Fixture Default: fixture quota unavailable",
-    },
     {
       name: "JSON full report explicit agent",
       args: ["--json", "--all", "--usage", "--agent", "work"],

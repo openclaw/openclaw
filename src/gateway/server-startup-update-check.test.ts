@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { currentUpdateCheckLifecycle } from "../infra/update-check-lifecycle.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -15,10 +17,12 @@ type UpdateCheckParams = Parameters<UpdateCheckStartupParams["createUpdateCheck"
 describe("deferred Gateway update-check lifecycle", () => {
   let state: OpenClawTestState;
   let defaultUpdateCheck: UpdateCheck;
+  let scheduler: ReturnType<typeof createTestGatewayScheduler>;
   const owners = new Set<ReturnType<typeof createDeferredGatewayUpdateCheck>>();
 
   beforeEach(async () => {
     resetGatewayWorkAdmission();
+    scheduler = createTestGatewayScheduler();
     state = await createOpenClawTestState({ label: "gateway-update-check" });
     defaultUpdateCheck = {
       initialize: vi.fn(async () => ({
@@ -34,6 +38,7 @@ describe("deferred Gateway update-check lifecycle", () => {
   afterEach(async () => {
     try {
       await Promise.all([...owners].map((owner) => owner.stop()));
+      await scheduler.stop();
     } finally {
       owners.clear();
       resetGatewayWorkAdmission();
@@ -43,8 +48,9 @@ describe("deferred Gateway update-check lifecycle", () => {
     }
   });
 
-  async function startUpdateCheck(overrides: Partial<UpdateCheckStartupParams> = {}) {
+  async function startUpdateCheck(overrides: Partial<UpdateCheckStartupParams> = {}, start = true) {
     const owner = createDeferredGatewayUpdateCheck({
+      scheduler,
       createUpdateCheck: () => defaultUpdateCheck,
       getConfig: () => ({}),
       log: { info: vi.fn(), warn: vi.fn() },
@@ -54,7 +60,9 @@ describe("deferred Gateway update-check lifecycle", () => {
       ...overrides,
     });
     owners.add(owner);
-    owner.start();
+    if (start) {
+      owner.start();
+    }
     return owner;
   }
 
@@ -69,6 +77,37 @@ describe("deferred Gateway update-check lifecycle", () => {
     }
     return call[0];
   }
+
+  it("owns RPC update work when autonomous checks never start", async () => {
+    const createUpdateCheck = vi.fn(() => defaultUpdateCheck);
+    const owner = await startUpdateCheck({ createUpdateCheck }, false);
+    const lifecycle = currentUpdateCheckLifecycle();
+    const entered = createDeferred();
+    const cleanup = createDeferred();
+    const cancelled = createDeferred();
+    const work = lifecycle.run(async (signal) => {
+      signal.addEventListener("abort", () => cancelled.resolve(), { once: true });
+      entered.resolve();
+      await cleanup.promise;
+    });
+    await entered.promise;
+
+    expect(scheduler.nextWakeAtMs).toBeNull();
+    let stopped = false;
+    const stopping = owner.stop().then(() => {
+      stopped = true;
+    });
+    try {
+      await cancelled.promise;
+      expect(stopped).toBe(false);
+      expect(createUpdateCheck).not.toHaveBeenCalled();
+    } finally {
+      cleanup.resolve();
+      await Promise.all([work, stopping]);
+    }
+    expect(stopped).toBe(true);
+    expect(scheduler.nextWakeAtMs).toBeNull();
+  });
 
   it("scopes detailed update broadcasts to read-capable operator clients", async () => {
     const clients = [

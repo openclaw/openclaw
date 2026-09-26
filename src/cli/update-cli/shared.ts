@@ -49,7 +49,7 @@ import { resolveNodeRunner } from "./node-runner.js";
 
 export { resolveNodeRunner } from "./node-runner.js";
 
-export type UpdateCommandOptions = {
+export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"> & {
   /** Doctor's accepted source update targets dev without changing the saved channel. */
   sourceUpdate?: { root: string };
   /** In-process reporting only, after the update owner settles. Never serialized. */
@@ -76,6 +76,7 @@ export type UpdateCommandOptions = {
     requesterAuthority?: UpdateRequesterAuthority;
     /** Live local executor only. A child must independently acquire its owner. */
     executorFence?: UpdateRecoveryFence;
+    sourceArtifactLock?: import("@openclaw/fs-safe/file-lock").FileLockHandle;
   };
   acceptCapabilities?: boolean;
   admission?: "auto" | "installed";

@@ -2554,6 +2554,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(commandRuntimeGroup.env?.OPENCLAW_VITEST_MAX_WORKERS).toBeUndefined();
     expect(commandRuntimeGroup.fallbackMaxWorkers).toBe(2);
     expect(commandRuntimeGroup.includePatterns?.toSorted()).toEqual([
+      "src/commands/doctor-agent-database-order.process.test.ts",
       "src/commands/doctor-config-flow.legacy-composition.test.ts",
       "src/commands/doctor-config-preflight.process.test.ts",
       "src/commands/doctor-config-preflight.refusal.process.test.ts",
@@ -4242,6 +4243,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   it("preserves runtime preparation and core-only ownership in full and compact plans", () => {
     const qaConfig = "test/vitest/vitest.extension-qa.config.ts";
     const doctorRuntimeTargets = [
+      "src/commands/doctor-agent-database-order.process.test.ts",
       "src/commands/doctor-config-flow.legacy-composition.test.ts",
       "src/commands/doctor-config-preflight.process.test.ts",
       "src/commands/doctor-config-preflight.refusal.process.test.ts",
@@ -6994,88 +6996,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it("splits auto-reply into balanced core/top-level and reply subtree shards", () => {
-    const shards = defaultShards;
-    const autoReplyShards = shards
-      .filter((shard) => shard.shardName.startsWith("auto-reply"))
-      .map((shard) => ({
-        checkName: shard.checkName,
-        configs: shard.configs,
-        requiresDist: shard.requiresDist,
-        shardName: shard.shardName,
-      }));
-
-    expect(autoReplyShards).toEqual([
-      {
-        checkName: "checks-node-auto-reply-core-top-level",
-        configs: [
-          "test/vitest/vitest.auto-reply-core.config.ts",
-          "test/vitest/vitest.auto-reply-top-level.config.ts",
-        ],
-        requiresDist: false,
-        shardName: "auto-reply-core-top-level",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-agent-runner",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-agent-runner",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-commands-1",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-commands-1",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-commands-2",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-commands-2",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-commands-3",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-commands-3",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-dispatch",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-dispatch",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-dispatch-core",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-dispatch-core",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-dispatch-delivery",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-dispatch-delivery",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-dispatch-lifecycle",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-dispatch-lifecycle",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-session",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-session",
-      },
-      {
-        checkName: "checks-node-auto-reply-reply-state-routing",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-        shardName: "auto-reply-reply-state-routing",
-      },
-    ]);
+  it("preserves auto-reply project ownership when splitting shards", () => {
+    const expected = fullSuiteVitestShards
+      .filter((shard) => shard.name === "auto-reply")
+      .flatMap((shard) => shard.projects);
+    const actual = defaultShards
+      .filter((shard) => shard.shardName.startsWith("auto-reply-"))
+      .flatMap((shard) => shard.configs);
+    expect(new Set(actual)).toEqual(new Set(expected));
   });
 
   it("covers every auto-reply reply test exactly once across split shards", () => {

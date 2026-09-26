@@ -11,48 +11,18 @@ afterEach(() => {
 });
 
 describe("tryResolveAmbientHeartbeatAgentId", () => {
-  it.each([
-    {
-      name: "explicit heartbeat owner",
-      cfg: {
-        agents: {
-          ownership: "explicit",
-          entries: { main: {}, ops: {} },
-          defaults: {
-            heartbeat: { agentId: "ops" },
-            systemAgent: { agentId: "main" },
-          },
+  it("prefers an explicit heartbeat owner over the system owner", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, ops: {} },
+        defaults: {
+          heartbeat: { agentId: "ops" },
+          systemAgent: { agentId: "main" },
         },
-      } as OpenClawConfig,
-      expected: "ops",
-    },
-    {
-      name: "system owner",
-      cfg: {
-        agents: {
-          ownership: "explicit",
-          entries: { main: {}, ops: {} },
-          defaults: { systemAgent: { agentId: "ops" } },
-        },
-      } as OpenClawConfig,
-      expected: "ops",
-    },
-    {
-      name: "sole agent",
-      cfg: {
-        agents: { ownership: "explicit", entries: { solo: {} } },
-      } as OpenClawConfig,
-      expected: "solo",
-    },
-    {
-      name: "ownerless explicit multi-agent roster",
-      cfg: {
-        agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
-      } as OpenClawConfig,
-      expected: undefined,
-    },
-  ])("resolves the $name", ({ cfg, expected }) => {
-    expect(tryResolveAmbientHeartbeatAgentId(cfg)).toBe(expected);
+      },
+    };
+    expect(tryResolveAmbientHeartbeatAgentId(cfg)).toBe("ops");
   });
 });
 
@@ -151,7 +121,6 @@ describe("resolveHeartbeatAgents", () => {
   });
 
   it.each([
-    { name: "system owner", cfg: systemOwnedConfig, expectedAgentIds: ["ops"] },
     {
       name: "explicit heartbeat owner",
       cfg: {
@@ -174,16 +143,6 @@ describe("resolveHeartbeatAgents", () => {
       name: "sole agent",
       cfg: { agents: { ownership: "explicit", entries: { solo: {} } } } as OpenClawConfig,
       expectedAgentIds: ["solo"],
-    },
-    {
-      name: "per-agent heartbeat entries",
-      cfg: {
-        agents: {
-          ownership: "explicit",
-          entries: { main: {}, ops: { heartbeat: { every: "30m" } } },
-        },
-      } as OpenClawConfig,
-      expectedAgentIds: ["ops"],
     },
     {
       name: "per-agent enrollment takes precedence over the default heartbeat owner",

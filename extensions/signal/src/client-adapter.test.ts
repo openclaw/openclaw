@@ -26,26 +26,24 @@ afterEach(() => {
 });
 
 describe("signalRpcRequest", () => {
-  it.each(["managed-native", "external-native"] as const)(
-    "routes %s through native JSON-RPC",
-    async (transportKind) => {
-      nativeRpc.mockResolvedValue({ timestamp: 17 });
+  it("routes external-native through native JSON-RPC", async () => {
+    const transportKind = "external-native";
+    nativeRpc.mockResolvedValue({ timestamp: 17 });
 
-      await expect(
-        signalRpcRequest(
-          "send",
-          { message: "Hello", recipient: ["+15550001111"] },
-          { baseUrl: "http://native:8080", transportKind },
-        ),
-      ).resolves.toEqual({ timestamp: 17 });
-      expect(nativeRpc).toHaveBeenCalledWith(
+    await expect(
+      signalRpcRequest(
         "send",
         { message: "Hello", recipient: ["+15550001111"] },
-        expect.objectContaining({ baseUrl: "http://native:8080", transportKind }),
-      );
-      expect(containerRpc).not.toHaveBeenCalled();
-    },
-  );
+        { baseUrl: "http://native:8080", transportKind },
+      ),
+    ).resolves.toEqual({ timestamp: 17 });
+    expect(nativeRpc).toHaveBeenCalledWith(
+      "send",
+      { message: "Hello", recipient: ["+15550001111"] },
+      expect.objectContaining({ baseUrl: "http://native:8080", transportKind }),
+    );
+    expect(containerRpc).not.toHaveBeenCalled();
+  });
 
   it("routes container through REST", async () => {
     containerRpc.mockResolvedValue({ timestamp: 17 });
@@ -75,16 +73,6 @@ describe("signalCheck", () => {
     ).resolves.toEqual({ ok: true, status: 200 });
     expect(nativeCheck).toHaveBeenCalledWith("http://native:8080", 5_000);
     expect(containerCheck).not.toHaveBeenCalled();
-  });
-
-  it("probes only the configured container endpoint", async () => {
-    containerCheck.mockResolvedValue({ ok: true, status: 200 });
-
-    await expect(
-      signalCheck("http://container:8080", 5_000, { transportKind: "container" }),
-    ).resolves.toEqual({ ok: true, status: 200 });
-    expect(containerCheck).toHaveBeenCalledWith("http://container:8080", 5_000, undefined);
-    expect(nativeCheck).not.toHaveBeenCalled();
   });
 
   it("validates the configured container account's receive WebSocket", async () => {

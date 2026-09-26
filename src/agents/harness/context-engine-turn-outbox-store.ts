@@ -91,7 +91,7 @@ async function runContextEngineTurnOutboxCommand(
                 },
               );
             try {
-              return await worker.run((scope) => scope.execute(command), assertCurrent);
+              return await worker.execute(command, assertCurrent);
             } finally {
               await worker.close();
             }

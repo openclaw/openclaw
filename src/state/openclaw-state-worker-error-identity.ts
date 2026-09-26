@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
 import { WorkspaceAliasRepointedError } from "../agents/workspace-state-identity.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
@@ -7,6 +8,7 @@ import {
   isStartupMaintenanceKind,
   StartupMaintenanceRequiredError,
 } from "../infra/startup-maintenance-required.js";
+import type { StateDatabaseCoordinatorOwner } from "../infra/state-database-coordinator-owner.js";
 import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import { PluginBlobStoreError } from "../plugin-state/plugin-blob-store.types.js";
 import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
@@ -51,7 +53,11 @@ export type ErrorIdentity =
         | "skill-upload-request"
         | "mcp-oauth-corruption";
     }
-  | { type: "coordinator-contention"; family: CoordinatorFamily }
+  | {
+      type: "coordinator-contention";
+      family: CoordinatorFamily;
+      blockingOwner?: StateDatabaseCoordinatorOwner;
+    }
   | { type: "ownership-metadata"; databasePath: string }
   | { type: "external-ownership"; databasePath: string; managerId: string }
   | { type: "state-lease"; leaseCode: OpenClawStateLeaseErrorCode }
@@ -108,7 +114,11 @@ export function identifyError(error: Error): ErrorIdentity {
     return { type: "skill-upload-request" };
   }
   if (error instanceof StateDatabaseCoordinatorContentionError) {
-    return { type: "coordinator-contention", family: error.family };
+    return {
+      type: "coordinator-contention",
+      family: error.family,
+      ...(error.blockingOwner ? { blockingOwner: { ...error.blockingOwner } } : {}),
+    };
   }
   if (error instanceof SqliteCoordinatorError) {
     return { type: "coordinator" };
@@ -180,6 +190,25 @@ function isBlobOperation(value: unknown): value is PluginBlobStoreError["operati
   );
 }
 
+function isCoordinatorFamily(value: unknown): value is CoordinatorFamily {
+  return value === "gateway-lifecycle" || value === "state-lifecycle" || value === "state-handles";
+}
+
+function isCoordinatorOwner(value: unknown): value is StateDatabaseCoordinatorOwner {
+  return (
+    isRecord(value) &&
+    Object.keys(value).every((key) => ["pid", "startTime", "command", "family"].includes(key)) &&
+    typeof value.pid === "number" &&
+    Number.isSafeInteger(value.pid) &&
+    value.pid > 0 &&
+    typeof value.startTime === "number" &&
+    Number.isFinite(value.startTime) &&
+    value.startTime >= 0 &&
+    typeof value.command === "string" &&
+    isCoordinatorFamily(value.family)
+  );
+}
+
 export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | undefined {
   switch (node.type) {
     case "worker-session-already-attached":
@@ -215,10 +244,13 @@ export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | un
         ? { type: node.type, reason: node.reason, missingTables: [...node.missingTables] }
         : undefined;
     case "coordinator-contention":
-      return node.family === "gateway-lifecycle" ||
-        node.family === "state-lifecycle" ||
-        node.family === "state-handles"
-        ? { type: node.type, family: node.family }
+      return isCoordinatorFamily(node.family) &&
+        (node.blockingOwner === undefined || isCoordinatorOwner(node.blockingOwner))
+        ? {
+            type: node.type,
+            family: node.family,
+            ...(node.blockingOwner ? { blockingOwner: { ...node.blockingOwner } } : {}),
+          }
         : undefined;
     case "ownership-metadata":
       return typeof node.databasePath === "string"
@@ -295,7 +327,7 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
     case "coordinator":
       return new SqliteCoordinatorError(node.message);
     case "coordinator-contention":
-      return new StateDatabaseCoordinatorContentionError(node.family);
+      return new StateDatabaseCoordinatorContentionError(node.family, node.blockingOwner);
     case "ownership":
       return new OpenClawStateOwnershipError(node.message);
     case "ownership-metadata":

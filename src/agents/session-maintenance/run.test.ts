@@ -1,7 +1,13 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { buildEmbeddedRunBaseParams } from "../../auto-reply/reply/agent-runner-run-params.js";
 import { createTestFollowupRun } from "../../auto-reply/reply/agent-runner.test-fixtures.js";
 import { createSessionMaintenanceFollowup } from "./run.js";
+
+vi.mock("../../utils/provider-utils.js", () => ({
+  isReasoningTagProvider: () => {
+    throw new Error("Prepared runtime hints must not be rediscovered");
+  },
+}));
 
 it("preserves prepared model facts and restrictive policy without foreground authority", async () => {
   const foreground = createTestFollowupRun({
@@ -27,9 +33,6 @@ it("preserves prepared model facts and restrictive policy without foreground aut
     model: "test-model",
     runId: "maintenance-run",
     authProfile: {},
-    isReasoningTagProvider: () => {
-      throw new Error("Prepared runtime hints must not be rediscovered");
-    },
   });
   expect(embedded.modelHasVision).toBe(true);
   expect(embedded.conversationToolPolicy).toEqual({ deny: ["read"] });

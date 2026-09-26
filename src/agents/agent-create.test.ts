@@ -163,9 +163,6 @@ describe("createAgent", () => {
     { kind: "not-armed", armed: false, detail: "owner-unresolved" },
     { kind: "no-legacy-rows", armed: true },
     { kind: "migrated-in-place", armed: true, canonicalKey: "agent:robby:main" },
-    { kind: "migrated-cross-store", armed: true, canonicalKey: "agent:robby:main" },
-    { kind: "canonical-exists-identical", armed: true, canonicalKey: "agent:robby:main" },
-    { kind: "divergent-canonical", armed: true, canonicalKey: "agent:robby:main" },
     { kind: "divergent-aliases", armed: true, canonicalKey: "agent:robby:main" },
     { kind: "legacy-json-store", armed: true, paths: ["/tmp/sessions.json"] },
     { kind: "store-unreadable", armed: true, paths: ["/tmp/store.sqlite"] },
@@ -638,17 +635,6 @@ describe("createAgent", () => {
       },
     });
     expect(result).toMatchObject({ status: "created", agentId: "researcher" });
-  });
-
-  it("finishes workspace setup before publishing config", async () => {
-    mocks.ensureAgentWorkspace.mockImplementation(async ({ dir }: { dir: string }) => {
-      expect(mocks.persisted).not.toHaveProperty("agents");
-      return { dir, bootstrapPending: true };
-    });
-
-    await createAgent({ name: "researcher" });
-
-    expect(mocks.ensureAgentWorkspace).toHaveBeenCalledOnce();
   });
 
   it("prepares staged config effects after setup and immediately before publication", async () => {

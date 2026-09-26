@@ -9,6 +9,7 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { createGatewayUpdateLifecycle } from "../../infra/update-check-lifecycle.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 
 const mocks = vi.hoisted(() => ({
@@ -44,6 +45,7 @@ vi.mock("../../infra/restart.js", async (original) => ({
 
 let home: TempHomeEnv;
 let lifecycle: ReturnType<typeof createGatewayUpdateLifecycle>;
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 let sha: string;
 
 async function git(...args: string[]) {
@@ -78,7 +80,8 @@ beforeEach(async () => {
   );
   sha = await git("rev-parse", "HEAD");
   await git("checkout", "--detach", sha);
-  lifecycle = createGatewayUpdateLifecycle();
+  scheduler = createTestGatewayScheduler();
+  lifecycle = createGatewayUpdateLifecycle(scheduler);
   mocks.handoff.mockReset().mockImplementation(async (params) => ({
     status: "started",
     pid: 12345,
@@ -91,6 +94,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await lifecycle?.stop();
+  await scheduler?.stop();
   vi.restoreAllMocks();
   await home?.restore();
 });

@@ -11,10 +11,7 @@ function prepareChangedEdit(content: string, edits: Edit[], path: string) {
   return plan;
 }
 
-function getMismatchMessage(
-  content: string,
-  edits: Array<{ oldText: string; newText: string }>,
-): string {
+function getMismatchMessage(content: string, edits: Edit[]): string {
   try {
     prepareFileEdit(content, edits, "test.ts");
   } catch (error) {

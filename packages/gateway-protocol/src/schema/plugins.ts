@@ -372,6 +372,7 @@ export const PluginDiscoveryCategorySchema = closedObject({
   description: NonEmptyString,
   icon: PluginDiscoveryIconKeySchema,
   order: Type.Integer({ minimum: 0 }),
+  pinnedPackages: Type.Optional(Type.Array(NonEmptyString, { uniqueItems: true })),
 });
 
 export const PluginDiscoveryCatalogFactsSchema = closedObject({
@@ -392,6 +393,7 @@ export const PluginDiscoveryCatalogFactsSchema = closedObject({
   trending: Type.Optional(Type.Boolean()),
   featuredRank: Type.Optional(Type.Integer({ minimum: 0 })),
   trendingRank: Type.Optional(Type.Integer({ minimum: 0 })),
+  categoryRanks: Type.Optional(Type.Record(NonEmptyString, Type.Integer({ minimum: 0 }))),
   publishedToClawHub: Type.Optional(Type.Boolean()),
 });
 

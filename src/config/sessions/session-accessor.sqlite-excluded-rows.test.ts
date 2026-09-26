@@ -90,9 +90,13 @@ const readers = [
   {
     name: "cap candidates",
     read: (database: OpenClawAgentDatabase, excludedKeys: ReadonlySet<string>) =>
-      Object.values(readSessionMaintenanceCapCandidates({ database, excludedKeys })).map(
-        (entry) => entry.sessionId,
-      ),
+      Object.values(
+        readSessionMaintenanceCapCandidates({
+          database,
+          overflow: Number.MAX_SAFE_INTEGER,
+          excludedKeys,
+        }),
+      ).map((entry) => entry.sessionId),
   },
 ];
 
@@ -238,9 +242,13 @@ describe("SQLite exclusion survivor semantics", () => {
             metadata.label = "\uFFFD\uFFFD";
           }
         }
-        expect(readSessionMaintenanceCapCandidates({ database, excludedKeys: new Set() })).toEqual(
-          metadata ? { [key]: metadata } : {},
-        );
+        expect(
+          readSessionMaintenanceCapCandidates({
+            database,
+            overflow: Number.MAX_SAFE_INTEGER,
+            excludedKeys: new Set(),
+          }),
+        ).toEqual(metadata ? { [key]: metadata } : {});
         expect([...readReferencedSessionIds(database)].toSorted()).toEqual(
           fullEntry ? ["historical", "raw"] : ["raw"],
         );
@@ -265,7 +273,11 @@ describe("SQLite exclusion survivor semantics", () => {
           );
         }
         expect(
-          readSessionMaintenanceCapCandidates({ database, excludedKeys: new Set([key]) }),
+          readSessionMaintenanceCapCandidates({
+            database,
+            overflow: Number.MAX_SAFE_INTEGER,
+            excludedKeys: new Set([key]),
+          }),
         ).toEqual({});
         expect([...readReferencedSessionIds(database, new Set([key]))]).toEqual([]);
         expect(storedBytes.get()?.bytes).toBe(bytesBefore);
@@ -296,9 +308,13 @@ describe("SQLite exclusion survivor semantics", () => {
     const excludedKeys = new Set(["excluded"]);
     expect([...readReferencedSessionIds(database, excludedKeys)]).toEqual(["raw"]);
     expect(readReferencedSessionIds(database, excludedKeys, ["raw"])).toEqual(new Set(["raw"]));
-    expect(readSessionMaintenanceCapCandidates({ database, excludedKeys })).toEqual(
-      readable ? { survivor: JSON.parse(json) } : {},
-    );
+    expect(
+      readSessionMaintenanceCapCandidates({
+        database,
+        overflow: Number.MAX_SAFE_INTEGER,
+        excludedKeys,
+      }),
+    ).toEqual(readable ? { survivor: JSON.parse(json) } : {});
   });
 
   it("retains surviving historical references, including archived entries", () => {
@@ -328,7 +344,13 @@ describe("SQLite exclusion survivor semantics", () => {
     expect([...readReferencedSessionIds(database, excludedKeys)].toSorted()).toEqual(
       ["current", "previous", "family", "checkpoint", "pre", "post"].toSorted(),
     );
-    expect(readSessionMaintenanceCapCandidates({ database, excludedKeys })).toEqual({});
+    expect(
+      readSessionMaintenanceCapCandidates({
+        database,
+        overflow: Number.MAX_SAFE_INTEGER,
+        excludedKeys,
+      }),
+    ).toEqual({});
   });
 });
 

@@ -37,37 +37,49 @@ export function mirrorStatStamp(stat: Stats) {
   ].join(":");
 }
 
+function mirrorArtifact(path: string) {
+  return [".crabbox/runs", ".crabbox/captures"].some(
+    (root) => path === root || path.startsWith(root + "/"),
+  );
+}
+
+export function recordMirrorEntry(entries: Map<string, string>, path: string, stat: Stats) {
+  if (mirrorArtifact(path)) {
+    return;
+  }
+  // Native sync may refresh its index; selection/candidate indexes stay sealed.
+  if (path === ".git/index") {
+    if (!stat.isFile() || stat.nlink !== 1) {
+      throw new Error("source mirror index is not a private regular file");
+    }
+    entries.set(path, "mutable-index");
+  } else if (stat.isDirectory()) {
+    if (path !== ".crabbox") {
+      entries.set(path, `dir:${stat.dev}:${stat.ino}:${stat.mode}`);
+    }
+  } else if (stat.isFile() || stat.isSymbolicLink()) {
+    entries.set(path, mirrorStatStamp(stat));
+  } else {
+    throw new Error("source mirror contains an unsupported file kind");
+  }
+}
+
 function payloadInventory(directory: string) {
   const entries = new Map<string, string>();
   let objectBytes = 0;
   function walk(parent: string) {
     for (const name of readdirSync(join(directory, parent))) {
       const path = parent ? `${parent}/${name}` : name;
-      // Native sync may refresh its index; the sealed selection/candidate indexes
-      // are separate files. Run outputs belong to staging's preservation owner.
-      if (path === ".crabbox/runs" || path === ".crabbox/captures") {
+      // Run outputs belong to staging's preservation owner.
+      if (mirrorArtifact(path)) {
         continue;
       }
       const stat = lstatSync(join(directory, path));
-      if (path === ".git/index") {
-        if (!stat.isFile() || stat.nlink !== 1) {
-          throw new Error("source mirror index is not a private regular file");
-        }
-        entries.set(path, "mutable-index");
-        continue;
-      }
+      recordMirrorEntry(entries, path, stat);
       if (stat.isDirectory()) {
-        if (path !== ".crabbox") {
-          entries.set(path, `dir:${stat.dev}:${stat.ino}:${stat.mode}`);
-        }
         walk(path);
-      } else if (stat.isFile() || stat.isSymbolicLink()) {
-        entries.set(path, mirrorStatStamp(stat));
-        if (path.startsWith(".git/objects/")) {
-          objectBytes += stat.size;
-        }
-      } else {
-        throw new Error("source mirror contains an unsupported file kind");
+      } else if (path.startsWith(".git/objects/")) {
+        objectBytes += stat.size;
       }
     }
   }
@@ -153,8 +165,9 @@ export function openSourceMirror(
     files,
     tracked: metadata?.tracked,
     close,
-    save(next: Map<string, MirrorFile>, tracked: string) {
-      const inventory = payloadInventory(directory).entries;
+    save(next: Map<string, MirrorFile>, tracked: string, inventory: Map<string, string>) {
+      // Staging's final payload walk supplies these fresh observations. No payload
+      // writes may follow it; both seals describe the same frozen filesystem.
       for (const [path, file] of next) {
         if (inventory.get(path) !== file.stamp) {
           throw new Error(

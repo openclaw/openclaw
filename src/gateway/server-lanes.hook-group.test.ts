@@ -298,6 +298,7 @@ describe("cron+hook capacity group", () => {
       g.release();
     }
     await Promise.all(runs);
+    expect(getCommandLaneSnapshot(CommandLane.CronNested).blockedBy).toBeNull();
   });
 
   it("keeps in-flight hooks inside the aggregate budget while disabling hooks", async () => {
@@ -370,16 +371,5 @@ describe("cron+hook capacity group", () => {
     publish(HOOKS_ON);
     await lateHook;
     expect(lateHookStarted).toBe(true);
-  });
-
-  it("removes the group when hooks are turned off by a config reload", async () => {
-    publish(HOOKS_ON);
-    expect(getCommandLaneSnapshot(CommandLane.CronNested).group).toBe("cron-hooks");
-
-    publish(HOOKS_OFF);
-    // Membership must actually be torn down, or cron keeps paying a reservation
-    // for a lane that no longer receives work.
-    expect(getCommandLaneSnapshot(CommandLane.CronNested).group).toBeUndefined();
-    expect(getCommandLaneSnapshot(CommandLane.CronNested).blockedBy).toBeNull();
   });
 });

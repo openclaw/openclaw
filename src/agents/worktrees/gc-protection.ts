@@ -1,31 +1,43 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { inspectManagedWorktreeCheckout } from "./checkout-inspection.js";
+import { deferWorktreeGcRecord, type WorktreeCleanupOwnerPolicy } from "./gc-removal.js";
 import type { createWorktreeLockPrefilter } from "./git-lock.js";
-import type { ManagedWorktreeRecord, ManagedWorktreeOwnerKind } from "./types.js";
+import type { ManagedWorktreeRecord } from "./types.js";
 
 export async function autoRemovalProtectionReason(
   record: ManagedWorktreeRecord,
   isLocked: ReturnType<typeof createWorktreeLockPrefilter>,
   hasLiveLease: (id: string) => boolean,
   context: { env: NodeJS.ProcessEnv; getConfig: () => OpenClawConfig },
-  shouldProtectOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean,
+  policy: WorktreeCleanupOwnerPolicy = {},
 ): Promise<string | undefined> {
+  if (record.gcProtection) {
+    if (!policy.retryDeferred) {
+      return record.gcProtection;
+    }
+    await deferWorktreeGcRecord(context.env, record, null);
+  }
   if (
     record.ownerId !== undefined &&
-    shouldProtectOwner?.(record.ownerKind, record.ownerId) === true
+    policy.shouldProtectOwner?.(record.ownerKind, record.ownerId) === true
   ) {
     return "owner is active";
   }
   if (hasLiveLease(record.id)) {
     return "run lease is active";
   }
+  if (await isLocked(record)) {
+    return "worktree has a live or foreign lock";
+  }
   const provisioned = await inspectManagedWorktreeCheckout(record, "provisioned", context);
   if (provisioned.retainedReason !== undefined) {
     return `provisioned checkout state is ${provisioned.retainedReason}`;
   }
-  if (await isLocked(record)) {
-    return "worktree has a live or foreign lock";
-  }
   const nested = await inspectManagedWorktreeCheckout(record, "nested-repository", context);
-  return nested.retainedReason === undefined ? undefined : "worktree contains a nested repository";
+  if (nested.retainedReason !== undefined) {
+    const reason = "worktree contains a nested repository";
+    await deferWorktreeGcRecord(context.env, record, reason);
+    return reason;
+  }
+  return undefined;
 }

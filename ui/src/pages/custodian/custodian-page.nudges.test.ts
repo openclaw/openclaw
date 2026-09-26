@@ -15,6 +15,21 @@ function createHealthyRequest() {
   });
 }
 
+async function mountCaretaker(request = createHealthyRequest()) {
+  const harness = createContext(request);
+  const { page } = await mountPage(harness.context, { onboarding: false });
+  await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+  return {
+    ...harness,
+    page,
+    request,
+    emitHealth: async (payload: unknown) => {
+      harness.emitGatewayEvent({ event: "health", payload });
+      await page.updateComplete;
+    },
+  };
+}
+
 function rejectAfterSend(
   _method: unknown,
   _params: unknown,
@@ -35,247 +50,155 @@ describe("custodian page nudges", () => {
   });
 
   it("shows a channel-error nudge but ignores routine events", async () => {
-    const request = createHealthyRequest();
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitGatewayEvent, emitHealth } = await mountCaretaker();
 
     emitGatewayEvent({ event: "tick", payload: { ts: Date.now() } });
     await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")).toBeNull();
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channels: {
-          telegram: {
-            enabled: false,
-            accounts: {
-              default: {
-                configured: true,
-                enabled: false,
-                running: true,
-                connected: false,
-              },
+    await emitHealth({
+      channels: {
+        telegram: {
+          enabled: false,
+          accounts: {
+            default: {
+              configured: true,
+              enabled: false,
+              running: true,
+              connected: false,
             },
           },
         },
       },
     });
-    await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")).toBeNull();
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channelLabels: { telegram: "Telegram" },
-        channels: {
-          telegram: {
-            enabled: false,
-            accounts: {
-              default: { configured: true, enabled: false, connected: false },
-              work: { configured: true, enabled: true, running: true, connected: false },
-            },
+    await emitHealth({
+      channelLabels: { telegram: "Telegram" },
+      channels: {
+        telegram: {
+          enabled: false,
+          accounts: {
+            default: { configured: true, enabled: false, connected: false },
+            work: { configured: true, enabled: true, running: true, connected: false },
           },
         },
       },
     });
-    await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")?.textContent).toContain(
       "Telegram just disconnected",
-    );
-  });
-
-  it("shows configuration reload failures from health snapshots", async () => {
-    const request = createHealthyRequest();
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-
-    emitGatewayEvent({
-      event: "health",
-      payload: { configReload: { hotReloadStatus: "disabled" }, channels: {} },
-    });
-    await page.updateComplete;
-
-    expect(page.querySelector(".custodian__nudge")?.textContent).toContain(
-      "Configuration reload stopped",
     );
   });
 
   it("does not report an intentionally stopped channel as disconnected", async () => {
-    const request = createHealthyRequest();
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitHealth } = await mountCaretaker();
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channels: {
-          telegram: {
-            configured: true,
-            enabled: true,
-            running: false,
-            connected: false,
-            healthState: "not-running",
-            restartPending: false,
-            reconnectAttempts: 0,
-            lastStopAt: 1_700_000_000_000,
-            lastError: "connection closed during the previous run",
-          },
+    await emitHealth({
+      channels: {
+        telegram: {
+          configured: true,
+          enabled: true,
+          running: false,
+          connected: false,
+          healthState: "not-running",
+          restartPending: false,
+          reconnectAttempts: 0,
+          lastStopAt: 1_700_000_000_000,
+          lastError: "connection closed during the previous run",
         },
       },
     });
-    await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")).toBeNull();
   });
 
   it("does not report a recovered channel with a retained error", async () => {
-    const request = createHealthyRequest();
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitHealth } = await mountCaretaker();
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channels: {
-          telegram: {
-            configured: true,
-            enabled: true,
-            running: true,
-            healthState: "healthy",
-            lastError: "connection closed during the previous run",
-          },
+    await emitHealth({
+      channels: {
+        telegram: {
+          configured: true,
+          enabled: true,
+          running: true,
+          healthState: "healthy",
+          lastError: "connection closed during the previous run",
         },
       },
     });
-    await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")).toBeNull();
   });
 
   it("reports a channel that fails before its first start", async () => {
-    const request = createHealthyRequest();
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitHealth } = await mountCaretaker();
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channelLabels: { telegram: "Telegram" },
-        channels: {
-          telegram: {
-            configured: true,
-            enabled: true,
-            running: false,
-            connected: false,
-            restartPending: false,
-            reconnectAttempts: 0,
-            healthState: "not-running",
-            lastError: "failed to initialize transport",
-          },
+    await emitHealth({
+      channelLabels: { telegram: "Telegram" },
+      channels: {
+        telegram: {
+          configured: true,
+          enabled: true,
+          running: false,
+          connected: false,
+          restartPending: false,
+          reconnectAttempts: 0,
+          healthState: "not-running",
+          lastError: "failed to initialize transport",
         },
       },
     });
-    await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")?.textContent).toContain("Telegram is degraded");
   });
 
   it("reports a failed restart after an earlier clean stop", async () => {
-    const request = createHealthyRequest();
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitHealth } = await mountCaretaker();
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channelLabels: { telegram: "Telegram" },
-        channels: {
-          telegram: {
-            configured: true,
-            enabled: true,
-            running: false,
-            restartPending: false,
-            reconnectAttempts: 0,
-            healthState: "not-running",
-            lastStopAt: 1_700_000_000_000,
-            lastStartAt: 1_700_000_001_000,
-            lastError: "failed to initialize transport",
-          },
+    await emitHealth({
+      channelLabels: { telegram: "Telegram" },
+      channels: {
+        telegram: {
+          configured: true,
+          enabled: true,
+          running: false,
+          restartPending: false,
+          reconnectAttempts: 0,
+          healthState: "not-running",
+          lastStopAt: 1_700_000_000_000,
+          lastStartAt: 1_700_000_001_000,
+          lastError: "failed to initialize transport",
         },
       },
     });
-    await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")?.textContent).toContain("Telegram is degraded");
   });
 
   it("reports a current failed probe for an intentionally stopped channel", async () => {
-    const request = createHealthyRequest();
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitHealth } = await mountCaretaker();
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channelLabels: { telegram: "Telegram" },
-        channels: {
-          telegram: {
-            configured: true,
-            enabled: true,
-            running: false,
-            restartPending: false,
-            reconnectAttempts: 0,
-            healthState: "not-running",
-            lastStopAt: 1_700_000_001_000,
-            lastStartAt: 1_700_000_000_000,
-            probe: { ok: false },
-          },
+    await emitHealth({
+      channelLabels: { telegram: "Telegram" },
+      channels: {
+        telegram: {
+          configured: true,
+          enabled: true,
+          running: false,
+          restartPending: false,
+          reconnectAttempts: 0,
+          healthState: "not-running",
+          lastStopAt: 1_700_000_001_000,
+          lastStartAt: 1_700_000_000_000,
+          probe: { ok: false },
         },
       },
     });
-    await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")?.textContent).toContain("Telegram is degraded");
   });
 
-  it("shows a channel disconnect from the aggregate health row", async () => {
-    const request = createHealthyRequest();
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channelLabels: { telegram: "Telegram" },
-        channels: {
-          telegram: { configured: true, running: true, connected: false },
-        },
-      },
-    });
-    await page.updateComplete;
-
-    expect(page.querySelector(".custodian__nudge")?.textContent).toContain(
-      "Telegram just disconnected",
-    );
-  });
-
   it("keeps a pending event nudge across a transient disconnect and reconnect", async () => {
-    const request = createHealthyRequest();
-    const { context, emitGatewayEvent, setGatewaySnapshot } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { request, page, setGatewaySnapshot, emitHealth } = await mountCaretaker();
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channels: { telegram: { configured: true, running: true, connected: false } },
-      },
+    await emitHealth({
+      channels: { telegram: { configured: true, running: true, connected: false } },
     });
-    await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")).not.toBeNull();
 
     setGatewaySnapshot({ phase: "reconnecting" });
@@ -289,19 +212,12 @@ describe("custodian page nudges", () => {
   });
 
   it("clears a pending event nudge when gateway ownership changes", async () => {
-    const request = createHealthyRequest();
-    const { context, emitGatewayEvent, setGatewaySnapshot, setGatewayToken } =
-      createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { request, page, setGatewaySnapshot, setGatewayToken, emitHealth } =
+      await mountCaretaker();
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channels: { telegram: { configured: true, running: true, connected: false } },
-      },
+    await emitHealth({
+      channels: { telegram: { configured: true, running: true, connected: false } },
     });
-    await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")).not.toBeNull();
 
     setGatewayToken("new-operator-token");
@@ -312,112 +228,67 @@ describe("custodian page nudges", () => {
     await waitForFast(() => expect(page.querySelector(".custodian__nudge")).toBeNull());
     expect(request).toHaveBeenCalledTimes(2);
 
-    emitGatewayEvent({
-      event: "health",
-      payload: { configReload: { hotReloadStatus: "disabled" }, channels: {} },
-    });
-    await page.updateComplete;
+    await emitHealth({ configReload: { hotReloadStatus: "disabled" }, channels: {} });
     expect(page.querySelector(".custodian__nudge")?.textContent).toContain(
       "Configuration reload stopped",
     );
   });
 
   it("dismisses event nudges for the rest of the page visit", async () => {
-    const request = createHealthyRequest();
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { request, page, emitHealth } = await mountCaretaker();
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channels: { telegram: { configured: true, running: true, connected: false } },
-      },
+    await emitHealth({
+      channels: { telegram: { configured: true, running: true, connected: false } },
     });
-    await page.updateComplete;
     page.querySelector<HTMLButtonElement>(".custodian__nudge-dismiss")!.click();
     await page.updateComplete;
 
-    emitGatewayEvent({
-      event: "health",
-      payload: { configReload: { hotReloadStatus: "disabled" }, channels: {} },
-    });
-    await page.updateComplete;
+    await emitHealth({ configReload: { hotReloadStatus: "disabled" }, channels: {} });
     expect(page.querySelector(".custodian__nudge")).toBeNull();
     expect(request).toHaveBeenCalledOnce();
   });
 
   it("replaces a pending nudge with the latest health failure", async () => {
-    const request = createHealthyRequest();
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitHealth } = await mountCaretaker();
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channelLabels: { telegram: "Telegram" },
-        channels: { telegram: { configured: true, healthState: "stale-socket" } },
-      },
+    await emitHealth({
+      channelLabels: { telegram: "Telegram" },
+      channels: { telegram: { configured: true, healthState: "stale-socket" } },
     });
-    await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")?.textContent).toContain("Telegram is degraded");
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channelLabels: { discord: "Discord" },
-        channels: { discord: { configured: true, healthState: "stale-socket" } },
-      },
+    await emitHealth({
+      channelLabels: { discord: "Discord" },
+      channels: { discord: { configured: true, healthState: "stale-socket" } },
     });
-    await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")?.textContent).toContain("Discord is degraded");
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channelLabels: { discord: "Discord" },
-        channels: { discord: { configured: true, running: true, connected: false } },
-      },
+    await emitHealth({
+      channelLabels: { discord: "Discord" },
+      channels: { discord: { configured: true, running: true, connected: false } },
     });
-    await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")?.textContent).toContain(
       "Discord just disconnected",
     );
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channelLabels: { telegram: "Telegram" },
-        channels: { telegram: { configured: true, healthState: "stale-socket" } },
-      },
+    await emitHealth({
+      channelLabels: { telegram: "Telegram" },
+      channels: { telegram: { configured: true, healthState: "stale-socket" } },
     });
-    await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")?.textContent).toContain("Telegram is degraded");
   });
 
   it("clears a pending nudge when health recovers", async () => {
-    const request = createHealthyRequest();
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitHealth } = await mountCaretaker();
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channels: { telegram: { configured: true, running: true, connected: false } },
-      },
+    await emitHealth({
+      channels: { telegram: { configured: true, running: true, connected: false } },
     });
-    await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")).not.toBeNull();
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channels: { telegram: { configured: true, running: true, connected: true } },
-      },
+    await emitHealth({
+      channels: { telegram: { configured: true, running: true, connected: true } },
     });
-    await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")).toBeNull();
   });
 
@@ -435,20 +306,14 @@ describe("custodian page nudges", () => {
         reply: "Inspecting the channel failure.",
         action: "none",
       });
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitHealth } = await mountCaretaker(request);
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channelLabels: { telegram: "Telegram" },
-        channels: {
-          telegram: { configured: true, tokenStatus: "configured_unavailable" },
-        },
+    await emitHealth({
+      channelLabels: { telegram: "Telegram" },
+      channels: {
+        telegram: { configured: true, tokenStatus: "configured_unavailable" },
       },
     });
-    await page.updateComplete;
     page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
@@ -466,19 +331,13 @@ describe("custodian page nudges", () => {
       sensitive: true,
       action: "none",
     });
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitHealth } = await mountCaretaker(request);
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channels: {
-          discord: { configured: true, tokenStatus: "configured_unavailable" },
-        },
+    await emitHealth({
+      channels: {
+        discord: { configured: true, tokenStatus: "configured_unavailable" },
       },
     });
-    await page.updateComplete;
     const action = page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!;
     expect(action.disabled).toBe(true);
     action.click();
@@ -501,17 +360,11 @@ describe("custodian page nudges", () => {
         isOther: false,
       },
     });
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitHealth } = await mountCaretaker(request);
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channels: { discord: { configured: true, tokenStatus: "configured_unavailable" } },
-      },
+    await emitHealth({
+      channels: { discord: { configured: true, tokenStatus: "configured_unavailable" } },
     });
-    await page.updateComplete;
     const action = page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!;
     expect(action.disabled).toBe(true);
     action.click();
@@ -528,17 +381,11 @@ describe("custodian page nudges", () => {
       action: "none",
       wizardInputPending: true,
     });
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitHealth } = await mountCaretaker(request);
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channels: { discord: { configured: true, tokenStatus: "configured_unavailable" } },
-      },
+    await emitHealth({
+      channels: { discord: { configured: true, tokenStatus: "configured_unavailable" } },
     });
-    await page.updateComplete;
     const action = page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!;
     expect(action.disabled).toBe(true);
     action.click();
@@ -567,17 +414,11 @@ describe("custodian page nudges", () => {
       .mockRejectedValueOnce(
         new GatewayRequestError({ code: "INVALID_REQUEST", message: "Request failed" }),
       );
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitHealth } = await mountCaretaker(request);
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channels: { discord: { configured: true, tokenStatus: "configured_unavailable" } },
-      },
+    await emitHealth({
+      channels: { discord: { configured: true, tokenStatus: "configured_unavailable" } },
     });
-    await page.updateComplete;
     page.querySelector<HTMLButtonElement>(".option-card__skip")!.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
@@ -622,17 +463,11 @@ describe("custodian page nudges", () => {
       .mockRejectedValueOnce(
         new GatewayRequestError({ code: "INVALID_REQUEST", message: "Request failed" }),
       );
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitHealth } = await mountCaretaker(request);
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channels: { discord: { configured: true, tokenStatus: "configured_unavailable" } },
-      },
+    await emitHealth({
+      channels: { discord: { configured: true, tokenStatus: "configured_unavailable" } },
     });
-    await page.updateComplete;
     page.querySelector<HTMLButtonElement>(".option-card__skip")!.click();
 
     await waitForFast(() => expect(page.querySelector('[role="alert"]')).not.toBeNull());
@@ -657,17 +492,11 @@ describe("custodian page nudges", () => {
         },
       })
       .mockImplementationOnce(rejectAfterSend);
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitHealth } = await mountCaretaker(request);
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channels: { discord: { configured: true, tokenStatus: "configured_unavailable" } },
-      },
+    await emitHealth({
+      channels: { discord: { configured: true, tokenStatus: "configured_unavailable" } },
     });
-    await page.updateComplete;
     const input = page.querySelector<HTMLTextAreaElement>(
       ".agent-chat__composer-combobox textarea",
     )!;
@@ -720,17 +549,11 @@ describe("custodian page nudges", () => {
         action: "none",
       });
     });
-    const { context, emitGatewayEvent, setGatewaySnapshot } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, setGatewaySnapshot, emitHealth } = await mountCaretaker(request);
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channels: { discord: { configured: true, tokenStatus: "configured_unavailable" } },
-      },
+    await emitHealth({
+      channels: { discord: { configured: true, tokenStatus: "configured_unavailable" } },
     });
-    await page.updateComplete;
     page.querySelector<HTMLButtonElement>(".option-card__skip")!.click();
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
 
@@ -766,20 +589,14 @@ describe("custodian page nudges", () => {
       .mockRejectedValueOnce(
         new GatewayRequestError({ code: "INVALID_REQUEST", message: "Request failed" }),
       );
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitHealth } = await mountCaretaker(request);
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channelLabels: { telegram: "Telegram" },
-        channels: {
-          telegram: { configured: true, tokenStatus: "configured_unavailable" },
-        },
+    await emitHealth({
+      channelLabels: { telegram: "Telegram" },
+      channels: {
+        telegram: { configured: true, tokenStatus: "configured_unavailable" },
       },
     });
-    await page.updateComplete;
     page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
@@ -805,9 +622,7 @@ describe("custodian page nudges", () => {
             resolveNudge = resolve;
           }),
       );
-    const { context, emitGatewayEvent, setGatewaySnapshot } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitGatewayEvent, setGatewaySnapshot } = await mountCaretaker(request);
     const degradedHealth = {
       channels: { telegram: { configured: true, healthState: "stale-socket" } },
     };
@@ -845,9 +660,7 @@ describe("custodian page nudges", () => {
         options?.onSent?.();
         return Promise.reject(new Error("gateway closed"));
       });
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitGatewayEvent } = await mountCaretaker(request);
     const degradedHealth = {
       channels: { telegram: { configured: true, healthState: "stale-socket" } },
     };
@@ -878,20 +691,14 @@ describe("custodian page nudges", () => {
             resolveNudge = resolve;
           }),
       );
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitGatewayEvent, emitHealth } = await mountCaretaker(request);
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channelLabels: { telegram: "Telegram" },
-        channels: {
-          telegram: { configured: true, tokenStatus: "configured_unavailable" },
-        },
+    await emitHealth({
+      channelLabels: { telegram: "Telegram" },
+      channels: {
+        telegram: { configured: true, tokenStatus: "configured_unavailable" },
       },
     });
-    await page.updateComplete;
     page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!.click();
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
 
@@ -928,9 +735,7 @@ describe("custodian page nudges", () => {
             resolveNudge = resolve;
           }),
       );
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitGatewayEvent } = await mountCaretaker(request);
     const telegramFailure = {
       channelLabels: { telegram: "Telegram" },
       channels: { telegram: { configured: true, running: true, connected: false } },
@@ -960,43 +765,6 @@ describe("custodian page nudges", () => {
     expect(page.querySelector(".custodian__nudge")).toBeNull();
   });
 
-  it("consumes a nudge after an unchanged health snapshot arrives while sending", async () => {
-    let resolveNudge!: (value: { sessionId: string; reply: string; action: "none" }) => void;
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-        reply: "Everything is healthy.",
-        action: "none",
-      })
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveNudge = resolve;
-          }),
-      );
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-    const degradedHealth = {
-      channels: { telegram: { configured: true, healthState: "stale-socket" } },
-    };
-
-    emitGatewayEvent({ event: "health", payload: degradedHealth });
-    await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!.click();
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-
-    emitGatewayEvent({ event: "health", payload: degradedHealth });
-    resolveNudge({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Telegram checked.",
-      action: "none",
-    });
-
-    await waitForFast(() => expect(page.querySelector(".custodian__nudge")).toBeNull());
-  });
-
   it("does not restore a failed nudge after health recovers while sending", async () => {
     let rejectNudge!: (error: Error) => void;
     const request = vi
@@ -1012,17 +780,11 @@ describe("custodian page nudges", () => {
             rejectNudge = reject;
           }),
       );
-    const { context, emitGatewayEvent } = createContext(request);
-    const { page } = await mountPage(context, { onboarding: false });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { page, emitGatewayEvent, emitHealth } = await mountCaretaker(request);
 
-    emitGatewayEvent({
-      event: "health",
-      payload: {
-        channels: { telegram: { configured: true, running: true, connected: false } },
-      },
+    await emitHealth({
+      channels: { telegram: { configured: true, running: true, connected: false } },
     });
-    await page.updateComplete;
     page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!.click();
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
 

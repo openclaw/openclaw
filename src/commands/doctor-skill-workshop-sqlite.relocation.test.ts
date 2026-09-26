@@ -4,14 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderProposalMarkdown } from "../skills/workshop/frontmatter.js";
 import { inspectSkillProposal, listSkillProposals } from "../skills/workshop/service.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
-import {
-  hashSkillProposalContent,
-  importLegacySkillProposal,
-  readSkillProposalRollback,
-} from "../skills/workshop/store.js";
+import { hashSkillProposalContent, readSkillProposalRollback } from "../skills/workshop/store.js";
 import {
   SKILL_WORKSHOP_ROLLBACK_SCHEMA,
-  SKILL_WORKSHOP_SCHEMA,
   type SkillProposalRecord,
   type SkillProposalRollback,
 } from "../skills/workshop/types.js";
@@ -49,68 +44,6 @@ afterEach(async () => {
 });
 
 describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
-  it("moves an applied legacy skill into the Workshop directory and converges", async () => {
-    const workspaceDir = await fs.realpath(
-      await tempDirs.make("openclaw-workshop-relocation-workspace-"),
-    );
-    const proposalId = "relocate-workshop-20260901-1234567890";
-    const legacySkillDir = path.join(workspaceDir, "skills", "relocate-workshop");
-    const legacySkillFile = path.join(legacySkillDir, "SKILL.md");
-    const skillContent =
-      "---\nname: relocate-workshop\ndescription: Relocated procedure\n---\n\n# Relocated\n";
-    const record = createAppliedLegacyProposal({
-      id: proposalId,
-      title: "Create Relocated Workshop",
-      description: "Relocated procedure",
-      content: skillContent,
-      target: { skillKey: "relocate-workshop", skillDir: legacySkillDir },
-    });
-    await fs.mkdir(legacySkillDir, { recursive: true });
-    await fs.writeFile(legacySkillFile, skillContent, "utf8");
-    await importLegacySkillProposal({
-      record,
-      ownerAgentId: "main",
-      store: { env: testState.env },
-    });
-
-    await expect(
-      inspectLegacySkillWorkshopMigration({ config: {}, env: testState.env }),
-    ).resolves.toEqual({
-      externalProposalCount: 1,
-      externalProposalDetails: expect.any(Array),
-      externalProposalCountsByAgent: { main: 1 },
-      legacyBackupRootCount: 0,
-      preservedLegacyBackupRootCount: 0,
-    });
-    await expect(fs.access(legacySkillFile)).resolves.toBeUndefined();
-
-    const first = await migrateLegacySkillWorkshopProposals({
-      config: {},
-      env: testState.env,
-    });
-    expect(first.changes.join("\n")).toContain(
-      "Relocated 1 Skill Workshop skill, retargeted 1 proposal, marked 0 stale",
-    );
-    const workshopSkillFile = path.join(
-      resolveWorkshopSkillsDir({}, "main", testState.env),
-      "relocate-workshop",
-      "SKILL.md",
-    );
-    await expect(fs.readFile(workshopSkillFile, "utf8")).resolves.toBe(skillContent);
-    await expect(fs.access(legacySkillDir)).rejects.toThrow();
-    await expect(
-      readSkillProposalRecord(proposalId, { env: testState.env }),
-    ).resolves.toMatchObject({
-      target: {
-        skillDir: path.dirname(workshopSkillFile),
-        skillFile: workshopSkillFile,
-        source: "openclaw-workshop",
-      },
-    });
-
-    await expectWorkshopMigrationConverged({ env: testState.env });
-  });
-
   it("retargets a pending update for a relocated applied skill", async () => {
     const workspaceDir = await fs.realpath(
       await tempDirs.make("openclaw-workshop-relocation-update-workspace-"),
@@ -445,15 +378,21 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       date: now,
     });
     const record: SkillProposalRecord = {
-      schema: SKILL_WORKSHOP_SCHEMA,
-      id: proposalId,
-      kind: "create",
+      ...createAppliedLegacyProposal({
+        id: proposalId,
+        title: "Create Legacy Workshop",
+        description: "Migrate the legacy proposal store",
+        createdAt: now,
+        createdBy: "cli",
+        content,
+        target: {
+          skillName: "Legacy Workshop",
+          skillKey: "legacy-workshop",
+          skillDir: targetDir,
+        },
+      }),
       status: "pending",
-      title: "Create Legacy Workshop",
-      description: "Migrate the legacy proposal store",
-      createdAt: now,
-      updatedAt: now,
-      createdBy: "cli",
+      appliedAt: undefined,
       origin: {
         sessionKey: "agent:main:legacy-workshop",
         runId: "legacy-run",
@@ -461,24 +400,6 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       },
       originRunIds: ["legacy-run", "revision-run"],
       originRunMutationCounts: { "legacy-run": 1, "revision-run": 2 },
-      proposedVersion: "v1",
-      draftFile: "PROPOSAL.md",
-      draftHash: hashSkillProposalContent(content),
-      target: {
-        skillName: "Legacy Workshop",
-        skillKey: "legacy-workshop",
-        skillDir: targetDir,
-        skillFile: path.join(targetDir, "SKILL.md"),
-        source: "openclaw-workspace",
-      },
-      scan: {
-        state: "clean",
-        scannedAt: now,
-        critical: 0,
-        warn: 0,
-        info: 0,
-        findings: [],
-      },
     };
     const previousSupportContent = "\n".repeat(256 * 1024);
     const rollback: SkillProposalRollback = {

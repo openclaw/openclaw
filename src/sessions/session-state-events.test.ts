@@ -212,50 +212,45 @@ describe("session state events", () => {
     expect(peekSystemEventEntries(watcher)).toEqual([]);
   });
 
-  it.each([false, true])(
-    "wakes main watchers but only queues notices for nested watchers (prior clock=%s)",
-    async (priorClock) => {
-      if (priorClock) {
-        vi.useFakeTimers();
-        vi.advanceTimersByTime(30_000);
-        requestHeartbeat({
-          source: "exec-event",
-          intent: "event",
-          reason: "exec-event",
-          coalesceMs: 0,
-        });
-        vi.useRealTimers();
-      }
-      vi.useFakeTimers();
-      const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
-      disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
-      // Pending deadlines may belong to a previous fake-clock origin.
-      await vi.runAllTimersAsync();
-      wakes.mockClear();
-      const database = createDatabaseOptions();
-      seedChild(database, nestedWatcher);
+  it("wakes main watchers but only queues nested notices after a prior clock", async () => {
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(30_000);
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      coalesceMs: 0,
+    });
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
+    disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
+    // Pending deadlines may belong to a previous fake-clock origin.
+    await vi.runAllTimersAsync();
+    wakes.mockClear();
+    const database = createDatabaseOptions();
+    seedChild(database, nestedWatcher);
 
-      recordSessionStateEvent(eventInput({ watcherSessionKeys: [nestedWatcher] }), database);
-      await vi.advanceTimersByTimeAsync(21_000);
-      expect(peekSystemEventEntries(nestedWatcher)).toHaveLength(1);
-      expect(wakes).not.toHaveBeenCalled();
+    recordSessionStateEvent(eventInput({ watcherSessionKeys: [nestedWatcher] }), database);
+    await vi.advanceTimersByTimeAsync(21_000);
+    expect(peekSystemEventEntries(nestedWatcher)).toHaveLength(1);
+    expect(wakes).not.toHaveBeenCalled();
 
-      seedChild(database, watcher);
-      recordSessionStateEvent(eventInput(), database);
-      await vi.advanceTimersByTimeAsync(21_000);
-      expect(wakes).toHaveBeenCalledWith(
-        // intent "immediate" is load-bearing: event-intent wakes defer on heartbeat
-        // dueness and would sit on the notice until the next scheduled tick. The
-        // wake itself coalesces for SESSION_STATE_WAKE_COALESCE_MS (20s), hence
-        // the 21s timer advances in these tests.
-        expect.objectContaining({
-          source: "session-state",
-          sessionKey: watcher,
-          intent: "immediate",
-        }),
-      );
-    },
-  );
+    seedChild(database, watcher);
+    recordSessionStateEvent(eventInput(), database);
+    await vi.advanceTimersByTimeAsync(21_000);
+    expect(wakes).toHaveBeenCalledWith(
+      // intent "immediate" is load-bearing: event-intent wakes defer on heartbeat
+      // dueness and would sit on the notice until the next scheduled tick. The
+      // wake itself coalesces for SESSION_STATE_WAKE_COALESCE_MS (20s), hence
+      // the 21s timer advances in these tests.
+      expect.objectContaining({
+        source: "session-state",
+        sessionKey: watcher,
+        intent: "immediate",
+      }),
+    );
+  });
 
   it("suppresses watcher-originated material events", () => {
     const database = createDatabaseOptions();

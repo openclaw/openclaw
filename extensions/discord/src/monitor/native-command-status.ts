@@ -1,8 +1,6 @@
 import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
-import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import type {
   ButtonInteraction,
   CommandInteraction,
@@ -12,6 +10,7 @@ import type { DispatchDiscordCommandInteractionResult } from "./native-command-d
 import {
   deliverDiscordInteractionReply,
   hasRenderableReplyPayload,
+  resolveDiscordInteractionReplyOptions,
 } from "./native-command-reply.js";
 import type { DiscordConfig } from "./native-command.types.js";
 
@@ -57,17 +56,9 @@ export async function maybeDeliverDiscordDirectStatus(params: {
       interaction: params.interaction,
       payload: statusReply,
       mediaLocalRoots: params.mediaLocalRoots,
-      textLimit: resolveTextChunkLimit(params.cfg, "discord", params.accountId, {
-        fallbackLimit: 2000,
-      }),
-      maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({
-        cfg: params.cfg,
-        discordConfig: params.discordConfig,
-        accountId: params.accountId,
-      }),
+      ...resolveDiscordInteractionReplyOptions(params),
       preferFollowUp: params.preferFollowUp,
       responseEphemeral: params.responseEphemeral,
-      chunkMode: resolveChunkMode(params.cfg, "discord", params.accountId),
     });
     return { accepted: true, effectiveRoute: params.effectiveRoute };
   }

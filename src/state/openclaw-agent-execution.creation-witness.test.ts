@@ -7,6 +7,7 @@ import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { readOpenClawAgentDatabaseRegistryToken } from "./openclaw-agent-db-registry-listing.js";
 import { unregisterOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -152,6 +153,57 @@ it.each(["missing", "schema-missing"] as const)(
       await expect(execution.runExisting(source(), async () => "retained")).resolves.toBe(
         "retained",
       );
+      const unrelatedInitialization = vi.fn(() => {
+        throw new Error("A warm borrower must not recapture initialization configuration");
+      });
+      const env = { ...options.env };
+      if (process.platform !== "win32") {
+        Object.defineProperty(env, "UNRELATED_INITIALIZATION", {
+          enumerable: true,
+          get: unrelatedInitialization,
+        });
+      }
+      const warm = captureOpenClawAgentDatabaseExecution({
+        ...options,
+        env,
+      });
+      try {
+        await expect(warm.runExisting(source(), async () => "warm")).resolves.toBe("warm");
+        expect(unrelatedInitialization).not.toHaveBeenCalled();
+      } finally {
+        await warm.release();
+      }
+      const windows = (() => {
+        const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        try {
+          return captureOpenClawAgentDatabaseExecution({
+            ...options,
+            env: {
+              HOME: options.env.OPENCLAW_STATE_DIR,
+              OpenClaw_State_Dir: options.env.OPENCLAW_STATE_DIR,
+            },
+          });
+        } finally {
+          platform.mockRestore();
+        }
+      })();
+      try {
+        await expect(windows.runExisting(source(), async () => "same owner")).resolves.toBe(
+          "same owner",
+        );
+      } finally {
+        await windows.release();
+      }
+      expect(() =>
+        captureOpenClawAgentDatabaseExecution(options, {
+          expectedIdentity: {
+            kind: "file",
+            physicalIdentity: physical.key.slice("file:".length),
+            nativeLocation: physical.canonicalPath,
+            birthtime: (fs.statSync(options.path, { bigint: true }).birthtimeNs + 1n).toString(),
+          },
+        }),
+      ).toThrow(/identity|physical file/);
     } finally {
       await execution.release();
     }
@@ -355,6 +407,85 @@ it("joins native creating admission before releasing its original reservation", 
     await Promise.allSettled([preparing, creator.release(), sibling.release()]);
   }
 });
+
+it("rechecks source authority after registration notification before authorizing native open", async () => {
+  const options = fixture();
+  readOpenClawAgentDatabaseRegistryToken({ env: options.env });
+  const execution = captureOpenClawAgentDatabaseExecution(options);
+  const revoked = new Error("Creation source revoked by its registry notification");
+  let current = true;
+  const authorizedOpen = vi.fn();
+  const requestSource: AgentDatabaseRequestExecutionSource = {
+    assertCurrent() {
+      if (!current) {
+        throw revoked;
+      }
+    },
+    onRegistryChange() {
+      current = false;
+    },
+    createAdmission(binding) {
+      return () => ({
+        nativeLocations: binding.nativeLocations,
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          binding.authorize(request);
+          if (request.stage === "open") {
+            authorizedOpen();
+          }
+          if (!grant()) {
+            throw new Error("Creation source lost admission");
+          }
+        }, binding.attachment),
+      });
+    },
+  };
+  try {
+    await expect(execution.prepare(requestSource)).rejects.toThrow(revoked);
+    expect(authorizedOpen).not.toHaveBeenCalled();
+    expect(fs.existsSync(options.path)).toBe(false);
+  } finally {
+    await execution.release();
+  }
+});
+
+it.skipIf(process.platform === "win32")(
+  "rejects a warm database path replaced by its source callback before granting admission",
+  async () => {
+    const options = fixture();
+    const retainedPath = `${options.path}.retained`;
+    const execution = captureOpenClawAgentDatabaseExecution(options);
+    let replaceOnAssertion = false;
+    let replaced = false;
+    const requestSource = source((request) => {
+      replaceOnAssertion = request.stage === "prepare";
+    });
+    requestSource.assertCurrent = () => {
+      if (replaceOnAssertion && !replaced) {
+        fs.renameSync(options.path, retainedPath);
+        fs.writeFileSync(options.path, "replacement path; not a database");
+        replaced = true;
+      }
+    };
+    try {
+      await execution.prepare(source());
+      await expect(
+        execution.runExisting(requestSource, (scope) =>
+          scope.execute({
+            type: "session.entry.read",
+            input: { sessionKey: "agent:main:missing" },
+          }),
+        ),
+      ).rejects.toThrow(/identity changed/);
+      expect(replaced).toBe(true);
+    } finally {
+      if (replaced) {
+        fs.unlinkSync(options.path);
+        fs.renameSync(retainedPath, options.path);
+      }
+      await execution.release();
+    }
+  },
+);
 
 it("reserves absent first birth and refuses a competitor introduced at the native open boundary", async () => {
   const options = fixture();

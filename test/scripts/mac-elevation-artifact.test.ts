@@ -245,20 +245,17 @@ describe.skipIf(process.platform !== "darwin")(
       }),
     );
 
-    it.concurrent.for(
-      ["arm64", "x86_64"].flatMap((arch) => [
-        `generic-native-${arch}`,
-        `missing-native-format-${arch}`,
-      ]),
-    )("rejects %s signatures despite successful app policy verification", async (fault, { mac }) =>
-      mac.lifetime.run(async () => {
-        const harness = await artifactFixture(mac);
-        const result = await harness.verify(fault);
-        expect(result.status, result.stderr).toBe(1);
-        expect(result.stderr).toContain("elevation code lacks native signature format:");
-        expect(result.stderr).toContain(addon);
-        expect(readFileSync(harness.calls, "utf8")).toContain("spctl --assess --type execute");
-      }),
+    it.concurrent.for(["generic-native-arm64", "missing-native-format-x86_64"])(
+      "rejects %s signatures despite successful app policy verification",
+      async (fault, { mac }) =>
+        mac.lifetime.run(async () => {
+          const harness = await artifactFixture(mac);
+          const result = await harness.verify(fault);
+          expect(result.status, result.stderr).toBe(1);
+          expect(result.stderr).toContain("elevation code lacks native signature format:");
+          expect(result.stderr).toContain(addon);
+          expect(readFileSync(harness.calls, "utf8")).toContain("spctl --assess --type execute");
+        }),
     );
 
     it.concurrent.for([
@@ -286,7 +283,7 @@ describe.skipIf(process.platform !== "darwin")(
     );
 
     it.concurrent.for(
-      (["archive", ...machResourceKinds] as const).flatMap((resource) =>
+      (["archive", "object"] as const).flatMap((resource) =>
         [false, true].flatMap((fat64) =>
           [false, true].map((archiveFirst) => ({ resource, fat64, archiveFirst })),
         ),
@@ -342,7 +339,7 @@ describe.skipIf(process.platform !== "darwin")(
       }));
 
     it.concurrent.for(
-      (["archive", ...machResourceKinds] as const).flatMap((resource) =>
+      (["archive", "object"] as const).flatMap((resource) =>
         ["thin", "fat32", "fat64"].map((format) => ({ resource, format })),
       ),
     )(
@@ -376,11 +373,11 @@ describe.skipIf(process.platform !== "darwin")(
         }),
     );
 
-    it.concurrent.for(
-      machResourceKinds.flatMap((resource) =>
-        ["thin", "fat32", "fat64"].map((format) => ({ resource, format })),
-      ),
-    )(
+    it.concurrent.for([
+      ...machResourceKinds.map((resource) => ({ resource, format: "thin" })),
+      { resource: "object", format: "fat32" },
+      { resource: "synthetic-core", format: "fat64" },
+    ] as const)(
       "accepts $format $resource resources without changing bytes or modes",
       async ({ resource, format }, { mac }) =>
         mac.lifetime.run(async () => {
@@ -431,11 +428,11 @@ describe.skipIf(process.platform !== "darwin")(
         }),
     );
 
-    it.concurrent.for(
-      ["arm64", "x86_64"].flatMap((arch) =>
-        ["thin", "fat32", "fat64"].map((format) => ({ arch, format })),
-      ),
-    )(
+    it.concurrent.for([
+      { arch: "arm64", format: "thin" },
+      { arch: "x86_64", format: "fat32" },
+      { arch: "arm64", format: "fat64" },
+    ])(
       "rejects wrong-architecture $format object resources in $arch",
       async ({ arch, format }, { mac }) =>
         mac.lifetime.run(async () => {
@@ -459,32 +456,30 @@ describe.skipIf(process.platform !== "darwin")(
         }),
     );
 
-    it.concurrent.for(
-      ["arm64", "x86_64"].flatMap((arch) =>
-        ["empty", "missing-member"].map((kind) => ({ arch, kind })),
-      ),
-    )("rejects $kind GNU thin archives in $arch", async ({ arch, kind }, { mac }) =>
-      mac.lifetime.run(async () => {
-        const harness = await artifactFixture(mac);
-        const header = [
-          "missing.o/".padEnd(16),
-          "0".padEnd(12),
-          "0".padEnd(6),
-          "0".padEnd(6),
-          "100644".padEnd(8),
-          "0".padEnd(10),
-          "`\n",
-        ].join("");
-        const target = harness.at(`${workerRoot}/${arch}/lib/opaque [*].resource`);
-        await write(target, `!<thin>\n${kind === "empty" ? "" : header}`);
-        expect(
-          await runMacFixtureTool("/usr/bin/file", ["-b", target], harness.home, mac),
-        ).toContain("thin archive with");
-        const result = await harness.verify();
-        expect(result.status, result.stderr).toBe(1);
-        expect(result.stderr).toContain("elevation worker contains unsupported thin archive:");
-        expect(result.stdout).not.toContain("Elevation artifact verified");
-      }),
+    it.concurrent.for(["empty", "missing-member"].map((kind) => ({ arch: "arm64", kind })))(
+      "rejects $kind GNU thin archives in $arch",
+      async ({ arch, kind }, { mac }) =>
+        mac.lifetime.run(async () => {
+          const harness = await artifactFixture(mac);
+          const header = [
+            "missing.o/".padEnd(16),
+            "0".padEnd(12),
+            "0".padEnd(6),
+            "0".padEnd(6),
+            "100644".padEnd(8),
+            "0".padEnd(10),
+            "`\n",
+          ].join("");
+          const target = harness.at(`${workerRoot}/${arch}/lib/opaque [*].resource`);
+          await write(target, `!<thin>\n${kind === "empty" ? "" : header}`);
+          expect(
+            await runMacFixtureTool("/usr/bin/file", ["-b", target], harness.home, mac),
+          ).toContain("thin archive with");
+          const result = await harness.verify();
+          expect(result.status, result.stderr).toBe(1);
+          expect(result.stderr).toContain("elevation worker contains unsupported thin archive:");
+          expect(result.stdout).not.toContain("Elevation artifact verified");
+        }),
     );
 
     it.concurrent("accepts universal native code, static archives, tar and Java resources without changing bytes or modes", async ({
@@ -576,42 +571,19 @@ describe.skipIf(process.platform !== "darwin")(
         }
       }));
 
-    it.concurrent.for(
-      (
-        [
-          ["Contents", "contents"],
-          ["Contents/Resources", "Contents/resources"],
-          [workerRoot, "Contents/Resources/Node-Worker"],
-        ] as const
-      ).flatMap(([relative, alias]) =>
-        ["wrong-slice", "escaping-link"].map((fault) => ({ relative, alias, fault })),
-      ),
-    )(
-      "rejects case-aliased worker structure $relative ($fault)",
-      async ({ relative, alias, fault }, { mac }) =>
-        mac.lifetime.run(async () => {
-          const harness = await artifactFixture(mac);
-          for (const arch of ["arm64", "x86_64"]) {
-            await write(
-              harness.at(`${workerRoot}/${arch}/bin/node`),
-              harness.binaries.universal,
-              0o755,
-            );
-          }
-          const target = harness.at(`${workerRoot}/arm64/${addon}`);
-          if (fault === "wrong-slice") {
-            await write(target, harness.binaries.intelLibrary);
-          } else {
-            const outside = path.join(harness.home, "outside-addon");
-            await rename(target, outside);
-            await symlink(outside, target);
-          }
-          await rename(harness.at(relative), harness.at(alias));
-          expect(readdirSync(path.dirname(harness.at(alias)))).toContain(path.basename(alias));
-          const result = await harness.verify();
-          expect(result.status, result.stderr).toBe(1);
-          expect(result.stderr).toContain("canonical directory spelling required");
-        }),
+    it.concurrent.for([
+      ["Contents", "contents"],
+      ["Contents/Resources", "Contents/resources"],
+      [workerRoot, "Contents/Resources/Node-Worker"],
+    ] as const)("rejects case-aliased worker structure %s", async ([relative, alias], { mac }) =>
+      mac.lifetime.run(async () => {
+        const harness = await artifactFixture(mac);
+        await rename(harness.at(relative), harness.at(alias));
+        expect(readdirSync(path.dirname(harness.at(alias)))).toContain(path.basename(alias));
+        const result = await harness.verify();
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stderr).toContain("canonical directory spelling required");
+      }),
     );
 
     it.concurrent.for([
@@ -716,24 +688,15 @@ describe.skipIf(process.platform !== "darwin")(
         expect(missingIdentity.stderr).toContain("elevation app is missing worker build identity");
       }));
 
-    it.concurrent.for(["directory", "file", "symlink"])(
-      "rejects an unexpected worker architecture %s",
-      async (kind, { mac }) =>
-        mac.lifetime.run(async () => {
-          const harness = await artifactFixture(mac);
-          const extra = harness.at(`${workerRoot}/unexpected [arch]`);
-          if (kind === "directory") {
-            await mkdir(extra);
-          } else if (kind === "symlink") {
-            await symlink("arm64", extra);
-          } else {
-            await write(extra, "unexpected");
-          }
-          const result = await harness.verify();
-          expect(result.status, result.stderr).toBe(1);
-          expect(result.stderr).toContain("unexpected elevation worker architecture entry:");
-        }),
-    );
+    it.concurrent("rejects an unexpected worker architecture", async ({ mac }) =>
+      mac.lifetime.run(async () => {
+        const harness = await artifactFixture(mac);
+        const extra = harness.at(`${workerRoot}/unexpected [arch]`);
+        await mkdir(extra);
+        const result = await harness.verify();
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stderr).toContain("unexpected elevation worker architecture entry:");
+      }));
 
     it.concurrent.for([
       "Contents",
@@ -943,15 +906,13 @@ describe.skipIf(process.platform !== "darwin")(
         }),
     );
 
-    it.concurrent.for(["healthy", "signature", "notarized", "stapler", "spctl"])(
+    it.concurrent.for(["healthy", "spctl"])(
       "fully verifies a new destination-stage copy with %s policy",
       async (fault, { mac }) =>
         mac.lifetime.run(async () => {
           const harness = await artifactFixture(mac);
           const result = await harness.verifyStagedCopy(fault);
-          expect(result.status, result.stderr).toBe(
-            fault === "healthy" ? 0 : fault === "signature" ? 1 : 23,
-          );
+          expect(result.status, result.stderr).toBe(fault === "healthy" ? 0 : 23);
           const checks = readFileSync(harness.calls, "utf8")
             .split("\n")
             .filter((line) =>

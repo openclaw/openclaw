@@ -15,7 +15,7 @@ import { withUpdateInProgressEnv } from "./update-command-service-env.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 import { maybeRestartService } from "./update-command-service.js";
 
-const { mocks, withServiceHome } =
+const { fixtureGatewayPid, mocks, withServiceHome } =
   await import("./update-command-service-maintenance.test-support.js");
 
 it.runIf(process.platform === "linux").each([
@@ -44,7 +44,7 @@ it.runIf(process.platform === "linux").each([
           programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
           environment: { HOME: home },
         },
-        runtime: { status: "running", systemd: { managerUid: 0 } },
+        runtime: { status: "running", pid: fixtureGatewayPid, systemd: { managerUid: 0 } },
         systemdInstallation: {
           kind: "system",
           system: {

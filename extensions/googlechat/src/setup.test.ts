@@ -65,6 +65,12 @@ const googlechatSetupPlugin = {
 const googlechatConfigure = createPluginSetupWizardConfigure(googlechatSetupPlugin);
 const googlechatStatus = createPluginSetupWizardStatus(googlechatSetupPlugin);
 
+function withGoogleChat(
+  googlechat: NonNullable<OpenClawConfig["channels"]>["googlechat"],
+): OpenClawConfig {
+  return { channels: { googlechat } };
+}
+
 function buildAccount(): ResolvedGoogleChatAccount {
   return {
     accountId: "default",
@@ -179,7 +185,7 @@ describe("googlechat setup", () => {
     }
     expect(
       googlechatSetupAdapter.applyAccountConfig({
-        cfg: { channels: { googlechat: {} } },
+        cfg: withGoogleChat({}),
         accountId: DEFAULT_ACCOUNT_ID,
         input: {
           name: "Default",
@@ -211,7 +217,7 @@ describe("googlechat setup", () => {
     }
     expect(
       googlechatSetupAdapter.applyAccountConfig({
-        cfg: { channels: { googlechat: {} } },
+        cfg: withGoogleChat({}),
         accountId: DEFAULT_ACCOUNT_ID,
         input: {
           name: "Default",
@@ -274,18 +280,14 @@ describe("googlechat setup", () => {
 
   it("reports configured state for the selected account instead of any account", async () => {
     const status = await googlechatStatus({
-      cfg: {
-        channels: {
-          googlechat: {
-            accounts: {
-              default: {
-                serviceAccount: { client_email: "default@example.com" },
-              },
-              alerts: {},
-            },
+      cfg: withGoogleChat({
+        accounts: {
+          default: {
+            serviceAccount: { client_email: "default@example.com" },
           },
+          alerts: {},
         },
-      } as OpenClawConfig,
+      }),
       accountOverrides: {
         googlechat: "alerts",
       },
@@ -297,19 +299,15 @@ describe("googlechat setup", () => {
 
   it("reports configured state for the configured defaultAccount instead of any account", async () => {
     const status = await googlechatStatus({
-      cfg: {
-        channels: {
-          googlechat: {
-            defaultAccount: "alerts",
-            accounts: {
-              default: {
-                serviceAccount: { client_email: "default@example.com" },
-              },
-              alerts: {},
-            },
+      cfg: withGoogleChat({
+        defaultAccount: "alerts",
+        accounts: {
+          default: {
+            serviceAccount: { client_email: "default@example.com" },
           },
+          alerts: {},
         },
-      } as OpenClawConfig,
+      }),
       accountOverrides: {},
       options: {},
     });
@@ -324,20 +322,16 @@ describe("googlechat setup", () => {
     });
 
     const next = await googlechatSetupWizard.dmPolicy?.promptAllowFrom?.({
-      cfg: {
-        channels: {
-          googlechat: {
-            defaultAccount: "alerts",
-            allowFrom: ["users/root"],
-            accounts: {
-              alerts: {
-                serviceAccount: { client_email: "bot@example.com" },
-                allowFrom: ["users/alerts"],
-              },
-            },
+      cfg: withGoogleChat({
+        defaultAccount: "alerts",
+        allowFrom: ["users/root"],
+        accounts: {
+          alerts: {
+            serviceAccount: { client_email: "bot@example.com" },
+            allowFrom: ["users/alerts"],
           },
         },
-      } as OpenClawConfig,
+      }),
       prompter,
     });
 
@@ -365,29 +359,12 @@ describe("googlechat setup", () => {
         expect(unregister).toHaveBeenCalledOnce();
       },
     });
-    expectLifecyclePatch(patches, { running: true });
-    expectLifecyclePatch(patches, { running: false });
-  });
-
-  it("publishes the bound webhook path when the account resolves one", async () => {
-    hoisted.startGoogleChatMonitor.mockResolvedValue(vi.fn());
-
-    const { abort, patches, task, isSettled } = startAccountAndTrackLifecycle({
-      startAccount: startGoogleChatGatewayAccount,
-      account: buildAccount(),
-    });
-    await expectPendingUntilAbort({
-      waitForStarted: waitForGoogleChatMonitorStarted,
-      isSettled,
-      abort,
-      task,
-    });
-
     expectLifecyclePatch(patches, {
       running: true,
       webhookPath: "/googlechat",
       lifecycle: "starting",
     });
+    expectLifecyclePatch(patches, { running: false });
     expect(patches.some((patch) => patch.lifecycle === "blocked")).toBe(false);
   });
 
@@ -501,13 +478,9 @@ describe("resolveGoogleChatAccount", () => {
     vi.stubEnv("OPENCLAW_HOME", homeDir);
     try {
       const resolved = resolveGoogleChatAccount({
-        cfg: {
-          channels: {
-            googlechat: {
-              serviceAccountFile: "~/service-account.json",
-            },
-          },
-        },
+        cfg: withGoogleChat({
+          serviceAccountFile: "~/service-account.json",
+        }),
         accountId: "default",
       });
 
@@ -523,7 +496,7 @@ describe("resolveGoogleChatAccount", () => {
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '{"client_email":"bot@example.com"}');
 
     const resolved = resolveGoogleChatAccount({
-      cfg: { channels: { googlechat: {} } },
+      cfg: withGoogleChat({}),
       accountId: "default",
     });
 
@@ -542,7 +515,7 @@ describe("resolveGoogleChatAccount", () => {
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", missingFile);
 
     const resolved = resolveGoogleChatAccount({
-      cfg: { channels: { googlechat: {} } },
+      cfg: withGoogleChat({}),
       accountId: "default",
     });
 
@@ -561,22 +534,18 @@ describe("resolveGoogleChatAccount", () => {
   });
 
   it("inherits shared defaults from accounts.default for named accounts", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        googlechat: {
-          accounts: {
-            default: {
-              audienceType: "app-url",
-              audience: "https://example.com/googlechat",
-              webhookPath: "/googlechat",
-            },
-            andy: {
-              serviceAccountFile: "/tmp/andy-sa.json",
-            },
-          },
+    const cfg: OpenClawConfig = withGoogleChat({
+      accounts: {
+        default: {
+          audienceType: "app-url",
+          audience: "https://example.com/googlechat",
+          webhookPath: "/googlechat",
+        },
+        andy: {
+          serviceAccountFile: "/tmp/andy-sa.json",
         },
       },
-    };
+    });
 
     const resolved = resolveGoogleChatAccount({ cfg, accountId: "andy" });
     expect(resolved.config.audienceType).toBe("app-url");
@@ -586,24 +555,20 @@ describe("resolveGoogleChatAccount", () => {
   });
 
   it("prefers top-level and account overrides over accounts.default", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        googlechat: {
-          audienceType: "project-number",
-          audience: "1234567890",
-          accounts: {
-            default: {
-              audienceType: "app-url",
-              audience: "https://default.example.com/googlechat",
-              webhookPath: "/googlechat-default",
-            },
-            april: {
-              webhookPath: "/googlechat-april",
-            },
-          },
+    const cfg: OpenClawConfig = withGoogleChat({
+      audienceType: "project-number",
+      audience: "1234567890",
+      accounts: {
+        default: {
+          audienceType: "app-url",
+          audience: "https://default.example.com/googlechat",
+          webhookPath: "/googlechat-default",
+        },
+        april: {
+          webhookPath: "/googlechat-april",
         },
       },
-    };
+    });
 
     const resolved = resolveGoogleChatAccount({ cfg, accountId: "april" });
     expect(resolved.config.audienceType).toBe("project-number");
@@ -612,25 +577,21 @@ describe("resolveGoogleChatAccount", () => {
   });
 
   it("merges account bot loop protection over top-level defaults field-by-field", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        googlechat: {
+    const cfg: OpenClawConfig = withGoogleChat({
+      botLoopProtection: {
+        maxEventsPerWindow: 8,
+        windowSeconds: 120,
+        cooldownSeconds: 240,
+      },
+      accounts: {
+        april: {
+          webhookPath: "/googlechat-april",
           botLoopProtection: {
-            maxEventsPerWindow: 8,
-            windowSeconds: 120,
-            cooldownSeconds: 240,
-          },
-          accounts: {
-            april: {
-              webhookPath: "/googlechat-april",
-              botLoopProtection: {
-                maxEventsPerWindow: 3,
-              },
-            },
+            maxEventsPerWindow: 3,
           },
         },
       },
-    };
+    });
 
     const resolved = resolveGoogleChatAccount({ cfg, accountId: "april" });
     expect(resolved.config.botLoopProtection).toEqual({
@@ -641,27 +602,23 @@ describe("resolveGoogleChatAccount", () => {
   });
 
   it("merges account bot loop protection over accounts.default field-by-field", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        googlechat: {
-          accounts: {
-            default: {
-              webhookPath: "/googlechat",
-              botLoopProtection: {
-                windowSeconds: 120,
-                cooldownSeconds: 240,
-              },
-            },
-            april: {
-              webhookPath: "/googlechat-april",
-              botLoopProtection: {
-                maxEventsPerWindow: 3,
-              },
-            },
+    const cfg: OpenClawConfig = withGoogleChat({
+      accounts: {
+        default: {
+          webhookPath: "/googlechat",
+          botLoopProtection: {
+            windowSeconds: 120,
+            cooldownSeconds: 240,
+          },
+        },
+        april: {
+          webhookPath: "/googlechat-april",
+          botLoopProtection: {
+            maxEventsPerWindow: 3,
           },
         },
       },
-    };
+    });
 
     const resolved = resolveGoogleChatAccount({ cfg, accountId: "april" });
     expect(resolved.config.botLoopProtection).toEqual({
@@ -672,22 +629,18 @@ describe("resolveGoogleChatAccount", () => {
   });
 
   it("does not inherit disabled state from accounts.default for named accounts", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        googlechat: {
-          accounts: {
-            default: {
-              enabled: false,
-              audienceType: "app-url",
-              audience: "https://example.com/googlechat",
-            },
-            andy: {
-              serviceAccountFile: "/tmp/andy-sa.json",
-            },
-          },
+    const cfg: OpenClawConfig = withGoogleChat({
+      accounts: {
+        default: {
+          enabled: false,
+          audienceType: "app-url",
+          audience: "https://example.com/googlechat",
+        },
+        andy: {
+          serviceAccountFile: "/tmp/andy-sa.json",
         },
       },
-    };
+    });
 
     const resolved = resolveGoogleChatAccount({ cfg, accountId: "andy" });
     expect(resolved.enabled).toBe(true);
@@ -696,26 +649,22 @@ describe("resolveGoogleChatAccount", () => {
   });
 
   it("does not inherit default-account credentials into named accounts", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        googlechat: {
-          accounts: {
-            default: {
-              serviceAccount: {
-                source: "env",
-                provider: "test",
-                id: "default-sa",
-              },
-              audienceType: "app-url",
-              audience: "https://example.com/googlechat",
-            },
-            andy: {
-              serviceAccountFile: "/tmp/andy-sa.json",
-            },
+    const cfg: OpenClawConfig = withGoogleChat({
+      accounts: {
+        default: {
+          serviceAccount: {
+            source: "env",
+            provider: "test",
+            id: "default-sa",
           },
+          audienceType: "app-url",
+          audience: "https://example.com/googlechat",
+        },
+        andy: {
+          serviceAccountFile: "/tmp/andy-sa.json",
         },
       },
-    };
+    });
 
     const resolved = resolveGoogleChatAccount({ cfg, accountId: "andy" });
     expect(resolved.credentialSource).toBe("file");
@@ -724,22 +673,18 @@ describe("resolveGoogleChatAccount", () => {
   });
 
   it("does not inherit dangerous name matching from accounts.default", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        googlechat: {
-          accounts: {
-            default: {
-              dangerouslyAllowNameMatching: true,
-              audienceType: "app-url",
-              audience: "https://example.com/googlechat",
-            },
-            andy: {
-              serviceAccountFile: "/tmp/andy-sa.json",
-            },
-          },
+    const cfg: OpenClawConfig = withGoogleChat({
+      accounts: {
+        default: {
+          dangerouslyAllowNameMatching: true,
+          audienceType: "app-url",
+          audience: "https://example.com/googlechat",
+        },
+        andy: {
+          serviceAccountFile: "/tmp/andy-sa.json",
         },
       },
-    };
+    });
 
     const resolved = resolveGoogleChatAccount({ cfg, accountId: "andy" });
     expect(resolved.config.dangerouslyAllowNameMatching).toBeUndefined();
@@ -747,18 +692,14 @@ describe("resolveGoogleChatAccount", () => {
   });
 
   it("uses configured defaultAccount when accountId is omitted", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        googlechat: {
-          defaultAccount: "alerts",
-          accounts: {
-            alerts: {
-              serviceAccountFile: "/tmp/alerts-sa.json",
-            },
-          },
+    const cfg: OpenClawConfig = withGoogleChat({
+      defaultAccount: "alerts",
+      accounts: {
+        alerts: {
+          serviceAccountFile: "/tmp/alerts-sa.json",
         },
       },
-    };
+    });
 
     const resolved = resolveGoogleChatAccount({ cfg });
     expect(resolved.accountId).toBe("alerts");

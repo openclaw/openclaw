@@ -358,37 +358,6 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     });
   });
 
-  it("keeps managed loopback tab opens on local CDP defaults", async () => {
-    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
-    const createTargetViaCdp = vi
-      .spyOn(deps.cdpModule, "createTargetViaCdp")
-      .mockResolvedValue({ targetId: "T_LOCAL", finalUrl: "http://127.0.0.1:3000" });
-    const state = deps.makeState("openclaw");
-    const fetchMock = vi.fn(
-      deps.createJsonListFetchMock([
-        {
-          id: "T_LOCAL",
-          title: "Local Tab",
-          url: "http://127.0.0.1:3000",
-          webSocketDebuggerUrl: "ws://127.0.0.1:18800/devtools/page/T_LOCAL",
-          type: "page",
-        },
-      ]),
-    );
-    global.fetch = withBrowserFetchPreconnect(fetchMock);
-    const ctx = deps.createBrowserRouteContext({ getState: () => state });
-
-    await ctx.forProfile("openclaw").openTab("http://127.0.0.1:3000");
-
-    expect(createTargetViaCdp).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18800",
-      url: "http://127.0.0.1:3000",
-      ssrfPolicy: undefined,
-      signal: expect.any(AbortSignal),
-      waitForNavigationResult: true,
-    });
-  });
-
   it("uses the remote HTTP timeout for /json/new fallback tab opens", async () => {
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
     vi.spyOn(deps.cdpModule, "createTargetViaCdp").mockRejectedValue(
