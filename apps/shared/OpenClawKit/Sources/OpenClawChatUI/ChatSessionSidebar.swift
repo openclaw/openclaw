@@ -6,7 +6,7 @@ extension ChatSessionSidebarModel.Node {
         self.children.isEmpty ? nil : self.children
     }
 
-    fileprivate var previewSessions: [OpenClawChatSessionEntry] {
+    var previewSessions: [OpenClawChatSessionEntry] {
         [self.session] + self.children.flatMap(\.previewSessions)
     }
 }
@@ -15,17 +15,17 @@ extension ChatSessionSidebarModel.Node {
 struct ChatSessionSidebar: View {
     @Bindable var viewModel: OpenClawChatViewModel
     @Binding var query: String
+    @Binding var groups: [OpenClawChatSessionGroup]
+    let previews: ChatSessionSidebarPreviews
     var additionalAttentionRequests: [OpenClawChatAttentionRequest] = []
     @State private var presentedAttention: OpenClawChatAttentionPresentation?
     @State private var sessionPendingDeletion: OpenClawChatSessionEntry?
     @State private var sessionPendingRename: OpenClawChatSessionEntry?
     @State private var renameText = ""
-    @State private var groups: [OpenClawChatSessionGroup] = []
     @State private var groupRefreshNonce = 0
     @State private var groupLoadFailed = false
     @State private var inspectedSession: OpenClawChatSessionEntry?
     @State private var isPresentingNewSessionOptions = false
-    @State private var previews = ChatSessionSidebarPreviews()
     @AppStorage("openclaw.chat.collapsedSessionGroups") private var collapsedSessionGroups = ""
 
     var body: some View {
@@ -443,7 +443,11 @@ struct ChatSessionSidebar: View {
                 }
                 HStack(spacing: 5) {
                     self.attentionBadge(summary: attention, targetID: targetID)
-                    self.badges(for: node)
+                    ChatSidebarSessionBadges(
+                        node: node,
+                        isConnected: self.viewModel.healthOK,
+                        isCurrentSession: self.viewModel.matchesCurrentSessionKey(
+                            incoming: node.session.key, current: self.viewModel.sessionKey))
                 }
             }
         }
@@ -485,36 +489,6 @@ struct ChatSessionSidebar: View {
         if let summary {
             OpenClawChatAttentionBadge(
                 summary: summary, targetID: targetID, presentation: self.$presentedAttention)
-        }
-    }
-
-    @ViewBuilder
-    private func badges(for node: ChatSessionSidebarModel.Node) -> some View {
-        if self.viewModel.healthOK, node.badges.queuedCount > 0 {
-            Image(systemName: "hourglass")
-                .foregroundStyle(OpenClawChatTheme.warning)
-                .accessibilityLabel(String(localized: "Thread queued"))
-        }
-        if self.viewModel.healthOK, node.badges.runningCount > 0 {
-            ProgressView()
-                .controlSize(.small)
-                .accessibilityLabel(String(localized: "Thread running"))
-        }
-        if node.badges.failedCount > 0 {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(OpenClawChatTheme.warning)
-                .accessibilityLabel(String(localized: "Thread failed"))
-        }
-        let isCurrentSession = self.viewModel.matchesCurrentSessionKey(
-            incoming: node.session.key,
-            current: self.viewModel.sessionKey)
-        if node.children.contains(where: \.badges.hasUnread) ||
-            (node.session.unread == true && !isCurrentSession)
-        {
-            Circle()
-                .fill(.tint)
-                .frame(width: 7, height: 7)
-                .accessibilityLabel(String(localized: "Unread"))
         }
     }
 
@@ -658,6 +632,38 @@ struct ChatSessionSidebar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 12)
         .background(.bar)
+    }
+}
+
+struct ChatSidebarSessionBadges: View {
+    let node: ChatSessionSidebarModel.Node
+    let isConnected: Bool
+    let isCurrentSession: Bool
+
+    var body: some View {
+        if self.isConnected, self.node.badges.queuedCount > 0 {
+            Image(systemName: "hourglass")
+                .foregroundStyle(OpenClawChatTheme.warning)
+                .accessibilityLabel(String(localized: "Thread queued"))
+        }
+        if self.isConnected, self.node.badges.runningCount > 0 {
+            ProgressView()
+                .controlSize(.small)
+                .accessibilityLabel(String(localized: "Thread running"))
+        }
+        if self.node.badges.failedCount > 0 {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(OpenClawChatTheme.warning)
+                .accessibilityLabel(String(localized: "Thread failed"))
+        }
+        if self.node.children.contains(where: \.badges.hasUnread) ||
+            (self.node.session.unread == true && !self.isCurrentSession)
+        {
+            Circle()
+                .fill(.tint)
+                .frame(width: 7, height: 7)
+                .accessibilityLabel(String(localized: "Unread"))
+        }
     }
 }
 
