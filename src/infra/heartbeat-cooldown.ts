@@ -150,21 +150,26 @@ function checkFloodGuard(input: ShouldDeferInput): DeferDecision | null {
     return null;
   }
   const windowStart = input.now - floodWindow;
-  let inWindow = 0;
-  let thresholdOldestTs: number | undefined;
-  for (let i = input.recentRunStarts.length - 1; i >= 0; i--) {
-    const ts = input.recentRunStarts[i];
+  // The buffer is insertion-ordered, not sorted: `recordRunStart` pushes
+  // `Date.now()` ("monotonic-ish"), so a backward clock step leaves an older
+  // timestamp after newer ones. Count every in-window entry instead of
+  // stopping at the first out-of-window one seen in reverse.
+  const inWindowTs: number[] = [];
+  for (const ts of input.recentRunStarts) {
     if (ts === undefined || ts < windowStart) {
-      break;
+      continue;
     }
-    inWindow += 1;
-    if (inWindow === floodThreshold) {
-      thresholdOldestTs = ts;
-    }
+    inWindowTs.push(ts);
   }
-  return inWindow >= floodThreshold && thresholdOldestTs !== undefined
-    ? { defer: true, reason: "flood", retryAtMs: thresholdOldestTs + floodWindow + 1 }
-    : null;
+  if (inWindowTs.length < floodThreshold) {
+    return null;
+  }
+  // Newest first, so the threshold-th entry is the oldest start that still
+  // keeps `floodThreshold` runs inside the window — the same instant the
+  // reverse scan resolved when the buffer happened to be sorted.
+  inWindowTs.sort((a, b) => b - a);
+  const thresholdOldestTs = inWindowTs[floodThreshold - 1];
+  return { defer: true, reason: "flood", retryAtMs: thresholdOldestTs + floodWindow + 1 };
 }
 
 /**

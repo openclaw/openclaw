@@ -289,6 +289,29 @@ describe("shouldDeferWake", () => {
         }),
       ).toEqual({ defer: false });
     });
+
+    it("counts in-window starts regardless of buffer order (clock jumps keep insertion order)", () => {
+      const now = 1_000_000;
+      // A backward clock step between runs leaves a stale out-of-window stamp
+      // after newer in-window ones; five of six starts are still in-window.
+      expect(
+        decide({
+          source: "exec-event",
+          now,
+          nextDueMs: 0,
+          lastRunStartedAtMs: now - 30_001,
+          recentRunStarts: [
+            now - 10_000,
+            now - 65_000,
+            now - 40_000,
+            now - 30_000,
+            now - 20_000,
+            now - 5_000,
+          ],
+          reason: "exec-event",
+        }),
+      ).toEqual({ defer: true, reason: "flood", retryAtMs: 1_020_001 });
+    });
   });
 });
 
