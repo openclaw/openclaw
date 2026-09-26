@@ -43,9 +43,9 @@ type ResolveManifestProviderAuthChoice =
   typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
 type ResolveProviderOnboardAuthFlags =
   typeof import("../plugins/provider-auth-choices.js").resolveProviderOnboardAuthFlags;
-type PromptDefaultModel = typeof import("../commands/model-picker.js").promptDefaultModel;
-type ApplyAuthChoice = typeof import("../commands/auth-choice.js").applyAuthChoice;
-type PrepareAuthChoice = typeof import("../commands/auth-choice.js").prepareAuthChoice;
+type PromptDefaultModel = typeof import("../flows/model-picker.js").promptDefaultModel;
+type ApplyAuthChoice = typeof import("../commands/auth-choice.apply.js").applyAuthChoice;
+type PrepareAuthChoice = typeof import("../commands/auth-choice.apply.js").prepareAuthChoice;
 type VerifySetupInferenceConfig =
   typeof import("../system-agent/setup-inference.js").verifySetupInferenceConfig;
 type ConfigureGatewayForSetup = typeof import("./setup.gateway-config.js").configureGatewayForSetup;
@@ -279,9 +279,7 @@ function prepareMockAuthProfilesIn(agentDir: string): void {
 }
 
 function persistedWizardConfigs(): OpenClawConfig[] {
-  return (replaceConfigFile.mock.calls as unknown[][]).map(
-    ([params]) => (params as { nextConfig: OpenClawConfig }).nextConfig,
-  );
+  return replaceConfigFile.mock.calls.map(([params]) => params.nextConfig);
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
@@ -323,8 +321,8 @@ function expectMockCallArgNotNull(
   }
 }
 
-vi.mock("../commands/onboard-channels.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../commands/onboard-channels.js")>()),
+vi.mock("../flows/channel-setup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/channel-setup.js")>()),
   setupChannels,
 }));
 
@@ -355,10 +353,16 @@ vi.mock("../commands/auth-choice-prompt.js", () => ({
   promptAuthChoiceGrouped,
 }));
 
-vi.mock("../commands/auth-choice.js", () => ({
+vi.mock("../commands/auth-choice.apply.js", () => ({
   applyAuthChoice,
   prepareAuthChoice,
+}));
+
+vi.mock("../plugins/provider-auth-choice-preference.js", () => ({
   resolvePreferredProviderForAuthChoice,
+}));
+
+vi.mock("../commands/auth-choice.model-check.js", () => ({
   warnIfModelConfigLooksOff,
 }));
 
@@ -385,7 +389,7 @@ vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
   resolvePluginProviders: resolvePluginProvidersRuntime,
 }));
 
-vi.mock("../commands/model-picker.js", () => ({
+vi.mock("../flows/model-picker.js", () => ({
   applyPrimaryModel,
   promptDefaultModel,
 }));
@@ -545,20 +549,14 @@ vi.mock("./setup.completion.js", () => ({
 }));
 
 function createRuntime(opts?: { throwsOnExit?: boolean }): RuntimeEnv {
-  if (opts?.throwsOnExit) {
-    return {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
-  }
-
   return {
     log: vi.fn(),
     error: vi.fn(),
-    exit: vi.fn(),
+    exit: vi.fn((code: number) => {
+      if (opts?.throwsOnExit) {
+        throw new Error(`exit:${code}`);
+      }
+    }),
   };
 }
 

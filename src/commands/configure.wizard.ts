@@ -14,7 +14,7 @@ import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/co
 import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createChannelSetupHooks } from "../flows/channel-setup.js";
+import { createChannelSetupHooks, setupChannels } from "../flows/channel-setup.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
@@ -51,7 +51,6 @@ import {
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
 } from "./onboard-agent-target.js";
-import { setupChannels } from "./onboard-channels.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,

@@ -235,45 +235,30 @@ export async function importLegacySkillProposalSidecars(params: {
 }): Promise<MigrationResult> {
   const env = params.env ?? process.env;
   const stateDir = resolveStateDir(env);
+  const warnings: string[] = [];
+  const changes: string[] = [];
   if (!(await pathExists(path.join(stateDir, PROPOSALS_DIR)))) {
-    if (!(await pathExists(path.join(stateDir, MANIFEST_PATH)))) {
-      return {
-        changes: [],
-        warnings: [],
-        detected: 0,
-        migrated: 0,
-      };
+    if (await pathExists(path.join(stateDir, MANIFEST_PATH))) {
+      await removePathWithinRoot({ rootDir: stateDir, relativePath: MANIFEST_PATH });
+      changes.push("Removed the empty legacy Skill Workshop proposal index.");
     }
-    await removePathWithinRoot({ rootDir: stateDir, relativePath: MANIFEST_PATH });
-    return {
-      changes: ["Removed the empty legacy Skill Workshop proposal index."],
-      warnings: [],
-      detected: 0,
-      migrated: 0,
-    };
+    return { changes, warnings, detected: 0, migrated: 0 };
   }
   const stateRoot = await root(stateDir);
   let entries;
   try {
     entries = await stateRoot.list(PROPOSALS_DIR, { withFileTypes: true });
   } catch (error) {
-    if (hasErrnoCode(error, "not-found")) {
-      return { changes: [], warnings: [], detected: 0, migrated: 0 };
+    if (!hasErrnoCode(error, "not-found")) {
+      warnings.push(`Failed to inspect legacy Skill Workshop proposals: ${String(error)}`);
     }
-    return {
-      changes: [],
-      warnings: [`Failed to inspect legacy Skill Workshop proposals: ${String(error)}`],
-      detected: 0,
-      migrated: 0,
-    };
+    return { changes, warnings, detected: 0, migrated: 0 };
   }
 
   const proposalIds = entries
     .filter((entry) => entry.isDirectory && PROPOSAL_ID_PATTERN.test(entry.name))
     .map((entry) => entry.name)
     .toSorted((left, right) => left.localeCompare(right));
-  const warnings: string[] = [];
-  const changes: string[] = [];
   let recoverableWarningCount = 0;
   const prepared = new Map<
     string,

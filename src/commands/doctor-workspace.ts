@@ -373,26 +373,13 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
       return;
     }
     const migration = await migrateLegacyRootMemoryFile(configuredWorkspaceDir);
-    if (migration.readLimitExceeded) {
+    if (migration.readLimitExceeded || migration.readError) {
+      const reason = migration.readLimitExceeded
+        ? "a file exceeded the safe read limit"
+        : "a file could not be read";
       note(
         [
-          `${prefix}Workspace memory root repair skipped (a file exceeded the safe read limit):`,
-          `- canonical: ${migration.canonicalPath}`,
-          `- legacy: ${migration.legacyPath}`,
-          migration.archivedLegacyPath
-            ? `- preserved archive: ${migration.archivedLegacyPath}`
-            : null,
-        ]
-          .filter((line): line is string => Boolean(line))
-          .join("\n"),
-        "Doctor changes",
-      );
-      return;
-    }
-    if (migration.readError) {
-      note(
-        [
-          `${prefix}Workspace memory root repair skipped (a file could not be read):`,
+          `${prefix}Workspace memory root repair skipped (${reason}):`,
           `- canonical: ${migration.canonicalPath}`,
           `- legacy: ${migration.legacyPath}`,
           migration.archivedLegacyPath

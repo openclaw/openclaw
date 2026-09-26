@@ -156,23 +156,13 @@ export async function warnIfModelConfigLooksOff(
   prompter: WizardPrompter,
   options?: DefaultModelAuthOptions,
 ) {
-  const ref = resolveDefaultModelForAgent({
-    cfg: config,
-    agentId: options?.agentId,
-  });
   const warnings: string[] = [];
-  const authStatus = resolveDefaultModelAuthStatus(config, {
-    ...(options?.agentId ? { agentId: options.agentId } : {}),
-    ...(options?.agentDir ? { agentDir: options.agentDir } : {}),
-    ...(options?.env ? { env: options.env } : {}),
-    ...(options?.observedRoutes ? { observedRoutes: options.observedRoutes } : {}),
-    ...(options?.pendingAuthProfiles ? { pendingAuthProfiles: options.pendingAuthProfiles } : {}),
-  });
+  const authStatus = resolveDefaultModelAuthStatus(config, options);
   if (authStatus.status === "missing") {
     warnings.push(
-      `No auth configured for provider "${ref.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
+      `No auth configured for provider "${authStatus.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
         {
-          provider: ref.provider,
+          provider: authStatus.provider,
           config,
           includeEnvVar: authStatus.authRequirement !== "subscription",
         },
@@ -180,11 +170,11 @@ export async function warnIfModelConfigLooksOff(
     );
   } else if (authStatus.status === "incompatible") {
     warnings.push(
-      `Model route is incompatible for "${ref.provider}/${ref.model}": ${authStatus.message}`,
+      `Model route is incompatible for "${authStatus.provider}/${authStatus.model}": ${authStatus.message}`,
     );
   } else if (authStatus.status === "indeterminate") {
     warnings.push(
-      `Auth readiness could not be confirmed for "${ref.provider}/${ref.model}". Verify the selected model route and credential source before continuing.`,
+      `Auth readiness could not be confirmed for "${authStatus.provider}/${authStatus.model}". Verify the selected model route and credential source before continuing.`,
     );
   }
 

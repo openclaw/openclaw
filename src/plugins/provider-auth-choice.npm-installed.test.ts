@@ -27,13 +27,13 @@ const install = vi.hoisted(() =>
   >(),
 );
 const modelPicker = vi.hoisted(() =>
-  vi.fn<typeof import("../commands/model-picker.js").promptModelAllowlist>(),
+  vi.fn<typeof import("../flows/model-picker.js").promptModelAllowlist>(),
 );
 vi.mock("../commands/onboarding-plugin-install.js", () => ({
   ensureOnboardingPluginInstalled: install,
 }));
-vi.mock("../commands/model-picker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../commands/model-picker.js")>()),
+vi.mock("../flows/model-picker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/model-picker.js")>()),
   promptModelAllowlist: modelPicker,
 }));
 

@@ -73,30 +73,6 @@ function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): Secu
   return findings;
 }
 
-function execSecurityRank(value: ExecSecurity): number {
-  switch (value) {
-    case "deny":
-      return 0;
-    case "allowlist":
-      return 1;
-    case "full":
-      return 2;
-  }
-  throw new Error("Unsupported exec security value");
-}
-
-function execAskRank(value: ExecAsk): number {
-  switch (value) {
-    case "off":
-      return 0;
-    case "on-miss":
-      return 1;
-    case "always":
-      return 2;
-  }
-  throw new Error("Unsupported exec ask value");
-}
-
 function collectExecPolicyConflictWarnings(
   cfg: OpenClawConfig,
   approvals: ExecApprovalsFile,
@@ -137,10 +113,8 @@ function collectExecPolicyConflictWarnings(
     const securityConfigured = snapshot.security.requestedSource !== defaultRequestedSecuritySource;
     const askConfigured = snapshot.ask.requestedSource !== defaultRequestedAskSource;
     const securityConflict =
-      securityConfigured &&
-      execSecurityRank(snapshot.security.requested) > execSecurityRank(snapshot.security.effective);
-    const askConflict =
-      askConfigured && execAskRank(snapshot.ask.requested) < execAskRank(snapshot.ask.effective);
+      securityConfigured && snapshot.security.requested !== snapshot.security.effective;
+    const askConflict = askConfigured && snapshot.ask.requested !== snapshot.ask.effective;
     if (!securityConflict && !askConflict) {
       return;
     }
@@ -391,7 +365,6 @@ export async function collectSecurityWarnings(
         ].join("\n"),
       });
     } else {
-      // Auth is configured, but still warn about network exposure
       findings.push({
         checkId: "gateway.bind_network_accessible",
         severity: "warn",

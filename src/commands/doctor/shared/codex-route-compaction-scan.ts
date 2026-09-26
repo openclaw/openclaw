@@ -1,6 +1,7 @@
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { dedupeByKey } from "../../../shared/dedupe-by-key.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import {
   agentUsesCodexRuntimeForCompaction,
@@ -175,16 +176,19 @@ function collectCompactionConfigs<T>(
 export function collectLegacyLosslessCompactionConfigs(
   params: CompactionScanParams,
 ): LegacyLosslessCompactionConfig[] {
-  return dedupeLegacyLosslessCompactionConfigs(
+  return dedupeByKey(
     collectCompactionConfigs(params, collectLegacyLosslessCompactionForAgent),
+    (hit) =>
+      `${hit.compactionPath}\0${hit.providerValue}\0${hit.modelPath ?? ""}\0${hit.modelValue ?? ""}`,
   );
 }
 
 export function collectUnsupportedCodexCompactionOverrides(
   params: CompactionScanParams,
 ): UnsupportedCodexCompactionOverride[] {
-  return dedupeUnsupportedCompactionOverrides(
+  return dedupeByKey(
     collectCompactionConfigs(params, collectUnsupportedCodexCompactionOverridesForAgent),
+    (hit) => `${hit.path}\0${hit.key}\0${hit.value}`,
   );
 }
 
@@ -358,34 +362,4 @@ export function readLosslessSummaryModel(plugins: MutableRecord | undefined): st
   return typeof config?.summaryModel === "string" && config.summaryModel.trim()
     ? config.summaryModel.trim()
     : undefined;
-}
-
-function dedupeLegacyLosslessCompactionConfigs(
-  hits: LegacyLosslessCompactionConfig[],
-): LegacyLosslessCompactionConfig[] {
-  const seen = new Set<string>();
-  return hits.filter((hit) => {
-    const key = `${hit.compactionPath}\0${hit.providerValue}\0${hit.modelPath ?? ""}\0${
-      hit.modelValue ?? ""
-    }`;
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
-}
-
-function dedupeUnsupportedCompactionOverrides(
-  hits: UnsupportedCodexCompactionOverride[],
-): UnsupportedCodexCompactionOverride[] {
-  const seen = new Set<string>();
-  return hits.filter((hit) => {
-    const key = `${hit.path}\0${hit.key}\0${hit.value}`;
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
 }

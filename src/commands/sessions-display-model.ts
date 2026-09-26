@@ -1,10 +1,4 @@
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
-/**
- * Model display resolution for session listings.
- *
- * Session rows may carry persisted model/provider overrides or CLI-runtime
- * model strings; this module normalizes them into display-ready model refs.
- */
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   inferUniqueProviderFromConfiguredModels,
@@ -25,25 +19,16 @@ type SessionDisplayModelRow = {
   providerOverride?: string;
 };
 
-type SessionDisplayDefaults = {
-  model: string;
-};
-
 type SessionDisplayModelRef = { provider: string; model: string };
 
-function resolveAgentPrimaryModel(
+export function resolveSessionDisplayDefaults(
   cfg: OpenClawConfig,
-  agentId: string | undefined,
-): string | undefined {
-  if (!agentId) {
-    return undefined;
-  }
-  return resolveAgentModelPrimaryValue(resolveAgentConfig(cfg, agentId)?.model);
-}
-
-function resolveDefaultModelRef(cfg: OpenClawConfig, agentId?: string): SessionDisplayModelRef {
+  agentId?: string,
+): SessionDisplayModelRef {
   const primary =
-    resolveAgentPrimaryModel(cfg, agentId) ??
+    (agentId
+      ? resolveAgentModelPrimaryValue(resolveAgentConfig(cfg, agentId)?.model)
+      : undefined) ??
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ??
     DEFAULT_MODEL;
   return (
@@ -52,16 +37,6 @@ function resolveDefaultModelRef(cfg: OpenClawConfig, agentId?: string): SessionD
       allowPluginNormalization: false,
     }) ?? { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL }
   );
-}
-
-/** Resolves default display values for a session table scoped to an agent. */
-export function resolveSessionDisplayDefaults(
-  cfg: OpenClawConfig,
-  agentId?: string,
-): SessionDisplayDefaults {
-  return {
-    model: resolveDefaultModelRef(cfg, agentId).model,
-  };
 }
 
 function normalizeCliRuntimeDisplayRef(
@@ -122,7 +97,7 @@ export function resolveSessionDisplayModelRef(
 ): SessionDisplayModelRef {
   const agentId =
     ownerAgentId ?? (row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined);
-  const defaultRef = resolveDefaultModelRef(cfg, agentId);
+  const defaultRef = resolveSessionDisplayDefaults(cfg, agentId);
   const normalizedOverride = normalizeStoredOverrideModel({
     providerOverride: row.providerOverride,
     modelOverride: row.modelOverride,

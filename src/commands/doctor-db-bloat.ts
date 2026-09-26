@@ -1,13 +1,8 @@
-// Doctor visibility for SQLite database bloat (state DB + per-agent DBs).
-// Registered size_bytes existed for a while with no reader; production bloat
-// (multi-hundred-MB stores, blocking vacuums) surfaced only after user harm.
 import { note } from "../../packages/terminal-core/src/note.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { SqliteBloatStats } from "./doctor-db-bloat.read.js";
 import { formatBytes } from "./doctor-disk-space.js";
 
-// Bloat is only worth an operator's attention when the file is meaningfully
-// large AND a real share of it is reclaimable free pages.
 const BLOAT_MIN_FILE_BYTES = 128 * 1024 * 1024;
 const BLOAT_MIN_FREE_BYTES = 32 * 1024 * 1024;
 const BLOAT_FREE_RATIO = 0.25;

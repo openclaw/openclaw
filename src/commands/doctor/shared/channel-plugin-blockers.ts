@@ -134,30 +134,8 @@ export function scanConfiguredChannelPluginBlockers(
     }
   };
 
-  for (const channelId of genericChannelIds) {
-    const owners = manifestRecords.filter((plugin) =>
-      plugin.channels.some(
-        (rawChannelId) => normalizeOptionalLowercaseString(rawChannelId) === channelId,
-      ),
-    );
-    const ownerStates = owners.map((plugin) =>
-      resolveConfiguredChannelOwnerState({
-        plugin,
-        channelId,
-        sourceConfig: activationSourceConfig,
-        sourcePluginsConfig,
-        effectiveConfig: cfg,
-        effectivePluginsConfig,
-      }),
-    );
-    if (ownerStates.some((state) => state.available)) {
-      continue;
-    }
-    addHits(channelId, ownerStates);
-  }
-
-  for (const [channelId, triggers] of packageEnvTriggers) {
-    const channelOwnerStates = manifestRecords
+  const resolveChannelOwnerStates = (channelId: string) =>
+    manifestRecords
       .filter((plugin) =>
         plugin.channels.some(
           (rawChannelId) => normalizeOptionalLowercaseString(rawChannelId) === channelId,
@@ -173,6 +151,17 @@ export function scanConfiguredChannelPluginBlockers(
           effectivePluginsConfig,
         }),
       );
+
+  for (const channelId of genericChannelIds) {
+    const ownerStates = resolveChannelOwnerStates(channelId);
+    if (ownerStates.some((state) => state.available)) {
+      continue;
+    }
+    addHits(channelId, ownerStates);
+  }
+
+  for (const [channelId, triggers] of packageEnvTriggers) {
+    const channelOwnerStates = resolveChannelOwnerStates(channelId);
     const channelAvailable = channelOwnerStates.some((state) => state.available);
     for (const pluginIds of triggers.values()) {
       const ownerStates = channelOwnerStates.filter((state) => pluginIds.has(state.pluginId));

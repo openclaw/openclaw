@@ -6,6 +6,7 @@ import {
   resolveTrajectoryPointerPath,
 } from "../config/sessions/artifacts.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import { resolveRealpathOrAbsolute as canonicalFilePath } from "../infra/boundary-path.js";
 import {
   assertSafeSessionSqliteMigrationDirectory,
   canonicalMigrationFilePath,
@@ -99,12 +100,4 @@ export function planSessionJsonlArchiveMove(params: {
 function resolveImportedTranscriptArchiveDir(storePath: string): string {
   const storeDir = canonicalFilePath(path.dirname(path.resolve(storePath)));
   return path.join(path.dirname(storeDir), "session-sqlite-import-archive");
-}
-
-function canonicalFilePath(filePath: string): string {
-  try {
-    return fs.realpathSync.native(filePath);
-  } catch {
-    return path.resolve(filePath);
-  }
 }

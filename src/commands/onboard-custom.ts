@@ -1,9 +1,3 @@
-/**
- * Interactive custom provider onboarding prompts and endpoint verification.
- *
- * The pure config helpers are re-exported from here because setup and configure
- * flows import this command module as their custom API entrypoint.
- */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
@@ -208,31 +202,6 @@ async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string>
   ).trim();
 }
 
-async function applyCustomApiRetryChoice(params: {
-  prompter: WizardPrompter;
-  config: OpenClawConfig;
-  secretInputMode?: SecretInputMode;
-  retryChoice: CustomApiRetryChoice;
-  current: { baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; modelId: string };
-}): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; modelId: string }> {
-  let { baseUrl, apiKey, resolvedApiKey, modelId } = params.current;
-  if (params.retryChoice === "baseUrl" || params.retryChoice === "both") {
-    const retryInput = await promptBaseUrlAndKey({
-      prompter: params.prompter,
-      config: params.config,
-      secretInputMode: params.secretInputMode,
-      initialBaseUrl: baseUrl,
-    });
-    baseUrl = retryInput.baseUrl;
-    apiKey = retryInput.apiKey;
-    resolvedApiKey = retryInput.resolvedApiKey;
-  }
-  if (params.retryChoice === "model" || params.retryChoice === "both") {
-    modelId = await promptCustomApiModelId(params.prompter);
-  }
-  return { baseUrl, apiKey, resolvedApiKey, modelId };
-}
-
 /** Prompts for a custom API provider and prepares its endpoint config without writing it. */
 export async function promptCustomApiConfig(params: {
   prompter: WizardPrompter;
@@ -251,14 +220,11 @@ export async function promptCustomApiConfig(params: {
     env: process.env,
   }).plugins;
 
-  const baseInput = await promptBaseUrlAndKey({
+  let { baseUrl, apiKey, resolvedApiKey } = await promptBaseUrlAndKey({
     prompter,
     config,
     secretInputMode: params.secretInputMode,
   });
-  let baseUrl = baseInput.baseUrl;
-  let apiKey = baseInput.apiKey;
-  let resolvedApiKey = baseInput.resolvedApiKey;
 
   const compatibilityChoice = await prompter.select({
     message: t("wizard.customProvider.compatibility"),
@@ -334,13 +300,17 @@ export async function promptCustomApiConfig(params: {
       }
     }
     const retryChoice = await promptCustomApiRetryChoice(prompter);
-    ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
-      prompter,
-      config,
-      secretInputMode: params.secretInputMode,
-      retryChoice,
-      current: { baseUrl, apiKey, resolvedApiKey, modelId },
-    }));
+    if (retryChoice === "baseUrl" || retryChoice === "both") {
+      ({ baseUrl, apiKey, resolvedApiKey } = await promptBaseUrlAndKey({
+        prompter,
+        config,
+        secretInputMode: params.secretInputMode,
+        initialBaseUrl: baseUrl,
+      }));
+    }
+    if (retryChoice === "model" || retryChoice === "both") {
+      modelId = await promptCustomApiModelId(prompter);
+    }
     if (compatibilityChoice === "unknown") {
       compatibility = null;
     }

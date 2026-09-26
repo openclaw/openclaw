@@ -5,6 +5,7 @@ import {
   inheritLegacyDefaultAgentId,
   tryGetLegacyDefaultAgentId,
 } from "../../../config/legacy.default-agent-owner.js";
+import { ensureRecord } from "../../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import {
@@ -19,16 +20,6 @@ import {
 } from "./store-migration.js";
 
 type MutableRecord = Record<string, unknown>;
-
-function ensureRecord(container: MutableRecord, key: string): MutableRecord {
-  const existing = asOptionalRecord(container[key]);
-  if (existing) {
-    return existing;
-  }
-  const created: MutableRecord = {};
-  container[key] = created;
-  return created;
-}
 
 function resolvePolicyOwner(params: {
   cfg: OpenClawConfig;

@@ -7,20 +7,12 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  probeInstallPolicy,
-  validateInstallPolicyStatic,
-  type InstallPolicyStaticValidation,
-} from "../security/install-policy.js";
+import { probeInstallPolicy, validateInstallPolicyStatic } from "../security/install-policy.js";
 
 type InstallPolicyHealthOptions = {
   deep?: boolean;
   env?: NodeJS.ProcessEnv;
 };
-
-function formatTargets(validation: InstallPolicyStaticValidation): string {
-  return validation.targets.length > 0 ? validation.targets.join(", ") : "none";
-}
 
 /** Builds doctor note lines for static install policy validation and optional deep probing. */
 async function collectInstallPolicyHealthLines(
@@ -32,7 +24,9 @@ async function collectInstallPolicyHealthLines(
     return [];
   }
 
-  const lines: string[] = [`- Install policy enabled for: ${formatTargets(validation)}`];
+  const lines: string[] = [
+    `- Install policy enabled for: ${validation.targets.length > 0 ? validation.targets.join(", ") : "none"}`,
+  ];
   for (const issue of validation.issues) {
     lines.push(`- ${issue.severity.toUpperCase()}: ${sanitizeTerminalText(issue.message)}`);
   }

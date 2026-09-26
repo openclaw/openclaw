@@ -4,6 +4,7 @@ import {
 } from "@openclaw/model-catalog-core/configured-model-refs";
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   isBlockedLegacyCodexModelRef,
   normalizeRuntimeString,
@@ -11,6 +12,22 @@ import {
   type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
 import type { CodexRouteHit, MutableRecord } from "./codex-route-types.js";
+
+export function visitChannelModelSlots(
+  cfg: OpenClawConfig,
+  visit: (slot: { container: MutableRecord; key: string; path: string }) => void,
+): void {
+  const modelByChannel = asMutableRecord(cfg.channels?.modelByChannel);
+  for (const [channelId, channelMap] of Object.entries(modelByChannel ?? {})) {
+    const container = asMutableRecord(channelMap);
+    if (!container) {
+      continue;
+    }
+    for (const key of Object.keys(container)) {
+      visit({ container, key, path: `channels.modelByChannel.${channelId}.${key}` });
+    }
+  }
+}
 
 export function recordCodexModelHit(params: {
   hits: CodexRouteHit[];

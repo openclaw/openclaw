@@ -40,7 +40,6 @@ import {
 } from "./codex-route-model-ref.js";
 import { maybeRepairCodexSessionRoutes } from "./codex-route-session-repair.js";
 import type {
-  CodexRouteHit,
   CodexRuntimeRouteHit,
   LegacyLosslessCompactionConfig,
   UnsupportedCodexCompactionOverride,
@@ -66,10 +65,6 @@ export function resolveKnownModelRefMigrationTarget(
     migrateLegacyRuntimeModelRef(ref)?.ref ?? toCanonicalOpenAIModelRef(ref) ?? ref;
   const migrated = rewriteKnownModelRefs(providerRef, "model", []).value;
   return typeof migrated === "string" && migrated !== ref ? migrated : undefined;
-}
-
-function formatCodexRouteChange(hit: CodexRouteHit): string {
-  return `${hit.path}: ${hit.model} -> ${hit.canonicalModel}.`;
 }
 
 function formatUnsupportedCompactionWarning(params: {
@@ -506,27 +501,17 @@ export function maybeRepairCodexRoutes(params: {
     (hit) => hit.removable,
   );
   if (
-    hits.length === 0 &&
-    disabledCodexPluginHits.length === 0 &&
-    unsupportedCompactionOverrides.length === 0 &&
-    legacyLosslessCompactionConfigs.length === 0 &&
-    !hasRemovableServiceTier &&
-    !blockedProviderPlan.warning
+    !params.shouldRepair ||
+    (hits.length === 0 &&
+      disabledCodexPluginHits.length === 0 &&
+      unsupportedCompactionOverrides.length === 0 &&
+      legacyLosslessCompactionConfigs.length === 0 &&
+      !hasRemovableServiceTier &&
+      !blockedProviderPlan.warning)
   ) {
     return {
       cfg: params.cfg,
       warnings: collectCodexRouteWarnings({ cfg: params.cfg, env, blockedProviderPlan }),
-      changes: [],
-    };
-  }
-  if (!params.shouldRepair) {
-    return {
-      cfg: params.cfg,
-      warnings: collectCodexRouteWarnings({
-        cfg: params.cfg,
-        env,
-        blockedProviderPlan,
-      }),
       changes: [],
     };
   }
@@ -549,7 +534,7 @@ export function maybeRepairCodexRoutes(params: {
     repaired.changes.length > 0
       ? [
           `Repaired Codex model routes:\n${repaired.changes
-            .map((hit) => `- ${formatCodexRouteChange(hit)}`)
+            .map((hit) => `- ${hit.path}: ${hit.model} -> ${hit.canonicalModel}.`)
             .join("\n")}`,
         ]
       : [];

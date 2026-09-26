@@ -25,7 +25,7 @@ const GATEWAY_BIND_RULE: LegacyConfigRule = {
   path: ["gateway", "bind"],
   message:
     'gateway.bind host aliases (for example 0.0.0.0/localhost) are legacy; use bind modes (lan/loopback/custom/tailnet/auto) instead. Run "openclaw doctor --fix".',
-  match: (value) => isLegacyGatewayBindHostAlias(value),
+  match: (value) => normalizeLegacyGatewayBindHostAlias(value) !== null,
   requireSourceLiteral: true,
 };
 
@@ -65,10 +65,6 @@ const LEGACY_GATEWAY_BIND_HOST_ALIASES = new Map<string, "lan" | "loopback">([
   ["::1", "loopback"],
   ["[::1]", "loopback"],
 ]);
-
-function isLegacyGatewayBindHostAlias(value: unknown): boolean {
-  return normalizeLegacyGatewayBindHostAlias(value) !== null;
-}
 
 function normalizeLegacyGatewayBindHostAlias(value: unknown): "lan" | "loopback" | null {
   const normalized = normalizeOptionalLowercaseString(value);
@@ -226,13 +222,8 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
         return;
       }
 
-      const normalized = normalizeOptionalLowercaseString(bindRaw);
-      if (!normalized) {
-        return;
-      }
       const mapped = normalizeLegacyGatewayBindHostAlias(bindRaw);
-
-      if (!mapped || normalized === mapped) {
+      if (!mapped) {
         return;
       }
 

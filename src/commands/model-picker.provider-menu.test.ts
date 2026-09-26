@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { promptDefaultModel } from "../flows/model-picker.js";
 import { WizardCancelledError, type WizardSelectParams } from "../wizard/prompts.js";
-import { promptDefaultModel } from "./model-picker.js";
 import { makePrompter } from "./setup/__tests__/test-utils.js";
 
 const prepared = vi.hoisted(() => ({ catalog: [] as ModelCatalogEntry[] }));

@@ -13,26 +13,17 @@ import { detectRuntime } from "../infra/runtime-guard.js";
 
 const CHECK_ID = "core/doctor/node-runtime";
 
-function unsupportedNodeFinding(
-  version: string | null,
-  source: "cli" | "gateway-service",
-  capabilityError?: string,
-): HealthFinding {
-  const label = source === "cli" ? "CLI" : "Gateway service";
+function unsupportedNodeFinding(version: string | null, capabilityError?: string): HealthFinding {
   return {
     checkId: CHECK_ID,
     severity: "warning",
-    source,
-    message: `${label} Node ${version ?? "unknown"} is unsupported. Required: ${SUPPORTED_NODE_VERSIONS}.`,
+    source: "gateway-service",
+    message: `Gateway service Node ${version ?? "unknown"} is unsupported. Required: ${SUPPORTED_NODE_VERSIONS}.`,
     requirement: SUPPORTED_NODE_VERSIONS,
     fixHint: [
       ...(capabilityError ? [capabilityError] : []),
       formatUnsupportedNodeVersionMessage(version),
-      ...(source === "gateway-service"
-        ? [
-            "After switching Node, refresh a managed Gateway with `openclaw gateway install --force`; for an externally managed service, have its deployment owner update the launcher.",
-          ]
-        : []),
+      "After switching Node, refresh a managed Gateway with `openclaw gateway install --force`; for an externally managed service, have its deployment owner update the launcher.",
     ].join("\n"),
   };
 }
@@ -86,9 +77,7 @@ async function collectServiceNodeRuntimeFindings(
         throw runtime.error;
       }
       if (runtime.status === "unsupported") {
-        findings.push(
-          unsupportedNodeFinding(runtime.version, "gateway-service", runtime.capabilityError),
-        );
+        findings.push(unsupportedNodeFinding(runtime.version, runtime.capabilityError));
       } else if (runtime.note) {
         findings.push({
           checkId: CHECK_ID,

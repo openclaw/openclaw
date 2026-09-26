@@ -100,10 +100,7 @@ async function maybeRemoveLegacyUsageCostCacheFiles(params: {
     );
     return null;
   });
-  if (!files) {
-    return;
-  }
-  if (files.length === 0) {
+  if (!files?.length) {
     return;
   }
   if (!params.shouldRepair) {

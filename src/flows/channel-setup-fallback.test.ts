@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetupPlugin } from "../channels/plugins/setup-wizard-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { setupChannels } from "./channel-setup.js";
 import {
   externalChatSetupEntries,
@@ -68,7 +69,7 @@ function runChannelSetup(
   );
 }
 
-describe("setupChannels catalog fallback plugin reuse", () => {
+describe("setupChannels status and catalog fallback plugin reuse", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
@@ -106,6 +107,23 @@ describe("setupChannels catalog fallback plugin reuse", () => {
       statusLines: [],
     });
     isChannelConfigured.mockReturnValue(true);
+  });
+
+  it("localizes the channel status note title in the setup flow", async () => {
+    const note = vi.fn(async () => undefined);
+    collectChannelStatus.mockResolvedValue({
+      installedPlugins: [],
+      catalogEntries: [],
+      installedCatalogEntries: [],
+      statusByChannel: new Map(),
+      statusLines: ["Discord: configured"],
+    });
+
+    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, () =>
+      runChannelSetup({}, { note, confirm: vi.fn(async () => false) }),
+    );
+
+    expect(note).toHaveBeenCalledWith("Discord: configured", "频道状态");
   });
 
   it(

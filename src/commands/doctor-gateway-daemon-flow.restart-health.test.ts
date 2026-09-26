@@ -21,7 +21,7 @@ const readLastGatewayErrorLine = vi.hoisted(() => vi.fn(async () => null));
 const readGatewayRestartHandoffSync = vi.hoisted(() => vi.fn(() => null));
 const findSystemGatewayServices = vi.hoisted(() => vi.fn(async () => []));
 const buildGatewayRuntimeHints = vi.hoisted(() => vi.fn((): string[] => []));
-const formatGatewayRuntimeSummary = vi.hoisted(() => vi.fn((): string | null => null));
+const formatRuntimeStatus = vi.hoisted(() => vi.fn((): string | null => null));
 const renderSystemdUnavailableHints = vi.hoisted(() => vi.fn((): string[] => []));
 const isDefaultInstallIdentity = vi.hoisted(() => vi.fn(() => true));
 const isContainerEnvironment = vi.hoisted(() => vi.fn(() => false));
@@ -83,7 +83,8 @@ vi.mock("./daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan: vi.fn(),
   gatewayInstallErrorHint: vi.fn(() => "hint"),
 }));
-vi.mock("./doctor-format.js", () => ({ buildGatewayRuntimeHints, formatGatewayRuntimeSummary }));
+vi.mock("../daemon/runtime-format.js", () => ({ formatRuntimeStatus }));
+vi.mock("./doctor-format.js", () => ({ buildGatewayRuntimeHints }));
 vi.mock("./gateway-install-token.js", () => ({ resolveGatewayInstallToken: vi.fn() }));
 vi.mock("./health.js", () => ({ healthCommandNonExiting: healthCommand }));
 
@@ -114,7 +115,7 @@ describe("maybeRepairGatewayDaemon restart health", () => {
     inspectPortConnections.mockResolvedValue({ port: 18789, connections: [] });
     isExpectedGatewayListeners.mockReturnValue(false);
     buildGatewayRuntimeHints.mockReturnValue([]);
-    formatGatewayRuntimeSummary.mockReturnValue(null);
+    formatRuntimeStatus.mockReturnValue(null);
     renderSystemdUnavailableHints.mockReset().mockReturnValue([]);
   });
 

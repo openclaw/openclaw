@@ -146,17 +146,10 @@ export async function runDoctorRepairSequence(params: {
     }
     appendNotes(warningNotes, mutation.warnings);
   };
-  type RepairStage = (config: DoctorConfigMutationState["candidate"]) =>
-    | {
-        config: DoctorConfigMutationState["candidate"];
-        changes: string[];
-        warnings?: string[];
-      }
-    | Promise<{
-        config: DoctorConfigMutationState["candidate"];
-        changes: string[];
-        warnings?: string[];
-      }>;
+  type RepairMutation = Parameters<typeof applyMutation>[0];
+  type RepairStage = (
+    config: DoctorConfigMutationState["candidate"],
+  ) => RepairMutation | Promise<RepairMutation>;
   const applyRepairStages = async (stages: readonly RepairStage[]): Promise<void> => {
     for (const repair of stages) {
       // Each descriptor consumes the previous repair's candidate; changing the

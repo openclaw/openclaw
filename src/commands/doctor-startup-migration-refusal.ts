@@ -19,33 +19,19 @@ export function throwStartupMigrationIdentityChanged(reason?: string): never {
   );
 }
 
-/**
- * A gateway startup that will refuse readiness must stay side-effect-free: a live owner of
- * this state directory means every pending startup write (config-health recovery, sidecar
- * quarantine, automatic migrations) would mutate its files before the runtime lock refuses.
- * Probe-only: the runtime lock stays owned by the gateway run loop's restart lifecycle.
- * Test runs skip the probe like acquireGatewayLock does (locks are disabled under Vitest).
- * Returns the refusal message so each mutation boundary can report through its own runtime.
- */
-async function describeLiveGatewayOwnerStartupBlocker(
-  env: NodeJS.ProcessEnv,
-): Promise<string | undefined> {
-  if (env.VITEST || env.NODE_ENV === "test") {
-    return undefined;
-  }
-  const { readActiveGatewayLockIdentity } = await import("../infra/gateway-lock.js");
-  const activeGateway = await readActiveGatewayLockIdentity({ env });
-  if (!activeGateway) {
-    return undefined;
-  }
-  return `Another gateway (pid ${activeGateway.pid}) already owns this state directory; refusing to run automatic startup migrations or report the gateway ready. Stop it with "openclaw gateway stop" (or select a different OPENCLAW_STATE_DIR), then retry startup.`;
-}
-
+// Refuse before any startup writes. This probe borrows no ownership from the
+// runtime lock, which remains with the Gateway run loop's restart lifecycle.
 export async function refuseStartupMigrationsForLiveGatewayOwner(
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
-  const blocker = await describeLiveGatewayOwnerStartupBlocker(env);
-  if (blocker) {
-    throwStartupMigrationRefusal(blocker);
+  if (env.VITEST || env.NODE_ENV === "test") {
+    return;
+  }
+  const { readActiveGatewayLockIdentity } = await import("../infra/gateway-lock.js");
+  const activeGateway = await readActiveGatewayLockIdentity({ env });
+  if (activeGateway) {
+    throwStartupMigrationRefusal(
+      `Another gateway (pid ${activeGateway.pid}) already owns this state directory; refusing to run automatic startup migrations or report the gateway ready. Stop it with "openclaw gateway stop" (or select a different OPENCLAW_STATE_DIR), then retry startup.`,
+    );
   }
 }

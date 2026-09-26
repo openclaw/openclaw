@@ -1,4 +1,3 @@
-// Implements identity metadata updates for configured agents.
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -62,7 +61,6 @@ function resolveAgentIdByWorkspace(
   );
 }
 
-/** Update an agent identity from flags or workspace identity markdown. */
 export async function agentsSetIdentityCommand(
   opts: AgentsSetIdentityOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -198,17 +196,16 @@ export async function agentsSetIdentityCommand(
 
   logConfigUpdated(runtime);
   runtime.log(`Agent: ${sanitizeTerminalText(resolvedAgentId)}`);
-  if (committedIdentity.name) {
-    runtime.log(`Name: ${sanitizeTerminalText(committedIdentity.name)}`);
-  }
-  if (committedIdentity.theme) {
-    runtime.log(`Theme: ${sanitizeTerminalText(committedIdentity.theme)}`);
-  }
-  if (committedIdentity.emoji) {
-    runtime.log(`Emoji: ${sanitizeTerminalText(committedIdentity.emoji)}`);
-  }
-  if (committedIdentity.avatar) {
-    runtime.log(`Avatar: ${sanitizeTerminalText(committedIdentity.avatar)}`);
+  for (const [field, label] of [
+    ["name", "Name"],
+    ["theme", "Theme"],
+    ["emoji", "Emoji"],
+    ["avatar", "Avatar"],
+  ] as const) {
+    const value = committedIdentity[field];
+    if (value) {
+      runtime.log(`${label}: ${sanitizeTerminalText(value)}`);
+    }
   }
   runtime.log(`Workspace: ${sanitizeTerminalText(shortenHomePath(storedWorkspaceDir))}`);
   if (locatorDiffers && workspaceLocatorDir) {

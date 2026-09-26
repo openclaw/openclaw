@@ -1,4 +1,5 @@
 // Doctor warning builder for allowlist policies that would block every sender.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
@@ -15,29 +16,13 @@ type CollectEmptyAllowlistPolicyWarningsParams = {
   shouldSkipDefaultEmptyGroupAllowlistWarning?: typeof shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning;
 };
 
-function usesSenderBasedGroupAllowlist(channelName?: string): boolean {
-  return getDoctorChannelCapabilities(channelName).warnOnEmptyGroupSenderAllowlist;
-}
-
-function allowsGroupAllowFromFallback(channelName?: string): boolean {
-  return getDoctorChannelCapabilities(channelName).groupAllowFromFallbackToAllowFrom;
-}
-
 /** Collect DM/group allowlist warnings for one channel or account config record. */
 export function collectEmptyAllowlistPolicyWarningsForAccount(
   params: CollectEmptyAllowlistPolicyWarningsParams,
 ): string[] {
   const warnings: string[] = [];
-  const dmEntry = params.account.dm;
-  const dm =
-    dmEntry && typeof dmEntry === "object" && !Array.isArray(dmEntry)
-      ? (dmEntry as DoctorAccountRecord)
-      : undefined;
-  const parentDmEntry = params.parent?.dm;
-  const parentDm =
-    parentDmEntry && typeof parentDmEntry === "object" && !Array.isArray(parentDmEntry)
-      ? (parentDmEntry as DoctorAccountRecord)
-      : undefined;
+  const dm = asNullableRecord(params.account.dm);
+  const parentDm = asNullableRecord(params.parent?.dm);
   const dmPolicy =
     (params.account.dmPolicy as string | undefined) ??
     (dm?.policy as string | undefined) ??
@@ -63,7 +48,10 @@ export function collectEmptyAllowlistPolicyWarningsForAccount(
     (params.parent?.groupPolicy as string | undefined) ??
     undefined;
 
-  if (groupPolicy !== "allowlist" || !usesSenderBasedGroupAllowlist(params.channelName)) {
+  if (
+    groupPolicy !== "allowlist" ||
+    !getDoctorChannelCapabilities(params.channelName).warnOnEmptyGroupSenderAllowlist
+  ) {
     return warnings;
   }
 
@@ -91,7 +79,9 @@ export function collectEmptyAllowlistPolicyWarningsForAccount(
   // Match runtime semantics: resolveGroupAllowFromSources treats empty arrays as
   // unset and falls back to allowFrom.
   const groupAllowFrom = hasAllowFromEntries(rawGroupAllowFrom) ? rawGroupAllowFrom : undefined;
-  const fallbackToAllowFrom = allowsGroupAllowFromFallback(params.channelName);
+  const fallbackToAllowFrom = getDoctorChannelCapabilities(
+    params.channelName,
+  ).groupAllowFromFallbackToAllowFrom;
   const effectiveGroupAllowFrom =
     groupAllowFrom ?? (fallbackToAllowFrom ? effectiveAllowFrom : undefined);
 

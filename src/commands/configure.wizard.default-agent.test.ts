@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { committedConfigFiles as configFiles } from "./committed-config.test-support.js";
 
-type SetupChannels = typeof import("./onboard-channels.js").setupChannels;
+type SetupChannels = typeof import("../flows/channel-setup.js").setupChannels;
 
 const mocks = vi.hoisted(() => ({
   state: { snapshot: undefined as unknown },
@@ -90,7 +90,10 @@ vi.mock("./onboard-helpers.js", () => ({
 
 vi.mock("./onboard-skills.js", () => ({ setupSkills: mocks.setupSkills }));
 
-vi.mock("./onboard-channels.js", () => ({ setupChannels: mocks.setupChannels }));
+vi.mock("../flows/channel-setup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/channel-setup.js")>()),
+  setupChannels: mocks.setupChannels,
+}));
 
 import { runConfigureWizard } from "./configure.wizard.js";
 

@@ -1,6 +1,7 @@
 // Legacy TTS runtime config migrations for provider aliases, enabled toggles, and voices.
 import {
   defineLegacyConfigMigration,
+  ensureRecord,
   getRecord,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
@@ -36,21 +37,9 @@ function hasLegacyTtsEnabled(value: unknown): boolean {
   return typeof getRecord(value)?.enabled === "boolean";
 }
 
-function hasLegacySpeakerSelectionKeys(value: unknown): boolean {
-  const config = getRecord(value);
-  if (!config) {
-    return false;
-  }
-  return (
-    Object.hasOwn(config, "voice") ||
-    Object.hasOwn(config, "voiceName") ||
-    Object.hasOwn(config, "voiceId")
-  );
-}
-
 function hasLegacyTtsSpeakerSelection(value: unknown): boolean {
   for (const [config] of visitLegacyTtsSpeakerConfigs(value, "")) {
-    if (hasLegacySpeakerSelectionKeys(config)) {
+    if (["voice", "voiceName", "voiceId"].some((key) => Object.hasOwn(config, key))) {
       return true;
     }
   }
@@ -68,16 +57,6 @@ function hasLegacyTtsInLocations(raw: Record<string, unknown>, matcher: LegacyTt
   return false;
 }
 
-function supportsChannelRootTtsMigration(channelId: string): boolean {
-  return !CHANNEL_ROOT_TTS_UNSUPPORTED_IDS.has(channelId.trim().toLowerCase());
-}
-
-function getOrCreateTtsProviders(tts: Record<string, unknown>): Record<string, unknown> {
-  const providers = getRecord(tts.providers) ?? {};
-  tts.providers = providers;
-  return providers;
-}
-
 function mergeLegacyTtsProviderConfig(
   tts: Record<string, unknown>,
   legacyKey: string,
@@ -89,7 +68,7 @@ function mergeLegacyTtsProviderConfig(
   if (!legacyOwner || !legacyValue) {
     return false;
   }
-  const providers = source === "providers" ? legacyOwner : getOrCreateTtsProviders(tts);
+  const providers = source === "providers" ? legacyOwner : ensureRecord(tts, "providers");
   const existing = getRecord(providers[providerId]) ?? {};
   const merged = structuredClone(existing);
   mergeMissing(merged, legacyValue);
@@ -169,16 +148,6 @@ function migrateLegacySpeakerSelectionConfig(
   }
 }
 
-function migrateLegacyTtsSpeakerSelection(
-  tts: Record<string, unknown> | null | undefined,
-  pathLabel: string,
-  changes: string[],
-): void {
-  for (const [config, path] of visitLegacyTtsSpeakerConfigs(tts, pathLabel)) {
-    migrateLegacySpeakerSelectionConfig(config, path, changes);
-  }
-}
-
 function* visitLegacySpeakerSelectionScope(
   value: unknown,
   pathLabel: string,
@@ -230,7 +199,7 @@ function* visitKnownTtsConfigLocations(
       continue;
     }
     const channel = getRecord(channelValue);
-    const migrateRootTts = supportsChannelRootTtsMigration(channelId);
+    const migrateRootTts = !CHANNEL_ROOT_TTS_UNSUPPORTED_IDS.has(channelId.trim().toLowerCase());
     if (migrateRootTts) {
       yield [getRecord(channel?.tts), `channels.${channelId}.tts`];
     }
@@ -266,7 +235,7 @@ const LEGACY_TTS_PROVIDER_RULES: LegacyConfigRule[] = [
     path: ["tts"],
     message:
       'tts legacy provider aliases/keys are legacy; use provider: "microsoft" and tts.providers.<provider>. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyTtsProviderKeys(value),
+    match: hasLegacyTtsProviderKeys,
   },
   {
     path: ["plugins", "entries"],
@@ -281,7 +250,7 @@ const LEGACY_TTS_ENABLED_RULES: LegacyConfigRule[] = [
   {
     path: ["tts"],
     message: 'tts.enabled is legacy; use tts.auto. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyTtsEnabled(value),
+    match: hasLegacyTtsEnabled,
   },
   {
     path: ["agents"],
@@ -308,7 +277,7 @@ const LEGACY_TTS_SPEAKER_SELECTION_RULES: LegacyConfigRule[] = [
     path: ["tts"],
     message:
       'tts speaker selection fields voice/voiceName/voiceId are legacy; use speakerVoice or speakerVoiceId. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyTtsSpeakerSelection(value),
+    match: hasLegacyTtsSpeakerSelection,
   },
   {
     path: ["agents"],
@@ -397,7 +366,9 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS: LegacyConfigMigrationSpec[] =
     legacyRules: LEGACY_TTS_SPEAKER_SELECTION_RULES,
     apply: (raw, changes) => {
       for (const [tts, pathLabel] of visitKnownTtsConfigLocations(raw)) {
-        migrateLegacyTtsSpeakerSelection(tts, pathLabel, changes);
+        for (const [config, path] of visitLegacyTtsSpeakerConfigs(tts, pathLabel)) {
+          migrateLegacySpeakerSelectionConfig(config, path, changes);
+        }
       }
     },
   }),

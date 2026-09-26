@@ -14,7 +14,7 @@ import {
   collectConfiguredPluginIds,
 } from "./missing-configured-plugin-install.ids.js";
 import { resolveRecordInstallPath } from "./missing-configured-plugin-install.install.js";
-import { isTrustedOfficialInstallRecordForCandidate } from "./missing-configured-plugin-install.records.js";
+import { resolveConfiguredPluginCandidateRepair } from "./missing-configured-plugin-install.targets.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
 
 const CONFIGURED_PLUGIN_INSTALLS_CHECK_ID = "core/doctor/configured-plugin-installs";
@@ -93,6 +93,14 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
   const pluginIds = collectConfiguredPluginIds(params.cfg, env);
   const channelIds = collectConfiguredChannelIds(params.cfg, env);
   const blockedPluginIds = collectBlockedPluginIds(params.cfg);
+  const context = await resolveConfiguredPluginInstallContext({
+    cfg: params.cfg,
+    env,
+    configuredPluginIds: pluginIds,
+    configuredChannelIds: channelIds,
+    blockedPluginIds,
+    baselineRecords: params.baselineRecords,
+  });
   const {
     knownIds,
     configuredChannelOwnerPluginIds,
@@ -105,14 +113,7 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     installedPluginIdsWithRepairablePackages: repairableInstalledPluginIds,
     installedPluginMissingRequiredDependencies,
     officialReplacementPluginIds,
-  } = await resolveConfiguredPluginInstallContext({
-    cfg: params.cfg,
-    env,
-    configuredPluginIds: pluginIds,
-    configuredChannelIds: channelIds,
-    blockedPluginIds,
-    baselineRecords: params.baselineRecords,
-  });
+  } = context;
   const deferredPluginIds = new Set<string>();
   const reportedPluginIds = new Set<string>();
   const issues: ConfiguredPluginInstallHealthIssue[] = [];
@@ -228,34 +229,16 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
       ...operatorManagedPluginIds,
     ]),
   })) {
-    if (bundledPluginsById.has(candidate.pluginId)) {
-      continue;
-    }
     if (reportedPluginIds.has(candidate.pluginId)) {
       continue;
     }
-    const shouldReplaceBrokenOfficialInstall = officialReplacementPluginIds.has(candidate.pluginId);
-    if (shouldReplaceBrokenOfficialInstall && !candidate.trustedSourceLinkedOfficialInstall) {
+    const repair = resolveConfiguredPluginCandidateRepair({ candidate, records, env, context });
+    if (!repair) {
       continue;
     }
     const record = records[candidate.pluginId];
-    if (
-      shouldReplaceBrokenOfficialInstall &&
-      !isTrustedOfficialInstallRecordForCandidate({ record, candidate })
-    ) {
-      continue;
-    }
-    const hasRecord = Object.hasOwn(records, candidate.pluginId);
-    const hasUsableRecord =
-      hasRecord && !isPayloadMissing(env, records[candidate.pluginId]?.installPath);
-    if (
-      !shouldReplaceBrokenOfficialInstall &&
-      (hasUsableRecord || (knownIds.has(candidate.pluginId) && !hasRecord))
-    ) {
-      continue;
-    }
     const installSpec = resolvePluginInstallSources(candidate)[0]?.spec;
-    if (shouldReplaceBrokenOfficialInstall) {
+    if (repair.shouldReplaceBrokenOfficialInstall) {
       const installPath = resolveRecordInstallPath(record, env);
       issues.push({
         kind: staleVersionBoundRuntimePluginIds.has(candidate.pluginId)

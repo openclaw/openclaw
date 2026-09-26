@@ -17,17 +17,7 @@ type ConfiguredChannelRemovalChoice = {
 };
 
 type ChannelRemovalSelectValue = { kind: "channel"; id: string } | { kind: "done" };
-type ChannelRemovalOption = Parameters<
-  typeof select<ChannelRemovalSelectValue>
->[0]["options"][number];
-type ChannelRemovalChoiceOption = Extract<
-  ChannelRemovalOption,
-  { value: { kind: "channel"; id: string } }
->;
-type ChannelRemovalDoneOption = Extract<ChannelRemovalOption, { value: { kind: "done" } }>;
-
 const RESERVED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
-const DONE_VALUE: Extract<ChannelRemovalSelectValue, { kind: "done" }> = { kind: "done" };
 
 function listConfiguredChannelRemovalChoices(
   cfg: OpenClawConfig,
@@ -87,17 +77,17 @@ export async function removeChannelConfigWizard(
       return next;
     }
 
-    const channelOptions = configured.map<ChannelRemovalChoiceOption>((meta) => ({
-      value: { kind: "channel" as const, id: meta.id },
-      label: meta.label,
-      hint: "Deletes tokens + settings from config (credentials stay on disk)",
-    }));
-    const doneOption: ChannelRemovalDoneOption = { value: DONE_VALUE, label: "Done" };
-    const options: ChannelRemovalOption[] = [...channelOptions, doneOption];
     const choice = guardCancel(
       await select<ChannelRemovalSelectValue>({
         message: "Remove which channel config?",
-        options,
+        options: [
+          ...configured.map((meta) => ({
+            value: { kind: "channel" as const, id: meta.id },
+            label: meta.label,
+            hint: "Deletes tokens + settings from config (credentials stay on disk)",
+          })),
+          { value: { kind: "done" }, label: "Done" },
+        ],
       }),
       runtime,
       1,
@@ -121,10 +111,10 @@ export async function removeChannelConfigWizard(
       continue;
     }
 
-    const nextChannels: Record<string, unknown> = { ...next.channels };
+    const nextChannels = { ...next.channels };
     delete nextChannels[channel];
     if (Object.keys(nextChannels).length) {
-      next.channels = nextChannels as OpenClawConfig["channels"];
+      next.channels = nextChannels;
     } else {
       delete next.channels;
     }

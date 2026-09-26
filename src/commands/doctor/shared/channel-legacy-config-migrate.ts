@@ -98,14 +98,8 @@ function collectPluginDoctorCompatibilityIds(params: {
   raw: unknown;
   unresolvedChannelIds: readonly string[];
 }): string[] {
-  const unresolvedChannelIds = new Set(params.unresolvedChannelIds);
   return [
-    ...new Set([
-      ...params.unresolvedChannelIds,
-      ...collectDoctorConfigRepairPluginIds(params.raw).filter(
-        (pluginId) => !unresolvedChannelIds.has(pluginId),
-      ),
-    ]),
+    ...new Set([...params.unresolvedChannelIds, ...collectDoctorConfigRepairPluginIds(params.raw)]),
   ].toSorted();
 }
 

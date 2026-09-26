@@ -81,20 +81,11 @@ export async function resolveAgentExecPrompt(
 }
 
 /**
- * Facts owned by this invocation rather than by any config, so they win over
- * both the ambient config and `--config`: exec is always scoped to the folder
- * it was pointed at, a one-shot turn never bootstraps, and explicit flags
- * outrank whatever the resolved config says.
+ * Keep state under exec's lock and bind every agent to the requested folder.
+ * Per-agent workspaces outrank defaults; ACP cwd can redirect the native harness.
+ * Channel binding cwd needs no adjustment because exec matches no channel.
  */
-/**
- * Drops inherited state and workspace location overrides, which outrank the
- * facts this invocation owns. `session.store` and `agentDir` can redirect state
- * outside the invocation root, where its lock or temporary cleanup cannot own
- * it; a native harness `runtime.acp.cwd` can make the turn edit the wrong repo.
- * `agents.bindings[].acp.cwd` needs no equivalent because exec runs no channel,
- * so no binding matches.
- */
-function stripInheritedAgentLocations(base: OpenClawConfig): OpenClawConfig {
+function pinExecAgentLocations(base: OpenClawConfig, cwd: string): OpenClawConfig {
   const { session, ...root } = base;
   const { store: _store, ...sessionWithoutStore } = session ?? {};
   const withoutSessionStore = session ? { ...root, session: sessionWithoutStore } : base;
@@ -110,39 +101,13 @@ function stripInheritedAgentLocations(base: OpenClawConfig): OpenClawConfig {
         Object.entries(entries).map(([id, entry]) => {
           const { agentDir: _agentDir, runtime, ...rest } = entry;
           if (runtime?.type !== "acp" || runtime.acp?.cwd === undefined) {
-            return [id, { ...rest, ...(runtime ? { runtime } : {}) }];
+            return [id, { ...rest, workspace: cwd, ...(runtime ? { runtime } : {}) }];
           }
           const { cwd: _cwd, ...acp } = runtime.acp;
-          return [id, { ...rest, runtime: { ...runtime, acp } }];
+          return [id, { ...rest, workspace: cwd, runtime: { ...runtime, acp } }];
         }),
       ),
     },
-  };
-}
-
-function buildExecRunOverlay(params: {
-  base: OpenClawConfig;
-  cwd: string;
-  opts: Pick<AgentExecCliOptions, "localModelLean">;
-}): OpenClawConfig {
-  // A per-agent `workspace` outranks `agents.defaults`, so pinning only the
-  // defaults would let an inherited entry silently run the turn against a
-  // different repository. Override every configured entry as well.
-  const entries = Object.keys(params.base.agents?.entries ?? {});
-  return {
-    agents: {
-      defaults: {
-        workspace: params.cwd,
-        skipBootstrap: true,
-        ...(params.opts.localModelLean ? { experimental: { localModelLean: true } } : {}),
-      },
-      ...(entries.length > 0
-        ? { entries: Object.fromEntries(entries.map((id) => [id, { workspace: params.cwd }])) }
-        : {}),
-    },
-    // This process exits after one turn, so live skill invalidation cannot be
-    // observed and would leave Chokidar retaining the otherwise-finished CLI.
-    skills: { load: { watch: false } },
   };
 }
 
@@ -168,47 +133,27 @@ function buildExecConfigDefaults(): OpenClawConfig {
 }
 
 /**
- * Resolves the config exec runs against. Default is the ambient config, so a
- * one-shot turn behaves like other folder-scoped coding CLIs and can reach
- * configured providers, credentials, and `agentRuntime` harness choices.
- *
- * `--auth-env-only` opts out of that inheritance entirely rather than trying to
- * launder the resolved config. A config is a credential store by design -- API
- * keys, secret headers, request auth, an inline `env` block, and login-shell
- * import all feed provider auth -- so the only closed way to promise
- * environment-only credentials is to not read it.
+ * Config is a credential source (provider keys, headers, env and shell imports).
+ * Environment-only execution therefore skips it entirely; ordinary exec inherits it.
  */
 export async function resolveExecBaseConfig(
   opts: Pick<AgentExecCliOptions, "authEnvOnly" | "config" | "isolated">,
 ): Promise<OpenClawConfig> {
-  // `--isolated` and `--auth-env-only` both mean "read no config", so pairing
-  // either with `--config` is a contradiction. Failing beats silently ignoring
-  // the pinned file, which would run a CI invocation on bare exec defaults.
   if (opts.config && (opts.isolated || opts.authEnvOnly === true)) {
     const conflicting = opts.isolated ? "--isolated" : "--auth-env-only";
     throw new Error(`--config cannot be combined with ${conflicting}.`);
   }
   if (opts.isolated || opts.authEnvOnly === true) {
-    // A missing config is normally passed through the persisted-config
-    // migrations, which materialize the legacy main agent. Configless exec
-    // modes must preserve that runtime contract even though they skip all
-    // authored config and its credential surfaces.
+    // Configless exec still needs the roster that ordinary missing-config migration supplies.
     const { migratePersistedImplicitMainRoster } = await import("../config/legacy.roster.js");
     const { coerceConfig } = await import("../config/io.read-helpers.js");
     return coerceConfig(migratePersistedImplicitMainRoster({}).config);
   }
   const { createConfigIO, getRuntimeConfig } = await import("../config/io.js");
   if (!opts.config) {
-    // Ambient means "whatever this process considers effective", so this honors a
-    // runtime snapshot an in-process caller already published and otherwise loads
-    // the ordinary config file exactly as any other command does.
     return getRuntimeConfig();
   }
-  // `--config` pins an exact file. The factory loader reads that file directly --
-  // unlike the module-level loader it never resolves from a published runtime
-  // snapshot, so a pinned run cannot be shadowed by one. It throws on a config
-  // that exists but is invalid, so the run cannot silently degrade to exec
-  // defaults, and it finalizes the load (config `env` block, shell-env fallback).
+  // A pinned file bypasses the published runtime snapshot and fails if missing or invalid.
   const io = createConfigIO({ configPath: path.resolve(opts.config) });
   if (!existsSync(io.configPath)) {
     throw new Error(`--config file not found: ${io.configPath}`);
@@ -222,9 +167,16 @@ export function buildExecRunConfig(params: {
   opts?: Pick<AgentExecCliOptions, "localModelLean">;
 }): OpenClawConfig {
   const opts = params.opts ?? {};
-  const base = stripInheritedAgentLocations(params.base);
-  return mergeDeep(
-    mergeDeep(buildExecConfigDefaults(), base),
-    buildExecRunOverlay({ base, cwd: params.cwd, opts }),
-  ) as OpenClawConfig; // SAFETY: Merging three typed configs preserves the OpenClawConfig shape.
+  const base = pinExecAgentLocations(params.base, params.cwd);
+  return mergeDeep(mergeDeep(buildExecConfigDefaults(), base), {
+    agents: {
+      defaults: {
+        workspace: params.cwd,
+        skipBootstrap: true,
+        ...(opts.localModelLean ? { experimental: { localModelLean: true } } : {}),
+      },
+    },
+    // A one-shot process cannot observe invalidation; a watcher would retain it after the turn.
+    skills: { load: { watch: false } },
+  }) as OpenClawConfig; // SAFETY: Merging three typed configs preserves the OpenClawConfig shape.
 }

@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CronQuarantinedJob } from "../../../cron/store.js";
 import { parseJsonWithJson5Fallback } from "../../../utils/parse-json-compat.js";
-import { archiveLegacyCronFile } from "./legacy-store-migration.js";
 
 export type LegacyCronQuarantine = {
   path: string;
@@ -78,9 +77,4 @@ export async function loadLegacyCronQuarantineForMigration(
     sourceSha256: createHash("sha256").update(raw).digest("hex"),
     jobs,
   };
-}
-
-/** Archives the exact quarantine source already committed to SQLite. */
-export async function archiveLegacyCronQuarantineForMigration(quarantine: LegacyCronQuarantine) {
-  return await archiveLegacyCronFile(quarantine.path, quarantine.sourceSha256);
 }

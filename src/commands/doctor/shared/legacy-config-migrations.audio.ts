@@ -7,20 +7,17 @@ import {
   type LegacyConfigMigrationSpec,
 } from "../../../config/legacy.shared.js";
 
-function applyLegacyAudioTranscriptionModel(params: {
-  raw: Record<string, unknown>;
-  source: unknown;
-  changes: string[];
-  movedMessage: string;
-  alreadySetMessage: string;
-  invalidMessage: string;
-}) {
-  const mapped = mapLegacyAudioTranscription(params.source);
+function applyLegacyAudioTranscriptionModel(
+  raw: Record<string, unknown>,
+  source: unknown,
+  changes: string[],
+) {
+  const mapped = mapLegacyAudioTranscription(source);
   if (!mapped) {
-    params.changes.push(params.invalidMessage);
+    changes.push("Removed audio.transcription (invalid or empty command).");
     return;
   }
-  const tools = ensureRecord(params.raw, "tools");
+  const tools = ensureRecord(raw, "tools");
   const media = ensureRecord(tools, "media");
   const mediaAudio = ensureRecord(media, "audio");
   const models = Array.isArray(media.models) ? (media.models as unknown[]) : [];
@@ -38,10 +35,10 @@ function applyLegacyAudioTranscriptionModel(params: {
     mediaAudio.preferredModel =
       typeof mapped.command === "string" ? `cli:${mapped.command}` : undefined;
     media.models = [...models, { ...mapped, capabilities: ["audio"] }];
-    params.changes.push(params.movedMessage);
+    changes.push("Moved audio.transcription → tools.media.models.");
     return;
   }
-  params.changes.push(params.alreadySetMessage);
+  changes.push("Removed audio.transcription (tools.media.models already set).");
 }
 
 /** Legacy config migration specs for audio/tool media config. */
@@ -61,14 +58,7 @@ export const LEGACY_CONFIG_MIGRATIONS_AUDIO: LegacyConfigMigrationSpec[] = [
         return;
       }
 
-      applyLegacyAudioTranscriptionModel({
-        raw,
-        source: audio.transcription,
-        changes,
-        movedMessage: "Moved audio.transcription → tools.media.models.",
-        alreadySetMessage: "Removed audio.transcription (tools.media.models already set).",
-        invalidMessage: "Removed audio.transcription (invalid or empty command).",
-      });
+      applyLegacyAudioTranscriptionModel(raw, audio.transcription, changes);
       delete audio.transcription;
       if (Object.keys(audio).length === 0) {
         delete raw.audio;

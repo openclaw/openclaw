@@ -55,58 +55,19 @@ type RemoteGatewayInferenceOnboardingDeps = {
 function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupInferenceDetection {
   return {
     candidates: result.candidates.map((candidate) => ({
-      kind: candidate.kind,
-      ...(candidate.brandId !== undefined ? { brandId: candidate.brandId } : {}),
-      label: candidate.label,
-      detail: candidate.detail,
-      modelRef: candidate.modelRef,
-      ...(candidate.modelTarget ? { modelTarget: candidate.modelTarget } : {}),
-      ...(candidate.icon !== undefined ? { icon: candidate.icon } : {}),
-      ...(candidate.website !== undefined ? { website: candidate.website } : {}),
+      ...candidate,
       // Gateway ordering is authoritative; the guided candidate shape no
       // longer permits a second client-side recommendation signal.
       recommended: false,
-      ...(candidate.credentials !== undefined ? { credentials: candidate.credentials } : {}),
     })),
-    manualProviders: result.manualProviders.map((provider) => ({
-      id: provider.id,
-      ...(provider.brandId !== undefined ? { brandId: provider.brandId } : {}),
-      label: provider.label,
-      ...(provider.modelTarget ? { modelTarget: provider.modelTarget } : {}),
-      ...(provider.hint !== undefined ? { hint: provider.hint } : {}),
-      ...(provider.icon !== undefined ? { icon: provider.icon } : {}),
-      ...(provider.website !== undefined ? { website: provider.website } : {}),
-    })),
-    authOptions: (result.authOptions ?? []).map((option) =>
-      Object.assign(
-        {
-          id: option.id,
-          ...(option.brandId !== undefined ? { brandId: option.brandId } : {}),
-          label: option.label,
-          kind: option.kind,
-          featured: option.featured,
-          ...(option.modelTarget ? { modelTarget: option.modelTarget } : {}),
-        },
-        option.hint !== undefined ? { hint: option.hint } : {},
-        option.groupLabel !== undefined ? { groupLabel: option.groupLabel } : {},
-        option.icon !== undefined ? { icon: option.icon } : {},
-        option.website !== undefined ? { website: option.website } : {},
-      ),
+    manualProviders: result.manualProviders.map(
+      ({ groupLabel: _groupLabel, ...provider }) => provider,
     ),
+    authOptions: result.authOptions ?? [],
     ...(result.prepareOptions !== undefined
       ? {
-          prepareOptions: result.prepareOptions.map((option) =>
-            Object.assign(
-              {
-                id: option.id,
-                label: option.label,
-                ...(option.modelTarget ? { modelTarget: option.modelTarget } : {}),
-              },
-              option.brandId !== undefined ? { brandId: option.brandId } : {},
-              option.hint !== undefined ? { hint: option.hint } : {},
-              option.icon !== undefined ? { icon: option.icon } : {},
-              option.website !== undefined ? { website: option.website } : {},
-            ),
+          prepareOptions: result.prepareOptions.map(
+            ({ actionLabel: _actionLabel, ...option }) => option,
           ),
         }
       : {}),
