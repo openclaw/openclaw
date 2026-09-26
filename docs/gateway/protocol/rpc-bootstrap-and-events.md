@@ -135,6 +135,11 @@ count.
   availability, and loaded cron bindings can produce broad invalidations.
   Activity-summary-only publications update opted-in Activity consumers; shared
   session and agent rosters do not refetch for those recap-only changes.
+  Prepared row publications yield between bounded slices during bursts. Pending
+  activity-summary updates for the same session generation share the latest
+  snapshot; lifecycle, capacity, transcript, deletion, and clearing receipts remain
+  distinct. Publication rechecks row readiness after each yield, and shutdown joins
+  admitted publications before disposing their projection.
   Authorized incognito descriptions and events use the same row presentation from
   transient process-local state. Incognito rows remain excluded from the session
   roster, and queued events cannot cross a reset or database replacement.
