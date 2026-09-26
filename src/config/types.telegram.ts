@@ -112,6 +112,10 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
     webhookPath?: string;
     /** Webhook forwarding endpoint (default 127.0.0.1:8787); false uses only the Gateway port. */
     legacyWebhook?: false | { port: number; host?: string };
+    /** @deprecated Legacy input only; Doctor migrates this to legacyWebhook.host. */
+    webhookHost?: string;
+    /** @deprecated Legacy input only; Doctor migrates this to legacyWebhook.port. */
+    webhookPort?: number;
     /** Path to the self-signed certificate (PEM) to upload to Telegram during webhook registration. */
     webhookCertPath?: string;
     /** Per-action tool gating (default: true for all). */

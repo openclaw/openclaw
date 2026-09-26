@@ -108,7 +108,7 @@ describe("telegram doctor", () => {
             webhookHost: "127.0.0.1",
           },
         },
-      } as OpenClawConfig,
+      } satisfies OpenClawConfig,
     });
     expect(normalized.config.channels?.telegram).toMatchObject({
       legacyWebhook: { port: 8787, host: "127.0.0.1" },
@@ -133,7 +133,7 @@ describe("telegram doctor", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } satisfies OpenClawConfig,
     });
     expect(config.channels?.telegram).not.toHaveProperty("webhookPort");
     for (const accountId of ["inherited", "disabled"]) {
