@@ -12,10 +12,8 @@ import {
   type ControlUiAssetManifestEntry,
 } from "../../../src/gateway/control-ui-asset-manifest.ts";
 import { createControlUiAssetRetention } from "../../../src/gateway/control-ui-asset-retention.ts";
-import {
-  handleControlUiHttpRequest,
-  type ControlUiRootState,
-} from "../../../src/gateway/control-ui.ts";
+import { handleControlUiHttpRequest } from "../../../src/gateway/control-ui.ts";
+import type { ControlUiRootState } from "../../../src/gateway/server-control-ui-root.ts";
 import { withEnvAsync } from "../../../src/test-utils/env.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { resolvePlaywrightChromiumExecutablePath } from "../test-helpers/control-ui-e2e.ts";

@@ -1,10 +1,7 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
-import {
-  shouldStageStructuredDraft,
-  structuredDraftInitialValue,
-} from "../../components/config-form-structured-draft.ts";
+import { resolveStructuredDraftInitialValue } from "../../components/config-form-structured-draft.ts";
 import { renderMapField } from "../../components/config-form.node.collection-map.ts";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import {
@@ -46,7 +43,7 @@ export function flattenPluginSettingsFields(
 ): PluginSettingsField[] {
   const { label, help } = resolveConfigFieldMeta(params.path, params.schema, params.hints);
   const labels = [...ancestors, label];
-  const initial = structuredDraftInitialValue(params);
+  const initial = resolveStructuredDraftInitialValue(params);
   // SecretRef metadata stays atomic; source/provider/id are not child settings.
   if (
     schemaType(params.schema) === "object" &&
@@ -58,7 +55,7 @@ export function flattenPluginSettingsFields(
     !params.schema.enum &&
     !isSecretRefObject(params.value) &&
     !params.unsupported.has(pathKey(params.path)) &&
-    !shouldStageStructuredDraft(params, initial)
+    initial === undefined
   ) {
     return resolveConfigObjectFields(params).fields.flatMap((field) =>
       flattenPluginSettingsFields(field, rootProperty, labels),
@@ -338,9 +335,9 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
           onRemove: props.onConfigRemove,
         }
       : null;
-    const initial = params ? structuredDraftInitialValue(params) : undefined;
+    const initial = params ? resolveStructuredDraftInitialValue(params) : undefined;
     const fields =
-      params && shouldStageStructuredDraft(params, initial)
+      params && initial !== undefined
         ? html`<openclaw-config-form-structured-draft
             .props=${{ identity: JSON.stringify(params.path), sourceIdentity: params.value, initialValue: initial, params, renderNode: (p: ConfigNodeRenderParams) => this.renderGroups(p, permissions) }}
           ></openclaw-config-form-structured-draft>`
