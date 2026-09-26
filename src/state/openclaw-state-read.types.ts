@@ -73,6 +73,7 @@ import type {
   TaskRegistryMutationScope,
   TaskRegistryStoreSnapshot,
 } from "../tasks/task-registry.store.types.js";
+import type { TuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import type {
   AgentDatabaseDeletionSnapshot,
   AgentDeletionJournalPurpose,
@@ -121,8 +122,7 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
-  | { type: "tui.lastSession.read"; stateKey: string }
-  | { type: "tui.lastSession.retiredPointers"; retiredSessionKeys: string[] }
+  | TuiLastSessionReadCommand
   | ChannelIngressReadCommand
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "config.snapshot.read" }

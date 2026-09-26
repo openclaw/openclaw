@@ -68,6 +68,7 @@ import {
   readTaskRegistryMutationSnapshotInDatabase,
   readTaskRegistrySnapshot,
 } from "../tasks/task-registry.store.kernel.js";
+import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
 import {
   readAgentDatabaseDeletionSnapshotInDatabase,
@@ -366,12 +367,6 @@ serveOwnedWorkerTasks(
                         ? readTaskRegistrySnapshot({ db, path: input.databasePath })
                         : readTaskRegistryMutationSnapshotInDatabase(db, command.input),
                   };
-                }
-                if (
-                  command.type === "tui.lastSession.read" ||
-                  command.type === "tui.lastSession.retiredPointers"
-                ) {
-                  return readTuiLastSessionCommand(db, command);
                 }
                 if (command.type === "tasks.retentionSource") {
                   const task = readTaskRecord(db, command.taskId);
@@ -683,7 +678,9 @@ serveOwnedWorkerTasks(
                     ),
                   };
                 }
-                return readStateRegistryCommand(db, command);
+                return isTuiLastSessionReadCommand(command)
+                  ? readTuiLastSessionCommand(db, command)
+                  : readStateRegistryCommand(db, command);
               },
               ...locationArgs,
             );
