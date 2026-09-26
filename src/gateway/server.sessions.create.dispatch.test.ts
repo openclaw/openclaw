@@ -10,6 +10,7 @@ import {
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import { identifiedClient } from "./server-methods/sessions-sharing.test-support.js";
@@ -248,6 +249,7 @@ test.each(mentionCreationOwners)(
       const sender = { ...identifiedClient(alice.id, "Alice"), connId: "alice-create" };
       const recipient = { ...identifiedClient(bob.id, "Bob"), connId: "bob-create" };
       const inbox = createMentionInbox({
+        scheduler: createTestGatewayScheduler(),
         gatewayInstanceId: "first-message-mentions",
         getRuntimeConfig,
         getClients: () => [sender, recipient],

@@ -23,11 +23,11 @@ import {
   type SessionTranscriptInitializationPublication,
 } from "./session-accessor.sqlite-entry-cache.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
-import {
-  prepareSessionEntryReplacementPublication,
-  type SessionEntryReplacementCommit,
-  type SessionEntryReplacementCommitted,
-} from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import type {
+  SessionEntryReplacementCommit,
+  SessionEntryReplacementCommitted,
+} from "./session-accessor.sqlite-replacement-types.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 
 type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };

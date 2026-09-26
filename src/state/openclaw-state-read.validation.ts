@@ -112,6 +112,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           (Array.isArray(input.command.input)
             ? Array.from(input.command.input).every(isTaskSnapshotScope)
             : isTaskSnapshotScope(input.command.input)))) ||
+      (input.command.type === "tasks.retentionSource" &&
+        typeof input.command.taskId === "string") ||
       (input.command.type === "subagents.runs" &&
         isRecord(input.command.scope) &&
         ((input.command.scope.kind === "session" &&

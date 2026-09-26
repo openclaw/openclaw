@@ -38,11 +38,17 @@ import {
 import { selectExistingTaskForCreate } from "../tasks/task-registry-create-rules.js";
 import { runTaskCreateOperation } from "../tasks/task-registry-create.operation.js";
 import { assertParentFlowRecordLinkAllowed } from "../tasks/task-registry-parent-flow-rules.js";
-import { findLatestTaskForFlowInSnapshot } from "../tasks/task-registry-records.js";
+import {
+  findLatestTaskForFlowInSnapshot,
+  normalizeTaskTimestamps,
+} from "../tasks/task-registry-records.js";
 import type {
   TaskMirroredFlowSyncOutcome,
   TaskRegistryRestoreResult,
 } from "../tasks/task-registry-restore.worker.js";
+import { captureTaskRetentionCommit } from "../tasks/task-registry-retention-receipt.js";
+import { captureTaskRetentionSource } from "../tasks/task-registry-retention-source.js";
+import { prepareTaskRetention } from "../tasks/task-registry-retention.operation.js";
 import type { TaskWorkerTransitionInput } from "../tasks/task-registry-transition.kernel.js";
 import { runTaskRecordTransitionOperation } from "../tasks/task-registry-transition.operation.js";
 import type { TaskRegistryStore, TaskRegistryStoreSnapshot } from "../tasks/task-registry.store.js";
@@ -130,6 +136,11 @@ export function createInMemoryTaskRegistryStore(
 ): TaskRegistryStore {
   const state = structuredClone(snapshot);
   return {
+    async prepareRetentionSourceAsync(context, taskId) {
+      context.admission.assertCurrent();
+      const task = this.loadSnapshot().tasks.get(taskId);
+      return task ? captureTaskRetentionSource(normalizeTaskTimestamps(task)) : undefined;
+    },
     settleAgentEventWrites(join) {
       join(performance.now() + 5_000);
     },
@@ -208,6 +219,25 @@ export function createInMemoryTaskRegistryStore(
           input: TaskInitialWorkerOperations[Key]["input"],
         ) => TaskInitialWorkerOperations[Key]["output"];
       } = {
+        "tasks.applyRetention": (input) => {
+          const stored = state.tasks.get(input.taskId);
+          const current = stored && normalizeTaskTimestamps(stored);
+          if (!current || captureTaskRetentionSource(current).version !== input.sourceVersion) {
+            return { kind: "unchanged" };
+          }
+          const result = prepareTaskRetention(current, input);
+          assertCurrent();
+          if (result.kind === "pruned") {
+            state.tasks.delete(input.taskId);
+            state.deliveryStates.delete(input.taskId);
+          } else if (result.kind === "stamped") {
+            this.upsertTaskWithDeliveryState({
+              task: result.task,
+              deliveryState: state.deliveryStates.get(input.taskId),
+            });
+          }
+          return result.kind === "unchanged" ? result : captureTaskRetentionCommit(input, result);
+        },
         "tasks.transitionRunRow": (input) => transitionRecord(input),
         "tasks.bindRunOwner": (input) => transitionRecord({ kind: "run-owner", ...input }),
         "tasks.acknowledgeStateChange": (input) =>
@@ -460,10 +490,6 @@ export function createInMemoryTaskRegistryStore(
       } else {
         state.deliveryStates.delete(task.taskId);
       }
-    },
-    deleteTaskWithDeliveryState: (taskId) => {
-      state.tasks.delete(taskId);
-      state.deliveryStates.delete(taskId);
     },
     upsertDeliveryState: (deliveryState) => {
       state.deliveryStates.set(deliveryState.taskId, structuredClone(deliveryState));

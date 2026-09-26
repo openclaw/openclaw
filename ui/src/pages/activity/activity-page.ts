@@ -20,6 +20,7 @@ import { readPresenceEntries, type PresencePayload } from "../../app/user-profil
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
 import { renderLoadingState } from "../../components/loading-state.ts";
+import { renderSettingsStatus } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
@@ -35,7 +36,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { StreamAutoFollowController } from "../../lit/stream-auto-follow-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderCurrentWork } from "./current-work-view.ts";
-import type { LiveActivity } from "./live-activity.ts";
+import { createLiveActivity, type LiveActivity } from "./live-activity.ts";
 import {
   activityRunInspectorSearch,
   mergeDecisionPage,
@@ -96,7 +97,7 @@ class ActivityPage extends OpenClawLightDomElement {
   @state() private runInspector: RunInspectorState = { status: "empty" };
   @state() private presencePayload: PresencePayload | undefined;
 
-  private liveActivitySource: LiveActivity | null = null;
+  private liveActivity: LiveActivity | null = null;
   private liveActivityRevision = -1;
   private readonly sessionActivity = new SessionActivityController(this);
   private sessionActivityRevision = -1;
@@ -114,28 +115,22 @@ class ActivityPage extends OpenClawLightDomElement {
       () => this.context?.agents,
       (agents, notify) => agents.subscribe(notify),
     )
-    .watch(
-      () =>
-        (this.routeData ?? this.presentedRoute?.data)?.mode === "live"
-          ? this.context?.liveActivity
-          : null,
-      (activity, notify) => activity.subscribe(notify),
-      (activity) => {
-        const snapshot = activity.snapshot;
-        const reset =
-          activity !== this.liveActivitySource || snapshot.revision !== this.liveActivityRevision;
-        this.liveActivitySource = activity;
-        this.liveActivityRevision = snapshot.revision;
-        this.entries = snapshot.entries;
-        if (reset) {
-          this.expandedIds = new Set();
-          this.streamFollow.atBottom = true;
-        }
-      },
-    )
     .effect(
       () => this.context?.gateway,
       (gateway) => {
+        const activity = createLiveActivity(gateway, this.context.sessions);
+        this.liveActivity = activity;
+        this.entries = [];
+        this.expandedIds = new Set();
+        const stopActivity = activity.subscribe((snapshot) => {
+          this.entries = snapshot.entries;
+          this.requestUpdate();
+          if (snapshot.revision !== this.liveActivityRevision) {
+            this.liveActivityRevision = snapshot.revision;
+            this.expandedIds = new Set();
+            this.streamFollow.atBottom = true;
+          }
+        });
         this.applyGatewaySnapshot(gateway, gateway.snapshot, true);
         const stopEvents = gateway.subscribeEvents((event) => {
           this.applyGatewayEvent(gateway, event);
@@ -144,6 +139,9 @@ class ActivityPage extends OpenClawLightDomElement {
           this.applyGatewaySnapshot(gateway, snapshot, false),
         );
         return () => {
+          stopActivity();
+          activity.dispose();
+          this.liveActivity = null;
           stopGateway();
           stopEvents();
         };
@@ -166,6 +164,9 @@ class ActivityPage extends OpenClawLightDomElement {
   }
 
   override updated(changed: PropertyValues) {
+    this.liveActivity?.syncSessions(
+      this.routeData?.mode === "live" ? (this.sessionActivity.result?.sessions ?? []) : [],
+    );
     if (changed.has("routeLocation")) {
       this.bindInspectorRoute();
     }
@@ -508,7 +509,7 @@ class ActivityPage extends OpenClawLightDomElement {
   }
 
   private clearEntries() {
-    this.context.liveActivity.clear();
+    this.liveActivity?.clear();
   }
 
   private renderMode(route: ActivityRouteData, location: RouteLocation, pending: boolean) {
@@ -595,6 +596,16 @@ class ActivityPage extends OpenClawLightDomElement {
         error: this.sessionActivity.error,
         onRetry: () => this.syncSessionActivity("retry"),
       })}
+      ${
+        this.liveActivity?.snapshot.error
+          ? html`<div role="alert">
+              ${renderSettingsStatus({ kind: "danger", label: this.liveActivity.snapshot.error })}
+              <button type="button" class="btn btn--sm" @click=${() => this.liveActivity?.retry()}>
+                ${t("common.retry")}
+              </button>
+            </div>`
+          : nothing
+      }
       ${renderActivity({
         basePath: this.context.basePath,
         entries: this.entries,

@@ -77,6 +77,12 @@ import {
   type ManagedImageRecord,
 } from "./managed-image-record-store.js";
 import { resolveManagedImageThumbnail } from "./managed-image-thumbnail-cache.js";
+import {
+  MANAGED_OUTGOING_ATTACHMENT_ID_RE,
+  MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
+  MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX,
+  parseManagedOutgoingArtifactId,
+} from "./managed-outgoing-artifact-id.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import {
@@ -84,17 +90,18 @@ import {
   readSessionMessagesWithSourceAsync,
 } from "./session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+export {
+  MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
+  MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX,
+  parseManagedOutgoingArtifactId,
+} from "./managed-outgoing-artifact-id.js";
 
 const OUTGOING_IMAGE_ROUTE_PREFIX = "/api/chat/media/outgoing";
 const DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS = 15 * 60 * 1000;
 const MANAGED_OUTGOING_IMAGE_TICKET_SCOPE = "managed-outgoing-image";
 const MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS = 5 * 60 * 1000;
-export const MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX = "artifact_managed_image_";
-export const MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX = "artifact_managed_media_";
 // Chat previews occupy up to 400 CSS pixels on displays with up to 3× density.
 const MANAGED_IMAGE_THUMBNAIL_MAX_SIDE = 1200;
-const MANAGED_OUTGOING_ATTACHMENT_ID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const managedOutgoingImageTicketSecret = randomBytes(32);
 
 export const DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS = {
@@ -438,25 +445,6 @@ function buildManagedOutgoingArtifactId(attachmentId: string, kind: ManagedMedia
       ? MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX
       : MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX;
   return `${prefix}${attachmentId}`;
-}
-
-export function parseManagedOutgoingArtifactId(
-  value: string,
-): { attachmentId: string; family: "image" | "media" } | null {
-  const family = value.startsWith(MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX)
-    ? "image"
-    : value.startsWith(MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX)
-      ? "media"
-      : null;
-  if (!family) {
-    return null;
-  }
-  const prefix =
-    family === "image"
-      ? MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX
-      : MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX;
-  const attachmentId = value.slice(prefix.length);
-  return MANAGED_OUTGOING_ATTACHMENT_ID_RE.test(attachmentId) ? { attachmentId, family } : null;
 }
 
 function signManagedOutgoingImageTicketPayload(encodedPayload: string): string {
