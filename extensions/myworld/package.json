@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/myworld",
+  "version": "2026.9.6",
+  "private": true,
+  "description": "OpenClaw myworld practice-world MCP integration",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.9.6"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  }
+}
