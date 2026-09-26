@@ -16,8 +16,8 @@ import {
   resolveZaloGroupsByEntriesMock,
   startZaloQrLoginMock,
 } from "./zalo-js.test-mocks.js";
+import { zalouserSetupPlugin } from "../setup-plugin-api.js";
 import { zalouserSetupWizard } from "./setup-surface.js";
-import { zalouserSetupPlugin } from "./setup-test-helpers.js";
 
 const zalouserConfigure = createPluginSetupWizardConfigure(zalouserSetupPlugin);
 

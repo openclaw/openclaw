@@ -6,13 +6,13 @@ import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-r
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import "./zalo-js.test-mocks.js";
-import { zalouserSetupPlugin } from "./setup-test-helpers.js";
+import { zalouserSetupPlugin } from "../setup-plugin-api.js";
 
 const zalouserSetupGetStatus = createPluginSetupWizardStatus(zalouserSetupPlugin);
 
 describe("zalouser setup plugin", () => {
   it("exposes config-promotion declarations on the setup adapter", () => {
-    expect(zalouserSetupPlugin.setupContract.singleAccountKeysToMove).toEqual([]);
+    expect(zalouserSetupPlugin.setupContract?.singleAccountKeysToMove).toEqual([]);
   });
 
   it("builds setup status without an initialized runtime", async () => {
