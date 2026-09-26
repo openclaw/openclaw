@@ -17,7 +17,12 @@ import {
 } from "./chat-message-markdown.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
-import { renderChatReplyAttribution } from "./chat-reply-attribution.ts";
+import {
+  isReplyAttributionVisible,
+  renderReplyAttribution,
+  resolveReplyAttribution,
+} from "./chat-reply-attribution.ts";
+import { renderReplyConnector } from "./chat-reply-connector.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { shouldToggleSelectableDisclosure, syncToolDisclosureOverflow } from "./chat-tool-cards.ts";
 import { renderToolOutcomeSummary } from "./chat-tool-outcome-summary.ts";
@@ -31,6 +36,10 @@ export type StreamGroupPart = Extract<
 
 type StreamMessageOptions = Pick<
   Parameters<typeof renderGroupedMessage>[2],
+  | "resolveReplyPreview"
+  | "onResolveReply"
+  | "onOpenReply"
+  | "replyNavigationId"
   | "sessionKey"
   | "presented"
   | "boardProvider"
@@ -145,15 +154,34 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
     workingOnly || opts.showAssistantAvatar === false
       ? nothing
       : renderChatAvatar("assistant", assistant);
-  const groupClass = `chat-group assistant${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
+  const sourcePart = parts.find((part) => part.kind === "stream");
+  const replyAttribution = resolveReplyAttribution(
+    {
+      kind: "group",
+      key: sourcePart?.key ?? "stream",
+      role: "assistant",
+      messages: [],
+      visibleContent: "text",
+      timestamp: sourcePart?.startedAt ?? 0,
+      isStreaming: active,
+      replyToSender: sourcePart?.replyToSender,
+      replyToMessage: sourcePart?.replyToMessage,
+    },
+    opts.resolveReplyPreview,
+  );
+  const hasReplyConnector = Boolean(
+    isReplyAttributionVisible(replyAttribution) && avatar !== nothing,
+  );
+  const groupClass = `chat-group assistant${hasReplyConnector ? " chat-group--reply" : ""}${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
 
   return html`
     <div class=${groupClass} data-chat-row-key=${parts[0]?.key ?? nothing}>
       ${avatar}
       <div class="chat-group-messages">
-        ${renderChatReplyAttribution(parts.find((part) => part.kind === "stream")?.replyToSender)}
+        ${renderReplyAttribution(replyAttribution, opts.onOpenReply, opts.onResolveReply, { navigationLoading: replyAttribution?.target?.kind === "id" && opts.replyNavigationId === replyAttribution.target.id })}
         ${renderStreamGroupParts(parts, opts, "standalone")}
       </div>
+      ${hasReplyConnector ? renderReplyConnector() : nothing}
       ${
         footerStartedAt === null
           ? nothing

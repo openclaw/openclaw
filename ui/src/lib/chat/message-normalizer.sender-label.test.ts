@@ -8,6 +8,20 @@ import { normalizeMessage } from "./message-normalizer.ts";
 const SENDER_METADATA_BLOCK = `${markInboundContextLabel("Sender:")}\n\`\`\`json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n\`\`\``;
 
 describe("message-normalizer sender labels", () => {
+  it("retains a reply sender whose snapshot has no text", () => {
+    const result = normalizeMessage({
+      role: "assistant",
+      content: "Answer",
+      __openclaw: {
+        replyToId: "original",
+        replyToPreview: { senderLabel: " Jordan ", text: "" },
+      },
+    });
+
+    expect(result.replyPreview).toEqual({ senderLabel: "Jordan", text: "" });
+    expect(result.replyTarget).toEqual({ kind: "id", id: "original" });
+  });
+
   it("normalizes message with string content", () => {
     const result = normalizeMessage({
       role: "user",

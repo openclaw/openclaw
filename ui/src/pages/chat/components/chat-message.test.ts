@@ -1722,6 +1722,37 @@ describe("grouped chat rendering", () => {
     expect(text?.textContent).toBe("**live**\nreply");
   });
 
+  it("keeps streaming participant attribution on the shared reply renderer", () => {
+    const container = document.createElement("div");
+    render(
+      renderStreamGroup([
+        {
+          kind: "stream",
+          key: "stream:participant",
+          text: "Reviewing the checklist.",
+          startedAt: 1,
+          isStreaming: true,
+          replyToSender: { name: "Alice Chen", identity: { type: "profile", id: "alice" } },
+          replyToMessage: {
+            key: "prompt",
+            message: {
+              role: "user",
+              content: "Review the release checklist.",
+              __openclaw: { id: "prompt" },
+            },
+          },
+        },
+      ]),
+      container,
+    );
+    expect(container.querySelectorAll(".chat-reply-attribution--reply")).toHaveLength(1);
+    expect(container.querySelector(".chat-reply-attribution__name")?.textContent).toBe(
+      "Alice Chen",
+    );
+    expect(container.querySelectorAll(".chat-reply-connector")).toHaveLength(1);
+    expect(container.querySelector(".chat-group--reply")).not.toBeNull();
+  });
+
   it("renders a reading-indicator-only run without avatar or footer", () => {
     const container = document.createElement("div");
 
@@ -2144,27 +2175,6 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector(".chat-group.user")?.classList.contains("chat-group--peer"),
     ).toBe(peer);
-  });
-
-  it("renders assistant reply attribution for a multi-sender thread", () => {
-    const container = document.createElement("div");
-    render(
-      renderMessageGroup(
-        createMessageGroup({ role: "assistant", content: "hello" }, "assistant", {
-          key: "reply-attribution",
-          replyToSender: { id: "alice@example.com", name: "Alice" },
-          messages: [{ key: "reply", message: { role: "assistant", content: "hello" } }],
-          timestamp: 1000,
-        }),
-        { showReasoning: true, showToolCalls: true },
-      ),
-      container,
-    );
-
-    const attribution = container.querySelector<HTMLElement>(".chat-reply-attribution");
-    expect(attribution?.textContent?.trim()).toBe("Alice");
-    expect(attribution?.getAttribute("title")).toBe("Replying to Alice");
-    expect(attribution?.nextElementSibling?.classList.contains("chat-bubble")).toBe(true);
   });
 
   it("renders multiline system notices as sanitized markdown", () => {
@@ -3491,7 +3501,7 @@ describe("grouped chat rendering", () => {
     );
   });
 
-  it("renders assistant MEDIA attachments and reply preview", async () => {
+  it("renders assistant MEDIA attachments without a strip for an unresolved current reply", async () => {
     const container = document.body.appendChild(document.createElement("div"));
     const onOpenImage = vi.fn();
     renderAssistantMessage(
@@ -3506,9 +3516,7 @@ describe("grouped chat rendering", () => {
       { showToolCalls: false, onOpenImage },
     );
 
-    expect(container.querySelector(".chat-reply-preview__label")?.textContent?.trim()).toBe(
-      "Replying to current message",
-    );
+    expect(container.querySelector(".chat-reply-attribution")).toBeNull();
     expect(container.querySelector(".chat-text")?.textContent?.trim()).toBe("Here is the image.");
     expect(expectElement(container, ".chat-message-image", HTMLImageElement).src).toBe(
       "https://example.com/photo.png",
@@ -3529,7 +3537,7 @@ describe("grouped chat rendering", () => {
     );
   });
 
-  it("renders a clickable quoted preview for structured user replies", () => {
+  it("renders a clickable sender name for structured user replies", () => {
     const container = document.body.appendChild(document.createElement("div"));
     const onOpenReply = vi.fn();
     renderGroupedMessage(
@@ -3549,9 +3557,9 @@ describe("grouped chat rendering", () => {
       },
     );
 
-    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
-    expect(preview?.textContent).toContain("Replying to Marie");
-    expect(preview?.textContent).toContain("The original answer");
+    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-attribution__target");
+    expect(preview?.getAttribute("aria-label")).toBe("Replying to Marie");
+    expect(preview?.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Marie");
     preview?.click();
     expect(onOpenReply).toHaveBeenCalledWith("transcript-123");
     expect(container.querySelector(".chat-text")?.textContent?.trim()).toBe("Follow up");
@@ -3572,9 +3580,9 @@ describe("grouped chat rendering", () => {
       { onOpenReply },
     );
 
-    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
-    expect(preview?.textContent).toContain("Replying to Marie");
-    expect(preview?.textContent).toContain("The original answer");
+    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-attribution__target");
+    expect(preview?.getAttribute("aria-label")).toBe("Replying to Marie");
+    expect(preview?.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Marie");
     expect(preview).toBeInstanceOf(HTMLButtonElement);
     preview?.click();
     expect(onOpenReply).toHaveBeenCalledWith("unloaded-message");
@@ -3594,10 +3602,9 @@ describe("grouped chat rendering", () => {
       { onOpenReply: vi.fn(), replyNavigationId: "unloaded-message" },
     );
 
-    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
+    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-attribution__target");
     expect(preview?.disabled).toBe(true);
     expect(preview?.getAttribute("aria-busy")).toBe("true");
-    expect(preview?.querySelector(".session-run-spinner")).toBeInstanceOf(HTMLElement);
   });
 
   it("checks local assistant audio against server metadata", async () => {

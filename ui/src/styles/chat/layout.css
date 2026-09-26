@@ -669,6 +669,16 @@ openclaw-pending-session-create {
   content-visibility: visible;
 }
 
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  /* Revealed footer targets extend past the compact row. Keep paint containment
+     from clipping their hit area while other virtual rows retain skipping. */
+  .chat-virtual-row:has(.chat-group:hover),
+  .chat-virtual-row:has(.chat-group:is(:focus-within, .chat-group--meta-revealed)) {
+    content-visibility: visible;
+    z-index: 1;
+  }
+}
+
 .chat-virtual-row--first > :first-child {
   margin-top: 0 !important;
 }

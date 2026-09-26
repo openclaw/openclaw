@@ -233,7 +233,8 @@
 
 .chat-group.user .chat-group-footer-actions,
 .chat-group.assistant .chat-group-footer-actions,
-.chat-group.assistant .chat-message-actions-row {
+.chat-group.assistant .chat-message-actions-row,
+.chat-group.user.chat-group--peer .chat-message-actions-row {
   justify-content: flex-start;
   margin-left: 0;
 }
@@ -243,6 +244,7 @@
 }
 
 .chat-message-actions-row {
+  --chat-message-action-size: 24px;
   align-self: stretch;
   margin-top: 4px;
 }
@@ -252,11 +254,21 @@
 .chat-sender-name {
   font-weight: 500;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--chat-sender-name-color, var(--muted));
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.chat-sender-name.person-activity-link {
+  color: color-mix(in srgb, var(--chat-sender-name-color, var(--muted)) 60%, var(--text));
+}
+
+.chat-sender-name.person-activity-link:hover,
+.chat-sender-name.person-activity-link:focus-visible {
+  color: color-mix(in srgb, var(--chat-sender-name-color, var(--muted)) 50%, var(--text));
+  text-decoration: none;
 }
 
 .chat-message-source {
@@ -382,12 +394,60 @@
 /* Inline rows belong to earlier messages in a group, so the latest footer's
    resting disclosure must not reveal them before hover or touch. */
 .chat-message-actions-row button {
+  min-height: var(--chat-message-action-size);
   opacity: var(--chat-message-action-opacity, 0);
   pointer-events: var(--chat-message-action-pointer-events, none);
 }
 
 .chat-group:hover .chat-group-footer-actions button,
 .chat-group:hover .chat-message-actions-row button {
+  opacity: 0.6;
+  pointer-events: auto;
+}
+
+.chat-group.user.chat-group--peer .chat-message-actions-row button,
+.chat-group.user.chat-group--peer .chat-group-footer-actions button {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* The native row owns both layout space and actions; no overlaid copy. */
+.chat-group.user.chat-group--peer
+  :is(.chat-bubble, .chat-message--reply):is(:hover, :focus-within, .chat-bubble--actions-revealed)
+  + .chat-message-actions-row
+  button,
+.chat-group.user.chat-group--peer .chat-message-actions-row:is(:hover, :focus-within) button {
+  opacity: 0.6;
+  pointer-events: auto;
+}
+
+/* The final action belongs to the final bubble, alongside its native metadata. */
+.chat-group.user.chat-group--peer:has(
+    > .chat-group-messages > .chat-bubble:last-child:hover,
+    > .chat-group-messages > .chat-message--reply:last-child > .chat-bubble:hover
+  )
+  > .chat-group-footer
+  .chat-group-footer-actions
+  button,
+.chat-group.user.chat-group--peer .chat-group-footer:hover .chat-group-footer-actions button {
+  opacity: 0.6;
+  pointer-events: auto;
+}
+
+.chat-group.user.chat-group--peer:has(
+    > .chat-group-messages
+      > .chat-bubble:last-child:is(:focus-within, .chat-bubble--actions-revealed),
+    > .chat-group-messages
+      > .chat-message--reply:last-child
+      > .chat-bubble:is(:focus-within, .chat-bubble--actions-revealed)
+  )
+  > .chat-group-footer
+  .chat-group-footer-actions
+  button,
+.chat-group.user.chat-group--peer
+  .chat-group-footer:focus-within
+  .chat-group-footer-actions
+  button {
   opacity: 0.6;
   pointer-events: auto;
 }
@@ -746,6 +806,212 @@ img.chat-avatar {
   color: color-mix(in srgb, var(--text) 80%, var(--primary) 20%);
 }
 
+.chat-group.chat-group--reply {
+  --chat-avatar-column: 36px;
+  --chat-avatar-gap: 10px;
+  --chat-message-column-max: var(
+    --chat-message-max-width,
+    min(980px, calc(100% - var(--chat-avatar-gutter)))
+  );
+  position: relative;
+}
+
+.chat-group.chat-group--reply > :is(.chat-avatar, .chat-avatar-slot),
+.chat-message--reply > :is(.chat-avatar, .chat-avatar-slot) {
+  align-self: start;
+  margin-top: calc(var(--chat-reply-attribution-line-height) + var(--chat-reply-attribution-gap));
+  position: relative;
+  z-index: 1;
+  display: grid;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--bg);
+  box-shadow: none;
+}
+
+.chat-group--reply > .chat-avatar-slot > .chat-avatar,
+.chat-message--reply > .chat-avatar-slot > .chat-avatar {
+  border: 0;
+  background: var(--bg);
+  box-shadow: none;
+}
+
+/* Center on the first text line inside the native 4px-padded assistant bubble:
+   the strip row and bubble padding above the line, minus half the avatar's
+   overhang beyond one line box. */
+.chat-group.assistant.chat-group--reply > :is(.chat-avatar, .chat-avatar-slot) {
+  grid-row: 1 / span 2;
+  margin-top: calc(
+    var(--chat-reply-attribution-line-height) + var(--chat-reply-attribution-gap) + 4px +
+      (1lh - var(--chat-avatar-column)) / 2
+  );
+}
+
+/* A peer quote and its avatar belong to this message, including in multi-message groups. */
+.chat-message--reply {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: start;
+  width: 100%;
+  min-width: 0;
+}
+
+.chat-message--reply > :is(.chat-avatar, .chat-avatar-slot) {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: calc(100% + var(--chat-avatar-gap));
+}
+
+/* The child circle supplies the opaque surface; the slot includes its bottom margin. */
+.chat-message--reply > .chat-avatar-slot {
+  background: none;
+}
+
+.chat-message--reply > .chat-reply-attribution--reply {
+  margin-block-end: var(--chat-reply-attribution-gap);
+}
+
+.chat-reply-connector {
+  position: absolute;
+  inset: 0 auto auto 0;
+  z-index: 0;
+  overflow: visible;
+  color: color-mix(in srgb, var(--muted) 48%, transparent);
+  pointer-events: none;
+}
+
+.chat-reply-attribution__mobile-icon {
+  display: none;
+}
+
+.chat-reply-attribution:is(.chat-reply-attribution--reply, .chat-reply-attribution--inline) {
+  display: grid;
+  grid-template-columns: max-content minmax(0, max-content) minmax(0, 1fr);
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+  font-size: var(--chat-reply-attribution-font-size);
+  font-weight: 400;
+  line-height: var(--chat-reply-attribution-line-height);
+  white-space: nowrap;
+}
+
+/* A whole-pixel line box keeps the 16px avatar on integer offsets. */
+:root {
+  --chat-reply-attribution-font-size: 13px;
+  --chat-reply-attribution-line-height: 20px;
+  --chat-reply-attribution-gap: 6px;
+}
+
+.chat-group--reply .chat-reply-attribution--reply {
+  margin-bottom: calc(var(--chat-reply-attribution-gap) - var(--chat-message-gap));
+}
+
+.chat-reply-attribution.chat-reply-attribution--inline {
+  padding: 0;
+  margin-block-end: var(--chat-reply-attribution-gap);
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  text-align: start;
+}
+
+.chat-reply-attribution--inline .chat-reply-attribution__person {
+  overflow: hidden;
+}
+
+.chat-reply-attribution--inline .chat-reply-attribution__unavailable {
+  contain: inline-size;
+  justify-self: stretch;
+}
+
+.chat-reply-attribution--inline .chat-reply-attribution__name {
+  color: inherit;
+}
+
+.chat-reply-attribution--inline
+  :is(.chat-reply-attribution__label, .chat-reply-attribution__unavailable) {
+  color: color-mix(in srgb, currentColor 75%, transparent);
+}
+
+.chat-reply-attribution__person {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.chat-reply-attribution__person .chat-author-avatar {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  box-shadow: none;
+}
+
+/* The agent avatar's hidden text fallback must not size its grid past the
+   16px circle, or the image stretches and crops. */
+.chat-reply-attribution__person .identity-avatar--agent {
+  grid-template: 100% / 100%;
+}
+
+.chat-reply-attribution__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--text);
+}
+
+button.chat-reply-attribution__target {
+  justify-self: start;
+  max-width: calc(100% + 6px);
+  padding: 2px 3px;
+  margin: -2px -3px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+}
+
+button.chat-reply-attribution__target:hover {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+button.chat-reply-attribution__target:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.chat-reply-attribution--inline button.chat-reply-attribution__target:hover {
+  background: color-mix(in srgb, currentColor 7%, transparent);
+}
+
+.chat-reply-attribution--inline button.chat-reply-attribution__target:focus-visible {
+  outline-color: currentColor;
+  background: none;
+}
+
+button.chat-reply-attribution__target:disabled {
+  cursor: var(--cursor-default);
+}
+
+.chat-reply-attribution__unavailable {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-weight: 400;
+}
+
 @media (hover: none),
   (max-width: 768px),
   (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
@@ -762,7 +1028,8 @@ img.chat-avatar {
   :where(.chat-thread) .chat-group {
     --chat-footer-disclosure-opacity: 0;
     --chat-footer-disclosure-pointer-events: none;
-    --chat-footer-detail-position: absolute;
+    /* Hidden metadata keeps exactly the footprint of the revealed row. */
+    --chat-footer-detail-position: static;
     --chat-persistent-footer-opacity: 0;
   }
 
@@ -1001,7 +1268,7 @@ img.chat-avatar {
 }
 
 .chat-group.user.chat-group--sender-tint .chat-sender-name {
-  color: hsl(var(--chat-sender-hue) 45% 70%);
+  --chat-sender-name-color: hsl(var(--chat-sender-hue) 45% 70%);
 }
 
 :where(:root[data-theme-mode="light"]) .chat-group.user.chat-group--sender-tint .chat-bubble {
@@ -1015,7 +1282,7 @@ img.chat-avatar {
 }
 
 :root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-sender-name {
-  color: hsl(var(--chat-sender-hue) 60% 36%);
+  --chat-sender-name-color: hsl(var(--chat-sender-hue) 60% 36%);
 }
 
 /* Ephemeral drafts share sent-turn geometry, typography, and identity tint. */
@@ -1113,6 +1380,14 @@ img.chat-avatar {
   display: block;
   width: fit-content;
   max-width: 100%;
+}
+
+.chat-group.user.chat-group--peer
+  .chat-bubble--with-images
+  > .chat-message-avatar-anchor:not(
+    :has(.chat-text, .chat-message-disclosure, .chat-json-collapse)
+  ) {
+  display: contents;
 }
 
 /* Match the sender tint's specificity so media stays outside the painted text
@@ -1336,6 +1611,108 @@ img.chat-avatar {
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-group {
+    --chat-reply-attribution-gap: 8px;
+  }
+
+  .chat-group:has(
+    > .chat-group-messages > :is(.chat-reply-attribution, .chat-message--reply):first-child
+  ) {
+    margin-block-start: 0;
+  }
+
+  .chat-group-messages > .chat-reply-attribution {
+    margin-block-end: calc(var(--chat-reply-attribution-gap) - var(--chat-message-gap));
+  }
+
+  .chat-group-footer {
+    flex-wrap: nowrap;
+    align-items: flex-start;
+  }
+
+  .chat-group-footer__meta :is(.chat-group-timestamp, .msg-meta) {
+    flex-shrink: 0;
+  }
+
+  .chat-group.user:not(.chat-group--peer)
+    .chat-group-footer--persistent-identity
+    :is(.chat-sender-name, .chat-message-source) {
+    order: 0;
+  }
+
+  .chat-group.user .chat-group-footer__meta > .chat-group-footer-actions {
+    order: 1;
+  }
+
+  .chat-group.user.chat-group--peer .chat-group-footer-actions {
+    flex-basis: auto;
+    justify-content: flex-start;
+  }
+
+  .chat-group.user.chat-group--peer .chat-message-footer {
+    --chat-footer-disclosure-opacity: 0;
+    --chat-footer-disclosure-pointer-events: none;
+    --chat-footer-action-opacity: 0;
+    opacity: var(--chat-footer-disclosure-opacity);
+    pointer-events: var(--chat-footer-disclosure-pointer-events);
+  }
+
+  .chat-group.user.chat-group--peer .chat-message-footer .chat-group-footer-actions button {
+    opacity: var(--chat-footer-action-opacity);
+    pointer-events: var(--chat-footer-disclosure-pointer-events);
+  }
+
+  .chat-group.user.chat-group--peer
+    .chat-group-messages
+    > .chat-bubble:hover
+    + .chat-message-footer,
+  .chat-group.user.chat-group--peer
+    .chat-group-messages
+    > .chat-message--reply:has(> .chat-bubble:hover)
+    + .chat-message-footer,
+  .chat-group.user.chat-group--peer .chat-message-footer:hover,
+  .chat-group.user.chat-group--peer
+    .chat-group-messages
+    > .chat-bubble:is(:focus-within, .chat-bubble--actions-revealed)
+    + .chat-message-footer,
+  .chat-group.user.chat-group--peer
+    .chat-group-messages
+    > .chat-message--reply:has(> .chat-bubble:is(:focus-within, .chat-bubble--actions-revealed))
+    + .chat-message-footer,
+  .chat-group.user.chat-group--peer .chat-message-footer:focus-within {
+    --chat-footer-disclosure-opacity: 1;
+    --chat-footer-disclosure-pointer-events: auto;
+    --chat-footer-action-opacity: 0.6;
+  }
+
+  .chat-group.chat-group--reply {
+    --chat-avatar-column: 0px;
+    --chat-avatar-gap: 0px;
+  }
+
+  .chat-group.chat-group--reply > :is(.chat-avatar, .chat-avatar-slot),
+  .chat-message--reply > :is(.chat-avatar, .chat-avatar-slot),
+  .chat-reply-connector {
+    display: none;
+  }
+
+  .chat-reply-attribution--reply .chat-reply-attribution__label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .chat-reply-attribution__mobile-icon {
+    display: inline-flex;
+    flex: none;
+    width: 14px;
+    height: 14px;
+  }
+
+  .chat-reply-attribution__mobile-icon:dir(rtl) {
+    transform: scaleX(-1);
+  }
+
   .chat-thread
     .chat-group.assistant:not(.chat-group--forwarded)
     .chat-bubble:not(.chat-bubble--tool-shell):has(.chat-message-images) {

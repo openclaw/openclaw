@@ -4,8 +4,8 @@ import {
   persistedMessageEntryId,
   setExpansionState,
 } from "../chat-thread.ts";
-import { resolveMessageGroupSenderLabel } from "./chat-message-group.ts";
-import type { LoadedReplySource } from "./chat-reply-preview.ts";
+import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
+import type { LoadedReplySource } from "./chat-reply-preview.types.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];

@@ -88,6 +88,26 @@ describe("chat pane reply-source history navigation", () => {
     },
   );
 
+  it("confirms a missing reply source only from a Gateway answer", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("socket closed"))
+      .mockResolvedValueOnce({ ok: false, unavailableReason: "not_found" });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+
+    pane.requestReplyMessage("source-message");
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    expect(pane.isReplyMessageMissing("source-message")).toBe(false);
+    pane.connectionGeneration += 1;
+    state.connectionEpoch = pane.connectionGeneration;
+    pane.requestReplyMessage("source-message");
+
+    await vi.waitFor(() => expect(pane.isReplyMessageMissing("source-message")).toBe(true));
+    expect(pane.readReplyMessage("source-message")).toBeUndefined();
+  });
+
   it("retries a previously unavailable reply source after reconnect", async () => {
     const message = { role: "assistant", content: "Source is available again" };
     const request = vi

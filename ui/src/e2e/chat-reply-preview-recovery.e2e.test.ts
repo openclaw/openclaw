@@ -62,10 +62,12 @@ suite.define(() => {
       let firstCount = 0;
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:reply-preview"));
-        const reply = page.locator(".chat-pane-cache__pane--active .chat-reply-preview--message");
-        await reply.waitFor({ state: "visible" });
-        expect(await reply.textContent()).toContain("Replying to message");
+        const pane = page.locator(".chat-pane-cache__pane--active");
+        await pane.locator('[data-entry-id="reply-message"]').waitFor({ state: "visible" });
         await gateway.waitForRequest("chat.message.get");
+        // Neither an unconfirmed nor an anonymous missing source adds a quote strip.
+        expect(await pane.locator(".chat-reply-attribution").count()).toBe(0);
+        expect(await pane.textContent()).not.toContain("Original message unavailable");
         const composer = page.locator(
           ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
         );
@@ -73,15 +75,6 @@ suite.define(() => {
         expect(await composer.inputValue()).toBe("This draft remains usable.");
         firstCount = (await gateway.getRequests("chat.message.get")).length;
         await expectRequestCountStable(gateway, "chat.message.get", 1);
-        if (artifact === "unavailable-source") {
-          await reply.click();
-          await page
-            .locator(".chat-pane-cache__pane--active")
-            .getByRole("alert")
-            .getByText("The original message is unavailable.", { exact: true })
-            .waitFor();
-          await expectRequestCountStable(gateway, "chat.message.get", 1);
-        }
       } finally {
         if (artifactDir) {
           await page.screenshot({
@@ -94,7 +87,7 @@ suite.define(() => {
               {
                 firstCount,
                 finalCount: (await gateway.getRequests("chat.message.get")).length,
-                replyText: await page.locator(".chat-reply-preview--message").allTextContents(),
+                replyText: await page.locator(".chat-reply-attribution--inline").allTextContents(),
               },
               null,
               2,
@@ -183,21 +176,24 @@ suite.define(() => {
 
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:reply-reconnect"));
-        const preview = page.locator(".chat-pane-cache__pane--active .chat-reply-preview--message");
-        await preview.waitFor();
+        const preview = page.locator(
+          ".chat-pane-cache__pane--active .chat-reply-attribution--inline",
+        );
+        await page
+          .locator('.chat-pane-cache__pane--active [data-entry-id="reconnect-reply"]')
+          .waitFor();
         await gateway.waitForRequest("chat.message.get");
         await expectRequestCountStable(gateway, "chat.message.get", 1);
-        if (initial === "previous success") {
-          expect(await preview.textContent()).toContain("Previous preview.");
-        }
+        // An unconfirmed or anonymous missing source adds no reply strip.
+        expect(await preview.count()).toBe(initial === "previous success" ? 1 : 0);
         await gateway.setMethodResponse("chat.message.get", { ok: true, message: source });
         const connectCount = (await gateway.getRequests("connect")).length;
         await gateway.closeLatest(1006, "reply preview recovery");
         await waitForRequests(gateway, "connect", connectCount + 1);
-        await expect.poll(() => preview.textContent()).toContain("The current original answer.");
+        await expect.poll(() => preview.getByRole("button").count()).toBe(1);
         await expectRequestCountStable(gateway, "chat.message.get", 2);
 
-        await preview.click();
+        await preview.getByRole("button").click();
         await page
           .locator(".chat-pane-cache__pane--active .chat-text")
           .getByText("The current original answer.", { exact: true })

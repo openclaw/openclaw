@@ -218,6 +218,7 @@ export type ChatItem =
       startedAt: number;
       isStreaming: boolean;
       replyToSender?: SenderIdentity;
+      replyToMessage?: MessageGroup["replyToMessage"];
       runId?: string;
       boundaryId?: string;
     }
@@ -306,10 +307,18 @@ export type MessageGroup = {
   sender?: SenderIdentity;
   sourceClients?: MessageClientSource[];
   replyToSender?: SenderIdentity;
+  replyToMessage?: { message: unknown; key: string };
+  /** Assistant reply context: more than one person speaks in the conversation. */
+  replyShared?: true;
+  /** Assistant reply context: the user prompt that opened this turn. */
+  replyTurnSource?: { message: unknown; key: string };
+  /** Assistant reply context: the prompt that started this run, resolving reply_to_current. */
+  replyCurrentSource?: { message: unknown; key: string };
   messages: Array<{
     message: unknown;
     key: string;
     duplicateCount?: number;
+    replyTarget?: NormalizedMessage["replyTarget"];
     /** Rendered reply content, excluding assistant thinking tags. */
     hasVisibleContent: boolean;
   }>;

@@ -55,7 +55,11 @@ describe("chat transcript replies", () => {
   it.each([false, true])(
     "resolves persisted replies and owns their flash lifetime (reduced motion: %s)",
     async (reducedMotion) => {
-      vi.stubGlobal("matchMedia", () => ({ matches: reducedMotion }));
+      vi.stubGlobal("matchMedia", (query: string) => ({
+        matches: query.includes("prefers-reduced-motion") && reducedMotion,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }));
       const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
       const props = threadProps("pane-reply-preview", "agent:main:main", [...replyMessages()]);
@@ -64,9 +68,10 @@ describe("chat transcript replies", () => {
       transcript.hostUpdated();
       await flushDeferredRowPrune();
 
-      const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
-      expect(preview?.textContent).toContain("Replying to Molty");
-      expect(preview?.textContent).toContain("The original answer");
+      const preview = container.querySelector<HTMLButtonElement>(
+        ".chat-reply-attribution--inline button",
+      );
+      expect(preview?.getAttribute("aria-label")).toBe("Replying to Molty");
       expect(preview?.textContent).not.toContain("source-message");
 
       const sourceBubble = [...container.querySelectorAll<HTMLElement>(".chat-bubble")].find(
@@ -140,11 +145,12 @@ describe("chat transcript replies", () => {
         props.replyMessageAccess.revision += 1;
         rerender();
 
-        const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
-        expect(preview?.querySelector(".chat-reply-preview__label")?.textContent?.trim()).toBe(
-          `Replying to ${senderLabel}`,
+        const preview = container.querySelector<HTMLButtonElement>(
+          ".chat-reply-attribution--inline button",
         );
-        expect(preview?.textContent).toContain("The original message");
+        expect(preview?.querySelector(".chat-reply-attribution__name")?.textContent?.trim()).toBe(
+          senderLabel,
+        );
         expect(container.querySelector("[data-entry-id='source-message']")).toBeNull();
         preview?.click();
         expect(open).toHaveBeenCalledWith("source-message");
@@ -179,7 +185,7 @@ describe("chat transcript replies", () => {
         rerender();
         transcript.hostConnected();
         await flushDeferredRowPrune();
-        requireElement(container, ".chat-reply-preview--message").click();
+        requireElement(container, ".chat-reply-attribution--inline button").click();
         expect(open).toHaveBeenCalledWith("source-message");
         props.replyMessageAccess.navigationId = "source-message";
         props.messages = [
@@ -258,7 +264,7 @@ describe("chat transcript replies", () => {
 
     expect(threadContainer.querySelector("[data-entry-id='source-message']")).toBeNull();
     const preview = threadContainer.querySelector<HTMLButtonElement>(
-      ".chat-reply-preview--message",
+      ".chat-reply-attribution--inline button",
     );
     expect(preview).not.toBeNull();
     preview!.click();

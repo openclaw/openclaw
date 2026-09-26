@@ -2152,41 +2152,6 @@ describe("buildCachedChatItems", () => {
     ]);
   });
 
-  it("attributes assistant groups to the latest user in multi-sender threads", () => {
-    const groups = messageGroups({
-      messages: [
-        userMessage("Alice asks", 1000, {
-          __openclaw: { senderId: "alice", senderName: "Alice" },
-        }),
-        assistantMessage("For Alice", 1001),
-        userMessage("Bob asks", 1002, {
-          __openclaw: { senderId: "bob", senderName: "Bob" },
-        }),
-        userMessage("Local follow-up", 1003),
-        assistantMessage("For Bob", 1004),
-      ],
-    });
-
-    const assistantGroups = groups.filter((group) => group.role === "assistant");
-    expect(assistantGroups.map((group) => group.replyToSender)).toEqual([
-      { id: "alice", name: "Alice" },
-      undefined,
-    ]);
-  });
-
-  it("does not add reply attribution in a single-sender thread", () => {
-    const groups = messageGroups({
-      messages: [
-        userMessage("Alice asks", 1000, {
-          __openclaw: { senderId: "alice", senderName: "Alice" },
-        }),
-        assistantMessage("For Alice", 1001),
-      ],
-    });
-
-    expect(groups.find((group) => group.role === "assistant")?.replyToSender).toBeUndefined();
-  });
-
   it("keeps differently cased user roles in one group", () => {
     const groups = messageGroups({
       messages: [
@@ -4859,41 +4824,6 @@ describe("thread item cache", () => {
       "assistant",
     ]);
     expect(roles(buildCachedChatItems(input))).toEqual(["assistant", "user"]);
-  });
-
-  it("sender provenance refreshes reply display without changing the person", () => {
-    resetChatThreadState();
-    const alice = userMessage("first", 1, {
-      __openclaw: {
-        senderId: "alice",
-        senderName: "Alice",
-        senderIdentity: { type: "profile", id: "alice" },
-      },
-    });
-    const bob = userMessage("second", 2, {
-      __openclaw: {
-        senderId: "bob",
-        senderName: "Bob",
-        senderIdentity: { type: "profile", id: "bob" },
-      },
-    });
-    const reply = assistantMessage("answer", 3);
-    const input = createProps({ messages: [alice, bob, reply] });
-    buildCachedChatItems(input);
-    const renamed = userMessage("second", 2, {
-      __openclaw: {
-        senderId: "bob",
-        senderName: "Bobby",
-        senderIdentity: { type: "profile", id: "bob" },
-        senderProfileAvatarUrl: "/api/users/bob/avatar?v=2",
-      },
-    });
-    const updated = buildCachedChatItems({ ...input, messages: [alice, renamed, reply] });
-    expect(
-      updated.find((item) => item.kind === "group" && item.role === "assistant"),
-    ).toMatchObject({
-      replyToSender: { name: "Bobby", profileAvatarUrl: "/api/users/bob/avatar?v=2" },
-    });
   });
 
   it("sender provenance keeps identical text from colliding authors", () => {

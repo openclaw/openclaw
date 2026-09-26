@@ -509,11 +509,13 @@ suite.define(() => {
       await rowFor(selected.key).locator("a").first().click();
       await assertSelectedRoute();
       await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
-      const replyPreview = activePane.locator(".chat-reply-preview", {
-        hasText: "Replying to current message",
-      });
+      // An unresolved reply_to_current keeps its answer without a reply strip.
+      const retainedReply = activePane
+        .locator(".chat-group")
+        .filter({ hasText: "Reply retained in the transcript." });
       const progressCard = activePane.locator('[data-progress-card-placement="composer"]');
-      await replyPreview.waitFor({ state: "visible" });
+      await retainedReply.waitFor({ state: "visible" });
+      expect(await retainedReply.locator(".chat-reply-attribution").count()).toBe(0);
       await progressCard.waitFor({ state: "visible" });
       await page.evaluate((sessionKey) => {
         const titleHistory: string[] = [];
@@ -694,7 +696,7 @@ suite.define(() => {
       await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
       await expect.poll(() => activePane.locator(".agent-chat__input").count()).toBe(0);
-      await expect.poll(() => replyPreview.locator(".session-run-spinner").count()).toBe(0);
+      await expect.poll(() => retainedReply.locator(".session-run-spinner").count()).toBe(0);
       await expect.poll(() => progressCard.count()).toBe(0);
       const archiveEvent = activePane.locator(".chat-notice", { hasText: "Archived by Mira" });
       await archiveEvent.waitFor({ state: "visible", timeout: 10_000 });

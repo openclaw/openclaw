@@ -60,7 +60,11 @@ import {
   type AssistantMessageDisclosure,
 } from "./chat-message-text.ts";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
-import { renderReplyPreview, type ReplyPreview } from "./chat-reply-preview-render.ts";
+import {
+  renderReplyAttribution,
+  resolveMessageReplyAttribution,
+} from "./chat-reply-attribution.ts";
+import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
@@ -169,6 +173,7 @@ export function renderGroupedMessage(
     transcriptVisible?: boolean;
     boardProvider?: BoardProvider;
     agentId?: string;
+    userId?: string | null;
     duplicateCount?: number;
     showReasoning: boolean;
     showToolCalls?: boolean;
@@ -205,10 +210,11 @@ export function renderGroupedMessage(
     entryId?: string;
     /** Freshly submitted user turn: play the one-shot composer entry animation. */
     entryRef?: (element?: Element) => void;
-    resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
+    resolveReplyPreview?: ReplyPreviewLookup;
     onResolveReply?: (replyToId: string) => void;
     onOpenReply?: (replyToId: string) => void;
     replyNavigationId?: string | null;
+    suppressReplyPreview?: boolean;
   },
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
@@ -572,6 +578,15 @@ export function renderGroupedMessage(
     }
   `;
 
+  const replyAttribution = opts.suppressReplyPreview
+    ? undefined
+    : resolveMessageReplyAttribution(normalizedMessage, opts.resolveReplyPreview, opts.userId);
+  const reply = renderReplyAttribution(replyAttribution, opts.onOpenReply, opts.onResolveReply, {
+    variant: "inline",
+    navigationLoading:
+      normalizedMessage.replyTarget?.kind === "id" &&
+      opts.replyNavigationId === normalizedMessage.replyTarget.id,
+  });
   return html`
     <div
       class="${bubbleClasses}"
@@ -581,17 +596,7 @@ export function renderGroupedMessage(
       data-message-text=${actionText || nothing}
       .messageActions=${opts.messageActions}
     >
-      ${renderReplyPreview(
-        normalizedMessage.replyTarget,
-        normalizedMessage.replyTarget?.kind === "id"
-          ? (opts.resolveReplyPreview?.(normalizedMessage.replyTarget.id) ??
-              normalizedMessage.replyPreview)
-          : undefined,
-        opts.onOpenReply,
-        opts.onResolveReply,
-        normalizedMessage.replyTarget?.kind === "id" &&
-          opts.replyNavigationId === normalizedMessage.replyTarget.id,
-      )}
+      ${reply}
       ${
         onlyToolCards
           ? renderInlineToolCards(toolCards, toolRenderOptions)

@@ -605,7 +605,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     ...(sender ? { sender } : {}),
     ...(sourceClients.length ? { sourceClients } : {}),
     ...(audioAsVoice ? { audioAsVoice: true } : {}),
-    ...(replyPreviewText
+    ...(replyPreviewText || replyPreviewSender
       ? {
           replyPreview: {
             text: replyPreviewText,

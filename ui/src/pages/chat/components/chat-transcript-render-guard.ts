@@ -43,13 +43,13 @@ export function trackTranscriptRenderDependencies(
 
 export function guardChatRenderItems(
   state: ChatThreadState,
-  // Live status ownership depends on sibling rows, while usage patches can
-  // update a visible indicator without changing the row itself.
-  liveStatus: (item: ChatRenderItem) => string,
+  // Reply sources and live status can change without replacing the row itself.
+  presentationDependencies: (item: ChatRenderItem) => readonly unknown[],
   render: (item: ChatRenderItem) => unknown,
 ) {
   return (item: ChatRenderItem) =>
-    guard([...itemDependencies(item), state.transcriptRenderContext, liveStatus(item)], () =>
-      render(item),
+    guard(
+      [...itemDependencies(item), state.transcriptRenderContext, ...presentationDependencies(item)],
+      () => render(item),
     );
 }

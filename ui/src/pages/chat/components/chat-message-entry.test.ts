@@ -119,12 +119,17 @@ describe("chat transcript entry lifecycle", () => {
   });
 
   it("does not leave a dormant arrival when reduced motion disables animation", () => {
-    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    const media = (matches: boolean) => () => ({
+      matches,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    });
+    vi.stubGlobal("matchMedia", media(true));
     const view = setupEntryTranscript();
     view.props.queue = [pendingSend("reduced-motion-prompt")];
     view.update();
     expect(entering(view.container)).toHaveLength(0);
-    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    vi.stubGlobal("matchMedia", media(false));
     view.props.queue = [...view.props.queue, pendingSend("later-prompt")];
     view.update();
     expect(entering(view.container).map((bubble) => bubble.dataset.messageText)).toEqual([

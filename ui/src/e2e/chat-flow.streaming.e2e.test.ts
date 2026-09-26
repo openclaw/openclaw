@@ -48,13 +48,13 @@ suite.define(() => {
       await page.getByText("Earlier completed reply.").waitFor();
       const earlierAssistant = page.locator(".chat-group.assistant").first();
       const footerPresentation = (group: typeof earlierAssistant) =>
-        group.locator(".chat-group-footer").evaluate((element) => {
+        group.locator(":scope > .chat-group-footer").evaluate((element) => {
           const style = getComputedStyle(element);
           return { opacity: style.opacity, pointerEvents: style.pointerEvents };
         });
       const actionOpacities = (group: typeof earlierAssistant) =>
         group
-          .locator(".chat-group-footer-actions button")
+          .locator(":scope > .chat-group-footer .chat-group-footer-actions button")
           .evaluateAll((buttons) => buttons.map((button) => getComputedStyle(button).opacity));
       await page.mouse.move(0, 0);
       await expect
@@ -70,7 +70,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           earlierAssistant
-            .locator(".chat-message-actions-row button")
+            .locator(".chat-message-actions-row button, .chat-message-footer button")
             .evaluateAll((buttons) => buttons.map((button) => getComputedStyle(button).opacity)),
         )
         .toEqual(["0", "0"]);
@@ -232,7 +232,9 @@ suite.define(() => {
           height,
         );
         await page.mouse.move(0, 0);
-        const actions = group.locator(".chat-group-footer-actions button");
+        const actions = group.locator(
+          ":scope > .chat-group-footer .chat-group-footer-actions button",
+        );
         const focusedActionOpacities = mobile ? ["1", "1"] : ["0.6", "0.6"];
         await actions.first().focus();
         await page.keyboard.press("Shift+Tab");
@@ -251,7 +253,7 @@ suite.define(() => {
           await expect
             .poll(() =>
               group
-                .locator(".chat-message-actions-row button")
+                .locator(".chat-message-actions-row button, .chat-message-footer button")
                 .evaluateAll((buttons) =>
                   buttons.map((button) => getComputedStyle(button).opacity),
                 ),

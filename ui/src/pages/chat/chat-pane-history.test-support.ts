@@ -51,6 +51,7 @@ export type TestChatPane = HTMLElement & {
   stagedOlderLoad: Promise<void> | null;
   requestReplyMessage: (messageId: string) => void;
   readReplyMessage: (messageId: string) => unknown;
+  isReplyMessageMissing: (messageId: string) => boolean;
   openReplyMessage: (messageId: string) => void;
   currentReplyNavigationId: (sessionKey: string) => string | null;
   hasOlderMessages: () => boolean;

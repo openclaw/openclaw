@@ -338,6 +338,112 @@ describe("chat transcript invalidation", () => {
     expect(chip()).toBeNull();
   });
 
+  it.each(["group", "frame"] as const)(
+    "refreshes an unchanged reply %s when its older original loads or changes",
+    async (presentation) => {
+      vi.spyOn(Date, "now").mockReturnValue(60_000);
+      const history = [
+        {
+          role: "user",
+          content: "Alice's recent prompt",
+          timestamp: 1_000,
+          __openclaw: { id: "alice-prompt", senderId: "alice", senderName: "Alice" },
+        },
+        {
+          role: "assistant",
+          content: "Unrelated answer",
+          timestamp: 2_000,
+          __openclaw: { id: "unrelated-answer" },
+        },
+        {
+          role: "user",
+          content: "Bob's current prompt",
+          timestamp: 3_000,
+          __openclaw: {
+            id: "bob-prompt",
+            senderId: "bob",
+            senderName: "Bob",
+            idempotencyKey: "reply-run:user",
+          },
+        },
+        {
+          role: "assistant",
+          content: "Answer to the earlier question",
+          timestamp: 4_000,
+          phase: "final_answer",
+          stopReason: "stop",
+          ...(presentation === "frame" ? { runId: "reply-run" } : {}),
+          __openclaw: {
+            id: "reply-answer",
+            replyToId: "older-prompt",
+            replyToPreview: { senderLabel: "Old label", text: "Old snapshot" },
+          },
+        },
+      ];
+      const props = threadProps(
+        `pane-reply-source-${presentation}`,
+        "agent:main:dashboard:reply-source",
+        history,
+      );
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      const rerender = () => {
+        render(renderChatThread(props, transcript), container);
+        transcript.hostUpdated();
+      };
+      const attribution = () =>
+        expectDefined(
+          container
+            .querySelector('[data-entry-id="reply-answer"]')
+            ?.closest(".chat-group")
+            ?.querySelector(".chat-reply-attribution--reply"),
+          "reply attribution",
+        );
+      try {
+        rerender();
+        transcript.hostConnected();
+        await flushDeferredRowPrune();
+        expect(attribution().querySelector(".chat-reply-attribution__name")?.textContent).toBe(
+          "Old label",
+        );
+        expect(attribution().querySelector("button")).toBeNull();
+        const unrelatedKey = expectDefined(
+          container
+            .querySelector('[data-entry-id="unrelated-answer"]')
+            ?.closest(".chat-group")
+            ?.getAttribute("data-chat-row-key"),
+          "unrelated group key",
+        );
+        const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+
+        for (const [name, text] of [
+          ["Carol", "Original question loaded"],
+          ["Caroline", "Original question corrected"],
+        ]) {
+          props.messages = [
+            {
+              role: "user",
+              content: text,
+              timestamp: 500,
+              __openclaw: { id: "older-prompt", senderId: "carol", senderName: name },
+            },
+            ...history,
+          ];
+          rerender();
+          await flushDeferredRowPrune();
+          expect(
+            attribution().querySelector("button .chat-reply-attribution__name")?.textContent,
+          ).toBe(name);
+          expect(renderGroup.mock.calls.filter(([group]) => group.key === unrelatedKey)).toEqual(
+            [],
+          );
+        }
+      } finally {
+        transcript.hostDisconnected();
+      }
+    },
+  );
+
   it.each(["agent:main:main", "agent:main:dashboard:history"])(
     "does not normalize historical messages again when their transcript is projected in %s",
     (sessionKey) => {

@@ -94,6 +94,8 @@ type ReplyMessageAccess = {
   revision: number;
   navigationId: string | null;
   read: (messageId: string) => unknown;
+  /** True once a lookup confirmed the message is inaccessible. */
+  missing?: (messageId: string) => boolean;
   request: (messageId: string) => void;
   open: (messageId: string) => void;
 };
@@ -456,6 +458,19 @@ function toggleTouchMessageMeta(event: PointerEvent): void {
     revealed.classList.remove("chat-group--meta-revealed");
   }
   group.classList.toggle("chat-group--meta-revealed", reveal);
+  for (const bubble of transcript.querySelectorAll(".chat-bubble--actions-revealed")) {
+    bubble.classList.remove("chat-bubble--actions-revealed");
+  }
+  if (reveal && group.classList.contains("chat-group--peer")) {
+    // Tapping beside an image must reveal its actions without opening the image.
+    const bubble =
+      target.closest(".chat-bubble") ??
+      [...group.querySelectorAll(".chat-bubble")].find((candidate) => {
+        const bounds = candidate.getBoundingClientRect();
+        return event.clientY >= bounds.top && event.clientY <= bounds.bottom;
+      });
+    bubble?.classList.add("chat-bubble--actions-revealed");
+  }
 }
 
 export function handleTranscriptPointerUp(event: PointerEvent, props: TranscriptInteractionProps) {

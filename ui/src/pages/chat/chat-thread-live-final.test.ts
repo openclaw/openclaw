@@ -257,7 +257,10 @@ describe("live terminal continuity with pending collaborators", () => {
       throw new Error("Missing active frame");
     }
     const stream = frame.parts.find((part) => part.kind === "stream-run");
-    expect(stream).toMatchObject({ replyToSender: { id: "reader" } });
+    expect(stream).toMatchObject({
+      replyToSender: { id: "reader" },
+      replyToMessage: { message: history[1] },
+    });
   });
   it("indexes rendered stream bubbles as reader anchors before they persist", () => {
     const items = project(props());
