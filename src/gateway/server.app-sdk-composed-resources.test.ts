@@ -684,9 +684,13 @@ async function proveRealGatewayContracts(): Promise<void> {
     .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
     .mockImplementation((params) => {
       const write = persistLifecycle(params);
-      if (params.event.runId === runId || params.event.runId === timeoutRunId) {
+      const phase = params.event.data?.phase;
+      if (
+        (params.event.runId === runId || params.event.runId === timeoutRunId) &&
+        (phase === "start" || phase === "end" || phase === "error")
+      ) {
         lifecycleWrites.push(write);
-        pendingLifecycleEvents.delete(`${params.event.runId}:${params.event.data?.phase}`);
+        pendingLifecycleEvents.delete(`${params.event.runId}:${phase}`);
         if (pendingLifecycleEvents.size === 0) {
           lifecycleWritesStarted.resolve();
         }
