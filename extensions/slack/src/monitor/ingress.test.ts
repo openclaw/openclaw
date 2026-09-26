@@ -281,10 +281,8 @@ describe("Slack durable ingress", () => {
 
   it("acknowledges a durable event before dispatch starts", async () => {
     await withQueue(async (queue) => {
-      let releaseAck = () => {};
-      const ackGate = new Promise<void>((resolve) => {
-        releaseAck = resolve;
-      });
+      const ackStarted = createDeferred<void>();
+      const ackGate = createDeferred<void>();
       const order: string[] = [];
       const processEvent = vi.fn(async (event: ReceiverEvent) => {
         order.push("dispatch");
@@ -293,21 +291,32 @@ describe("Slack durable ingress", () => {
       const { ingress, receive } = attachIngress(queue, processEvent);
       const ack = vi.fn(async () => {
         order.push("ack-start");
-        await ackGate;
+        ackStarted.resolve();
+        await ackGate.promise;
         order.push("ack-complete");
       });
       ingress.start();
 
       const receiving = receive(createReceiverEvent("Ev-ack-order", ack));
-      await vi.waitFor(() => expect(ack).toHaveBeenCalledTimes(1));
-      expect(processEvent).not.toHaveBeenCalled();
+      try {
+        // Await acknowledgement entry while still surfacing failed or missing admission.
+        await Promise.race([ackStarted.promise, receiving]);
+        expect(ack).toHaveBeenCalledTimes(1);
+        expect(processEvent).not.toHaveBeenCalled();
 
-      releaseAck();
-      await receiving;
-      await ingress.waitForIdle();
+        ackGate.resolve();
+        await receiving;
+        await ingress.waitForIdle();
 
-      expect(order).toEqual(["ack-start", "ack-complete", "dispatch"]);
-      await ingress.stop();
+        expect(order).toEqual(["ack-start", "ack-complete", "dispatch"]);
+      } finally {
+        ackGate.resolve();
+        try {
+          await receiving;
+        } finally {
+          await ingress.stop();
+        }
+      }
     });
   });
 
