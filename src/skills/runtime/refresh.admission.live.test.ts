@@ -284,7 +284,7 @@ it.skipIf(!nativeSupported).each(["directory", "missing"] as const)(
 );
 
 it.skipIf(!nativeSupported)(
-  "keeps native supporting create, atomic replacement and deletion out of discovery",
+  "refreshes native supporting create, replacement and deletion without publishing parsed skills",
   async ({ onTestFailed }) => {
     let phase = "ready";
     const observations: unknown[] = [];
@@ -366,10 +366,18 @@ it.skipIf(!nativeSupported)(
     phase = "initial-sync";
     await syncWorkspaceSkills(syncOptions);
     const copiedScript = path.join(targetWorkspaceDir, "skills", "guide", "scripts", "run.sh");
-    const sourceVersion = refreshState.getSkillsSourceVersion(workspaceDir);
     const snapshotVersion = refreshState.getSkillsSnapshotVersion(workspaceDir);
     const changed = vi.fn();
     let supporting = createDeferredCore();
+    let resourceVersion = refreshState.getSkillsResourceVersion(workspaceDir);
+    const refreshed = (changedWorkspace?: string) => {
+      if (
+        changedWorkspace === workspaceDir &&
+        refreshState.getSkillsResourceVersion(workspaceDir) > resourceVersion
+      ) {
+        supporting.resolve();
+      }
+    };
     const unsubscribe = refresh.registerSkillsChangeListener((event) => {
       changed(event);
       supporting.reject(new Error("Unexpected discovery publication: " + JSON.stringify(event)));
@@ -377,9 +385,15 @@ it.skipIf(!nativeSupported)(
     const markSupporting = refreshState.markSkillsSupportingFilesChanged;
     vi.spyOn(refreshState, "markSkillsSupportingFilesChanged").mockImplementation((params) => {
       markSupporting(params);
-      if (params.workspaceDir === workspaceDir) {
-        supporting.resolve();
-      }
+      refreshed(params.workspaceDir);
+    });
+    // Native directory hints can also advance resource freshness through
+    // discovery reconciliation without changing the parsed skill fingerprint.
+    const bumpSnapshot = refreshState.bumpSkillsSnapshotVersion;
+    vi.spyOn(refreshState, "bumpSkillsSnapshotVersion").mockImplementation((params) => {
+      const version = bumpSnapshot(params);
+      refreshed(params?.workspaceDir);
+      return version;
     });
     try {
       phase = "create";
@@ -388,9 +402,9 @@ it.skipIf(!nativeSupported)(
       phase += "-sync";
       await syncWorkspaceSkills(syncOptions);
       expect(await fs.readFile(copiedScript, "utf8")).toBe("created");
-      expect(refreshState.getSkillsSourceVersion(workspaceDir)).toBe(sourceVersion);
 
       supporting = createDeferredCore();
+      resourceVersion = refreshState.getSkillsResourceVersion(workspaceDir);
       phase = "replace";
       // Stay outside the admitted Root, not merely outside the selected source.
       // A vanished sibling under the watched Root is intentionally unknown detail.
@@ -401,16 +415,15 @@ it.skipIf(!nativeSupported)(
       phase += "-sync";
       await syncWorkspaceSkills(syncOptions);
       expect(await fs.readFile(copiedScript, "utf8")).toBe("atomically replaced");
-      expect(refreshState.getSkillsSourceVersion(workspaceDir)).toBe(sourceVersion);
 
       supporting = createDeferredCore();
+      resourceVersion = refreshState.getSkillsResourceVersion(workspaceDir);
       phase = "delete";
       await fs.unlink(scriptPath);
       await supporting.promise;
       phase += "-sync";
       await syncWorkspaceSkills(syncOptions);
       await expect(fs.stat(copiedScript)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(refreshState.getSkillsSourceVersion(workspaceDir)).toBe(sourceVersion);
       expect(refreshState.getSkillsSnapshotVersion(workspaceDir)).toBe(snapshotVersion);
       expect(changed).not.toHaveBeenCalled();
     } finally {

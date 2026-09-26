@@ -99,6 +99,12 @@ it
       }
     });
     try {
+      if (process.platform === "win32" && replacement === "workspace") {
+        // Windows forbids renaming an ancestor of an open directory handle.
+        // Move the observed child first, then replace its workspace without
+        // closing observation or skipping the later independent edit proof.
+        await fs.rename(sourceRoot, path.join(fixture.root, "retired-skills"));
+      }
       await fs.rename(
         replacement === "root" ? sourceRoot : workspaceDir,
         path.join(fixture.root, "retired"),
