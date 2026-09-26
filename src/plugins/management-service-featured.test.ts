@@ -38,7 +38,6 @@ function metadataSnapshot(params: {
   installRecord?: Record<string, unknown>;
   featured?: boolean;
   description?: string;
-  iconPath?: string;
 }) {
   const id = params.id ?? "workboard";
   const packageName =
@@ -51,7 +50,6 @@ function metadataSnapshot(params: {
       name: params.name ?? "Workboard",
       description: params.description ?? "Coordinate agent work in a shared board.",
       catalog: { featured: params.featured ?? true, order: 10 },
-      ...(params.iconPath ? { iconPath: params.iconPath } : {}),
       channels: [],
       providers: [],
       cliBackends: [],

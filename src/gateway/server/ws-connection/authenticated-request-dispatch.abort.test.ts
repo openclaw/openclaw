@@ -266,41 +266,38 @@ describe("authenticated WebSocket request cancellation", () => {
     expect(socket.listenerCount("close")).toBe(0);
   });
 
-  it.each(["test.trace", "sessions.cleanup", "agents.delete"])(
-    "keeps authenticated %s work alive after its socket disconnects",
-    async (method) => {
-      const socket = new EventEmitter();
-      const { awaitResponseFrame, client, dispatcher } = createDispatcher(socket);
-      const invoked = createDeferredCore();
-      const completion = createDeferredCore();
-      let completed = false;
-      handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
-        invoked.resolve();
-        await completion.promise;
-        completed = true;
-        options.respond(true, { ok: true });
-      });
+  it("keeps ordinary authenticated work alive after its socket disconnects", async () => {
+    const socket = new EventEmitter();
+    const { awaitResponseFrame, client, dispatcher } = createDispatcher(socket);
+    const invoked = createDeferredCore();
+    const completion = createDeferredCore();
+    let completed = false;
+    handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
+      invoked.resolve();
+      await completion.promise;
+      completed = true;
+      options.respond(true, { ok: true });
+    });
 
-      const dispatch = dispatcher.dispatch(
-        { type: "req", id: "ordinary-request", method, params: {} },
-        client,
-      );
-      try {
-        await invoked.promise;
-        expect(handleGatewayRequest).toHaveBeenCalledOnce();
+    const dispatch = dispatcher.dispatch(
+      { type: "req", id: "ordinary-request", method: "test.trace", params: {} },
+      client,
+    );
+    try {
+      await invoked.promise;
+      expect(handleGatewayRequest).toHaveBeenCalledOnce();
 
-        expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
-        expect(socket.listenerCount("close")).toBe(0);
-        socket.emit("close", 1006, Buffer.alloc(0));
-        expect(completed).toBe(false);
-      } finally {
-        completion.resolve();
-        await awaitResponseFrame("ordinary-request");
-        await dispatch;
-      }
-      expect(completed).toBe(true);
-    },
-  );
+      expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
+      expect(socket.listenerCount("close")).toBe(0);
+      socket.emit("close", 1006, Buffer.alloc(0));
+      expect(completed).toBe(false);
+    } finally {
+      completion.resolve();
+      await awaitResponseFrame("ordinary-request");
+      await dispatch;
+    }
+    expect(completed).toBe(true);
+  });
 
   it("cancels a session companion ask when its authenticated socket closes", async () => {
     const socket = new EventEmitter();

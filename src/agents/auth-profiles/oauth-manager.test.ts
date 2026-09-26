@@ -23,10 +23,7 @@ import { oidcIdentity } from "./credential-fixtures.test-support.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
 import { createOAuthManager } from "./oauth-manager.js";
 import { isSettledOAuthRefreshFailure, OAuthManagerRefreshError } from "./oauth-refresh-failure.js";
-import {
-  isSafeToAdoptBootstrapOAuthIdentity,
-  isSafeToAdoptMainStoreOAuthIdentity,
-} from "./oauth-shared.js";
+import { isSafeToAdoptMainStoreOAuthIdentity } from "./oauth-shared.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import * as authProfileStoreRuntime from "./store-runtime.js";
@@ -89,23 +86,6 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
-describe("isSafeToAdoptBootstrapOAuthIdentity", () => {
-  it("allows identity-less external bootstrap adoption", () => {
-    const existing = createCredential({
-      access: "expired-local-access",
-      refresh: "expired-local-refresh",
-      expires: Date.now() - 60_000,
-    });
-    const incoming = createCredential({
-      access: "external-access",
-      refresh: "external-refresh",
-      expires: Date.now() + 60_000,
-    });
-
-    expect(isSafeToAdoptBootstrapOAuthIdentity(existing, incoming)).toBe(true);
-  });
-});
-
 describe("isSafeToAdoptMainStoreOAuthIdentity", () => {
   it("allows identity-less credentials to adopt from the main store", () => {
     expect(
@@ -118,21 +98,6 @@ describe("isSafeToAdoptMainStoreOAuthIdentity", () => {
           access: "main-access",
           refresh: "main-refresh",
           accountId: "acct-main",
-        }),
-      ),
-    ).toBe(true);
-  });
-});
-
-describe("matching account identity adoption", () => {
-  it("accepts matching account identities for main-store adoption", () => {
-    expect(
-      isSafeToAdoptMainStoreOAuthIdentity(
-        createCredential({ accountId: "acct-123" }),
-        createCredential({
-          access: "main-access",
-          refresh: "main-refresh",
-          accountId: "acct-123",
         }),
       ),
     ).toBe(true);

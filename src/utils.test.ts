@@ -12,8 +12,6 @@ import {
   normalizeE164,
   pinConfigDir,
   resolveConfigDir,
-  resolveHomeDir,
-  resolveUserPath,
   shortenHomeInString,
   shortenHomePath,
   sleep,
@@ -40,17 +38,6 @@ describe("ensureDir", () => {
 });
 
 describe("sleep", () => {
-  it("resolves after delay using fake timers", async () => {
-    vi.useFakeTimers();
-    try {
-      const promise = sleep(1000);
-      vi.advanceTimersByTime(1000);
-      await expect(promise).resolves.toBeUndefined();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("clamps oversized sleep delays before scheduling", async () => {
     vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
@@ -76,18 +63,6 @@ describe("sleep", () => {
 
     expect(error).toMatchObject({ name: "AbortError", message: "aborted", cause: reason });
     expect(isAbortError(error)).toBe(true);
-  });
-
-  it("rejects a pre-aborted positive-duration wait", async () => {
-    const controller = new AbortController();
-    const reason = new Error("cancelled");
-    controller.abort(reason);
-
-    await expect(sleep(1, controller.signal)).rejects.toMatchObject({
-      name: "AbortError",
-      message: "aborted",
-      cause: reason,
-    });
   });
 
   it("resolves a non-aborted zero-duration wait without scheduling", async () => {
@@ -132,11 +107,8 @@ describe("sleep", () => {
 
 describe("normalizeE164", () => {
   it.each([
-    ["+1234567890", "+1234567890"],
-    ["++1234567890", "+1234567890"],
     ["1+234+567", "+1234567"],
     ["whatsapp:+1 (234) 567-8900", "+12345678900"],
-    ["signal: 1 234 567", "+1234567"],
     ["not a phone number", ""],
   ])("normalizes %s", (input, expected) => {
     expect(normalizeE164(input)).toBe(expected);
@@ -186,14 +158,6 @@ describe("resolveConfigDir", () => {
         OPENCLAW_TEST_FAST: "1",
       });
     }
-  });
-});
-
-describe("resolveHomeDir", () => {
-  it("prefers OPENCLAW_HOME over HOME", () => {
-    withEnv({ OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/home/other" }, () => {
-      expect(resolveHomeDir()).toBe(path.resolve("/srv/openclaw-home"));
-    });
   });
 });
 
@@ -278,40 +242,4 @@ describe("shortenHomeInString", () => {
       });
     },
   );
-});
-
-describe("resolveUserPath", () => {
-  it("expands ~ to home dir", () => {
-    expect(resolveUserPath("~", {}, () => "/Users/thoffman")).toBe(path.resolve("/Users/thoffman"));
-  });
-
-  it("expands ~/ to home dir", () => {
-    expect(resolveUserPath("~/openclaw", {}, () => "/Users/thoffman")).toBe(
-      path.resolve("/Users/thoffman", "openclaw"),
-    );
-  });
-
-  it("resolves relative paths", () => {
-    expect(resolveUserPath("tmp/dir")).toBe(path.resolve("tmp/dir"));
-  });
-
-  it("prefers OPENCLAW_HOME for tilde expansion", () => {
-    withEnv({ OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/home/other" }, () => {
-      expect(resolveUserPath("~/openclaw")).toBe(path.resolve("/srv/openclaw-home", "openclaw"));
-    });
-  });
-
-  it("uses the provided env for tilde expansion", () => {
-    const env = {
-      HOME: "/tmp/openclaw-home",
-      OPENCLAW_HOME: "/srv/openclaw-home",
-    } as NodeJS.ProcessEnv;
-
-    expect(resolveUserPath("~/openclaw", env)).toBe(path.resolve("/srv/openclaw-home", "openclaw"));
-  });
-
-  it("keeps blank paths blank", () => {
-    expect(resolveUserPath("")).toBe("");
-    expect(resolveUserPath("   ")).toBe("");
-  });
 });

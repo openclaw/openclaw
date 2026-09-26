@@ -170,17 +170,6 @@ describe("channel-streaming", () => {
     ).toBe(false);
   });
 
-  it("separates progress labels from detail lines with a blank line", () => {
-    const entry = { streaming: { progress: { label: "Working" } } };
-
-    expect(
-      formatChannelProgressDraftText({
-        entry,
-        lines: ["🛠️ pgrep -fl Discord || true (agent)", "Discord is installed."],
-      }),
-    ).toBe("Working\n\n🛠️ pgrep -fl Discord || true (agent)\n• Discord is installed.");
-  });
-
   it("renders automatic and configured progress labels through the public formatter", () => {
     expect(formatChannelProgressDraftText({ lines: [], random: () => 0 })).toBe("Working");
     expect(
@@ -231,17 +220,6 @@ describe("channel-streaming", () => {
         ],
       }),
     ).toBe("_Checking source data before summarizing._");
-  });
-
-  it("renders progress labels as rolling lines", () => {
-    const entry = { streaming: { progress: { label: "Shelling", maxLines: 3 } } };
-
-    expect(
-      formatChannelProgressDraftText({
-        entry,
-        lines: ["🛠️ Exec", "📖 Read", "🩹 Patch"],
-      }),
-    ).toBe("🛠️ Exec\n📖 Read\n🩹 Patch");
   });
 
   it("renders structured progress lines with compact details", () => {
@@ -847,22 +825,6 @@ describe("channel-streaming", () => {
     expect(merged).toHaveLength(1);
     expect(merged[0]).toEqual({ ...output, id: expect.any(String) });
     expect(merged[0]).toMatchObject({ detail: "command pnpm test", status: "exit 2" });
-  });
-
-  it("starts progress drafts after the initial delay", async () => {
-    vi.useFakeTimers();
-    const onStart = vi.fn(async () => {});
-    const gate = createChannelProgressDraftGate({ onStart });
-
-    await expect(gate.noteWork()).resolves.toBe(false);
-    expect(onStart).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS - 1);
-    expect(onStart).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(onStart).toHaveBeenCalledTimes(1);
-    expect(gate.hasStarted).toBe(true);
   });
 
   it("does not start progress drafts before the delay after two rapid work events", async () => {

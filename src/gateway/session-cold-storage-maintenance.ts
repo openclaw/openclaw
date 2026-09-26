@@ -1,5 +1,6 @@
 import type { SessionsStorageStatusResult } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   isGatewayWorkAdmissionClosed,
   runWithGatewayDetachedWorkAdmission,
@@ -26,6 +27,7 @@ function idleStatus(): MaintenanceStatus {
 
 /** One sweep owner per Gateway, shared by periodic and explicit maintenance. */
 export function startSessionColdStorageMaintenance(params: {
+  scheduler: GatewayScheduler;
   getRuntimeConfig: () => OpenClawConfig;
   onError: (message: string) => void;
 }): MaintenanceOwner {
@@ -58,7 +60,7 @@ export function startSessionColdStorageMaintenance(params: {
         }
       };
       status.running = true;
-      status.lastStartedAt = Date.now();
+      status.lastStartedAt = params.scheduler.now();
       status.lastError = null;
       status.archivedTranscripts = 0;
       status.externalizedTranscripts = 0;
@@ -89,15 +91,15 @@ export function startSessionColdStorageMaintenance(params: {
         })
         .finally(() => {
           status.running = false;
-          status.lastCompletedAt = Date.now();
+          status.lastCompletedAt = params.scheduler.now();
           inFlight = undefined;
         });
       return inFlight;
     },
     stop: async () => {
       stopped = true;
-      clearInterval(timer);
       abortController.abort();
+      await job.stop();
       // A worker must relinquish its writer admission before database teardown.
       await inFlight?.catch(() => {});
       await previousDrain;
@@ -114,13 +116,16 @@ export function startSessionColdStorageMaintenance(params: {
       isGatewayWorkAdmissionClosed() ||
       params.getRuntimeConfig().session?.maintenance?.coldStorage?.enabled !== true
     ) {
-      return;
+      return undefined;
     }
-    void owner.run().catch((error: unknown) => params.onError(String(error)));
+    return owner.run().catch((error: unknown) => params.onError(String(error)));
   };
-  const timer = setInterval(tick, 60_000);
-  timer.unref();
-  tick();
+  const job = params.scheduler.schedule({
+    id: "maintenance:session-cold-storage",
+    atMs: params.scheduler.now(),
+    everyMs: 60_000,
+    run: tick,
+  });
   return owner;
 }
 

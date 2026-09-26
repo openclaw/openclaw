@@ -25,7 +25,6 @@ async function execute(input: Record<string, unknown>) {
     action: "camera_ptz",
     input: { action: "camera_ptz", node: "Mac", ...input },
     gatewayOpts: {},
-    mediaInvokeActions: {},
   });
 }
 

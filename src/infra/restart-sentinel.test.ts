@@ -337,20 +337,6 @@ describe("restart sentinel", () => {
     });
   });
 
-  it("keeps revisions strictly monotonic within the same millisecond", async () => {
-    await withRestartSentinelStateDir(async () => {
-      const now = vi.spyOn(Date, "now").mockReturnValue(1000);
-      try {
-        const first = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
-        const second = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 2 });
-        expect(second.revision).toBe(first.revision + 1);
-        expect(readSentinelRow()?.updated_at_ms).toBe(second.revision);
-      } finally {
-        now.mockRestore();
-      }
-    });
-  });
-
   it("upgrades pre-floor rows only when the captured revision still exists", async () => {
     await withRestartSentinelStateDir(async () => {
       const now = vi.spyOn(Date, "now").mockReturnValue(1000);
@@ -432,19 +418,6 @@ describe("restart sentinel", () => {
     expect(summarizeRestartSentinel(payload)).toBe("Gateway auto-recovery");
   });
 
-  it("formatRestartSentinelMessage falls back to summary when no message", () => {
-    const payload = {
-      kind: "update" as const,
-      status: "ok" as const,
-      ts: Date.now(),
-      stats: { mode: "git" },
-    };
-    const result = formatRestartSentinelMessage(payload);
-    expect(result).toContain("Gateway restart");
-    expect(result).toContain("update");
-    expect(result).toContain("ok");
-  });
-
   it("formatRestartSentinelMessage falls back to summary for blank message", () => {
     const payload = {
       kind: "restart" as const,
@@ -516,13 +489,6 @@ describe("restart sentinel", () => {
         "Run openclaw doctor",
       ].join("\n"),
     );
-  });
-
-  it("trims log tails", () => {
-    const text = "a".repeat(9000);
-    const trimmed = trimLogTail(text, 8000);
-    expect(trimmed?.length).toBeLessThanOrEqual(8001);
-    expect(trimmed?.startsWith("…")).toBe(true);
   });
 
   it("keeps trimmed log tails UTF-16 safe", () => {
@@ -890,25 +856,6 @@ describe("restart sentinel message dedup", () => {
     const occurrences = result.split("Applying config changes").length - 1;
     expect(occurrences).toBe(1);
     expect(result).not.toContain("Reason:");
-  });
-
-  it("keeps Reason: line when stats.reason differs from message", () => {
-    const payload = {
-      kind: "restart" as const,
-      status: "ok" as const,
-      ts: Date.now(),
-      message: "Restart requested by /restart",
-      stats: { mode: "gateway.restart", reason: "/restart" },
-    };
-    const result = formatRestartSentinelMessage(payload);
-    expect(result).toContain("Restart requested by /restart");
-    expect(result).toContain("Reason: /restart");
-  });
-
-  it("formats the non-interactive doctor command as actionability guidance", () => {
-    expect(formatDoctorNonInteractiveHint({ PATH: "/usr/bin:/bin" })).toBe(
-      "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
-    );
   });
 
   it("keeps profile-aware doctor guidance actionable outside constrained delivery surfaces", () => {

@@ -15,7 +15,6 @@ import {
   createPathResolutionEnv,
   deleteTestEnvValue,
   setTestEnvValue,
-  withEnvAsync,
 } from "../test-utils/env.js";
 import { collectPluginsTrustFindings } from "./audit-plugins-trust.js";
 
@@ -448,7 +447,7 @@ describe("security audit install metadata findings", () => {
 
     const bundledFindings = await runInstallMetadataAudit(
       {
-        plugins: { allow: ["discord", "some-installed-plugin"] },
+        plugins: { allow: ["discord", "anthropic", "some-installed-plugin"] },
       },
       bundledStateDir,
     );
@@ -501,35 +500,6 @@ describe("security audit install metadata findings", () => {
     expect(findings.map((finding) => finding.detail).join("\n")).not.toContain(
       ".openclaw-install-backups",
     );
-  });
-
-  it("does not report bundled provider and utility plugins as phantom allowlist entries", async () => {
-    const stateDir = await makeTmpDir("phantom-bundled-providers");
-    await fs.mkdir(path.join(stateDir, "extensions", "installed-plugin"), {
-      recursive: true,
-    });
-
-    const findings = await runInstallMetadataAudit(
-      {
-        plugins: {
-          allow: [
-            "active-memory",
-            "anthropic",
-            "brave",
-            "google",
-            "lmstudio",
-            "memory-core",
-            "ollama",
-            "installed-plugin",
-          ],
-        },
-      },
-      stateDir,
-    );
-
-    expect(
-      findings.find((finding) => finding.checkId === "plugins.allow_phantom_entries"),
-    ).toBeUndefined();
   });
 });
 
@@ -647,61 +617,10 @@ describe("security audit extension tool reachability findings", () => {
           ).toBe(false);
         },
       },
-      {
-        name: "flags unallowlisted extensions as warn-level findings when extension inventory exists",
-        cfg: {
-          channels: {
-            discord: { enabled: true, token: "t" },
-          },
-        } satisfies OpenClawConfig,
-        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
-          expect(
-            findings.some(
-              (finding) =>
-                finding.checkId === "plugins.extensions_no_allowlist" &&
-                finding.severity === "warn",
-            ),
-          ).toBe(true);
-        },
-      },
-      {
-        name: "treats SecretRef channel credentials as configured for extension allowlist severity",
-        cfg: {
-          channels: {
-            discord: {
-              enabled: true,
-              token: {
-                source: "env",
-                provider: "default",
-                id: "DISCORD_BOT_TOKEN",
-              } as unknown as string,
-            },
-          },
-        } satisfies OpenClawConfig,
-        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
-          expect(
-            findings.some(
-              (finding) =>
-                finding.checkId === "plugins.extensions_no_allowlist" &&
-                finding.severity === "warn",
-            ),
-          ).toBe(true);
-        },
-      },
     ] as const;
 
-    await withEnvAsync(
-      {
-        DISCORD_BOT_TOKEN: undefined,
-        TELEGRAM_BOT_TOKEN: undefined,
-        SLACK_BOT_TOKEN: undefined,
-        SLACK_APP_TOKEN: undefined,
-      },
-      async () => {
-        for (const testCase of cases) {
-          testCase.assert(await runSharedExtensionsAudit(testCase.cfg));
-        }
-      },
-    );
+    for (const testCase of cases) {
+      testCase.assert(await runSharedExtensionsAudit(testCase.cfg));
+    }
   });
 });

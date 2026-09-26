@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { projectProviderError } from "../../../packages/ai/src/utils/provider-error.js";
 import { failoverClassificationCorpus } from "../../agents/failover/failover-classification.corpus.cases.test-support.js";
-import { failoverRetryExpectations } from "../../agents/failover/failover-retry.expected.test-support.js";
 import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import {
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
@@ -37,25 +36,65 @@ describe("isRetryableAssistantError", () => {
       expect(isRetryableAssistantError(message)).toBe(false);
     },
   );
-  it("freezes one retry decision for every failover corpus row", () => {
-    expect(Object.keys(failoverRetryExpectations).toSorted()).toEqual(
-      failoverClassificationCorpus.map((row) => row.id).toSorted(),
-    );
+  // The classifier owns the full phrase corpus. Keep retry-specific evidence,
+  // replay windows, and incomplete-stream regressions at this adapter boundary.
+  it.each([
+    ["bedrock-incomplete-terminal-stream", true],
+    ["anthropic-incomplete-terminal-stream", true],
+    ["google-incomplete-terminal-stream", true],
+    ["mistral-incomplete-terminal-stream", true],
+    ["openai-completions-incomplete-terminal-stream", true],
+    ["openai-responses-incomplete-terminal-stream", true],
+    ["proxy-incomplete-terminal-stream", true],
+    ["retry-rate-limit-hyphen", true],
+    ["billing-rate-limit-too-many", true],
+    ["billing-service-capacity", true],
+    ["legacy-provider-matchers-012", true],
+    ["billing-openai-structured-server-error", true],
+    ["billing-econnrefused", true],
+    ["billing-connection-error", true],
+    ["retry-connection-refused", true],
+    ["retry-connection-lost", true],
+    ["retry-other-side-closed", true],
+    ["billing-fetch-failed", true],
+    ["retry-reset-before-headers", true],
+    ["retry-websocket-closed", true],
+    ["retry-websocket-error", true],
+    ["retry-http2-no-response", true],
+    ["retry-delay", true],
+    ["retry-ended-without-terminal-response", true],
+    ["http-provider-timeout", true],
+    ["billing-undici-connect-timeout", true],
+    ["legacy-billing-a-004", true],
+    ["patterns-context-llamacpp-exceeded-500", true],
+    ["billing-http402-rate-limit", true],
+    ["legacy-billing-a-055", true],
+    ["legacy-billing-a-059", true],
+    ["legacy-billing-a-082", true],
+    ["legacy-billing-b-036", true],
+    ["legacy-billing-a-021", false],
+    ["http-structured-insufficient-quota", false],
+    ["patterns-xai-spending-limit", false],
+  ] as const)("preserves retry policy for %s", (id, expected) => {
+    const row = failoverClassificationCorpus.find((entry) => entry.id === id);
+    if (!row) {
+      throw new Error(`Missing retry fixture: ${id}`);
+    }
+    const message = errorMessage(row.signal.message ?? "");
+    message.provider =
+      ("provider" in row.signal ? row.signal.provider : undefined) ?? "test-provider";
+    expect(isRetryableAssistantError(message)).toBe(expected);
   });
 
-  it.each(failoverClassificationCorpus)(
-    "preserves the retry decision for $id [$source]",
-    ({ id, signal }) => {
-      const message = signal.message
-        ? errorMessage(signal.message)
-        : ({ ...errorMessage(""), errorMessage: undefined } as AssistantMessage);
-      message.provider = ("provider" in signal ? signal.provider : undefined) ?? "test-provider";
-
-      expect(isRetryableAssistantError(message)).toBe(
-        failoverRetryExpectations[id as keyof typeof failoverRetryExpectations],
-      );
-    },
-  );
+  it("does not retry a missing error message even with a transient code", () => {
+    expect(
+      isRetryableAssistantError({
+        ...errorMessage(""),
+        errorMessage: undefined,
+        errorCode: "UND_ERR_CONNECT_TIMEOUT",
+      }),
+    ).toBe(false);
+  });
 
   it.each([PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE, PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE])(
     "does not retry replay-unsafe provider outcome %s",

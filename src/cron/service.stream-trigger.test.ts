@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
@@ -18,6 +19,8 @@ async function createHarness(fire: boolean) {
     async (): Promise<{ status: "ok" | "error"; error?: string }> => ({ status: "ok" }),
   );
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     cronEnabled: true,
     cronConfig: { triggers: { enabled: true } },
@@ -102,6 +105,8 @@ describe("cron stream trigger composition", () => {
     const { storePath } = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: true,
       cronConfig: { triggers: { enabled: true } },
@@ -144,6 +149,8 @@ describe("cron stream trigger composition", () => {
     const { storePath } = await makeStorePath();
     const runScriptJob = vi.fn(async () => ({ status: "ok" as const }));
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: true,
       cronConfig: { triggers: { enabled: true } },
@@ -200,6 +207,8 @@ describe("cron stream trigger composition", () => {
       async () => undefined,
     );
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: true,
       cronConfig: {
@@ -263,6 +272,8 @@ describe("cron stream trigger composition", () => {
     const { storePath } = await makeStorePath();
     const onTriggerDisposition = vi.fn();
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: true,
       cronConfig: { triggers: { enabled: true } },

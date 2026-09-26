@@ -13,8 +13,6 @@ describe("pw-role-snapshot", () => {
       ['button "Save \\"draft\\""', 'Save "draft"'],
       ['button "Open C:\\\\draft"', "Open C:\\draft"],
       [`'button "Save: owner''s draft"'`, "Save: owner's draft"],
-      [`'button "Issue #123"'`, "Issue #123"],
-      [`'button "Save {draft}"'`, "Save {draft}"],
       ['button "保存 🦞 résumé"', "保存 🦞 résumé"],
       ["button /api/v1/", "/api/v1/"],
       ["button /", "/"],

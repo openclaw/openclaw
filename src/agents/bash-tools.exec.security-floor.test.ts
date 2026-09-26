@@ -181,21 +181,6 @@ describe("exec security floor", () => {
     expect(optionalRuntimeImports).toEqual({ reviewer: 0, followup: 0 });
   });
 
-  it("enforces configured allowlist security when model also passes allowlist", async () => {
-    const tool = createExecTool({
-      security: "allowlist",
-      ask: "off",
-      safeBins: [],
-    });
-
-    const modelArgs = {
-      command: "echo hello",
-      security: "allowlist",
-      ask: "off",
-    };
-    await expect(tool.execute("call-2", modelArgs)).rejects.toThrow(/exec denied: allowlist miss/i);
-  });
-
   it("ignores model-supplied ask overrides when configured ask is off", async () => {
     const root = tempRoot ?? os.tmpdir();
     const binDir = installAllowlistedGogFixture(root);

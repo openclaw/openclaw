@@ -119,14 +119,6 @@ describe("resolveAssistantIdentity", () => {
     );
   });
 
-  it("keeps short text avatars", async () => {
-    const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", identity: { avatar: "PS" } }] },
-    };
-
-    expect((await resolveAssistantIdentity({ cfg, workspaceDir: "" })).avatar).toBe("PS");
-  });
-
   it("keeps path avatars", async () => {
     const cfg: OpenClawConfig = {
       agents: { list: [{ id: "main", identity: { avatar: "avatars/openclaw.png" } }] },

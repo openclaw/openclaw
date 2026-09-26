@@ -17,6 +17,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import {
   createTestApprovalFixture,
@@ -896,6 +897,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     tempDirs.push(stateDir);
     const databaseOptions = { path: path.join(stateDir, "state.sqlite") };
     const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
+      scheduler: createTestGatewayScheduler(),
       approvalKind: "plugin",
       persistence: { runtimeEpoch: "node-policy-test", databaseOptions },
       resolveAllowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions,

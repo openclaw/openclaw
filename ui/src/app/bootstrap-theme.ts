@@ -259,13 +259,12 @@ export function createApplicationTheme(
       serverSelection = { revision: (serverSelection?.revision ?? 0) + 1, scope, theme };
       publish();
     },
-    setMode(mode: ThemeMode, element) {
+    setMode(mode: ThemeMode) {
       const currentTheme = resolveTheme(settings.theme, settings.themeMode);
       const nextTheme = resolveTheme(settings.theme, mode);
       startThemeTransition({
         nextTheme,
         currentTheme,
-        context: { element },
         applyTheme: () => {
           patchSettings({ themeMode: mode });
         },

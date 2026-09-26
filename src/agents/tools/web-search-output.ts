@@ -185,38 +185,28 @@ function normalizeCitations(
       budget.truncated = true;
       break;
     }
-    if (typeof entry === "string") {
-      const url = toHttpUrl(entry);
-      if (url && consumeUrlBudget(url, budget)) {
-        citations.push({ url });
-      }
+    const source = typeof entry === "string" ? { url: entry } : entry;
+    if (!isRecord(source) || typeof source.url !== "string") {
       continue;
     }
-    const url = isRecord(entry) && typeof entry.url === "string" ? toHttpUrl(entry.url) : undefined;
-    if (!isRecord(entry) || !url || !consumeUrlBudget(url, budget)) {
+    const url = toHttpUrl(source.url);
+    if (!url || !consumeUrlBudget(url, budget)) {
       continue;
     }
     const citation: Static<typeof WebSearchCitationSchema> = { url };
-    if (typeof entry.title === "string") {
-      citation.title = entry.title;
+    if (typeof source.title === "string") {
+      citation.title = source.title;
     }
     citations.push(citation);
   }
   return citations;
 }
 
-// Provider output is untrusted third-party data (bundled or, worse, external
-// plugin code). Snapshot it into plain JSON before reading any field so exotic
-// values a real HTTP payload never has — bigint, circular refs, throwing
-// getters, Proxy traps — cannot crash the agent turn or vary between reads. A
-// payload that will not serialize degrades to a safe provider error rather than
-// throwing out of the boundary.
+// Snapshot provider data before reading it so getters/proxies cannot vary between
+// reads. Non-JSON values degrade to a provider error at this boundary.
 function snapshotProviderResult(result: Record<string, unknown>): Record<string, unknown> | null {
   try {
-    // Serialize-then-parse, not structuredClone: we specifically want non-JSON
-    // values (bigint, circular refs, functions, symbols) to flatten or throw
-    // here rather than survive and break a later serialization. structuredClone
-    // preserves them, so it would only move the crash downstream.
+    // structuredClone preserves non-JSON values that could break later serialization.
     const serialized = JSON.stringify(result ?? {});
     const cloned: unknown = JSON.parse(serialized);
     return isRecord(cloned) ? cloned : {};
@@ -225,7 +215,6 @@ function snapshotProviderResult(result: Record<string, unknown>): Record<string,
   }
 }
 
-/** Normalizes every bundled or external provider payload at the core tool boundary. */
 export function normalizeWebSearchOutput(params: {
   result: Record<string, unknown>;
   provider: string;
@@ -255,16 +244,14 @@ export function normalizeWebSearchOutput(params: {
   // success payloads, so treating it as failure first prevents an error plus
   // empty results from masquerading as a successful search.
   if (Object.hasOwn(result, "error")) {
-    // Error branches carry no externalContent marker, so nothing provider-
-    // controlled may pass unwrapped: the structured code is a core literal,
-    // the raw provider code and message travel inside the envelope, and docs
-    // must canonicalize as http(s).
-    // Non-string error payloads (numbers, objects) keep their diagnostics by
-    // serializing into the wrapped message instead of collapsing to a bare code.
-    const rawError =
+    // Error branches carry no trust marker: wrap the provider code and message,
+    // preserve non-string diagnostics as JSON, and allow only http(s) docs links.
+    const rawError = truncateUtf16Safe(
       typeof result.error === "string"
-        ? truncateUtf16Safe(result.error, 2_000)
-        : truncateUtf16Safe(JSON.stringify(result.error) ?? "provider_error", 2_000);
+        ? result.error
+        : (JSON.stringify(result.error) ?? "provider_error"),
+      2_000,
+    );
     const rawMessage = typeof result.message === "string" ? result.message : rawError;
     const docs = typeof result.docs === "string" ? toHttpUrl(result.docs) : undefined;
     return {

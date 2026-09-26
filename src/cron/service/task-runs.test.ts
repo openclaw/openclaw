@@ -11,6 +11,7 @@ import {
   resetTaskRegistryForTests,
   setDetachedTaskLifecycleRuntime,
 } from "../../tasks/task-runtime.test-helpers.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
 import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
@@ -36,6 +37,7 @@ function createCronServiceState(
   params: Partial<Parameters<typeof createCronServiceStateBase>[0]>,
 ): ReturnType<typeof createCronServiceStateBase> {
   return createCronServiceStateBase({
+    scheduler: createTestGatewayScheduler(),
     defaultAgentId: "main",
     storePath: "/tmp/jobs.json",
     cronEnabled: true,

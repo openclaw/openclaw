@@ -3,6 +3,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { cronTaskRecordToRunLogEntry } from "../tasks/cron-task-record.js";
 import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../tasks/task-registry.store.sqlite.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { cronRunRecordStoreKey } from "./run-history-detail.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
@@ -38,6 +39,8 @@ async function createHarness(input: Partial<CronJobCreate> = {}) {
     status: "ok",
   }));
   const deps: CronServiceDeps = {
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     cronEnabled: true,
     cronConfig: { triggers: { enabled: true } },

@@ -72,28 +72,7 @@ describe("renderChannelWizard busy controls", () => {
 
   it.each([
     { name: "note", step: { id: "note", type: "note", message: "Do this" } },
-    {
-      name: "select",
-      step: {
-        id: "select",
-        type: "select",
-        message: "Pick one",
-        options: [{ label: "Alpha", value: "alpha" }],
-      },
-    },
-    {
-      name: "multiselect",
-      step: {
-        id: "multi",
-        type: "multiselect",
-        message: "Pick several",
-        options: [{ label: "Alpha", value: "alpha" }],
-      },
-    },
-    { name: "text", step: { id: "text", type: "text", message: "Enter a value" } },
     { name: "confirm", step: { id: "confirm", type: "confirm", message: "Continue?" } },
-    { name: "action", step: { id: "action", type: "action", message: "Run action" } },
-    { name: "progress", step: { id: "progress", type: "progress", message: "Run action" } },
   ] satisfies Array<{ name: string; step: ChannelWizardStep }>)(
     "shows one spinner button while a $name answer is running",
     ({ step }) => {

@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   runCommandWithTimeout: vi.fn(),
   killProcessTree: vi.fn(),
   spawn: vi.fn(),
-  log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
+  log: { debug: vi.fn(), error: vi.fn(), warn: vi.fn(), info: vi.fn() },
   defaultRuntime: {
     log: vi.fn(),
     error: vi.fn(),

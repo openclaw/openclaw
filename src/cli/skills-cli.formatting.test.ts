@@ -97,23 +97,6 @@ describe("skills-cli (e2e)", () => {
     });
   });
 
-  it("formats info for a real bundled skill (peekaboo)", () => {
-    const entries = createEntries();
-    const report = buildWorkspaceSkillStatus(tempWorkspaceDir, {
-      managedSkillsDir: "/nonexistent",
-      entries,
-    });
-
-    const peekaboo = report.skills.find((s) => s.name === "peekaboo");
-    if (!peekaboo) {
-      throw new Error("peekaboo fixture skill missing");
-    }
-
-    const output = formatSkillInfo(report, "peekaboo", {});
-    expect(output).toContain("peekaboo");
-    expect(output).toContain("Details:");
-  });
-
   it.each([
     ["plain", "left\tright"],
     ["ESC CSI", "left\x1b[31\tmright\x1b[0m"],

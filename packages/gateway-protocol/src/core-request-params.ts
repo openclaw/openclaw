@@ -3,6 +3,7 @@ import type * as AgentSchema from "./schema/agent.js";
 import type * as BoardSchema from "./schema/board.js";
 import type { CanvasDocumentPreviewParams, CanvasDocumentViewParams } from "./schema/canvas.js";
 import type { CommandsListParams } from "./schema/commands.js";
+import type { CronHistoryParams } from "./schema/cron.js";
 import type {
   EnvironmentsSessionCreateParams,
   EnvironmentsSessionStatusParams,
@@ -25,6 +26,7 @@ import type * as UsersSchema from "./schema/users.js";
 
 /** Schema-derived payload ownership for statically validated core Gateway methods. */
 export type GatewayCoreRequestParams = {
+  "cron.history": CronHistoryParams;
   "users.personalFile.get": UsersSchema.UsersPersonalFileGetParams;
   "users.personalFile.set": UsersSchema.UsersPersonalFileSetParams;
   "canvas.document.preview": CanvasDocumentPreviewParams;

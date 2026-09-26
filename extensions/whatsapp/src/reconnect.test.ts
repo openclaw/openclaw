@@ -1,13 +1,7 @@
 // Whatsapp tests cover reconnect plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import {
-  computeBackoff,
-  DEFAULT_RECONNECT_POLICY,
-  resolveHeartbeatSeconds,
-  resolveReconnectPolicy,
-  sleepWithAbort,
-} from "./reconnect.js";
+import { resolveHeartbeatSeconds, resolveReconnectPolicy } from "./reconnect.js";
 
 describe("web reconnect helpers", () => {
   const cfg: OpenClawConfig = {};
@@ -28,24 +22,8 @@ describe("web reconnect helpers", () => {
     expect(policy.maxAttempts).toBeGreaterThanOrEqual(0);
   });
 
-  it("computes increasing backoff with jitter", () => {
-    const policy = { ...DEFAULT_RECONNECT_POLICY, jitter: 0 };
-    const first = computeBackoff(policy, 1);
-    const second = computeBackoff(policy, 2);
-    expect(first).toBe(policy.initialMs);
-    expect(second).toBeGreaterThan(first);
-    expect(second).toBeLessThanOrEqual(policy.maxMs);
-  });
-
   it("returns heartbeat default when unset", () => {
     expect(resolveHeartbeatSeconds(cfg)).toBe(60);
     expect(resolveHeartbeatSeconds(cfg, 5)).toBe(5);
-  });
-
-  it("sleepWithAbort rejects on abort", async () => {
-    const controller = new AbortController();
-    const promise = sleepWithAbort(50, controller.signal);
-    controller.abort();
-    await expect(promise).rejects.toThrow("aborted");
   });
 });

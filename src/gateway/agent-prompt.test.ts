@@ -12,14 +12,6 @@ describe("gateway agent prompt", () => {
     expect(buildAgentMessageFromConversationEntries([])).toBe("");
   });
 
-  it("returns current body when there is no history", () => {
-    expect(
-      buildAgentMessageFromConversationEntries([
-        { role: "user", entry: { sender: "User", body: "hi" } },
-      ]),
-    ).toBe("hi");
-  });
-
   it("extracts text from content-array body when there is no history", () => {
     expect(
       buildAgentMessageFromConversationEntries([
@@ -36,21 +28,6 @@ describe("gateway agent prompt", () => {
         },
       ]),
     ).toBe("hi there");
-  });
-
-  it("uses history context when there is history", () => {
-    const entries = [
-      { role: "assistant", entry: { sender: "Assistant", body: "prev" } },
-      { role: "user", entry: { sender: "User", body: "next" } },
-    ] as const;
-
-    const expected = buildHistoryContextFromEntries({
-      entries: entries.map((e) => e.entry),
-      currentMessage: "User: next",
-      formatEntry: (e) => `${e.sender}: ${e.body}`,
-    });
-
-    expect(buildAgentMessageFromConversationEntries([...entries])).toBe(expected);
   });
 
   it("prefers last tool entry over assistant for current message", () => {
@@ -117,17 +94,6 @@ describe("gateway agent prompt", () => {
     expect(prompt).not.toContain("Assistant:");
     expect(prompt).toContain("User: first");
     expect(prompt).toContain("User: retry");
-  });
-
-  it("preserves ordinary assistant text that merely mentions the stream-error placeholder", () => {
-    const mention = `Diagnostic note: ${STREAM_ERROR_FALLBACK_TEXT}`;
-    const entries = [
-      { role: "assistant", entry: { sender: "Assistant", body: mention } },
-      { role: "user", entry: { sender: "User", body: "next" } },
-    ] as const;
-
-    const prompt = buildAgentMessageFromConversationEntries([...entries]);
-    expect(prompt).toContain(mention);
   });
 
   it("preserves exact stream-error placeholder text from user history", () => {

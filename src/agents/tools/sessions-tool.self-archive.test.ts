@@ -4,22 +4,47 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { createSessionsTool } from "./sessions-tool.js";
+
+async function createArchiveSession(dir: string, name: string, sessionId = `session-${name}`) {
+  const storePath = path.join(dir, "sessions.json");
+  const sessionKey = `agent:main:${name}`;
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey, storePath },
+    { sessionId, updatedAt: 1 },
+  );
+  return {
+    storePath,
+    sessionKey,
+    sessionId,
+    createTool: (callGateway: AgentToolGatewayRequestCaller) =>
+      createSessionsTool({
+        agentSessionKey: sessionKey,
+        agentSessionId: sessionId,
+        config: { session: { store: storePath } },
+        callGateway,
+      }),
+    beginAdmission: (id = sessionId) =>
+      beginSessionWorkAdmission({
+        scope: storePath,
+        identities: [sessionKey, id],
+        assertAllowed: () => {},
+      }),
+    archiveRequest: {
+      method: "sessions.patch",
+      params: { key: sessionKey, archived: true, expectedSessionId: sessionId },
+    },
+  };
+}
 
 describe("sessions tool self-archive", () => {
   it("returns success before a detached dynamic-tool self-archive commits", async () => {
     await withTestDir({ prefix: "openclaw-sessions-tool-detached-archive-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const sessionKey = "agent:main:detached-self-archive";
-      const sessionId = "session-detached-self-archive";
-      const config: OpenClawConfig = { session: { store: storePath } };
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey, storePath },
-        { sessionId, updatedAt: 1 },
-      );
+      const { storePath, sessionKey, sessionId, createTool, beginAdmission, archiveRequest } =
+        await createArchiveSession(dir, "detached-self-archive");
       const runAbort = new AbortController();
       const callGateway = vi.fn(async () => {
         await upsertSessionEntryCore(
@@ -29,17 +54,8 @@ describe("sessions tool self-archive", () => {
         runAbort.abort(new Error("archive stopped the active turn"));
         return { ok: true };
       });
-      const tool = createSessionsTool({
-        agentSessionKey: sessionKey,
-        agentSessionId: sessionId,
-        config,
-        callGateway: callGateway as never,
-      });
-      const admission = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [sessionKey, sessionId],
-        assertAllowed: () => {},
-      });
+      const tool = createTool(callGateway as never);
+      const admission = await beginAdmission();
 
       try {
         const projected = await Promise.race([
@@ -70,14 +86,7 @@ describe("sessions tool self-archive", () => {
       }
 
       await vi.waitFor(() => {
-        expect(callGateway).toHaveBeenCalledExactlyOnceWith({
-          method: "sessions.patch",
-          params: {
-            key: sessionKey,
-            archived: true,
-            expectedSessionId: sessionId,
-          },
-        });
+        expect(callGateway).toHaveBeenCalledExactlyOnceWith(archiveRequest);
         expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toHaveProperty(
           "archivedAt",
         );
@@ -87,26 +96,11 @@ describe("sessions tool self-archive", () => {
 
   it("defers self-archiving until the current agent turn has completed", async () => {
     await withTestDir({ prefix: "openclaw-sessions-tool-self-archive-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const sessionKey = "agent:main:self-archive";
-      const sessionId = "session-self-archive";
-      const config: OpenClawConfig = { session: { store: storePath } };
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey, storePath },
-        { sessionId, updatedAt: 1 },
-      );
+      const { storePath, sessionKey, createTool, beginAdmission, archiveRequest } =
+        await createArchiveSession(dir, "self-archive");
       const callGateway = vi.fn(async () => ({ ok: true }));
-      const tool = createSessionsTool({
-        agentSessionKey: sessionKey,
-        agentSessionId: sessionId,
-        config,
-        callGateway: callGateway as never,
-      });
-      const admission = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [sessionKey, sessionId],
-        assertAllowed: () => {},
-      });
+      const tool = createTool(callGateway as never);
+      const admission = await beginAdmission();
 
       try {
         const result = await admission.run(async () => {
@@ -130,40 +124,20 @@ describe("sessions tool self-archive", () => {
       }
 
       await vi.waitFor(() => {
-        expect(callGateway).toHaveBeenCalledExactlyOnceWith({
-          method: "sessions.patch",
-          params: {
-            key: sessionKey,
-            archived: true,
-            expectedSessionId: sessionId,
-          },
-        });
+        expect(callGateway).toHaveBeenCalledExactlyOnceWith(archiveRequest);
       });
     });
   });
 
   it("applies other self-patch settings before the deferred archive", async () => {
     await withTestDir({ prefix: "openclaw-sessions-tool-archive-patch-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const sessionKey = "agent:main:archive-patch";
-      const sessionId = "session-archive-patch";
-      const config: OpenClawConfig = { session: { store: storePath } };
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey, storePath },
-        { sessionId, updatedAt: 1 },
+      const { sessionKey, sessionId, createTool, beginAdmission } = await createArchiveSession(
+        dir,
+        "archive-patch",
       );
       const callGateway = vi.fn(async () => ({ ok: true }));
-      const tool = createSessionsTool({
-        agentSessionKey: sessionKey,
-        agentSessionId: sessionId,
-        config,
-        callGateway: callGateway as never,
-      });
-      const admission = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [sessionKey, sessionId],
-        assertAllowed: () => {},
-      });
+      const tool = createTool(callGateway as never);
+      const admission = await beginAdmission();
 
       try {
         await admission.run(async () => {
@@ -207,26 +181,14 @@ describe("sessions tool self-archive", () => {
 
   it("does not apply a deferred archive to a replacement session", async () => {
     await withTestDir({ prefix: "openclaw-sessions-tool-archive-replacement-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const sessionKey = "agent:main:archive-replacement";
-      const sessionId = "session-before-reset";
-      const config: OpenClawConfig = { session: { store: storePath } };
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey, storePath },
-        { sessionId, updatedAt: 1 },
+      const { storePath, sessionKey, createTool, beginAdmission } = await createArchiveSession(
+        dir,
+        "archive-replacement",
+        "session-before-reset",
       );
       const callGateway = vi.fn(async () => ({ ok: true }));
-      const tool = createSessionsTool({
-        agentSessionKey: sessionKey,
-        agentSessionId: sessionId,
-        config,
-        callGateway: callGateway as never,
-      });
-      const admission = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [sessionKey, sessionId],
-        assertAllowed: () => {},
-      });
+      const tool = createTool(callGateway as never);
+      const admission = await beginAdmission();
       let replacementAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
 
       try {
@@ -236,11 +198,7 @@ describe("sessions tool self-archive", () => {
             { agentId: "main", sessionKey, storePath },
             { sessionId: "session-after-reset", updatedAt: 2 },
           );
-          replacementAdmission = await beginSessionWorkAdmission({
-            scope: storePath,
-            identities: [sessionKey, "session-after-reset"],
-            assertAllowed: () => {},
-          });
+          replacementAdmission = await beginAdmission("session-after-reset");
         });
       } finally {
         admission.release();
@@ -265,31 +223,14 @@ describe("sessions tool self-archive", () => {
 
   it("waits for a competing turn before applying a scheduled archive", async () => {
     await withTestDir({ prefix: "openclaw-sessions-tool-archive-competing-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const sessionKey = "agent:main:archive-competing";
-      const sessionId = "session-archive-competing";
-      const config: OpenClawConfig = { session: { store: storePath } };
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey, storePath },
-        { sessionId, updatedAt: 1 },
+      const { sessionKey, createTool, beginAdmission, archiveRequest } = await createArchiveSession(
+        dir,
+        "archive-competing",
       );
       const callGateway = vi.fn(async () => ({ ok: true }));
-      const tool = createSessionsTool({
-        agentSessionKey: sessionKey,
-        agentSessionId: sessionId,
-        config,
-        callGateway: callGateway as never,
-      });
-      const currentAdmission = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [sessionKey, sessionId],
-        assertAllowed: () => {},
-      });
-      const competingAdmission = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [sessionKey, sessionId],
-        assertAllowed: () => {},
-      });
+      const tool = createTool(callGateway as never);
+      const currentAdmission = await beginAdmission();
+      const competingAdmission = await beginAdmission();
 
       try {
         await currentAdmission.run(async () => {
@@ -311,51 +252,27 @@ describe("sessions tool self-archive", () => {
       }
 
       await vi.waitFor(() => {
-        expect(callGateway).toHaveBeenCalledExactlyOnceWith({
-          method: "sessions.patch",
-          params: {
-            key: sessionKey,
-            archived: true,
-            expectedSessionId: sessionId,
-          },
-        });
+        expect(callGateway).toHaveBeenCalledExactlyOnceWith(archiveRequest);
       });
     });
   });
 
   it("retries a scheduled archive when a turn races the gateway mutation", async () => {
     await withTestDir({ prefix: "openclaw-sessions-tool-archive-retry-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const sessionKey = "agent:main:archive-retry";
-      const sessionId = "session-archive-retry";
-      const config: OpenClawConfig = { session: { store: storePath } };
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey, storePath },
-        { sessionId, updatedAt: 1 },
+      const { sessionKey, createTool, beginAdmission, archiveRequest } = await createArchiveSession(
+        dir,
+        "archive-retry",
       );
       let competingAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
       const callGateway = vi.fn(async () => {
         if (!competingAdmission) {
-          competingAdmission = await beginSessionWorkAdmission({
-            scope: storePath,
-            identities: [sessionKey, sessionId],
-            assertAllowed: () => {},
-          });
+          competingAdmission = await beginAdmission();
           throw Object.assign(new Error("Session did not finish stopping."), { retryable: true });
         }
         return { ok: true };
       });
-      const tool = createSessionsTool({
-        agentSessionKey: sessionKey,
-        agentSessionId: sessionId,
-        config,
-        callGateway: callGateway as never,
-      });
-      const currentAdmission = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [sessionKey, sessionId],
-        assertAllowed: () => {},
-      });
+      const tool = createTool(callGateway as never);
+      const currentAdmission = await beginAdmission();
 
       try {
         await currentAdmission.run(async () => {
@@ -378,53 +295,29 @@ describe("sessions tool self-archive", () => {
 
       await vi.waitFor(() => {
         expect(callGateway).toHaveBeenCalledTimes(2);
-        expect(callGateway).toHaveBeenLastCalledWith({
-          method: "sessions.patch",
-          params: {
-            key: sessionKey,
-            archived: true,
-            expectedSessionId: sessionId,
-          },
-        });
+        expect(callGateway).toHaveBeenLastCalledWith(archiveRequest);
       });
     });
   });
 
   it("retries when a competing turn releases before its archive rejection settles", async () => {
     await withTestDir({ prefix: "openclaw-sessions-tool-archive-release-race-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const sessionKey = "agent:main:archive-release-race";
-      const sessionId = "session-archive-release-race";
-      const config: OpenClawConfig = { session: { store: storePath } };
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey, storePath },
-        { sessionId, updatedAt: 1 },
+      const { sessionKey, createTool, beginAdmission, archiveRequest } = await createArchiveSession(
+        dir,
+        "archive-release-race",
       );
       let competingTurnFinished = false;
       const callGateway = vi.fn(async () => {
         if (!competingTurnFinished) {
-          const competingAdmission = await beginSessionWorkAdmission({
-            scope: storePath,
-            identities: [sessionKey, sessionId],
-            assertAllowed: () => {},
-          });
+          const competingAdmission = await beginAdmission();
           competingAdmission.release();
           competingTurnFinished = true;
           throw Object.assign(new Error("Session did not finish stopping."), { retryable: true });
         }
         return { ok: true };
       });
-      const tool = createSessionsTool({
-        agentSessionKey: sessionKey,
-        agentSessionId: sessionId,
-        config,
-        callGateway: callGateway as never,
-      });
-      const admission = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [sessionKey, sessionId],
-        assertAllowed: () => {},
-      });
+      const tool = createTool(callGateway as never);
+      const admission = await beginAdmission();
 
       try {
         await admission.run(async () => {
@@ -440,42 +333,23 @@ describe("sessions tool self-archive", () => {
 
       await vi.waitFor(() => {
         expect(callGateway).toHaveBeenCalledTimes(2);
-        expect(callGateway).toHaveBeenLastCalledWith({
-          method: "sessions.patch",
-          params: {
-            key: sessionKey,
-            archived: true,
-            expectedSessionId: sessionId,
-          },
-        });
+        expect(callGateway).toHaveBeenLastCalledWith(archiveRequest);
       });
     });
   });
 
   it("retries a scheduled archive after a transient gateway failure", async () => {
     await withTestDir({ prefix: "openclaw-sessions-tool-archive-transport-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const sessionKey = "agent:main:archive-transport";
-      const sessionId = "session-archive-transport";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey, storePath },
-        { sessionId, updatedAt: 1 },
+      const { sessionKey, createTool, beginAdmission, archiveRequest } = await createArchiveSession(
+        dir,
+        "archive-transport",
       );
       const callGateway = vi
         .fn()
         .mockRejectedValueOnce(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }))
         .mockResolvedValue({ ok: true });
-      const tool = createSessionsTool({
-        agentSessionKey: sessionKey,
-        agentSessionId: sessionId,
-        config: { session: { store: storePath } },
-        callGateway: callGateway as never,
-      });
-      const admission = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [sessionKey, sessionId],
-        assertAllowed: () => {},
-      });
+      const tool = createTool(callGateway as never);
+      const admission = await beginAdmission();
 
       try {
         await admission.run(async () => {
@@ -491,14 +365,7 @@ describe("sessions tool self-archive", () => {
 
       await vi.waitFor(() => {
         expect(callGateway).toHaveBeenCalledTimes(2);
-        expect(callGateway).toHaveBeenLastCalledWith({
-          method: "sessions.patch",
-          params: {
-            key: sessionKey,
-            archived: true,
-            expectedSessionId: sessionId,
-          },
-        });
+        expect(callGateway).toHaveBeenLastCalledWith(archiveRequest);
       });
     });
   });
@@ -507,14 +374,8 @@ describe("sessions tool self-archive", () => {
     vi.useFakeTimers();
     try {
       await withTestDir({ prefix: "openclaw-sessions-tool-archive-projected-" }, async (dir) => {
-        const storePath = path.join(dir, "sessions.json");
-        const sessionKey = "agent:main:archive-projected";
-        const sessionId = "session-archive-projected";
-        const config: OpenClawConfig = { session: { store: storePath } };
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey, storePath },
-          { sessionId, updatedAt: 1 },
-        );
+        const { sessionKey, createTool, beginAdmission, archiveRequest } =
+          await createArchiveSession(dir, "archive-projected");
         let attempts = 0;
         const callGateway = vi.fn(async () => {
           attempts += 1;
@@ -525,17 +386,8 @@ describe("sessions tool self-archive", () => {
           }
           return { ok: true };
         });
-        const tool = createSessionsTool({
-          agentSessionKey: sessionKey,
-          agentSessionId: sessionId,
-          config,
-          callGateway: callGateway as never,
-        });
-        const admission = await beginSessionWorkAdmission({
-          scope: storePath,
-          identities: [sessionKey, sessionId],
-          assertAllowed: () => {},
-        });
+        const tool = createTool(callGateway as never);
+        const admission = await beginAdmission();
 
         try {
           await admission.run(async () => {
@@ -551,14 +403,7 @@ describe("sessions tool self-archive", () => {
 
         await vi.advanceTimersByTimeAsync(30_000);
         expect(callGateway).toHaveBeenCalledTimes(11);
-        expect(callGateway).toHaveBeenLastCalledWith({
-          method: "sessions.patch",
-          params: {
-            key: sessionKey,
-            archived: true,
-            expectedSessionId: sessionId,
-          },
-        });
+        expect(callGateway).toHaveBeenLastCalledWith(archiveRequest);
       });
     } finally {
       vi.useRealTimers();
@@ -567,38 +412,19 @@ describe("sessions tool self-archive", () => {
 
   it("keeps main-session archive validation on the gateway", async () => {
     await withTestDir({ prefix: "openclaw-sessions-tool-archive-main-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const sessionKey = "agent:main:main";
-      const sessionId = "session-main-archive";
-      const config: OpenClawConfig = { session: { store: storePath } };
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey, storePath },
-        { sessionId, updatedAt: 1 },
+      const { createTool, beginAdmission, archiveRequest } = await createArchiveSession(
+        dir,
+        "main",
+        "session-main-archive",
       );
       const callGateway = vi.fn(async () => ({ ok: true }));
-      const tool = createSessionsTool({
-        agentSessionKey: sessionKey,
-        agentSessionId: sessionId,
-        config,
-        callGateway: callGateway as never,
-      });
-      const admission = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [sessionKey, sessionId],
-        assertAllowed: () => {},
-      });
+      const tool = createTool(callGateway as never);
+      const admission = await beginAdmission();
 
       try {
         await admission.run(async () => {
           await tool.execute("archive-main", { action: "patch", archived: true });
-          expect(callGateway).toHaveBeenCalledExactlyOnceWith({
-            method: "sessions.patch",
-            params: {
-              key: sessionKey,
-              expectedSessionId: sessionId,
-              archived: true,
-            },
-          });
+          expect(callGateway).toHaveBeenCalledExactlyOnceWith(archiveRequest);
         });
       } finally {
         admission.release();

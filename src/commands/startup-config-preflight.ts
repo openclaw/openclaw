@@ -16,6 +16,7 @@ import {
 } from "./config-preflight-snapshot.js";
 import { refreshStartupPluginQuarantine } from "./doctor-config-preflight-plugin-verification.js";
 import { throwStartupMigrationGuardRejected } from "./doctor-startup-migration-refusal.js";
+import { cleanupStartupPluginSourceCaptures } from "./startup-plugin-source-captures.js";
 
 export type StartupConfigPreflightOptions = {
   gateway: boolean;
@@ -62,6 +63,9 @@ async function prepareStartupConfig(
   if (!options.gateway) {
     const read = await readSnapshot();
     await beforeStatePreparation(read.snapshot);
+    if (read.snapshot.valid && options.observe !== false) {
+      await cleanupStartupPluginSourceCaptures(env);
+    }
     return result(read);
   }
 
@@ -76,6 +80,9 @@ async function prepareStartupConfig(
   env = cloneEnvWithPlatformSemantics(process.env);
   if (!read.snapshot.valid) {
     return result(read);
+  }
+  if (options.observe !== false) {
+    await cleanupStartupPluginSourceCaptures(env);
   }
   let lease: StartupMigrationLease | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;

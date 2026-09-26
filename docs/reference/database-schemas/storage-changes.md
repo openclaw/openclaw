@@ -176,15 +176,21 @@ update behavior are unchanged.
 
 Task retention also runs in the shared-state worker. Maintenance keeps its existing
 task selection, sweep time, and cron-history limits, then rechecks each selected
-task inside the admitted transaction. The read worker prepares the exact row and a
+task inside the admitted transaction. Cron overflow selections retain their original
+partition and ranking facts across asynchronous preparation; changed rows wait for
+the next sweep. Before deleting overflow, the worker checks its current partition
+rank inside the write transaction, since a changed peer can bring an unchanged row
+back within the history limit. The read worker prepares the exact row and a
 fingerprint; the write worker verifies that source before mutation and rechecks
 live authority before commit. A compact native commit receipt preserves the known
 outcome if result delivery fails, without replaying the write or carrying task
 payloads through the commit channel. Deletes remove the task, delivery state, and
 execution-owner metadata together; cleanup-deadline stamps preserve delivery and
 activity timestamps. Committed receipts update resident indexes and activity before
-observer events, while newer task publications supersede stale replies. Shutdown
-joins accepted work. Retention policy, schema, and update behavior are unchanged.
+observer events, while newer task publications supersede stale replies. Deferred
+flow effects retain their existing bounded retries after a cleanup stamp. A known
+cancellation commit needs only projection repair; uncertain writes are not replayed.
+Shutdown joins accepted work. Retention policy, schema, and update behavior are unchanged.
 
 Warm profile ensures read existing email, provider, and Gateway-owner identities
 without writer admission. Missing identities and display-name changes recheck
@@ -1774,13 +1780,19 @@ connection. Unrelated session writes can continue during those checks. Workers
 can borrow the Gateway's remembered verification for the same physical agent
 database under live write admission. The worker reacquires the writer and
 revalidates current authority before index repair, schema work, or deletion.
-The process retains at most one validated reclamation worker connection and lease,
+The process retains at most one validated reclamation worker connection and lease per physical store,
 with a 30-minute idle retirement. Each deletion keeps its own transaction, retained
 parent claim, numbered write admission, and current-authority checks in its own
 async context. The worker clears operation buffers and acknowledges transaction
 settlement before the parent publishes committed removals and releases that
 operation's writer admission. Later requests reuse the connection only for the
 same physical database and shared-state owner; every request checks its live lease.
+Ordinary reclamation's refused admission or commit requests leave an already admitted worker reusable only
+after confirmed rollback, with an open retained connection and current parent
+authority. The caller still receives its refusal; no mutation is replayed. Native
+failures and uncertain settlement still retire the worker. Retirement logs include
+the reason, last operation kind, age, operation count, and worker thread ID.
+Canonical validation scopes retain their existing native failure and drainage contract.
 
 During Doctor maintenance, session mutation and worker-close jobs borrow its
 existing state-lifecycle coordinator through a live delegate bound to the actor,
@@ -1789,7 +1801,7 @@ cleanup until the original result settles or native exit is joined. Revocation
 still prevents later writes. Failed coordinator cleanup remains owned for drainage;
 a confirmed mutation stays successful if only subsequent cleanup fails.
 
-Switching databases, deletion, quarantine, maintenance, root retirement, and shutdown
+Deletion, quarantine, maintenance scopes, root retirement, and shutdown
 revoke reuse and join native worker exit before releasing the database owner. Pending
 commit requests are rejected before synchronous close can wait on their writer lock.
 Requests still waiting in the shared archive queue drop their callback before releasing

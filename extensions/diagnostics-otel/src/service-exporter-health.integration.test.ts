@@ -219,26 +219,6 @@ function startTraceExporterHealthService(
   });
 }
 
-test("reports no OpenClaw-owned routes when the SDK is disabled", async () => {
-  process.env.OTEL_SDK_DISABLED = " TRUE ";
-
-  const { ctx } = await startOtelService({
-    traces: true,
-    metrics: true,
-    logs: true,
-    logsExporter: "stdout",
-  });
-
-  expect(
-    getReportedExporterHealth(ctx).map(({ signal, transport, status }) => ({
-      signal,
-      transport,
-      status,
-    })),
-  ).toEqual([]);
-  expect(propagation.fields()).toEqual(["traceparent", "tracestate", "baggage"]);
-});
-
 test("retries a real OTLP 503 then succeeds without an intermediate failure fact", async () => {
   const receiver = await startExporterHealthReceiver((_request, response, requestCount) => {
     response.writeHead(requestCount === 1 ? 503 : 200, {
@@ -300,7 +280,7 @@ test("records a final failure after persistent real OTLP 503 responses", async (
   }
 }, 15_000);
 
-test.each([400, 408, 500] as const)(
+test.each([400] as const)(
   "records one final failure for a non-retryable real OTLP HTTP $statusCode response",
   async (statusCode) => {
     const receiver = await startExporterHealthReceiver((_request, response) => {

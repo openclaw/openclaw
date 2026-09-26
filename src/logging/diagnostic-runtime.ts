@@ -1,4 +1,3 @@
-// Diagnostic runtime helpers expose process runtime facts for diagnostics.
 import {
   areDiagnosticsEnabledForProcess,
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
@@ -6,7 +5,6 @@ import {
 import { getDiagnosticSessionState, type SessionRef } from "./diagnostic-session-state.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
-// Shared diagnostic logger and queue-activity event helpers.
 const diag = createSubsystemLogger("diagnostic");
 let lastActivityAt = 0;
 

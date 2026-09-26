@@ -19,10 +19,13 @@ import {
   createCodexNativeWebSearchWrapper,
 } from "./openai.js";
 
-function createPayloadCapture(opts?: { initialReasoning?: unknown }) {
+function createPayloadCapture(opts?: {
+  initialReasoning?: unknown;
+  payload?: () => Record<string, unknown>;
+}) {
   const payloads: Array<Record<string, unknown>> = [];
   const baseStreamFn: StreamFn = (model, context, options) => {
-    const payload: Record<string, unknown> = { model: model.id };
+    const payload: Record<string, unknown> = { model: model.id, ...opts?.payload?.() };
     if (opts?.initialReasoning !== undefined) {
       payload.reasoning = structuredClone(opts.initialReasoning);
     }
@@ -45,6 +48,23 @@ const openaiModel = {
   id: "gpt-5.2",
   baseUrl: "https://api.openai.com/v1",
 } as Model<"openai-responses">;
+
+const nativeSearchConfig = {
+  tools: {
+    web: { search: { enabled: true, openaiCodex: { enabled: true, mode: "cached" as const } } },
+  },
+};
+
+function codeModeContext(...extraNames: string[]) {
+  return {
+    messages: [],
+    tools: ["exec", "wait", ...extraNames].map((name) => ({
+      name,
+      description: "",
+      parameters: {},
+    })),
+  };
+}
 
 afterEach(() => {
   logger.debug.mockReset();
@@ -69,18 +89,13 @@ describe("createOpenAIFastModeWrapper", () => {
 
 describe("createOpenAICompletionsToolsCompatWrapper", () => {
   it("strips tools fields when OpenAI-compatible models disable tool support", () => {
-    const payloads: Array<Record<string, unknown>> = [];
-    const baseStreamFn: StreamFn = (model, context, options) => {
-      const payload: Record<string, unknown> = {
-        model: model.id,
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      payload: () => ({
         tools: [{ type: "function", function: { name: "noop" } }],
         tool_choice: "auto",
         parallel_tool_calls: true,
-      };
-      options?.onPayload?.(payload, model);
-      payloads.push(structuredClone(payload));
-      return createAssistantMessageEventStream();
-    };
+      }),
+    });
 
     const wrapped = createOpenAICompletionsToolsCompatWrapper(baseStreamFn);
     void wrapped(
@@ -101,16 +116,11 @@ describe("createOpenAICompletionsToolsCompatWrapper", () => {
   });
 
   it("keeps tools fields for OpenAI-compatible models without an explicit opt-out", () => {
-    const payloads: Array<Record<string, unknown>> = [];
-    const baseStreamFn: StreamFn = (model, context, options) => {
-      const payload: Record<string, unknown> = {
-        model: model.id,
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      payload: () => ({
         tools: [{ type: "function", function: { name: "noop" } }],
-      };
-      options?.onPayload?.(payload, model);
-      payloads.push(structuredClone(payload));
-      return createAssistantMessageEventStream();
-    };
+      }),
+    });
 
     const wrapped = createOpenAICompletionsToolsCompatWrapper(baseStreamFn);
     void wrapped(
@@ -172,13 +182,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
         provider: "gateway",
         id: "gpt-5.5",
       } as Model<"openai-chatgpt-responses">,
-      {
-        messages: [],
-        tools: [
-          { name: "exec", description: "", parameters: {} },
-          { name: "wait", description: "", parameters: {} },
-        ],
-      },
+      codeModeContext(),
       {
         onPayload: (payload) => {
           const payloadObj = payload as { tools?: unknown } | undefined;
@@ -236,26 +240,16 @@ describe("createCodexNativeWebSearchWrapper", () => {
       codeModeToolSurfaceEnabled: true,
     });
 
-    void wrapped(
-      codexModel,
-      {
-        messages: [],
+    void wrapped(codexModel, codeModeContext(), {
+      onPayload: async () => ({
         tools: [
-          { name: "exec", description: "", parameters: {} },
-          { name: "wait", description: "", parameters: {} },
+          { type: "function", name: "exec" },
+          { type: "function", name: "wait" },
+          { type: "function", name: "browser" },
+          { type: "file_search" },
         ],
-      },
-      {
-        onPayload: async () => ({
-          tools: [
-            { type: "function", name: "exec" },
-            { type: "function", name: "wait" },
-            { type: "function", name: "browser" },
-            { type: "file_search" },
-          ],
-        }),
-      },
-    );
+      }),
+    });
     await payloadResult;
 
     expect(logger.info).toHaveBeenCalledOnce();
@@ -271,42 +265,29 @@ describe("createCodexNativeWebSearchWrapper", () => {
     );
   });
 
-  it.each(["", "0", "false", "off", "no"])(
-    "does not emit dedicated diagnostics for false-like flag %j",
-    (flag) => {
-      vi.stubEnv("OPENCLAW_DEBUG_CODE_MODE", flag);
-      const baseStreamFn: StreamFn = (model, _context, options) => {
-        options?.onPayload?.(
-          {
-            tools: [
-              { type: "function", name: "exec" },
-              { type: "function", name: "wait" },
-              { type: "file_search" },
-            ],
-          },
-          model,
-        );
-        return createAssistantMessageEventStream();
-      };
-      const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
-        codeModeToolSurfaceEnabled: true,
-      });
-
-      void wrapped(
-        codexModel,
+  it.each(["", "false"])("does not emit dedicated diagnostics for false-like flag %j", (flag) => {
+    vi.stubEnv("OPENCLAW_DEBUG_CODE_MODE", flag);
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      options?.onPayload?.(
         {
-          messages: [],
           tools: [
-            { name: "exec", description: "", parameters: {} },
-            { name: "wait", description: "", parameters: {} },
+            { type: "function", name: "exec" },
+            { type: "function", name: "wait" },
+            { type: "file_search" },
           ],
         },
-        {},
+        model,
       );
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      codeModeToolSurfaceEnabled: true,
+    });
 
-      expect(logger.info).not.toHaveBeenCalled();
-    },
-  );
+    void wrapped(codexModel, codeModeContext(), {});
+
+    expect(logger.info).not.toHaveBeenCalled();
+  });
 
   it("filters async replacement payloads when code mode owns the tool surface", async () => {
     let observedOptions: Parameters<StreamFn>[2];
@@ -316,16 +297,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
     };
     const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
       codeModeToolSurfaceEnabled: true,
-      config: {
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              openaiCodex: { enabled: true, mode: "cached" },
-            },
-          },
-        },
-      },
+      config: nativeSearchConfig,
     });
     const model = {
       api: "openai-chatgpt-responses",
@@ -333,39 +305,27 @@ describe("createCodexNativeWebSearchWrapper", () => {
       id: "gpt-5.5",
     } as Model<"openai-chatgpt-responses">;
 
-    void wrapped(
-      model,
-      {
-        messages: [],
+    void wrapped(model, codeModeContext("sessions_yield", "structured_output"), {
+      onPayload: async () => ({
         tools: [
-          { name: "exec", description: "", parameters: {} },
-          { name: "wait", description: "", parameters: {} },
-          { name: "sessions_yield", description: "", parameters: {} },
-          { name: "structured_output", description: "", parameters: {} },
-        ],
-      },
-      {
-        onPayload: async () => ({
-          tools: [
-            { type: "function", name: "exec" },
-            { type: "function", name: "computer" },
-            { type: "function", name: "image" },
-            { type: "function", name: "message" },
-            { type: "function", name: "sessions_yield" },
-            { type: "function", name: "structured_output" },
-            {
-              type: "function",
-              get function(): { name: string } {
-                throw new Error("async code mode payload function getter exploded");
-              },
+          { type: "function", name: "exec" },
+          { type: "function", name: "computer" },
+          { type: "function", name: "image" },
+          { type: "function", name: "message" },
+          { type: "function", name: "sessions_yield" },
+          { type: "function", name: "structured_output" },
+          {
+            type: "function",
+            get function(): { name: string } {
+              throw new Error("async code mode payload function getter exploded");
             },
-            { type: "function", name: "wait" },
-            { type: "web_search" },
-            { type: "file_search" },
-          ],
-        }),
-      },
-    );
+          },
+          { type: "function", name: "wait" },
+          { type: "web_search" },
+          { type: "file_search" },
+        ],
+      }),
+    });
 
     const nextPayload = await observedOptions?.onPayload?.({ tools: [] }, model);
     expect(nextPayload).toEqual({
@@ -402,29 +362,10 @@ describe("createCodexNativeWebSearchWrapper", () => {
     const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
       codeModeToolSurfaceEnabled: true,
       nativeWebSearchAllowedByToolPolicy: false,
-      config: {
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              openaiCodex: { enabled: true, mode: "cached" },
-            },
-          },
-        },
-      },
+      config: nativeSearchConfig,
     });
 
-    void wrapped(
-      codexModel,
-      {
-        messages: [],
-        tools: [
-          { name: "exec", description: "", parameters: {} },
-          { name: "wait", description: "", parameters: {} },
-        ],
-      },
-      {},
-    );
+    void wrapped(codexModel, codeModeContext(), {});
 
     expect(payloads[0]?.tools).toEqual([
       { type: "function", name: "exec" },
@@ -500,15 +441,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
         provider: "gateway",
         id: "gpt-5.5",
       } as Model<"openai-chatgpt-responses">,
-      {
-        messages: [],
-        tools: [
-          { name: "exec", description: "", parameters: {} },
-          { name: "wait", description: "", parameters: {} },
-          { name: "sessions_yield", description: "", parameters: {} },
-          { name: "structured_output", description: "", parameters: {} },
-        ],
-      },
+      codeModeContext("sessions_yield", "structured_output"),
       {},
     );
 
@@ -558,15 +491,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
           provider: "google",
           id: "gemini-3.1-pro",
         } as never,
-        {
-          messages: [],
-          tools: [
-            { name: "exec", description: "", parameters: {} },
-            { name: "wait", description: "", parameters: {} },
-            { name: "sessions_yield", description: "", parameters: {} },
-            { name: "structured_output", description: "", parameters: {} },
-          ],
-        },
+        codeModeContext("sessions_yield", "structured_output"),
         {},
       );
 
@@ -584,16 +509,11 @@ describe("createCodexNativeWebSearchWrapper", () => {
   );
 
   it("does not inject native web_search when agent policy denies web search", () => {
-    const payloads: Array<Record<string, unknown>> = [];
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      const payload: Record<string, unknown> = {
-        model: model.id,
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      payload: () => ({
         tools: [{ type: "function", name: "read" }],
-      };
-      options?.onPayload?.(payload, model);
-      payloads.push(structuredClone(payload));
-      return createAssistantMessageEventStream();
-    };
+      }),
+    });
     const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
       agentId: "main",
       config: {
@@ -630,16 +550,11 @@ describe("createCodexNativeWebSearchWrapper", () => {
   });
 
   it("does not inject native web_search when runtime sender policy denies web search", () => {
-    const payloads: Array<Record<string, unknown>> = [];
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      const payload: Record<string, unknown> = {
-        model: model.id,
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      payload: () => ({
         tools: [{ type: "function", name: "read" }],
-      };
-      options?.onPayload?.(payload, model);
-      payloads.push(structuredClone(payload));
-      return createAssistantMessageEventStream();
-    };
+      }),
+    });
     const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
       messageProvider: "teams",
       senderId: "alice",
@@ -674,10 +589,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
 
 describe("createOpenAICompletionsStrictMessageKeysWrapper", () => {
   it("strips message keys to role and content for strict OpenAI-compatible endpoints", () => {
-    const payloads: Array<Record<string, unknown>> = [];
-    const baseStreamFn: StreamFn = (model, context, options) => {
-      const payload: Record<string, unknown> = {
-        model: model.id,
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      payload: () => ({
         messages: [
           {
             role: "assistant",
@@ -692,11 +605,8 @@ describe("createOpenAICompletionsStrictMessageKeysWrapper", () => {
             tool_call_id: "call_1",
           },
         ],
-      };
-      options?.onPayload?.(payload, model);
-      payloads.push(structuredClone(payload));
-      return createAssistantMessageEventStream();
-    };
+      }),
+    });
 
     const wrapped = createOpenAICompletionsStrictMessageKeysWrapper(baseStreamFn);
     void wrapped(
@@ -719,149 +629,70 @@ describe("createOpenAICompletionsStrictMessageKeysWrapper", () => {
 });
 
 describe("createOpenAIThinkingLevelWrapper", () => {
-  it("overrides effort on reasoning-capable model when thinkingLevel is medium", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture({
-      initialReasoning: { effort: "none" },
-    });
-    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "medium");
-    void wrapped(codexModel, { messages: [] }, {});
-
-    expect(payloads[0]?.reasoning).toEqual({ effort: "medium" });
-  });
-
-  it("overrides effort on reasoning-capable model when thinkingLevel is high", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture({
-      initialReasoning: { effort: "none" },
-    });
-    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "high");
-    void wrapped(openaiModel, { messages: [] }, {});
-
-    expect(payloads[0]?.reasoning).toEqual({ effort: "high" });
-  });
-
-  it("removes reasoning when thinkingLevel is off on reasoning-capable model", () => {
+  it("removes reasoning when thinkingLevel is off", () => {
     const { baseStreamFn, payloads } = createPayloadCapture({
       initialReasoning: { effort: "medium" },
     });
-    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "off");
-    void wrapped(codexModel, { messages: [] }, {});
-
+    void createOpenAIThinkingLevelWrapper(baseStreamFn, "off")(codexModel, { messages: [] }, {});
     expect(payloads[0]).not.toHaveProperty("reasoning");
   });
 
-  it("maps adaptive thinkingLevel to medium effort on reasoning-capable model", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture({
-      initialReasoning: { effort: "none" },
-    });
-    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "adaptive");
-    void wrapped(codexModel, { messages: [] }, {});
-
-    expect(payloads[0]?.reasoning).toEqual({ effort: "medium" });
-  });
-
-  it("replaces string disabled reasoning when thinkingLevel is enabled", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture({ initialReasoning: "none" });
-    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "low");
-    void wrapped(codexModel, { messages: [] }, {});
-
-    expect(payloads[0]?.reasoning).toEqual({ effort: "low" });
-  });
-
-  it("does not add reasoning for non-reasoning models without existing reasoning payload", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture();
-    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "medium");
-    void wrapped(openaiModel, { messages: [] }, {});
-
-    expect(payloads[0]?.reasoning).toBeUndefined();
-  });
-
-  it("returns underlying streamFn unchanged when thinkingLevel is undefined", () => {
-    const { baseStreamFn } = createPayloadCapture();
-    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, undefined);
-    expect(wrapped).toBe(baseStreamFn);
-  });
-
-  it("preserves other reasoning properties when overriding effort", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture({
-      initialReasoning: { effort: "none", summary: "auto" },
-    });
-    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "high");
-    void wrapped(codexModel, { messages: [] }, {});
-
-    expect(payloads[0]?.reasoning).toEqual({ effort: "high", summary: "auto" });
-  });
-
-  it("does not inject reasoning for completions API on proxy routes", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture();
-    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "medium");
-    void wrapped(
+  it.each([
+    ["adaptive", codexModel, "adaptive", { effort: "none" }, { effort: "medium" }],
+    ["disabled string", codexModel, "low", "none", { effort: "low" }],
+    [
+      "other properties",
+      codexModel,
+      "high",
+      { effort: "none", summary: "auto" },
+      { effort: "high", summary: "auto" },
+    ],
+    [
+      "native max",
+      { ...openaiModel, id: "gpt-5.6-sol" },
+      "max",
+      { effort: "xhigh", summary: "auto" },
+      { effort: "max", summary: "auto" },
+    ],
+    [
+      "native minimal floor",
+      { ...openaiModel, id: "gpt-5.6-luna" },
+      "minimal",
+      { effort: "minimal", summary: "auto" },
+      { effort: "low", summary: "auto" },
+    ],
+    [
+      "earlier model max",
+      { ...openaiModel, id: "gpt-5.5" },
+      "max",
+      { effort: "high" },
+      { effort: "xhigh" },
+    ],
+    [
+      "Azure max",
       {
-        api: "openai-completions",
-        provider: "openai",
-        id: "gpt-4o",
-        baseUrl: "https://proxy.example.com/v1",
-      } as Model<"openai-completions">,
-      { messages: [] },
-      {},
-    );
-
-    expect(payloads[0]?.reasoning).toBeUndefined();
-  });
-
-  it("does not inject reasoning for proxy routes with custom baseUrl", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture();
-    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "medium");
-    void wrapped(
-      {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5.2",
-        baseUrl: "https://proxy.example.com/v1",
-      } as Model<"openai-responses">,
-      { messages: [] },
-      {},
-    );
-
-    expect(payloads[0]?.reasoning).toBeUndefined();
-  });
-
-  it("passes through all thinking levels correctly on reasoning-capable models", () => {
-    const levels = ["minimal", "low", "medium", "high", "xhigh"] as const;
-    for (const level of levels) {
-      const { baseStreamFn, payloads } = createPayloadCapture({
-        initialReasoning: { effort: "none" },
-      });
-      const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, level);
-      void wrapped(codexModel, { messages: [] }, {});
-      expect(payloads[0]?.reasoning).toEqual({ effort: level });
-    }
-  });
-
-  it("raises minimal reasoning for web_search on loopback Responses routes", () => {
-    const payloads: Array<Record<string, unknown>> = [];
-    const baseStreamFn: StreamFn = (model, context, options) => {
-      const payload: Record<string, unknown> = {
-        reasoning: { effort: "minimal", summary: "auto" },
-        tools: [{ type: "function", name: "web_search" }],
-      };
-      options?.onPayload?.(payload, model);
-      payloads.push(structuredClone(payload));
-      return createAssistantMessageEventStream();
-    };
-    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "minimal");
-    void wrapped(
-      {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5",
-        baseUrl: "http://127.0.0.1:19191/v1",
-      } as Model<"openai-responses">,
-      { messages: [] },
-      {},
-    );
-
-    expect(payloads[0]?.reasoning).toEqual({ effort: "low", summary: "auto" });
-  });
+        ...openaiModel,
+        api: "azure-openai-responses",
+        provider: "azure-openai-responses",
+        id: "gpt-5.6-sol",
+        baseUrl: "https://example.openai.azure.com/openai",
+      },
+      "max",
+      { effort: "high" },
+      { effort: "xhigh" },
+    ],
+  ] as const)(
+    "normalizes %s reasoning",
+    (_name, model, thinkingLevel, initialReasoning, expected) => {
+      const { baseStreamFn, payloads } = createPayloadCapture({ initialReasoning });
+      void createOpenAIThinkingLevelWrapper(baseStreamFn, thinkingLevel)(
+        model,
+        { messages: [] },
+        {},
+      );
+      expect(payloads[0]?.reasoning).toEqual(expected);
+    },
+  );
 
   it.each([
     {
@@ -884,59 +715,49 @@ describe("createOpenAIThinkingLevelWrapper", () => {
     expect(payloads[0]?.reasoning).toEqual({ effort: "xhigh" });
   });
 
-  it("preserves max for native GPT-5.6 models", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture({
-      initialReasoning: { effort: "xhigh", summary: "auto" },
-    });
-    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "max");
-    void wrapped(
-      {
-        ...openaiModel,
-        id: "gpt-5.6-sol",
-      },
-      { messages: [] },
-      {},
-    );
-
-    expect(payloads[0]?.reasoning).toEqual({ effort: "max", summary: "auto" });
+  it.each([
+    openaiModel,
+    {
+      ...openaiModel,
+      api: "openai-completions",
+      id: "gpt-4o",
+      baseUrl: "https://proxy.example.com/v1",
+    },
+    { ...openaiModel, baseUrl: "https://proxy.example.com/v1" },
+  ] as const)("does not inject absent reasoning for $api at $baseUrl", (model) => {
+    const { baseStreamFn, payloads } = createPayloadCapture();
+    void createOpenAIThinkingLevelWrapper(baseStreamFn, "medium")(model, { messages: [] }, {});
+    expect(payloads[0]?.reasoning).toBeUndefined();
   });
 
-  it("raises unsupported minimal reasoning to low for native GPT-5.6 models", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture({
-      initialReasoning: { effort: "minimal", summary: "auto" },
-    });
-    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "minimal");
-    void wrapped(
-      {
-        ...openaiModel,
-        id: "gpt-5.6-luna",
-      },
-      { messages: [] },
-      {},
-    );
-
-    expect(payloads[0]?.reasoning).toEqual({ effort: "low", summary: "auto" });
+  it("returns underlying streamFn unchanged when thinkingLevel is undefined", () => {
+    const { baseStreamFn } = createPayloadCapture();
+    expect(createOpenAIThinkingLevelWrapper(baseStreamFn, undefined)).toBe(baseStreamFn);
   });
 
-  it("keeps max clamped to xhigh for earlier OpenAI and Azure models", () => {
-    const models = [
-      { ...openaiModel, id: "gpt-5.5" },
-      {
-        api: "azure-openai-responses",
-        provider: "azure-openai-responses",
-        id: "gpt-5.6-sol",
-        baseUrl: "https://example.openai.azure.com/openai",
-      } as Model<"azure-openai-responses">,
-    ];
-
-    for (const model of models) {
+  it("passes through generic thinking levels on reasoning-capable models", () => {
+    for (const level of ["minimal", "low", "medium", "high", "xhigh"] as const) {
       const { baseStreamFn, payloads } = createPayloadCapture({
-        initialReasoning: { effort: "high" },
+        initialReasoning: { effort: "none" },
       });
-      const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "max");
-      void wrapped(model, { messages: [] }, {});
-      expect(payloads[0]?.reasoning).toEqual({ effort: "xhigh" });
+      void createOpenAIThinkingLevelWrapper(baseStreamFn, level)(codexModel, { messages: [] }, {});
+      expect(payloads[0]?.reasoning).toEqual({ effort: level });
     }
+  });
+
+  it("raises minimal reasoning for web_search on loopback Responses routes", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      payload: () => ({
+        reasoning: { effort: "minimal", summary: "auto" },
+        tools: [{ type: "function", name: "web_search" }],
+      }),
+    });
+    void createOpenAIThinkingLevelWrapper(baseStreamFn, "minimal")(
+      { ...openaiModel, id: "gpt-5", baseUrl: "http://127.0.0.1:19191/v1" },
+      { messages: [] },
+      {},
+    );
+    expect(payloads[0]?.reasoning).toEqual({ effort: "low", summary: "auto" });
   });
 });
 

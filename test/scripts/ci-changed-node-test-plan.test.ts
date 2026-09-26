@@ -2403,28 +2403,26 @@ describe("CI changed Node test plan", () => {
     expect(targets).toContain("src/agents/live-model-filter.test.ts");
   });
 
-  it.each([
-    "src/gone.test.ts",
-    "src/plugin-sdk/gone.test.ts",
-    "src/plugins/contracts/gone.test.ts",
-    "src/channels/plugins/gone.test.ts",
-  ])("runs only the boundary shard when a diff deletes %s", (target) => {
-    const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-ci-deleted-test-"));
-    try {
-      expect(createChangedExtensionFallbackShards([target], { cwd })).toEqual([]);
-      expect(createChangedNodeTestShards([target], { cwd })).toEqual([
-        {
-          checkName: "checks-node-changed-boundary",
-          configs: ["test/vitest/vitest.boundary.config.ts"],
-          requiresDist: false,
-          runner: "blacksmith-8vcpu-ubuntu-2404",
-          shardName: "changed-boundary",
-        },
-      ]);
-    } finally {
-      rmSync(cwd, { force: true, recursive: true });
-    }
-  });
+  it.each(["src/gone.test.ts", "src/plugin-sdk/gone.test.ts"])(
+    "runs only the boundary shard when a diff deletes %s",
+    (target) => {
+      const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-ci-deleted-test-"));
+      try {
+        expect(createChangedExtensionFallbackShards([target], { cwd })).toEqual([]);
+        expect(createChangedNodeTestShards([target], { cwd })).toEqual([
+          {
+            checkName: "checks-node-changed-boundary",
+            configs: ["test/vitest/vitest.boundary.config.ts"],
+            requiresDist: false,
+            runner: "blacksmith-8vcpu-ubuntu-2404",
+            shardName: "changed-boundary",
+          },
+        ]);
+      } finally {
+        rmSync(cwd, { force: true, recursive: true });
+      }
+    },
+  );
 
   it.each([
     "tsconfig.json",
@@ -2469,12 +2467,6 @@ describe("CI changed Node test plan", () => {
     ]);
 
     expectAllExtensionConfigs(shards);
-  });
-
-  it("covers every extension config when the fallback planner itself changes", () => {
-    expectAllExtensionConfigs(
-      createChangedExtensionFallbackShards(["scripts/lib/ci-changed-node-test-plan.mts"]),
-    );
   });
 
   it("keeps fallback config processes serial while filling independent job budgets", () => {
@@ -2864,23 +2856,32 @@ describe("CI changed Node test plan", () => {
     expect(targets.toSorted()).toEqual(
       listExecutableExtensionFiles(["extensions/telegram"]).toSorted(),
     );
-    const workerCount = targets.filter((file) =>
-      databaseWorkerExtensionTestFiles.includes(file),
-    ).length;
-    const telegramConfig = "test/vitest/vitest.extension-telegram.config.ts";
-    const runtimeFiles = listVitestRuntimeConsumerFiles([telegramConfig]).filter((file) =>
-      targets.includes(file),
+    const runtimeFiles = new Set(
+      listVitestRuntimeConsumerFiles([
+        "test/vitest/vitest.extension-telegram.config.ts",
+        "test/vitest/vitest.extension-database-workers.config.ts",
+      ]),
     );
-    expect(
-      shards
-        .filter((shard) => shard.pretestBuildMode && shard.configs.includes(telegramConfig))
-        .flatMap((shard) => shard.includePatterns ?? [])
-        .toSorted(),
-    ).toEqual(runtimeFiles.toSorted());
-    expect(groups).toHaveLength(
-      Math.ceil(workerCount / 10) +
-        Math.ceil(runtimeFiles.length / 10) +
-        Math.ceil((targets.length - workerCount - runtimeFiles.length) / 10),
+    const preparedConsumers: string[] = [];
+    for (const shard of shards) {
+      const consumers = fallbackGroups([shard])
+        .flatMap((group) => group.includePatterns ?? [])
+        .filter((file) => runtimeFiles.has(file));
+      expect(Boolean(shard.pretestBuildMode)).toBe(consumers.length > 0);
+      if (consumers.length > 0) {
+        expect(shard.groups).toBeUndefined();
+        expect(shard.pretestBuildMode).toBe("runtime");
+        preparedConsumers.push(...consumers);
+      }
+    }
+    expect(preparedConsumers.toSorted()).toEqual(
+      targets.filter((file) => runtimeFiles.has(file)).toSorted(),
+    );
+    expect(preparedConsumers).toEqual(
+      expect.arrayContaining([
+        "extensions/telegram/src/polling-session.test.ts",
+        "extensions/telegram/src/sticker-cache.selection.test.ts",
+      ]),
     );
   });
 

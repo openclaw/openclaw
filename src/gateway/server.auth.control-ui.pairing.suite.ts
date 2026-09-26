@@ -348,59 +348,20 @@ export function registerControlUiPairingSuite(): void {
       });
       expect(mismatched.ok).toBe(false);
       expect(mismatched.error?.message ?? "").toContain("pairing required");
-      expect(
-        (
-          mismatched.error?.details as
-            | {
-                reason?: string;
-                requestedRole?: string;
-                requestedScopes?: string[];
-                approvedRoles?: string[];
-                approvedScopes?: string[];
-              }
-            | undefined
-        )?.reason,
-      ).toBe("not-paired");
-      expect(
-        (
-          mismatched.error?.details as
-            | {
-                requestedRole?: string;
-                requestedScopes?: string[];
-              }
-            | undefined
-        )?.requestedRole,
-      ).toBe("operator");
-      expect(
-        (
-          mismatched.error?.details as
-            | {
-                requestedRole?: string;
-                requestedScopes?: string[];
-              }
-            | undefined
-        )?.requestedScopes,
-      ).toEqual(["operator.admin"]);
-      expect(
-        (
-          mismatched.error?.details as
-            | {
-                approvedRoles?: string[];
-                approvedScopes?: string[];
-              }
-            | undefined
-        )?.approvedRoles,
-      ).toBeUndefined();
-      expect(
-        (
-          mismatched.error?.details as
-            | {
-                approvedRoles?: string[];
-                approvedScopes?: string[];
-              }
-            | undefined
-        )?.approvedScopes,
-      ).toBeUndefined();
+      const details = mismatched.error?.details as
+        | {
+            reason?: string;
+            requestedRole?: string;
+            requestedScopes?: string[];
+            approvedRoles?: string[];
+            approvedScopes?: string[];
+          }
+        | undefined;
+      expect(details?.reason).toBe("not-paired");
+      expect(details?.requestedRole).toBe("operator");
+      expect(details?.requestedScopes).toEqual(["operator.admin"]);
+      expect(details?.approvedRoles).toBeUndefined();
+      expect(details?.approvedScopes).toBeUndefined();
     } finally {
       ws2.close();
       await server.close();

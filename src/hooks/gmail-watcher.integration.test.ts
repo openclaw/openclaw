@@ -9,6 +9,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { startGmailWatcher, stopGmailWatcher } from "./gmail-watcher.js";
 
 const describePosix = process.platform === "win32" ? describe.skip : describe;
@@ -89,17 +90,20 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
   });
 
   it("stopGmailWatcher removes gog and its credential-helper descendant", async () => {
-    const result = await startGmailWatcher({
-      hooks: {
-        enabled: true,
-        token: "integration-token",
-        gmail: {
-          account: "integration@example.com",
-          topic: "projects/integration/topics/gmail",
-          pushToken: "integration-push-token",
+    const result = await startGmailWatcher(
+      {
+        hooks: {
+          enabled: true,
+          token: "integration-token",
+          gmail: {
+            account: "integration@example.com",
+            topic: "projects/integration/topics/gmail",
+            pushToken: "integration-push-token",
+          },
         },
       },
-    });
+      { scheduler: createTestGatewayScheduler() },
+    );
 
     expect(result.started).toBe(true);
 
