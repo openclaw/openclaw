@@ -16,7 +16,7 @@ export function createMSTeamsWebhookHandler(
       if (closing) {
         res.writeHead(503, { "Retry-After": "1" });
         res.end("Service Unavailable");
-        return;
+        return Promise.resolve();
       }
       const response = createDeferred<void>();
       responses.set(res, response.promise);

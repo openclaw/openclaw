@@ -55,9 +55,9 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
     await once(gateway, "listening");
   });
   afterAll(async () => {
-    await new Promise<void>((resolve, reject) =>
-      gateway.close((error) => (error ? reject(error) : resolve())),
-    );
+    await new Promise<void>((resolve, reject) => {
+      gateway.close((error) => (error ? reject(error) : resolve()));
+    });
     await claim.release();
   });
   afterEach(resetMSTeamsMonitorMocks);

@@ -27,15 +27,15 @@ type ResolveMSTeamsUserAllowlistMock = (params: {
 }) => Promise<MSTeamsUserResolution[]>;
 
 const { createDeferred, routeState } = await vi.hoisted(async () => {
-  const { createDeferred } = await import("openclaw/plugin-sdk/extension-shared");
+  const extensionShared = await import("openclaw/plugin-sdk/extension-shared");
   return {
-    createDeferred,
+    createDeferred: extensionShared.createDeferred,
     routeState: {
       routes: [] as Array<Parameters<typeof registerPluginHttpRoute>[0]>,
-      ready: createDeferred<void>(),
+      ready: extensionShared.createDeferred<void>(),
       unregister: vi.fn(),
       fail: false,
-      requestStarted: createDeferred<void>(),
+      requestStarted: extensionShared.createDeferred<void>(),
       responseGate: undefined as Promise<void> | undefined,
       responseWork: undefined as Promise<boolean | void> | undefined,
     },
@@ -71,7 +71,7 @@ const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
           | {
               registerRoute?: (
                 path: string,
-                handler: (req: Request, res: Response) => void,
+                handler: (req: Request, res: Response) => void | Promise<void>,
               ) => void;
             }
           | undefined;
@@ -143,8 +143,10 @@ vi.mock("./sdk.js", () => ({
   }),
   createMSTeamsExpressAdapter: vi.fn(
     async (expressApp: { post: (...args: unknown[]) => void }) => ({
-      registerRoute: (path: string, handler: (req: Request, res: Response) => void) =>
-        expressApp.post(path, handler),
+      registerRoute: (
+        path: string,
+        handler: (req: Request, res: Response) => void | Promise<void>,
+      ) => expressApp.post(path, handler),
       start: vi.fn().mockResolvedValue(undefined),
       stop: vi.fn().mockResolvedValue(undefined),
     }),
