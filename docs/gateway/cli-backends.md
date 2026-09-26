@@ -218,8 +218,9 @@ and `eval`/`exec`/`source` wrappers do not auto-allow.
 
 `ask: "always"` still prompts for allowlisted commands. `security: "deny"`
 still denies, and `ask: "off"` keeps the behavior described above. **Allow
-always** remains unavailable for Bash, and truncated Bash approval descriptions
-still fail closed.
+always** remains unavailable for Bash. A command that matches the allowlist
+auto-allows at any length, but a command that would need a prompt is denied
+without one when its approval description cannot show the complete input.
 
 This is argument-level policy applied to the command Claude Code will run,
 not sandboxed execution by OpenClaw. Claude Code owns cwd, PATH, environment,

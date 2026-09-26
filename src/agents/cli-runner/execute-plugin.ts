@@ -254,7 +254,9 @@ function createPluginToolPermissionHandler(params: {
         outcome.message ??
           (outcome.reason === "user"
             ? `OpenClaw user denied native tool use (${toolName}).`
-            : `OpenClaw approval was not granted for native tool use (${toolName}).`),
+            : outcome.reason === "policy-oversized"
+              ? `OpenClaw denied native tool use (${toolName}): the input is too long to show in full in an approval prompt, so no approval request was created. This is not a user denial. Retry with a shorter command, or ask the operator to add its executables to this agent's exec allowlist.`
+              : `OpenClaw approval was not granted for native tool use (${toolName}).`),
       );
     }
     if (outcome.grantAlways) {
