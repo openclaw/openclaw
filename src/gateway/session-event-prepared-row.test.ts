@@ -24,6 +24,7 @@ it.each([0, 7])(
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
     setRuntimeConfigSnapshot(cfg);
     const keys = Array.from({ length: 12 }, (_, index) => `agent:main:burst-${index}`);
+    const yieldedKey = "agent:main:burst-9";
     const projection = createSessionRowProjectionFixture({
       cfg,
       store: Object.fromEntries(keys.map((key) => [key, { sessionId: key, updatedAt: 1 }])),
@@ -42,7 +43,11 @@ it.each([0, 7])(
     let atIo = -1;
     setImmediate(() => {
       atIo = published.length;
-      projection.setEntry(keys[9], { sessionId: keys[9], updatedAt: 2, label: "after yield" });
+      projection.setEntry(yieldedKey, {
+        sessionId: yieldedKey,
+        updatedAt: 2,
+        label: "after yield",
+      });
     });
     const work = keys.map((key) =>
       withPreparedSessionEventRow(projection, key, "main", () => {
@@ -57,7 +62,7 @@ it.each([0, 7])(
       expect(atIo).toBeGreaterThan(0);
       expect(atIo).toBeLessThan(keys.length - 1);
       expect(published).toEqual(keys.slice(1));
-      expect(labels.get(keys[9])).toBe("after yield");
+      expect(labels.get(yieldedKey)).toBe("after yield");
       held.resolve();
       await vi.runAllTimersAsync();
       await settled;
@@ -83,7 +88,8 @@ it.each(["replacement", "reset"])(
     vi.spyOn(performance, "now").mockImplementation(() => now);
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
     setRuntimeConfigSnapshot(cfg);
-    const keys = ["agent:main:first", "agent:main:changed"];
+    const changedKey = "agent:main:changed";
+    const keys = ["agent:main:first", changedKey];
     const projection = createSessionRowProjectionFixture({
       cfg,
       store: Object.fromEntries(keys.map((key) => [key, { sessionId: key, updatedAt: 1 }])),
@@ -98,8 +104,8 @@ it.each(["replacement", "reset"])(
       getSessionRowProjection: () => projection,
     });
     setImmediate(() => {
-      projection.setEntry(keys[1], {
-        sessionId: kind === "replacement" ? "replacement" : keys[1],
+      projection.setEntry(changedKey, {
+        sessionId: kind === "replacement" ? "replacement" : changedKey,
         lifecycleRevision: "new-lifecycle",
         updatedAt: 2,
       });
