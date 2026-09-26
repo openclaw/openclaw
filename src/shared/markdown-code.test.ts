@@ -19,6 +19,21 @@ describe("formatInlineCodeSpan", () => {
   it("pads multi-line content", () => {
     expect(formatInlineCodeSpan("a\nb")).toBe("` a\nb `");
   });
+
+  it("guards edge spaces against CommonMark one-space stripping", () => {
+    expect(formatInlineCodeSpan(" 1 ")).toBe("`  1  `");
+    expect(formatInlineCodeSpan(" `code` ")).toBe("``  `code`  ``");
+  });
+
+  it("does not pad content whose spaces are safe", () => {
+    expect(formatInlineCodeSpan(" leading")).toBe("` leading`");
+    expect(formatInlineCodeSpan("trailing ")).toBe("`trailing `");
+    expect(formatInlineCodeSpan("   ")).toBe("`   `");
+  });
+
+  it("keeps edge-backtick padding correct when the far edge has a space", () => {
+    expect(formatInlineCodeSpan("`x ")).toBe("`` `x  ``");
+  });
 });
 
 describe("formatFencedCodeBlock", () => {

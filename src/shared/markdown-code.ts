@@ -17,11 +17,18 @@ function longestBacktickRun(value: string): number {
 /**
  * Wraps text in an inline code span whose delimiter is longer than any
  * backtick run inside it. Edge backticks and newlines get spacer padding so
- * renderers do not glue the delimiter onto the content.
+ * renderers do not glue the delimiter onto the content. Content that starts
+ * and ends with a space gets an extra space per side because CommonMark
+ * strips one leading and one trailing space from code span content.
  */
 export function formatInlineCodeSpan(value: string): string {
   const delimiter = "`".repeat(longestBacktickRun(value) + 1);
-  const padding = value.startsWith("`") || value.endsWith("`") || value.includes("\n") ? " " : "";
+  const needsDelimiterPadding =
+    value.startsWith("`") || value.endsWith("`") || value.includes("\n");
+  // CommonMark strips one space from each end only when both ends are spaces
+  // and the content holds a non-space character; all-space content survives.
+  const needsSpaceGuard = value.startsWith(" ") && value.endsWith(" ") && value.trim().length > 0;
+  const padding = needsDelimiterPadding || needsSpaceGuard ? " " : "";
   return `${delimiter}${padding}${value}${padding}${delimiter}`;
 }
 
