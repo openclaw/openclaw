@@ -325,6 +325,12 @@ sent through the Gateway so it shares the same session-store writer as runtime
 traffic. Use `--store <path>` for explicit offline repair of a SQLite database or
 legacy store selector.
 
+Automatic offline fallback applies only when the configured local Gateway cannot
+be reached before connecting. A failed remote Gateway connection or
+`OPENCLAW_GATEWAY_URL` override exits with an error and leaves local stores alone,
+including when the selected URL uses a loopback SSH tunnel. Restore the remote
+connection or use `--store <path>` to explicitly select a local store.
+
 When the selected store's parent directory is named `agent`, transcript artifacts
 live in the sibling `sessions` directory. This also applies to custom paths:
 `/backup/agent/sessions.json` selects `/backup/agent/openclaw-agent.sqlite`, whose

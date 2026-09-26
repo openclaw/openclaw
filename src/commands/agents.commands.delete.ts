@@ -47,12 +47,15 @@ import {
   purgeAgentSessionStoreEntries,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalAgentCronJobsRemoved } from "../cron/local-service.js";
+import { resolveGatewayMutationFallback } from "../gateway/call-mutation-fallback.js";
 import {
+  buildGatewayConnectionDetails,
   callGateway,
-  isGatewayCredentialsRequiredError,
-  isGatewayTransportError,
+  isImplicitLocalGatewayTarget,
 } from "../gateway/call.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { withAgentExecApprovalsRemoved } from "../infra/exec-approvals.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentIdStrict } from "../routing/session-key.js";
@@ -115,11 +118,16 @@ function logTrashFailures(
 }
 
 async function maybeDeleteAgentThroughGateway(params: {
+  config: OpenClawConfig;
   agentId: string;
   deleteFiles: boolean;
 }): Promise<AgentDeleteGatewayAttempt> {
+  const { url } = buildGatewayConnectionDetails({ config: params.config });
+  const localTarget = await isImplicitLocalGatewayTarget({ config: params.config });
   try {
     const result = await callGateway<AgentsDeleteResult>({
+      config: params.config,
+      expectUrl: url,
       method: "agents.delete",
       params: {
         agentId: params.agentId,
@@ -131,11 +139,18 @@ async function maybeDeleteAgentThroughGateway(params: {
     });
     return { kind: "deleted", result };
   } catch (error) {
-    if (isGatewayTransportError(error) && error.kind === "closed" && error.code === undefined) {
+    const fallback = resolveGatewayMutationFallback({ error, localTarget });
+    if (fallback === "unreachable") {
       return { kind: "fallback-unreachable" };
     }
-    if (isGatewayCredentialsRequiredError(error)) {
+    if (fallback === "credentials-required") {
       return { kind: "fallback-credentials-required" };
+    }
+    if (fallback === "non-local") {
+      throw new Error(
+        `${formatErrorMessage(error)}\nLocal agent state was left unchanged. Restore the Gateway connection and credentials, or run this command on the Gateway host (the far end of any SSH tunnel).`,
+        { cause: error },
+      );
     }
     throw error;
   }
@@ -262,6 +277,7 @@ export async function agentsDeleteCommand(
     : { config: cfg, removedBindings: 0, removedAllow: 0, clearedOwnerRefs: [] };
 
   const gatewayAttempt = await maybeDeleteAgentThroughGateway({
+    config: cfg,
     agentId,
     deleteFiles: true,
   });
