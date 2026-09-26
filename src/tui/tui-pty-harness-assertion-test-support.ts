@@ -13,7 +13,6 @@ import { type PtyRun, waitFor } from "./tui-pty-test-support.js";
 
 export {
   hasHistoricalSynchronizedFrameRow,
-  hasSynchronizedFrameRow,
   synchronizedFrameRows,
   waitForSynchronizedFrameRows,
 } from "./tui-pty-terminal-evidence-test-support.js";
