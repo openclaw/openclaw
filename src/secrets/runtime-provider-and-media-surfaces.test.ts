@@ -584,6 +584,42 @@ describe("secrets runtime provider and media surfaces", () => {
     );
   });
 
+  it("does not let a managed local embedding service depend on a remote api key ref", async () => {
+    const missingRef = envTokenRef("MISSING_LLAMA_CPP_API_KEY");
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        memory: { search: { provider: "local" } },
+        models: {
+          providers: {
+            "llama-cpp": {
+              baseUrl: "http://127.0.0.1:35063/v1",
+              apiKey: missingRef,
+              localService: { command: "/fixture/llama-server" },
+              models: [],
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "llama-cpp",
+            providers: ["llama-cpp"],
+            contracts: { embeddingProviders: ["local"] },
+          },
+        ],
+      },
+    });
+
+    expect(snapshot.config.models?.providers?.["llama-cpp"]?.apiKey).toEqual(missingRef);
+    expect(snapshot.degradedOwners).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ ownerId: "memory-provider:main" })]),
+    );
+  });
+
   it.each([
     ["bare shorthand", "$MEMORY_REMOTE_KEY", "resolved-memory-key"],
     ["braced shorthand", "${MEMORY_REMOTE_KEY}", "resolved-memory-key"],
