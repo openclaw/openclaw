@@ -16,6 +16,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -48,19 +49,24 @@ class ProviderSignInDialogTest {
   private var readyProvider: String? = null
   private var openedUrl: String? = null
   private var savedKey: String? = null
+  private var authStatus = AUTH
+  private var loginChoice: String? = null
   private val lease =
     GatewaySession.RequestLease("gateway", { true }, null) { method, params, _, enqueue ->
       enqueue {}
       val input = Json.parseToJsonElement(requireNotNull(params)).jsonObject
       when (method) {
         "models.authStatus" -> {
-          if (readyProvider == null) AUTH else """{"providers":[{"provider":"$readyProvider","status":"ok"}]}"""
+          if (readyProvider == null) authStatus else """{"providers":[{"provider":"$readyProvider","status":"ok"}]}"""
         }
 
         "models.authLogin" -> {
+          loginChoice = input.getValue("authChoice").jsonPrimitive.content
           when (val choice = input.getValue("authChoice").jsonPrimitive.content) {
             "plugin/example" -> """{"done":false,"status":"running","step":{"id":"device","type":"action","executor":"client","externalUrl":"https://example.com/login","deviceCode":{"code":"ABCD"}}}"""
             "plugin/other" -> """{"done":false,"status":"running","step":{"id":"callback","type":"text","executor":"client","externalUrl":"https://example.com/oauth","placeholder":"Callback URL"}}"""
+            "anthropic/setup-token" -> """{"done":false,"status":"running","step":{"id":"subscription","type":"text","executor":"client","sensitive":true,"placeholder":"Setup token"}}"""
+            "minimax/minimax-cn-oauth" -> """{"done":false,"status":"running","step":{"id":"portal","type":"action","executor":"client","externalUrl":"https://example.com/minimax","deviceCode":{"code":"DEMO"}}}"""
             else -> error("Unexpected login choice: $choice")
           }
         }
@@ -75,6 +81,15 @@ class ProviderSignInDialogTest {
             "callback" -> {
               assertEquals("https://example.com/return?code=synthetic", answer.getValue("value").jsonPrimitive.content)
               readyProvider = "other"
+            }
+
+            "subscription" -> {
+              assertEquals("synthetic-subscription-token", answer.getValue("value").jsonPrimitive.content)
+              readyProvider = "anthropic"
+            }
+
+            "portal" -> {
+              readyProvider = "minimax-portal"
             }
 
             else -> {
@@ -102,6 +117,46 @@ class ProviderSignInDialogTest {
   fun tearDown() {
     controller.close()
     scope.cancel()
+  }
+
+  @Test
+  fun providerFamilyOffersApiAndOAuthWithoutChangingTheCredentialOwner() {
+    authStatus = FAMILY_AUTH
+    show("minimax")
+    composeRule.onNodeWithText("MiniMax API key (Global)").assertIsDisplayed()
+    composeRule.onNodeWithText("MiniMax API key (CN)").assertIsDisplayed()
+    composeRule.onNodeWithText("MiniMax OAuth (Global)").assertIsDisplayed()
+    composeRule.onNodeWithText("MiniMax OAuth (CN)").performScrollTo().performClick()
+    composeRule.onNodeWithText("DEMO").assertIsDisplayed()
+    composeRule.onNodeWithText("Continue").performClick()
+    composeRule.runOnIdle {
+      assertEquals("minimax/minimax-cn-oauth", loginChoice)
+      assertEquals("minimax-portal", connected)
+      assertNull(savedKey)
+    }
+  }
+
+  @Test
+  fun providerPickerKeepsSubscriptionTokenAndGatewaySetupDistinct() {
+    authStatus = FAMILY_AUTH
+    show()
+    composeRule.onNode(hasText("Anthropic") and !hasSetTextAction()).performClick()
+    composeRule.onNodeWithText("Anthropic API key").assertIsDisplayed()
+    composeRule.onNodeWithText("Claude subscription (setup-token)").assertIsDisplayed()
+    composeRule.onNodeWithText("Anthropic Claude CLI").performScrollTo().performClick()
+    composeRule.onNodeWithText("openclaw configure --section model").assertIsDisplayed()
+    composeRule.runOnIdle { assertNull(loginChoice) }
+    composeRule.onNodeWithContentDescription("Back").performClick()
+    composeRule.onNodeWithText("Claude subscription (setup-token)").performClick()
+    val token = composeRule.onNode(hasSetTextAction() and hasText("Setup token"))
+    token.assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Password))
+    token.performTextReplacement("synthetic-subscription-token")
+    composeRule.onNodeWithText("Continue").performClick()
+    composeRule.runOnIdle {
+      assertEquals("anthropic/setup-token", loginChoice)
+      assertEquals("anthropic", connected)
+      assertNull(savedKey)
+    }
   }
 
   @Test
@@ -188,6 +243,20 @@ class ProviderSignInDialogTest {
   }
 
   companion object {
+    private const val FAMILY_AUTH = """{"providers":[],"providerCapabilities":[
+      {"provider":"anthropic","apiKeySupported":true,"quickApiKeySetup":true,"loginOptions":[
+        {"id":"anthropic/apiKey","groupId":"anthropic","groupLabel":"Anthropic","label":"Anthropic API key","kind":"secret"},
+        {"id":"anthropic/setup-token","groupId":"anthropic","groupLabel":"Anthropic","label":"Claude subscription (setup-token)","kind":"secret"}
+      ],"setupOptions":[{"id":"anthropic/anthropic-cli","groupId":"anthropic","groupLabel":"Anthropic","label":"Anthropic Claude CLI"}]},
+      {"provider":"minimax","apiKeySupported":false,"quickApiKeySetup":false,"loginOptions":[
+        {"id":"minimax/minimax-global-api","groupId":"minimax","groupLabel":"MiniMax","label":"MiniMax API key (Global)","kind":"secret"},
+        {"id":"minimax/minimax-cn-api","groupId":"minimax","groupLabel":"MiniMax","label":"MiniMax API key (CN)","kind":"secret"}
+      ]},
+      {"provider":"minimax-portal","apiKeySupported":false,"quickApiKeySetup":false,"loginOptions":[
+        {"id":"minimax/minimax-global-oauth","groupId":"minimax","groupLabel":"MiniMax","label":"MiniMax OAuth (Global)","kind":"device-code"},
+        {"id":"minimax/minimax-cn-oauth","groupId":"minimax","groupLabel":"MiniMax","label":"MiniMax OAuth (CN)","kind":"device-code"}
+      ]}
+    ]}"""
     private const val AUTH = """{"providers":[],"providerCapabilities":[{"provider":"example","apiKeySupported":false,"quickApiKeySetup":false,"loginOptions":[{"id":"plugin/example","label":"Example account","kind":"device-code","featured":true}]},{"provider":"other","apiKeySupported":false,"quickApiKeySetup":false,"loginOptions":[{"id":"plugin/other","label":"Other account","kind":"oauth","featured":false}]},{"provider":"key","apiKeySupported":true,"quickApiKeySetup":true}]}"""
   }
 }

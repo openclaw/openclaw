@@ -465,7 +465,7 @@ class ProviderAuthControllerTest {
       runCurrent()
       assertTrue(fixture.controller.state.value.cancelling)
       assertFalse(fixture.changed)
-      settled.complete("""{"status":"cancelled"}""")
+      settled.complete("""{"status":"cancelled","error":"cancelled"}""")
       runCurrent()
       assertEquals(
         "cancelled",
@@ -474,6 +474,7 @@ class ProviderAuthControllerTest {
           .jsonPrimitive.content,
       )
       assertFalse(fixture.controller.state.value.cancelling)
+      assertNull(fixture.controller.state.value.errorText)
       assertTrue(fixture.changed)
     }
 

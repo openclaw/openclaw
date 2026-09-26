@@ -1,4 +1,3 @@
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 // Model auth status tests cover profile health summaries, provider usage,
 // credential cleanup, secret refresh, and provider run abort side effects.
@@ -20,13 +19,12 @@ import {
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
-import { loadPluginManifest } from "../../plugins/manifest.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-values.js";
 import { resolveProviderAuthLookupMaps } from "../../secrets/provider-env-vars.js";
-import { resolveBundledPluginPublicModulePath } from "../../test-utils/bundled-plugin-public-surface.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { defineModelAuthCapabilityTests } from "./models-auth-capabilities.suite.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type BuildAuthHealthSummary = typeof import("../../agents/auth-health.js").buildAuthHealthSummary;
@@ -798,90 +796,12 @@ describe("models.authStatus", () => {
     },
   );
 
-  it("projects provider capabilities from the published lifecycle metadata", async () => {
-    const snapshot = createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: "provider-auth",
-          origin: "bundled",
-          providers: ["OpenAI", "github-copilot", "media-only"],
-          providerAuthAliases: { "openai-legacy": "openai" },
-          providerAuthChoices: [
-            {
-              provider: "openai-legacy",
-              method: "api-key",
-              choiceId: "openai-api-key",
-              choiceLabel: "OpenAI API key",
-              appGuidedSecret: true,
-            },
-            {
-              provider: "openai",
-              method: "oauth",
-              choiceId: "openai-oauth",
-              choiceLabel: "OpenAI OAuth",
-            },
-            {
-              provider: "media-only",
-              method: "api-key",
-              choiceId: "media-only-key",
-              choiceLabel: "Media API key",
-              onboardingScopes: ["image-generation"],
-            },
-            {
-              provider: "github-copilot",
-              method: "oauth",
-              choiceId: "github-copilot-oauth",
-              choiceLabel: "GitHub Copilot OAuth",
-            },
-          ],
-        },
-        {
-          id: "search-tool",
-          setup: { providers: [{ id: "search-tool", authMethods: ["api-key"] }] },
-        },
-      ],
-    });
-    setPreparedMetadataSnapshot(snapshot);
-
-    const result = await readAuthStatus();
-
-    expect(result.providerCapabilities).toEqual([
-      { provider: "github-copilot", apiKeySupported: false, quickApiKeySetup: false },
-      { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
-    ]);
-  });
-
-  it("offers bundled key, token, browser, and device logins before any credentials exist", async () => {
-    setPreparedMetadataSnapshot(
-      createPluginMetadataSnapshotFixture({
-        plugins: ["anthropic", "openai"].map((pluginId) => {
-          const loaded = loadPluginManifest(
-            path.dirname(
-              resolveBundledPluginPublicModulePath({
-                pluginId,
-                artifactBasename: "openclaw.plugin.json",
-              }),
-            ),
-          );
-          if (!loaded.ok) {
-            throw new Error(loaded.error);
-          }
-          return loaded.manifest;
-        }),
-      }),
-    );
-
-    const result = await readAuthStatus();
-    const options = result.providerCapabilities?.flatMap((provider) => provider.loginOptions ?? []);
-
-    expect(options?.map(({ id, kind }) => ({ id, kind }))).toEqual([
-      { id: "anthropic/apiKey", kind: "secret" },
-      { id: "anthropic/setup-token", kind: "secret" },
-      { id: "openai/openai-token-sharing", kind: "oauth" },
-      { id: "openai/openai-device-code", kind: "device-code" },
-      { id: "openai/openai", kind: "oauth" },
-      { id: "openai/openai-api-key", kind: "secret" },
-    ]);
+  defineModelAuthCapabilityTests({
+    setPreparedMetadataSnapshot,
+    readAuthStatus,
+    setConfig: (config) => {
+      mocks.getRuntimeConfig.mockReturnValue(config);
+    },
   });
 
   it("uses the published metadata owner for provider env auth and aliases", async () => {

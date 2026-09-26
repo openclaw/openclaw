@@ -43,15 +43,20 @@ requests. Older Gateways that omit this tag scope omit those badges. **More
 models** expands the remaining inventory without labeling it old. Expanding a
 provider or model does not change the configured default.
 
-**Connect Provider** offers the Gateway's supported account, device-code,
-token, and API-key methods. **Set API key** opens a masked key field directly.
+**Connect Provider** and **Add provider** group account, device-code, subscription,
+token, and API-key methods by the same provider families as the Gateway's model
+configuration assistant. Regional and plan-specific methods keep their original
+credential owners. Methods that require the broader Gateway setup remain listed
+with their exact name and instructions for `openclaw configure --section model`.
+**Edit API key** opens a masked field only for an existing key; new connections
+start with the method chooser.
 **Test connection** displays the Gateway's result, including partial failures.
 **Remove key** asks for confirmation and removes only saved API keys, preserving
 OAuth and token profiles; environment-managed keys remain managed on the
 Gateway computer. Removing a shared Gateway config key also affects other agents
 using that key; the confirmation calls this out. Saved profile changes keep the
 selected agent's credential scope. These actions require administrator access.
-Providers without app setup show computer setup guidance.
+Providers without app sign-in still offer **Set up on Gateway** guidance.
 
 Cards distinguish **Credentials configured** from **Ready** using the Gateway's
 catalog result. Inactive or excluded profiles do not count as configured

@@ -190,7 +190,7 @@ OpenClaw release:
     a long-lived token starting with `sk-ant-oat01-`.
 
     During onboarding, paste the token in the macOS app by choosing
-    **Anthropic setup-token** under **Connect with an API key or token**, or use:
+    **Claude subscription (setup-token)** under **Connect with an API key or token**, or use:
 
     ```bash
     openclaw models auth login --provider anthropic --method setup-token

@@ -146,14 +146,23 @@ internal fun ProviderModelsCard(
       HorizontalDivider(color = ClawTheme.colors.border)
       ProviderGlobalMetrics(usage, usageLoading, spend)
       FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (capability?.canSignIn == true) {
-          ClawSecondaryButton(text = if (row.renewalFailed) nativeString("Reconnect") else nativeString("Connect Provider"), onClick = onConnect, enabled = enabled)
+        if (capability != null) {
+          ClawSecondaryButton(
+            text =
+              when {
+                row.renewalFailed -> nativeString("Reconnect")
+                capability.canSignIn -> nativeString("Connect Provider")
+                else -> nativeString("Set up on Gateway")
+              },
+            onClick = onConnect,
+            enabled = enabled,
+          )
         }
         if (hasCredentials || row.models.any { it.available == true }) {
           ClawSecondaryButton(text = nativeString("Test connection"), onClick = onProbe, enabled = enabled)
         }
-        if (capability?.apiKeySupported == true) {
-          ClawSecondaryButton(text = nativeString("Set API key"), onClick = onSetApiKey, enabled = enabled)
+        if (row.auth?.hasApiKey == true && capability?.apiKeySupported == true) {
+          ClawSecondaryButton(text = nativeString("Edit API key"), onClick = onSetApiKey, enabled = enabled)
         }
         if (row.auth?.canRemoveApiKey == true) {
           Surface(onClick = onRemoveKey, enabled = enabled, modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget), shape = RoundedCornerShape(ClawTheme.radii.button), color = ClawTheme.colors.dangerSoft, contentColor = ClawTheme.colors.danger) {

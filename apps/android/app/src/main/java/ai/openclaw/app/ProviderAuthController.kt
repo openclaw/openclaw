@@ -41,6 +41,16 @@ internal data class ProviderAuthLoginOption(
   val hint: String?,
   val kind: ProviderAuthLoginKind,
   val featured: Boolean,
+  val groupId: String,
+  val groupLabel: String,
+)
+
+internal data class ProviderAuthSetupOption(
+  val id: String,
+  val label: String,
+  val hint: String?,
+  val groupId: String,
+  val groupLabel: String,
 )
 
 internal data class ProviderAuthProvider(
@@ -49,10 +59,17 @@ internal data class ProviderAuthProvider(
   val loginOptions: List<ProviderAuthLoginOption>,
   val apiKeySupported: Boolean,
   val ready: Boolean,
+  val setupOptions: List<ProviderAuthSetupOption> = emptyList(),
 ) {
   val canSignIn: Boolean
     get() = apiKeySupported || loginOptions.isNotEmpty()
 }
+
+internal data class ProviderAuthGroup(
+  val id: String,
+  val displayName: String,
+  val providers: List<ProviderAuthProvider>,
+)
 
 internal data class ProviderConnectionProbeTarget(
   val label: String,
@@ -102,16 +119,17 @@ internal data class ProviderAuthState(
             statuses.firstOrNull { it["provider"]?.jsonPrimitive?.content == id }
               ?: statuses.firstOrNull { it["authProvider"]?.jsonPrimitive?.content == id }
           val rawOptions = (capability?.get("loginOptions") as? JsonArray).orEmpty().map { it.jsonObject }
+          val displayName =
+            status
+              ?.get("displayName")
+              ?.jsonPrimitive
+              ?.content
+              ?.takeUnless { it == id }
+              ?: rawOptions.firstNotNullOfOrNull { it["groupLabel"]?.jsonPrimitive?.content }
+              ?: providerDisplayName(id)
           ProviderAuthProvider(
             id = id,
-            displayName =
-              status
-                ?.get("displayName")
-                ?.jsonPrimitive
-                ?.content
-                ?.takeUnless { it == id }
-                ?: rawOptions.firstNotNullOfOrNull { it["groupLabel"]?.jsonPrimitive?.content }
-                ?: providerDisplayName(id),
+            displayName = displayName,
             loginOptions =
               rawOptions
                 .mapNotNull { option ->
@@ -128,19 +146,54 @@ internal data class ProviderAuthState(
                     hint = option["hint"]?.jsonPrimitive?.content,
                     kind = kind,
                     featured = option["featured"]?.jsonPrimitive?.booleanOrNull == true,
+                    groupId = option["groupId"]?.jsonPrimitive?.content ?: id,
+                    groupLabel = option["groupLabel"]?.jsonPrimitive?.content ?: displayName,
                   )
-                }.distinctBy { it.id }
-                .sortedByDescending { it.featured },
+                }.distinctBy { it.id },
             apiKeySupported =
               capability?.get("apiKeySupported")?.jsonPrimitive?.booleanOrNull == true &&
                 capability["quickApiKeySetup"]?.jsonPrimitive?.booleanOrNull == true,
             ready = status?.get("status")?.jsonPrimitive?.content in setOf("ok", "static", "expiring"),
+            setupOptions =
+              (capability?.get("setupOptions") as? JsonArray).orEmpty().map { entry ->
+                val option = entry.jsonObject
+                ProviderAuthSetupOption(
+                  id = option.getValue("id").jsonPrimitive.content,
+                  label = option.getValue("label").jsonPrimitive.content,
+                  hint = option["hint"]?.jsonPrimitive?.content,
+                  groupId = option["groupId"]?.jsonPrimitive?.content ?: id,
+                  groupLabel = option["groupLabel"]?.jsonPrimitive?.content ?: displayName,
+                )
+              },
           )
         }.sortedBy { it.displayName.lowercase() }
     }
 
   val apiKeyProviders: List<String>
     get() = providers.filter { it.apiKeySupported }.map { it.id }
+
+  val providerGroups: List<ProviderAuthGroup>
+    get() =
+      providers
+        .flatMap { provider ->
+          val groups =
+            (provider.loginOptions.map { it.groupId to it.groupLabel } + provider.setupOptions.map { it.groupId to it.groupLabel })
+              .distinctBy { it.first }
+              .ifEmpty { listOf(provider.id to provider.displayName) }
+          groups.map { (id, label) ->
+            Triple(
+              id,
+              label,
+              provider.copy(
+                loginOptions = provider.loginOptions.filter { it.groupId == id },
+                setupOptions = provider.setupOptions.filter { it.groupId == id },
+              ),
+            )
+          }
+        }.groupBy { it.first }
+        .map { (id, entries) ->
+          ProviderAuthGroup(id, entries.first().second, entries.map { it.third })
+        }.sortedBy { it.displayName.lowercase() }
 }
 
 /** One agent on one physical connection. Replace and close this owner when either changes. */
@@ -527,7 +580,12 @@ internal class ProviderAuthController(
     lease.commitIfCurrent { if (!closed && isCurrent()) _state.update(update) }
   }
 
-  private fun resultError(result: JsonObject): NativeText? = if (result["error"] != null) nativeText("Sign-in could not finish. Review the sign-in step and try again.") else null
+  private fun resultError(result: JsonObject): NativeText? =
+    if (result["error"] != null && result["status"]?.jsonPrimitive?.content != "cancelled") {
+      nativeText("Sign-in could not finish. Review the sign-in step and try again.")
+    } else {
+      null
+    }
 
   private fun terminalResult(result: JsonObject): JsonObject =
     buildJsonObject {

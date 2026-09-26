@@ -146,6 +146,14 @@ The availability probe is also read-only.
 text-inference onboarding do not become credential-only actions. Descriptor-only
 `setup.providers[].authMethods` entries do not create executable login choices.
 
+`models.authStatus` keeps these executable methods in `loginOptions` and exposes
+other visible setup methods separately in `setupOptions`. Both carry the CLI
+family's `groupId` and `groupLabel`; `brandId` and the capability's `provider`
+retain their credential identity. Clients group the family without merging its
+credential stores: for example, MiniMax API-key and OAuth methods appear together
+but still target their respective providers. Setup-only methods show Gateway
+configuration instructions and must not be sent to `models.authLogin`.
+
 Bundled API-key and setup-token choices support credential-only connections as
 well as onboarding. The shared API-key helper skips starter-model discovery when
 `ctx.credentialOnly` is true. Provider-owned methods must do the same before

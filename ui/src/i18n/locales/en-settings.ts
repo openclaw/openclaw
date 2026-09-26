@@ -632,6 +632,8 @@ const enSettings = {
       accounts: "Accounts available to this agent",
       noAccounts: "No connected accounts for this provider.",
       connectAccount: "Connect an account",
+      gatewaySetupHint:
+        "Run this command on the computer hosting your Gateway, then choose {provider} and this method.",
       apiKeyHint: "Connect with a key from your provider account.",
       compareMethods: "Compare connection methods",
       searchProviders: "Search providers…",

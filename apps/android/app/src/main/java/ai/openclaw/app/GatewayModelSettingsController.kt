@@ -27,6 +27,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 
 internal data class GatewayModelDefaults(
   val primary: String = "",
@@ -107,27 +108,15 @@ internal class GatewayModelSettingsController(
     if (id.isBlank()) return
     mutate {
       buildJsonObject {
-        put(
-          "plugins",
-          buildJsonObject {
-            put(
-              "entries",
-              buildJsonObject {
-                put(
-                  "acpx",
-                  buildJsonObject {
-                    put(
-                      "config",
-                      buildJsonObject {
-                        put("nativeAgents", buildJsonObject { put(id, enabled) })
-                      },
-                    )
-                  },
-                )
-              },
-            )
-          },
-        )
+        putJsonObject("plugins") {
+          putJsonObject("entries") {
+            putJsonObject("acpx") {
+              putJsonObject("config") {
+                putJsonObject("nativeAgents") { put(id, enabled) }
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -301,7 +290,7 @@ internal class GatewayModelSettingsController(
     value: JsonElement,
   ): JsonObject =
     buildJsonObject {
-      put("agents", buildJsonObject { put("defaults", buildJsonObject { put(key, value) }) })
+      putJsonObject("agents") { putJsonObject("defaults") { put(key, value) } }
     }
 
   private fun modelValue(

@@ -726,49 +726,76 @@ describe("models.authLogin ownership", () => {
     }
   });
 
-  it("settles discarded login input before admitting another login on the same connection", async () => {
-    const h = harness();
-    const release = createDeferred();
-    hooks.admission.mockImplementationOnce(
-      async (_stateDir: string, run: () => Promise<unknown>) => {
-        await run();
-        await release.promise;
-      },
-    );
-    hooks.login.mockImplementationOnce(async (options: ModelsAuthLoginFlowOptions) => {
-      await expectDefined(options.beforePersistentEffect, "credential commit callback")();
-      await options.prompter.note("Credentials saved.");
-      return result;
-    });
-    await h.start();
-    const session = expectDefined(h.tracker.wizardSessions.get("login"), "login session");
-    try {
-      await h.invoke("wizard.next", { sessionId: "login" });
-      let responded = false;
-      const closing = h.invoke("wizard.cancel", { sessionId: "login", closeInput: true });
-      void closing.then(() => {
-        responded = true;
+  it.each(["before-write", "writing", "after-write"])(
+    "settles discarded login input before replacement (%s)",
+    async (phase) => {
+      const h = harness();
+      const release = createDeferred();
+      const enteredWrite = createDeferred();
+      const finishWrite = createDeferred();
+      hooks.admission.mockImplementationOnce(
+        async (_stateDir: string, run: () => Promise<unknown>) => {
+          await run();
+          await release.promise;
+        },
+      );
+      hooks.login.mockImplementationOnce(async (options: ModelsAuthLoginFlowOptions) => {
+        if (phase !== "before-write") {
+          await expectDefined(options.beforePersistentEffect, "credential commit callback")();
+          if (phase === "writing") {
+            enteredWrite.resolve();
+            await finishWrite.promise;
+          }
+          await options.prompter.note("Credentials saved.");
+        } else {
+          await options.prompter.text({ message: "Enter token", sensitive: true });
+        }
+        return result;
       });
-      await withTestTimeout(session.whenSettled(), 1_000, "Disposed login kept waiting for input");
-      expect(responded).toBe(false);
-      release.resolve();
-      expect(await closing).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "error" }),
-        undefined,
-      );
-      expect(h.controller.signal.aborted).toBe(false);
-      expect(await h.start()).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ sessionId: "login", status: "running" }),
-        undefined,
-      );
-    } finally {
-      session.close(new Error("Test cleanup"));
-      release.resolve();
-      await whenAdmittedWizardSessionSettled(session);
-    }
-  });
+      await h.start();
+      const session = expectDefined(h.tracker.wizardSessions.get("login"), "login session");
+      try {
+        if (phase === "writing") {
+          await enteredWrite.promise;
+        } else {
+          await h.invoke("wizard.next", { sessionId: "login" });
+        }
+        let responded = false;
+        const closing = h.invoke("wizard.cancel", { sessionId: "login", closeInput: true });
+        void closing.then(() => {
+          responded = true;
+        });
+        if (phase === "writing") {
+          expect(session.signal.aborted).toBe(false);
+          expect(responded).toBe(false);
+          finishWrite.resolve();
+        }
+        await withTestTimeout(
+          session.whenSettled(),
+          1_000,
+          "Disposed login kept waiting for input",
+        );
+        expect(responded).toBe(false);
+        release.resolve();
+        expect(await closing).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: phase === "writing" ? "error" : "cancelled" }),
+          undefined,
+        );
+        expect(h.controller.signal.aborted).toBe(false);
+        expect(await h.start()).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ sessionId: "login", status: "running" }),
+          undefined,
+        );
+      } finally {
+        session.close(new Error("Test cleanup"));
+        finishWrite.resolve();
+        release.resolve();
+        await whenAdmittedWizardSessionSettled(session);
+      }
+    },
+  );
 
   it("does not register or start login when the owner disconnects during admission", async () => {
     const h = harness();

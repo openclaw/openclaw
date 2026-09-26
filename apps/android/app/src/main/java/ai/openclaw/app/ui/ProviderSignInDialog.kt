@@ -1,8 +1,9 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.ProviderAuthController
+import ai.openclaw.app.ProviderAuthGroup
 import ai.openclaw.app.ProviderAuthLoginKind
-import ai.openclaw.app.ProviderAuthProvider
+import ai.openclaw.app.ProviderAuthSetupOption
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.verbatimText
@@ -50,6 +51,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -73,11 +75,13 @@ internal fun ProviderSignInDialog(
   var selectedProviderId by remember(controller, initialProviderId) { mutableStateOf(initialProviderId) }
   var search by remember(controller) { mutableStateOf("") }
   var apiKey by remember(controller, selectedProviderId) { mutableStateOf("") }
-  var apiKeySelected by remember(controller, selectedProviderId) { mutableStateOf(initialApiKeySelected) }
-  val providers = state.providers
-  val provider = providers.firstOrNull { it.id == selectedProviderId }
+  var apiKeyProviderId by remember(controller, selectedProviderId) { mutableStateOf(initialProviderId?.takeIf { initialApiKeySelected }) }
+  var setupOption by remember(controller, selectedProviderId) { mutableStateOf<ProviderAuthSetupOption?>(null) }
+  val selectedSetup = setupOption
+  val providers = state.providerGroups
+  val provider = providers.firstOrNull { group -> group.id == selectedProviderId || group.providers.any { it.id == selectedProviderId } }
+  val keyProvider = state.providers.firstOrNull { it.id == apiKeyProviderId && it.apiKeySupported }
   val displayName = provider?.displayName ?: selectedProviderId?.let(::providerDisplayName)
-  val computerSetup = selectedProviderId != null && state.authStatus != null && state.authStatus?.get("unavailable") == null && provider?.canSignIn != true
   val controlsEnabled = !state.busy && !state.cancelling
   val step =
     state.wizard
@@ -108,10 +112,11 @@ internal fun ProviderSignInDialog(
       modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 8.dp, bottom = 8.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      if (!state.signInActive && (apiKeySelected || (selectedProviderId != null && initialProviderId == null))) {
+      if (!state.signInActive && (apiKeyProviderId != null || setupOption != null || (selectedProviderId != null && initialProviderId == null))) {
         IconButton(enabled = controlsEnabled, onClick = {
-          if (apiKeySelected) {
-            apiKeySelected = false
+          if (apiKeyProviderId != null || setupOption != null) {
+            apiKeyProviderId = null
+            setupOption = null
             apiKey = ""
           } else {
             selectedProviderId = null
@@ -121,11 +126,7 @@ internal fun ProviderSignInDialog(
         }
       }
       Text(
-        when {
-          displayName == null -> nativeString("Add provider")
-          computerSetup -> nativeString("\$provider needs the computer", displayName)
-          else -> nativeString("Connect \$provider", displayName)
-        },
+        if (displayName == null) nativeString("Add provider") else nativeString("Connect \$provider", displayName),
         style = ClawTheme.type.title,
         modifier = Modifier.weight(1f).padding(start = 8.dp),
       )
@@ -159,7 +160,15 @@ internal fun ProviderSignInDialog(
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
           )
-          val filtered = providers.filter { it.displayName.contains(search, ignoreCase = true) || it.id.contains(search, ignoreCase = true) }
+          val filtered =
+            providers.filter { group ->
+              (
+                listOf(group.displayName, group.id) +
+                  group.providers.flatMap { entry ->
+                    listOf(entry.id, entry.displayName) + entry.loginOptions.map { it.label } + entry.setupOptions.map { it.label }
+                  }
+              ).any { it.contains(search, ignoreCase = true) }
+            }
           filtered.forEach { entry ->
             TextButton(
               modifier = Modifier.fillMaxWidth(),
@@ -170,7 +179,7 @@ internal fun ProviderSignInDialog(
                 ProviderBrandIcon(entry.id, size = 28.dp)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                   Text(entry.displayName, style = ClawTheme.type.label)
-                  Text(providerConnectionType(entry), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+                  Text(providerConnectionType(entry), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
               }
             }
@@ -179,9 +188,12 @@ internal fun ProviderSignInDialog(
             Text(nativeString("No providers found"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         } else if (provider != null) {
-          if (!provider.canSignIn) {
+          if (selectedSetup != null) {
+            Text(selectedSetup.label, style = ClawTheme.type.section)
+            selectedSetup.hint?.let { Text(it, style = ClawTheme.type.body) }
             ProviderComputerSetup()
-          } else if (apiKeySelected && provider.apiKeySupported) {
+            Text(nativeString("Choose \$provider, then \$method.", provider.displayName, selectedSetup.label), style = ClawTheme.type.body)
+          } else if (keyProvider != null) {
             OutlinedTextField(
               value = apiKey,
               onValueChange = { apiKey = it },
@@ -195,12 +207,12 @@ internal fun ProviderSignInDialog(
             ClawPrimaryButton(
               text = nativeString("Save and connect"),
               enabled = controlsEnabled,
-              onClick = { controller.setApiKey(provider.id, apiKey) },
+              onClick = { controller.setApiKey(keyProvider.id, apiKey) },
               modifier = Modifier.fillMaxWidth(),
             )
           } else {
             Text(nativeString("Pick how you want to connect."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-            provider.loginOptions.forEach { option ->
+            provider.providers.flatMap { it.loginOptions }.distinctBy { it.id }.forEach { option ->
               TextButton(
                 modifier = Modifier.fillMaxWidth(),
                 enabled = controlsEnabled,
@@ -213,13 +225,23 @@ internal fun ProviderSignInDialog(
                 }
               }
             }
-            // Prefer the advertised secret wizard when it owns this provider's key setup.
-            if (provider.apiKeySupported && provider.loginOptions.none { it.kind == ProviderAuthLoginKind.Secret }) {
+            provider.providers.filter { it.apiKeySupported && it.loginOptions.none { option -> option.kind == ProviderAuthLoginKind.Secret } }.forEach { entry ->
               TextButton(
                 modifier = Modifier.fillMaxWidth(),
                 enabled = controlsEnabled,
-                onClick = { apiKeySelected = true },
-              ) { Text(nativeString("API key"), modifier = Modifier.fillMaxWidth(), style = ClawTheme.type.label) }
+                onClick = { apiKeyProviderId = entry.id },
+              ) { Text(nativeString("\$provider API key", entry.displayName), modifier = Modifier.fillMaxWidth(), style = ClawTheme.type.label) }
+            }
+            provider.providers.flatMap { it.setupOptions }.distinctBy { it.id }.forEach { option ->
+              TextButton(enabled = controlsEnabled, onClick = { setupOption = option }, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                  Text(option.label, style = ClawTheme.type.label)
+                  Text(nativeString("Set up on Gateway"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+                }
+              }
+            }
+            if (provider.providers.none { it.canSignIn || it.setupOptions.isNotEmpty() }) {
+              ProviderComputerSetup()
             }
           }
         } else if (!state.busy && state.authStatus != null && state.authStatus?.get("unavailable") == null) {
@@ -256,21 +278,19 @@ internal fun ProviderSignInDialog(
   }
 }
 
-private fun providerConnectionType(provider: ProviderAuthProvider): String {
-  val account = provider.loginOptions.any { it.kind != ProviderAuthLoginKind.Secret }
-  val key = provider.apiKeySupported || provider.loginOptions.any { it.kind == ProviderAuthLoginKind.Secret }
-  return when {
-    account && key -> nativeString("Account or key")
-    account -> nativeString("Account")
-    key -> nativeString("API key")
-    else -> nativeString("Set up on computer")
-  }
-}
+private fun providerConnectionType(group: ProviderAuthGroup): String =
+  group.providers
+    .flatMap { provider ->
+      provider.loginOptions.map { it.label } + provider.setupOptions.map { it.label } +
+        if (provider.apiKeySupported && provider.loginOptions.isEmpty()) listOf(nativeString("API key")) else emptyList()
+    }.distinct()
+    .joinToString(" · ")
+    .ifEmpty { nativeString("Set up on Gateway") }
 
 @Composable
 private fun ProviderComputerSetup() {
   Text(nativeString("Run this command on the computer running your Gateway, then refresh."), style = ClawTheme.type.body)
-  SelectionContainer { Text(verbatimText("openclaw configure").resolveNativeText(), style = ClawTheme.type.mono) }
+  SelectionContainer { Text(verbatimText("openclaw configure --section model").resolveNativeText(), style = ClawTheme.type.mono) }
 }
 
 @Composable

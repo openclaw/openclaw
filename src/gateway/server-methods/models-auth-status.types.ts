@@ -69,6 +69,7 @@ export type ModelProviderCapability = {
   apiKeySupported: boolean;
   quickApiKeySetup: boolean;
   loginOptions?: import("../../plugins/provider-login-options.js").ProviderLoginOption[];
+  setupOptions?: import("../../plugins/provider-login-options.js").ProviderSetupOption[];
 };
 
 export type ModelAuthStatusResult = {

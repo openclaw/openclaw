@@ -4,15 +4,18 @@ import {
   type ProviderAuthChoiceMetadata,
 } from "./provider-auth-choices.js";
 
-export type ProviderLoginOption = {
+export type ProviderSetupOption = {
   id: string;
   brandId: string;
+  groupId?: string;
   label: string;
   hint?: string;
   groupLabel?: string;
   icon?: string;
   website?: string;
   docsUrl?: string;
+};
+export type ProviderLoginOption = ProviderSetupOption & {
   kind: "oauth" | "device-code" | "secret";
   featured: boolean;
 };
@@ -58,9 +61,7 @@ export function isProviderLoginChoiceStartable(choice: ProviderAuthChoiceMetadat
   return loginKind(choice) !== undefined;
 }
 
-export function listProviderLoginOptions(
-  choices: readonly ProviderAuthChoiceMetadata[],
-): ProviderLoginOption[] {
+function visibleProviderChoices(choices: readonly ProviderAuthChoiceMetadata[]) {
   return choices
     .filter(isEligible)
     .toSorted(
@@ -73,27 +74,47 @@ export function listProviderLoginOptions(
         Number(b.onboardingFeatured === true) - Number(a.onboardingFeatured === true) ||
         a.choiceLabel.localeCompare(b.choiceLabel, "en") ||
         a.choiceId.localeCompare(b.choiceId),
-    )
-    .flatMap((choice): ProviderLoginOption[] => {
-      const kind = loginKind(choice);
-      if (!kind) {
-        return [];
-      }
-      return [
-        {
-          id: formatProviderLoginChoiceRef(choice),
-          brandId: choice.providerId,
-          label: choice.choiceLabel,
-          hint: choice.choiceHint,
-          groupLabel: choice.groupLabel,
-          icon: choice.icon,
-          website: choice.website,
-          docsUrl: choice.docsUrl,
-          kind,
-          featured: choice.onboardingFeatured === true,
-        },
-      ];
-    });
+    );
+}
+
+function projectProviderOption(choice: ProviderAuthChoiceMetadata): ProviderSetupOption {
+  return {
+    id: formatProviderLoginChoiceRef(choice),
+    brandId: choice.providerId,
+    groupId: choice.groupId ?? choice.providerId,
+    label: choice.choiceLabel,
+    hint: choice.choiceHint,
+    groupLabel: choice.groupLabel,
+    icon: choice.icon,
+    website: choice.website,
+    docsUrl: choice.docsUrl,
+  };
+}
+
+export function listProviderSetupOptions(
+  choices: readonly ProviderAuthChoiceMetadata[],
+): ProviderSetupOption[] {
+  return visibleProviderChoices(choices)
+    .filter((choice) => !isProviderLoginChoiceStartable(choice))
+    .map(projectProviderOption);
+}
+
+export function listProviderLoginOptions(
+  choices: readonly ProviderAuthChoiceMetadata[],
+): ProviderLoginOption[] {
+  return visibleProviderChoices(choices).flatMap((choice): ProviderLoginOption[] => {
+    const kind = loginKind(choice);
+    if (!kind) {
+      return [];
+    }
+    return [
+      {
+        ...projectProviderOption(choice),
+        kind,
+        featured: choice.onboardingFeatured === true,
+      },
+    ];
+  });
 }
 
 export function formatProviderLoginChoiceRef(

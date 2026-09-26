@@ -336,7 +336,7 @@ class ProvidersModelsScreenTest {
     composeRule.onNodeWithText("Ready").assertDoesNotExist()
     composeRule.onNodeWithText("Connect Provider").performClick()
     composeRule.onNodeWithText("Test connection").performClick()
-    composeRule.onNodeWithText("Set API key").performClick()
+    composeRule.onNodeWithText("Edit API key").performClick()
     composeRule.onNodeWithText("Remove key").performClick()
     assertEquals(listOf("connect", "probe", "key", "remove"), actions)
   }
