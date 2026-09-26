@@ -135,4 +135,31 @@ describe("extractLinksFromMessage", () => {
       "https://example.com/a(b)_c",
     ]);
   });
+
+  it("preserves punctuation inside the URL and trims only the token-final character", () => {
+    // Query commas and periods inside the URL survive untouched; the trim
+    // applies only when prose punctuation ends the bare token, matching the
+    // GFM autolink trailing-punctuation rule.
+    expect(extractLinksFromMessage("see https://example.com/search?q=a,b then go")).toStrictEqual([
+      "https://example.com/search?q=a,b",
+    ]);
+    expect(extractLinksFromMessage("https://example.com/search?q=a,b")).toStrictEqual([
+      "https://example.com/search?q=a,b",
+    ]);
+    expect(
+      extractLinksFromMessage("look at https://example.com/search?q=a,b, and more"),
+    ).toStrictEqual(["https://example.com/search?q=a,b"]);
+    expect(extractLinksFromMessage("end of sentence https://example.com/a?b=1.")).toStrictEqual([
+      "https://example.com/a?b=1",
+    ]);
+  });
+
+  it("resolves the ambiguous token-final comma by preferring the prose reading", () => {
+    // Authored URLs that genuinely end in list punctuation, e.g. a trailing
+    // comma of ?ids=1,2,, are fetched without it; the same tradeoff GitHub's
+    // autolink extension makes. Pinning this so the rule stays deliberate.
+    expect(extractLinksFromMessage("https://example.com/x?ids=1,2,")).toStrictEqual([
+      "https://example.com/x?ids=1,2",
+    ]);
+  });
 });
