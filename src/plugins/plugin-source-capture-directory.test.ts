@@ -5,6 +5,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { cleanupStartupPluginSourceCaptures } from "../commands/startup-plugin-source-captures.js";
 import * as census from "../infra/openclaw-process-census.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
@@ -90,6 +91,74 @@ async function abandonCapture(stateDir: string, source: string) {
   expect(fs.readFileSync(captured.capturedFile, "utf8")).toBe(capturedSource);
   return captured;
 }
+
+it("retains mapped addons once through disposal and exit, then reclaims them at startup", async () => {
+  const stateDir = temp.make("plugin-capture-loaded-");
+  const result = spawnSync(
+    process.execPath,
+    [
+      ...runtimeArgs,
+      "--input-type=module",
+      "-e",
+      `
+      import assert from "node:assert/strict";
+      import fs from "node:fs";
+      import fsp from "node:fs/promises";
+      import path from "node:path";
+      import { createPluginSourceCapture } from ${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.metadataCapture).href)};
+      import { createPluginNativeCaptureRoot, sweepPluginSourceCaptureDirectories } from ${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.captureDirectory).href)};
+      const captures = [createPluginSourceCapture(), createPluginSourceCapture(), createPluginNativeCaptureRoot(), createPluginNativeCaptureRoot()];
+      const files = captures.map(capture => path.join(capture.directory, "addon.node"));
+      for (const file of files) fs.writeFileSync(file, "synthetic mapped image");
+      // The OS map is independent of require.cache, including direct process.dlopen.
+      process.report.getReport = () => ({ sharedObjects: files });
+      const warnings = [];
+      process.emitWarning = warning => warnings.push(String(warning));
+      const remove = fs.rmSync;
+      const removeAsync = fsp.rm;
+      let attempts = 0;
+      const check = target => {
+        if (files.some(file => file.startsWith(String(target) + path.sep))) {
+          attempts++;
+          throw Object.assign(new Error("synthetic mapped-image unlink"), { code: "EPERM" });
+        }
+      };
+      fs.rmSync = (target, options) => { check(target); return remove(target, options); };
+      fsp.rm = async (target, options) => { check(target); return removeAsync(target, options); };
+      for (const [index, capture] of captures.entries()) {
+        if (index % 2) await capture.disposeAsync();
+        else capture.dispose();
+      }
+      await sweepPluginSourceCaptureDirectories();
+      assert(files.every(file => fs.existsSync(file)));
+      // Registered after the capture owner, so this includes its terminal cleanup.
+      process.on("exit", () => process.stdout.write(JSON.stringify({
+        directories: captures.map(capture => capture.directory), warnings, attempts,
+      })));
+      `,
+    ],
+    { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, encoding: "utf8", timeout: 15_000 },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  const observed: { directories: string[]; warnings: string[]; attempts: number } = JSON.parse(
+    result.stdout,
+  );
+  expect(observed.attempts).toBe(0);
+  expect(observed.warnings).toHaveLength(1);
+  expect(observed.warnings[0]).toContain("retained-by-loaded-module");
+  expect(result.stderr).not.toContain("cleanup failed");
+  expect(observed.directories.every((directory) => fs.existsSync(directory))).toBe(true);
+  // A new process has no mapped image and acquires released custody; no one-hour wait.
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  await cleanupStartupPluginSourceCaptures({
+    ...process.env,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+  });
+  expect(warning).not.toHaveBeenCalled();
+  expect(fs.readdirSync(path.join(stateDir, "tmp", "plugin-captures"))).toEqual([]);
+});
 
 it.each(["natural", "failure", "explicit", "signal"])(
   "reclaims process-owned captures on %s exit",

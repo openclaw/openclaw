@@ -8,7 +8,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPathInside } from "../infra/path-guards.js";
 import { escapeRegExp } from "../shared/regexp.js";
-import { retainPluginSourceCaptureInstance } from "./plugin-source-capture-directory.js";
+import {
+  retainLoadedPluginSourceCapture,
+  retainPluginSourceCaptureInstance,
+} from "./plugin-source-capture-directory.js";
 import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
 import { verifyPluginSourceInputs, type PluginSourceInput } from "./plugin-source-verification.js";
 
@@ -683,12 +686,16 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     },
     dispose() {
       beginDisposal();
-      fs.rmSync(directory, { recursive: true, force: true });
+      if (!retainLoadedPluginSourceCapture(directory)) {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
       instance?.release();
     },
     async disposeAsync() {
       beginDisposal();
-      await fsPromises.rm(directory, { recursive: true, force: true });
+      if (!retainLoadedPluginSourceCapture(directory)) {
+        await fsPromises.rm(directory, { recursive: true, force: true });
+      }
       await instance?.releaseAsync();
     },
   };
