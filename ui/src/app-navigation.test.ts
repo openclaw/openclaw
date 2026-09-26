@@ -304,7 +304,7 @@ describe("subtitleForRoute", () => {
       "model-setup": "Connect a verified AI model",
       "model-providers": "Default models, behavior, provider access, usage, and cost.",
       "memory-import": "Bring Codex and Claude Code memory into an agent workspace.",
-      notifications: "Browser push notifications from your gateway.",
+      notifications: "In-app and push notifications from your gateway.",
       security: "Gateway auth, exec policy, tool profile, and approvals.",
       secrets:
         "Choose protected, write-only secrets or intentionally agent-readable Gateway environment values.",

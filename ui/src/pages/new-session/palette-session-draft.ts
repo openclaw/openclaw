@@ -2,6 +2,7 @@ import { html, nothing, type ReactiveController } from "lit";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import { captureSessionNoticeOwner } from "../../app/session-notice-owner.ts";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
@@ -10,10 +11,10 @@ import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../components/web-awesome-popover.ts";
 import "../../styles/new-session.css";
 import "../../styles/chat/composer.css";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import type { ChatAttachmentControlsProps } from "../chat/components/chat-attachment-controls.types.ts";
 import {
   appendChatAttachmentFiles,
@@ -28,7 +29,6 @@ import { closeSessionMenus } from "./new-session-runtime.ts";
 import { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import { PaletteSessionSettings } from "./palette-session-settings.ts";
 import type { PaletteSessionPreference } from "./preferences.ts";
-import { captureSessionNoticeOwner } from "./session-notice-owner.ts";
 
 registerCommandPaletteEnglish();
 

@@ -24,6 +24,7 @@ import type { ApplicationConfigCapability } from "./config.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import type { InAppNotificationsCapability } from "./in-app-notifications.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { NativeDeviceSettingsCapability } from "./native-device-settings.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
@@ -147,6 +148,7 @@ export type ApplicationContext<TRouteId extends string = RouteId> = {
   readonly nativeChatDrafts: NativeChatDrafts;
   readonly nativeDeviceSettings: NativeDeviceSettingsCapability | null;
   readonly nativeNotifications: NativeNotificationsCapability | null;
+  readonly inAppNotifications: InAppNotificationsCapability;
   readonly webPush: WebPushCapability;
   readonly chatSubmissions: ApplicationChatSubmissions;
   readonly chatAttachmentHandoff: ApplicationChatAttachmentHandoff;

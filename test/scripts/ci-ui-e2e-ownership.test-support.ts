@@ -132,6 +132,7 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
     "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
     "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
+    "ui/src/e2e/session-completion-notices.real-gateway.e2e.test.ts",
     "ui/src/e2e/session-management.delete.e2e.test.ts",
     "ui/src/e2e/session-mention-involvement.e2e.test.ts",
     "ui/src/e2e/sidebar-account-footer.e2e.test.ts",

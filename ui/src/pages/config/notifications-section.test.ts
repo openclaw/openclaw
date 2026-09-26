@@ -199,7 +199,7 @@ describe("Web Push preference controls", () => {
 
     // Native checkboxes bypass the settings toggle; booleans are wa-switch rows.
     expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
-    expect(container.querySelectorAll("wa-switch.settings-toggle")).toHaveLength(8);
+    expect(container.querySelectorAll("wa-switch.settings-toggle")).toHaveLength(9);
 
     const unstyled = Array.from(container.querySelectorAll<HTMLElement>("select, input"))
       .filter((control) => {
@@ -238,4 +238,40 @@ describe("Web Push preference controls", () => {
     detail.dispatchEvent(new Event("change"));
     expect(onDevice).toHaveBeenLastCalledWith(expect.objectContaining({ detailLevel: "detailed" }));
   });
+});
+
+describe("in-app completion preferences", () => {
+  it.each(["absent", "unsupported", "denied", "native"] as const)(
+    "offers the account toggle when browser push is %s",
+    (mode) => {
+      const container = document.createElement("div");
+      const onChange = vi.fn();
+      render(
+        renderNotificationsSection({
+          connected: true,
+          inAppNotifications: { enabled: false, available: true, loading: false, error: null },
+          onInAppNotificationsSetEnabled: onChange,
+          ...(mode === "native"
+            ? { nativeNotifications: { permission: "denied" as const, test: null } }
+            : {}),
+          ...(mode === "unsupported" || mode === "denied"
+            ? {
+                webPush: {
+                  supported: mode !== "unsupported",
+                  permission: mode === "denied" ? ("denied" as const) : ("unsupported" as const),
+                  subscription: "missing" as const,
+                  loading: false,
+                },
+              }
+            : {}),
+        }),
+        container,
+      );
+      expect(container.textContent).toContain("Notify when other sessions finish");
+      const toggle = container.querySelector("wa-switch");
+      expect(toggle?.hasAttribute("disabled")).toBe(false);
+      toggle?.dispatchEvent(new Event("change", { bubbles: true }));
+      expect(onChange).toHaveBeenCalled();
+    },
+  );
 });

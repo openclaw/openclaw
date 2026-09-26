@@ -40,6 +40,7 @@ describe("GATEWAY_EVENTS", () => {
 
   it("advertises session observer digests", () => {
     expect(GATEWAY_EVENTS).toContain("session.observer");
+    expect(GATEWAY_EVENTS).toContain("session.run.completed");
   });
 
   it("advertises question methods and events", () => {

@@ -1,5 +1,5 @@
 ---
-summary: "Enable and test browser or macOS notifications from the Control UI"
+summary: "Enable in-app, browser, or macOS notifications from the Control UI"
 title: "Notifications"
 read_when:
   - Enabling notifications from Settings
@@ -10,7 +10,27 @@ read_when:
 
 OpenClaw can ping you when something needs your attention, including an exec or plugin approval request. The ping arrives in the browser that runs the Control UI. It can also arrive through native macOS notifications when you use the OpenClaw macOS app. Your first chat send may request permission automatically. **Settings → Notifications** remains the place to enable or repair the current device. Use the same page to check its status and send yourself a test.
 
-This page covers those two surfaces. It does not control channel reaction notifications, Android notification forwarding, or iOS background push. The mobile apps register for push through their own node paths. See [iOS](/platforms/ios) and [Nodes](/nodes).
+This page covers in-app completion pop-ups and those two notification surfaces. It does not control channel reaction notifications, Android notification forwarding, or iOS background push. The mobile apps register for push through their own node paths. See [iOS](/platforms/ios) and [Nodes](/nodes).
+
+## In-app completion pop-ups
+
+In **Settings → Notifications → In-app notifications**, enable **Notify when other
+sessions finish** to get an actionable completion pop-up while working elsewhere
+in OpenClaw. This account preference is off by default and does not require
+browser push support, notification permission, or a push subscription.
+
+Completion pop-ups cover unattended sessions regardless of how they were started,
+including later turns. Select **Open session** to go to the exact conversation.
+Sessions already visible in a pane do not announce their completion. A turn
+yielded to child work is not itself reported as complete. Pop-ups distinguish a
+failed run from a successful one. Reconnecting does not replay historical completions.
+
+The existing **New Session → Start in background** completion notice remains
+available when this preference is off, including the next settled session turn
+after a yield. This does not enable notices for subsequent unrelated turns.
+When both apply, OpenClaw shows one notice.
+Keep OpenClaw open to receive in-app notices; browser and operating-system alerts
+are configured separately below.
 
 ## Which surface you get
 

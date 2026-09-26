@@ -54,6 +54,47 @@ describe("broadcast transport retirement", () => {
     vi.useRealTimers();
   });
 
+  it("authorizes completion metadata without requiring a transcript subscription", () => {
+    const allowed = controlledPeer("allowed");
+    allowed.client.connect.caps = ["session-scoped-events"];
+    const denied = controlledPeer("denied");
+    const node = controlledPeer("node");
+    node.client.connect.role = "node";
+    const pairing = controlledPeer("pairing");
+    pairing.client.connect.scopes = ["operator.pairing"];
+    const unrelated = controlledPeer("unsubscribed");
+    const peers = [allowed, denied, node, pairing, unrelated];
+    const authorize = vi.fn((client: GatewayWsClient) => client.connId !== "denied");
+    const { broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry(peers.map((peer) => peer.client)),
+      canReceiveSessionEvent: authorize,
+    });
+    const payload = {
+      sessionKey: "agent:coder:task:one",
+      agentId: "coder",
+      runId: "run",
+      status: "ok",
+    };
+    broadcastToConnIds(
+      "session.run.completed",
+      payload,
+      new Set(["allowed", "denied", "node", "pairing"]),
+      { sessionKeys: [payload.sessionKey], agentId: payload.agentId },
+    );
+    expect(allowed.frames).toHaveLength(1);
+    expect(allowed.frames[0]?.payload).toEqual(payload);
+    for (const peer of peers.slice(1)) {
+      expect(peer.frames).toHaveLength(0);
+    }
+    expect(authorize).toHaveBeenCalledWith(
+      allowed.client,
+      [payload.sessionKey],
+      "coder",
+      "session.run.completed",
+      payload,
+    );
+  });
+
   it("terminates only the slow socket captured before replacement", () => {
     vi.useFakeTimers();
     const retired = controlledPeer("replacement");

@@ -1,21 +1,13 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { selectApplicationSession } from "../../app/agent-selection.ts";
+import { trackBackgroundSessionCompletion } from "../../app/background-session-tracker.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   autoPromptNotificationsOnSend,
   hasActiveNotificationPromptGesture,
   shouldAutoPromptNotificationsOnSend,
 } from "../../app/notifications-auto-prompt.ts";
-import { t } from "../../i18n/index.ts";
+import { captureSessionNoticeOwner } from "../../app/session-notice-owner.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
-import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
-import {
-  areUiSessionKeysEquivalent,
-  uiSessionEventMatches,
-} from "../../lib/sessions/session-key.ts";
-import { showToast } from "../../lib/toast.ts";
-import { captureSessionNoticeOwner } from "./session-notice-owner.ts";
 
 type AgentWaitResult = {
   status?: "error" | "ok" | "pending" | "timeout";
@@ -24,6 +16,7 @@ type AgentWaitResult = {
   pendingError?: boolean;
   providerStarted?: boolean;
   stopReason?: string;
+  yielded?: boolean;
 };
 
 const RETRY_DELAY_MS = 1_000;
@@ -41,15 +34,27 @@ async function notifyWhenBackgroundSessionEnds(params: {
   runId: string;
   isCurrentOwner: () => boolean;
 }): Promise<void> {
+  const tracker = trackBackgroundSessionCompletion({
+    context: params.context,
+    client: params.client,
+    agentId: params.agentId,
+    sessionKey: params.key,
+    runId: params.runId,
+  });
   let result: AgentWaitResult | undefined;
   while (!result) {
+    if (!tracker.current()) {
+      tracker.cancel();
+      return;
+    }
     try {
       const observed = await params.client.request<AgentWaitResult>(
         "agent.wait",
         { runId: params.runId, timeoutMs: 30_000 },
         { timeoutMs: null },
       );
-      if (params.context.gateway.snapshot.client !== params.client) {
+      if (!tracker.current()) {
+        tracker.cancel();
         return;
       }
       const observationalTimeout =
@@ -78,7 +83,8 @@ async function notifyWhenBackgroundSessionEnds(params: {
         gateway.phase === "connecting" ||
         gateway.phase === "starting" ||
         gateway.phase === "reconnecting";
-      if (gateway.client !== params.client || !reconnecting) {
+      if (!tracker.current() || gateway.client !== params.client || !reconnecting) {
+        tracker.cancel();
         return;
       }
       await delayRetry();
@@ -86,65 +92,29 @@ async function notifyWhenBackgroundSessionEnds(params: {
   }
 
   if (!params.isCurrentOwner()) {
+    tracker.cancel();
     return;
   }
-  const gateway = params.context.gateway.snapshot;
-  if (
-    uiSessionEventMatches(
-      { ...gateway, sessionKey: gateway.sessionKey },
-      params.key,
-      params.agentId,
-    )
-  ) {
+
+  // Keep explicit background intent until the parent settles after child work.
+  if (result.yielded === true) {
+    tracker.yield();
     return;
   }
-  const row = params.context.sessions.state.result?.sessions.find((session) =>
-    areUiSessionKeysEquivalent(session.key, params.key),
-  );
-  const status =
-    result.status === "ok"
-      ? t("sessionsView.statusDone")
-      : result.status === "timeout"
-        ? t("sessionsView.statusTimeout")
-        : result.stopReason === "rpc"
-          ? t("sessionsView.statusKilled")
-          : t("sessionsView.statusFailed");
-  const nativeTarget = sessionNavigationTarget({
-    face: "chat",
+  const notice = {
     sessionKey: params.key,
-    fallbackAgentId: params.agentId,
-    exactKey: true,
-  });
-  params.context.nativeNotifications?.backgroundSessionCompleted({
+    agentId: params.agentId,
     runId: params.runId,
-    path: nativeTarget.options.pathname,
-    ...(nativeTarget.options.search ? { search: nativeTarget.options.search } : {}),
-  });
-  showToast({
-    fifo: true,
-    message: `${resolveSessionDisplayName(params.key, row)}: ${status}`,
-    actionLabel: t("sessionsView.openSession"),
-    onAction: () => {
-      if (!params.isCurrentOwner()) {
-        return;
-      }
-      selectApplicationSession({
-        selection: params.context.agentSelection,
-        gateway: params.context.gateway,
-        sessionKey: params.key,
-        agentId: params.agentId,
-      });
-      params.context.navigate(
-        "chat",
-        sessionNavigationTarget({
-          context: params.context,
-          face: "chat",
-          sessionKey: params.key,
-          agentId: params.agentId,
-        }).options,
-      );
-    },
-  });
+    status:
+      result.status === "ok"
+        ? ("ok" as const)
+        : result.status === "timeout"
+          ? ("timeout" as const)
+          : result.stopReason === "rpc"
+            ? ("aborted" as const)
+            : ("error" as const),
+  };
+  tracker.finish(notice);
 }
 
 export function prepareBackgroundSessionCompletion(params: {

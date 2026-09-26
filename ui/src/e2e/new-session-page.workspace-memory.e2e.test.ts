@@ -578,7 +578,11 @@ suite.define(() => {
             "projects.list": { projects: [], recents: [] },
             "users.prefs.get": {
               sequence: [
+                // inAppNotifications queries for notification preference on startup
                 { status: "ok", entries: {} },
+                // Preference migration checks for the migration flag
+                { status: "ok", entries: {} },
+                // After navigation, re-check shows migrated state
                 {
                   status: "ok",
                   entries: {

@@ -2021,7 +2021,7 @@ export const en: TranslationMap & {
     modelSetup: "Connect a verified AI model",
     modelProviders: "Default models, behavior, provider access, usage, and cost.",
     memoryImport: "Bring Codex and Claude Code memory into an agent workspace.",
-    notifications: "Browser push notifications from your gateway.",
+    notifications: "In-app and push notifications from your gateway.",
     security: "Gateway auth, exec policy, tool profile, and approvals.",
     advanced: "Every remaining config section, plus the raw file editor.",
     debug: "Snapshots, events, RPC.",

@@ -1281,6 +1281,11 @@ const enSettings = {
       xxl: "XXL",
     },
     notifications: {
+      inAppTitle: "In-app notifications",
+      otherSessionsFinished: "Notify when other sessions finish",
+      otherSessionsFinishedHint:
+        "Show a pop-up with an Open session action when an unattended session finishes or fails. Applies to your account, independently of browser notifications.",
+      inAppAccountRequired: "Connect with a user profile to save this account preference.",
       title: "Push notifications",
       nativeTitle: "Notifications",
       unavailableHint: "Browser unsupported.",

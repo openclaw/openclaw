@@ -24,6 +24,8 @@ export type ToastOptions = {
   durationMs?: number;
   /** Wait behind the active toast instead of replacing it. */
   fifo?: boolean;
+  /** Revalidate a queued message against its current owner before presentation. */
+  shouldShow?: () => boolean;
 };
 
 const DEFAULT_TOAST_DURATION_MS = 6_000;
@@ -92,10 +94,14 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     }
   }
 
-  show(options: ToastOptions) {
+  show(options: ToastOptions): boolean {
+    if (options.shouldShow?.() === false) {
+      options.onDismiss?.("replaced");
+      return false;
+    }
     if (options.fifo && this.toast) {
       this.toastQueue.push(options);
-      return;
+      return true;
     }
     this.finishDismiss(this.exitReason ?? "replaced");
     this.toast = options;
@@ -103,6 +109,7 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     this.exitReason = null;
     this.remainingMs = options.durationMs ?? DEFAULT_TOAST_DURATION_MS;
     this.syncDismissTimer();
+    return true;
   }
 
   override updated() {
@@ -159,9 +166,9 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
         pending.onDismiss?.("disconnected");
       }
     } else if (reason !== "replaced") {
-      const next = this.toastQueue.shift();
-      if (next) {
-        this.show(next);
+      let next = this.toastQueue.shift();
+      while (next && !this.show(next)) {
+        next = this.toastQueue.shift();
       }
     }
   }
@@ -298,8 +305,7 @@ export function showToast(options: ToastOptions): boolean {
     };
     modal.addEventListener("wa-after-hide", handoff);
   }
-  host.show(options);
-  return true;
+  return host.show(options);
 }
 
 // Guarded so DOM-free (node) consumers of send-failure surfacing can load this module.

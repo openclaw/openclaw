@@ -33,11 +33,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { logError, logWarn } from "../logger.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import {
-  isAcpSessionKey,
-  isSubagentSessionKey,
-  parseCronRunScopeSuffix,
-} from "../sessions/session-key-utils.js";
+import { isAcpSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { mergeAssistantText, resolveAssistantTextInput } from "./agent-event-assistant-text.js";
@@ -85,6 +81,7 @@ import {
 } from "./session-lifecycle-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+import { createSessionTerminalPublisher } from "./session-run-completion.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 import { projectGatewaySessionRunState } from "./session-utils-display.js";
 import { loadGatewaySessionEntryReadOnly, type GatewaySessionRow } from "./session-utils.js";
@@ -429,6 +426,10 @@ export function createAgentEventHandler({
   };
 
   const pendingTerminalLifecycleErrors = new Map<string, PendingTerminalLifecycleError>();
+  const terminalPublisher = createSessionTerminalPublisher({
+    broadcastToConnIds,
+    resolveActiveLifecycleGenerationForRun,
+  });
 
   const liveTextDelivery = (
     runId: string,
@@ -789,34 +790,27 @@ export function createAgentEventHandler({
           persistence,
         });
         const broadcastSessionChange = (snapshotEvent?: AgentEventPayload) => {
-          if (parseCronRunScopeSuffix(sessionKey).runId) {
-            return;
-          }
-          const sessionEventConnIds = sessionEventSubscribers.getAll();
-          if (!hasSessionChangeReceivers(sessionEventConnIds)) {
-            return;
-          }
-          broadcastToConnIds(
-            "sessions.changed",
-            {
+          const recipients = sessionEventSubscribers.getAll();
+          terminalPublisher.publish({
+            event: evt,
+            sessionKey,
+            agentId: sessionAgentId,
+            runId: eventRunId,
+            recipients,
+            sessionKeys: deliverySessionKeys,
+            snapshot: buildSessionEventSnapshot(
               sessionKey,
-              ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-              phase: lifecyclePhase,
-              runId: evt.runId,
-              ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
-              ts: evt.ts,
-              ...buildSessionEventSnapshot(
-                sessionKey,
-                snapshotEvent,
-                sessionAgentId,
-                true,
-                true,
-                evt,
-              ),
-            },
-            sessionEventConnIds,
-            { dropIfSlow: true },
-          );
+              snapshotEvent,
+              sessionAgentId,
+              true,
+              true,
+              evt,
+            ),
+            completionEligible:
+              !snapshotEvent &&
+              isControlUiVisible &&
+              !resolveHeartbeatFlag(clientRunId, evt.runId, evt.isHeartbeat),
+          });
         };
         // Terminal writes serialize with restart markers. Reload only after the
         // write so subscribers see the canonical post-race session state.
@@ -1881,6 +1875,7 @@ export function createAgentEventHandler({
 
   return Object.assign(handleEvent, {
     dispose: () => {
+      terminalPublisher.dispose();
       // Deferred provider errors belong to this gateway subscription. Letting
       // them outlive shutdown can project stale terminal state into a successor.
       for (const pending of pendingTerminalLifecycleErrors.values()) {

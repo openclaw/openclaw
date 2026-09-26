@@ -6,6 +6,7 @@ import type {
   WebPushNotificationPreferences,
 } from "../../../../packages/gateway-protocol/src/schema/push.js";
 import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
+import type { InAppNotificationsSnapshot } from "../../app/in-app-notifications.ts";
 import type {
   NativeNotificationsPermission,
   NativeNotificationTestOutcome,
@@ -218,6 +219,8 @@ export type ConfigProps = {
   };
   onNativeNotificationsRequestPermission?: () => void;
   onNativeNotificationsSendTest?: () => void;
+  inAppNotifications?: InAppNotificationsSnapshot;
+  onInAppNotificationsSetEnabled?: (enabled: boolean) => void;
   webPush?: WebPushSnapshot;
   onWebPushSubscribe?: () => void;
   onWebPushUnsubscribe?: () => void;

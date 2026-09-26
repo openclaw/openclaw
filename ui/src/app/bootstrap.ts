@@ -61,6 +61,7 @@ import type { ApplicationNavigationOptions, ApplicationContext } from "./context
 import { createScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import { startGatewayPageActivation } from "./gateway-page-activation.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
+import { createLazyInAppNotificationsCapability } from "./in-app-notifications-lazy.ts";
 import { startLinkReaderRouting } from "./link-reader-routing.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
@@ -341,6 +342,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   });
   let nativeDeviceSettings: ApplicationContext["nativeDeviceSettings"] = null;
   let nativeNotifications: ApplicationContext["nativeNotifications"] = null;
+  const inAppNotifications = createLazyInAppNotificationsCapability(gateway);
   const webPush = createWebPushCapability(gateway, { connectionBootstrap });
   const placementStartup = createApplicationPlacementStartup({
     gateway,
@@ -508,6 +510,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     get nativeNotifications() {
       return nativeNotifications;
     },
+    inAppNotifications,
     webPush,
     chatSubmissions,
     chatAttachmentHandoff,
@@ -658,6 +661,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       nativeChatDrafts.dispose();
       linkReaderRouting.dispose();
       nativeLinkRouting.dispose();
+      inAppNotifications.dispose();
       webPush.dispose();
       chatSubmissions.clear();
       chatAttachmentHandoff.dispose();

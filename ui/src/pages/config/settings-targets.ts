@@ -401,6 +401,9 @@ export const SETTINGS_SEARCH_TARGETS = {
     labelKey: "configView.notifications.title",
     hash: `#${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}`,
     searchKeys: [
+      "configView.notifications.inAppTitle",
+      "configView.notifications.otherSessionsFinished",
+      "configView.notifications.otherSessionsFinishedHint",
       "configView.notifications.browserSupport",
       "configView.notifications.permission",
       "configView.notifications.status",
