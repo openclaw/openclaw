@@ -972,8 +972,18 @@ describe("skill workshop proposals", () => {
       description: "Discard after rejection",
       content: "# Rejected\n",
     });
+    const applied = await proposeCreateSkill({
+      workspaceDir,
+      name: "Keep Applied",
+      description: "Remain active",
+      content: "# Applied\n",
+    });
+    await applySkillProposal({ workspaceDir, proposalId: applied.record.id });
     await expect(
       purgeRejectedSkillProposal({ workspaceDir, proposalId: pending.record.id }),
+    ).rejects.toThrow("Only rejected proposals can be purged");
+    await expect(
+      purgeRejectedSkillProposal({ workspaceDir, proposalId: applied.record.id }),
     ).rejects.toThrow("Only rejected proposals can be purged");
     await rejectSkillProposal({ workspaceDir, proposalId: rejected.record.id });
     const reviewed = await inspectSkillProposal(rejected.record.id);
@@ -1001,6 +1011,9 @@ describe("skill workshop proposals", () => {
     ).resolves.toEqual({ proposalId: rejected.record.id, purged: true });
     expect(await inspectSkillProposal(rejected.record.id)).toBeNull();
     expect(await inspectSkillProposal(pending.record.id)).not.toBeNull();
+    await expect(
+      fs.readFile(path.join(workshopSkillsDir(), "keep-applied", "SKILL.md"), "utf8"),
+    ).resolves.toContain("# Applied");
     await expect(
       fs.access(path.join(stateDir, "skill-workshop", "proposals", rejected.record.id)),
     ).rejects.toThrow();
