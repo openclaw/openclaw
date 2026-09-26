@@ -18,6 +18,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -83,23 +84,28 @@ it.each([
             vi.spyOn(sessionRunError, "recordGatewaySessionRunFailure").mockImplementationOnce(
               async (params) => {
                 await Promise.resolve();
-                prepared = true;
                 if (race === "session") {
                   accessor.replaceSessionEntrySync(scope, {
                     ...original,
                     sessionId: "successor",
                   });
                 } else if (race === "generation") {
-                  const other = new DatabaseSync(database.path);
-                  try {
-                    other
-                      .prepare(
-                        "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
-                      )
-                      .run("$.lifecycleRevision", "successor", scope.sessionKey);
-                  } finally {
-                    other.close();
-                  }
+                  // Keep the separate connection, but serialize its write with maintenance.
+                  await runOpenClawAgentWriteAdmission(
+                    { agentId: "main", path: database.path },
+                    () => {
+                      const other = new DatabaseSync(database.path);
+                      try {
+                        other
+                          .prepare(
+                            "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
+                          )
+                          .run("$.lifecycleRevision", "successor", scope.sessionKey);
+                      } finally {
+                        other.close();
+                      }
+                    },
+                  );
                 } else if (race === "local-owner") {
                   registerAgentRunContext("startup-race-owner", {
                     sessionKey: scope.sessionKey,
@@ -135,6 +141,7 @@ it.each([
                       "{}",
                     );
                 }
+                prepared = true;
                 await writeReceipt(params);
               },
             );
