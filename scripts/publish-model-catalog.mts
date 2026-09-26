@@ -1026,15 +1026,18 @@ export async function assembleModelCatalogBundleV2(
   standalonePricing?: StandalonePricing,
   manifests: ModelCatalogManifestInput[] = [],
 ): Promise<RemoteModelCatalogBundleV2> {
-  const recommendations = new Map<string, unknown>();
+  const recommendations = new Map<string, string[]>();
   for (const entry of manifests) {
-    for (const [id, provider] of Object.entries(entry.manifest.modelCatalog?.providers ?? {})) {
-      if (isRecord(provider) && provider.recommendedModels !== undefined) {
+    const catalog = normalizeModelCatalog(entry.manifest.modelCatalog, {
+      ownedProviders: new Set(entry.manifest.providers ?? []),
+    });
+    for (const [id, provider] of Object.entries(catalog?.providers ?? {})) {
+      if (provider.recommendedModels?.length) {
         recommendations.set(id, provider.recommendedModels);
       }
     }
   }
-  const providers: Record<string, unknown> = {};
+  const providers: RemoteModelCatalogBundleV2["providers"] = {};
   const models: RemoteModelCatalogBundleV2["models"] = [];
   for (const [providerId, provider] of Object.entries(bundle.providers)) {
     const recommendedModels = recommendations.get(providerId);
@@ -1042,10 +1045,7 @@ export async function assembleModelCatalogBundleV2(
       api: provider.api,
       defaultModel: provider.defaultModel,
       defaultUtilityModel: provider.defaultUtilityModel,
-      ...(recommendedModels !== undefined &&
-      !(Array.isArray(recommendedModels) && recommendedModels.length === 0)
-        ? { recommendedModels }
-        : {}),
+      ...(recommendedModels?.length ? { recommendedModels } : {}),
     };
     for (const model of provider.models) {
       const { cost, ...metadata } = model;

@@ -45,6 +45,7 @@ function fixtureRoot() {
         modelsDev: { "fixture-native": "upstream" },
         providers: {
           anthropic: {
+            recommendedModels: ["missing"],
             models: seeds.map((model, index) =>
               index === 0 ? { ...model, cost: { input: 0.5 } } : model,
             ),
@@ -213,6 +214,7 @@ describe("publish model catalog v2", () => {
     expect(v2.providers.openai?.defaultModel).toBe("seed-0");
     expect(v2.providers.openai?.recommendedModels).toEqual(["seed-2", "seed-0"]);
     expect(v1.providers.openai).not.toHaveProperty("recommendedModels");
+    expect(v2.providers.anthropic).not.toHaveProperty("recommendedModels");
     expect(
       v2.models.find((model) => model.provider === "anthropic" && model.id === "seed-0")?.pricing,
     ).toEqual({
