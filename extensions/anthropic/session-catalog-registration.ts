@@ -88,31 +88,24 @@ function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
 }
 
 function createClaudeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
-  return [
+  const commands: Array<
+    Pick<OpenClawPluginNodeHostCommand, "command" | "duplex" | "isAvailable" | "handle">
+  > = [
     {
       command: CLAUDE_SESSIONS_LIST_COMMAND,
-      cap: CLAUDE_SESSIONS_CAPABILITY,
-      dangerous: false,
-      hasActiveWork: () => false,
       isAvailable: ({ env }) => claudeProjectsAvailable(env),
       handle: async (paramsJSON) =>
         await (await loadClaudeSessionNodeCommands()).listClaudeSessions(paramsJSON),
     },
     {
       command: CLAUDE_SESSION_READ_COMMAND,
-      cap: CLAUDE_SESSIONS_CAPABILITY,
-      dangerous: false,
-      hasActiveWork: () => false,
       isAvailable: ({ env }) => claudeProjectsAvailable(env),
       handle: async (paramsJSON) =>
         await (await loadClaudeSessionNodeCommands()).readClaudeSession(paramsJSON),
     },
     {
       command: CLAUDE_TERMINAL_RESUME_COMMAND,
-      cap: CLAUDE_SESSIONS_CAPABILITY,
-      dangerous: false,
       duplex: true,
-      hasActiveWork: () => false,
       isAvailable: ({ env }) =>
         claudeProjectsAvailable(env) && Boolean(resolveClaudeTerminalExecutable(env)),
       handle: async (paramsJSON, io) =>
@@ -120,15 +113,18 @@ function createClaudeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] 
     },
     {
       command: CLAUDE_TERMINAL_START_COMMAND,
-      cap: CLAUDE_SESSIONS_CAPABILITY,
-      dangerous: false,
       duplex: true,
-      hasActiveWork: () => false,
       isAvailable: ({ env }) => Boolean(resolveClaudeTerminalExecutable(env)),
       handle: async (paramsJSON, io) =>
         await (await loadClaudeSessionNodeCommands()).startClaudeSession(paramsJSON, io),
     },
   ];
+  return commands.map((command) => ({
+    ...command,
+    cap: CLAUDE_SESSIONS_CAPABILITY,
+    dangerous: false,
+    hasActiveWork: () => false,
+  }));
 }
 
 export function createClaudeSessionNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
