@@ -113,6 +113,10 @@ only one key was set. Doctor's normal config backup protects the original
 settings. Existing canonical `legacyWebhook` settings, including `false`, win.
 An install that omitted both old settings keeps receiving traffic on port `3000`.
 
+The deprecated TypeScript `webhookPort` and `webhookHost` input fields remain
+source-compatible until the next Plugin SDK major. Runtime config uses
+`legacyWebhook`; run `openclaw doctor --fix` to migrate the old keys.
+
 To use only the Gateway port, update the Feishu callback URL or reverse-proxy
 upstream to the Gateway port and `webhookPath`, verify delivery, then set
 `legacyWebhook: false`. Removing that setting restores the inherited or default

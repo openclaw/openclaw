@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { resolveFeishuAccount } from "./accounts.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
+import type { FeishuConfig } from "./types.js";
 
 function feishuConfig(entry: Record<string, unknown>): OpenClawConfig {
   return { channels: { feishu: entry } } as never;
@@ -296,12 +297,13 @@ describe("feishu webhook route doctor migration", () => {
 
 describe("feishu Gateway listener migration", () => {
   it("preserves explicit root and account listeners through canonical config and is idempotent", () => {
+    const old: Partial<FeishuConfig> = {
+      webhookPort: 3000,
+      webhookHost: "127.0.0.1",
+      accounts: { second: { webhookPort: 3001 } },
+    };
     const result = normalizeCompatibilityConfig({
-      cfg: feishuConfig({
-        webhookPort: 3000,
-        webhookHost: "127.0.0.1",
-        accounts: { second: { webhookPort: 3001 } },
-      }),
+      cfg: { channels: { feishu: old } },
     });
     const parsed = FeishuConfigSchema.parse(result.config.channels?.feishu);
     expect(parsed.legacyWebhook).toEqual({ port: 3000, host: "127.0.0.1" });
