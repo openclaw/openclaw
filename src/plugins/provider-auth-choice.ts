@@ -311,11 +311,14 @@ async function prepareProviderPluginAuthMethod(
   authProfiles: ProviderAuthResult["profiles"];
   persistAuthProfiles: (profiles?: ProviderAuthResult["profiles"]) => Promise<void>;
 }> {
-  const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
-  const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
+  // Fully scoped model-picker calls do not need an ambient owner.
+  let ownerAgentId: string | undefined;
+  const resolveOwnerAgentId = () =>
+    (ownerAgentId ??= params.agentId ?? resolveDefaultAgentId(params.config));
+  const agentDir = params.agentDir ?? resolveAgentDir(params.config, resolveOwnerAgentId());
   const workspaceDir =
     params.workspaceDir ??
-    resolveAgentWorkspaceDir(params.config, agentId) ??
+    resolveAgentWorkspaceDir(params.config, resolveOwnerAgentId()) ??
     resolveDefaultAgentWorkspaceDir();
   const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
   const existingProfiles = Object.entries(store.profiles)

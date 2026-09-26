@@ -32,6 +32,20 @@ openclaw configure --section model --section channels
 openclaw configure --section gateway --section daemon
 ```
 
+Use `--agent <id>` to select the configured agent that owns workspace, model,
+provider credentials, and other agent-scoped setup. The selector applies to both
+the full wizard and section-limited runs:
+
+```bash
+openclaw configure --agent ops
+openclaw configure --agent ops --section model --section channels
+openclaw config --agent ops
+```
+
+Malformed or unknown IDs fail before setup effects; they do not fall back to
+another agent. Without the flag, existing default/System Agent selection and
+the multi-agent owner picker are unchanged.
+
 Selecting `gateway`, `daemon`, or `health` (or running the full wizard with no `--section`) prompts where the Gateway runs and updates `gateway.mode`. Section filters that skip all three go straight to the requested setup with no gateway-mode prompt. Picking remote gateway mode writes the remote config and exits immediately. It does not run local-only steps like plugin installs.
 
 Gateway, daemon, health, and web settings do not require an agent owner. Workspace, model, plugin, skill, and channel setup use the configured System Agent in an explicit fleet. If none is configured, the wizard asks which existing agent to use. That selection applies to the remaining agent-scoped sections without changing the System Agent setting. Channel setup uses the selected workspace for plugin discovery. Removing channel configuration does not require an agent selection.

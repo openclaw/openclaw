@@ -698,7 +698,8 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
 
   return {
     config:
-      params.target && params.config.agents?.ownership === "explicit"
+      params.target &&
+      (params.config.agents?.ownership === "explicit" || params.target.defaultsScope === "agent")
         ? applyAgentModelDefaults(config, params.target, applyModelDefaults)
         : applyModelDefaults(config),
     providerId,

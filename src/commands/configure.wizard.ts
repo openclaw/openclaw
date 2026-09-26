@@ -3,15 +3,9 @@ import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
-import {
-  listAgentIds,
-  tryResolveAmbientOwnerAgentId,
-  tryResolveLegacyCompatibilityAgentId,
-} from "../agents/agent-scope-config.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/config.js";
-import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createChannelSetupHooks } from "../flows/channel-setup.js";
@@ -26,6 +20,7 @@ import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { writeWizardConfigFile } from "../wizard/setup.shared.js";
+import { createConfigureAgentTargetResolver, validateConfigureAgentId } from "./configure.agent.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon, type DaemonSetupOutcome } from "./configure.daemon.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
@@ -49,7 +44,6 @@ import { healthCommandNonExiting } from "./health.js";
 import {
   applyOnboardingWorkspace,
   ensureOnboardingAgentWorkspace,
-  resolveOnboardingAgentTarget,
 } from "./onboard-agent-target.js";
 import { setupChannels } from "./onboard-channels.js";
 import {
@@ -474,6 +468,8 @@ export async function runConfigureWizard(
       }
     }
 
+    const requestedAgentId = validateConfigureAgentId(baseConfig, opts.agentId);
+
     const selectedSections = opts.sections;
     const shouldPromptGatewayRunMode =
       !selectedSections ||
@@ -596,29 +592,12 @@ export async function runConfigureWizard(
         },
       };
     }
-    let setupAgentId: string | undefined;
-    const resolveSetupTarget = async () => {
-      // Only agent-scoped steps choose an owner; keep that choice across sections.
-      if (nextConfig.agents?.ownership !== "explicit") {
-        inheritLegacyDefaultAgentId(baseConfig, nextConfig);
-      }
-      setupAgentId ??=
-        nextConfig.agents?.ownership === "explicit"
-          ? tryResolveAmbientOwnerAgentId(nextConfig)
-          : tryResolveLegacyCompatibilityAgentId(nextConfig);
-      const agentIds = listAgentIds(nextConfig);
-      if (!setupAgentId && agentIds.length > 1) {
-        setupAgentId = guardCancel(
-          await select({
-            message: "Which agent do you want to configure?",
-            options: agentIds.map((id) => ({ value: id, label: id })),
-          }),
-          runtime,
-          1,
-        );
-      }
-      return resolveOnboardingAgentTarget(nextConfig, setupAgentId);
-    };
+    const resolveAgentTarget = createConfigureAgentTargetResolver({
+      baseConfig,
+      requestedAgentId,
+      runtime,
+    });
+    const resolveSetupTarget = () => resolveAgentTarget(nextConfig);
     let gatewayPort = resolveGatewayPort(baseConfig);
     let didPersistConfig = false;
     let daemonSetupOutcome: DaemonSetupOutcome | undefined;

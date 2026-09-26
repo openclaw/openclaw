@@ -325,9 +325,14 @@ export function registerConfigCli(program: Command) {
       collectOption,
       [] as string[],
     )
+    .option("--agent <id>", "Agent that owns the guided setup. Use with no subcommand.")
     .action(async (opts) => {
       const { configureCommandFromSectionsArg } = await import("../commands/configure.js");
-      await configureCommandFromSectionsArg(opts.section, defaultRuntime);
+      await configureCommandFromSectionsArg(
+        opts.section,
+        defaultRuntime,
+        opts.agent !== undefined ? { agentId: String(opts.agent) } : {},
+      );
     });
   setCommandJsonMode(cmd, "output", ({ argv }) => isConfigMachineOutput(argv));
 

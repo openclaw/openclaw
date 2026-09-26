@@ -1,6 +1,7 @@
 // Register configure tests cover configure command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerConfigCli } from "../config-cli.js";
 import { registerConfigureCommand } from "./register.configure.js";
 
 const mocks = vi.hoisted(() => ({
@@ -31,6 +32,7 @@ describe("registerConfigureCommand", () => {
   async function runCli(args: string[]) {
     const program = new Command();
     registerConfigureCommand(program);
+    registerConfigCli(program);
     await program.parseAsync(args, { from: "user" });
   }
 
@@ -42,7 +44,11 @@ describe("registerConfigureCommand", () => {
   it("forwards repeated --section values", async () => {
     await runCli(["configure", "--section", "auth", "--section", "channels"]);
 
-    expect(configureCommandFromSectionsArgMock).toHaveBeenCalledWith(["auth", "channels"], runtime);
+    expect(configureCommandFromSectionsArgMock).toHaveBeenCalledWith(
+      ["auth", "channels"],
+      runtime,
+      {},
+    );
   });
 
   it.each([
@@ -53,7 +59,19 @@ describe("registerConfigureCommand", () => {
   ] as const)("preserves %s for shared section validation", async (_label, sections) => {
     await runCli(["configure", ...sections.flatMap((section) => ["--section", section])]);
 
-    expect(configureCommandFromSectionsArgMock).toHaveBeenCalledWith([...sections], runtime);
+    expect(configureCommandFromSectionsArgMock).toHaveBeenCalledWith([...sections], runtime, {});
+  });
+
+  it.each(["configure", "config"])("forwards selectors through the %s alias", async (command) => {
+    for (const agent of ["ops", "", "ops!"]) {
+      configureCommandFromSectionsArgMock.mockClear();
+      await runCli([command, "--agent", agent, "--section", "channels"]);
+      expect(configureCommandFromSectionsArgMock).toHaveBeenCalledExactlyOnceWith(
+        ["channels"],
+        runtime,
+        { agentId: agent },
+      );
+    }
   });
 
   it("reports errors through runtime when configure command fails", async () => {

@@ -215,6 +215,7 @@ export async function promptAuthConfig(
       prompter,
       includeSkip: true,
       config: next,
+      workspaceDir: target.workspaceDir,
     });
 
     preferredProvider =
@@ -223,6 +224,7 @@ export async function promptAuthConfig(
         : await resolvePreferredProviderForAuthChoice({
             choice: authChoice,
             config: next,
+            workspaceDir: target.workspaceDir,
           });
 
     if (authChoice === "custom-api-key") {
@@ -270,6 +272,7 @@ export async function promptAuthConfig(
       runtime,
       agentId: target.agentId,
       agentDir: target.agentDir,
+      workspaceDir: target.workspaceDir,
       setDefaultModel: false,
       preserveExistingDefaultModel: true,
     });

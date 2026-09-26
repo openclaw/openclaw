@@ -49,6 +49,8 @@ export type ChannelsWizardMode = "configure" | "remove";
 export type ConfigureWizardParams = {
   command: "configure" | "update";
   sections?: WizardSection[];
+  /** Optional explicit owner; omission retains interactive owner selection. */
+  agentId?: string;
 };
 
 export const CONFIGURE_SECTION_OPTIONS: Array<{

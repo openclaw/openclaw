@@ -24,7 +24,7 @@ const CONFIGURE_NON_TTY_HINT = [
 export async function configureCommandFromSectionsArg(
   rawSections: unknown,
   runtime: RuntimeEnv = defaultRuntime,
-  options?: { interactive?: boolean },
+  options?: { interactive?: boolean; agentId?: string },
 ): Promise<void> {
   const { sections, invalid } = parseConfigureWizardSections(rawSections);
   if (invalid.length > 0) {
@@ -44,7 +44,11 @@ export async function configureCommandFromSectionsArg(
 
   // Omission opens the full chooser; an empty array means no selected changes to the runner.
   await runConfigureWizard(
-    { command: "configure", ...(sections.length > 0 ? { sections } : {}) },
+    {
+      command: "configure",
+      ...(sections.length > 0 ? { sections } : {}),
+      ...(options?.agentId !== undefined ? { agentId: options.agentId } : {}),
+    },
     runtime,
   );
 }
