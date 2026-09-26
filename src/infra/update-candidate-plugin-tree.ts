@@ -2,7 +2,6 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { z } from "zod";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { root as openRoot } from "./fs-safe.js";
@@ -17,6 +16,10 @@ import {
   resolveUpdateCandidatePluginTreeTargets,
   verifyUpdateCandidatePluginTree,
 } from "./update-candidate-plugin-tree-links.js";
+import type {
+  UpdateCandidatePluginEntry,
+  UpdateCandidatePluginTreePlan,
+} from "./update-candidate-plugin-tree-schema.js";
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import {
   readRuntimeModulesManifest,
@@ -25,44 +28,8 @@ import {
 } from "./update-runtime-relocation.js";
 import { isGitRuntimeStagingName } from "./update-runtime-staging.js";
 
-const entryFields = {
-  path: z.string(),
-  size: z.number().int().nonnegative(),
-  mode: z.number().int().nonnegative(),
-  dev: z.string(),
-  ino: z.string(),
-};
-const UpdateCandidatePluginEntrySchema = z.discriminatedUnion("kind", [
-  z.object({ ...entryFields, kind: z.literal("directory") }),
-  z.object({
-    ...entryFields,
-    kind: z.literal("file"),
-    birthtimeNs: z.string(),
-    mtimeNs: z.string(),
-    ctimeNs: z.string(),
-  }),
-  z.object({
-    ...entryFields,
-    kind: z.literal("symlink"),
-    link: z.string(),
-    linkType: z.enum(["file", "junction"]),
-  }),
-]);
-type UpdateCandidatePluginEntry = z.infer<typeof UpdateCandidatePluginEntrySchema>;
-
-export const UpdateCandidatePluginTreePlanSchema = z.object({
-  bytes: z.number().int().nonnegative(),
-  privateRoot: z.string(),
-  candidateRoot: z.string(),
-  copies: z.array(z.tuple([z.string(), z.string()])),
-  entries: z.array(UpdateCandidatePluginEntrySchema),
-  hostLinks: z.array(z.string()),
-  relocations: z.array(z.object({ sourceRoot: z.string(), destinationRoot: z.string() })),
-  aliases: z.array(z.tuple([z.string(), z.string()])),
-  moduleBindings: z.array(z.tuple([z.string(), z.string()])),
-  edges: z.array(z.object({ source: z.string(), target: z.string(), real: z.string() })),
-});
-export type UpdateCandidatePluginTreePlan = z.infer<typeof UpdateCandidatePluginTreePlanSchema>;
+export { UpdateCandidatePluginTreePlanSchema } from "./update-candidate-plugin-tree-schema.js";
+export type { UpdateCandidatePluginTreePlan } from "./update-candidate-plugin-tree-schema.js";
 
 async function dependencyOwner(target: string, withinRetainedHost = false): Promise<string> {
   // A pnpm package resolves dependencies beside its package directory. Preserve
