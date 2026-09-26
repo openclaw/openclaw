@@ -55,7 +55,11 @@ import {
 } from "./doctor-service-repair-policy.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { resolveGatewaySetupRuntime } from "./gateway-setup-runtime.js";
-import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
+import {
+  formatGatewayClosedDiagnostic,
+  formatHealthCheckFailure,
+  formatHealthDiagnosticNote,
+} from "./health-format.js";
 import { healthCommandNonExiting } from "./health.js";
 
 type LaunchAgentBootstrapDoctorOutcome =
@@ -530,7 +534,7 @@ export async function maybeRepairGatewayDaemon(params: {
         const closedDiagnostic = formatGatewayClosedDiagnostic(err);
         if (closedDiagnostic) {
           note(closedDiagnostic, "Gateway");
-          note(params.gatewayDetailsMessage, "Gateway connection");
+          note(formatHealthDiagnosticNote(params.gatewayDetailsMessage), "Gateway connection");
         } else {
           params.runtime.error(formatHealthCheckFailure(err));
         }

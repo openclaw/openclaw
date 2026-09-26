@@ -47,7 +47,11 @@ import {
   gatewayProbeResultSawGateway,
   gatewayProbeResultWasRateLimited,
 } from "./gateway-health-auth-diagnostic.js";
-import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
+import {
+  formatGatewayClosedDiagnostic,
+  formatHealthCheckFailure,
+  formatHealthDiagnosticNote,
+} from "./health-format.js";
 import { formatSqliteWalHealthWarning } from "./sqlite-wal-health.js";
 import { formatTelemetryExporterSummary } from "./telemetry-exporter-summary.js";
 
@@ -453,7 +457,7 @@ export async function checkGatewayHealth(params: {
     if (closedDiagnostic) {
       const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
       note(closedDiagnostic, "Gateway");
-      note(gatewayDetails.message, "Gateway connection");
+      note(formatHealthDiagnosticNote(gatewayDetails.message), "Gateway connection");
     } else {
       params.runtime.error(formatHealthCheckFailure(err));
     }
