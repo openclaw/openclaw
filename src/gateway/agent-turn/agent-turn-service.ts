@@ -182,17 +182,7 @@ export function createAgentTurnService(
         modelOverride,
         explicitRecipientSession,
         knownAgents,
-      }).catch((error: unknown) => {
-        assertAdmissionCurrent?.();
-        // Preparation refusal must preserve the cached Stop or replacement response.
-        if (
-          !dedupeLifecycle.ownsReservation() &&
-          replayAgentTurnIfCached({ preflight, context, io, acceptedOnly: privateCompletion })
-        ) {
-          return undefined;
-        }
-        throw error;
-      });
+      }).catch(dedupeLifecycle.handlePreparationFailure(assertAdmissionCurrent));
       if (!content) {
         return;
       }

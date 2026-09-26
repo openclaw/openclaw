@@ -122,6 +122,25 @@ export function createAgentDedupeLifecycle(params: {
     }
   };
 
+  const handlePreparationFailure =
+    (assertCallerCurrent: (() => void) | undefined) =>
+    (error: unknown): undefined => {
+      assertCallerCurrent?.();
+      // Preparation refusal must preserve the cached Stop or replacement response.
+      if (
+        !ownsReservation() &&
+        replayAgentTurnIfCached({
+          preflight: params,
+          context: params.context,
+          io: params.io,
+          acceptedOnly: params.privateCompletion,
+        })
+      ) {
+        return undefined;
+      }
+      throw error;
+    };
+
   const recordCommittedReset = (
     completion: CommittedResetCompletion,
     followUpNotice: string,
@@ -275,6 +294,7 @@ export function createAgentDedupeLifecycle(params: {
     ownsReservation,
     ownedReservationKeys,
     assertReservationCurrent,
+    handlePreparationFailure,
     reserve,
     bindSessionTarget,
     clearUnaccepted,
