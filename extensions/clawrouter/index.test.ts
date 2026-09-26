@@ -31,6 +31,19 @@ const LIVE_CATALOG = {
   ],
 };
 
+function createDynamicModelContext() {
+  return {
+    config: { models: {} },
+    agentDir: "/agent",
+    workspaceDir: "/workspace",
+    provider: "clawrouter",
+    modelId: "openai/gpt-5.5",
+    modelRegistry: { find: vi.fn(() => null) },
+    authProfileId: "clawrouter-profile",
+    authProfileMode: "api_key",
+  };
+}
+
 describe("ClawRouter plugin", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
@@ -473,16 +486,7 @@ describe("ClawRouter plugin", () => {
       vi.fn(async () => Response.json(LIVE_CATALOG)),
     );
     const provider = await registerSingleProviderPlugin(plugin);
-    const context = {
-      config: { models: {} },
-      agentDir: "/agent",
-      workspaceDir: "/workspace",
-      provider: "clawrouter",
-      modelId: "openai/gpt-5.5",
-      modelRegistry: { find: vi.fn(() => null) },
-      authProfileId: "clawrouter-profile",
-      authProfileMode: "api_key",
-    };
+    const context = createDynamicModelContext();
 
     expect(provider?.resolveDynamicModel?.(context as never)).toBeUndefined();
     expect(provider?.preferRuntimeResolvedModel?.(context as never)).toBe(false);
@@ -534,16 +538,7 @@ describe("ClawRouter plugin", () => {
     );
     const first = await registerSingleProviderPlugin(plugin);
     const second = await registerSingleProviderPlugin(plugin);
-    const context = {
-      config: { models: {} },
-      agentDir: "/agent",
-      workspaceDir: "/workspace",
-      provider: "clawrouter",
-      modelId: "openai/gpt-5.5",
-      modelRegistry: { find: vi.fn(() => null) },
-      authProfileId: "clawrouter-profile",
-      authProfileMode: "api_key",
-    };
+    const context = createDynamicModelContext();
 
     await first.prepareDynamicModel?.(context as never);
 
@@ -568,27 +563,22 @@ describe("ClawRouter plugin", () => {
       .mockReturnValueOnce(refreshResponse);
     vi.stubGlobal("fetch", fetchMock);
     const provider = await registerSingleProviderPlugin(plugin);
-    const context = {
-      config: { models: {} },
-      agentDir: "/agent",
-      workspaceDir: "/workspace",
-      provider: "clawrouter",
-      modelId: "openai/gpt-5.5",
-      modelRegistry: { find: vi.fn(() => null) },
-      authProfileId: "clawrouter-profile",
-      authProfileMode: "api_key",
-    };
+    const context = createDynamicModelContext();
 
     await provider?.prepareDynamicModel?.(context as never);
     const refresh = provider?.prepareDynamicModel?.(context as never);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    // Observe early failure; the finally block joins the same refresh.
+    void refresh?.catch(() => {});
+    try {
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
 
-    expect(provider?.resolveDynamicModel?.(context as never)).toMatchObject({
-      id: "openai/gpt-5.5",
-    });
-
-    finishRefresh?.(Response.json({ providers: [] }));
-    await refresh;
+      expect(provider?.resolveDynamicModel?.(context as never)).toMatchObject({
+        id: "openai/gpt-5.5",
+      });
+    } finally {
+      finishRefresh?.(Response.json({ providers: [] }));
+      await refresh;
+    }
     expect(provider?.resolveDynamicModel?.(context as never)).toBeUndefined();
   });
 
@@ -604,16 +594,7 @@ describe("ClawRouter plugin", () => {
         .mockRejectedValueOnce(new Error("catalog unavailable")),
     );
     const provider = await registerSingleProviderPlugin(plugin);
-    const context = {
-      config: { models: {} },
-      agentDir: "/agent",
-      workspaceDir: "/workspace",
-      provider: "clawrouter",
-      modelId: "openai/gpt-5.5",
-      modelRegistry: { find: vi.fn(() => null) },
-      authProfileId: "clawrouter-profile",
-      authProfileMode: "api_key",
-    };
+    const context = createDynamicModelContext();
 
     await provider?.prepareDynamicModel?.(context as never);
     await expect(provider?.prepareDynamicModel?.(context as never)).rejects.toThrow(

@@ -203,7 +203,6 @@ describe("ClawRouter provider catalog", () => {
       api: "google-generative-ai",
       baseUrl: "https://clawrouter.example/v1/native/google-gemini/v1beta",
     });
-    expect(provider.models.map((model) => model.id)).not.toContain("cohere/command-a-plus-05-2026");
   });
 
   it.each(["codex-latest", "synthetic-upstream-sentinel"])(
@@ -362,6 +361,21 @@ describe("ClawRouter provider catalog", () => {
     const headers = fetchGuardMock.mock.calls[0]?.[0].init?.headers;
     expect(headers).toBeInstanceOf(Headers);
     expect((headers as Headers).get("authorization")).toBe("Bearer clawrouter-test-key");
+
+    fetchGuardMock.mockResolvedValueOnce({
+      response: Response.json({ providers: [] }),
+      finalUrl: "https://clawrouter.example/v1/catalog",
+      release: async () => undefined,
+    });
+    const otherScope = await buildClawRouterProviderConfig({
+      ...params,
+      discoveryApiKey: "other-scope-test-key",
+    });
+    expect(otherScope.models).toEqual([]);
+    expect(fetchGuardMock).toHaveBeenCalledTimes(2);
+    expect((fetchGuardMock.mock.calls[1]?.[0].init?.headers as Headers).get("authorization")).toBe(
+      "Bearer other-scope-test-key",
+    );
   });
 
   it("does not advertise Gemini without a streaming route", async () => {

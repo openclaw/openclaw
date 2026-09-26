@@ -228,28 +228,17 @@ describe("ClawRouter usage", () => {
   it.each([
     ["malformed JSON", new TextEncoder().encode('{"budget":')],
     ["a non-object JSON root", new TextEncoder().encode("null")],
+    [
+      "invalid UTF-8",
+      new Uint8Array([
+        ...new TextEncoder().encode(
+          '{"budget":{"configured":true,"windowKey":"default/test-policy/2026-',
+        ),
+        0xff,
+        ...new TextEncoder().encode('","limitMicros":1000000,"spentMicros":500000}}'),
+      ]),
+    ],
   ])("reports %s as a malformed usage response", async (_label, body) => {
-    const snapshot = await fetchClawRouterUsage({
-      token: "test-token",
-      timeoutMs: 5000,
-      fetchGuard: mockFetchGuard(new Response(body)),
-    });
-
-    expect(snapshot).toEqual({
-      provider: "clawrouter",
-      displayName: "ClawRouter",
-      windows: [],
-      error: "Malformed usage response",
-    });
-  });
-
-  it("reports invalid UTF-8 as a malformed usage response", async () => {
-    const prefix = new TextEncoder().encode(
-      '{"budget":{"configured":true,"windowKey":"default/test-policy/2026-',
-    );
-    const suffix = new TextEncoder().encode('","limitMicros":1000000,"spentMicros":500000}}');
-    const body = new Uint8Array([...prefix, 0xff, ...suffix]);
-
     const snapshot = await fetchClawRouterUsage({
       token: "test-token",
       timeoutMs: 5000,
