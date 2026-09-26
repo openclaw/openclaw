@@ -145,7 +145,8 @@
                   ]
                 }
               }
-            }
+            },
+            "baseUrl": "https://api.typesafe.ai/v1/systemone"
           },
           {
             "id": "jev-1.13.0",
@@ -180,9 +181,22 @@
                   "modes": [
                     "auto"
                   ]
+                },
+                "billing": {
+                  "unit": "tokens",
+                  "source": "provider-docs",
+                  "usdPerMillion": {
+                    "input": 0.042,
+                    "output": 0
+                  }
+                },
+                "limits": {
+                  "maxRequestTokens": 64000,
+                  "maxStateAndQuestionTokens": 32000
                 }
               }
-            }
+            },
+            "baseUrl": "https://api.typesafe.ai/v1/systemone"
           },
           {
             "id": "kev-latest",
@@ -222,6 +236,13 @@
             }
           }
         ]
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "typesafe": {
+        "external": false
       }
     }
   }

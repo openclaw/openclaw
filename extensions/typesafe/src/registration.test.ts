@@ -63,8 +63,21 @@ describe("plugin ownership and configuration", () => {
     for (const model of manifest.modelCatalog.providers.typesafe.models) {
       expect(model.inference.chat).toBe(false);
       expect(model.inference.decision.reasoning).toEqual({ modes: ["auto"] });
-      expect(model.inference.decision.billing).toBeUndefined();
-      expect(model.inference.decision.limits).toBeUndefined();
+      if (model.id === "jev-1.13.0") {
+        expect(model.baseUrl).toBe("https://api.typesafe.ai/v1/systemone");
+        expect(model.inference.decision.billing).toEqual({
+          unit: "tokens",
+          source: "provider-docs",
+          usdPerMillion: { input: 0.042, output: 0 },
+        });
+        expect(model.inference.decision.limits).toEqual({
+          maxRequestTokens: 64000,
+          maxStateAndQuestionTokens: 32000,
+        });
+      } else {
+        expect(model.inference.decision.billing).toBeUndefined();
+        expect(model.inference.decision.limits).toBeUndefined();
+      }
       for (const field of ["api", "contextWindow", "maxTokens", "cost"]) {
         expect(model[field]).toBeUndefined();
       }

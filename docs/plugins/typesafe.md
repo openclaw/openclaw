@@ -92,6 +92,29 @@ incur TypeSafe's normal usage charges.
 Consumer scheduling and publication permissions remain unchanged. Clearing the
 role or explicitly disabling the plugin prevents its use by those consumers.
 
+## Hosted route metadata and estimates
+
+The pinned `typesafe/jev-1.13.0` row declares the hosted
+`https://api.typesafe.ai/v1/systemone` route. The
+[TypeSafe model documentation](https://docs.typesafe.ai/models) checked on
+September 26, 2026 lists **$0.042 per million input tokens**, free output tokens,
+a **64,000-token** state-plus-all-questions budget, and a **32,000-token**
+state-plus-longest-question budget. These are native decision limits, not chat
+context or output limits. Rates carry `provider-docs` provenance and are a
+documented snapshot, not a promise that vendor pricing cannot change.
+
+The shared accounting owner can estimate observed token usage on that pinned
+hosted route; provider-reported USD, if supplied through the Decision SDK, takes
+precedence. The current TypeSafe HTTP response contract reports token counts,
+not a dollar amount. No count or dollar amount is invented when it is unknown.
+
+`jev-latest` is a moving alias. Although the documentation currently points it
+(and `jev-preview`) to `jev-1.13.0`, OpenClaw does not pin its routing or attach
+that version's permanent rate and limits to the alias. Select the explicit version
+for this documented estimate. Local Kev and loopback overrides stay monetarily
+unknown; preparation records their actual local route rather than borrowing the
+hosted tariff. Generic third-party pricing feeds do not price TypeSafe rows.
+
 ## Local System One server
 
 ### Run Kev

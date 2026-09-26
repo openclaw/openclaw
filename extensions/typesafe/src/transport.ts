@@ -12,6 +12,11 @@ import { MAX_JSON_BYTES, type EvaluationInput } from "./schema.js";
 
 const ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 
+/** Physical route for already validated plugin settings; shared with host preparation. */
+export function systemOneEndpoint(localOrigin?: string): string {
+  return localOrigin ? `${localOrigin}/v1/systemone` : ENDPOINT;
+}
+
 function httpError(response: Response): EvaluationError {
   if (response.status === 401 || response.status === 403) {
     return new EvaluationError(
@@ -91,7 +96,7 @@ export async function requestEvaluation(params: {
   deadlineMonotonicMs?: number;
 }): Promise<unknown> {
   const baseUrl = localBaseUrl(params.baseUrl);
-  const endpoint = baseUrl ? `${baseUrl}/v1/systemone` : ENDPOINT;
+  const endpoint = systemOneEndpoint(baseUrl);
   const body = JSON.stringify(params.body);
   if (Buffer.byteLength(body) > MAX_JSON_BYTES) {
     throw new EvaluationError("TypeSafe request exceeds its limit.", "unsupported-input");

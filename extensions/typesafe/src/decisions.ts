@@ -6,6 +6,7 @@ import type {
 import { evaluate as evaluateTypeSafe } from "./client.js";
 import { runtimeSettings, type RuntimeConfig } from "./config.js";
 import { decisionFailure } from "./errors.js";
+import { systemOneEndpoint } from "./transport.js";
 
 const LOCAL_AUTH_MARKER = "typesafe-local";
 
@@ -18,6 +19,14 @@ export function createDecisionProvider(getConfig: () => RuntimeConfig): Decision
       label: "TypeSafe AI",
       auth: [],
       authScope: "plugin",
+      normalizeTransport: ({ provider, config }) => {
+        if (provider !== "typesafe") {
+          return undefined;
+        }
+        const settings = runtimeSettings(config?.plugins?.entries?.typesafe?.config);
+        // Local requests must not retain the pinned hosted route's monetary claim.
+        return settings.baseUrl ? { baseUrl: systemOneEndpoint(settings.baseUrl) } : undefined;
+      },
       resolveSyntheticAuth: () => {
         const config = getConfig();
         if (config.baseUrl) {
