@@ -73,6 +73,32 @@ export type Row = {
   parents: Set<string>;
   generation: string | symbol;
 };
+
+/** Sharing fences every publication; selection holds only unchanged metadata. */
+export function createSessionRowProjectionRevisions() {
+  let sharing: object | undefined;
+  let selection: object | undefined;
+  const invalidate = (metadataChanged = false) => {
+    sharing = undefined;
+    if (metadataChanged) {
+      selection = undefined;
+    }
+  };
+  return {
+    sharing: () => (sharing ??= {}),
+    selection: () => (selection ??= {}),
+    invalidate,
+    replace(previous: Row | undefined, row: Row) {
+      invalidate(
+        !previous ||
+          previous.generation !== row.generation ||
+          previous.hasBoard !== row.hasBoard ||
+          !isDeepStrictEqual(previous.entry, row.entry),
+      );
+    },
+  };
+}
+
 export type Query = {
   agentId?: string;
   storePath?: string;
