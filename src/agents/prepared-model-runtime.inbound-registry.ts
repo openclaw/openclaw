@@ -67,6 +67,7 @@ export function loadPreparedInboundPluginRegistry(
   onPrimaryRegistry?: (registry: PluginRegistry) => void,
 ): PluginRegistry {
   const activeRegistry = getActivePluginRegistry();
+  const activeWorkspaceDir = getActivePluginRegistryWorkspaceDir();
   // Registry-owned facts survive an outer reload cache without allowing stale
   // metadata or changed activation inputs to reuse already-registered callbacks.
   const reusableGatewayRegistry =
@@ -74,11 +75,11 @@ export function loadPreparedInboundPluginRegistry(
     input.env === undefined &&
     getActivePluginRuntimeSubagentMode() === "gateway-bindable" &&
     activeRegistry &&
-    getActivePluginRegistryWorkspaceDir() === metadataSnapshot.workspaceDir &&
+    (metadataSnapshot.workspaceDir ?? activeWorkspaceDir) === activeWorkspaceDir &&
     getReusablePluginRuntimeActivation(activeRegistry, {
       config: input.config,
       env: process.env,
-      workspaceDir: metadataSnapshot.workspaceDir,
+      workspaceDir: activeWorkspaceDir,
       metadataSnapshot,
     }) &&
     listRuntimePluginIdsFromRegistry(activeRegistry).every(
