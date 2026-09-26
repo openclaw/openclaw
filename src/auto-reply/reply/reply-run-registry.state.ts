@@ -1,6 +1,7 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveActiveEmbeddedRunRecoveryBlocker } from "../../agents/embedded-agent-runner/run-state.js";
+import { isEmbeddedRunHandleCompacting } from "../../agents/embedded-agent-runner/runs.probes.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import {
   getDiagnosticSessionActivitySnapshot,
@@ -214,7 +215,7 @@ export function isReplyRunCompacting(operation: ReplyOperation): boolean {
     return false;
   }
   const backend = getAttachedBackend(operation);
-  return backend?.isCompacting?.() ?? false;
+  return backend ? isEmbeddedRunHandleCompacting(operation.sessionId, backend) === true : false;
 }
 
 export function isReplyOperationPreBackendPhase(phase: ReplyOperationPhase): boolean {

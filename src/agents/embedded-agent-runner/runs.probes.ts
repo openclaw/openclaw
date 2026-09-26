@@ -3,6 +3,9 @@
 import { diagnosticLogger as diag } from "../../logging/diagnostic.js";
 import type { EmbeddedAgentQueueHandle } from "./run-state.js";
 
+type CompactionProbe = { isCompacting?: () => boolean };
+const reportedCompactingProbeFailures = new WeakSet<CompactionProbe>();
+
 export function isEmbeddedRunHandleAbortable(
   sessionId: string,
   handle: EmbeddedAgentQueueHandle,
@@ -21,14 +24,17 @@ export function isEmbeddedRunHandleAbortable(
 // indeterminate outcome: queueing fails closed, abort selection skips the handle.
 export function isEmbeddedRunHandleCompacting(
   sessionId: string,
-  handle: EmbeddedAgentQueueHandle,
+  handle: CompactionProbe,
 ): boolean | undefined {
   try {
-    return handle.isCompacting();
+    return handle.isCompacting?.() ?? false;
   } catch (err) {
-    diag.warn(
-      `embedded run state check failed: sessionId=${sessionId} reason=compacting_check_failed err=${String(err)}`,
-    );
+    if (!reportedCompactingProbeFailures.has(handle)) {
+      reportedCompactingProbeFailures.add(handle);
+      diag.warn(
+        `embedded run state check failed: sessionId=${sessionId} reason=compacting_check_failed err=${String(err)}`,
+      );
+    }
     return undefined;
   }
 }

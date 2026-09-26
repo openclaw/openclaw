@@ -8,6 +8,7 @@ import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.j
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
+import { diagnosticLogger } from "../../logging/diagnostic.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -603,6 +604,7 @@ describe("embedded-agent active-run steering", () => {
   });
 
   it("fails closed when the compacting state check throws", async () => {
+    const warnings = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun("session-bad-compacting-state", {
       ...createEmbeddedRunHandle({ queueMessage }),
@@ -622,6 +624,10 @@ describe("embedded-agent active-run steering", () => {
       reason: "compacting",
       gatewayHealth: "live",
     });
+    await expect(
+      queueEmbeddedAgentMessageWithOutcomeAsync("session-bad-compacting-state", "retry"),
+    ).resolves.toEqual(outcome);
+    expect(warnings).toHaveBeenCalledTimes(1);
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
