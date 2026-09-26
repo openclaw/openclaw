@@ -1,0 +1,43 @@
+name: One-shot ratchet fixture formatter
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: ${{ !contains(github.event.head_commit.message, 'format ratchet fixtures') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm exec oxfmt --write --threads=1 test/scripts/check-assertion-safety-ratchet.test.ts test/scripts/check-max-lines-ratchet.test.ts
+      - name: Commit formatting and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/one-shot-ratchet-formatter.yml
+          git add test/scripts/check-assertion-safety-ratchet.test.ts test/scripts/check-max-lines-ratchet.test.ts
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "style(test): format ratchet fixtures
+
+Apply the repository Oxfmt formatting to the ratchet regression fixtures.
+
+Co-authored-by: cgsdn <chaogeshuodiannao@users.noreply.github.com>"
+          git push origin HEAD:main
