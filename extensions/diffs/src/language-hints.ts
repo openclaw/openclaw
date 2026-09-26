@@ -89,10 +89,18 @@ export function collectDiffPayloadLanguageHints(payload: {
   return [...langs];
 }
 
-async function normalizeDiffPayloadFileLanguage<T extends DiffPayloadFile>(
-  file: T | undefined,
+function normalizeDiffPayloadFileLanguage(
+  file: FileDiffMetadata | undefined,
   options: { languagePackAvailable?: boolean },
-): Promise<T | undefined> {
+): Promise<FileDiffMetadata | undefined>;
+function normalizeDiffPayloadFileLanguage(
+  file: FileContents | undefined,
+  options: { languagePackAvailable?: boolean },
+): Promise<FileContents | undefined>;
+async function normalizeDiffPayloadFileLanguage(
+  file: DiffPayloadFile | undefined,
+  options: { languagePackAvailable?: boolean },
+): Promise<DiffPayloadFile | undefined> {
   if (!file) {
     return undefined;
   }
