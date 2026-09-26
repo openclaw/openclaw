@@ -6302,16 +6302,54 @@ ${outcome === "assets" ? "upload_release_evidence_assets() { echo asset-upload-d
 `,
         },
       );
+      const toolingRoot = join(fixture.root, ".release-harness");
+      // These module URLs own the trusted tooling root; symlinks would select the real checkout.
+      unlinkSync(join(toolingRoot, "scripts/lib/release-beta-verifier.ts"));
+      for (const source of [
+        "scripts/release-verify-beta.ts",
+        "scripts/lib/release-beta-verifier.ts",
+        "scripts/tsx.mjs",
+        "scripts/lib/tsx-cli-shim.mjs",
+      ]) {
+        copyFileSync(resolve(source), join(toolingRoot, source));
+      }
+      for (const helper of [
+        "actions-artifact-archive.mjs",
+        "bounded-response.mjs",
+        "local-check-runtime.mts",
+        "npm-json-output.mts",
+        "npm-publish-plan.mjs",
+        "plugin-clawhub-release.ts",
+        "plugin-npm-release.ts",
+      ]) {
+        symlinkSync(
+          resolve("scripts/lib", helper),
+          join(toolingRoot, "scripts/lib", helper),
+          "file",
+        );
+      }
+      mkdirSync(join(toolingRoot, "packages"));
+      symlinkSync(
+        resolve("packages/normalization-core"),
+        join(toolingRoot, "packages/normalization-core"),
+        "dir",
+      );
+      symlinkSync(join(fixture.root, "node_modules"), join(toolingRoot, "node_modules"), "dir");
       writeFileSync(
         join(fixture.root, "package.json"),
         JSON.stringify({ type: "module", version }),
       );
       mkdirSync(join(fixture.root, "extensions"));
       mkdirSync(join(fixture.root, "scripts"));
-      writeFileSync(join(fixture.root, "scripts/openclaw-npm-postpublish-verify.ts"), "");
-      copyFileSync(
-        resolve("scripts/release-verify-beta.ts"),
-        join(fixture.root, ".release-harness/scripts/release-verify-beta.ts"),
+      writeFileSync(
+        join(fixture.root, "scripts/openclaw-npm-postpublish-verify.ts"),
+        'throw new Error("Historical postpublish verifier must not receive the new contract");\n',
+      );
+      writeFileSync(
+        join(fixture.root, ".release-harness/scripts/openclaw-npm-postpublish-verify.ts"),
+        `import assert from "node:assert/strict";
+assert.deepEqual(process.argv.slice(2), [${JSON.stringify(version)}, process.env.GITHUB_WORKSPACE, process.env.TARGET_SHA]);
+`,
       );
       const bin = join(fixture.root, "bin");
       mkdirSync(bin);

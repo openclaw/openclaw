@@ -69,8 +69,10 @@ on pinned current `main` for command and validation requirements.
    Docker, and finalization. Docker-only recovery may dispatch from `main` with
    `publish_openclaw_npm=false` and `publish_docker_only=true`; that path does
    not attach evidence or finalize the release.
-8. From a clean current-`main` checkout, run
-   `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.P`.
+8. Set `TARGET_ROOT` to the absolute path of the unchanged, qualified checkout
+   and `TARGET_SHA` to the recorded full product Release SHA, not the tooling SHA.
+   From a clean, qualified current-`main` tooling checkout, run
+   `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.P "$TARGET_ROOT" "$TARGET_SHA"`.
    Verify package signatures, source commits, inventories, exact versions, and selectors.
    To promote an already-published core version to `extended-stable`, use
    `promote_extended_stable` in the `openclaw/releases` dist-tag workflow

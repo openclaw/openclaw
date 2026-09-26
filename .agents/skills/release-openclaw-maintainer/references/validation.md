@@ -62,10 +62,27 @@ keep those enabled. `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1` is the existing
 non-root-skip mode, not permission to skip install proof. Published correction
 versions must prove upgrade from their base stable package. Postpublish use:
 
+Set `TARGET_ROOT` to the absolute path of the validated frozen release checkout
+and `TARGET_SHA` to the recorded full product Release SHA. Set `TOOLING_ROOT` to
+the qualified trusted tooling checkout; do not run a historical target's verifier
+with the new operands. Postpublish requires target HEAD, committed package
+identity, and clean tracked/index state to match before reading worker declarations.
+Untracked contract inputs are rejected; unrelated evidence is allowed. A
+same-source correction also requires its already-acquired base tag to resolve to
+`TARGET_SHA`. No source or tag is fetched by this admission.
+
+Prepublish verification and `release:check` use their working directory as the
+target. The beta verifier passes its checked root and captured product HEAD to
+its trusted tooling sibling. Keep the selected root throughout these checks.
+The product SHA comes from release evidence, not the workflow/tooling SHA or
+unsigned npm `gitHead`; this source check does not replace publication provenance.
+
 ```bash
 OPENCLAW_NPM_EXPECTED_WORKFLOW_REF=refs/tags/release-publish/<tooling-sha12>-<epoch> \
 OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA=<tooling-sha> \
-node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
+node --import "$TOOLING_ROOT/scripts/tsx.mjs" \
+  "$TOOLING_ROOT/scripts/openclaw-npm-postpublish-verify.ts" \
+  <published-version> "$TARGET_ROOT" "$TARGET_SHA"
 ```
 
 Run it from a checkout of the Release SHA once the registry lists the version

@@ -318,10 +318,18 @@ verification from a checkout of the Release SHA (a newer tooling checkout
 reports main-only bundled plugin files as missing), with the tooling identity
 exported, or it fails `SHA-pinned release-publish ref does not match`:
 
+Set `TARGET_ROOT` to that checkout's absolute path, with unchanged tracked source
+and index, and `TARGET_SHA` to the recorded full product Release SHA matching HEAD.
+Set `TOOLING_ROOT` to the qualified trusted tooling checkout. Keep the Release SHA
+checkout as the working directory, but invoke the trusted verifier below, not a
+historical target script. Worker requirements come from the selected commit.
+
 ```bash
 OPENCLAW_NPM_EXPECTED_WORKFLOW_REF=refs/tags/release-publish/<tooling-sha12>-<epoch> \
 OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA=<tooling-sha> \
-node --import tsx scripts/openclaw-npm-postpublish-verify.ts <version>
+node --import "$TOOLING_ROOT/scripts/tsx.mjs" \
+  "$TOOLING_ROOT/scripts/openclaw-npm-postpublish-verify.ts" \
+  <version> "$TARGET_ROOT" "$TARGET_SHA"
 ```
 
 If `Complete publish workflows` fails after core publication, inspect the
