@@ -623,6 +623,39 @@ describe("gateway sessions patch", () => {
     expect(read.agentStatus).toBeUndefined();
   });
 
+  test("commits a read acknowledgement without ageing the session row", async () => {
+    const store = mainStoreEntry({
+      markedUnreadAt: 40,
+      agentStatus: { note: "Waiting", attention: "hand", expiresAt: Date.now() + 60_000 },
+    });
+
+    const read = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, unread: false, expectedMarkedUnreadAt: 40 },
+      }),
+    );
+    expect(read.updatedAt).toBe(1);
+    expect(read.lastReadAt).toEqual(expect.any(Number));
+    expect(read.markedUnreadAt).toBeUndefined();
+    expect(read.agentStatus).toBeUndefined();
+
+    const marked = expectPatchOk(
+      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, unread: true } }),
+    );
+    expect(marked.updatedAt).toBeGreaterThan(1);
+    expect(marked.markedUnreadAt).toEqual(expect.any(Number));
+
+    const pinned = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ markedUnreadAt: 40 }),
+        patch: { key: MAIN_SESSION_KEY, pinned: true, unread: false },
+      }),
+    );
+    expect(pinned.pinnedAt).toEqual(expect.any(Number));
+    expect(pinned.updatedAt).toBeGreaterThan(1);
+  });
+
   test("stores sanitized agent status with attention and a bounded TTL", async () => {
     const before = Date.now();
     const entry = expectPatchOk(
