@@ -22,6 +22,7 @@ import {
   assertInteractiveLeastPrivilegeTask,
   DIAGNOSTIC_TEXT_LIMIT,
   readRelatedProcessDiagnostics,
+  readTaskDefinitionSnapshot,
   readTaskPrincipal,
   readTaskXml,
   resolveDiagnosticReplacements,
@@ -79,8 +80,6 @@ type FailureDiagnosticSnapshot = {
   };
 };
 
-type TaskDefinitionSnapshot = { exists: false; taskXml: null } | { exists: true; taskXml: string };
-
 async function sleep(delayMs = WAIT_INTERVAL_MS): Promise<void> {
   await new Promise((resolve) => {
     setTimeout(resolve, delayMs);
@@ -124,21 +123,6 @@ async function waitForLoopbackPortRelease(port: number): Promise<void> {
     await sleep();
   }
   throw new Error(`Timed out waiting for Scheduled Task loopback port ${port} to be reusable`);
-}
-
-async function readTaskDefinitionSnapshot(taskName: string): Promise<TaskDefinitionSnapshot> {
-  const exists = probeScheduledTaskExists(taskName);
-  if (exists === null) {
-    throw new Error(`Could not determine whether Scheduled Task ${taskName} exists`);
-  }
-  if (!exists) {
-    return { exists: false, taskXml: null };
-  }
-  const taskXml = await readTaskXml(taskName);
-  if (!taskXml) {
-    throw new Error(`Could not export Scheduled Task XML for ${taskName}`);
-  }
-  return { exists: true, taskXml };
 }
 
 async function clearActivePid(activePidPath: string, pid: number): Promise<void> {
@@ -1005,9 +989,12 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
     }
   }
 
+  const bodyTimeoutMs =
+    installedFixture?.resolveInstalledCellBodyTimeoutMs(installedCell) ?? 240_000;
   it(
     "isolates and completes the native Scheduled Task lifecycle",
     ({ signal }) => {
+      const cellDeadlineAt = performance.now() + bodyTimeoutMs;
       if (!nativeEntrypoints) {
         throw new Error(
           "Native Scheduled Task integration requires compiled subprocess entrypoints",
@@ -1044,10 +1031,11 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
                 canBindLoopbackPort,
               },
               signal,
+              cellDeadlineAt,
             )
           : runNativeLifecycle(moduleUrls, lifetime),
       );
     },
-    installedFixture?.resolveInstalledCellBodyTimeoutMs(installedCell) ?? 240_000,
+    bodyTimeoutMs,
   );
 });

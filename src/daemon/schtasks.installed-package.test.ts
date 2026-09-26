@@ -341,6 +341,7 @@ describe("published installed update progress", () => {
     recordProgress = vi
       .fn<(phase: string, error?: Error) => Promise<void>>()
       .mockResolvedValue(undefined),
+    observationCellDeadlineAt?: number,
   ) {
     const task = installedTask();
     const command = createDeferredCore<string>();
@@ -355,25 +356,28 @@ describe("published installed update progress", () => {
       signal: new AbortController().signal,
       observations,
       recordProgress,
+      observationCellDeadlineAt,
     });
     return { command, observations, pending, recordProgress };
   }
 
+  const capacityObservation: Awaited<ReturnType<typeof installedPackage.recordCapacityBoundary>> = {
+    boundary: "synthetic-update",
+    cell: "2026.9.3",
+    availableBytes: 100_000_000_000,
+    freeBytes: 100_000_000_000,
+    totalBytes: 200_000_000_000,
+    profileHomeAvailableBytes: 100_000_000_000,
+    expectedProfileState: [],
+    installAndStaging: [],
+    stateAndPreparation: null,
+    scope: "synthetic capacity fixture",
+  };
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(invokedAt);
-    vi.spyOn(installedPackage, "recordCapacityBoundary").mockResolvedValue({
-      boundary: "synthetic-update",
-      cell: "2026.9.3",
-      availableBytes: 100_000_000_000,
-      freeBytes: 100_000_000_000,
-      totalBytes: 200_000_000_000,
-      profileHomeAvailableBytes: 100_000_000_000,
-      expectedProfileState: [],
-      installAndStaging: [],
-      stateAndPreparation: null,
-      scope: "synthetic capacity fixture",
-    });
+    vi.spyOn(installedPackage, "recordCapacityBoundary").mockResolvedValue(capacityObservation);
   });
 
   afterEach(() => {
@@ -551,10 +555,13 @@ describe("published installed update progress", () => {
       installedPackage.packageRoot(installedTask().installRoot),
     ]);
     expect(fixture.recordProgress).toHaveBeenCalledTimes(1);
-    expect(fixture.observations.updateTerminalProcesses).toEqual([
+    expect(fixture.observations.updateSettlementProcesses).toEqual([
       expect.objectContaining({
         runId: terminal.runId,
         capturedAtMs: invokedAt + 45_000,
+        phase: "finished",
+        status: "succeeded",
+        reason: "terminal",
         processes: [
           expect.objectContaining({
             pid: 1234,
@@ -563,9 +570,15 @@ describe("published installed update progress", () => {
           }),
         ],
       }),
-      expect.objectContaining({ runId: terminal.runId, capturedAtMs: invokedAt + 75_000 }),
+      expect.objectContaining({
+        runId: terminal.runId,
+        capturedAtMs: invokedAt + 75_000,
+        phase: "finished",
+        status: "succeeded",
+        reason: "follow-up",
+      }),
     ]);
-    const retained = JSON.stringify(fixture.observations.updateTerminalProcesses);
+    const retained = JSON.stringify(fixture.observations.updateSettlementProcesses);
     expect(retained).not.toContain("synthetic-hidden-credential");
     expect(retained.length).toBeLessThan(5000);
     fixture.command.resolve(JSON.stringify(success));
@@ -575,6 +588,142 @@ describe("published installed update progress", () => {
       "command:update",
     ]);
   });
+
+  it.each([
+    { terminal: true, physicalMs: 480_000, secondAtMs: 450_000 },
+    { terminal: false, physicalMs: 480_000, secondAtMs: 465_000 },
+    { terminal: false, physicalMs: 361_000, secondAtMs: 345_000 },
+  ])(
+    "reserves the second snapshot for terminal=$terminal or cutoff=$physicalMs",
+    async ({ terminal, physicalMs, secondAtMs }) => {
+      const active = { ...recordedRun([completedStep]), phase: "verifying" as const };
+      const reader = vi.spyOn(updateRunReader, "listUpdateRunsAsync").mockResolvedValue([active]);
+      const census = vi.spyOn(nativeObservation, "readRelatedProcessDiagnostics").mockReturnValue({
+        ok: true,
+        error: null,
+        truncated: false,
+        processes: [],
+      });
+      const fixture = startUpdate(undefined, performance.now() + physicalMs + 180_000 + 180_000);
+      await vi.advanceTimersByTimeAsync(299_999);
+      expect(census).not.toHaveBeenCalled();
+      expect(fixture.recordProgress.mock.calls.map(([phase]) => phase)).toEqual([
+        "published-update:completed-step",
+      ]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(census).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(census).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(secondAtMs - 315_000 - 15_000);
+      expect(census).toHaveBeenCalledTimes(1);
+      if (terminal) {
+        reader.mockResolvedValue([{ ...active, phase: "finished", status: "succeeded" }]);
+      }
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(census).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(census).toHaveBeenCalledTimes(2);
+      expect(fixture.observations.updateSettlementProcesses).toEqual([
+        expect.objectContaining({
+          runId: active.runId,
+          capturedAtMs: invokedAt + 300_000,
+          phase: "verifying",
+          status: "running",
+          reason: "elapsed-300s",
+        }),
+        expect.objectContaining({
+          capturedAtMs: invokedAt + secondAtMs,
+          phase: terminal ? "finished" : "verifying",
+          status: terminal ? "succeeded" : "running",
+          reason: terminal ? "terminal" : "before-physical-cutoff",
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(census).toHaveBeenCalledTimes(2);
+      expect(fixture.recordProgress).toHaveBeenCalledTimes(1);
+      const failure = new Error("Original acceptance limit exceeded; observation only");
+      fixture.command.reject(failure);
+      await expect(fixture.pending).rejects.toBe(failure);
+      expect(fixture.recordProgress.mock.calls.map(([phase]) => phase)).toEqual([
+        "published-update:completed-step",
+        "command:update",
+      ]);
+    },
+  );
+
+  it("records diagnostic absence instead of starting a late terminal census or retrying it", async () => {
+    const reader = vi.spyOn(updateRunReader, "listUpdateRunsAsync").mockResolvedValue([]);
+    const census = vi.spyOn(nativeObservation, "readRelatedProcessDiagnostics");
+    const fixture = startUpdate(undefined, performance.now() + 1_080_000);
+    await vi.advanceTimersByTimeAsync(450_000);
+    const delayed = createDeferredCore<UpdateRunRecord[]>();
+    reader.mockReturnValueOnce(delayed.promise);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(5_000);
+    const terminal = {
+      ...recordedRun([]),
+      phase: "finished" as const,
+      status: "succeeded" as const,
+    };
+    reader.mockResolvedValue([terminal]);
+    delayed.resolve([terminal]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(census).not.toHaveBeenCalled();
+    expect(fixture.observations.updateSettlementProcessCaptureUnavailable).toMatchObject({
+      runId: terminal.runId,
+      phase: "finished",
+      status: "succeeded",
+      capturedAtMs: invokedAt + 470_000,
+      reason: "Less than 15000ms remains before the physical cutoff",
+    });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(census).not.toHaveBeenCalled();
+    expect(fixture.recordProgress).not.toHaveBeenCalled();
+    const failure = new Error("Original acceptance limit exceeded; observation only");
+    fixture.command.reject(failure);
+    await expect(fixture.pending).rejects.toBe(failure);
+  });
+
+  it.each([
+    { deadline: 1_080_000, limit: 480_000, refused: false },
+    { deadline: 780_000, limit: 400_000, refused: false },
+    { deadline: 740_000, limit: 360_000, refused: true },
+    { deadline: 730_000, limit: 350_000, refused: true },
+  ])(
+    "reserves cleanup after capacity preparation (deadline=$deadline)",
+    async ({ deadline, limit, refused }) => {
+      let now = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      vi.mocked(installedPackage.recordCapacityBoundary).mockImplementationOnce(async () => {
+        now = 20_000;
+        return capacityObservation;
+      });
+      const fixture = startUpdate(undefined, deadline);
+      const outcome = fixture.pending.then(
+        (value) => ({ value, error: undefined }),
+        (error: unknown) => ({ value: undefined, error }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fixture.observations.naturalSettlementObservation).toMatchObject({
+        acceptanceLimitMs: 360_000,
+        physicalLimitMs: limit,
+        cleanupReserveMs: 180_000,
+        failureInspectionReserveMs: 180_000,
+      });
+      if (refused) {
+        expect(installedCommand.run).not.toHaveBeenCalled();
+        expect(String((await outcome).error)).toContain("Insufficient cell lifetime");
+      } else {
+        expect(vi.mocked(installedCommand.run).mock.calls[0]?.[6]).toEqual({
+          commandBudget: "published-update",
+          physicalObservationLimitMs: limit,
+        });
+        expect(now + limit + 180_000 + 180_000).toBeLessThanOrEqual(deadline);
+        fixture.command.resolve(JSON.stringify(success));
+        expect((await outcome).value).toEqual(success);
+      }
+    },
+  );
 
   it.each(["returned", "thrown"] as const)(
     "keeps a %s process observation failure diagnostic without failing the updater",
@@ -591,7 +740,7 @@ describe("published installed update progress", () => {
       });
       const fixture = startUpdate();
       await vi.advanceTimersByTimeAsync(45_000);
-      expect(fixture.observations.updateTerminalProcesses).toEqual([
+      expect(fixture.observations.updateSettlementProcesses).toEqual([
         expect.objectContaining({ unavailable: expect.any(String) }),
         expect.objectContaining({ unavailable: expect.any(String) }),
       ]);

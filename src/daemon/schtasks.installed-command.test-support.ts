@@ -8,10 +8,55 @@ import {
   inspectManagedProcessGroup,
   runManagedCommand,
 } from "../../scripts/lib/managed-child-process.mts";
-import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
+import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import {
+  redactSupportString,
+  type SupportRedactionContext,
+} from "../logging/diagnostic-support-redaction.js";
 import { formatCommandOutput } from "../process/command-error.js";
+import { readRelatedProcessDiagnostics } from "./schtasks.integration-observation.test-support.js";
 
 type ServiceObservation = "install" | "status";
+export const PUBLISHED_UPDATE_ACCEPTANCE_MS = 360_000;
+export const MAX_SETTLEMENT_OBSERVATION_MS = 480_000;
+
+export function captureInstalledUpdateProcesses(
+  context: SupportRedactionContext,
+  needles: string[],
+  progress: Pick<UpdateRunRecord, "runId" | "phase" | "status">,
+  reason: "terminal" | "elapsed-300s" | "follow-up" | "before-physical-cutoff",
+) {
+  const sample = {
+    runId: progress.runId,
+    phase: progress.phase,
+    status: progress.status,
+    reason,
+    capturedAtMs: Date.now(),
+  };
+  const safeText = (value: string) => redactSupportString(value, context, { maxLength: 2_000 });
+  try {
+    const capture = readRelatedProcessDiagnostics(needles);
+    return {
+      ...sample,
+      ok: capture.ok,
+      truncated: capture.truncated,
+      ...(capture.error ? { unavailable: safeText(capture.error) } : {}),
+      processes: capture.processes.map((process) => ({
+        pid: process.ProcessId,
+        parentPid: process.ParentProcessId,
+        createdAt: process.CreationDate,
+        userModeTime100ns: process.UserModeTime,
+        kernelModeTime100ns: process.KernelModeTime,
+        readOperationCount: process.ReadOperationCount,
+        writeOperationCount: process.WriteOperationCount,
+        otherOperationCount: process.OtherOperationCount,
+        commandLine: process.CommandLine ? safeText(process.CommandLine) : null,
+      })),
+    };
+  } catch {
+    return { ...sample, unavailable: "Process observation could not be read" };
+  }
+}
 
 function captureServiceOutput(
   kind: ServiceObservation,
@@ -114,6 +159,11 @@ export type CommandRecord = {
   joined: boolean;
   elapsedMs: number;
   settlement?: CommandSettlement;
+  naturalSettlementObservation?: {
+    acceptanceLimitMs: number;
+    physicalLimitMs: number;
+    acceptanceExceeded: boolean;
+  };
   failureOutput?: { stdout: string; stderr: string; captureTruncated: boolean };
   serviceOutput?: ReturnType<typeof captureServiceOutput>;
 };
@@ -128,9 +178,20 @@ export async function run(
     expectedStderr?: readonly string[];
     observeService?: ServiceObservation;
     commandBudget?: "published-update";
+    physicalObservationLimitMs?: number;
   } = {},
 ) {
   const { expectedStderr = [], observeService } = options;
+  const physicalLimitMs = options.physicalObservationLimitMs;
+  if (physicalLimitMs !== undefined) {
+    assert.equal(options.commandBudget, "published-update");
+    assert.ok(
+      Number.isFinite(physicalLimitMs) &&
+        physicalLimitMs > PUBLISHED_UPDATE_ACCEPTANCE_MS &&
+        physicalLimitMs <= MAX_SETTLEMENT_OBSERVATION_MS,
+      "Natural-settlement observation requires a physical limit above acceptance and at most 480000ms",
+    );
+  }
   const started = performance.now();
   const settlement: CommandSettlement | undefined =
     options.commandBudget === "published-update"
@@ -153,7 +214,9 @@ export async function run(
       cwd,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
-      timeoutMs: options.commandBudget === "published-update" ? 360_000 : 180_000,
+      timeoutMs:
+        physicalLimitMs ??
+        (options.commandBudget === "published-update" ? PUBLISHED_UPDATE_ACCEPTANCE_MS : 180_000),
       signal,
       onReady(launched) {
         child = launched;
@@ -218,6 +281,29 @@ export async function run(
   } catch (error) {
     failure = toErrorObject(error, "Installed Scheduled Task fixture failed");
   }
+  const elapsedMs = performance.now() - started;
+  const naturalSettlementObservation =
+    physicalLimitMs === undefined
+      ? undefined
+      : {
+          acceptanceLimitMs: PUBLISHED_UPDATE_ACCEPTANCE_MS,
+          physicalLimitMs,
+          acceptanceExceeded: elapsedMs > PUBLISHED_UPDATE_ACCEPTANCE_MS,
+        };
+  if (naturalSettlementObservation?.acceptanceExceeded) {
+    const acceptanceFailure = new assert.AssertionError({
+      message: "Published update exceeded the original 360000ms acceptance limit; observation only",
+      actual: elapsedMs,
+      expected: PUBLISHED_UPDATE_ACCEPTANCE_MS,
+      operator: "<=",
+    });
+    failure = failure
+      ? new AggregateError(
+          [acceptanceFailure, failure],
+          "Published update failed acceptance and its physical observation command failed",
+        )
+      : acceptanceFailure;
+  }
   const afterCleanup = child
     ? inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" })
     : undefined;
@@ -260,8 +346,9 @@ export async function run(
     signal: exitSignal,
     beforeCleanup,
     joined: afterCleanup === "dead" && !hasUnjoinedWork(failure),
-    elapsedMs: performance.now() - started,
+    elapsedMs,
     ...(settlement ? { settlement } : {}),
+    ...(naturalSettlementObservation ? { naturalSettlementObservation } : {}),
     ...(failureOutput ? { failureOutput } : {}),
     ...(observeService
       ? { serviceOutput: captureServiceOutput(observeService, stdout, truncated, diagnostic) }

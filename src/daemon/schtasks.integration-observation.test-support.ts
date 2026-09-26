@@ -6,6 +6,7 @@ import { expect } from "vitest";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
 import { setScheduledTaskXmlEnabled } from "./schtasks-control.js";
 import { execSchtasks } from "./schtasks-exec.js";
+import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 const WAIT_INTERVAL_MS = 200;
@@ -33,6 +34,7 @@ export type WindowsProcessDiagnostic = {
   KernelModeTime?: number | string;
   ReadOperationCount?: number | string;
   WriteOperationCount?: number | string;
+  OtherOperationCount?: number | string;
   ParentProcessId?: number;
   ProcessId?: number;
 };
@@ -42,6 +44,25 @@ export async function readTaskXml(taskName: string): Promise<string | null> {
   return result.code === 0
     ? result.stdout.replace(/^\uFEFF/u, "").replaceAll(String.fromCharCode(0), "")
     : null;
+}
+
+type TaskDefinitionSnapshot = { exists: false; taskXml: null } | { exists: true; taskXml: string };
+
+export async function readTaskDefinitionSnapshot(
+  taskName: string,
+): Promise<TaskDefinitionSnapshot> {
+  const exists = probeScheduledTaskExists(taskName);
+  if (exists === null) {
+    throw new Error(`Could not determine whether Scheduled Task ${taskName} exists`);
+  }
+  if (!exists) {
+    return { exists: false, taskXml: null };
+  }
+  const taskXml = await readTaskXml(taskName);
+  if (!taskXml) {
+    throw new Error(`Could not export Scheduled Task XML for ${taskName}`);
+  }
+  return { exists: true, taskXml };
 }
 
 export function disableScheduledTaskXmlForFixture(xml: string): string {
@@ -130,7 +151,7 @@ export function readRelatedProcessDiagnostics(needles: string[]): {
 } {
   const script = [
     "$ErrorActionPreference='Stop'",
-    "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,UserModeTime,KernelModeTime,ReadOperationCount,WriteOperationCount,@{Name='CreationDate';Expression={if ($_.CreationDate) {$_.CreationDate.ToUniversalTime().ToString('o')}}} | ConvertTo-Json -Compress",
+    "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,UserModeTime,KernelModeTime,ReadOperationCount,WriteOperationCount,OtherOperationCount,@{Name='CreationDate';Expression={if ($_.CreationDate) {$_.CreationDate.ToUniversalTime().ToString('o')}}} | ConvertTo-Json -Compress",
   ].join("; ");
   const result = spawnSync(
     getWindowsPowerShellExePath(),

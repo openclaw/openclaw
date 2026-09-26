@@ -65,6 +65,7 @@ export async function runInstalledLifecycle(
   lifetime: Lifetime,
   owners: Owners,
   signal: AbortSignal,
+  cellDeadlineAt: number,
 ) {
   const { resolveGatewayWindowsTaskName } = await import("./constants.js");
   const { execSchtasks } = await import("./schtasks-exec.js");
@@ -365,6 +366,7 @@ export async function runInstalledLifecycle(
         signal,
         observations,
         recordProgress,
+        observationCellDeadlineAt: cellDeadlineAt,
       });
       await prepareInstalledPackage({ ...input, installRoot });
       await recordProgress("updated-candidate:hash-verified");

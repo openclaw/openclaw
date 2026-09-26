@@ -8,7 +8,13 @@ import { hashFile, hashInstall } from "../../scripts/lib/gateway-bench-installed
 import { listUpdateRunsAsync } from "../infra/update-run-reader.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { sleep } from "../utils/sleep.js";
-import { run, type CommandRecord } from "./schtasks.installed-command.test-support.js";
+import {
+  captureInstalledUpdateProcesses,
+  MAX_SETTLEMENT_OBSERVATION_MS,
+  PUBLISHED_UPDATE_ACCEPTANCE_MS,
+  run,
+  type CommandRecord,
+} from "./schtasks.installed-command.test-support.js";
 import {
   packageRoot,
   type parseInstalledPreview,
@@ -16,7 +22,6 @@ import {
   recordCapacityBoundary,
   requiredCellSpace,
 } from "./schtasks.installed-package.test-support.js";
-import { readRelatedProcessDiagnostics } from "./schtasks.integration-observation.test-support.js";
 
 export const doctorReportSchema = z.object({
   checksRun: z.number().int().positive(),
@@ -156,6 +161,7 @@ export async function runInstalledPublishedUpdate(params: {
   signal: AbortSignal;
   observations: Record<string, unknown>;
   recordProgress: (phase: string, error?: Error) => Promise<void>;
+  observationCellDeadlineAt?: number;
 }) {
   const { task, input, inputPath, key, commands, signal, observations, recordProgress } = params;
   const before = await recordCapacityBoundary(inputPath, input, key, "before-published-update");
@@ -173,33 +179,9 @@ export async function runInstalledPublishedUpdate(params: {
   const stopObservation = new AbortController();
   const completed = new Set<string>();
   let observedRunId: string | undefined;
-  const terminalProcesses: ReturnType<typeof captureTerminalProcesses>[] = [];
-  function captureTerminalProcesses(runId: string) {
-    const capturedAtMs = Date.now();
-    const safeText = (value: string) => redactSupportString(value, task, { maxLength: 2_000 });
-    try {
-      const capture = readRelatedProcessDiagnostics([task.profile, packageRoot(task.installRoot)]);
-      return {
-        runId,
-        capturedAtMs,
-        ok: capture.ok,
-        truncated: capture.truncated,
-        ...(capture.error ? { unavailable: safeText(capture.error) } : {}),
-        processes: capture.processes.map((process) => ({
-          pid: process.ProcessId,
-          parentPid: process.ParentProcessId,
-          createdAt: process.CreationDate,
-          userModeTime100ns: process.UserModeTime,
-          kernelModeTime100ns: process.KernelModeTime,
-          readOperationCount: process.ReadOperationCount,
-          writeOperationCount: process.WriteOperationCount,
-          commandLine: process.CommandLine ? safeText(process.CommandLine) : null,
-        })),
-      };
-    } catch {
-      return { runId, capturedAtMs, unavailable: "Process observation could not be read" };
-    }
-  }
+  let physicalCutoffAt = Infinity;
+  let processObservationWindowClosed = false;
+  const settlementProcesses: ReturnType<typeof captureInstalledUpdateProcesses>[] = [];
   let observationFailure: Error | undefined;
   const observation = (async () => {
     while (!stopObservation.signal.aborted) {
@@ -222,14 +204,42 @@ export async function runInstalledPublishedUpdate(params: {
       if (progress.runId !== observedRunId) {
         continue;
       }
+      const remainingMs = physicalCutoffAt - performance.now();
+      const snapshotReason =
+        settlementProcesses[0]?.reason === "terminal"
+          ? "follow-up"
+          : progress.phase === "finished" && progress.status !== "running"
+            ? "terminal"
+            : settlementProcesses.length === 0 && Date.now() - startedAt >= 300_000
+              ? "elapsed-300s"
+              : settlementProcesses.length === 1 && remainingMs >= 15_000 && remainingMs < 30_000
+                ? "before-physical-cutoff"
+                : undefined;
       if (
-        progress.phase === "finished" &&
-        progress.status !== "running" &&
-        terminalProcesses.length < 2
+        !processObservationWindowClosed &&
+        settlementProcesses.length < 2 &&
+        remainingMs < 15_000
       ) {
-        terminalProcesses.push(captureTerminalProcesses(progress.runId));
+        processObservationWindowClosed = true;
+        observations.updateSettlementProcessCaptureUnavailable = {
+          runId: progress.runId,
+          phase: progress.phase,
+          status: progress.status,
+          capturedAtMs: Date.now(),
+          reason: "Less than 15000ms remains before the physical cutoff",
+        };
+      }
+      if (!processObservationWindowClosed && snapshotReason && settlementProcesses.length < 2) {
+        settlementProcesses.push(
+          captureInstalledUpdateProcesses(
+            task,
+            [task.profile, packageRoot(task.installRoot)],
+            progress,
+            snapshotReason,
+          ),
+        );
         // Diagnostics wait for an ordinary proof write; they are not durable update progress.
-        observations.updateTerminalProcesses = terminalProcesses;
+        observations.updateSettlementProcesses = settlementProcesses;
       }
       const newSteps = progress.steps.filter((step) => {
         if (step.status !== "completed" || step.endedAtMs === undefined) {
@@ -253,6 +263,31 @@ export async function runInstalledPublishedUpdate(params: {
   let output = "";
   let failure: Error | undefined;
   try {
+    const commandStartedAt = performance.now();
+    const physicalObservationLimitMs =
+      params.observationCellDeadlineAt === undefined
+        ? undefined
+        : Math.floor(
+            Math.min(
+              MAX_SETTLEMENT_OBSERVATION_MS,
+              params.observationCellDeadlineAt - commandStartedAt - 180_000 - 180_000,
+            ),
+          );
+    if (physicalObservationLimitMs !== undefined) {
+      observations.naturalSettlementObservation = {
+        acceptanceLimitMs: PUBLISHED_UPDATE_ACCEPTANCE_MS,
+        physicalLimitMs: physicalObservationLimitMs,
+        cleanupReserveMs: 180_000,
+        failureInspectionReserveMs: 180_000,
+        qualification: "Observation only; completion after acceptance remains a failure",
+      };
+      assert.ok(
+        physicalObservationLimitMs > PUBLISHED_UPDATE_ACCEPTANCE_MS,
+        "Insufficient cell lifetime for natural-settlement observation, 180000ms failure inspection, and 180000ms cleanup reserve",
+      );
+    }
+    physicalCutoffAt =
+      commandStartedAt + (physicalObservationLimitMs ?? PUBLISHED_UPDATE_ACCEPTANCE_MS);
     // Execute the unchanged published CLI; the observer neither injects markers nor changes state.
     output = await run(
       [task.entry, "--profile", task.profile, "update", "--yes", "--tag", input.tarball, "--json"],
@@ -261,7 +296,7 @@ export async function runInstalledPublishedUpdate(params: {
       commands,
       0,
       signal,
-      { commandBudget: "published-update" },
+      { commandBudget: "published-update", physicalObservationLimitMs },
     );
   } catch (error) {
     failure = toErrorObject(error, "Installed published update failed");

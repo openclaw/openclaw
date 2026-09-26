@@ -1,10 +1,77 @@
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import * as managedCommand from "../../scripts/lib/managed-child-process.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { run, type CommandRecord } from "./schtasks.installed-command.test-support.js";
 import { installedStatusSchema } from "./schtasks.installed-package.test-support.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
+
+it.each([350_000, 370_000])(
+  "preserves original acceptance for an observed exit zero at %sms",
+  async (elapsedMs) => {
+    const root = temporary.make("schtasks-observed-exit-");
+    const records: CommandRecord[] = [];
+    vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(elapsedMs);
+    const pending = run(
+      ["-e", 'process.stdout.write("completed");'],
+      { SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR },
+      root,
+      records,
+      0,
+      undefined,
+      { commandBudget: "published-update", physicalObservationLimitMs: 480_000 },
+    );
+    if (elapsedMs > 360_000) {
+      await expect(pending).rejects.toThrow("original 360000ms acceptance limit");
+    } else {
+      await expect(pending).resolves.toBe("completed");
+    }
+    expect(records[0]).toMatchObject({
+      code: 0,
+      signal: null,
+      joined: true,
+      naturalSettlementObservation: {
+        acceptanceLimitMs: 360_000,
+        physicalLimitMs: 480_000,
+        acceptanceExceeded: elapsedMs > 360_000,
+      },
+      settlement: { exitAtMs: expect.any(Number), closeAtMs: expect.any(Number) },
+    });
+  },
+);
+
+it("retains original acceptance failure together with the physical observation timeout", async () => {
+  const records: CommandRecord[] = [];
+  vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(480_001);
+  const physicalTimeout = Object.assign(new Error("Managed command timed out after 480000ms"), {
+    code: "ETIMEDOUT",
+  });
+  const command = vi.spyOn(managedCommand, "runManagedCommand").mockRejectedValue(physicalTimeout);
+  const failure = await run(
+    ["unused-fixture"],
+    {},
+    temporary.make("schtasks-observed-timeout-"),
+    records,
+    0,
+    undefined,
+    { commandBudget: "published-update", physicalObservationLimitMs: 480_000 },
+  ).catch((error: unknown) => error);
+  expect(command).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 480_000 }));
+  expect(failure).toBeInstanceOf(AggregateError);
+  if (!(failure instanceof AggregateError)) {
+    throw new Error("Acceptance and physical timeout must both remain available");
+  }
+  expect(failure.errors).toEqual([
+    expect.objectContaining({
+      code: "ERR_ASSERTION",
+      message: expect.stringContaining("original 360000ms"),
+    }),
+    physicalTimeout,
+  ]);
+  expect(records[0]?.naturalSettlementObservation?.acceptanceExceeded).toBe(true);
+});
 
 it.each(
   (["stdout", "stderr"] as const).flatMap((stream) =>
