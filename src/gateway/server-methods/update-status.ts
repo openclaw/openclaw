@@ -9,7 +9,10 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { areDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveOcmUpdateManager } from "../../infra/ocm-update-client.js";
+import {
+  OcmUpdateCapabilitiesUnsupportedError,
+  resolveOcmUpdateManager,
+} from "../../infra/ocm-update-client.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
@@ -55,7 +58,13 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       phase = next;
     };
     try {
-      let manager = await resolveOcmUpdateManager();
+      let manager = await resolveOcmUpdateManager().catch((error: unknown) => {
+        if (!(error instanceof OcmUpdateCapabilitiesUnsupportedError)) {
+          throw error;
+        }
+        context?.logGateway?.warn(error.message);
+        return null;
+      });
       const managedRun = manager ? await manager.status() : null;
       if (manager && !manager.canStart && !managedRun) {
         manager = null;

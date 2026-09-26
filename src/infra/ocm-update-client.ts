@@ -10,7 +10,7 @@ import {
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { redactKnownPathPrefixesForSupport } from "../logging/diagnostic-support-redaction.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { runExec } from "../process/exec.js";
+import { isPlainCommandExitFailure, runExec } from "../process/exec.js";
 import { formatErrorMessage } from "./errors.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
@@ -18,6 +18,27 @@ import type { UpdateRunRecord } from "./update-run-record.js";
 const name = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u);
 const jobId = name.max(128);
 const timestamp = z.string().transform(Date.parse).pipe(z.number().int().nonnegative());
+const commandFailureSchema = z.object({
+  failed: z.boolean(),
+  exitCode: z.number().optional(),
+  signal: z.unknown().optional(),
+  cause: z.unknown().optional(),
+  timedOut: z.boolean().optional(),
+  isCanceled: z.boolean().optional(),
+  isMaxBuffer: z.boolean().optional(),
+  isTerminated: z.boolean().optional(),
+  stdout: z.string(),
+  stderr: z.string(),
+});
+
+export class OcmUpdateCapabilitiesUnsupportedError extends Error {
+  constructor() {
+    super(
+      "OCM update capabilities are unsupported. Use OCM's update command or update OCM to enable Gateway update jobs.",
+    );
+  }
+}
+
 const capabilitySchema = z.object({
   protocol: z.literal("ocm.upgrade-job"),
   protocolVersion: z.literal(1),
@@ -171,7 +192,22 @@ export async function resolveOcmUpdateManager() {
       timeoutMs: 30_000,
       maxBuffer: 64 * 1024,
       logOutput: false,
-    }).catch(rejectDiagnostic);
+    }).catch((error: unknown) => {
+      const failure = commandFailureSchema.safeParse(error);
+      // Released managers reject this command before looking up or updating an environment.
+      if (
+        args[0] === "capabilities" &&
+        failure.success &&
+        isPlainCommandExitFailure(failure.data) &&
+        failure.data.exitCode === 1 &&
+        failure.data.stdout === "" &&
+        failure.data.stderr ===
+          `ocm: unexpected arguments: capabilities ${envName.data}\nRun "${executable.trim()} help" for usage.\n`
+      ) {
+        throw new OcmUpdateCapabilitiesUnsupportedError();
+      }
+      return rejectDiagnostic(error);
+    });
     try {
       return JSON.parse(stdout) as unknown;
     } catch {
@@ -180,6 +216,9 @@ export async function resolveOcmUpdateManager() {
   };
   const parsedCapability = capabilitySchema.safeParse(
     await command(["capabilities", envName.data]).catch((error: unknown) => {
+      if (error instanceof OcmUpdateCapabilitiesUnsupportedError) {
+        throw error;
+      }
       throw new Error(
         `Could not read OCM update capabilities: ${formatErrorMessage(error)}. Use OCM's update command or update OCM to enable Gateway update jobs.`,
       );

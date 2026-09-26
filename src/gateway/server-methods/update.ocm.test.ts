@@ -479,15 +479,105 @@ it("refuses an incomplete claimed manager binding before probing", async () => {
   });
 });
 
-it("keeps an unsupported manager probe failure out of the native updater", async () => {
+it("preserves native read-only history with an older manager while refusing managed writes and reads", async () => {
   await withManager(async () => {
-    exec.mockRejectedValue(new Error("unexpected arguments: capabilities fixture"));
+    normalizeUpdateChannelMock.mockReturnValue("dev");
+    exec.mockRejectedValue(
+      Object.assign(new Error("Command exited with code 1"), {
+        failed: true,
+        exitCode: 1,
+        stdout: "",
+        stderr:
+          'ocm: unexpected arguments: capabilities fixture\nRun "/trusted/ocm help" for usage.\n',
+      }),
+    );
+    const run = createUpdateRun({ trigger: "cli" });
+    finishUpdateRun(run.runId, { status: "succeeded" });
+    const { updateHandlers } = await import("./update.js");
+    const respond = vi.fn();
+    const context = { getRuntimeConfig: () => ({ update: { channel: "dev" } }) };
+    await expectDefined(
+      updateHandlers["update.status"],
+      "update.status handler",
+    )({
+      params: {},
+      respond,
+      context,
+    } as never);
+    expect(respond).toHaveBeenLastCalledWith(
+      true,
+      expect.objectContaining({
+        effectiveChannel: "dev",
+        lastRun: expect.objectContaining({ runId: run.runId, status: "succeeded" }),
+      }),
+    );
+    await expectDefined(
+      updateHandlers["update.runs.list"],
+      "update.runs.list handler",
+    )({
+      params: {},
+      respond,
+    } as never);
+    expect(respond).toHaveBeenLastCalledWith(true, {
+      runs: [expect.objectContaining({ runId: run.runId })],
+    });
+    const get = expectDefined(updateHandlers["update.runs.get"], "update.runs.get handler");
+    await get({ params: { runId: run.runId }, respond } as never);
+    expect(respond).toHaveBeenLastCalledWith(true, {
+      run: expect.objectContaining({ runId: run.runId }),
+    });
+    await expect(get({ params: { runId: "ocm:missing" }, respond } as never)).rejects.toThrow(
+      "OCM update capabilities",
+    );
     await expect(invokeUpdateRun({})).rejects.toThrow("OCM update capabilities");
-    expect(exec).toHaveBeenCalledTimes(1);
-    expect(listUpdateRuns()).toEqual([]);
+    expect(exec.mock.calls.every(([, args]) => args[2] === "capabilities")).toBe(true);
+    expect(listUpdateRuns()).toHaveLength(1);
     expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
   });
 });
+
+it.each(["timeout", "authentication", "malformed", "binding", "identity", "job-read"])(
+  "keeps a manager %s failure visible to read-only status",
+  async (failure) => {
+    await withManager(async ({ capability }) => {
+      if (failure === "identity") {
+        deleteTestEnvValue("OCM_ACTIVE_ENV_ROOT");
+      } else if (failure === "binding") {
+        capability.stateDir = path.dirname(resolveStateDir());
+      } else if (failure === "malformed") {
+        capability.protocolVersion = 99;
+      } else {
+        exec.mockImplementation(async (_command, args) => {
+          if (failure === "job-read" && args[2] === "capabilities") {
+            return { stdout: JSON.stringify(capability), stderr: "" };
+          }
+          throw Object.assign(new Error("Manager unavailable"), {
+            failed: true,
+            exitCode: 1,
+            timedOut: failure === "timeout",
+            stdout: "",
+            stderr:
+              failure === "authentication"
+                ? "OCM authentication failed"
+                : 'ocm: unexpected arguments: capabilities fixture\nRun "/trusted/ocm help" for usage.\n',
+          });
+        });
+      }
+      const { updateHandlers } = await import("./update.js");
+      const respond = vi.fn();
+      await expect(
+        expectDefined(
+          updateHandlers["update.status"],
+          "update.status handler",
+        )({
+          params: {},
+          respond,
+        } as never),
+      ).rejects.toThrow();
+      expect(respond).not.toHaveBeenCalled();
+    });
+  },
+);
 
 it("does not pass config-owned host tool overrides into the trusted manager", async () => {
   await withManager(async () => {
