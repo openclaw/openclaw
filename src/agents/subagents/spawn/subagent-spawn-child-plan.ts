@@ -74,11 +74,11 @@ export async function resolveSubagentChildPlan(params: {
     targetAgentId: params.targetAgentId,
     explicitWorkspaceDir: inheritedWorkspaceDir,
   });
-  // Thread binding and completion delivery must resolve the requester conversation the
-  // same way. CLI runtimes have no agentTo and only carry current* fields, so a
-  // child-plan that read agentTo alone could not bind while delivery already had
-  // the target (issue #158945). Explicit agentTo remains the fallback, keeping
-  // regular channel turns identical.
+  // Thread binding follows the explicitly directed conversation: an explicit
+  // agentTo/agentThreadId wins, preserving regular channel turns. CLI runtimes
+  // have no agentTo and only carry current* fields, so fall back to the current
+  // target/channel the way delivery does — otherwise a CLI turn could not bind
+  // while delivery already knew the target (issue #158945).
   const requesterConversation = resolveSpawnRequesterConversationTarget(params.ctx);
   const requesterOrigin = normalizeDeliveryContext({
     channel: params.ctx.agentChannel,

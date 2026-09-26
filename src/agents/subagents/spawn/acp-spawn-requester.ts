@@ -121,8 +121,8 @@ export function resolveAcpSpawnRequesterState(params: {
       ? Boolean(normalizeOptionalString(params.ctx.agentThreadId))
       : params.ctx.agentThreadId != null;
   // ACP thread binding uses the same requester-conversation resolution as native
-  // spawn and delivery, so CLI runtimes without `agentTo` can still bind through
-  // currentMessagingTarget/currentChannelId/currentThreadTs (issue #158945).
+  // spawn: an explicit agentTo wins, and CLI runtimes without `agentTo` fall
+  // back to currentMessagingTarget/currentChannelId/currentThreadTs (issue #158945).
   const requesterConversation = resolveSpawnRequesterConversationTarget(params.ctx);
   return {
     isSubagentSession,
