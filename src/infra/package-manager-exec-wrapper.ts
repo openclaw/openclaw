@@ -1,4 +1,3 @@
-// Parses package-manager exec wrappers that delegate to a concrete command.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 import { parseInlineOptionToken } from "./inline-option-token.js";
@@ -322,22 +321,19 @@ export function hasKnownPackageManagerExecContextOptions(argv: string[]): boolea
     case "npx":
     case "bunx":
       return hasContextOption(argv, 1, NPM_EXEC_OPTIONS);
-    case "pnpm": {
-      if (hasContextOption(argv, 1, PNPM_EXEC_OPTIONS)) {
-        return true;
-      }
-      const subcommandIdx = findFirstNonOptionIndex(argv, 1, PNPM_EXEC_OPTIONS);
-      return argv[subcommandIdx ?? -1] === "dlx"
-        ? hasContextOption(argv, (subcommandIdx ?? 0) + 1, PNPM_EXEC_OPTIONS)
-        : false;
-    }
+    case "pnpm":
     case "yarn": {
-      if (hasContextOption(argv, 1, YARN_EXEC_OPTIONS)) {
+      const options = executable === "pnpm" ? PNPM_EXEC_OPTIONS : YARN_EXEC_OPTIONS;
+      if (hasContextOption(argv, 1, options)) {
         return true;
       }
-      const subcommandIdx = findFirstNonOptionIndex(argv, 1, YARN_EXEC_OPTIONS);
+      const subcommandIdx = findFirstNonOptionIndex(argv, 1, options);
       return argv[subcommandIdx ?? -1] === "dlx"
-        ? hasContextOption(argv, (subcommandIdx ?? 0) + 1, YARN_DLX_OPTIONS)
+        ? hasContextOption(
+            argv,
+            (subcommandIdx ?? 0) + 1,
+            executable === "pnpm" ? PNPM_EXEC_OPTIONS : YARN_DLX_OPTIONS,
+          )
         : false;
     }
     default:
@@ -437,62 +433,39 @@ export function unwrapKnownPackageManagerExecInvocation(argv: string[]): string[
   return resolution.kind === "unwrapped" ? resolution.argv : null;
 }
 
+const PACKAGE_EXEC_MANAGERS = {
+  npm: [unwrapNpmExecInvocation, NPM_EXEC_OPTIONS, NPM_EXEC_SUBCOMMANDS],
+  pnpm: [unwrapPnpmExecInvocation, PNPM_EXEC_OPTIONS, PNPM_EXEC_SUBCOMMANDS],
+  yarn: [unwrapYarnExecInvocation, YARN_EXEC_OPTIONS, YARN_EXEC_SUBCOMMANDS],
+} as const;
+
 export function resolveKnownPackageManagerExecInvocation(
   argv: string[],
 ): PackageManagerExecInvocation {
   const executable = normalizePackageManagerExecToken(argv[0] ?? "");
-  switch (executable) {
-    case "npm": {
-      const unwrapped = unwrapNpmExecInvocation(argv);
-      if (unwrapped) {
-        return { kind: "unwrapped", argv: unwrapped };
-      }
-      const firstSubcommand = firstSubcommandAfterOptions(argv, NPM_EXEC_OPTIONS);
-      return NPM_EXEC_SUBCOMMANDS.has(firstSubcommand ?? "")
-        ? { kind: "unsafe-exec" }
-        : firstSubcommand === null && containsSubcommandToken(argv.slice(1), NPM_EXEC_SUBCOMMANDS)
-          ? { kind: "unsafe-exec" }
-          : { kind: "not-exec" };
-    }
-    case "npx":
-    case "bunx": {
-      const unwrapped = unwrapPackageExecArguments(argv, 1, NPM_DIRECT_EXEC_OPTIONS, "reject");
-      return unwrapped ? { kind: "unwrapped", argv: unwrapped } : { kind: "unsafe-exec" };
-    }
-    case "pnpm": {
-      const unwrapped = unwrapPnpmExecInvocation(argv);
-      if (unwrapped) {
-        return { kind: "unwrapped", argv: unwrapped };
-      }
-      const firstSubcommand = firstSubcommandAfterOptions(argv, PNPM_EXEC_OPTIONS);
-      const detectedKnownExec = PNPM_EXEC_SUBCOMMANDS.has(firstSubcommand ?? "");
-      const hiddenKnownExec =
-        firstSubcommand === null && containsSubcommandToken(argv.slice(1), PNPM_EXEC_SUBCOMMANDS);
-      const implicitExecShorthand =
-        firstSubcommand !== null &&
-        !PNPM_SCRIPT_RUN_SUBCOMMANDS.has(firstSubcommand) &&
-        !PNPM_BUILTIN_NON_EXEC_SUBCOMMANDS.has(firstSubcommand);
-      return detectedKnownExec || hiddenKnownExec || implicitExecShorthand
-        ? { kind: "unsafe-exec" }
-        : { kind: "not-exec" };
-    }
-    case "yarn": {
-      const unwrapped = unwrapYarnExecInvocation(argv);
-      if (unwrapped) {
-        return { kind: "unwrapped", argv: unwrapped };
-      }
-      const firstSubcommand = firstSubcommandAfterOptions(argv, YARN_EXEC_OPTIONS);
-      const detectedKnownExec = YARN_EXEC_SUBCOMMANDS.has(firstSubcommand ?? "");
-      const hiddenKnownExec =
-        firstSubcommand === null && containsSubcommandToken(argv.slice(1), YARN_EXEC_SUBCOMMANDS);
-      const implicitRunOrBin =
-        firstSubcommand !== null &&
-        (firstSubcommand === "run" || !YARN_BUILTIN_NON_EXEC_SUBCOMMANDS.has(firstSubcommand));
-      return detectedKnownExec || hiddenKnownExec || implicitRunOrBin
-        ? { kind: "unsafe-exec" }
-        : { kind: "not-exec" };
-    }
-    default:
-      return { kind: "not-package-manager" };
+  if (executable === "npx" || executable === "bunx") {
+    const unwrapped = unwrapPackageExecArguments(argv, 1, NPM_DIRECT_EXEC_OPTIONS, "reject");
+    return unwrapped ? { kind: "unwrapped", argv: unwrapped } : { kind: "unsafe-exec" };
   }
+  if (executable !== "npm" && executable !== "pnpm" && executable !== "yarn") {
+    return { kind: "not-package-manager" };
+  }
+  const [unwrap, options, execSubcommands] = PACKAGE_EXEC_MANAGERS[executable];
+  const unwrapped = unwrap(argv);
+  if (unwrapped) {
+    return { kind: "unwrapped", argv: unwrapped };
+  }
+  const firstSubcommand = firstSubcommandAfterOptions(argv, options);
+  const knownExec =
+    firstSubcommand === null
+      ? containsSubcommandToken(argv.slice(1), execSubcommands)
+      : execSubcommands.has(firstSubcommand);
+  const implicitExec =
+    firstSubcommand !== null &&
+    (executable === "pnpm"
+      ? !PNPM_SCRIPT_RUN_SUBCOMMANDS.has(firstSubcommand) &&
+        !PNPM_BUILTIN_NON_EXEC_SUBCOMMANDS.has(firstSubcommand)
+      : executable === "yarn" &&
+        (firstSubcommand === "run" || !YARN_BUILTIN_NON_EXEC_SUBCOMMANDS.has(firstSubcommand)));
+  return knownExec || implicitExec ? { kind: "unsafe-exec" } : { kind: "not-exec" };
 }

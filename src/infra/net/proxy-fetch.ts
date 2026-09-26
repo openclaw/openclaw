@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { logWarn } from "../../logger.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
@@ -37,11 +38,7 @@ export function makeProxyFetch(proxyUrl: string): typeof fetch {
 /** Return the explicit proxy URL attached by {@link makeProxyFetch}, if present. */
 export function getProxyUrlFromFetch(fetchImpl?: typeof fetch): string | undefined {
   const proxyUrl = (fetchImpl as ProxyFetchWithMetadata | undefined)?.[PROXY_FETCH_PROXY_URL];
-  if (typeof proxyUrl !== "string") {
-    return undefined;
-  }
-  const trimmed = proxyUrl.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(proxyUrl);
 }
 
 /**

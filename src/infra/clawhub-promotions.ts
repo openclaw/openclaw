@@ -1,4 +1,3 @@
-// ClawHub promotion APIs and declarative payload validation.
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import {
   fetchClawHubJson,
@@ -12,8 +11,6 @@ import {
 } from "./clawhub-client.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 
-// ─── ClawHub promotions ────────────────────────────────────────────────────
-// Promotional model offers published by ClawHub (GET /api/v1/promotions).
 // The payload is declarative only: provider/authChoiceId/pluginNames are
 // validated against the local provider catalog by the caller before any
 // install/auth action, so a malformed or hostile record cannot execute code.
@@ -75,10 +72,8 @@ function parseClawHubPromotionModel(value: unknown, context: string): ClawHubPro
 // into copy-paste CLI commands; anything else would be a shell-injection path.
 const CLAWHUB_PROMOTION_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
-// Safe identifier grammar for provider ids and auth choice ids.
 const CLAWHUB_PROMOTION_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._@/-]*$/;
 
-// Validate promotion details before adding status and activation metadata.
 function parseClawHubPromotionCore(
   value: Record<string, unknown>,
   context: string,

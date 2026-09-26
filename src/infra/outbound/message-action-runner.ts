@@ -498,6 +498,7 @@ function buildInternalSourceReplyToolResult(payload: {
     : payload.sourceReply.channelData?.[CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY]
       ? payload.sourceReply.text
       : undefined;
+  const { sourceReplyDeliveryMode, ...details } = payload;
   return {
     content: [
       {
@@ -506,21 +507,8 @@ function buildInternalSourceReplyToolResult(payload: {
       },
     ],
     details: {
-      status: payload.status,
-      deliveryStatus: payload.deliveryStatus,
-      channel: payload.channel,
-      target: payload.target,
-      ...(payload.sourceReplyDeliveryMode
-        ? { sourceReplyDeliveryMode: payload.sourceReplyDeliveryMode }
-        : {}),
-      ...(payload.idempotencyKey ? { idempotencyKey: payload.idempotencyKey } : {}),
-      ...(payload.sourceReplyTranscriptOwner ? { sourceReplyTranscriptOwner: true as const } : {}),
-      ...(payload.sourceReplySink ? { sourceReplySink: payload.sourceReplySink } : {}),
-      sourceReply: payload.sourceReply,
-      ...(payload.message ? { message: payload.message } : {}),
-      ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
-      ...(payload.mediaUrls?.length ? { mediaUrls: payload.mediaUrls } : {}),
-      dryRun: payload.dryRun,
+      ...details,
+      ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
     },
   };
 }

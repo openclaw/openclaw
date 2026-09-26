@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { projectPluginMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
@@ -299,11 +300,7 @@ export async function buildMessagePayload(params: {
     rawDelivery && typeof rawDelivery === "object" && !Array.isArray(rawDelivery)
       ? (rawDelivery as ReplyPayloadDelivery)
       : undefined;
-  const rawChannelData = actionParams.channelData;
-  const channelData =
-    rawChannelData && typeof rawChannelData === "object" && !Array.isArray(rawChannelData)
-      ? (rawChannelData as Record<string, unknown>)
-      : undefined;
+  const channelData = asOptionalRecord(actionParams.channelData);
   const presentation = normalizeMessagePresentation(actionParams.presentation);
   const interactive = normalizeLegacyInteractiveReply(actionParams.interactive);
   const payload: ReplyPayload = {

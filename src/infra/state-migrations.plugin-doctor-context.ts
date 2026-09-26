@@ -229,36 +229,21 @@ function guardIngressQueueMutations<TPayload, TMetadata, TCompletedMetadata>(
   queue: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>,
   assertCurrent: () => void,
 ): ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata> {
+  const guardMutation =
+    <Args extends unknown[], Result>(mutate: (...args: Args) => Result) =>
+    (...args: Args): Result => {
+      assertCurrent();
+      return mutate(...args);
+    };
   const guarded: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata> = {
     ...queue,
-    enqueue: (...args) => {
-      assertCurrent();
-      return queue.enqueue(...args);
-    },
-    claimNext: (...args) => {
-      assertCurrent();
-      return queue.claimNext(...args);
-    },
-    claim: (...args) => {
-      assertCurrent();
-      return queue.claim(...args);
-    },
-    complete: (...args) => {
-      assertCurrent();
-      return queue.complete(...args);
-    },
-    release: (...args) => {
-      assertCurrent();
-      return queue.release(...args);
-    },
-    fail: (...args) => {
-      assertCurrent();
-      return queue.fail(...args);
-    },
-    delete: (...args) => {
-      assertCurrent();
-      return queue.delete(...args);
-    },
+    enqueue: guardMutation(queue.enqueue.bind(queue)),
+    claimNext: guardMutation(queue.claimNext.bind(queue)),
+    claim: guardMutation(queue.claim.bind(queue)),
+    complete: guardMutation(queue.complete.bind(queue)),
+    release: guardMutation(queue.release.bind(queue)),
+    fail: guardMutation(queue.fail.bind(queue)),
+    delete: guardMutation(queue.delete.bind(queue)),
     // Recovery predicates may await, so asserting once at call time is not enough: a
     // migration could start recovery, return, release the section, and only then let a
     // predicate resolve into the tombstone or claim-release write. Re-assert after every
@@ -286,26 +271,21 @@ function guardIngressQueueMutations<TPayload, TMetadata, TCompletedMetadata>(
       }
       return queue.recoverStaleClaims(guardedRecovery);
     },
-    prune: (...args) => {
-      assertCurrent();
-      return queue.prune(...args);
-    },
+    prune: guardMutation(queue.prune.bind(queue)),
   };
   // Optional members stay optional: bind the receiver up front so the wrapper needs
   // neither a detached method reference nor a type assertion to call it.
   const refreshClaim = queue.refreshClaim?.bind(queue);
   if (refreshClaim) {
-    guarded.refreshClaim = (...args) => {
-      assertCurrent();
-      return refreshClaim(...args);
-    };
+    guarded.refreshClaim = guardMutation(refreshClaim);
   }
   const resubmit = queue.resubmit?.bind(queue);
   if (resubmit) {
-    guarded.resubmit = (...args) => {
-      assertCurrent();
-      return resubmit(...args);
-    };
+    guarded.resubmit = guardMutation(resubmit);
+  }
+  const purge = queue.purge?.bind(queue);
+  if (purge) {
+    guarded.purge = guardMutation(purge);
   }
   return guarded;
 }

@@ -5,7 +5,6 @@ import type {
   ChannelMessageUnknownSendReconciliationResult,
 } from "../../channels/message/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
@@ -85,7 +84,7 @@ import {
   type QueuedDelivery,
 } from "./delivery-queue-storage.js";
 import type { DeliveryFailureSettlement } from "./delivery-queue-types.js";
-import { createMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
+import { createOutboundMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
 import {
   completedOutboundAuditTerminals,
   emitOutboundAuditTerminals,
@@ -120,17 +119,7 @@ function emitRecoveredMessageSentEvents(
   entry: QueuedDelivery,
   events: readonly MessageSentEvent[],
 ): void {
-  const { emitMessageSent } = createMessageSentEmitter({
-    hookRunner: getGlobalHookRunner(),
-    channel: entry.channel,
-    to: entry.to,
-    accountId: entry.accountId,
-    sessionKeyForInternalHooks: entry.mirror?.sessionKey ?? entry.session?.key,
-    isGroup: entry.mirror?.isGroup,
-    groupId: entry.mirror?.groupId,
-    runId: entry.preparedBatch.runId,
-    logPrefix: OUTBOUND_DELIVERY_LOG_SCOPE,
-  });
+  const { emitMessageSent } = createOutboundMessageSentEmitter(entry, OUTBOUND_DELIVERY_LOG_SCOPE);
   for (const event of events) {
     emitMessageSent(event);
   }

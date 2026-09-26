@@ -68,13 +68,10 @@ export function assertNoPendingLegacyIdentity(options: DeviceIdentityStoreOption
   }
 }
 
-function withDeviceIdentityCoordinator<T>(
-  options: DeviceIdentityStoreOptions,
-  operation: (
-    resolved: ReturnType<typeof resolveDeviceIdentityStore>,
-    resolvedOptions: DeviceIdentityStoreOptions,
-  ) => T,
-): T {
+/** Load a valid canonical identity or atomically create its SQLite row. */
+export function loadOrCreateDeviceIdentity(
+  options: DeviceIdentityStoreOptions = {},
+): DeviceIdentity {
   const resolved = resolveDeviceIdentityStore(options);
   const resolvedOptions: DeviceIdentityStoreOptions = {
     ...options,
@@ -85,19 +82,13 @@ function withDeviceIdentityCoordinator<T>(
     databasePath: resolved.databasePath,
     stateDir: resolveOpenClawStateDirForDatabasePath(resolved.databasePath),
   });
-  let result: T;
+  let result: DeviceIdentity;
   try {
-    result = operation(resolved, resolvedOptions);
+    result = loadOrCreateDeviceIdentityOwned(resolvedOptions);
   } catch (operationError) {
-    let releaseFailed = false;
-    let releaseError: unknown;
     try {
       coordinator.release();
-    } catch (error) {
-      releaseFailed = true;
-      releaseError = error;
-    }
-    if (releaseFailed) {
+    } catch (releaseError) {
       throw createSqliteLifecycleAggregateError(
         [operationError, releaseError],
         "device identity operation and coordinator release both failed",
@@ -124,15 +115,6 @@ function loadOrCreateDeviceIdentityOwned(options: DeviceIdentityStoreOptions): D
   // before inserting so concurrent runtimes converge on one authoritative key.
   const candidate = generateStoredDeviceIdentity();
   return toDeviceIdentity(insertStoredDeviceIdentityIfAbsent(candidate, options));
-}
-
-/** Load a valid canonical identity or atomically create its SQLite row. */
-export function loadOrCreateDeviceIdentity(
-  options: DeviceIdentityStoreOptions = {},
-): DeviceIdentity {
-  return withDeviceIdentityCoordinator(options, (_resolved, resolvedOptions) =>
-    loadOrCreateDeviceIdentityOwned(resolvedOptions),
-  );
 }
 
 /** Keep one authoritative identity stable for the lifetime of a state-dir process. */

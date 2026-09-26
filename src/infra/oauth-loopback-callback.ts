@@ -1,5 +1,6 @@
 import type { LookupAddress } from "node:dns";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import { createDeferredCore } from "../shared/deferred.js";
 import { oauthErrorHtml, renderOAuthPage } from "../shared/oauth-page.js";
 import { OAUTH_PAGE_CSP } from "./oauth-page-csp.js";
 
@@ -183,12 +184,11 @@ export async function startOAuthLoopbackCallbackServer(params: {
   let binding = true;
   const timeoutRef: { current?: NodeJS.Timeout } = {};
   let closePromise: Promise<void> | undefined;
-  let resolveWait!: (result: OAuthLoopbackCallbackResult) => void;
-  let rejectWait!: (error: Error) => void;
-  const waitPromise = new Promise<OAuthLoopbackCallbackResult>((resolve, reject) => {
-    resolveWait = resolve;
-    rejectWait = reject;
-  });
+  const {
+    promise: waitPromise,
+    resolve: resolveWait,
+    reject: rejectWait,
+  } = createDeferredCore<OAuthLoopbackCallbackResult>();
   void waitPromise.catch(() => undefined);
   const close = () => (binding ? Promise.resolve() : (closePromise ??= closeServers(servers)));
   const cleanup = () => {

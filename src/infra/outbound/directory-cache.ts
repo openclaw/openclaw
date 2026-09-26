@@ -1,4 +1,3 @@
-// Directory cache stores short-lived projections partitioned by config identity.
 import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -9,9 +8,6 @@ type CacheEntry<T> = {
   fetchedAt: number;
 };
 
-/**
- * Stable dimensions that partition channel-directory cache entries.
- */
 type DirectoryCacheKey = {
   channel: ChannelId;
   accountId?: string | null;
@@ -21,17 +17,12 @@ type DirectoryCacheKey = {
   query?: string | null;
 };
 
-/**
- * Serializes channel-directory lookup dimensions into a cache key.
- */
 export function buildDirectoryCacheKey(key: DirectoryCacheKey): string {
   const signature = key.signature ?? "default";
   return `${key.channel}:${key.accountId ?? "default"}:${key.kind}:${key.source}:${signature}:query:${key.query ?? ""}`;
 }
 
-/**
- * Small TTL cache for channel directory lookups tied to a config object reference.
- */
+/** TTL and capacity are scoped to a config object reference. */
 export class DirectoryCache<T> {
   private cachesByConfig = new WeakMap<OpenClawConfig, Map<string, CacheEntry<T>>>();
   private readonly ttlMs: number;
@@ -42,22 +33,12 @@ export class DirectoryCache<T> {
     this.maxSize = Math.max(1, resolveNonNegativeIntegerOption(maxSize, 2000));
   }
 
-  /**
-   * Returns a cached value after applying config scoping, TTL, and capacity invalidation.
-   */
   get(key: string, cfg: OpenClawConfig): T | undefined {
     const cache = this.cacheForConfig(cfg);
     this.pruneExpired(cache, Date.now());
-    const entry = cache.get(key);
-    if (!entry) {
-      return undefined;
-    }
-    return entry.value;
+    return cache.get(key)?.value;
   }
 
-  /**
-   * Stores a value and refreshes its recency for bounded-size eviction.
-   */
   set(key: string, value: T, cfg: OpenClawConfig): void {
     const cache = this.cacheForConfig(cfg);
     const now = Date.now();
@@ -68,9 +49,6 @@ export class DirectoryCache<T> {
     pruneMapToMaxSize(cache, this.maxSize);
   }
 
-  /**
-   * Clears matching entries without disturbing unrelated cached lookups.
-   */
   clearMatching(match: (key: string) => boolean, cfg: OpenClawConfig): void {
     const cache = this.cachesByConfig.get(cfg);
     if (!cache) {
@@ -83,9 +61,6 @@ export class DirectoryCache<T> {
     }
   }
 
-  /**
-   * Drops one config scope or all cached entries.
-   */
   clear(cfg?: OpenClawConfig): void {
     if (cfg) {
       this.cachesByConfig.delete(cfg);

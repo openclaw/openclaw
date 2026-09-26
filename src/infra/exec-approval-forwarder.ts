@@ -589,29 +589,24 @@ export function createExecApprovalForwarder(
   const getNativeApprovalRouteCoordinator =
     deps.getNativeApprovalRouteCoordinator ?? (() => undefined);
 
-  const execHandlers = createApprovalHandlers({
-    strategy: execApprovalStrategy,
+  const handlerDeps = {
     getConfig,
     deliver,
     nowMs,
     resolveSessionTarget,
     getNativeApprovalRouteCoordinator,
+  };
+  const execHandlers = createApprovalHandlers({
+    ...handlerDeps,
+    strategy: execApprovalStrategy,
   });
   const pluginHandlers = createApprovalHandlers({
+    ...handlerDeps,
     strategy: pluginApprovalStrategy,
-    getConfig,
-    deliver,
-    nowMs,
-    resolveSessionTarget,
-    getNativeApprovalRouteCoordinator,
   });
   const systemAgentHandlers = createApprovalHandlers({
+    ...handlerDeps,
     strategy: systemAgentApprovalStrategy,
-    getConfig,
-    deliver,
-    nowMs,
-    resolveSessionTarget,
-    getNativeApprovalRouteCoordinator,
   });
 
   return {

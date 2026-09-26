@@ -18,6 +18,7 @@ import {
   prepareSqliteReadOnlyLocationSyncInProcess,
   SqliteSourceChangedError,
 } from "./sqlite-readonly-location.js";
+import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import {
   SQLITE_READONLY_WORKER_MAX_BUFFER,
   SQLITE_INSPECTION_CONTENTION_PREFIX,
@@ -118,6 +119,7 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       }
       return { ok: true, warnings };
     }
+    let prepared: PreparedSqliteReadOnlyLocation;
     if (mode === "consolidated") {
       if (!stagingRoot || path.dirname(path.resolve(pathname)) !== path.resolve(stagingRoot)) {
         throw new Error(
@@ -126,14 +128,13 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       }
       // The backup owner admits a child staging token before reading the private
       // WAL family. Parent loss cannot let reclamation race its native backup.
-      const prepared = await createOnlineReadOnlyBackup(pathname, stagingRoot);
-      releaseSnapshotTempDirectory(prepared.cleanupRoot ?? path.dirname(prepared.location));
-      return { ok: true, location: prepared.location };
+      prepared = await createOnlineReadOnlyBackup(pathname, stagingRoot);
+    } else {
+      prepared =
+        mode === "sync"
+          ? prepareSqliteReadOnlyLocationSyncInProcess(pathname, stagingRoot)
+          : await prepareSqliteReadOnlyLocationInProcess(pathname, stagingRoot);
     }
-    const prepared =
-      mode === "sync"
-        ? prepareSqliteReadOnlyLocationSyncInProcess(pathname, stagingRoot)
-        : await prepareSqliteReadOnlyLocationInProcess(pathname, stagingRoot);
     releaseSnapshotTempDirectory(prepared.cleanupRoot ?? path.dirname(prepared.location));
     return { ok: true, location: prepared.location };
   } catch (error) {

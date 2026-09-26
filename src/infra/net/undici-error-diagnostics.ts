@@ -33,14 +33,8 @@ function observeDispatcherValue(value: unknown): void {
     return;
   }
 
-  if (Array.isArray(value) || value instanceof Set) {
-    for (const entry of value) {
-      observeDispatcherValue(entry);
-    }
-    return;
-  }
-  if (value instanceof Map) {
-    for (const entry of value.values()) {
+  if (Array.isArray(value) || value instanceof Set || value instanceof Map) {
+    for (const entry of value instanceof Map ? value.values() : value) {
       observeDispatcherValue(entry);
     }
   }

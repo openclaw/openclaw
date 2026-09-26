@@ -1,9 +1,9 @@
 // Shared session cost and usage accounting type contracts.
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { Usage } from "../llm/types.js";
-import type {
-  SessionUsageTimePoint as SharedSessionUsageTimePoint,
-  SessionUsageTimeSeries as SharedSessionUsageTimeSeries,
+export type {
+  SessionUsageTimePoint,
+  SessionUsageTimeSeries,
 } from "../shared/session-usage-timeseries-types.js";
 
 export type CostBreakdown = Partial<Usage["cost"]>;
@@ -176,10 +176,6 @@ export type DiscoveredSession = {
   sessionFile: string;
   mtime: number;
 };
-
-export type SessionUsageTimePoint = SharedSessionUsageTimePoint;
-
-export type SessionUsageTimeSeries = SharedSessionUsageTimeSeries;
 
 export type SessionLogEntry = {
   timestamp: number;

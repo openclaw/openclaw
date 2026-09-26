@@ -468,6 +468,35 @@ async function runGatewayUpdateCheckOwned(
   }
 
   const { root, status, installReceipt } = installStatus;
+  const announceUpdate = (
+    target: NonNullable<UpdateScheduleState["target"]>,
+    channel: "stable" | "beta" | "dev",
+    tag: string,
+  ) =>
+    updateCampaign.announce({
+      target,
+      inspect: params.activeWorkInspectors,
+      onChange: onCampaignChange,
+      apply: ({ forced }) =>
+        lifecycle.run(() =>
+          runCampaignUpdate({
+            channel,
+            mode: target.kind === "git" ? "git" : status.packageManager,
+            version: target.kind === "git" ? target.upstreamSha : target.version,
+            tag,
+            forced,
+            root: root ?? status.root ?? undefined,
+            ...(target.kind === "git" ? { devTarget: devUpdateTargetFromGitTarget(target) } : {}),
+            log: params.log,
+            runAuto,
+            canApply,
+            onAttempt: recordAutoUpdateAttempt,
+            campaign: updateCampaign,
+            onUpdateRunCreated: params.onUpdateRunCreated,
+            signal: params.signal,
+          }),
+        ),
+    });
   setSchedule(
     withUpdateInstallStatus(
       getUpdateSchedule() ?? initialSchedule,
@@ -558,30 +587,7 @@ async function runGatewayUpdateCheckOwned(
         Number.isFinite(lastAttemptAt) &&
         now - lastAttemptAt < ONE_HOUR_MS;
       if (!recentAttempt) {
-        updateCampaign.announce({
-          target,
-          inspect: params.activeWorkInspectors,
-          onChange: onCampaignChange,
-          apply: ({ forced }) =>
-            lifecycle.run(() =>
-              runCampaignUpdate({
-                channel: "dev",
-                mode: "git",
-                version: upstreamSha,
-                tag: "dev",
-                forced,
-                root: root ?? status.root ?? undefined,
-                devTarget: devUpdateTargetFromGitTarget(target),
-                log: params.log,
-                runAuto,
-                canApply,
-                onAttempt: recordAutoUpdateAttempt,
-                campaign: updateCampaign,
-                onUpdateRunCreated: params.onUpdateRunCreated,
-                signal: params.signal,
-              }),
-            ),
-        });
+        announceUpdate(target, "dev", "dev");
       }
     } else {
       updateCampaign.clear();
@@ -620,9 +626,7 @@ async function runGatewayUpdateCheckOwned(
     writeState(nextState);
     return;
   }
-  const resolvedVersion = resolved.version;
-
-  const cmp = compareSemverStrings(VERSION, resolvedVersion);
+  const cmp = compareSemverStrings(VERSION, resolved.version);
   if (cmp != null && cmp < 0) {
     const nextAvailable: UpdateAvailable = {
       currentVersion: VERSION,
@@ -693,29 +697,7 @@ async function runGatewayUpdateCheckOwned(
           tag,
         });
       } else {
-        updateCampaign.announce({
-          target,
-          inspect: params.activeWorkInspectors,
-          onChange: onCampaignChange,
-          apply: ({ forced }) =>
-            lifecycle.run(() =>
-              runCampaignUpdate({
-                channel,
-                mode: status.packageManager,
-                version: resolvedVersion,
-                tag,
-                forced,
-                root: root ?? status.root ?? undefined,
-                log: params.log,
-                runAuto,
-                canApply,
-                onAttempt: recordAutoUpdateAttempt,
-                campaign: updateCampaign,
-                onUpdateRunCreated: params.onUpdateRunCreated,
-                signal: params.signal,
-              }),
-            ),
-        });
+        announceUpdate(target, channel, tag);
       }
     }
   } else {

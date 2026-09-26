@@ -9,6 +9,7 @@ import type {
   RecordPairedNodeConnectionResult,
   RequestNodePairingResult,
 } from "./device-pairing-node.records.js";
+import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
 
 type GenerationInput = { nodeId: string; expectedPairingGeneration: NodePairingGeneration };
 
@@ -53,12 +54,7 @@ export type DevicePairingNodeWorkerOperations = {
   };
 };
 
-export type DevicePairingNodeMutation = {
-  [Key in keyof DevicePairingNodeWorkerOperations]: {
-    type: Key;
-    input: DevicePairingNodeWorkerOperations[Key]["input"];
-  };
-}[keyof DevicePairingNodeWorkerOperations];
+export type DevicePairingNodeMutation = SqliteWorkerCommand<DevicePairingNodeWorkerOperations>;
 
 export type DevicePairingNodeAdmissionFacts =
   | ({ kind: "node-pending" } & NodePairingPendingSnapshot)

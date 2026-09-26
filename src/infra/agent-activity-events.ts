@@ -137,10 +137,7 @@ export type AgentHistoryActivity = { messageId: string; items: AgentActivityItem
 export function projectAgentHistoryActivity(
   messages: ReadonlyArray<{ messageId: string; message: unknown }>,
 ): AgentHistoryActivity[] {
-  const facts = new Map<
-    string,
-    Parameters<typeof projectAgentToolActivity>[0] & ToolCallIdentity
-  >();
+  const facts = new Map<string, ToolActivityInput & ToolCallIdentity>();
   let turn = 0;
   const entries = messages.map(({ messageId, message }) => {
     const record = asOptionalRecord(message);

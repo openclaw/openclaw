@@ -1,18 +1,8 @@
-// Filters volatile files from backup manifests.
 import path from "node:path";
 import { isLegacyAuditMigrationBackupPath } from "./backup-audit-paths.js";
 
-/**
- * Paths that are known to change during a live backup and commonly trigger
- * tar EOF errors. These files are actively appended to (logs, sockets, pid
- * markers) while `tar.c()` is reading them, which races with the size recorded
- * at `lstat()` time.
- *
- * Skipping them is safe: they are either recreated on startup, are transient
- * by nature, or have durable equivalents elsewhere in state. Snapshotting a
- * partial tail of a live log has no restoration value.
- */
-
+// These live-mutation paths are transient or have durable equivalents in state;
+// archiving their changing bytes would race the size captured by the tar header.
 const CHROMIUM_SINGLETON_FILES = new Set(["SingletonCookie", "SingletonLock", "SingletonSocket"]);
 const SQLITE_MEMORY_TRANSIENT_PATH_PATTERN =
   /(?:^|\/)(?:[^/]+\.sqlite\.(?:generation-(?:lock|writer)|reindex-lock)\.sqlite|[^/]+\.sqlite\.(?:backup|memory-reindex|tmp)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:-wal|-shm|-journal)?$/iu;
@@ -85,20 +75,6 @@ type VolatileFilterPlan = {
   stateDirs: string[];
 };
 
-/**
- * Returns true if the given absolute path should be skipped during backup
- * because it is a live-mutation target.
- *
- * Rules:
- *   - `{stateDir}/sessions/**`/`*.{jsonl,log}` (legacy)
- *   - `{stateDir}/agents/<agentId>/sessions/**`/`*.{jsonl,log}`
- *   - `{stateDir}/cron/runs/**`/`*.{jsonl,log}`
- *   - `{stateDir}/logs/**`/`*.{jsonl,log}`
- *   - `{stateDir}/{delivery-queue,session-delivery-queue}/**`/`*.{json,delivered,tmp}`
- *   - `{stateDir}/browser/<profile>/user-data/Singleton{Cookie,Lock,Socket}`
- *   - `{stateDir}/sandbox/skills-workspaces/**`
- *   - `{stateDir}/**`/`*.{sock,pid,tmp}`
- */
 export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterPlan): boolean {
   if (!absolutePath) {
     return false;
@@ -133,25 +109,13 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
         }
       }
 
-      const sessionsRoot = path.posix.join(stateDirPosix, "sessions");
-      if (isUnder(filePosix, sessionsRoot) && hasExtension(filePosix, [".jsonl", ".log"])) {
-        return true;
-      }
-
       if (
-        isAgentSessionTranscriptPath(filePosix, stateDirPosix) &&
-        hasExtension(filePosix, [".jsonl", ".log"])
+        hasExtension(filePosix, [".jsonl", ".log"]) &&
+        (isAgentSessionTranscriptPath(filePosix, stateDirPosix) ||
+          [["sessions"], ["cron", "runs"], ["logs"]].some((parts) =>
+            isUnder(filePosix, path.posix.join(stateDirPosix, ...parts)),
+          ))
       ) {
-        return true;
-      }
-
-      const cronRunsRoot = path.posix.join(stateDirPosix, "cron", "runs");
-      if (isUnder(filePosix, cronRunsRoot) && hasExtension(filePosix, [".jsonl", ".log"])) {
-        return true;
-      }
-
-      const logsRoot = path.posix.join(stateDirPosix, "logs");
-      if (isUnder(filePosix, logsRoot) && hasExtension(filePosix, [".jsonl", ".log"])) {
         return true;
       }
 

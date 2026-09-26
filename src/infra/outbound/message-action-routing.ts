@@ -133,8 +133,7 @@ function resolveTargetBoundAccountId(params: {
   if (!params.agentId) {
     return undefined;
   }
-  const target =
-    normalizeOptionalString(params.args.to) ?? normalizeOptionalString(params.args.channelId) ?? "";
+  const target = readTrimmedStringAlias(params.args, ["to", "channelId"]);
   if (!target) {
     return resolveFirstBoundAccountId({
       cfg: params.cfg,
@@ -163,7 +162,6 @@ function resolveTargetBoundAccountId(params: {
 async function resolveActionTarget(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
-  action: ChannelMessageActionName;
   args: Record<string, unknown>;
   accountId?: string | null;
   plugin?: ChannelPlugin;
@@ -190,18 +188,15 @@ async function resolveActionTarget(params: {
       accountId: params.accountId ?? undefined,
       plugin: params.plugin,
       preferredKind: "group",
-      validateResolvedTarget: (target) =>
-        target.kind === "user"
-          ? `Channel id "${channelIdRaw}" resolved to a user target.`
-          : undefined,
     });
-    params.args.channelId = sanitizeGroupTargetId(resolved.to);
+    if (resolved.kind === "user") {
+      throw invalidMessageActionTargetError(
+        `Channel id "${channelIdRaw}" resolved to a user target.`,
+      );
+    }
+    params.args.channelId = resolved.to.replace(/^(channel|group):/i, "");
   }
   return resolvedTarget;
-}
-
-function sanitizeGroupTargetId(target: string): string {
-  return target.replace(/^(channel|group):/i, "");
 }
 
 async function resolveResolvedTargetOrThrow(params: {
@@ -211,7 +206,6 @@ async function resolveResolvedTargetOrThrow(params: {
   accountId?: string;
   plugin?: ChannelPlugin;
   preferredKind?: "group" | "user" | "channel";
-  validateResolvedTarget?: (target: ResolvedMessagingTarget) => string | undefined;
 }): Promise<ResolvedMessagingTarget> {
   const resolved = await resolveChannelTarget({
     cfg: params.cfg,
@@ -223,10 +217,6 @@ async function resolveResolvedTargetOrThrow(params: {
   });
   if (!resolved.ok) {
     throw resolved.error;
-  }
-  const validationError = params.validateResolvedTarget?.(resolved.target);
-  if (validationError) {
-    throw invalidMessageActionTargetError(validationError);
   }
   return resolved.target;
 }
@@ -271,10 +261,7 @@ function isCurrentSourceTargetParam(
     return false;
   }
 
-  const explicitTarget =
-    normalizeOptionalString(params.target) ??
-    normalizeOptionalString(params.to) ??
-    normalizeOptionalString(params.channelId);
+  const explicitTarget = readTrimmedStringAlias(params, ["target", "to", "channelId"]);
   if (!explicitTarget) {
     return false;
   }
@@ -501,7 +488,6 @@ export async function resolveMessageTarget(params: {
     : await resolveActionTarget({
         cfg: params.cfg,
         channel: params.channel,
-        action: params.action,
         args: params.args,
         accountId: params.accountId,
         plugin: params.plugin,

@@ -18,10 +18,7 @@ import { isSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js"
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import { mergeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  isDeliverableMessageChannel,
-} from "../../utils/message-channel.js";
+import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import {
   normalizeDeliverableOutboundChannel,
   resolveOutboundChannelPlugin,
@@ -86,13 +83,6 @@ export function resolveOutboundTarget(params: {
           allowBootstrap: params.allowBootstrap,
         }),
       target: params,
-      onMissingPlugin: () =>
-        params.channel === INTERNAL_MESSAGE_CHANNEL
-          ? undefined
-          : {
-              ok: false,
-              error: new Error(`Unsupported channel: ${params.channel}`),
-            },
     }) ?? {
       ok: false,
       error: new Error(`Unsupported channel: ${params.channel}`),

@@ -40,8 +40,8 @@ type CommandResult = {
   error?: string;
 };
 
-type ListenerReadResult = {
-  listeners: PortListener[];
+type SocketReadResult<T extends PortListener> = {
+  entries: T[];
   detail?: string;
   errors: string[];
 };
@@ -254,21 +254,21 @@ async function readUnixSocketEntries<T extends PortListener>(
 
 async function readUnixEstablishedConnections(
   port: number,
-): Promise<{ connections: PortConnection[]; detail?: string; errors: string[] }> {
+): Promise<SocketReadResult<PortConnection>> {
   const lsof = await resolveLsofCommand();
   const primary = await readUnixSocketEntries(
     [lsof, "-nP", `-iTCP:${port}`, "-sTCP:ESTABLISHED", "-FpFcn"],
     (output) => parseLsofConnectionFieldOutput(output, port),
   );
   if (!primary.unavailable) {
-    return { connections: primary.entries, detail: primary.detail, errors: primary.errors };
+    return primary;
   }
   const fallback = await readUnixSocketEntries(
     ["ss", "-H", "-tnp", "state", "established", `( sport = :${port} or dport = :${port} )`],
     (output) => parseSsConnections(output, port),
   );
   return {
-    connections: fallback.entries,
+    entries: fallback.entries,
     detail: fallback.entries.length > 0 ? fallback.detail : undefined,
     errors: fallback.entries.length > 0 ? fallback.errors : [...primary.errors, ...fallback.errors],
   };
@@ -329,11 +329,11 @@ async function readUnixListeners(
   port: number,
   snapshot?: UnixListenerSnapshot,
   signal?: AbortSignal,
-): Promise<ListenerReadResult> {
+): Promise<SocketReadResult<PortListener>> {
   const listenerSnapshot = snapshot ?? (await readUnixListenerSnapshot(port, signal));
   if (!listenerSnapshot.lsofUnavailable) {
-    const result = readLsofListenersForPort(listenerSnapshot.recordsByPort, port);
-    return { ...result, errors: listenerSnapshot.errors };
+    const { listeners, detail } = readLsofListenersForPort(listenerSnapshot.recordsByPort, port);
+    return { entries: listeners, detail, errors: listenerSnapshot.errors };
   }
   const fallback = await readUnixSocketEntries(
     ["ss", "-H", "-ltnp", `sport = :${port}`],
@@ -341,7 +341,7 @@ async function readUnixListeners(
     signal,
   );
   return {
-    listeners: fallback.entries,
+    entries: fallback.entries,
     detail: fallback.entries.length > 0 ? fallback.detail : undefined,
     errors:
       fallback.entries.length > 0
@@ -458,7 +458,7 @@ async function readWindowsNetstatEntries<T extends PortListener>(
   port: number,
   parse: (output: string, port: number) => T[],
   signal?: AbortSignal,
-): Promise<{ entries: T[]; detail?: string; errors: string[] }> {
+): Promise<SocketReadResult<T>> {
   signal?.throwIfAborted();
   const errors: string[] = [];
   const res = await runCommandSafe([getWindowsSystem32ExePath("netstat.exe"), "-ano"], signal);
@@ -496,21 +496,6 @@ async function readWindowsNetstatEntries<T extends PortListener>(
   return { entries, detail: res.stdout.trim() || undefined, errors };
 }
 
-async function readWindowsListeners(
-  port: number,
-  signal?: AbortSignal,
-): Promise<ListenerReadResult> {
-  const result = await readWindowsNetstatEntries(port, parseWindowsNetstatListeners, signal);
-  return { listeners: result.entries, detail: result.detail, errors: result.errors };
-}
-
-async function readWindowsEstablishedConnections(
-  port: number,
-): Promise<{ connections: PortConnection[]; detail?: string; errors: string[] }> {
-  const result = await readWindowsNetstatEntries(port, parseNetstatConnections);
-  return { connections: result.entries, detail: result.detail, errors: result.errors };
-}
-
 export async function inspectPortUsage(
   port: number,
   options?: { probeHosts?: readonly string[]; signal?: AbortSignal },
@@ -519,24 +504,22 @@ export async function inspectPortUsage(
   signal?.throwIfAborted();
   const result =
     process.platform === "win32"
-      ? await readWindowsListeners(port, signal)
+      ? await readWindowsNetstatEntries(port, parseWindowsNetstatListeners, signal)
       : await readUnixListeners(port, undefined, signal);
   if (process.platform !== "win32") {
-    await enrichUnixListenerProcessInfo(result.listeners, signal);
+    await enrichUnixListenerProcessInfo(result.entries, signal);
   }
   return buildPortUsage(port, result, options?.probeHosts, signal);
 }
 
 async function buildPortUsage(
   port: number,
-  result: ListenerReadResult,
+  result: SocketReadResult<PortListener>,
   probeHosts?: readonly string[],
   signal?: AbortSignal,
 ): Promise<PortUsage> {
   signal?.throwIfAborted();
-  const errors: string[] = [];
-  errors.push(...result.errors);
-  let listeners = result.listeners;
+  let listeners = result.entries;
   const status: PortUsageStatus = probeHosts
     ? await probePortUsage(port, probeHosts, signal)
     : listeners.length > 0
@@ -563,7 +546,7 @@ async function buildPortUsage(
     listeners,
     hints,
     detail: result.detail,
-    errors: errors.length > 0 ? errors : undefined,
+    errors: result.errors.length > 0 ? [...result.errors] : undefined,
   };
 }
 
@@ -618,7 +601,7 @@ export async function inspectPortUsages(
 
   const snapshot = await readUnixListenerSnapshot();
   const results = await Promise.all(uniquePorts.map((port) => readUnixListeners(port, snapshot)));
-  await enrichUnixListenerProcessInfo(results.flatMap(({ listeners }) => listeners));
+  await enrichUnixListenerProcessInfo(results.flatMap(({ entries }) => entries));
   const entries = await Promise.all(
     uniquePorts.map(
       async (port, index) =>
@@ -634,14 +617,14 @@ export async function inspectPortUsages(
 export async function inspectPortConnections(port: number): Promise<PortConnections> {
   const result =
     process.platform === "win32"
-      ? await readWindowsEstablishedConnections(port)
+      ? await readWindowsNetstatEntries(port, parseNetstatConnections)
       : await readUnixEstablishedConnections(port);
   if (process.platform !== "win32") {
-    await enrichUnixListenerProcessInfo(result.connections);
+    await enrichUnixListenerProcessInfo(result.entries);
   }
   return {
     port,
-    connections: result.connections,
+    connections: result.entries,
     detail: result.detail,
     errors: result.errors.length > 0 ? result.errors : undefined,
   };

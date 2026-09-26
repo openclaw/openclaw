@@ -2592,7 +2592,6 @@ src/infra/agent-events.ts	2
 src/infra/agent-lifecycle-error.ts	1
 src/infra/approval-errors.ts	5
 src/infra/approval-gateway-resolver.ts	5
-src/infra/approval-handler-bootstrap.ts	1
 src/infra/approval-handler-runtime.ts	15
 src/infra/approval-presentation.ts	3
 src/infra/backup-archive-publication.ts	6
@@ -2613,7 +2612,7 @@ src/infra/delivery-queue-sqlite.types.ts	1
 src/infra/delivery-recovery.shared.ts	4
 src/infra/device-pairing-store.ts	4
 src/infra/diagnostic-event-listener-presence.ts	3
-src/infra/diagnostic-events.ts	8
+src/infra/diagnostic-events.ts	4
 src/infra/diagnostic-model-request.ts	1
 src/infra/diagnostic-semantic-run-progress.ts	1
 src/infra/diagnostic-trace-context.ts	2
@@ -2628,7 +2627,6 @@ src/infra/exec-approvals-socket.ts	1
 src/infra/exec-approvals-store.ts	1
 src/infra/exec-argv-analysis.ts	1
 src/infra/exec-host.ts	3
-src/infra/exec-safe-bin-policy-profiles.ts	1
 src/infra/fetch-headers.ts	4
 src/infra/fetch.ts	5
 src/infra/file-lock-manager.ts	1
@@ -2645,7 +2643,7 @@ src/infra/install-package-dir.ts	2
 src/infra/json-utf8-bytes.ts	4
 src/infra/kysely-sync-cache-state.ts	1
 src/infra/kysely-sync.ts	7
-src/infra/net/fetch-guard.ts	3
+src/infra/net/fetch-guard.ts	2
 src/infra/net/form-data.ts	2
 src/infra/net/node-proxy-agent.ts	4
 src/infra/net/proxy-fetch.ts	2
@@ -2673,7 +2671,7 @@ src/infra/outbound/format.ts	1
 src/infra/outbound/message-account-selection.ts	2
 src/infra/outbound/message-action-execution.ts	3
 src/infra/outbound/message-action-runner.ts	1
-src/infra/outbound/message-action-send.ts	2
+src/infra/outbound/message-action-send.ts	1
 src/infra/outbound/reply-payload-normalize.ts	3
 src/infra/outbound/send-deps.ts	2
 src/infra/outbound/session-binding-normalization.ts	1
@@ -2695,7 +2693,6 @@ src/infra/question-gateway-resolver.ts	3
 src/infra/question-reaction-runtime.ts	3
 src/infra/restart-coordinator.ts	1
 src/infra/restart-handoff.ts	1
-src/infra/restart-sentinel-store.ts	10
 src/infra/restart-sentinel.ts	1
 src/infra/restart-stale-pids.ts	3
 src/infra/retry-policy.ts	3
@@ -2704,7 +2701,6 @@ src/infra/session-cost-usage-collection.ts	3
 src/infra/session-cost-usage-pricing.ts	4
 src/infra/session-cost-usage-reporting.ts	5
 src/infra/session-sqlite-migration-readers.ts	2
-src/infra/shell-env.ts	1
 src/infra/sqlite-coordinator.ts	2
 src/infra/sqlite-file-generation.ts	9
 src/infra/sqlite-files.ts	1
@@ -2734,18 +2730,17 @@ src/infra/state-migrations.meeting-transcripts-files.ts	5
 src/infra/state-migrations.meeting-transcripts-verify.ts	2
 src/infra/state-migrations.meeting-transcripts.ts	2
 src/infra/state-migrations.node-host.ts	2
-src/infra/state-migrations.runtime-state.ts	7
+src/infra/state-migrations.runtime-state.ts	1
 src/infra/state-migrations.session-store.ts	9
 src/infra/state-migrations.shared-auth-store.ts	1
 src/infra/state-migrations.state-dir.ts	1
-src/infra/state-migrations.storage.ts	7
+src/infra/state-migrations.storage.ts	3
 src/infra/state-migrations.tui-last-session.ts	2
 src/infra/state-migrations.update-check.ts	2
 src/infra/state-migrations.workspace-setup-store.ts	2
 src/infra/state-migrations.workspace-setup.ts	1
 src/infra/system-presence.ts	2
 src/infra/system-run-approval-binding.ts	1
-src/infra/system-run-approval-context.ts	6
 src/infra/tailscale.ts	7
 src/infra/tmp-openclaw-dir.ts	3
 src/infra/unhandled-rejections.ts	5

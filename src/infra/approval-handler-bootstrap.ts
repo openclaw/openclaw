@@ -17,7 +17,6 @@ import {
 } from "./channel-runtime-context.js";
 import { isExecApprovalChannelRuntimeTerminalStartError } from "./exec-approval-channel-runtime.js";
 
-type ApprovalBootstrapHandler = ChannelApprovalHandler;
 const APPROVAL_HANDLER_BOOTSTRAP_RETRY_MS = 1_000;
 
 function isRetryableApprovalBootstrapStartError(error: unknown): boolean {
@@ -59,7 +58,7 @@ export async function startChannelApprovalHandlerBootstrap(params: {
   const channelLabel = params.plugin.meta.label || params.plugin.id;
   const logger = params.logger ?? createSubsystemLogger(`${params.plugin.id}/approval-bootstrap`);
   let activeGeneration = 0;
-  let activeHandler: ApprovalBootstrapHandler | null = null;
+  let activeHandler: ChannelApprovalHandler | null = null;
   let retryTimer: NodeJS.Timeout | null = null;
   const invalidateActiveHandler = () => {
     activeGeneration += 1;
@@ -109,7 +108,7 @@ export async function startChannelApprovalHandlerBootstrap(params: {
       await handler.stop().catch(() => {});
       return;
     }
-    activeHandler = handler as ApprovalBootstrapHandler;
+    activeHandler = handler;
     try {
       await withGatewayNativeApprovalRuntime(params.gatewayRuntime, () => handler.start());
     } catch (error) {

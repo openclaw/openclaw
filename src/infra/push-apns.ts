@@ -21,6 +21,7 @@ import {
   resolveExecApprovalAlertBody,
   resolvePluginApprovalAlertBody,
 } from "./push-apns-payloads.js";
+import { apnsSendInvalidatedError, requireCurrentApnsSend } from "./push-apns-send-current.js";
 import {
   isLikelyApnsToken,
   isValidApnsTopic,
@@ -88,24 +89,6 @@ type ApnsRequestResponse = { status: number; apnsId?: string; body: string };
 type ApnsRequestSender = (params: ApnsRequestParams) => Promise<ApnsRequestResponse>;
 
 const DEFAULT_APNS_TIMEOUT_MS = 10_000;
-
-function throwIfApnsSendAborted(signal: AbortSignal | undefined): void {
-  if (!signal?.aborted) {
-    return;
-  }
-  throw signal.reason instanceof Error ? signal.reason : new Error("APNs send invalidated");
-}
-
-async function requireCurrentApnsSend(params: {
-  signal?: AbortSignal;
-  isCurrent?: () => Promise<boolean>;
-}): Promise<void> {
-  throwIfApnsSendAborted(params.signal);
-  if (params.isCurrent && !(await params.isCurrent())) {
-    throw new Error("APNs send invalidated");
-  }
-  throwIfApnsSendAborted(params.signal);
-}
 
 function parseReason(body: string): string | undefined {
   const trimmed = body.trim();
@@ -191,13 +174,7 @@ async function sendApnsRequest(params: ApnsRequestParams): Promise<ApnsRequestRe
       }
       reject(toErrorObject(err, "Non-Error rejection"));
     };
-    const onAbort = () =>
-      fail(
-        params.signal?.reason instanceof Error
-          ? params.signal.reason
-          : new Error("APNs send invalidated"),
-        { cancelRequest: true },
-      );
+    const onAbort = () => fail(apnsSendInvalidatedError(params.signal), { cancelRequest: true });
     const finish = (result: { status: number; apnsId?: string; body: string }) => {
       if (settled) {
         return;

@@ -78,26 +78,15 @@ export type QueuedDeliveryPayload = {
   maxRetries?: number;
 };
 
-type LegacyQueuedDeliveryPayload = Omit<QueuedDeliveryPayload, "preparedBatch" | "payloads"> & {
+export interface LegacyQueuedDelivery extends Omit<
+  QueuedDelivery,
+  "preparedBatch" | "settlement" | "retainOnFailure" | "recoveryState"
+> {
   payloads: ReplyPayload[];
   replyToId?: string | null;
   replyToMode?: ReplyToMode;
   replyPayloadSendingHook?: QueuedReplyPayloadSendingHook;
-};
-
-export interface LegacyQueuedDelivery extends LegacyQueuedDeliveryPayload {
-  id: string;
-  enqueuedAt: number;
-  retryCount: number;
-  attemptCount: number;
-  availableAt?: number;
-  producerClaimId?: string;
-  lastAttemptAt?: number;
-  lastError?: string;
-  platformSendAttemptId?: string;
-  platformSendStartedAt?: number;
-  effectiveReplyToId?: string | null;
-  recoveryState?: "producer_claimed" | "send_attempt_started" | "unknown_after_send";
+  recoveryState?: Exclude<QueuedDelivery["recoveryState"], "settlement_pending">;
 }
 
 export type LegacyQueuedDeliveryPreparation = LegacyQueuedDelivery & {

@@ -2,56 +2,18 @@ import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
+import { z } from "zod";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import type { UpdateFailureFact } from "./update-failure-facts.js";
-import { updateRecoverySchema, type UpdateRecovery } from "./update-recovery.js";
+import { updateRecoverySchema } from "./update-recovery.js";
 import { UpdateFailureFactSchema } from "./update-run-schema.js";
 
-type RestartSentinelLog = {
-  stdoutTail?: string | null;
-  stderrTail?: string | null;
-  exitCode?: number | null;
-};
-
-type RestartSentinelStep = {
-  name: string;
-  command: string;
-  cwd?: string | null;
-  durationMs?: number | null;
-  log?: RestartSentinelLog | null;
-  advisory?: boolean;
-  failureFacts?: UpdateFailureFact[];
-};
-
-type RestartSentinelStats = {
-  runId?: string;
-  recovery?: UpdateRecovery;
-  mode?: string;
-  root?: string;
-  target?: string;
-  requiresRestart?: boolean;
-  handoffId?: string;
-  before?: Record<string, unknown> | null;
-  after?: Record<string, unknown> | null;
-  steps?: RestartSentinelStep[];
-  reason?: string | null;
-  durationMs?: number | null;
-};
-
-export type RestartSentinelContinuation =
-  | {
-      kind: "systemEvent";
-      text: string;
-    }
-  | {
-      kind: "agentTurn";
-      message: string;
-    };
+type RestartSentinelStats = z.infer<typeof restartSentinelStatsSchema>;
+export type RestartSentinelContinuation = z.infer<typeof restartSentinelContinuationSchema>;
 
 export type RestartSentinelPayload = {
   kind: "config-apply" | "config-auto-recovery" | "config-patch" | "update" | "restart";
@@ -88,249 +50,113 @@ export type RestartSentinelRowState =
 const RESTART_SENTINEL_KEY = "current";
 const RESTART_SENTINEL_REVISION_FLOOR_KEY = "revision-floor";
 const UPDATE_INSTALL_RECEIPT_KEY = "latest-update-install";
-const RESTART_SENTINEL_KINDS = new Set<RestartSentinelPayload["kind"]>([
-  "config-apply",
-  "config-auto-recovery",
-  "config-patch",
-  "update",
-  "restart",
-]);
-const RESTART_SENTINEL_STATUSES = new Set<RestartSentinelPayload["status"]>([
-  "ok",
-  "error",
-  "skipped",
-]);
-
 type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
 type RestartSentinelRow = Omit<
   Selectable<GatewayRestartSentinelDatabase["gateway_restart_sentinel"]>,
   "sentinel_key" | "payload_json"
 >;
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
 function isSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value);
 }
 
-function parseOptionalNullableString(
-  record: Record<string, unknown>,
-  key: string,
-): string | null | undefined | false {
-  const value = record[key];
-  if (value === undefined || value === null || typeof value === "string") {
-    return value;
+// Optional properties are absent from the canonical payload, including when an
+// input explicitly supplies undefined. Keep nested diagnostic records untouched.
+function omitUndefinedFields<T extends object>(value: T): T {
+  for (const key in value) {
+    if (value[key] === undefined) {
+      delete value[key];
+    }
   }
-  return false;
+  return value;
 }
 
-function parseRestartSentinelLog(value: unknown): RestartSentinelLog | null {
-  if (!isPlainRecord(value)) {
-    return null;
-  }
-  const stdoutTail = parseOptionalNullableString(value, "stdoutTail");
-  const stderrTail = parseOptionalNullableString(value, "stderrTail");
-  const exitCode = value.exitCode;
-  if (
-    stdoutTail === false ||
-    stderrTail === false ||
-    (exitCode !== undefined && exitCode !== null && !isSafeInteger(exitCode))
-  ) {
-    return null;
-  }
-  return {
-    ...(stdoutTail !== undefined ? { stdoutTail } : {}),
-    ...(stderrTail !== undefined ? { stderrTail } : {}),
-    ...(exitCode !== undefined ? { exitCode: exitCode as number | null } : {}),
-  };
-}
+const restartSentinelLogSchema = z
+  .object({
+    stdoutTail: z.string().nullish(),
+    stderrTail: z.string().nullish(),
+    exitCode: z.number().int().nullish(),
+  })
+  .transform(omitUndefinedFields);
+const restartSentinelStepSchema = z
+  .object({
+    name: z.string(),
+    command: z.string(),
+    failureFacts: UpdateFailureFactSchema.array().max(5).optional().catch(undefined),
+    cwd: z.string().nullish(),
+    durationMs: z.number().finite().nullish(),
+    log: restartSentinelLogSchema.nullish(),
+    advisory: z.boolean().optional(),
+  })
+  .transform(omitUndefinedFields);
+const restartSentinelStepsSchema = z.custom<unknown[]>(Array.isArray).transform((steps, ctx) =>
+  steps.map((step) => {
+    const parsed = restartSentinelStepSchema.safeParse(step);
+    if (parsed.success) {
+      return parsed.data;
+    }
+    ctx.addIssue({ code: "custom", message: "Invalid restart sentinel step" });
+    return z.NEVER;
+  }),
+);
+const restartSentinelStatsSchema = z
+  .object({
+    // Unsupported recovery metadata must not suppress the restart notice.
+    recovery: updateRecoverySchema.optional().catch(undefined),
+    mode: z.string().optional(),
+    root: z.string().optional(),
+    target: z.string().optional(),
+    requiresRestart: z.boolean().optional(),
+    handoffId: z.string().optional(),
+    runId: z.string().optional(),
+    before: z.custom<Record<string, unknown>>(isPlainRecord).nullish(),
+    after: z.custom<Record<string, unknown>>(isPlainRecord).nullish(),
+    steps: restartSentinelStepsSchema.optional(),
+    reason: z.string().nullish(),
+    durationMs: z.number().finite().nullish(),
+  })
+  .transform(omitUndefinedFields);
 
-function parseRestartSentinelStep(value: unknown): RestartSentinelStep | null {
-  if (
-    !isPlainRecord(value) ||
-    typeof value.name !== "string" ||
-    typeof value.command !== "string"
-  ) {
-    return null;
-  }
-  const cwd = parseOptionalNullableString(value, "cwd");
-  const durationMs = value.durationMs;
-  const log = value.log;
-  const advisory = value.advisory;
-  if (
-    cwd === false ||
-    (durationMs !== undefined && durationMs !== null && !isFiniteNumber(durationMs)) ||
-    (log !== undefined && log !== null && !parseRestartSentinelLog(log)) ||
-    (advisory !== undefined && typeof advisory !== "boolean")
-  ) {
-    return null;
-  }
-  const { name, command } = value;
-  const facts = UpdateFailureFactSchema.array().max(5).safeParse(value.failureFacts);
-  return {
-    name,
-    command,
-    ...(facts.success ? { failureFacts: facts.data } : {}),
-    ...(cwd !== undefined ? { cwd } : {}),
-    ...(durationMs !== undefined ? { durationMs: durationMs as number | null } : {}),
-    ...(log !== undefined ? { log: log === null ? null : parseRestartSentinelLog(log) } : {}),
-    ...(advisory !== undefined ? { advisory } : {}),
-  };
-}
-
-function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null {
-  if (!isPlainRecord(value)) {
-    return null;
-  }
-  const mode = parseOptionalNullableString(value, "mode");
-  const root = parseOptionalNullableString(value, "root");
-  const target = parseOptionalNullableString(value, "target");
-  const handoffId = parseOptionalNullableString(value, "handoffId");
-  const runId = parseOptionalNullableString(value, "runId");
-  const reason = parseOptionalNullableString(value, "reason");
-  const before = value.before;
-  const after = value.after;
-  const steps = value.steps;
-  const durationMs = value.durationMs;
-  const recovery =
-    value.recovery === undefined ? undefined : updateRecoverySchema.safeParse(value.recovery);
-  if (
-    mode === false ||
-    mode === null ||
-    root === false ||
-    root === null ||
-    target === false ||
-    target === null ||
-    handoffId === false ||
-    handoffId === null ||
-    runId === false ||
-    runId === null ||
-    reason === false ||
-    (value.requiresRestart !== undefined && typeof value.requiresRestart !== "boolean") ||
-    (before !== undefined && before !== null && !isPlainRecord(before)) ||
-    (after !== undefined && after !== null && !isPlainRecord(after)) ||
-    (steps !== undefined &&
-      (!Array.isArray(steps) || steps.some((step) => !parseRestartSentinelStep(step)))) ||
-    (durationMs !== undefined && durationMs !== null && !isFiniteNumber(durationMs))
-  ) {
-    return null;
-  }
-  // Recovery is diagnostic here; unsupported metadata must not suppress the restart notice.
-  return {
-    ...(recovery?.success ? { recovery: recovery.data } : {}),
-    ...(mode !== undefined ? { mode } : {}),
-    ...(root !== undefined ? { root } : {}),
-    ...(target !== undefined ? { target } : {}),
-    ...(value.requiresRestart !== undefined
-      ? { requiresRestart: value.requiresRestart as boolean }
-      : {}),
-    ...(handoffId !== undefined ? { handoffId } : {}),
-    ...(runId !== undefined ? { runId } : {}),
-    ...(before !== undefined ? { before: before as Record<string, unknown> | null } : {}),
-    ...(after !== undefined ? { after: after as Record<string, unknown> | null } : {}),
-    ...(steps !== undefined ? { steps: steps.map((step) => parseRestartSentinelStep(step)!) } : {}),
-    ...(reason !== undefined ? { reason } : {}),
-    ...(durationMs !== undefined ? { durationMs: durationMs as number | null } : {}),
-  };
-}
-
-function parseRestartSentinelContinuation(value: unknown): RestartSentinelContinuation | null {
-  if (!isPlainRecord(value)) {
-    return null;
-  }
-  if (value.kind === "systemEvent" && typeof value.text === "string") {
-    return { kind: "systemEvent", text: value.text };
-  }
-  if (value.kind === "agentTurn" && typeof value.message === "string") {
-    return { kind: "agentTurn", message: value.message };
-  }
-  return null;
-}
+const restartSentinelContinuationSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("systemEvent"), text: z.string() }),
+  z.object({ kind: z.literal("agentTurn"), message: z.string() }),
+]);
+const restartSentinelPayloadSchema = z
+  .object({
+    kind: z.enum(["config-apply", "config-auto-recovery", "config-patch", "update", "restart"]),
+    status: z.enum(["ok", "error", "skipped"]),
+    ts: z.number().int(),
+    sessionKey: z.string().optional(),
+    deliveryContext: z
+      .object({
+        channel: z.string().optional(),
+        to: z.string().optional(),
+        accountId: z.string().optional(),
+      })
+      .transform(omitUndefinedFields)
+      .transform((value) => (Object.keys(value).length > 0 ? value : undefined))
+      .optional(),
+    threadId: z.string().optional(),
+    message: z
+      .string()
+      .nullish()
+      .transform((value) => value ?? undefined),
+    continuation: restartSentinelContinuationSchema
+      .nullish()
+      .transform((value) => value ?? undefined),
+    doctorHint: z
+      .string()
+      .nullish()
+      .transform((value) => value ?? undefined),
+    stats: restartSentinelStatsSchema.nullish().transform((value) => value ?? undefined),
+  })
+  // SQL NULL is canonical absence for optional top-level columns. Keep legacy
+  // nulls and empty routes consistent between writes and typed-column reads.
+  .transform(omitUndefinedFields);
 
 function parseRestartSentinelPayload(value: unknown): RestartSentinelPayload | null {
-  if (
-    !isPlainRecord(value) ||
-    !RESTART_SENTINEL_KINDS.has(value.kind as RestartSentinelPayload["kind"]) ||
-    !RESTART_SENTINEL_STATUSES.has(value.status as RestartSentinelPayload["status"]) ||
-    !isSafeInteger(value.ts)
-  ) {
-    return null;
-  }
-  const sessionKey = parseOptionalNullableString(value, "sessionKey");
-  const threadId = parseOptionalNullableString(value, "threadId");
-  const message = parseOptionalNullableString(value, "message");
-  const doctorHint = parseOptionalNullableString(value, "doctorHint");
-  if (
-    sessionKey === false ||
-    sessionKey === null ||
-    threadId === false ||
-    threadId === null ||
-    message === false ||
-    doctorHint === false
-  ) {
-    return null;
-  }
-
-  let deliveryContext: RestartSentinelPayload["deliveryContext"];
-  if (value.deliveryContext !== undefined) {
-    if (!isPlainRecord(value.deliveryContext)) {
-      return null;
-    }
-    const channel = parseOptionalNullableString(value.deliveryContext, "channel");
-    const to = parseOptionalNullableString(value.deliveryContext, "to");
-    const accountId = parseOptionalNullableString(value.deliveryContext, "accountId");
-    if (
-      channel === false ||
-      channel === null ||
-      to === false ||
-      to === null ||
-      accountId === false ||
-      accountId === null
-    ) {
-      return null;
-    }
-    deliveryContext = {
-      ...(channel !== undefined ? { channel } : {}),
-      ...(to !== undefined ? { to } : {}),
-      ...(accountId !== undefined ? { accountId } : {}),
-    };
-  }
-
-  let continuation: RestartSentinelContinuation | null | undefined;
-  if (value.continuation !== undefined) {
-    continuation =
-      value.continuation === null ? null : parseRestartSentinelContinuation(value.continuation);
-    if (continuation === null && value.continuation !== null) {
-      return null;
-    }
-  }
-
-  let stats: RestartSentinelStats | null | undefined;
-  if (value.stats !== undefined) {
-    stats = value.stats === null ? null : parseRestartSentinelStats(value.stats);
-    if (stats === null && value.stats !== null) {
-      return null;
-    }
-  }
-
-  // SQL NULL is canonical absence for optional top-level columns. Normalize
-  // legacy nulls and empty routes so writes and typed-column reads agree.
-  return {
-    kind: value.kind as RestartSentinelPayload["kind"],
-    status: value.status as RestartSentinelPayload["status"],
-    ts: value.ts,
-    ...(sessionKey !== undefined ? { sessionKey } : {}),
-    ...(deliveryContext !== undefined && Object.keys(deliveryContext).length > 0
-      ? { deliveryContext }
-      : {}),
-    ...(threadId !== undefined ? { threadId } : {}),
-    ...(message !== undefined && message !== null ? { message } : {}),
-    ...(continuation !== undefined && continuation !== null ? { continuation } : {}),
-    ...(doctorHint !== undefined && doctorHint !== null ? { doctorHint } : {}),
-    ...(stats !== undefined && stats !== null ? { stats } : {}),
-  };
+  const parsed = restartSentinelPayloadSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 export function parseRestartSentinelEnvelope(value: unknown): RestartSentinelEnvelope | null {
