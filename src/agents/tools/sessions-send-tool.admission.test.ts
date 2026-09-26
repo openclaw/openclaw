@@ -1,5 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -429,6 +431,9 @@ describe("sessions_send dispatch admission", () => {
     { admission: "rejected", timeoutSeconds: 1 },
     { admission: "pending", timeoutSeconds: 0 },
     { admission: "pending", timeoutSeconds: 1 },
+    { admission: "dispatched-timeout", timeoutSeconds: 0 },
+    { admission: "dispatched-timeout", timeoutSeconds: 1 },
+    { admission: "unsent-timeout", timeoutSeconds: 0 },
   ] as const)(
     "does not install a watch or start A2A when admission is $admission (wait $timeoutSeconds)",
     async ({ admission, timeoutSeconds }) => {
@@ -446,6 +451,13 @@ describe("sessions_send dispatch admission", () => {
           if (request.method === "agent") {
             if (admission === "rejected") {
               throw new Error("Task admission failed before dispatch");
+            }
+            if (admission === "dispatched-timeout" || admission === "unsent-timeout") {
+              throw new GatewayProtocolRequestTimeoutError({
+                method: "agent",
+                timeoutMs: 10_000,
+                requestSent: admission === "dispatched-timeout",
+              });
             }
             return { runId, status: "in_flight", admissionPending: true };
           }
@@ -477,7 +489,9 @@ describe("sessions_send dispatch admission", () => {
         error:
           admission === "rejected"
             ? "Task admission failed before dispatch"
-            : expect.stringMatching(/admission|unconfirmed|pending/i),
+            : admission === "unsent-timeout"
+              ? expect.stringMatching(/timed out/i)
+              : expect.stringMatching(/admission|unconfirmed|pending/i),
       });
       if (admission === "pending") {
         expect.soft(result.details).toMatchObject({
@@ -487,6 +501,19 @@ describe("sessions_send dispatch admission", () => {
       } else {
         expect.soft(result.details).not.toHaveProperty("sentBeforeError");
       }
+      if (admission === "dispatched-timeout" || admission === "unsent-timeout") {
+        expect.soft(result.details).toMatchObject({
+          dispatch: {
+            outcome: admission === "dispatched-timeout" ? "unknown" : "not_sent",
+            code: "CLIENT_TIMEOUT",
+            method: "agent",
+            requestSent: admission === "dispatched-timeout",
+            timeoutMs: 10_000,
+            idempotencyKey: runId,
+          },
+        });
+      }
+      expect.soft(Value.Check(tool.outputSchema!, result.details)).toBe(true);
       expect.soft(registerWatch).not.toHaveBeenCalled();
       expect.soft(runSessionsSendA2AFlow).not.toHaveBeenCalled();
       expect.soft(requests.filter((request) => request.method === "agent")).toHaveLength(1);
