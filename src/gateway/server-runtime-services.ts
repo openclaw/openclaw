@@ -161,6 +161,7 @@ export function scheduleGatewayPostReadyMaintenance(params: {
 const RECOVERY_SHUTDOWN_STILL_PENDING_WARN_MS = 5_000;
 
 function startPendingOutboundDeliveryRecovery(params: {
+  scheduler: GatewayScheduler;
   cfg: OpenClawConfig;
   log: GatewayRuntimeServiceLogger;
 }): () => Promise<void> {
@@ -171,9 +172,9 @@ function startPendingOutboundDeliveryRecovery(params: {
   let stopPromise: Promise<void> | null = null;
   let logRecovery: ReturnType<GatewayRuntimeServiceLogger["child"]> | undefined;
 
-  const recover = (): void => {
+  const recover = (): Promise<void> | undefined => {
     if (stopped || inFlight || isGatewayWorkAdmissionClosed()) {
-      return;
+      return undefined;
     }
     const recovery = runWithGatewayIndependentRootWorkAdmission(async () => {
       if (stopped) {
@@ -289,16 +290,21 @@ function startPendingOutboundDeliveryRecovery(params: {
       }
     });
     inFlight = settled;
+    return settled;
   };
 
   // Match the queue's first backoff window without holding admission between
   // ticks; otherwise suspended/restarting gateways retain invisible work.
-  const retryTimer = setInterval(recover, computeBackoffMs(1));
-  retryTimer.unref?.();
-  recover();
+  const retryJob = params.scheduler.schedule({
+    id: "delivery:outbound-recovery",
+    delayMs: computeBackoffMs(1),
+    everyMs: computeBackoffMs(1),
+    run: recover,
+  });
+  void recover();
   return () => {
     stopped = true;
-    clearInterval(retryTimer);
+    retryJob.cancel();
     if (stopPromise) {
       return stopPromise;
     }
@@ -478,6 +484,7 @@ export function activateGatewayScheduledServices(params: {
       : {}),
   });
   const stopOutboundDeliveryRecovery = startPendingOutboundDeliveryRecovery({
+    scheduler,
     cfg: params.cfgAtStart,
     log: params.log,
   });

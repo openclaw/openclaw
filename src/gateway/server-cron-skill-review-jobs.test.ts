@@ -12,6 +12,7 @@ import {
   getOpenClawAgentDatabaseIfOpen,
 } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reconcileSkillCollectionReviewJobs } from "./server-cron-skill-review-jobs.js";
 
@@ -237,6 +238,7 @@ describe("reconcileSkillCollectionReviewJobs", () => {
   ])("preserves an existing review with stored execution preferences: %j", async (preferences) => {
     const testState = await createOpenClawTestState({ label: "skill-review-preferences" });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath: testState.statePath("cron", "jobs.json"),
       cronEnabled: false,
       log: logger,
@@ -297,6 +299,7 @@ describe("reconcileSkillCollectionReviewJobs", () => {
       agents: { ownership: "explicit", list: [{ id: "main", default: true }, { id: "ops" }] },
     };
     const deps = {
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: false,
       log: logger,
@@ -369,6 +372,7 @@ describe("reconcileSkillCollectionReviewJobs", () => {
       }
     });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath: testState.statePath("cron", "jobs.json"),
       cronEnabled: true,
       log: logger,

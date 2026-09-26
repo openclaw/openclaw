@@ -42,7 +42,11 @@ import { PluginIconController } from "../plugins/plugin-icon-controller.ts";
 import { renderPluginsHubHeader } from "../plugins/plugins-hub-header.ts";
 import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "../plugins/plugins-hub.ts";
 import { SkillLibraryController } from "./library-controller.ts";
-import { renderSkillLibrary, renderSkillLibraryDialogs } from "./library-view.ts";
+import {
+  renderSkillLibrary,
+  renderSkillLibraryDialogs,
+  renderSkillLibraryFeedback,
+} from "./library-view.ts";
 import type { SkillDetailTab, SkillsStatusFilter } from "./view-types.ts";
 import { renderSkills } from "./view.ts";
 
@@ -456,8 +460,7 @@ class SkillsPage extends OpenClawLightDomElement {
             library:
               this.surface === "discovery"
                 ? html`
-                    ${this.library.error && !this.library.draft && !this.library.importOpen ? html`<div class="callout danger" role="alert">${this.library.error}</div>` : nothing}
-                    ${this.library.notice && !this.library.draft ? html`<div class="callout success" role="status">${this.library.notice}</div>` : nothing}
+                    ${renderSkillLibraryFeedback(this.library)}
                     ${renderSkillLibraryDialogs(this.library)}
                   `
                 : renderSkillLibrary(

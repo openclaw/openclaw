@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
+import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { agentCommandMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   sessionStoreEntry,
@@ -105,6 +106,10 @@ test("agent RPC still dispatches for configured-agent session keys", async () =>
 
   vi.mocked(agentCommandMock).mockClear();
   const { ws } = await openClient();
+  const execution = await observeGatewayRunExecution({
+    method: "agent",
+    runId: "proof-main-agent",
+  });
   try {
     const accepted = await rpcReq(ws, "agent", {
       sessionKey: "main",
@@ -114,9 +119,14 @@ test("agent RPC still dispatches for configured-agent session keys", async () =>
     expect(accepted.ok).toBe(true);
     expect(accepted.payload?.status).toBe("accepted");
     expect(accepted.payload?.runId).toBe("proof-main-agent");
-    await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalled());
+    await execution.waitForCompletion();
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
   } finally {
-    ws.close();
-    resetSessionStoreFixture();
+    try {
+      await execution.restore();
+    } finally {
+      ws.close();
+      resetSessionStoreFixture();
+    }
   }
 });
