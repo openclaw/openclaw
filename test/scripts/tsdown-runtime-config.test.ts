@@ -232,12 +232,16 @@ describe("tsdown config", () => {
     const handoffGraph = configs.find((config) =>
       entryKeys(config).includes("managed-handoff-runtime"),
     );
+    const activationGraph = configs.find((config) =>
+      entryKeys(config).includes("package-update-activation-recovery"),
+    );
     const executableGraphs = new Set([
       unifiedGraph,
       expectDefined(workerGraph, "deploy worker graph"),
       requireStandaloneRuntimeGraph("worker/image-processor.worker"),
       requireStandaloneRuntimeGraph("worker/sqlite-store.worker"),
       expectDefined(handoffGraph, "managed handoff graph"),
+      expectDefined(activationGraph, "package activation graph"),
       requireNativeHookRelayGraph(),
       requireStandaloneRuntimeGraph("infra/sqlite-readonly-location.worker"),
       requireStandaloneRuntimeGraph("infra/sqlite-source-revision.worker"),

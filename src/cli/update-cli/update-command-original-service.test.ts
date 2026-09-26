@@ -620,6 +620,44 @@ it("refuses B ledger admission independently from compatible service A state", a
   expect(mocks.restart).not.toHaveBeenCalled();
 });
 
+it("keeps a captured prepublication failure on the existing managed recovery path", async () => {
+  const run: NonNullable<UpdateCommandOptions["run"]> = {
+    runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
+    env: state.env,
+    recoveryBaseline: {
+      directory: state.path("captured-baseline"),
+      manifestPath: state.path("captured-baseline/manifest.json"),
+      manifestSha256: "a".repeat(64),
+    },
+  };
+  await withUpdateCommandExecutor(run.runId, async (executor) => {
+    run.executorFence = await executor.enter(rootB, { serviceRoot: rootA });
+    const opts: UpdateCommandOptions = { json: true, run };
+    const original = await observeOriginalManagedServiceRuntime({ root: rootB, opts }, before);
+    if (!original) {
+      throw new Error("Original managed runtime fixture was not observed.");
+    }
+    const outcome = await rollbackFailedUpdate({
+      definitionRecovery: {},
+      result: { status: "error", mode: "npm", root: rootB, steps: [], durationMs: 0 },
+      previousRoot: rootB,
+      previousSchemaVersions: schemas,
+      originalManagedServiceRuntime: original,
+      configSnapshot: await readConfigFileSnapshot({ observe: false }),
+      opts,
+      preManagedServiceStop: before,
+      allowGatewayRestart: false,
+      timeoutMs: 30_000,
+    });
+    expect(outcome.pendingRecoveryReason).not.toBe(
+      "Full recovery requires its original captured run and package transaction.",
+    );
+    expect(outcome.result.status).toBe("error");
+  });
+  expect(mocks.nativeInstall).not.toHaveBeenCalled();
+  expect(mocks.nativeRestart).not.toHaveBeenCalled();
+});
+
 // Component regression: an unavailable A certificate must stop preparation, not A.
 it.each([
   "fingerprint-timeout",

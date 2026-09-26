@@ -37,6 +37,10 @@ import {
 import { resolveUpdateFinalizationTimeoutMs } from "./update-finalization-budget.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import {
+  POST_CORE_EXECUTOR_CAPABILITY,
+  POST_CORE_MUTATION_PROTOCOL,
+} from "./update-post-core-capability.js";
+import {
   createManagedUpdateRequesterAuthority,
   createManagedUpdateRequesterContinuationAuthority,
   UpdateRequesterRevokedError,
@@ -58,6 +62,8 @@ async function finalizeMigratedUpdate(): Promise<void> {
     process.stdout.write(
       JSON.stringify({
         executorDelegation: "pid-start-v1",
+        postCoreExecutor: POST_CORE_EXECUTOR_CAPABILITY,
+        mutationProtocol: POST_CORE_MUTATION_PROTOCOL,
         retainedOwnerBinding: true,
         doctorConfigWrites: "pid-start-v1",
         gatewayRestartCompletion: true,

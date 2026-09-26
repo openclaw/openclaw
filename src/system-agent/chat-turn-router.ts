@@ -158,7 +158,7 @@ export class ChatTurnRouter {
     proposalHash: string,
     beforePersistentApply?: PersistentApplyGuard,
   ): Promise<SystemAgentChatReply | null> {
-    return await resolveOperatorApprovalDecision({
+    return await resolveOperatorApprovalDecision<SystemAgentChatReply>({
       decision,
       proposalHash,
       getProposal: () => this.getPendingOperatorProposal(),

@@ -1,7 +1,14 @@
+import fs from "node:fs";
+import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
-import type { ManagedHandoffLease } from "../../infra/update-managed-service-handoff-lease.js";
+import type {
+  createManagedHandoffLeaseStore,
+  ManagedHandoffLease,
+  ManagedHandoffParent,
+} from "../../infra/update-managed-service-handoff-lease.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import {
   CommandProcessCleanupError,
@@ -24,18 +31,18 @@ import {
 import { resolvePackageRuntimePreflight } from "./update-command-service-plan.js";
 import { createUpdateOperationDeadline } from "./update-operation-deadline.js";
 
-const boundaries = vi.hoisted(() => ({ store: vi.fn(), runtime: vi.fn() }));
+const boundaries = vi.hoisted(() => ({ store: vi.fn(), runtime: vi.fn(), databasePath: "" }));
 vi.mock("../../daemon/runtime-paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/runtime-paths.js")>()),
   resolveNodeRuntimeInfo: boundaries.runtime,
 }));
 vi.mock("../../infra/update-managed-service-handoff-lease.js", () => ({
   createManagedHandoffLeaseStore: boundaries.store,
-  resolveManagedUpdateLeaseDatabasePath: () => "/synthetic/leases.sqlite",
+  resolveManagedUpdateLeaseDatabasePath: () => boundaries.databasePath,
 }));
 vi.mock("../../infra/update-managed-service-handoff-database.js", () => ({
   captureManagedUpdateLeaseDatabaseIdentity: () => ({
-    databasePath: "/synthetic/leases.sqlite",
+    databasePath: boundaries.databasePath,
     databaseIdentity: "database",
     parentIdentity: "directory",
   }),
@@ -47,7 +54,22 @@ vi.mock("./update-command-identity-warning.js", () => ({
   createUpdateIdentityWarningReporter: () => ({ warn: vi.fn(), flush: vi.fn() }),
 }));
 
-const root = "/synthetic/install";
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+let root: string;
+type SettlementStore = Pick<
+  ReturnType<typeof createManagedHandoffLeaseStore>,
+  | "retainReadConnection"
+  | "read"
+  | "acquire"
+  | "release"
+  | "releaseAll"
+  | "bindUpdateChildren"
+  | "cancelUpdate"
+  | "current"
+  | "owns"
+  | "isProcessIdentityCurrent"
+  | "acceptParentBoundExecutor"
+>;
 const rows = new Map<string, ManagedHandoffLease>();
 const readers = new Set<Disposable>();
 function lease(key: string, owner: string, pid = process.pid): ManagedHandoffLease {
@@ -64,10 +86,23 @@ function lease(key: string, owner: string, pid = process.pid): ManagedHandoffLea
 }
 
 beforeEach(() => {
+  root = fs.realpathSync(dirs.make("update-settlement-"));
+  boundaries.databasePath = path.join(root, "leases.sqlite");
   rows.clear();
   boundaries.runtime.mockReset();
-  const current = (candidate: ManagedHandoffLease) => rows.get(candidate.key) === candidate;
-  boundaries.store.mockReturnValue({
+  const current = (candidate: ManagedHandoffParent) => rows.get(candidate.key) === candidate;
+  const releaseAll: SettlementStore["releaseAll"] = (leases) => {
+    if (!leases.every(current)) {
+      return false;
+    }
+    for (const candidate of leases) {
+      rows.delete(candidate.key);
+    }
+    return true;
+  };
+  // Controlled lease boundary: these cases prove async executor settlement.
+  // Native store tests own physical identity, transactional CAS and v4 cancellation.
+  const store: SettlementStore = {
     retainReadConnection: () => {
       const reader = {
         [Symbol.dispose]() {
@@ -82,20 +117,33 @@ beforeEach(() => {
       return found ? { kind: "current", lease: found } : { kind: "absent" };
     },
     acquire: (key: string, owner: string) => {
-      if (rows.has(key)) {
-        return { kind: "busy" };
+      const incumbent = rows.get(key);
+      if (incumbent) {
+        return { kind: "busy", owner: incumbent.owner };
       }
       const acquired = lease(key, owner);
       rows.set(key, acquired);
       return { kind: "acquired", lease: acquired };
     },
     release: (candidate: ManagedHandoffLease) => current(candidate) && rows.delete(candidate.key),
-    bind: (candidate: ManagedHandoffLease) => (current(candidate) ? candidate : undefined),
+    releaseAll,
+    bindUpdateChildren: (children) => (children.every(current) ? children : null),
+    cancelUpdate: (original, retained) =>
+      current(original) && (!retained || current(retained))
+        ? {
+            lease: original,
+            retained,
+            retainedOriginal: retained,
+            release: (paired = []) =>
+              releaseAll([original, ...(retained ? [retained] : []), ...paired]),
+          }
+        : null,
     current,
     owns: current,
     isProcessIdentityCurrent: () => true,
     acceptParentBoundExecutor: current,
-  });
+  };
+  boundaries.store.mockReturnValue(store);
 });
 
 function runWithExecutorFence<T>(
@@ -113,7 +161,7 @@ function runWithExecutorFence<T>(
   rows.set(root, parent);
   rows.set(childKey, { ...lease(childKey, "run"), helper: parent.executor });
   return withDelegatedUpdateCommandExecutor(
-    { runId: "run", root, databasePath: "/synthetic/leases.sqlite", parent, childKey },
+    { runId: "run", root, databasePath: boundaries.databasePath, parent, childKey },
     "run",
     root,
     operation,
@@ -144,7 +192,7 @@ it.each([
         signal!.throwIfAborted();
         return "child finished";
       });
-      void child.catch(() => undefined);
+      void child.catch((error: unknown) => admitted.reject(error));
       await admitted.promise;
       if (rejects) {
         throw original;
@@ -153,7 +201,10 @@ it.each([
     })
       .then(
         (value) => ({ value }),
-        (error: unknown) => ({ error }),
+        (error: unknown) => {
+          admitted.reject(error);
+          return { error };
+        },
       )
       .finally(() => {
         ended = true;
@@ -201,13 +252,16 @@ it.each([
           await cancelled.promise;
           throw signal!.reason;
         });
-        void child.catch(() => undefined);
+        void child.catch((error: unknown) => admitted.reject(error));
         await admitted.promise;
         return "operation finished";
       },
       1000,
     )
-      .catch((error: unknown) => error)
+      .catch((error: unknown) => {
+        admitted.reject(error);
+        return error;
+      })
       .finally(() => {
         ended = true;
       });
@@ -271,7 +325,10 @@ it.each(["direct", "delegated"] as const)(
       },
       1000,
     )
-      .catch((error: unknown) => error)
+      .catch((error: unknown) => {
+        admitted.reject(error);
+        return error;
+      })
       .finally(() => {
         ended = true;
       });
@@ -305,7 +362,10 @@ it.each(["forced", "uncertain"] as const)(
       retainCommandProcessCleanup(cleanup.promise);
       admitted.resolve();
       throw original;
-    }).catch((error: unknown) => error);
+    }).catch((error: unknown) => {
+      admitted.reject(error);
+      return error;
+    });
     try {
       await admitted.promise;
       await setImmediate();
@@ -332,7 +392,7 @@ it.each(["forced", "uncertain"] as const)(
     const admitted = createDeferredCore();
     const cleanup = createDeferredCore<"forced" | "uncertain">();
     const original = new Error("startup cancelled");
-    const candidateRoot = "/synthetic/candidate";
+    const candidateRoot = path.join(root, "candidate");
     let fence: UpdateRecoveryFence | undefined;
     let childWork: Promise<unknown> | undefined;
     const work = withUpdateCommandExecutor("run", async (executor) => {
@@ -343,7 +403,10 @@ it.each(["forced", "uncertain"] as const)(
         throw original;
       });
       await childWork;
-    }).catch((error: unknown) => error);
+    }).catch((error: unknown) => {
+      admitted.reject(error);
+      return error;
+    });
     try {
       await admitted.promise;
       await setImmediate();
@@ -377,7 +440,7 @@ it.each(["forced", "uncertain"] as const)(
     const cleanup = createDeferredCore<"forced" | "uncertain">();
     let fence: UpdateRecoveryFence | undefined;
     const work = withDelegatedUpdateCommandExecutor(
-      { runId: "run", root, databasePath: "/synthetic/leases.sqlite", parent, childKey },
+      { runId: "run", root, databasePath: boundaries.databasePath, parent, childKey },
       "run",
       root,
       async (current) => {
@@ -386,7 +449,10 @@ it.each(["forced", "uncertain"] as const)(
         admitted.resolve();
         return "complete";
       },
-    ).catch((error: unknown) => error);
+    ).catch((error: unknown) => {
+      admitted.reject(error);
+      return error;
+    });
     try {
       await admitted.promise;
       await setImmediate();
@@ -442,7 +508,10 @@ it.each(["forced", "uncertain"] as const)(
       expect(runtime.ok).toBe(true);
       releaseUpdateCommandPreflightForHandoff(fence);
       handedOff = true;
-    }).catch((error: unknown) => error);
+    }).catch((error: unknown) => {
+      admitted.reject(error);
+      return error;
+    });
     try {
       await admitted.promise;
       await setImmediate();
@@ -475,7 +544,10 @@ it.each([false, true])(
         }
         throw deadline.signal.reason;
       })
-      .catch((error: unknown) => error);
+      .catch((error: unknown) => {
+        admitted.reject(error);
+        return error;
+      });
     try {
       await admitted.promise;
       await vi.advanceTimersByTimeAsync(1000);

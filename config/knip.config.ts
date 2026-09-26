@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { collectPluginSourceEntries } from "../scripts/lib/bundled-plugin-build-entries.mjs";
-import { createManagedHandoffBuildConfig } from "../scripts/lib/managed-handoff-build-config.mts";
+import { createManagedHandoffBuildConfigs } from "../scripts/lib/managed-handoff-build-config.mts";
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
 import { controlUiSource } from "../src/plugins/package-manifest.js";
@@ -328,10 +328,10 @@ const rootEntries = [
   ...repositoryScriptEntries,
   ...listScriptShimEntries(),
   // Runtime launchers resolve these by URL rather than a static import edge.
-  ...Object.values({
-    ...runtimeProcessBuildEntries,
-    ...createManagedHandoffBuildConfig().entry,
-  }).map((source) => `${path.relative(".", source).replaceAll("\\", "/")}!`),
+  ...[
+    ...Object.values(runtimeProcessBuildEntries),
+    ...createManagedHandoffBuildConfigs().flatMap(({ entry }) => Object.values(entry)),
+  ].map((source) => `${path.relative(".", source).replaceAll("\\", "/")}!`),
   // Knip loads these audit configurations directly by command-line path.
   "config/knip.config.ts!",
   "config/knip.all-exports.config.ts!",

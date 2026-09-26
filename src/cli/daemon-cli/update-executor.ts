@@ -3,6 +3,7 @@ import { withGatewayServiceRebindCapture } from "../../daemon/service-rebind.js"
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import { assertUpdateCommandChildInitialStores } from "../update-cli/update-command-executor-grant.js";
 import {
   withDelegatedUpdateCommandExecutor,
   type UpdateCommandChildGrant,
@@ -64,6 +65,7 @@ export async function runGatewayServiceUpdateCommand(
     }
     // SAFETY: Partial transport data is validated against live lease rows before effects.
     const grant = input.executor as UpdateCommandChildGrant;
+    assertUpdateCommandChildInitialStores(grant, grant.root);
     const root = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
     const targetRoot = input.targetRoot;
     if (

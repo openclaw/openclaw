@@ -17,6 +17,10 @@ import {
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
+import {
+  resolveNpmGlobalPrefixLayoutFromGlobalRoot,
+  resolveNpmGlobalPrefixLayoutFromPrefix,
+} from "./update-npm-prefix.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-step-result.js";
@@ -125,6 +129,35 @@ export async function runPackageUpdateLifecycle(params: {
     params.steps.push(step);
     return { status: "failed", step, preserveStage };
   }
+}
+
+export async function createStagedPackageInstall(
+  installTarget: ResolvedGlobalInstallTarget,
+  packageName: string,
+): Promise<StagedPackageInstall> {
+  const targetLayout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot, {
+    allowDirectNodeModulesRoot: installTarget.directNodeModulesRoot === true,
+  });
+  if (!targetLayout) {
+    throw new Error(
+      `The ${installTarget.manager} global install layout cannot prepare the update. Reinstall with ${installTarget.manager} into its default global layout, then retry the update.`,
+    );
+  }
+  await fs.mkdir(targetLayout.globalRoot, { recursive: true });
+  // Active stages must stay outside cleanupGlobalRenameDirs' disposable ".openclaw-" namespace.
+  const prefix = await fs.mkdtemp(path.join(targetLayout.globalRoot, ".openclaw.update-stage-"));
+  const layout = resolveNpmGlobalPrefixLayoutFromPrefix(prefix);
+  return {
+    prefix,
+    layout,
+    packageRoot: path.join(layout.globalRoot, packageName),
+    installTarget: {
+      manager: "npm",
+      command: installTarget.command,
+      globalRoot: layout.globalRoot,
+      packageRoot: path.join(layout.globalRoot, packageName),
+    },
+  };
 }
 
 class PackageStageRemovalError extends Error {}

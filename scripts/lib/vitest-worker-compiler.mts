@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveBuildInfo } from "../write-build-info.ts";
-import { createManagedHandoffBuildConfig } from "./managed-handoff-build-config.mts";
+import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
 import { collectRuntimeImportClosure } from "./runtime-import-closure.mts";
 import {
   sharedRuntimeProcessBuildEntries,
@@ -258,15 +258,17 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
       });
     }
     reportPhase("standalone workers compiled");
-    await build({
-      ...createManagedHandoffBuildConfig(),
-      config: false,
-      cwd: root,
-      outDir,
-      clean: false,
-      logLevel: config.logLevel,
-      plugins: config.plugins,
-    });
+    for (const sealedConfig of createManagedHandoffBuildConfigs()) {
+      await build({
+        ...sealedConfig,
+        config: false,
+        cwd: root,
+        outDir,
+        clean: false,
+        logLevel: config.logLevel,
+        plugins: config.plugins,
+      });
+    }
     reportPhase("managed handoff compiled");
   };
   const compilePreservedModules = async () => {

@@ -10,7 +10,6 @@ import {
 } from "../../config/io.read-helpers.js";
 import { withConfigMutationLock } from "../../config/mutate.js";
 import { resolveStateDir } from "../../config/paths.js";
-import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import {
   restoreGatewayServiceDefinitionBackup,
   verifyGatewayServiceDefinitionBackup,
@@ -18,31 +17,24 @@ import {
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import {
   readUpdateStateSchemaVersions,
   resolveUpdateStateContentVersion,
   updateStateSchemaVersionsMatch,
-  type UpdateStateSchemaVersion,
 } from "../../infra/update-candidate-state.js";
 import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
-import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
-import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import type { UpdateCommandOptions } from "./shared.js";
-import {
-  readUpdateConfigSnapshot,
-  type UpdateConfigSnapshot,
-} from "./update-command-config-snapshot.js";
+import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { readPackageUpdateIdentity } from "./update-command-package.js";
+import { rollbackOriginalUpdateGeneration } from "./update-command-recovery-rollback.js";
 import type {
-  UpdateServiceDefinitionRecovery,
-  OriginalManagedServiceRuntime,
-} from "./update-command-service-context-types.js";
+  RollbackFailedUpdateParams,
+  RollbackFailedUpdateResult,
+} from "./update-command-rollback-types.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
   createWindowsTaskAutoStartGuard,
@@ -59,33 +51,9 @@ import {
 } from "./update-command-service.js";
 
 /** Restores the previous generation only while schemas and activation-owned config stay intact. */
-export async function rollbackFailedUpdate(params: {
-  result: UpdateRunResult;
-  previousRoot: string;
-  packageTransaction?: PackageUpdateTransaction;
-  rollbackBlockedReason?: "state-migrated-no-rollback" | "rollback-state-unverified";
-  schemaVersions?: UpdateStateSchemaVersion[];
-  candidateSchemaVersions?: OpenClawSchemaVersions;
-  previousSchemaVersions?: OpenClawSchemaVersions;
-  previousVerified?: boolean;
-  originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
-  allowGatewayRestart?: boolean;
-  configSnapshot: ConfigFileSnapshot;
-  activationConfig?: UpdateConfigSnapshot;
-  opts: UpdateCommandOptions;
-  preManagedServiceStop?: PreManagedServiceStop;
-  timeoutMs: number;
-  nodeRunner?: string;
-  invocationCwd?: string;
-  definitionRecovery: UpdateServiceDefinitionRecovery;
-}): Promise<{
-  result: UpdateRunResult;
-  rolledBack: boolean;
-  stoppedForRollback?: PreManagedServiceStop;
-  verifiedAtMs?: number;
-  pendingRecoveryReason?: string;
-  originalServiceRecovery?: "healthy" | "failed";
-}> {
+export async function rollbackFailedUpdate(
+  params: RollbackFailedUpdateParams,
+): Promise<RollbackFailedUpdateResult> {
   const { preManagedServiceStop: before, packageTransaction, opts } = params;
   const run = opts.run;
   const executor = run?.executorFence;
@@ -96,6 +64,13 @@ export async function rollbackFailedUpdate(params: {
     executor?.assertCurrent();
   };
   const env = before?.serviceEnv ?? opts.run?.env ?? process.env;
+  // beforeActivate captures B, then the activation owner registers this reverse
+  // transaction synchronously before any package/config/state effect. Without
+  // that transaction publication never began, so existing untouched-runtime
+  // recovery remains the only owner. Once registered, never downgrade to it.
+  if (!opts.recovery && run?.recoveryBaseline && packageTransaction?.reversePublication) {
+    return rollbackOriginalUpdateGeneration(params);
+  }
   if (!opts.recovery) {
     try {
       assertCurrent();

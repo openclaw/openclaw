@@ -7,6 +7,7 @@ import {
   runGlobalPackageUpdateSteps,
   type PackageUpdateTransaction,
 } from "../../infra/package-update-steps.js";
+import type { PackageActivationOptions } from "../../infra/package-update-swap-contract.js";
 import { PackageUpdateActivationError } from "../../infra/package-update-swap-contract.js";
 import {
   failedPackageVerificationStep,
@@ -426,9 +427,11 @@ export type PackageInstallUpdateParams = {
   validateCandidate: (root: string) => Promise<UpdateStepResult[]>;
   beforeActivate: () => Promise<void>;
   assertCurrent?: () => void;
+  reserveInstallSlot?: (root: string) => void;
   onTransaction: (transaction: PackageUpdateTransaction) => void;
   onConfigSnapshot?: PackageDoctorOptions["onConfigSnapshot"];
   getDoctorContext?: PackageDoctorOptions["getDoctorContext"];
+  activation?: PackageActivationOptions;
 };
 
 /** Retain one staged target while its runtime initializes a fresh profile. */
@@ -576,7 +579,9 @@ export async function runPackageInstallUpdate(
     resolveLifecycleNodeRunner: params.resolveLifecycleNodeRunner ?? (() => params.nodeRunner),
     beforeActivate: params.beforeActivate,
     assertCurrent: params.assertCurrent,
+    reserveInstallSlot: params.reserveInstallSlot,
     onTransaction: params.onTransaction,
+    activation: params.activation,
     installTarget,
     installSpec,
     packageName,

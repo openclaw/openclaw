@@ -460,3 +460,23 @@ The reservation is canonical recovery state. Do not delete it to clear a provide
 error. Before downgrading to a version without reservation support, disable the
 backend and reconcile its pending leases using the current version. Older readers
 can open the database but do not implement this lifecycle.
+
+## Package-publication recovery receipt
+
+The package-only activation owner keeps one operation in
+`<installation-parent>/.openclaw.package-activation-<install-key-hash>.control/operation.sqlite`.
+This is the existing single-slot `package_activation` table, not the shared
+state database. Its columns and numeric schema version are unchanged. The
+strict descriptor records the original executor database identity, exact
+package/launcher identities, pre-move custody, helper identity and a revision.
+The control directory also holds the operation-scoped `recovery.mjs` until
+retirement. It is published once with the complete journal and helper; the
+disposable package directory is a separate sibling. The descriptor distinguishes
+the installation parent, control directory, and original executor database parent.
+
+An existing journal is opened without creation or migration. The external-helper
+layout is explicit in the descriptor; legacy flat and in-directory journals are refused
+and remain with their original recovery owner. A successful retirement retains
+one bounded completion receipt after the directory and helper are gone. Only a
+new original-store-admitted operation can replace that slot. Status reads do
+not grant admission or perform cleanup.

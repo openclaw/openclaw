@@ -51,6 +51,7 @@ import {
 import { projectLegacyRuntimeConfigWrite } from "./runtime-source-projection.js";
 import { copyRuntimeConfigWriteApplication } from "./runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
+import { deferConfigFileWriteCapture } from "./write-capture.js";
 import { captureConfigWriteLockGuard, withConfigWriteLock } from "./write-lock.js";
 
 export { createConfigIO };
@@ -461,9 +462,11 @@ export async function writeConfigFile(
       // Finalization outlives the nested factory lock. Its compensation keeps
       // this original outer owner, never the closed factory scope or a later owner.
       const assertPostCommitCurrent = captureConfigWriteLockGuard(io.configPath);
+      const capture = deferConfigFileWriteCapture();
       const writeResult = await io.writeConfigFile(nextCfg, {
         // Preserve caller policy and provenance; runtime-owned fields take precedence below.
         ...options,
+        ...capture.options,
         baseSnapshot,
         basePluginMetadataSnapshot: baseSnapshotRead.pluginMetadataSnapshot,
         envSnapshotForRestore: resolveWriteEnvSnapshotForPath({
@@ -505,12 +508,13 @@ export async function writeConfigFile(
         !hadRuntimeSnapshot &&
         !getRuntimeConfigSnapshotRefreshHandler()
       ) {
+        capture.record();
         return writeResult;
       }
       if (deferRuntimeActivation) {
         replaceEnvSnapshot(io.env, createManagedRuntimeEnvBase());
       }
-      return await finalizeCommittedConfigWrite({
+      const finalized = await finalizeCommittedConfigWrite({
         io,
         ioOptions,
         options,
@@ -523,6 +527,8 @@ export async function writeConfigFile(
         managedPreparedCandidates,
         assertPostCommitCurrent,
       });
+      capture.record();
+      return finalized;
     },
     processIo.env,
     options.assertCurrent,

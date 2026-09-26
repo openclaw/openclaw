@@ -276,6 +276,34 @@ failed install or update, or `openclaw doctor --fix` for a load problem. Invalid
 configuration or state, ownership errors, and failed core startup or readiness
 checks still prevent completion.
 
+### Package-publication recovery
+
+Supported POSIX npm updates print an external-Node recovery command before
+transferring the staged package into recovery custody. Keep the printed commands;
+each names one operation with required `--anchor` and `--operation` arguments.
+The initial journal and helper are published together in a private control
+directory only after both are complete. A later update first prints a temporary
+staging command, then the stable command after the helper has moved. The staging
+command is valid only before that move; an earlier operation's command cannot
+select a later operation. The helper verifies its own recorded path, identity
+and content before using that journal. It is outside the live package and disposable recovery
+directory. `status` reads the operation, `repair` resumes only its recorded
+package publication, and `retire` removes only its recorded obsolete objects.
+These commands do not replace post-update plugin, migration or service recovery.
+Keep other package managers stopped while recovering the operation.
+
+Retirement records removal of the disposable directory before recording the
+helper's final unlink intent. The helper is then removed. The bounded last
+receipt remains in the control directory and is readable through
+`openclaw update status --json` as `packageActivation`, even after helper removal.
+A completed receipt is replaced only when the next update is admitted through
+the same original executor store; it is not authority to mutate an installation.
+
+Missing, legacy or identity-mismatched recovery artifacts block the next mutable
+update. They are not silently migrated or deleted. Preserve them and use their
+original recovery owner; do not recreate the journal or remove them to bypass
+the refusal.
+
 Switch channels or target a specific version:
 
 ```bash

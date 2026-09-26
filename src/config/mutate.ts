@@ -3,7 +3,6 @@ import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   readDeferredPluginMigrations,
   type DeferredPluginMigration,
@@ -11,7 +10,6 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { assertUpdateDoctorConfigInputHash } from "../infra/update-doctor-result.js";
 import { isPathInside } from "../security/scan-paths.js";
-import { isRecord } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import {
   applyConfigEnvVars,
@@ -36,10 +34,10 @@ import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import {
   collectChangedConfigPaths,
   resolveIncludeWriteBoundary,
-  type ChangedConfigPaths,
+  getLegacyTopLevelIncludeBoundary,
   type IncludeWriteBoundary,
 } from "./include-write-boundary.js";
-import { hashConfigIncludeRaw, INCLUDE_KEY, isInternalIncludeWriteTarget } from "./includes.js";
+import { hashConfigIncludeRaw, isInternalIncludeWriteTarget } from "./includes.js";
 import { createInvalidConfigError, formatInvalidConfigDetails } from "./io.invalid-config.js";
 import {
   createConfigIO,
@@ -93,6 +91,7 @@ import {
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 import { createConfigWriteAuthorityGuard } from "./write-authority.js";
+import { getConfigFileWriteCapture, recordConfigFileWrite } from "./write-capture.js";
 import {
   captureConfigWriteLockGuard,
   markActiveConfigMutationPath,
@@ -353,40 +352,6 @@ export async function withConfigMutationExclusive<T>(
     {},
     async (prepared) => await fn(prepared.snapshot.sourceConfig),
   );
-}
-
-function getLegacyTopLevelIncludeBoundary(params: {
-  snapshot: ConfigFileSnapshot;
-  changed: ChangedConfigPaths;
-}): IncludeWriteBoundary | null {
-  // Synthetic/legacy snapshots and invalid include repair have no completed
-  // provenance event, so retain the parsed-directive fallback at this boundary.
-  if (!isRecord(params.snapshot.parsed) || params.changed.rootChanged) {
-    return null;
-  }
-  const topLevelKeys = new Set(
-    params.changed.paths.map((changedPath) => changedPath[0]).filter((key) => key !== undefined),
-  );
-  if (topLevelKeys.size !== 1) {
-    return null;
-  }
-  const key = expectDefined([...topLevelKeys][0], "changed top-level key at 0");
-  const authoredSection = params.snapshot.parsed[key];
-  if (!isRecord(authoredSection)) {
-    return null;
-  }
-  const includeValue = authoredSection[INCLUDE_KEY];
-  if (Object.keys(authoredSection).length !== 1 || typeof includeValue !== "string") {
-    return null;
-  }
-
-  const rootDir = path.dirname(params.snapshot.path);
-  return {
-    boundaryPath: [key],
-    includePath: path.normalize(
-      path.isAbsolute(includeValue) ? includeValue : path.resolve(rootDir, includeValue),
-    ),
-  };
 }
 
 /**
@@ -732,6 +697,13 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
           !hadRuntimeSnapshot &&
           !getRuntimeConfigSnapshotRefreshHandler()
         ) {
+          if (getConfigFileWriteCapture()) {
+            recordConfigFileWrite(
+              includeTarget.absolutePath,
+              previousIncludeRaw === null ? null : hashConfigRaw(previousIncludeRaw),
+              hashConfigRaw(committedIncludeRaw),
+            );
+          }
           return {
             persistedHash: null,
             persistedConfig: runtimeConfigToWrite,
@@ -799,6 +771,13 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
             new Error(`runtime snapshot refresh failed: ${detail}`, { cause }),
         });
         assertPostCommitCurrent();
+        if (getConfigFileWriteCapture()) {
+          recordConfigFileWrite(
+            includeTarget.absolutePath,
+            previousIncludeRaw === null ? null : hashConfigRaw(previousIncludeRaw),
+            hashConfigRaw(committedIncludeRaw),
+          );
+        }
         return {
           persistedHash,
           persistedConfig: refreshedSnapshot.sourceConfig,

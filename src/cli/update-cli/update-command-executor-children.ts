@@ -1,4 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
+import {
+  snapshotUpdateInitialStoreTransport,
+  type UpdateInitialStoreTransport,
+} from "../../infra/update-initial-store-transport.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
 import {
@@ -15,12 +19,20 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 export type UpdateCommandChildGrant = {
   runId: string;
   root: string;
+  initialStores?: UpdateInitialStoreTransport;
   databasePath: string;
   parent: ManagedHandoffParent;
   /** Original owner and its lineage survive a package-generation change. */
   originalParent?: ManagedHandoffParent;
   originalChildKey?: string;
   spawner?: ManagedHandoffLease;
+  slot?: {
+    parent: ManagedHandoffLease;
+    spawner: ManagedHandoffLease;
+    /** The live legacy bridge that reserved this slot, retained through descendants. */
+    reserver?: ManagedHandoffLease;
+    childKey: string;
+  };
   retainedParent?: ManagedHandoffLease;
   retainedChildKey?: string;
   childKey: string;
@@ -41,6 +53,8 @@ export function childLineageDigest(
   parent: ManagedHandoffParent,
   database: ManagedUpdateLeaseDatabaseIdentity,
   retained?: ManagedHandoffLease,
+  slot?: Omit<NonNullable<UpdateCommandChildGrant["slot"]>, "childKey">,
+  initialStores?: UpdateInitialStoreTransport,
 ): string {
   return createHash("sha256")
     .update(
@@ -48,6 +62,7 @@ export function childLineageDigest(
         database.databasePath,
         database.databaseIdentity,
         database.parentIdentity,
+        ...(initialStores ? [["initial-pair-v1", initialStores.selection]] : []),
         [original, spawner, parent].map((lease) =>
           // v1 stores only its runner; bind the borrowed updater too. Shipped
           // v2/v3 payloads already carry both identities and keep their bytes.
@@ -55,6 +70,30 @@ export function childLineageDigest(
             ? [lease.key, lease.owner, lease.payload, lease.updatedAt, lease.helper, lease.executor]
             : [lease.key, lease.owner, lease.payload, lease.updatedAt],
         ),
+        ...(slot
+          ? [
+              [
+                "occupied-slot-v1",
+                ...[slot.parent, slot.spawner].map((lease) => [
+                  lease.key,
+                  lease.owner,
+                  lease.payload,
+                  lease.updatedAt,
+                ]),
+                ...(slot.reserver
+                  ? [
+                      [
+                        "legacy-slot-reserver-v1",
+                        slot.reserver.key,
+                        slot.reserver.owner,
+                        slot.reserver.payload,
+                        slot.reserver.updatedAt,
+                      ],
+                    ]
+                  : []),
+              ],
+            ]
+          : []),
         // Absent retention preserves the shipped single-root digest bytes.
         ...(retained
           ? [
@@ -80,9 +119,11 @@ export function createChildOwner(params: {
     parent: ManagedHandoffParent;
     original: ManagedHandoffParent;
     spawner: ManagedHandoffLease;
+    slot?: Omit<NonNullable<UpdateCommandChildGrant["slot"]>, "childKey">;
     retainedParent?: ManagedHandoffLease;
     databasePath: string;
     databaseIdentity?: ManagedUpdateLeaseDatabaseIdentity;
+    initialStores?: UpdateInitialStoreTransport;
   };
   assertBase: () => void;
   onStart?: (purpose?: ChildPurpose) => void;
@@ -116,8 +157,19 @@ export function createChildOwner(params: {
       if (!admissionOpen) {
         throw new UpdateCommandRecoveryPendingError("Child executor admission is closed.");
       }
-      const { store, parent, original, spawner, retainedParent, databasePath, databaseIdentity } =
-        params.binding();
+      const {
+        store,
+        parent,
+        original,
+        spawner,
+        slot,
+        retainedParent,
+        databasePath,
+        databaseIdentity,
+        initialStores: inputStores,
+      } = params.binding();
+      const initialStores =
+        inputStores === undefined ? undefined : snapshotUpdateInitialStoreTransport(inputStores);
       if (!databaseIdentity) {
         throw new UpdateCommandRecoveryPendingError(
           "Native child requires its pinned lease database.",
@@ -125,17 +177,35 @@ export function createChildOwner(params: {
       }
       params.onStart?.(purpose);
       const candidateRoot = resolveUpdateInstallRoot(root);
+      if (
+        initialStores &&
+        (candidateRoot !== initialStores.selection.installation.path ||
+          databasePath !== initialStores.selection.handoff.databasePath ||
+          databaseIdentity.databaseIdentity !== initialStores.selection.handoff.databaseIdentity ||
+          databaseIdentity.parentIdentity !== initialStores.selection.handoff.parentIdentity)
+      ) {
+        throw new UpdateCommandRecoveryPendingError(
+          "Child requires its explicitly selected installation and stores.",
+        );
+      }
       let candidateParent = parent;
       let acquiredParent = false;
-      const children: ManagedHandoffLease[] = [];
+      let children: ManagedHandoffLease[] = [];
+      let bindingAttempted = false;
       let bound = false;
       delegating = true;
       const assertOwners = () => {
         params.assertBase();
         if (
           !store.current(candidateParent) ||
+          (slot && (!store.current(slot.parent) || !store.current(slot.spawner))) ||
           (retainedParent && !store.current(retainedParent)) ||
-          resolveUpdateInstallRoot(root) !== candidateParent.key
+          (resolveUpdateInstallRoot(root) !== candidateParent.key &&
+            !(
+              slot &&
+              candidateParent.key === original.key &&
+              resolveUpdateInstallRoot(root) === slot.parent.key
+            ))
         ) {
           throw new UpdateCommandRecoveryPendingError("Update installation ownership changed.");
         }
@@ -149,8 +219,17 @@ export function createChildOwner(params: {
               "Retained service root is not a candidate executor.",
             );
           }
-          if (candidateRoot !== parent.key) {
-            const acquired = store.acquire(candidateRoot, randomUUID(), { kind: "update" });
+          if (slot && candidateRoot === slot.parent.key) {
+            candidateParent = slot.parent;
+          } else if (candidateRoot !== parent.key) {
+            const acquired = store.acquire(
+              candidateRoot,
+              randomUUID(),
+              { kind: "update" },
+              false,
+              undefined,
+              original,
+            );
             if (acquired.kind !== "acquired") {
               throw new UpdateCommandRecoveryPendingError(
                 "Another update executor owns the update installation.",
@@ -166,26 +245,45 @@ export function createChildOwner(params: {
             ...new Map(
               [
                 spawner,
+                ...(slot ? [slot.spawner] : []),
                 ...(retainedParent ? [retainedParent] : []),
-                ...(candidateParent.key === original.key ? [] : [candidateParent]),
+                ...(candidateParent.key === original.key || candidateParent.key === slot?.parent.key
+                  ? []
+                  : [candidateParent]),
               ].map((owner) => [owner.key, owner]),
             ).values(),
           ];
           const candidateChildIndex =
             candidateParent.key === original.key
               ? 0
-              : parents.findIndex((owner) => owner.key === candidateParent.key);
-          const childName = `${randomUUID()}-lineage-${childLineageDigest(original, spawner, candidateParent, databaseIdentity, retainedParent)}`;
+              : parents.findIndex(
+                  (owner) =>
+                    owner.key ===
+                    (candidateParent.key === slot?.parent.key
+                      ? slot.spawner.key
+                      : candidateParent.key),
+                );
+          const childName = `${randomUUID()}${initialStores ? "-stores-v1" : ""}-lineage-${childLineageDigest(original, spawner, candidateParent, databaseIdentity, retainedParent, slot, initialStores)}`;
           for (const childParent of parents) {
             const acquired = store.acquire(
               `${childParent.key}/.openclaw-update-child-${childName}`,
               params.runId,
-              { kind: "update" },
+              {
+                kind: "update",
+                ...((childParent.key === original.key ||
+                  childParent.key.startsWith(`${original.key}/.openclaw-update-child-`)) &&
+                original.version === 2 &&
+                original.action.kind === "update" &&
+                original.action.mutationProtocol
+                  ? { mutationProtocol: original.action.mutationProtocol }
+                  : {}),
+              },
               false,
               original.version === 1 &&
                 childParent.key.startsWith(`${original.key}/.openclaw-update-child-`)
                 ? original
                 : undefined,
+              original,
             );
             if (acquired.kind !== "acquired") {
               throw new UpdateCommandRecoveryPendingError(
@@ -204,6 +302,16 @@ export function createChildOwner(params: {
             originalChildKey: children[0]!.key,
             childKey: children[candidateChildIndex]!.key,
             databaseIdentity,
+            ...(initialStores ? { initialStores } : {}),
+            ...(slot
+              ? {
+                  slot: {
+                    ...slot,
+                    childKey:
+                      children[parents.findIndex((owner) => owner.key === slot.spawner.key)]!.key,
+                  },
+                }
+              : {}),
             ...(retainedParent
               ? {
                   retainedParent,
@@ -215,18 +323,17 @@ export function createChildOwner(params: {
           const result = await withCommandProcessScope(() =>
             operation(grant, (pid, argv) => {
               assertOwners();
-              if (bound || pid === process.pid) {
+              if (bindingAttempted || pid === process.pid) {
                 throw new UpdateCommandRecoveryPendingError(
                   "Update process can be bound only once.",
                 );
               }
-              for (let index = 0; index < children.length; index++) {
-                const assigned = store.bind(children[index]!, pid, undefined, argv);
-                if (!assigned) {
-                  throw new UpdateCommandRecoveryPendingError("Update process binding failed.");
-                }
-                children[index] = assigned;
+              bindingAttempted = true;
+              const assigned = store.bindUpdateChildren(children, pid, argv);
+              if (!assigned) {
+                throw new UpdateCommandRecoveryPendingError("Update process binding failed.");
               }
+              children = assigned;
               bound = true;
             }),
           );
@@ -245,12 +352,13 @@ export function createChildOwner(params: {
           throw outcome.error;
         }
         try {
-          // Release the active generation before the original lineage, as in
-          // the shipped finalizer. A failed release never reactivates the parent.
-          for (let index = children.length - 1; index > 0; index--) {
-            if (!store.release(children[index]!)) {
-              throw new UpdateCommandRecoveryPendingError("The update process has not finished.");
-            }
+          // Preserve current-main's destination-before-original release order.
+          // A failed destination release must retain the original lineage; its
+          // paired occupied-slot lineage is released in the same transaction.
+          const lineageCount = slot ? 2 : 1;
+          const destinations = children.slice(lineageCount);
+          if (destinations.length > 0 && !store.releaseAll(destinations)) {
+            throw new UpdateCommandRecoveryPendingError("The update process has not finished.");
           }
           if (
             acquiredParent &&
@@ -258,7 +366,8 @@ export function createChildOwner(params: {
           ) {
             throw new UpdateCommandRecoveryPendingError("Update installation release failed.");
           }
-          if (children.length > 0 && !store.release(children[0]!)) {
+          const lineage = children.slice(0, lineageCount);
+          if (lineage.length > 0 && !store.releaseAll(lineage)) {
             throw new UpdateCommandRecoveryPendingError("The update process has not finished.");
           }
           delegating = false;

@@ -5,6 +5,7 @@ import { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { hasErrnoCode } from "./errors.js";
 import { isRemovalIoError, removePathWithinRoot } from "./fs-safe-remove.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
@@ -132,10 +133,14 @@ export async function copyPackagePathEntry(
   source: string,
   destination: string,
   assertCaller = () => {},
+  beforePublish?: (staged: string) => void,
 ): Promise<{ ownershipPreserved: boolean }> {
   const assertCurrent = retainMutationAuthority(assertCaller);
   assertCurrent();
   const sourceIdentity = fsSync.lstatSync(source, { bigint: true });
+  if (sourceIdentity.isDirectory() && beforePublish) {
+    throw new Error("Journal-owned launcher publication requires a file or symlink.");
+  }
   const destinationParent = await fs.realpath(path.dirname(destination));
   assertCurrent();
   const parentIdentity = fsSync.lstatSync(destinationParent, { bigint: true });
@@ -256,6 +261,8 @@ export async function copyPackagePathEntry(
           sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
           preserveSourceMode: true,
           mkdir: false,
+          // Journal publication performs a strict sync below: fs-safe's ordinary
+          // durable copy is best effort for EPERM, which cannot authorize an ack.
           durable: false,
         });
       } else {
@@ -266,6 +273,25 @@ export async function copyPackagePathEntry(
     await copyEntry(source, "entry", sourceIdentity, assertStaging, false);
     assertStaging();
     const stagedIdentity = fsSync.lstatSync(staged, { bigint: true });
+    if (beforePublish && sourceIdentity.isFile()) {
+      const opened = await stagedRoot.open("entry");
+      try {
+        assertStaging();
+        assertPackagePathIdentity(staged, stagedIdentity);
+        const openedIdentity = fsSync.fstatSync(opened.handle.fd, { bigint: true });
+        if (
+          openedIdentity.dev !== stagedIdentity.dev ||
+          openedIdentity.ino !== stagedIdentity.ino
+        ) {
+          throw new FsSafeError("path-mismatch", "staged package launcher changed before sync");
+        }
+        await opened.handle.sync();
+        assertStaging();
+        assertPackagePathIdentity(staged, stagedIdentity);
+      } finally {
+        await opened.handle.close();
+      }
+    }
     assertPackagePathIdentity(target, destinationIdentity);
     if (sourceIdentity.isDirectory()) {
       await removePackagePath(
@@ -284,8 +310,28 @@ export async function copyPackagePathEntry(
     assertStaging();
     assertPackagePathIdentity(staged, stagedIdentity);
     assertPackagePathIdentity(target, destinationIdentity);
+    if (beforePublish) {
+      // Also persist symlink entries, whose branch does not use copyIn.
+      requireDirectorySync(await syncDirectory(staging), "Staged package launcher");
+      assertStaging();
+      assertPackagePathIdentity(staged, stagedIdentity);
+      assertPackagePathIdentity(target, destinationIdentity);
+    }
+    beforePublish?.(staged);
+    assertStaging();
+    assertPackagePathIdentity(staged, stagedIdentity);
+    assertPackagePathIdentity(target, destinationIdentity);
     await fs.rename(staged, target);
     assertParent();
+    if (beforePublish) {
+      for (const directory of [staging, destinationParent]) {
+        assertStaging();
+        assertPackagePathIdentity(target, stagedIdentity);
+        requireDirectorySync(await syncDirectory(directory), "Package launcher publication");
+        assertStaging();
+        assertPackagePathIdentity(target, stagedIdentity);
+      }
+    }
   } catch (error) {
     failure = { error };
   } finally {

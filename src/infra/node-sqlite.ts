@@ -8,6 +8,7 @@ import { compareValidSemver } from "./semver.js";
 import { registerSqliteReaderConnection } from "./sqlite-reader-lifecycle.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 import { trackSqliteSchema } from "./sqlite-schema-facts.js";
+import { assertUpdateRecoveryWriterAllowed } from "./update-recovery-writer-guard.js";
 import { installProcessWarningFilter } from "./warning-filter.js";
 
 const require = createRequire(import.meta.url);
@@ -141,6 +142,9 @@ export function openNodeSqliteDatabase(
   location: string,
   options?: NodeSqliteDatabaseOptions,
 ): import("node:sqlite").DatabaseSync {
+  if (options?.readOnly !== true) {
+    assertUpdateRecoveryWriterAllowed();
+  }
   const sqlite = requireNodeSqlite();
   // Callers may pass file: URIs or already-namespaced paths from specialized
   // resolvers; location normalization must remain idempotent for those forms.

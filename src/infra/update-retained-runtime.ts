@@ -108,7 +108,13 @@ export async function withRetainedUpdateRuntime<T>(
           }
           const outsideMutation = (candidate: string) =>
             !boundaries.some((entry) => isPathInside(entry, candidate));
-          if (outsideMutation(parent)) {
+          // An unselected module install can copy its entire enclosing module
+          // owner. Keep its scratch outside that owner; standalone checkouts
+          // can retain current-main same-volume placement.
+          if (
+            (installTarget || !sourceRoot.split(path.sep).includes("node_modules")) &&
+            outsideMutation(parent)
+          ) {
             const sourceStat = await fs.stat(sourceRoot);
             assertCurrent();
             try {

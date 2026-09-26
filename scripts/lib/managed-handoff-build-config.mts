@@ -1,12 +1,18 @@
 import { isBuiltin } from "node:module";
 import { fileURLToPath } from "node:url";
 import type { UserConfig } from "tsdown";
+import { packageActivationRuntimeEntrypoint } from "../../src/infra/package-update-activation-runtime-assets.ts";
 import { managedHandoffRuntimeEntrypoint } from "../../src/infra/update-managed-service-handoff-runtime-assets.ts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 
 /** The installed CLI and invocation compiler seal the same typed lease owner. */
-export function createManagedHandoffBuildConfig() {
-  const entry = managedHandoffRuntimeEntrypoint;
+export function createManagedHandoffBuildConfigs() {
+  return [managedHandoffRuntimeEntrypoint, packageActivationRuntimeEntrypoint].map((entry) =>
+    createSealedRecoveryBuildConfig(entry),
+  );
+}
+
+function createSealedRecoveryBuildConfig(entry: typeof managedHandoffRuntimeEntrypoint) {
   const identityReader = fileURLToPath(
     new URL("../../src/shared/freebsd-process-identity.ts", import.meta.url),
   );
@@ -33,7 +39,9 @@ export function createManagedHandoffBuildConfig() {
         // All shared identity consumers in this bundle use the same private loader.
         // Normal installations and sibling sealed builds keep their own loader policy.
         resolveId(source, importer) {
-          return source === "./freebsd-process-identity-native.ts" && importer === identityReader
+          return entry === managedHandoffRuntimeEntrypoint &&
+            source === "./freebsd-process-identity-native.ts" &&
+            importer === identityReader
             ? privateNativeLoader
             : null;
         },

@@ -208,6 +208,7 @@ export function createFixture(groups: readonly string[], root: string) {
     "src/infra/node-runtime-executable.ts",
     "src/infra/runtime-dependency-ownership.ts",
     "src/shared/non-packaged-plugin-dirs.ts",
+    "src/infra/package-update-activation-runtime-assets.ts",
     "packages/normalization-core/src/mountinfo-path.ts",
     "packages/normalization-core/src/record-coerce.ts",
   ]);

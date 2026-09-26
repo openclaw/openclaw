@@ -41,7 +41,8 @@ it.skipIf(process.platform === "win32").each([
     const leaf = `
       import fs from 'node:fs';
       import {setTimeout} from 'node:timers/promises';
-      const {grant,root}=JSON.parse(fs.readFileSync(0,'utf8'));
+      import {text} from 'node:stream/consumers';
+      const {grant,root}=JSON.parse(await text(process.stdin));
       fs.writeFileSync(root+'/leaf-pid',String(process.pid));
       const {withDelegatedUpdateCommandExecutor}=await import(${JSON.stringify(owner.href)});
       const parentPid=grant.originalParent.executor.pid;

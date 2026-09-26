@@ -23,6 +23,7 @@ export type ConfigWriteResult = {
 export type ConfigWriteInputBasis = { kind: ConfigMutationBase; config: unknown };
 
 export const configWritePostCommitRollback = Symbol("configWritePostCommitRollback");
+export const configWritePostCommitCapture = Symbol("configWritePostCommitCapture");
 
 export type InternalConfigWriteResult = ConfigWriteResult & {
   [configWritePostCommitRollback]?: {
@@ -39,6 +40,8 @@ export type ConfigWriteAuditOrigin =
   | "cli";
 
 export type ConfigWriteOptions = {
+  /** Release the physical writer receipt only after runtime finalization accepts it. */
+  [configWritePostCommitCapture]?: (record: () => void) => void;
   /** Candidate's source/runtime basis within its write snapshot; omitted inputs use active globals. */
   inputBase?: ConfigMutationBase;
   /** Semantic writer label recorded in the config audit journal. */

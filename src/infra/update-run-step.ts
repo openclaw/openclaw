@@ -2,7 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatUpdateDoctorConfigChange } from "./update-doctor-config.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import { summarizeUpdateStepFailure, type UpdateRunStep } from "./update-run-record.js";
-import type { UpdateRunResult } from "./update-runner-types.js";
+import type { UpdateRunResult } from "./update-run-result.js";
 import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 

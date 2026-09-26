@@ -79,6 +79,18 @@ function receipt() {
   };
 }
 
+function generationReceipt() {
+  return {
+    operationId: "original-reverse-operation",
+    candidateSha256: "d".repeat(64),
+    preparedSha256: "e".repeat(64),
+    sourceAttestation: {
+      path: path.join(root, "candidate", "source-attestation.json"),
+      sha256: "f".repeat(64),
+    },
+  };
+}
+
 function storedRow() {
   return ownedDatabase().prepare("SELECT * FROM update_runs WHERE run_id=?").get(record().runId);
 }
@@ -120,8 +132,8 @@ describe("durable update capture receipts", () => {
     expect(recovered?.updatedAtMs).toBeGreaterThan(2);
   });
 
-  it("preserves exact receipt paths, hashes and warnings through the real ledger writer and reader", () => {
-    const capture = receipt();
+  it("preserves captured generation bindings, paths and warnings after reopening the ledger", () => {
+    const capture = { ...receipt(), generation: generationReceipt() };
     const input = {
       ...record(),
       reason: `Failure at ${root}`,
@@ -180,12 +192,12 @@ describe("durable update capture receipts", () => {
     ).toEqual(capture);
   });
 
-  it.each(["retirement", "forward"] as const)(
+  it.each(["retirement", "retirement-v1", "forward"] as const)(
     "retains %s resolution without changing the failed-run outcome",
     (mode) => {
       const capture = receipt();
       const resolution =
-        mode === "retirement"
+        mode !== "forward"
           ? {
               restored: true as const,
               retirement: {
@@ -195,12 +207,25 @@ describe("durable update capture receipts", () => {
                 configPath: env.OPENCLAW_CONFIG_PATH!,
                 identity: { dev: 1, ino: 2, birthtimeMs: 3 },
                 outcome: "restored" as const,
+                ...(mode === "retirement-v1" ? { inventoryVersion: 1 as const } : {}),
                 generations: [
                   {
                     kind: "candidate" as const,
                     manifestSha256: "d".repeat(64),
                     identity: { dev: 4, ino: 5, birthtimeMs: 6 },
+                    ...(mode === "retirement-v1"
+                      ? { sourceAttestation: generationReceipt().sourceAttestation }
+                      : {}),
                   },
+                  ...(mode === "retirement-v1"
+                    ? [
+                        {
+                          kind: "prepared" as const,
+                          manifestSha256: generationReceipt().preparedSha256,
+                          identity: { dev: 7, ino: 8, birthtimeMs: 9 },
+                        },
+                      ]
+                    : []),
                 ],
               },
             }
@@ -236,7 +261,11 @@ describe("durable update capture receipts", () => {
                 completedAtMs: 3,
               },
             };
-      const retained = { ...capture, ...resolution };
+      const retained = {
+        ...capture,
+        ...resolution,
+        ...(mode === "retirement-v1" ? { generation: generationReceipt() } : {}),
+      };
       persistRun(
         ownedDatabase(),
         { ...record(), origin: { updateRecoveryCapture: retained } },
@@ -311,14 +340,25 @@ describe("durable update capture receipts", () => {
     expect(storedRow()).toEqual(before);
   });
 
-  it.each(["hash", "path"] as const)(
+  it.each(["hash", "path", "generation-hash", "attestation-hash"] as const)(
     "rejects a malformed receipt %s without changing the stored row",
     (field) => {
-      const capture = receipt();
+      const capture = { ...receipt(), generation: generationReceipt() };
+      // Establish a valid saved capture first: the refusal must be caused by
+      // the mutated field, not an unsupported receipt or failed fixture setup.
+      persistRun(
+        ownedDatabase(),
+        { ...record(), origin: { updateRecoveryCapture: capture } },
+        { env },
+      );
       if (field === "hash") {
         capture.manifestSha256 = "not-a-hash";
-      } else {
+      } else if (field === "path") {
         capture.configWrites[0]!.path = "../unowned.json";
+      } else if (field === "generation-hash") {
+        capture.generation.candidateSha256 = "not-a-hash";
+      } else {
+        capture.generation.sourceAttestation.sha256 = "not-a-hash";
       }
       const before = storedRow();
       expect(() =>

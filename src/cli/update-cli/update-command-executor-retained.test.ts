@@ -7,9 +7,11 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   resolvePackageActivationAnchor,
-  PACKAGE_ACTIVATION_JOURNAL,
+  resolvePackageActivationControl,
+  resolvePackageActivationJournalPath,
+  resolvePackageActivationHelper,
+  type PackageActivationDescriptor,
 } from "../../infra/package-update-activation-journal.js";
-import { PACKAGE_ACTIVATION_HELPER } from "../../infra/package-update-activation-runtime-assets.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
@@ -268,7 +270,14 @@ it.each([
       },
     );
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toMatch(/retained owner pair|does not match its parent/);
+    if (["both", "wrong-key", "wrong-generation"].includes(tamper)) {
+      expect(result.stderr).toContain(
+        "Candidate store selection or lineage is missing or invalid.",
+      );
+    } else {
+      expect(result.stderr).toMatch(/retained owner pair|does not match its parent/);
+    }
+    expect(fs.existsSync(path.join(root, "receipt"))).toBe(false);
     expect(fs.existsSync(output)).toBe(false);
     fence.assertCurrent();
   });
@@ -281,8 +290,10 @@ function publishedPackageFixture(
 ) {
   const anchor = resolvePackageActivationAnchor(authority.installKey);
   fs.mkdirSync(anchor, { mode: 0o700 });
-  const journal = path.join(anchor, PACKAGE_ACTIVATION_JOURNAL);
-  const helper = path.join(anchor, PACKAGE_ACTIVATION_HELPER);
+  const control = resolvePackageActivationControl(anchor);
+  fs.mkdirSync(control, { mode: 0o700 });
+  const journal = resolvePackageActivationJournalPath(anchor);
+  const helper = resolvePackageActivationHelper(anchor);
   const helperSource = "// Inert published-journal fixture, never executed.\n";
   fs.writeFileSync(helper, helperSource, { mode: 0o600 });
   const db = new DatabaseSync(journal);
@@ -304,11 +315,13 @@ function publishedPackageFixture(
       "INSERT INTO package_activation VALUES (1,0,'publication-complete',?,'null','[]')",
     ).run(
       JSON.stringify({
+        layout: "external-helper",
         version: 1,
         operationId: randomUUID(),
         authority,
         anchorIdentity: identity(anchor),
         journalIdentity: identity(journal),
+        journalParentIdentity: identity(control),
         parentIdentity: identity(path.dirname(anchor)),
         binDir: root,
         binIdentity: identity(root),
@@ -317,9 +330,21 @@ function publishedPackageFixture(
         candidate: { ...fingerprint, identity: identity(candidateRoot) },
         launcherRootIdentity: identity(root),
         previousLauncherRootIdentity: null,
+        helperIdentity: identity(helper),
+        preparation: [
+          { name: "anchor" as const, source: anchor },
+          { name: "helper" as const, source: helper },
+          { name: "candidate" as const, source: candidateRoot },
+          { name: "launchers" as const, source: root },
+        ].map(({ name, source }) => ({
+          name,
+          source,
+          sourceParentIdentity: identity(path.dirname(source)),
+          identity: identity(source),
+        })),
         helperDigest: createHash("sha256").update(helperSource).digest("hex"),
         launchers: [],
-      }),
+      } satisfies PackageActivationDescriptor),
     );
   } finally {
     db.close();

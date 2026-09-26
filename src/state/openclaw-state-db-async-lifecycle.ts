@@ -101,6 +101,23 @@ export function getOpenClawDatabaseMaintenanceScope():
   return maintenanceResources.current.getStore()?.scope;
 }
 
+/** Capture one active maintenance scope across awaits without allowing a replacement scope. */
+export function captureOpenClawDatabaseMaintenanceAdmission(
+  scope: OpenClawDatabaseMaintenanceScope,
+): () => void {
+  if (getOpenClawDatabaseMaintenanceScope() !== scope) {
+    throw new Error("Database maintenance scope is not active");
+  }
+  const assertAdmission = () => scope.assertAdmission();
+  assertAdmission();
+  return () => {
+    if (getOpenClawDatabaseMaintenanceScope() !== scope) {
+      throw new Error("Database maintenance scope changed");
+    }
+    assertAdmission();
+  };
+}
+
 /** Delayed work acquires its own resources instead of inheriting the completed scope. */
 export function runOutsideOpenClawDatabaseMaintenanceScope<T>(operation: () => T): T {
   return maintenanceResources.current.exit(operation);

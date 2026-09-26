@@ -135,6 +135,10 @@ if (
 } else {
   const entryFile = fileURLToPath(import.meta.url);
   const installRoot = resolveEntryInstallRoot(entryFile);
+  const { enterUpdateRecoveryStartup } = await import("./infra/update-recovery-startup-entry.js");
+  if (await enterUpdateRecoveryStartup({ installRoot, entryFile, argv: process.argv })) {
+    process.exit(0);
+  }
   installDistEsmResolveFastPath(import.meta.url);
   ensureOpenClawExecMarkerOnProcess();
   installProcessWarningFilter();

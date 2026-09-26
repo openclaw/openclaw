@@ -38,6 +38,17 @@ type ConfigSnapshotWrite = ConfigAuditStoreContext & {
 
 const configJournalFingerprintKeys = new Map<string, Buffer>();
 
+/** Describe the config owner's persistent fingerprint key without reading its bytes. */
+export function describeConfigJournalFingerprintKey(stateDir: string): {
+  path: string;
+  byteLength: number;
+} {
+  return {
+    path: path.join(path.resolve(stateDir), CONFIG_JOURNAL_FINGERPRINT_KEY_FILENAME),
+    byteLength: CONFIG_JOURNAL_FINGERPRINT_KEY_BYTES,
+  };
+}
+
 function loadConfigJournalFingerprintKey(params?: ConfigAuditStoreContext): Buffer | null {
   const context = resolveConfigAuditStoreContext(params);
   const stateDir = resolveStateDir(context.env, context.homedir);

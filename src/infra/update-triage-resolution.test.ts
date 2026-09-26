@@ -345,6 +345,30 @@ describe("saved update failure resolution", () => {
     },
   );
 
+  it.each(["OPENCLAW_UPDATE_IN_PROGRESS", "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE"])(
+    "preserves the supplied %s context when formatting pending migrations",
+    async (flag) => {
+      vi.mocked(readDeferredPluginMigrations).mockReturnValue([
+        {
+          pluginId: "codex",
+          reason: "State migration has not completed.",
+          command: "openclaw doctor --fix",
+        },
+      ]);
+      const result = await validateTriageUpdateResolution({
+        failure: failure(),
+        installRoot: "/fixture/openclaw",
+        env: { OPENCLAW_STATE_DIR: "/fixture/state", [flag]: "1" },
+        signal: new AbortController().signal,
+        validateDoctor,
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        summary: expect.stringContaining("Let the current update or repair finish."),
+      });
+    },
+  );
+
   it("formats every pending migration with the supplied update environment", async () => {
     const env = { OPENCLAW_STATE_DIR: "/fixture/state", OPENCLAW_UPDATE_IN_PROGRESS: "1" };
     vi.mocked(readDeferredPluginMigrations).mockReturnValue(

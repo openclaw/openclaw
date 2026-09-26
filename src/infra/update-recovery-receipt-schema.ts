@@ -31,6 +31,7 @@ const updateRecoveryRetirementSchema = z
     configPath: z.string().min(1).max(4096),
     identity: z.object({ dev: z.number(), ino: z.number(), birthtimeMs: z.number() }).strict(),
     outcome: z.enum(["committed", "restored"]),
+    inventoryVersion: z.literal(1).optional(),
     // Present only after every retained generation has passed terminal verification.
     generations: z
       .array(
@@ -38,6 +39,10 @@ const updateRecoveryRetirementSchema = z
           .object({
             kind: z.enum(["candidate", "prepared"]),
             manifestSha256: sha256,
+            sourceAttestation: z
+              .object({ path: z.string().min(1), sha256 })
+              .strict()
+              .optional(),
             identity: z
               .object({ dev: z.number(), ino: z.number(), birthtimeMs: z.number() })
               .strict(),
@@ -103,6 +108,17 @@ export const updateRecoveryCaptureStateSchema = z
     error: z.string().max(4096).optional(),
     doctorCompleted: z.boolean().optional(),
     restored: z.literal(true).optional(),
+    // Sealed by the original C/T producer before reverse publication; never
+    // reconstructed from whatever files happen to remain at terminal cleanup.
+    generation: z
+      .object({
+        operationId: z.string().min(1),
+        candidateSha256: sha256,
+        preparedSha256: sha256,
+        sourceAttestation: z.object({ path: z.string().min(1), sha256 }).strict(),
+      })
+      .strict()
+      .optional(),
     retirement: updateRecoveryRetirementSchema.optional(),
     forwardResolution: updateRecoveryForwardResolutionSchema.optional(),
   })

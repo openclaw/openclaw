@@ -397,6 +397,7 @@ suite.define(() => {
       const copied = `Request\tStatus\nAsk ${label} today\tOpen`;
       await page.getByRole("button", { name: "Copy table", exact: true }).click();
       await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(copied);
+      await page.evaluate(() => navigator.clipboard.writeText("awaiting context-menu copy"));
       const avatar = await image.boundingBox();
       expect(avatar).not.toBeNull();
       await page.mouse.click(avatar!.x + avatar!.width / 2, avatar!.y + avatar!.height / 2, {

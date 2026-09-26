@@ -32,8 +32,8 @@ import {
   createFreeBsdPkgOwnershipInspection,
   type FreeBsdPkgOwnershipInspection,
 } from "../../infra/update-freebsd-pkg-ownership.js";
+import { assertUpdateInitialStoreInvocation } from "../../infra/update-initial-store-invocation.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
-import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -58,11 +58,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord, UpdateRunStep } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
-import {
-  inspectUpdateRecoveries,
-  loadUpdateRecovery,
-  type UpdateRecoveryFence,
-} from "../../infra/update-run-recovery.js";
+import { inspectUpdateRecoveries, loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import {
   AUTO_UPDATE_STEP_TIMEOUT_MS,
@@ -70,7 +66,6 @@ import {
   UPDATE_RUNNER_TIMEOUT_MS,
 } from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
-import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
@@ -95,7 +90,6 @@ import {
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import {
   resolveOwnedManagedUpdateEnv,
-  withOwnedManagedUpdateEnv,
   resolveServiceRefreshEnv,
 } from "./update-command-service-env.js";
 import {
@@ -162,6 +156,7 @@ export async function resolveUpdateCommandAdmissionEnv(params: {
     params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS);
   await pkgOwnership.assertUnowned(params.root);
   let env = resolveServiceRefreshEnv(process.env, params.invocationCwd);
+  assertUpdateInitialStoreInvocation(params.root, env);
   if (
     await resolveForegroundUpdateAdmission({
       root: params.root,
@@ -172,8 +167,10 @@ export async function resolveUpdateCommandAdmissionEnv(params: {
         undefined,
     })
   ) {
+    assertUpdateInitialStoreInvocation(params.root, env);
     return env;
   }
+  assertUpdateInitialStoreInvocation(params.root, env);
   // A preview belongs to its explicit state directory. Real updates follow the
   // same owned service selectors as finalization, then freeze them for all writers.
   if (
@@ -199,6 +196,7 @@ export async function resolveUpdateCommandAdmissionEnv(params: {
       }
     }
   }
+  assertUpdateInitialStoreInvocation(params.root, env);
   return env;
 }
 
@@ -253,16 +251,19 @@ export async function admitUpdateCommandRun(params: {
 }): Promise<NonNullable<UpdateCommandOptions["run"]>> {
   assertUpdatePackageActivationAdmission(params.root, { serviceRoot: params.serviceRoot });
   const env = await resolveUpdateCommandAdmissionEnv(params);
+  assertUpdateInitialStoreInvocation(params.root, env);
   // A previous invocation may have died with a sealed restoration plan. Detect
   // it before any writable owner open or history row creation changes that state.
   // An inherited diagnostic run ID is not a durable continuation claim.
   await assertUpdateRecoveryAdmission({ env });
+  assertUpdateInitialStoreInvocation(params.root, env);
   assertUpdatePackageActivationAdmission(params.root, { serviceRoot: params.serviceRoot });
   await assertOpenClawStateWriteAllowedAtPath({
     databasePath: resolveOpenClawStateSqlitePath(env),
     env,
     recoverOrphanedSidecars: false,
   });
+  assertUpdateInitialStoreInvocation(params.root, env);
   if (params.initialization) {
     const initialized = params.initialization;
     if (
@@ -305,6 +306,7 @@ export async function admitUpdateCommandRun(params: {
     env,
     busyTimeoutMs: parseUpdateTimeoutMs(params.opts.timeout) ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
   };
+  assertUpdateInitialStoreInvocation(params.root, env);
   const created = createUpdateRun(
     {
       runId: env[UPDATE_RUN_ID_ENV]?.trim() || params.initialization?.runId,
@@ -592,10 +594,12 @@ export function readDevUpdateTarget(): DevUpdateTarget | undefined {
 }
 
 export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
+  assertUpdateInitialStoreInvocation();
   // Refuse before preflight can inspect write ownership or admit a live run ledger.
   const runtimeFailure = process.versions.bun
     ? null
     : nodeRuntimeFailure(process.versions.node, await detectCurrentSqliteCapabilities());
+  assertUpdateInitialStoreInvocation();
   if (runtimeFailure) {
     const error = `${runtimeFailure}\n${formatUnsupportedNodeVersionMessage(process.versions.node)}`;
     if (opts.json) {
@@ -636,21 +640,26 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   // The shim can move during preparation; the loaded module owns the executing generation.
   const executingRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
   const discoveredRoot = opts.sourceUpdate?.root ?? (await resolveUpdateRoot());
+  assertUpdateInitialStoreInvocation(discoveredRoot);
   const installKind = await resolveUpdateInstallKind(discoveredRoot, { timeoutMs });
+  assertUpdateInitialStoreInvocation(discoveredRoot);
   if (opts.sourceUpdate && installKind !== "git") {
     throw new Error("Doctor source update requires the accepted Git checkout.");
   }
   const controlPlaneUpdateSentinelMeta = await readControlPlaneUpdateSentinelMeta();
+  assertUpdateInitialStoreInvocation(discoveredRoot);
   const foreground =
     !postCoreUpdateResume &&
     (await resolveForegroundUpdateAdmission({
       root: discoveredRoot,
       meta: controlPlaneUpdateSentinelMeta,
     }));
+  assertUpdateInitialStoreInvocation(discoveredRoot);
   const pkgOwnership = createFreeBsdPkgOwnershipInspection(timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS);
   // Inspect the invoking installation before a service can redirect its root,
   // runtime or state. This also covers package-to-Git and preview requests.
   await pkgOwnership.assertUnowned(discoveredRoot);
+  assertUpdateInitialStoreInvocation(discoveredRoot);
   // A post-core marker cannot bypass pending recovery without the live original
   // owner. Check both roots before config/autostart preparation or history.
   assertUpdatePackageActivationAdmission(discoveredRoot, {
@@ -664,6 +673,8 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
           rebind: shouldRestart,
         })
       : undefined;
+  const initialAdmissionRoot = resolveUpdateCommandAdmissionRoot({ discoveredRoot, servicePlan });
+  assertUpdateInitialStoreInvocation(initialAdmissionRoot);
   const packageAdmission = {
     continuation: postCoreUpdateResume ? opts.run?.executorFence : undefined,
     serviceRoot: servicePlan?.serviceRoot ?? servicePlan?.rootRedirect?.root,
@@ -676,17 +687,20 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
       recoverOrphanedSidecars: false,
     });
   }
+  assertUpdateInitialStoreInvocation(initialAdmissionRoot);
   opts.run?.executorFence?.assertCurrent();
   const handoffRoot = controlPlaneUpdateSentinelMeta?.root;
   if (handoffRoot) {
     const { assertManagedServiceUpdateHandoffRoot } =
       await import("../../infra/update-managed-service-handoff.js");
+    assertUpdateInitialStoreInvocation(initialAdmissionRoot);
     await assertManagedServiceUpdateHandoffRoot({
       expectedRoot: handoffRoot,
       root: discoveredRoot,
       executingRoot,
       postCore: postCoreUpdateResume,
     });
+    assertUpdateInitialStoreInvocation(initialAdmissionRoot);
     opts.run?.executorFence?.assertCurrent();
   }
   assertUpdatePackageActivationAdmission(discoveredRoot, packageAdmission);
@@ -712,25 +726,4 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
     servicePlan,
     pkgOwnership,
   };
-}
-
-/** Prepare mutable runtime state only under the admitted installation owner. */
-export async function prepareMutableUpdateRuntime(
-  env: NodeJS.ProcessEnv | undefined,
-  fence: UpdateRecoveryFence,
-) {
-  return await withOwnedManagedUpdateEnv(env, async () => {
-    fence.assertCurrent();
-    await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
-    fence.assertCurrent();
-    await assertOpenClawStateWriteAllowedAtPath({
-      databasePath: resolveOpenClawStateSqlitePath(process.env),
-    });
-    fence.assertCurrent();
-    await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
-    fence.assertCurrent();
-    const records = await loadInstalledPluginIndexInstallRecords();
-    fence.assertCurrent();
-    return records;
-  });
 }

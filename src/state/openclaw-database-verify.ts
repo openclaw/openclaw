@@ -3,7 +3,10 @@ import type { ChildProcess } from "node:child_process";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { OpenClawDatabaseVerifyTarget } from "./openclaw-database-verify.worker.js";
+import type {
+  OpenClawDatabaseVerifyResult,
+  OpenClawDatabaseVerifyTarget,
+} from "./openclaw-database-verify.worker.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 const log = createSubsystemLogger("state/database-verify");
@@ -19,6 +22,14 @@ const quickCheckQueues = resolveGlobalSingleton(
   Symbol.for("openclaw.databaseIntegrityQuickChecks"),
   () => new Map<string, QuickCheckQueue>(),
 );
+
+/** Run explicit copied-database verification in the maintained isolated child. */
+export async function runOpenClawDatabaseVerificationWorker(
+  targets: readonly OpenClawDatabaseVerifyTarget[],
+): Promise<OpenClawDatabaseVerifyResult[]> {
+  const { runDatabaseVerifyWorker } = await import("./openclaw-database-verify.impl.js");
+  return await runDatabaseVerifyWorker(targets);
+}
 
 function quickCheckQueue(env: NodeJS.ProcessEnv): QuickCheckQueue {
   const key = path.resolve(resolveOpenClawStateSqlitePath(env));

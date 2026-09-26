@@ -4,10 +4,8 @@ import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
 import type { HandoffChild } from "./update-managed-service-handoff-control.js";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
-import type {
-  createManagedHandoffLeaseStore,
-  ManagedHandoffLease,
-} from "./update-managed-service-handoff-lease.js";
+import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease-types.js";
+import type { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 import type { UpdateRequester } from "./update-requester-authority.js";
 import type {
   ForegroundUpdateOrigin,

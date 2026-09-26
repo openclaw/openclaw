@@ -9,6 +9,20 @@ import { createConfigWriteAuthorityGuard } from "./write-authority.js";
 
 export const CONFIG_BACKUP_COUNT = 5;
 
+/** Exact config-owned recovery artifacts retained around one config path. */
+export function resolveConfigRecoveryArtifacts(configPath: string): {
+  backups: string[];
+  snapshot: string;
+} {
+  const base = `${path.resolve(configPath)}.bak`;
+  return {
+    backups: Array.from({ length: CONFIG_BACKUP_COUNT }, (_, index) =>
+      index === 0 ? base : `${base}.${index}`,
+    ),
+    snapshot: `${path.resolve(configPath)}.pre-update`,
+  };
+}
+
 /** Prepare backup bytes without blocking unrelated Gateway requests. */
 export async function prepareConfigFileWrite(params: {
   configPath: string;

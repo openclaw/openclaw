@@ -4,6 +4,7 @@ import { SQLITE_SIDECAR_SUFFIXES } from "../../infra/sqlite-files.js";
 import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
 import type { UpdateCandidateAdmissionResult } from "../../infra/update-candidate-admission.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
+import { assertUpdateInitialStoreInvocation } from "../../infra/update-initial-store-invocation.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { isFailedUpdateStep } from "../../infra/update-run-step.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
@@ -97,21 +98,26 @@ export async function withUpdateInitializationCleanup<T>(
 
 /** Missing state is not permission to recreate an interrupted database family. */
 export async function updateStateNeedsInitialization(env: NodeJS.ProcessEnv): Promise<boolean> {
+  assertUpdateInitialStoreInvocation(undefined, env);
   await assertUpdateRecoveryAdmission({ env });
+  assertUpdateInitialStoreInvocation(undefined, env);
   const databasePath = resolveOpenClawStateSqlitePath(env);
   await assertOpenClawStateWriteAllowedAtPath({
     databasePath,
     env,
     recoverOrphanedSidecars: false,
   });
+  assertUpdateInitialStoreInvocation(undefined, env);
   try {
     await fs.lstat(databasePath);
+    assertUpdateInitialStoreInvocation(undefined, env);
     return false;
   } catch (error) {
     if (!hasNodeErrorCode(error, "ENOENT")) {
       throw error;
     }
   }
+  assertUpdateInitialStoreInvocation(undefined, env);
   for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
     try {
       await fs.lstat(`${databasePath}${suffix}`);

@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
@@ -534,3 +535,57 @@ it.each([
     await expect(fs.lstat(staging)).rejects.toHaveProperty("code", "ENOENT");
   }
 });
+
+it.each(["publish", "revoke", "replace"] as const)(
+  "preserves live ownership through the journal publication hook: %s",
+  async (action) => {
+    const root = dirs.make("package-journal-publication-");
+    const source = path.join(root, "source");
+    const destination = path.join(root, "destination");
+    const retained = path.join(root, "retained");
+    await fs.writeFile(source, "sealed launcher");
+    await fs.writeFile(destination, "live launcher");
+    const refusal = new Error("journal owner revoked");
+    let revoked = false;
+    const beforePublish = vi.fn((staged: string) => {
+      expect(fsSync.readFileSync(staged, "utf8")).toBe("sealed launcher");
+      expect(fsSync.readFileSync(destination, "utf8")).toBe("live launcher");
+      if (action === "revoke") {
+        revoked = true;
+      } else if (action === "replace") {
+        fsSync.renameSync(destination, retained);
+        fsSync.writeFileSync(destination, "foreign launcher");
+      }
+    });
+    const result = copyPackagePathEntry(
+      source,
+      destination,
+      () => {
+        if (revoked) {
+          throw refusal;
+        }
+      },
+      beforePublish,
+    );
+    if (action === "publish") {
+      await expect(result).resolves.toEqual({ ownershipPreserved: true });
+    } else if (action === "revoke") {
+      await expect(result).rejects.toBe(refusal);
+    } else {
+      await expect(result).rejects.toHaveProperty("code", "path-mismatch");
+      expect(await fs.readFile(retained, "utf8")).toBe("live launcher");
+    }
+    expect(beforePublish).toHaveBeenCalledOnce();
+    expect(await fs.readFile(source, "utf8")).toBe("sealed launcher");
+    expect(await fs.readFile(destination, "utf8")).toBe(
+      action === "publish"
+        ? "sealed launcher"
+        : action === "revoke"
+          ? "live launcher"
+          : "foreign launcher",
+    );
+    expect((await fs.readdir(root)).toSorted()).toEqual(
+      action === "replace" ? ["destination", "retained", "source"] : ["destination", "source"],
+    );
+  },
+);
