@@ -47,6 +47,7 @@ type RenderedPane = HTMLElement & {
   routeFace: "chat" | "dashboard";
   dashboardExpanded: boolean;
   sessionKey: string;
+  visuallyPresented: boolean;
 };
 
 function getRouteDraftForActivePane(page: ChatPage): string | undefined {
@@ -292,6 +293,32 @@ describe("chat page retained sessions", () => {
     expect(paneB?.active).toBe(true);
     expect(paneB?.presented).toBe(true);
     expect(paneB?.hasAttribute("inert")).toBe(false);
+  });
+
+  it("leaves visuallyPresented untouched while previewing a retained session", async () => {
+    const { page, paneFor } = await mountRetainedPage("agent:main:a", "agent:main:b");
+    const paneB = expectDefined(paneFor("agent:main:b"), "retained preview pane");
+
+    // Park pane B at the baseline the preview path must preserve. The preview is
+    // for B's own session, so the pane is selected and `presented` is true: the
+    // write is a real false->true flip, not a no-op.
+    await showSession(page, "agent:main:a");
+    expect(paneB.visuallyPresented).toBe(false);
+
+    const intent = new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
+      cancelable: true,
+      detail: { commit: () => true, face: "chat", sessionKey: "agent:main:b" },
+    });
+    window.dispatchEvent(intent);
+
+    // The preview branch really ran on pane B...
+    expect(intent.defaultPrevented).toBe(true);
+    expect(paneB.classList.contains("chat-pane-cache__pane--visible")).toBe(true);
+    expect(paneB.hasAttribute("inert")).toBe(true);
+    // ...and it must not touch the reactive flag: a preview takes visual
+    // ownership only, so writing it schedules a second component update that
+    // renders the same face.
+    expect(paneB.visuallyPresented).toBe(false);
   });
 
   it.each([

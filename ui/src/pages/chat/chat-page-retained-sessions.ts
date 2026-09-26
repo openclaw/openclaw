@@ -331,11 +331,14 @@ export class ChatPageRetainedSessions {
       const selected = areUiSessionKeysEquivalent(pane.sessionKey ?? "", sessionKey);
       const presented = this.bindings.presented() && visible && selected;
       pane.classList.toggle("chat-pane-cache__pane--visible", selected);
-      pane.visuallyPresented = presented;
       if (preview) {
         pane.toggleAttribute("inert", true);
         continue;
       }
+      // Write the reactive flag only on the real activation path: the preview
+      // branch above leaves a cached pane inert, so setting it there only
+      // schedules a second component update that renders the same face.
+      pane.visuallyPresented = presented;
       pane.toggleAttribute("inert", !presented);
       pane.setAttribute("aria-hidden", presented ? "false" : "true");
       pane.presented = presented;
