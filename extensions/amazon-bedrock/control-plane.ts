@@ -8,6 +8,7 @@ import type {
   ListInferenceProfilesCommandInput,
 } from "@aws-sdk/client-bedrock";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
+import { bedrockCredentialDefaultProvider } from "./aws-credential-refresh.js";
 
 const BEDROCK_CONTROL_PLANE_REQUEST_TIMEOUT_MS = 30_000;
 
@@ -30,7 +31,11 @@ export async function loadBedrockControlPlaneSdk(): Promise<BedrockControlPlaneS
     ListInferenceProfilesCommand,
   } = await import("@aws-sdk/client-bedrock");
   return {
-    createClient: (region) => new BedrockClient(region ? { region } : {}),
+    createClient: (region) =>
+      new BedrockClient({
+        ...(region ? { region } : {}),
+        credentialDefaultProvider: bedrockCredentialDefaultProvider,
+      }),
     createGetInferenceProfileCommand: (input) => new GetInferenceProfileCommand(input),
     createListFoundationModelsCommand: () => new ListFoundationModelsCommand({}),
     createListInferenceProfilesCommand: (input) => new ListInferenceProfilesCommand(input),
