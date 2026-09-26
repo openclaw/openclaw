@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import { sql } from "kysely";
 import { cronRunRecordStoreKey } from "../cron/run-history-detail.js";
 import { getNodeSqliteKysely, prepareSqliteQueryIterator } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
@@ -45,17 +44,43 @@ function hasCurrentCronHistoryOverflow(db: DatabaseSync, current: TaskRecord): b
       getNodeSqliteKysely<DB>(db)
         .selectFrom("task_runs")
         .select(["task_id", "status", "created_at", "started_at", "ended_at", "last_event_at"])
-        .select([
-          sql<string | null>`CASE WHEN json_valid(detail_json) THEN
-            CASE WHEN json_type(detail_json) = 'object'
-              AND json_type(detail_json, '$.storeKey') = 'text'
-            THEN json_extract(detail_json, '$.storeKey') END
-          END`.as("store_key"),
-          sql<number>`CASE WHEN json_valid(detail_json) THEN
-            CASE WHEN json_type(detail_json) = 'object'
-              AND json_extract(detail_json, '$.kind') = 'cron-run'
-            THEN 1 ELSE 0 END
-          ELSE 0 END`.as("has_history"),
+        .select((eb) => [
+          eb
+            .case()
+            .when(eb.fn("json_valid", ["detail_json"]), "=", 1)
+            .then(
+              eb
+                .case()
+                .when(
+                  eb.and([
+                    eb(eb.fn("json_type", ["detail_json"]), "=", "object"),
+                    eb(eb.fn("json_type", ["detail_json", eb.val("$.storeKey")]), "=", "text"),
+                  ]),
+                )
+                .then(eb.fn<string>("json_extract", ["detail_json", eb.val("$.storeKey")]))
+                .end(),
+            )
+            .end()
+            .as("store_key"),
+          eb
+            .case()
+            .when(eb.fn("json_valid", ["detail_json"]), "=", 1)
+            .then(
+              eb
+                .case()
+                .when(
+                  eb.and([
+                    eb(eb.fn("json_type", ["detail_json"]), "=", "object"),
+                    eb(eb.fn("json_extract", ["detail_json", eb.val("$.kind")]), "=", "cron-run"),
+                  ]),
+                )
+                .then(1)
+                .else(0)
+                .end(),
+            )
+            .else(0)
+            .end()
+            .as("has_history"),
         ])
         .where("runtime", "=", "cron")
         .where(
