@@ -578,11 +578,14 @@ internal class ConversationReplyNotifier(
 
   private fun userPerson(): Person = Person.Builder().setName(nativeString("You")).build()
 
-  private fun canPostNotifications(): Boolean =
-    canPostConversationNotifications(Build.VERSION.SDK_INT) {
+  private fun canPostNotifications(): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+
+    return canPostConversationNotifications(Build.VERSION.SDK_INT) {
       ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
         PackageManager.PERMISSION_GRANTED
     }
+  }
 
   private fun ensureChannel() {
     val channel =
