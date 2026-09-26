@@ -1,3 +1,4 @@
+import { isAudioFileName } from "@openclaw/media-core/mime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   copyReplyPayloadMetadata,
@@ -8,8 +9,16 @@ import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispat
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
-import { parseInlineDirectives, sanitizeReplyDirectiveId } from "../../utils/directive-tags.js";
-import { sanitizeAssistantDisplayText } from "./chat-assistant-content.js";
+import {
+  parseInlineDirectives,
+  sanitizeReplyDirectiveId,
+  stripInlineDirectiveTagsForDelivery,
+} from "../../utils/directive-tags.js";
+import { isSuppressedControlReplyText } from "../control-reply-text.js";
+import {
+  combineNonStreamingReplyParts,
+  sanitizeAssistantDisplayText,
+} from "./chat-assistant-content.js";
 
 export type DeliveredChatSendReply = {
   input: ReplyDispatchOperation;
@@ -275,4 +284,56 @@ export function selectChatSendFinalReplyInputs(params: {
   return [...commandBlockPayloadEntriesForDelivery, ...finalPayloadEntriesForDelivery].map(
     (entry) => entry.input,
   );
+}
+
+export function buildTranscriptReplyTextFromInputs(
+  inputs: readonly ReplyDispatchOperation[],
+): string {
+  const chunks = inputs
+    .map((input) => {
+      const payload = readChatSendReplyPayload(input);
+      if (payload.isReasoning === true) {
+        return "";
+      }
+      const parts =
+        input.kind === "prepared" ? input.plan.parts : resolveSendableOutboundReplyParts(payload);
+      const lines: string[] = [];
+      const parsedText =
+        input.kind === "raw" && payload.text?.includes("[[")
+          ? parseInlineDirectives(payload.text)
+          : undefined;
+      const replyToId =
+        sanitizeReplyDirectiveId(payload.replyToId) ??
+        sanitizeReplyDirectiveId(parsedText?.replyToExplicitId);
+      if (replyToId) {
+        lines.push(`[[reply_to:${replyToId}]]`);
+      } else if (payload.replyToCurrent || parsedText?.replyToCurrent) {
+        lines.push("[[reply_to_current]]");
+      }
+      const text =
+        input.kind === "raw" && payload.text
+          ? stripInlineDirectiveTagsForDelivery(payload.text).text
+          : (payload.text ?? "");
+      if (text.trim() && (input.kind === "prepared" || !isSuppressedControlReplyText(text))) {
+        lines.push(text);
+      }
+      for (const mediaUrl of parts.mediaUrls) {
+        if (payload.sensitiveMedia === true) {
+          continue;
+        }
+        const trimmed = mediaUrl.trim();
+        if (trimmed) {
+          lines.push(`Attachment: ${trimmed}`);
+        }
+      }
+      if (
+        (payload.audioAsVoice || parsedText?.audioAsVoice) &&
+        parts.mediaUrls.some((mediaUrl) => isAudioFileName(mediaUrl))
+      ) {
+        lines.push("[[audio_as_voice]]");
+      }
+      return lines.join("\n");
+    })
+    .filter(Boolean);
+  return combineNonStreamingReplyParts(chunks);
 }

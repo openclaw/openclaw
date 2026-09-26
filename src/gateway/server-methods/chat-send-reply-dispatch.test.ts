@@ -35,15 +35,13 @@ import {
   extractAssistantDisplayText,
 } from "./chat-assistant-content.js";
 import {
+  buildTranscriptReplyTextFromInputs,
   readChatSendReplyPayload,
   selectChatSendFinalReplyInputs,
 } from "./chat-send-command-replies.js";
-import {
-  buildTranscriptReplyTextFromInputs,
-  createChatSendReplyDispatch,
-} from "./chat-send-reply-dispatch.js";
+import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 
-async function createReplyTranscriptFixture() {
+async function createReplyTranscriptFixture(hidden = false) {
   const runId = "receipt-run";
   const scope = {
     agentId: "main",
@@ -73,6 +71,7 @@ async function createReplyTranscriptFixture() {
   const userTurnRecorder = createUserTurnTranscriptRecorder({
     input: {
       text: "Inspect the synthetic fixture.",
+      ...(hidden ? { display: false as const } : {}),
       idempotencyKey: `${runId}:user`,
     },
     target: { ...scope, sessionEntry },
@@ -261,6 +260,118 @@ describe("buildAssistantReplyContentFromInputs", () => {
 });
 
 describe("createChatSendReplyDispatch", () => {
+  it.each([
+    { kind: "raw", adopted: false },
+    { kind: "prepared", adopted: false },
+    { kind: "raw", adopted: true },
+    { kind: "prepared", adopted: true },
+  ] as const)(
+    "threads warnings to the committed source through $kind delivery (adopted $adopted)",
+    async ({ kind, adopted }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const fixture = await createReplyTranscriptFixture();
+        const replyRunId = adopted ? "adopted-run" : fixture.runId;
+        if (adopted) {
+          fixture.dispatch.captureAgentTranscriptStart(replyRunId);
+        }
+        const payload: ReplyPayload = {
+          text: "Session Send failed",
+          isError: true,
+          replyToId: replyRunId,
+        };
+        if (kind === "raw") {
+          await fixture.dispatch.dispatcherOptions.deliver(payload, { kind: "final" });
+        } else {
+          const [plan] = createStructuredOutboundPayloadPlan([payload]);
+          if (!plan) {
+            throw new Error("Expected prepared warning");
+          }
+          await fixture.dispatch.dispatcherOptions.deliverPrepared?.(plan, { kind: "final" });
+        }
+        const [reply] = fixture.dispatch.deliveredReplies;
+        if (!reply) {
+          throw new Error("Expected delivered warning");
+        }
+        expect(readChatSendReplyPayload(reply.input)).toMatchObject({
+          text: "Session Send failed",
+          isError: true,
+          replyToId: fixture.inputId,
+        });
+        expect(fixture.inputId).not.toBe(fixture.runId);
+        expect(buildTranscriptReplyTextFromInputs([reply.input])).toBe(
+          "[[reply_to:" + fixture.inputId + "]]\nSession Send failed",
+        );
+        expect(payload.replyToId).toBe(replyRunId);
+        const source = await sessionTranscriptReaders.readSessionMessageByIdAsync(
+          fixture.scope,
+          fixture.inputId,
+        );
+        expect(source).toMatchObject({
+          found: true,
+          message: { role: "user", content: "Inspect the synthetic fixture." },
+        });
+        for (const replyToId of [fixture.runId, "adopted-run"]) {
+          const [late] = fixture.dispatch.resolveReplyInputs(
+            { kind: "raw", payload: { ...payload, replyToId } },
+            "adopted-run",
+            true,
+          );
+          if (!late) {
+            throw new Error("Expected late reply");
+          }
+          expect(readChatSendReplyPayload(late).replyToId).toBe(fixture.inputId);
+        }
+      });
+    },
+  );
+
+  it.each(["[[reply_to:receipt-run]]"])(
+    "persists canonical identity for %s before transcript publication",
+    async (directive) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const fixture = await createReplyTranscriptFixture();
+        await fixture.dispatch.runAgentMediaTranscript(
+          { run: async (operation) => operation() },
+          async () => {
+            const message = runAgentHarnessBeforeMessageWriteHook({
+              message: buildAssistantMessage({
+                model: { api: "openai-responses", provider: "fixture", id: "fixture" },
+                content: [{ type: "text", text: directive + " Result" }],
+                stopReason: "stop",
+                usage: buildUsageWithNoCost({}),
+              }),
+              prepareAssistantTranscriptMessage: fixture.dispatch.prepareAssistantTranscriptMessage,
+            });
+            expect(message).toMatchObject({
+              content: [{ type: "text", text: "Result" }],
+              openclawDelivery: { replyToId: fixture.inputId },
+            });
+            expect(message).not.toHaveProperty("openclawDelivery.replyToCurrent");
+          },
+        );
+      });
+    },
+  );
+
+  it("does not invent a quote for a hidden source or retarget a legitimate explicit reply", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const fixture = await createReplyTranscriptFixture(true);
+      await fixture.dispatch.dispatcherOptions.deliver(
+        { text: "Task finished", replyToId: fixture.runId },
+        { kind: "final" },
+      );
+      await fixture.dispatch.dispatcherOptions.deliver(
+        { text: "Explicit reply", replyToId: "earlier-source" },
+        { kind: "final" },
+      );
+      expect(
+        fixture.dispatch.deliveredReplies.map(
+          ({ input }) => readChatSendReplyPayload(input).replyToId,
+        ),
+      ).toEqual([undefined, "earlier-source"]);
+    });
+  });
+
   it("owns assistant media before transcript publication only during its live dispatch", async () => {
     let current = true;
     const dispatch = createChatSendReplyDispatch({
