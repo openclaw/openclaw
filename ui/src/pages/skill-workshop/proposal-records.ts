@@ -18,12 +18,17 @@ function startOfLocalDay(ms: number): number {
 }
 
 function recencyGroup(ms: number): SkillWorkshopProposal["recencyGroup"] {
-  const today = startOfLocalDay(Date.now());
+  const nowMs = Date.now();
+  const now = new Date(nowMs);
+  const today = startOfLocalDay(nowMs);
+  // Calendar days aren't always 24 elapsed hours across a DST transition, so
+  // step back a calendar day instead of subtracting a fixed millisecond span.
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime();
   const day = startOfLocalDay(ms);
   if (day === today) {
     return "today";
   }
-  if (day === today - 24 * 60 * 60 * 1000) {
+  if (day === yesterday) {
     return "yesterday";
   }
   return "earlier";
