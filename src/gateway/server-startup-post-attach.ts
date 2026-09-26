@@ -11,6 +11,7 @@ import {
 } from "../infra/delivery-queue-state-context.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { hasRestartSentinel } from "../infra/restart-sentinel.js";
 import type { createGatewayUpdateCheck } from "../infra/update-startup.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
@@ -36,7 +37,6 @@ import type { GatewayClient, GatewayContextResolver } from "./server-methods/sha
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
-import { scheduleContextCachePrewarm } from "./server-startup-context-cache-prewarm.js";
 import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
 import {
@@ -614,6 +614,7 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
 /** Start work that depends on the HTTP server being attached and visible. */
 export async function startGatewayPostAttachRuntime(
   params: {
+    scheduler: GatewayScheduler;
     minimalTestGateway: boolean;
     updateCanary?: boolean;
     cfgAtStart: OpenClawConfig;
@@ -999,7 +1000,6 @@ export async function startGatewayPostAttachRuntime(
           // work can create sessions that the recovery scan must leave alone.
           params.unlockStartupMethods();
           const newGatewayLifetimeSidecars = [
-            scheduleContextCachePrewarm(params),
             scheduleGatewayHandlerPrewarm(params),
             ...(mainSessionRecoverySidecar ? [mainSessionRecoverySidecar] : []),
           ];

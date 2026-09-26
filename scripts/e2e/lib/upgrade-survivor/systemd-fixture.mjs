@@ -326,22 +326,22 @@ function inspectLoadedRuntime(args) {
     ]);
     return true;
   }
-  if (
-    matches([
-      "get-property",
-      paths.owner,
-      object,
-      `${manager}.Service`,
-      "Result",
-      "NRestarts",
-      "MainPID",
-      "ExecMainStatus",
-      "ExecMainCode",
-      "KillMode",
-      "TasksCurrent",
-      "MemoryCurrent",
-    ])
-  ) {
+  const runtimeQuery = [
+    "get-property",
+    paths.owner,
+    object,
+    `${manager}.Service`,
+    "Result",
+    "NRestarts",
+    "MainPID",
+    "ExecMainStatus",
+    "ExecMainCode",
+    "KillMode",
+    "TasksCurrent",
+    "MemoryCurrent",
+  ];
+  const includeControlGroup = matches([...runtimeQuery, "ControlGroup"]);
+  if (matches(runtimeQuery) || includeControlGroup) {
     // systemd's unavailable uint64 sentinel stays unknown to the native reader.
     const unknown = Number(0xffff_ffff_ffff_ffffn);
     writeProperties([
@@ -353,6 +353,8 @@ function inspectLoadedRuntime(args) {
       ["s", unit.killMode],
       ["t", runtime.settled ? 0 : unknown],
       ["t", unknown],
+      // This process-group emulator does not create a native systemd cgroup.
+      ...(includeControlGroup ? [["s", ""]] : []),
     ]);
     return true;
   }

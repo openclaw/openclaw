@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import OpenClawKit
 
 private struct StoredPushRelayRegistrationState: Codable {
     var relayHandle: String
@@ -45,7 +46,7 @@ enum PushRelayRegistrationStore {
     }
 
     static func loadRegistrationState() -> RegistrationState? {
-        guard let raw = KeychainStore.loadString(
+        guard let raw = GenericPasswordKeychainStore.loadString(
             service: self.service,
             account: self.registrationStateAccount),
             let data = raw.data(using: .utf8),
@@ -70,29 +71,19 @@ enum PushRelayRegistrationStore {
 
     @discardableResult
     static func saveRegistrationState(_ state: RegistrationState) -> Bool {
-        let stored = StoredPushRelayRegistrationState(
-            relayHandle: state.relayHandle,
-            sendGrant: state.sendGrant,
-            relayOrigin: state.relayOrigin,
-            gatewayDeviceId: state.gatewayDeviceId,
-            relayHandleExpiresAtMs: state.relayHandleExpiresAtMs,
-            tokenDebugSuffix: state.tokenDebugSuffix,
-            lastAPNsTokenHashHex: state.lastAPNsTokenHashHex,
-            installationId: state.installationId,
-            lastTransport: state.lastTransport,
-            apnsEnvironment: state.apnsEnvironment,
-            relayProfile: state.relayProfile,
-            proofPolicy: state.proofPolicy)
-        guard let data = try? JSONEncoder().encode(stored),
+        guard let data = try? JSONEncoder().encode(state),
               let raw = String(data: data, encoding: .utf8)
         else {
             return false
         }
-        return KeychainStore.saveString(raw, service: self.service, account: self.registrationStateAccount)
+        return GenericPasswordKeychainStore.saveString(
+            raw,
+            service: self.service,
+            account: self.registrationStateAccount)
     }
 
     static func loadAppAttestKeyID(scope: AppAttestScope) -> String? {
-        let value = KeychainStore.loadString(
+        let value = GenericPasswordKeychainStore.loadString(
             service: self.service,
             account: self.scopedAccount(self.appAttestKeyIDAccount, scope: scope))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -102,7 +93,7 @@ enum PushRelayRegistrationStore {
 
     @discardableResult
     static func saveAppAttestKeyID(_ keyID: String, scope: AppAttestScope) -> Bool {
-        KeychainStore.saveString(
+        GenericPasswordKeychainStore.saveString(
             keyID,
             service: self.service,
             account: self.scopedAccount(self.appAttestKeyIDAccount, scope: scope))
@@ -110,13 +101,13 @@ enum PushRelayRegistrationStore {
 
     @discardableResult
     static func clearAppAttestKeyID(scope: AppAttestScope) -> Bool {
-        KeychainStore.delete(
+        GenericPasswordKeychainStore.delete(
             service: self.service,
             account: self.scopedAccount(self.appAttestKeyIDAccount, scope: scope))
     }
 
     static func loadAttestedKeyID(scope: AppAttestScope) -> String? {
-        let value = KeychainStore.loadString(
+        let value = GenericPasswordKeychainStore.loadString(
             service: self.service,
             account: self.scopedAccount(self.appAttestedKeyIDAccount, scope: scope))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -126,7 +117,7 @@ enum PushRelayRegistrationStore {
 
     @discardableResult
     static func saveAttestedKeyID(_ keyID: String, scope: AppAttestScope) -> Bool {
-        KeychainStore.saveString(
+        GenericPasswordKeychainStore.saveString(
             keyID,
             service: self.service,
             account: self.scopedAccount(self.appAttestedKeyIDAccount, scope: scope))
@@ -134,7 +125,7 @@ enum PushRelayRegistrationStore {
 
     @discardableResult
     static func clearAttestedKeyID(scope: AppAttestScope) -> Bool {
-        KeychainStore.delete(
+        GenericPasswordKeychainStore.delete(
             service: self.service,
             account: self.scopedAccount(self.appAttestedKeyIDAccount, scope: scope))
     }

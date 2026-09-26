@@ -21,7 +21,6 @@ export function createModelSelectionStateFixture(params: {
     }),
     allowedModelKeys: new Set<string>(),
     allowedModelCatalog: [],
-    policyAliasIndex: { byAlias: new Map(), byKey: new Map() },
     resetModelOverride: false,
     resetModelOverrideRef: undefined,
     resetModelOverrideReason: undefined,

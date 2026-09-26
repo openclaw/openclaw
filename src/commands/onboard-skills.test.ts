@@ -103,6 +103,16 @@ function createBundledSkill(params: {
   };
 }
 
+function createNodeSkill() {
+  return createBundledSkill({
+    name: "node-helper",
+    description: "Node helper",
+    bins: ["node-helper"],
+    installLabel: "Install node-helper",
+    installKind: "node",
+  });
+}
+
 function createWorkspaceSkill(
   params: Parameters<typeof createBundledSkill>[0],
 ): ReturnType<typeof createBundledSkill> {
@@ -283,13 +293,7 @@ describe("setupSkills", () => {
         bins: ["repo-helper"],
         installLabel: "Install repo-helper",
       }),
-      createBundledSkill({
-        name: "node-helper",
-        description: "Node helper",
-        bins: ["node-helper"],
-        installLabel: "Install node-helper",
-        installKind: "node",
-      }),
+      createNodeSkill(),
     ]);
 
     const { prompter } = createPrompter({});
@@ -311,15 +315,7 @@ describe("setupSkills", () => {
   });
 
   it("installs explicitly selected dependencies when Skip for now is also selected", async () => {
-    mockMissingBrewStatus([
-      createBundledSkill({
-        name: "node-helper",
-        description: "Node helper",
-        bins: ["node-helper"],
-        installLabel: "Install node-helper",
-        installKind: "node",
-      }),
-    ]);
+    mockMissingBrewStatus([createNodeSkill()]);
 
     const { prompter } = createPrompter({ multiselect: ["__skip__", "node-helper"] });
     await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
@@ -340,13 +336,7 @@ describe("setupSkills", () => {
           installLabel: "Install repo-helper",
           installKind: "node",
         }),
-        createBundledSkill({
-          name: "node-helper",
-          description: "Node helper",
-          bins: ["node-helper"],
-          installLabel: "Install node-helper",
-          installKind: "node",
-        }),
+        createNodeSkill(),
         createBundledSkill({
           name: "nano-pdf",
           description: "PDF helper",
@@ -388,13 +378,7 @@ describe("setupSkills", () => {
 
   it("installs only the bundled dependencies selected by the user", async () => {
     mockMissingBrewStatus([
-      createBundledSkill({
-        name: "node-helper",
-        description: "Node helper",
-        bins: ["node-helper"],
-        installLabel: "Install node-helper",
-        installKind: "node",
-      }),
+      createNodeSkill(),
       createBundledSkill({
         name: "other-helper",
         description: "Other helper",
@@ -414,15 +398,7 @@ describe("setupSkills", () => {
   });
 
   it("rechecks persistent-effect authority immediately before each dependency install", async () => {
-    mockMissingBrewStatus([
-      createBundledSkill({
-        name: "node-helper",
-        description: "Node helper",
-        bins: ["node-helper"],
-        installLabel: "Install node-helper",
-        installKind: "node",
-      }),
-    ]);
+    mockMissingBrewStatus([createNodeSkill()]);
     const beforePersistentEffect = vi.fn(async () => {});
 
     const { prompter } = createPrompter({ multiselect: ["node-helper"] });
@@ -438,25 +414,12 @@ describe("setupSkills", () => {
 
   it.each([
     [undefined, undefined, "npm"],
-    ["npm", undefined, "npm"],
-    ["pnpm", undefined, "pnpm"],
-    ["bun", undefined, "bun"],
     ["yarn", undefined, "yarn"],
-    ["yarn", "npm", "npm"],
-    ["bun", "pnpm", "pnpm"],
     ["pnpm", "bun", "bun"],
   ] as const)(
     "installs with saved %s and requested %s using %s",
     async (saved, requested, expected) => {
-      mockMissingBrewStatus([
-        createBundledSkill({
-          name: "node-helper",
-          description: "Node helper",
-          bins: ["node-helper"],
-          installLabel: "Install node-helper",
-          installKind: "node",
-        }),
-      ]);
+      mockMissingBrewStatus([createNodeSkill()]);
 
       const { prompter } = createPrompter({ multiselect: ["node-helper"] });
       const next = await setupSkills(

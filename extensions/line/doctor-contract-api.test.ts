@@ -115,33 +115,6 @@ describe("LINE doctor state migration", () => {
     });
   });
 
-  it("detects and migrates pre-drain rows for the default account absent from config", async () => {
-    await withStateDir(async (stateDir) => {
-      // Pre-drain rows outlive the account config that admitted them, so the
-      // sweep discovers accounts from the durable queue rather than the config.
-      await seedLegacyRow(stateDir, "default", "legacy-doctor-default");
-
-      const detected = await migration.detectLegacyState(migrationParams(stateDir, {}));
-      expect(detected?.preview).toEqual([
-        '- LINE pre-drain spool rows (account "default"): 1 row(s) -> canonical ingress contract',
-      ]);
-
-      const result = await migration.migrateLegacyState(migrationParams(stateDir, {}));
-      expect(result.changes).toEqual([
-        'Migrated LINE pre-drain spool rows (account "default"): 1 queued under the canonical contract, 0 dead-lettered at the identity fence (account not currently configured, so these stay queued until it is restored)',
-      ]);
-      expect(result.warnings).toEqual([]);
-
-      const queue = createChannelIngressQueue<{
-        version: number;
-        rawEvent: string;
-        destination: string;
-      }>({ channelId: "line", accountId: "default", stateDir });
-      const pending = await queue.listPending({ limit: "all" });
-      expect(pending.map((record) => record.id)).toEqual(["message:message-legacy-doctor-default"]);
-    });
-  });
-
   it("detects and migrates pre-drain rows for a configured account", async () => {
     await withStateDir(async (stateDir) => {
       await seedLegacyRow(stateDir, "work", "legacy-doctor-1");
@@ -191,6 +164,14 @@ describe("LINE doctor state migration", () => {
       ]);
       expect(result.warnings).toEqual([]);
 
+      const defaultQueue = createChannelIngressQueue({
+        channelId: "line",
+        accountId: "default",
+        stateDir,
+      });
+      expect((await defaultQueue.listPending({ limit: "all" })).map((record) => record.id)).toEqual(
+        ["message:message-legacy-doctor-kept"],
+      );
       const retiredQueue = createChannelIngressQueue<{
         version: number;
         rawEvent: string;

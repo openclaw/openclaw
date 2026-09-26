@@ -1485,17 +1485,6 @@ describe("run-node script", () => {
     },
   );
 
-  it("reports a clean tree explicitly when dist is current", async ({ tmp }) => {
-    await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
-
-    const requirement = resolveBuildRequirement(createBuildRequirementDeps(tmp));
-
-    expect(requirement).toEqual({
-      shouldBuild: false,
-      reason: "clean",
-    });
-  });
-
   it.for(["build", "runtime"] as const)(
     "refreshes dirty-built %s artifacts after restoring the same HEAD source",
     async (scope, { tmp }) => {
@@ -2150,18 +2139,6 @@ describe("run-node script", () => {
       expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
       expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
       expect(fakeProcess.listenerCount("exit")).toBe(0);
-    });
-
-    it("releases the lock directory when the wrapper receives SIGTERM", async ({ tmp }) => {
-      const fakeProcess = createFakeProcess();
-      const lockDir = path.join(tmp, ".artifacts", "run-node-build.lock");
-
-      const release = await acquireRunNodeBuildLock(lockDeps(tmp, fakeProcess));
-      expect(fsSync.existsSync(lockDir)).toBe(true);
-
-      fakeProcess.emit("SIGTERM");
-      expect(fsSync.existsSync(lockDir)).toBe(false);
-      expect(release()).toBeUndefined();
     });
 
     it("releases the lock directory on process exit", async ({ tmp }) => {

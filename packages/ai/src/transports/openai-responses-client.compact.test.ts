@@ -53,6 +53,15 @@ function mockCompactResponse(body: unknown): void {
   sdkState.post.mockResolvedValue(body);
 }
 
+function compact(requestModel: Model = model) {
+  return requestPreparedOpenAIResponsesCompaction(
+    createOpenAIResponsesTransportStreamFn(),
+    requestModel,
+    context,
+    { apiKey: "test-key" },
+  );
+}
+
 describe("responses compact endpoint", () => {
   beforeEach(() => {
     sdkState.clients.length = 0;
@@ -133,18 +142,10 @@ describe("responses compact endpoint", () => {
       usage: { input_tokens: 1, output_tokens: 1 },
     });
 
-    await expect(
-      requestPreparedOpenAIResponsesCompaction(
-        createOpenAIResponsesTransportStreamFn(),
-        model,
-        context,
-        { apiKey: "test-key" },
-      ),
-    ).rejects.toThrow("one trailing compaction item");
+    await expect(compact()).rejects.toThrow("one trailing compaction item");
   });
 
   it.each([
-    ["missing", [{ type: "message", role: "user", content: [] }]],
     [
       "malformed retained-message",
       [
@@ -180,14 +181,7 @@ describe("responses compact endpoint", () => {
       usage: { input_tokens: 1, output_tokens: 1 },
     });
 
-    await expect(
-      requestPreparedOpenAIResponsesCompaction(
-        createOpenAIResponsesTransportStreamFn(),
-        model,
-        context,
-        { apiKey: "test-key" },
-      ),
-    ).rejects.toThrow("one trailing compaction item");
+    await expect(compact()).rejects.toThrow("one trailing compaction item");
   });
 
   it("keeps the checkpoint-only response shape distinct from retained user history", async () => {
@@ -197,14 +191,7 @@ describe("responses compact endpoint", () => {
       usage: { input_tokens: 1, output_tokens: 1 },
     });
 
-    await expect(
-      requestPreparedOpenAIResponsesCompaction(
-        createOpenAIResponsesTransportStreamFn(),
-        model,
-        context,
-        { apiKey: "test-key" },
-      ),
-    ).resolves.toMatchObject({ historyMode: "compacted-prefix" });
+    await expect(compact()).resolves.toMatchObject({ historyMode: "compacted-prefix" });
   });
 
   it.each([
@@ -222,14 +209,7 @@ describe("responses compact endpoint", () => {
       ],
       usage: { input_tokens: 1, output_tokens: 1 },
     });
-    await expect(
-      requestPreparedOpenAIResponsesCompaction(
-        createOpenAIResponsesTransportStreamFn(),
-        officialOpenAIModel,
-        context,
-        { apiKey: "test-key" },
-      ),
-    ).rejects.toThrow("one trailing compaction item");
+    await expect(compact(officialOpenAIModel)).rejects.toThrow("one trailing compaction item");
   });
 
   it.each([model, { ...model, provider: "custom", baseUrl: "https://responses.example/v1" }])(
@@ -240,14 +220,7 @@ describe("responses compact endpoint", () => {
         output: [{ type: "compaction", encrypted_content: "opaque", status: "completed" }],
         usage: { input_tokens: 1, output_tokens: 1 },
       });
-      await expect(
-        requestPreparedOpenAIResponsesCompaction(
-          createOpenAIResponsesTransportStreamFn(),
-          route,
-          context,
-          { apiKey: "test-key" },
-        ),
-      ).rejects.toThrow("one trailing compaction item");
+      await expect(compact(route)).rejects.toThrow("one trailing compaction item");
     },
   );
 
@@ -268,14 +241,7 @@ describe("responses compact endpoint", () => {
       ],
       usage: { input_tokens: 1, output_tokens: 1 },
     });
-    await expect(
-      requestPreparedOpenAIResponsesCompaction(
-        createOpenAIResponsesTransportStreamFn(),
-        officialOpenAIModel,
-        context,
-        { apiKey: "test-key" },
-      ),
-    ).rejects.toThrow("one trailing compaction item");
+    await expect(compact(officialOpenAIModel)).rejects.toThrow("one trailing compaction item");
   });
 
   it.each([

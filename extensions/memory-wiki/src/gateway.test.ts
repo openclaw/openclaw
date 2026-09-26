@@ -46,12 +46,10 @@ vi.mock("./wiki-overview.js", () => ({
   listMemoryWikiOverview: vi.fn(),
 }));
 
-vi.mock("./obsidian.js", () => ({
+vi.mock("./obsidian.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./obsidian.js")>()),
   probeObsidianCli: vi.fn(),
-  runObsidianCommand: vi.fn(),
-  runObsidianDaily: vi.fn(),
-  runObsidianOpen: vi.fn(),
-  runObsidianSearch: vi.fn(),
+  runObsidianAction: vi.fn(),
 }));
 
 vi.mock("./query.js", () => ({

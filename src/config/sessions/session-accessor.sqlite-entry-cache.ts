@@ -53,7 +53,6 @@ import type { InternalSessionEntry, SessionEntry } from "./types.js";
 export {
   assertSessionEntryCreationPublication,
   isPreparedSessionSharingChange,
-  projectSessionSharingEntry,
   publishSessionEntryPlaceholderInsertion,
   publishSessionSharingMemberChange,
   readCommittedIncognitoSessionSharing,
@@ -65,9 +64,10 @@ export {
   runWithSessionEntryCreationPublication,
   type SessionEntryReplacementPublication,
 } from "./session-accessor.sqlite-entry-cache-publication.js";
-export type {
-  SessionEntryPlaceholder,
-  SessionTranscriptInitializationPublication,
+export {
+  projectSessionSharingEntry,
+  type SessionEntryPlaceholder,
+  type SessionTranscriptInitializationPublication,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 
 type SessionEntryCacheTables = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
@@ -216,14 +216,10 @@ export function readSessionEntryCache(
 ): SessionEntryCacheSnapshot {
   return runSqliteReadOperationSync(database.db, () => {
     const projection = options.retainFullEntry ? "full" : options.projection;
-    const prepared = assertCanonicalSqliteSessionKeysCurrent(
-      database,
-      projection !== "full" && !options.fullEntryKeys,
-    );
+    const prepared = assertCanonicalSqliteSessionKeysCurrent(database, projection !== "full");
     if (
       !options.cache ||
       options.deferParticipants ||
-      options.fullEntryKeys ||
       options.retainFullEntry ||
       options.latest ||
       projection === "full" ||
@@ -234,7 +230,6 @@ export function readSessionEntryCache(
         database,
         projection,
         prepared,
-        options.fullEntryKeys ? new Set(options.fullEntryKeys) : undefined,
         options.retainFullEntry,
         options.deferParticipants,
       );

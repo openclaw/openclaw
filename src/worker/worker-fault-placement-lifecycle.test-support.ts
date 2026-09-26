@@ -88,7 +88,7 @@ export class WorkerFaultPlacementLifecycle {
 
   async prepareRun(runId: string, credential: string): Promise<WorkerSessionTurnClaim> {
     const current = this.options.placementStore.get(this.options.sessionId);
-    const placement = current?.state === "active" ? current : this.activatePlacement();
+    const placement = current?.state === "active" ? current : await this.activatePlacement();
     const activeClaim = projectWorkerSessionTurnClaim(placement);
     if (activeClaim) {
       if (activeClaim.runId !== runId) {
@@ -168,8 +168,10 @@ export class WorkerFaultPlacementLifecycle {
     }
   }
 
-  private activatePlacement(): Extract<WorkerSessionPlacementRecord, { state: "active" }> {
-    let placement = this.options.placementStore.startDispatch({
+  private async activatePlacement(): Promise<
+    Extract<WorkerSessionPlacementRecord, { state: "active" }>
+  > {
+    let placement = await this.options.placementStore.startDispatch({
       sessionId: this.options.sessionId,
       agentId: this.options.agentId,
       sessionKey: this.options.sessionKey,

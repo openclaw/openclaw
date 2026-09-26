@@ -201,7 +201,6 @@ async function configureSpawnRuntime(mode: "memory" | "durable"): Promise<void> 
       // Memory mode measures runtime projection with empty, no-op task persistence.
       loadSnapshot: () => ({ tasks: new Map(), deliveryStates: new Map() }),
       upsertTaskWithDeliveryState: () => {},
-      deleteTaskWithDeliveryState: () => {},
       upsertDeliveryState: () => {},
       close: () => {},
     },

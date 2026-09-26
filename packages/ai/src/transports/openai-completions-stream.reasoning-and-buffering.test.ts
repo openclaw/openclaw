@@ -41,7 +41,11 @@ describe("openai completions stream", () => {
         }),
         makeCompletionsChunk({}, "tool_calls"),
       ],
-      expectedFirst: { type: "thinking", thinking: "Need a tool." },
+      expectedFirst: {
+        type: "thinking",
+        thinking: "Need a tool.",
+        thinkingSignature: "reasoning_details",
+      },
       expectedSecond: {
         type: "toolCall",
         id: "call_1",

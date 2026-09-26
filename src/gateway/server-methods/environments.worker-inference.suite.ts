@@ -3,6 +3,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createDeviceWorkerRuntime } from "../worker-environments/device-provider.js";
 import { createWorkerEnvironmentService } from "../worker-environments/service.js";
 import { createWorkerEnvironmentStore } from "../worker-environments/store.js";
@@ -68,6 +69,7 @@ export function registerWorkerInferenceEnvironmentTests(
     const bootstrapWorker = vi.fn();
     const service = createWorkerEnvironmentService({
       store,
+      scheduler: createTestGatewayScheduler(),
       getConfig: () => config,
       resolveProvider: (id) => (id === "device" ? runtime.provider : undefined),
       prepareInstallation,

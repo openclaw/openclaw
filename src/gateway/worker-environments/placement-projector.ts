@@ -151,6 +151,7 @@ export function projectWorkerSessionPlacement(
   identity?: WorkerPlacementIdentity,
   failedRecoveryAction?: "restart" | "stop-first",
   workspaceResultReconciling = false,
+  retryOnSend = false,
 ): SessionPlacement {
   const { inference, ...provenance } = identity ?? {};
   const timing = {
@@ -248,6 +249,7 @@ export function projectWorkerSessionPlacement(
             ...retained,
             recoveryError: record.recoveryError,
             ...(failedRecoveryAction ? { recoveryAction: failedRecoveryAction } : {}),
+            ...(retryOnSend ? { retryOnSend: true as const } : {}),
             ...terminal,
           }
         : { state: "reclaimed", ...retained, ...terminal };

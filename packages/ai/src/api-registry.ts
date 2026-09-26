@@ -59,18 +59,6 @@ function wrapStream<TApi extends Api, TOptions extends StreamOptions>(
   };
 }
 
-function wrapStreamSimple<TApi extends Api>(
-  api: TApi,
-  streamSimple: StreamFunction<TApi, SimpleStreamOptions>,
-): ApiStreamSimpleFunction {
-  return (model, context, options) => {
-    if (model.api !== api) {
-      throw new Error(`Mismatched api: ${model.api} expected ${api}`);
-    }
-    return streamSimple(model as Model<TApi>, context, options);
-  };
-}
-
 /** Creates an isolated provider registry for one runtime or tenant. */
 export function createApiRegistry() {
   const providers = new Map<string, RegisteredApiProviderEntry>();
@@ -84,7 +72,7 @@ export function createApiRegistry() {
       provider: {
         api: provider.api,
         stream: wrapStream(provider.api, provider.stream),
-        streamSimple: wrapStreamSimple(provider.api, provider.streamSimple),
+        streamSimple: wrapStream(provider.api, provider.streamSimple),
       },
       sourceId,
     });

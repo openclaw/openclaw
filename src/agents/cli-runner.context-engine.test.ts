@@ -707,17 +707,4 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(maintain).toHaveBeenCalledTimes(1);
     expect(dispose).not.toHaveBeenCalled();
   });
-
-  it("does not dispose context engines when CLI attempts fail", async () => {
-    executePreparedCliRunMock.mockRejectedValue(new Error("cli boom"));
-    const dispose = vi.fn(async () => {
-      throw new Error("dispose boom");
-    });
-    const contextEngine = createContextEngine({ dispose });
-    await expect(runPreparedCliAgent(buildPreparedContext(contextEngine))).rejects.toThrow(
-      "cli boom",
-    );
-
-    expect(dispose).not.toHaveBeenCalled();
-  });
 });

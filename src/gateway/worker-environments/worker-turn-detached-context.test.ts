@@ -105,7 +105,7 @@ async function launchProbe(
   waitForInitialPlacement?: WorkerTurnLauncherOptions["waitForInitialPlacement"],
 ) {
   if (!waitForInitialPlacement) {
-    seedActivePlacement();
+    await seedActivePlacement();
   }
   const deliberateStop = new WorkerRunnerUnavailableError();
   let credentialCalls = 0;

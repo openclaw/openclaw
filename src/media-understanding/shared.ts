@@ -1,5 +1,3 @@
-// Shared provider HTTP/audio helpers for media-understanding integrations,
-// including guarded fetches, deadlines, retries, and multipart upload bodies.
 import path from "node:path";
 import {
   resolveDateTimestampMs,
@@ -269,28 +267,15 @@ export async function pollProviderOperationJson<TPayload>(
         deadline: params.deadline,
         defaultTimeoutMs: params.defaultTimeoutMs,
       });
-      const guardedOptions = resolveGuardedRequestOptions(params);
-      const result = guardedOptions
-        ? await fetchGuardedProviderOperationResponse({
-            stage: "poll",
-            url: params.url,
-            init,
-            timeoutMs,
-            fetchFn: params.fetchFn,
-            requestFailedMessage: params.requestFailedMessage,
-            guardedOptions,
-          })
-        : {
-            response: await fetchProviderOperationResponse({
-              stage: "poll",
-              url: params.url,
-              init,
-              timeoutMs,
-              fetchFn: params.fetchFn,
-              requestFailedMessage: params.requestFailedMessage,
-            }),
-            release: undefined,
-          };
+      const result = await fetchProviderOperation({
+        stage: "poll",
+        url: params.url,
+        init,
+        timeoutMs,
+        fetchFn: params.fetchFn,
+        requestFailedMessage: params.requestFailedMessage,
+        guardedOptions: resolveGuardedRequestOptions(params),
+      });
       try {
         return (await readProviderJsonObjectResponse(
           result.response,
@@ -314,37 +299,7 @@ export async function fetchProviderOperationResponse(params: {
   requestFailedMessage?: string;
   retry?: TransientProviderRetryConfig;
 }): Promise<Response> {
-  return await executeProviderOperationWithRetry({
-    provider: params.provider ?? "provider-http",
-    stage: params.stage,
-    retry: params.retry,
-    operation: async () => {
-      const timeoutMs = resolveProviderRequestTimeoutMs({
-        timeoutMs: params.timeoutMs,
-        defaultTimeoutMs: DEFAULT_GUARDED_HTTP_TIMEOUT_MS,
-      });
-      const requestDeadline = createProviderOperationDeadline({
-        timeoutMs,
-        label: params.requestFailedMessage ?? `${params.provider ?? "provider"} ${params.stage}`,
-      });
-      const response = await fetchWithTimeout(
-        params.url,
-        params.init ?? {},
-        timeoutMs,
-        params.fetchFn,
-      );
-      if (params.requestFailedMessage) {
-        await assertOkOrThrowHttpError(response, params.requestFailedMessage, {
-          bodyTimeoutMs: createProviderOperationTimeoutResolver({
-            deadline: requestDeadline,
-            defaultTimeoutMs: timeoutMs,
-          }),
-          onBodyTimeout: () => createProviderOperationTimeoutError(requestDeadline),
-        });
-      }
-      return response;
-    },
-  });
+  return (await fetchProviderOperation(params)).response;
 }
 
 /**
@@ -473,41 +428,6 @@ export function resolveProviderHttpRequestConfigWithOriginTrust(
   return resolveProviderHttpRequestConfigWithOriginTrustInternal(params);
 }
 
-/**
- * Decide whether to auto-upgrade a provider HTTP request into
- * `TRUSTED_ENV_PROXY` mode based on the runtime environment.
- *
- * This is gated conservatively to avoid the SSRF bypasses the initial
- * auto-upgrade path exposed (see openclaw#64974 review threads):
- *
- * 1. If the caller supplied an explicit `dispatcherPolicy` — custom proxy URL,
- *    `proxyTls`, or `connect` options — do NOT override it. Trusted-env mode
- *    builds an `EnvHttpProxyAgent` that would silently drop those overrides,
- *    breaking enterprise proxy/mTLS configs.
- *
- * 2. Only auto-upgrade when `HTTP_PROXY` or `HTTPS_PROXY` (lower- or
- *    upper-case) is configured for the target protocol. `ALL_PROXY` is
- *    explicitly ignored by `EnvHttpProxyAgent`, so counting it would
- *    auto-upgrade requests that then make direct connections while skipping
- *    pinned-DNS/SSRF hostname checks.
- *
- * 3. If `NO_PROXY` would bypass the proxy for this target, do NOT auto-upgrade.
- *    `EnvHttpProxyAgent` makes direct connections for `NO_PROXY` matches, but
- *    in `TRUSTED_ENV_PROXY` mode `fetchWithSsrFGuard` skips
- *    `resolvePinnedHostnameWithPolicy` — so those direct connections would
- *    bypass SSRF protection. Keep strict mode for `NO_PROXY` matches.
- */
-function shouldAutoUpgradeToTrustedEnvProxy(params: {
-  url: string;
-  dispatcherPolicy: PinnedDispatcherPolicy | undefined;
-}): boolean {
-  if (params.dispatcherPolicy) {
-    return false;
-  }
-
-  return shouldUseEnvHttpProxyForUrl(params.url);
-}
-
 export async function fetchWithTimeoutGuarded(
   url: string,
   init: RequestInit,
@@ -522,34 +442,12 @@ export async function fetchWithTimeoutGuarded(
     mode?: GuardedFetchMode;
   },
 ): Promise<GuardedFetchResult> {
-  // Provider HTTP helpers (image/music/video generation, transcription, etc.)
-  // call this function from every provider that talks to a remote API. When
-  // the host has HTTP_PROXY/HTTPS_PROXY configured, the lower-level strict
-  // mode would force Node-level `dns.lookup()` on the target hostname before
-  // dialing the proxy — which fails with EAI_AGAIN in proxy-only environments
-  // (containers, restricted sandboxes, corporate networks with DNS-over-proxy,
-  // Clash TUN fake-IP, etc.). Auto-upgrade to trusted env proxy mode in that
-  // case so the request goes through the configured proxy agent instead of
-  // doing a local DNS pre-resolution.
-  //
-  // This does not weaken SSRF protection when the auto-upgrade fires: an HTTP
-  // CONNECT proxy on the egress path performs hostname resolution itself and
-  // client-side DNS pinning cannot meaningfully constrain the target IP. But
-  // the auto-upgrade is gated (see `shouldAutoUpgradeToTrustedEnvProxy`) to
-  // avoid three SSRF-bypass edge cases: caller-provided `dispatcherPolicy`,
-  // `ALL_PROXY`-only envs, and `NO_PROXY` target matches. Callers that
-  // explicitly need strict pinned-DNS can still opt in by passing
-  // `mode: GUARDED_FETCH_MODE.STRICT` here or by using `fetchWithSsrFGuard`
-  // directly.
-  //
-  // See openclaw#52162 for the reported failure mode on memory embeddings,
-  // which shares this code path with image/music/video/audio generation.
+  // Proxy-only networks cannot resolve targets locally. Preserve explicit transport
+  // policy; the proxy owner excludes ALL_PROXY-only and NO_PROXY direct routes so
+  // those requests retain DNS pinning (#64974).
   const resolvedMode =
     options?.mode ??
-    (shouldAutoUpgradeToTrustedEnvProxy({
-      url,
-      dispatcherPolicy: options?.dispatcherPolicy,
-    })
+    (!options?.dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url)
       ? GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY
       : undefined);
   return await fetchWithSsrFGuard({
@@ -604,17 +502,17 @@ function resolveGuardedRequestOptions(
   };
 }
 
-async function fetchGuardedProviderOperationResponse(params: {
+async function fetchProviderOperation(params: {
   stage: ProviderOperationRetryStage;
   url: string;
-  init: RequestInit;
+  init?: RequestInit;
   timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
   provider?: string;
   requestFailedMessage?: string;
   retry?: TransientProviderRetryConfig;
-  guardedOptions: GuardedProviderRequestOptions;
-}): Promise<GuardedFetchResult> {
+  guardedOptions?: GuardedProviderRequestOptions;
+}): Promise<{ response: Response; release?: () => Promise<void> }> {
   return await executeProviderOperationWithRetry({
     provider: params.provider ?? "provider-http",
     stage: params.stage,
@@ -628,13 +526,23 @@ async function fetchGuardedProviderOperationResponse(params: {
         timeoutMs,
         label: params.requestFailedMessage ?? `${params.provider ?? "provider"} ${params.stage}`,
       });
-      const result = await fetchWithTimeoutGuarded(
-        params.url,
-        params.init,
-        timeoutMs,
-        params.fetchFn,
-        params.guardedOptions,
-      );
+      const result = params.guardedOptions
+        ? await fetchWithTimeoutGuarded(
+            params.url,
+            params.init ?? {},
+            timeoutMs,
+            params.fetchFn,
+            params.guardedOptions,
+          )
+        : {
+            response: await fetchWithTimeout(
+              params.url,
+              params.init ?? {},
+              timeoutMs,
+              params.fetchFn,
+            ),
+            release: undefined,
+          };
       try {
         if (params.requestFailedMessage) {
           await assertOkOrThrowHttpError(result.response, params.requestFailedMessage, {
@@ -647,7 +555,7 @@ async function fetchGuardedProviderOperationResponse(params: {
         }
         return result;
       } catch (error) {
-        await result.release();
+        await result.release?.();
         throw error;
       }
     },
@@ -673,23 +581,22 @@ type GuardedPostRequestParams<TBody> = GuardedProviderRequestParams &
     fetchFn: typeof fetch;
   };
 
-async function postGuardedRequest(params: {
-  url: string;
-  init: RequestInit;
-  timeoutMs?: number;
-  fetchFn: typeof fetch;
-  guardedOptions?: GuardedProviderRequestOptions;
-  retryStage?: ProviderOperationRetryStage;
-  retry?: TransientProviderRetryConfig;
-}) {
+async function postGuardedRequest(params: GuardedPostRequestParams<BodyInit | undefined>) {
+  const init: RequestInit = {
+    method: "POST",
+    headers: params.headers,
+    body: params.body,
+    ...(params.signal ? { signal: params.signal } : {}),
+  };
+  const guardedOptions = resolveGuardedRequestOptions(params);
   const operation = async () => {
-    params.init.signal?.throwIfAborted();
+    params.signal?.throwIfAborted();
     const result = await fetchWithTimeoutGuarded(
       params.url,
-      params.init,
+      init,
       params.timeoutMs,
       params.fetchFn,
-      params.guardedOptions,
+      guardedOptions,
     );
     if (params.retryStage && isTransientProviderHttpStatus(result.response.status)) {
       try {
@@ -709,43 +616,20 @@ async function postGuardedRequest(params: {
     provider: "provider-http",
     stage: params.retryStage,
     retry: params.retry,
-    signal: params.init.signal ?? undefined,
+    signal: params.signal,
     operation,
   });
 }
 
 export async function postJsonRequest(params: GuardedPostRequestParams<unknown>) {
   return await postGuardedRequest({
-    url: params.url,
-    init: {
-      method: "POST",
-      headers: params.headers,
-      body: JSON.stringify(params.body),
-      ...(params.signal ? { signal: params.signal } : {}),
-    },
-    timeoutMs: params.timeoutMs,
-    fetchFn: params.fetchFn,
-    guardedOptions: resolveGuardedRequestOptions(params),
-    retryStage: params.retryStage,
-    retry: params.retry,
+    ...params,
+    body: JSON.stringify(params.body),
   });
 }
 
 export async function postMultipartRequest(params: GuardedPostRequestParams<BodyInit>) {
-  return await postGuardedRequest({
-    url: params.url,
-    init: {
-      method: "POST",
-      headers: params.headers,
-      body: params.body,
-      ...(params.signal ? { signal: params.signal } : {}),
-    },
-    timeoutMs: params.timeoutMs,
-    fetchFn: params.fetchFn,
-    guardedOptions: resolveGuardedRequestOptions(params),
-    retryStage: params.retryStage,
-    retry: params.retry,
-  });
+  return await postGuardedRequest(params);
 }
 
 // Keep the shipped transcription name on the canonical multipart transport.

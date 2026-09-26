@@ -39,7 +39,6 @@ import {
   parseStreamingJson,
   sanitizeSurrogates,
   transformMessages,
-  type Api,
   type AssistantMessage,
   type AssistantMessageEvent,
   type CacheRetention,
@@ -171,7 +170,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
     const output: AssistantMessage = {
       role: "assistant",
       content: [],
-      api: "bedrock-converse-stream" as Api,
+      api: "bedrock-converse-stream",
       provider: model.provider,
       model: model.id,
       usage: {
@@ -932,18 +931,6 @@ function isAnthropicClaudeModel(model: Model<"bedrock-converse-stream">): boolea
   );
 }
 
-/**
- * Check if the model supports thinking signatures in reasoningContent.
- * Only Anthropic Claude models support the signature field.
- * Other models (OpenAI, Qwen, Minimax, Moonshot, etc.) reject it with:
- * "This model doesn't support the reasoningContent.reasoningText.signature field"
- *
- * Checks both model ID and model name to support application inference profiles.
- */
-function supportsThinkingSignature(model: Model<"bedrock-converse-stream">): boolean {
-  return isAnthropicClaudeModel(model);
-}
-
 function buildSystemPrompt(
   systemPrompt: string | undefined,
   cacheRetention: CacheRetention,
@@ -1073,7 +1060,7 @@ function convertMessages(
               if (c.redacted) {
                 // transformMessages already strips opaque reasoning after a model
                 // switch; this also rejects routes that cannot consume the format.
-                if (!supportsThinkingSignature(model)) {
+                if (!isAnthropicClaudeModel(model)) {
                   continue;
                 }
                 if (!c.thinkingSignature) {
@@ -1093,7 +1080,7 @@ function convertMessages(
               }
               const thinkingSignature = c.thinkingSignature;
               const normalizedThinkingSignature = thinkingSignature?.trim();
-              const supportsSignature = supportsThinkingSignature(model);
+              const supportsSignature = isAnthropicClaudeModel(model);
               const hasNativeThinkingSignature =
                 supportsSignature &&
                 Boolean(normalizedThinkingSignature) &&
@@ -1375,39 +1362,32 @@ function buildAdditionalModelRequestFields(
     const display = isGovCloudBedrockTarget(model, options)
       ? undefined
       : (options.thinkingDisplay ?? "summarized");
-    const result: Record<string, unknown> = supportsAdaptiveThinking(model)
-      ? {
-          thinking: { type: "adaptive", ...(display !== undefined ? { display } : {}) },
-          output_config: { effort: mapThinkingLevelToEffort(model, reasoning) },
-        }
-      : (() => {
-          const defaultBudgets: Record<ThinkingLevel, number> = {
-            minimal: 1024,
-            low: 2048,
-            medium: 8192,
-            high: 16384,
-            xhigh: 16384, // Claude doesn't support xhigh, clamp to high
-            max: 16384,
-          };
-
-          // Custom budgets override defaults (xhigh not in ThinkingBudgets, use high)
-          const level = reasoning === "xhigh" ? "high" : reasoning;
-          const budget = options.thinkingBudgets?.[level] ?? defaultBudgets[reasoning];
-
-          return {
-            thinking: {
-              type: "enabled",
-              budget_tokens: budget,
-              ...(display !== undefined ? { display } : {}),
-            },
-          };
-        })();
-
-    if (!supportsAdaptiveThinking(model) && (options.interleavedThinking ?? true)) {
-      result.anthropic_beta = ["interleaved-thinking-2025-05-14"];
+    if (supportsAdaptiveThinking(model)) {
+      return {
+        thinking: { type: "adaptive", ...(display !== undefined ? { display } : {}) },
+        output_config: { effort: mapThinkingLevelToEffort(model, reasoning) },
+      };
     }
-
-    return result as DocumentType;
+    const defaultBudgets: Record<ThinkingLevel, number> = {
+      minimal: 1024,
+      low: 2048,
+      medium: 8192,
+      high: 16384,
+      xhigh: 16384,
+      max: 16384,
+    };
+    // Manual Claude thinking uses the high budget for xhigh.
+    const level = reasoning === "xhigh" ? "high" : reasoning;
+    return {
+      thinking: {
+        type: "enabled",
+        budget_tokens: options.thinkingBudgets?.[level] ?? defaultBudgets[reasoning],
+        ...(display !== undefined ? { display } : {}),
+      },
+      ...((options.interleavedThinking ?? true)
+        ? { anthropic_beta: ["interleaved-thinking-2025-05-14"] }
+        : {}),
+    };
   }
 
   return undefined;

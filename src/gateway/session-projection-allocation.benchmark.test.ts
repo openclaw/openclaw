@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import {
@@ -64,7 +65,11 @@ it.skipIf(process.env.OPENCLAW_ALLOCATION_BENCH !== "1")(
         listSessions({ client: clients[index % 50]!, context, request });
       await list(0);
       const projection = getSessionRowProjection(context)!;
-      const connection = createGatewayConnectionState({ bootId: "allocation", cfg });
+      const connection = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "allocation",
+        cfg,
+      });
       const detach = connection.attachSessionRowProjection(projection);
       clients.forEach((client) => connection.clients.add(client));
       const connIds = new Set(clients.map((client) => client.connId));

@@ -24,7 +24,18 @@ type HeldCompactionResult = {
   };
 };
 
-export function holdCompaction(result: HeldCompactionResult) {
+export function holdCompaction(
+  result: HeldCompactionResult = {
+    ok: true,
+    compacted: true,
+    result: {
+      summary: "summary",
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 120,
+      tokensAfter: 80,
+    },
+  },
+) {
   const entered = createDeferred();
   const terminal = createDeferred<HeldCompactionResult>();
   embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(() => {

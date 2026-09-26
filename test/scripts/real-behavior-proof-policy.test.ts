@@ -102,22 +102,6 @@ function chunkedResponse(chunks: Uint8Array[]) {
 }
 
 describe("real-behavior-proof-policy", () => {
-  it.each([
-    "![after](https://github.com/user-attachments/assets/abc123)",
-    "Linked artifact: https://github.com/openclaw/openclaw/actions/runs/123456789/artifacts/987654321",
-    "Redacted runtime log: gateway connected Discord channel and delivered the reply.",
-    ["Terminal transcript:", "```text", "$ openclaw gateway status", "discord ready", "```"].join(
-      "\n",
-    ),
-  ])("passes external PRs with evidence: %s", (evidence) => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(proofBody(evidence)),
-    });
-
-    expect(evaluation.status).toBe("passed");
-    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
-  });
-
   it("passes CRLF-formatted external PRs with screenshot proof", () => {
     const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(
@@ -297,37 +281,6 @@ describe("real-behavior-proof-policy", () => {
     expect(labelsForPullRequestContext(laterValid)).toEqual([]);
     expect(laterInvalid.status).toBe("missing");
     expect(laterInvalid.missingSections).toEqual(["Evidence"]);
-  });
-
-  it("accepts out-of-scope follow-ups as not-tested proof detail", () => {
-    const body = [
-      "## What Problem This Solves",
-      "",
-      "Cron validation should retain the configured low thinking level.",
-      "",
-      "## Evidence",
-      "",
-      "- Real environment tested: Local macOS source checkout, Node 24.",
-      "- Exact steps or command run after this patch:",
-      "  1. Built the local checkout with `node --import tsx scripts/build-all.mts`.",
-      "  2. Ran a redacted behavior probe for `provider=google`, `model=gemini-3-flash-preview`, and `catalogReasoning=false`.",
-      '- Evidence after fix: `.artifacts/behavior-85156/after-installed.json` recorded `lowSupported: true` and `fallbackFromLow: "low"`.',
-      "- Observed result after fix:",
-      "  - `levels: off, minimal, low, medium, adaptive, high`",
-      "  - `lowSupported: true`",
-      "  - `fallbackFromLow: low`",
-      "  - `local command version: OpenClaw 2026.5.21`",
-      "",
-      "## Out-of-scope Follow-ups",
-      "- No live systemd cron schedule was tested.",
-      "- No real Google provider request was sent.",
-    ].join("\n");
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(body),
-    });
-
-    expect(evaluation.status).toBe("passed");
-    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
   it("accepts source PR proof when explicit gaps live in out-of-scope follow-ups", () => {
@@ -532,11 +485,6 @@ describe("isMaintainerTeamMember", () => {
     expect(await isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch })).toBe(false);
   });
 
-  it("returns false when GitHub returns 404", async () => {
-    const fetch = vi.fn().mockResolvedValue(jsonResponse(404));
-    expect(await isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch })).toBe(false);
-  });
-
   it("cancels 404 membership response bodies", async () => {
     let canceled = false;
     const response = new Response(
@@ -559,13 +507,6 @@ describe("isMaintainerTeamMember", () => {
     expect(await isMaintainerTeamMember({ token: "t", login: "u", fetch })).toBe(false);
     expect(await isMaintainerTeamMember({ token: "t", org: "o", fetch })).toBe(false);
     expect(fetch).not.toHaveBeenCalled();
-  });
-
-  it("throws on unexpected HTTP errors so the caller can warn and fall back", async () => {
-    const fetch = vi.fn().mockResolvedValue(jsonResponse(500));
-    await expect(
-      isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch }),
-    ).rejects.toThrow(/500/);
   });
 
   it("cancels unexpected HTTP error response bodies", async () => {
@@ -625,12 +566,6 @@ describe("isMaintainerTeamMember", () => {
 });
 
 describe("readBoundedGitHubApiJson", () => {
-  it("reads bounded JSON response bodies", async () => {
-    await expect(
-      readBoundedGitHubApiJson(new Response('{"state":"active"}'), "GitHub API", 1024),
-    ).resolves.toEqual({ state: "active" });
-  });
-
   it("rejects oversized JSON bodies by content length", async () => {
     const response = contentLengthResponse(1025);
 

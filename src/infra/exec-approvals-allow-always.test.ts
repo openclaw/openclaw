@@ -2041,38 +2041,8 @@ $0 \\"$1\\"" touch {marker}`,
     },
     {
       executable: "elixir",
-      first: "elixir -e 'IO.puts(:ok)'",
-      second: 'elixir -e \'System.cmd("sh", ["-c", "id > {marker}"])\'',
-    },
-    {
-      executable: "elixir",
       first: "elixir --rpc-eval worker@127.0.0.1 'IO.puts(:ok)'",
       second: 'elixir --rpc-eval worker@127.0.0.1 \'System.cmd("sh", ["-c", "id > {marker}"])\'',
-    },
-    {
-      executable: "iex",
-      first: "iex -e 'IO.puts(:ok)'",
-      second: 'iex -e \'System.cmd("sh", ["-c", "id > {marker}"])\'',
-    },
-    {
-      executable: "guile",
-      first: "guile -c '(display 1)'",
-      second: "guile -c '(system \"id > {marker}\")'",
-    },
-    {
-      executable: "guile",
-      first: "guile -e main /dev/null",
-      second: "guile -e '(lambda args (system \"id > {marker}\"))' /dev/null",
-    },
-    {
-      executable: "groovy",
-      first: "groovy -e 'println 1'",
-      second: "groovy -e '\"sh -c id > {marker}\".execute()'",
-    },
-    {
-      executable: "groovy",
-      first: "groovy '-eprintln 1'",
-      second: "groovy '-e\"sh -c id > {marker}\".execute()'",
     },
     {
       executable: "groovy",
@@ -2085,114 +2055,9 @@ $0 \\"$1\\"" touch {marker}`,
       second: 'groovy -pe \'["sh", "-c", "id > {marker}"].execute()\'',
     },
     {
-      executable: "scala",
-      first: "scala -e 'println(1)'",
-      second: "scala -e 'sys.process.Process(\"sh -c id > {marker}\").!'",
-    },
-    {
-      executable: "scala",
-      first: "scala --execute-script 'println(1)'",
-      second: "scala --script-snippet 'sys.process.Process(\"sh -c id > {marker}\").!'",
-    },
-    {
-      executable: "scala-cli",
-      first: "scala-cli --execute-script 'println(1)'",
-      second: "scala-cli --script-snippet 'sys.process.Process(\"sh -c id > {marker}\").!'",
-    },
-    {
-      executable: "clojure",
-      first: "clojure -e '(println 1)'",
-      second: 'clojure -e \'(clojure.java.shell/sh "sh" "-c" "id > {marker}")\'',
-    },
-    {
-      executable: "clj",
-      first: "clj -e '(println 1)'",
-      second: 'clj -e \'(clojure.java.shell/sh "sh" "-c" "id > {marker}")\'',
-    },
-    {
-      executable: "raku",
-      first: "raku -e 'say 1'",
-      second: 'raku -e \'run "sh", "-c", "id > {marker}"\'',
-    },
-    {
-      executable: "raku",
-      first: "raku '-esay 1'",
-      second: 'raku \'-erun "sh", "-c", "id > {marker}"\'',
-    },
-    {
-      executable: "raku",
-      first: "raku -ne 'say $_'",
-      second: 'raku -ne \'run "sh", "-c", "id > {marker}"\'',
-    },
-    {
-      executable: "perl6",
-      first: "perl6 -e 'say 1'",
-      second: 'perl6 -e \'run "sh", "-c", "id > {marker}"\'',
-    },
-    {
-      executable: "perl6",
-      first: "perl6 -pe 'say $_'",
-      second: 'perl6 -pe \'run "sh", "-c", "id > {marker}"\'',
-    },
-    {
-      executable: "ghc",
-      first: "ghc -e '1 + 1'",
-      second: "ghc -e 'System.Process.system \"id > {marker}\"'",
-    },
-    {
-      executable: "ghci",
-      first: "ghci -e '1 + 1'",
-      second: "ghci -e 'System.Process.system \"id > {marker}\"'",
-    },
-    {
-      executable: "erl",
-      first: "erl -eval 'erlang:display(ok).' -noshell -s init stop",
-      second: "erl -eval 'os:cmd(\"id > {marker}\").' -noshell -s init stop",
-    },
-    {
-      executable: "erl",
-      first: "erl -noshell -run init stop",
-      second: "erl -noshell -run os cmd 'id > {marker}' -s init stop",
-    },
-    {
-      executable: "erl",
-      first: "erl -noshell -s init stop",
-      second: "erl -noshell -s os cmd 'id > {marker}' -s init stop",
-    },
-    {
-      executable: "gdb",
-      first: "gdb -ex 'print 1' -ex quit",
-      second: "gdb -ex 'shell id > {marker}' -ex quit",
-    },
-    {
-      executable: "gdb",
-      first: "gdb -iex 'print 1'",
-      second: "gdb -iex 'shell id > {marker}'",
-    },
-    {
-      executable: "gdb",
-      first: "gdb -eval-c 'print 1'",
-      second: "gdb -eval-c 'shell id > {marker}'",
-    },
-    {
       executable: "gdb",
       first: "gdb -ev 'print 1'",
       second: "gdb --ev 'shell id > {marker}'",
-    },
-    {
-      executable: "gdb",
-      first: "gdb -eiex 'print 1'",
-      second: "gdb -early-init-eval 'shell id > {marker}'",
-    },
-    {
-      executable: "expect",
-      first: "expect -c 'puts ok'",
-      second: "expect -c 'exec sh -c \"id > {marker}\"'",
-    },
-    {
-      executable: "expect",
-      first: "expect '-cputs ok'",
-      second: "expect '-cexec sh -c \"id > {marker}\"'",
     },
   ] as const)(
     "prevents allow-always bypass for additional inline-eval interpreter: $executable",

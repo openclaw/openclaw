@@ -108,7 +108,7 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
       .menuUnread=${menuUnread}
       .switcherAvailable=${cardAgents.length > 1}
       .onToggleMenu=${(trigger: HTMLElement) => host.sidebarMenus.toggleAgentMenu(trigger)}
-      .onMenuPointerEnter=${(trigger: HTMLElement, event: PointerEvent) =>
+      .onMenuPointerMove=${(trigger: HTMLElement, event: PointerEvent) =>
         host.sidebarMenus.scheduleAgentMenuHoverOpen(trigger, event)}
       .onMenuPointerLeave=${() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
       @contextmenu=${(event: MouseEvent) => {
@@ -135,7 +135,7 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost) {
         aria-haspopup="menu"
         aria-expanded=${String(menuOpen)}
         aria-label="${name} · ${t("agentChip.workspaceMenuLabel")}"
-        @pointerenter=${(event: PointerEvent) => {
+        @pointermove=${(event: PointerEvent) => {
           if (event.currentTarget instanceof HTMLElement) {
             host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
           }

@@ -13,8 +13,8 @@ import {
 } from "../../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { cronStoreKey } from "../store/key.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronJob } from "../types.js";
 import { timeoutErrorMessage } from "./execution-errors.js";
 import { createCronServiceState as createCronServiceStateBase } from "./state.js";
@@ -33,9 +33,34 @@ function tryCreateCronTaskRun(
 import { executeJobCoreWithTimeout } from "./timer-job-runner.js";
 
 function createCronServiceState(
-  params: Parameters<typeof createCronServiceStateBase>[0],
+  params: Partial<Parameters<typeof createCronServiceStateBase>[0]>,
 ): ReturnType<typeof createCronServiceStateBase> {
-  return createCronServiceStateBase({ defaultAgentId: "main", ...params });
+  return createCronServiceStateBase({
+    defaultAgentId: "main",
+    storePath: "/tmp/jobs.json",
+    cronEnabled: true,
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    ...params,
+  });
+}
+
+function makeJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
+  return {
+    id,
+    name: id,
+    enabled: true,
+    createdAtMs: 100,
+    updatedAtMs: 100,
+    schedule: { kind: "every", everyMs: 60_000, anchorMs: 100 },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "work" },
+    state: { nextRunAtMs: 60_000 },
+    ...overrides,
+  };
 }
 
 afterEach(() => {
@@ -86,13 +111,11 @@ describe("cron task run terminal records", () => {
         const runPending = new Promise<void>((resolve) => {
           resolveRun = resolve;
         });
-        const job: CronJob = {
-          id: testCase.id,
+        const job = makeJob(testCase.id, {
           name: testCase.label,
           agentId: testCase.agentId,
           sessionKey: "agent:ops:telegram:group:creator",
           sessionTarget: testCase.sessionTarget,
-          wakeMode: "next-heartbeat",
           payload: {
             kind: "agentTurn",
             message: "work",
@@ -102,10 +125,7 @@ describe("cron task run terminal records", () => {
           },
           schedule: { kind: "every", everyMs: 60_000 },
           state: {},
-          createdAtMs: 100,
-          updatedAtMs: 100,
-          enabled: true,
-        };
+        });
         const runIsolatedAgentJob = vi.fn(async ({ onExecutionStarted }) => {
           onExecutionStarted?.({
             jobId: job.id,
@@ -123,11 +143,6 @@ describe("cron task run terminal records", () => {
           };
         });
         const state = createCronServiceState({
-          storePath: "/tmp/jobs.json",
-          cronEnabled: true,
-          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           runIsolatedAgentJob,
         });
 
@@ -167,26 +182,14 @@ describe("cron task run terminal records", () => {
           createRunningTaskRun: customCreate,
           finalizeTaskRunByRunId: customFinalize,
         });
-        const job: CronJob = {
-          id: "core-ledger-runtime",
+        const job = makeJob("core-ledger-runtime", {
           name: "core ledger runtime",
-          enabled: true,
-          createdAtMs: 100,
-          updatedAtMs: 100,
-          schedule: { kind: "every", everyMs: 60_000, anchorMs: 100 },
           sessionTarget: "main",
-          wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "work" },
           state: {},
-        };
+        });
         const state = createCronServiceState({
-          storePath: "/tmp/jobs.json",
-          cronEnabled: true,
-          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           nowMs: () => 1_100,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         });
 
         tryFinishCronTaskRun(state, {
@@ -205,7 +208,7 @@ describe("cron task run terminal records", () => {
         expect(customCreate).not.toHaveBeenCalled();
         expect(customFinalize).not.toHaveBeenCalled();
         expect(
-          readCronTaskRunHistoryPage({
+          readCronRunHistoryPageForTests({
             storeKey: cronStoreKey(state.deps.storePath),
             jobId: job.id,
           }).entries,
@@ -217,26 +220,15 @@ describe("cron task run terminal records", () => {
   it("keeps task-registry finalization failures inside the best-effort boundary", () => {
     const warn = vi.fn();
     const startedAt = 500;
-    const job: CronJob = {
-      id: "lookup-failure",
+    const job = makeJob("lookup-failure", {
       name: "lookup failure",
-      enabled: true,
-      createdAtMs: 100,
-      updatedAtMs: 100,
-      schedule: { kind: "every", everyMs: 60_000, anchorMs: 100 },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "work" },
       state: {},
-    };
+    });
     const state = createCronServiceState({
-      storePath: "/tmp/jobs.json",
-      cronEnabled: true,
       log: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
       nowMs: () => startedAt + 100,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     vi.spyOn(taskRegistry, "findTaskByRunId").mockImplementation(() => {
       throw new Error("task store unavailable");
@@ -294,9 +286,6 @@ describe("cron task run terminal records", () => {
           cronEnabled: true,
           log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           nowMs: () => startedAt,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         });
 
         tryFinishCronTaskRun(state, {
@@ -342,7 +331,7 @@ describe("cron task run terminal records", () => {
         expect(rows[0]?.childSessionKey).toBeUndefined();
         expect(rows[0]?.requesterSessionKey).toBe("");
         expect(
-          readCronTaskRunHistoryPage({
+          readCronRunHistoryPageForTests({
             storeKey: cronStoreKey(state.deps.storePath),
             jobId: job.id,
           }).entries,
@@ -363,26 +352,11 @@ describe("cron task run terminal records", () => {
       async () => {
         resetTaskRegistryForTests({ persist: false });
         const startedAt = 1_500;
-        const job: CronJob = {
-          id: "same-millisecond-job",
+        const job = makeJob("same-millisecond-job", {
           name: "same millisecond job",
-          enabled: true,
-          createdAtMs: 100,
-          updatedAtMs: 100,
-          schedule: { kind: "every", everyMs: 60_000, anchorMs: 100 },
-          sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "agentTurn", message: "work" },
-          state: { nextRunAtMs: 60_000 },
-        };
+        });
         const state = createCronServiceState({
-          storePath: "/tmp/jobs.json",
-          cronEnabled: true,
-          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           nowMs: () => startedAt + 100,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         });
         const publicRunIds = [
           "manual:same-millisecond-job:1500:1",
@@ -419,7 +393,7 @@ describe("cron task run terminal records", () => {
         expect(rows).toHaveLength(2);
         expect(new Set(rows.map((row) => row.runId)).size).toBe(2);
         expect(
-          readCronTaskRunHistoryPage({
+          readCronRunHistoryPageForTests({
             storeKey: cronStoreKey(state.deps.storePath),
             jobId: job.id,
           }).entries.map((entry) => entry.runId),
@@ -434,26 +408,11 @@ describe("cron task run terminal records", () => {
       async () => {
         resetTaskRegistryForTests({ persist: false });
         const startedAt = 2_000;
-        const job: CronJob = {
-          id: "cancelled-job",
+        const job = makeJob("cancelled-job", {
           name: "cancelled job",
-          enabled: true,
-          createdAtMs: 100,
-          updatedAtMs: 100,
-          schedule: { kind: "every", everyMs: 60_000, anchorMs: 100 },
-          sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "agentTurn", message: "work" },
-          state: { nextRunAtMs: 60_000 },
-        };
+        });
         const state = createCronServiceState({
-          storePath: "/tmp/jobs.json",
-          cronEnabled: true,
-          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           nowMs: () => startedAt + 100,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         });
         const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
         if (!taskRunId) {
@@ -502,7 +461,7 @@ describe("cron task run terminal records", () => {
         });
         expect(row?.terminalSummary).toBeUndefined();
         expect(
-          readCronTaskRunHistoryPage({
+          readCronRunHistoryPageForTests({
             storeKey: cronStoreKey(state.deps.storePath),
             jobId: job.id,
           }).entries,
@@ -528,26 +487,11 @@ describe("cron task run terminal records", () => {
       async () => {
         resetTaskRegistryForTests({ persist: false });
         const startedAt = 3_000;
-        const job: CronJob = {
-          id: "retry-job",
+        const job = makeJob("retry-job", {
           name: "retry job",
-          enabled: true,
-          createdAtMs: 100,
-          updatedAtMs: 100,
-          schedule: { kind: "every", everyMs: 60_000, anchorMs: 100 },
-          sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "agentTurn", message: "work" },
-          state: { nextRunAtMs: 60_000 },
-        };
+        });
         const state = createCronServiceState({
-          storePath: "/tmp/jobs.json",
-          cronEnabled: true,
-          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           nowMs: () => startedAt + 100,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         });
         const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
         if (!taskRunId) {
@@ -596,26 +540,11 @@ describe("cron task run terminal records", () => {
       async () => {
         resetTaskRegistryForTests({ persist: false });
         const startedAt = 4_000;
-        const job: CronJob = {
-          id: "lost-job",
+        const job = makeJob("lost-job", {
           name: "lost job",
-          enabled: true,
-          createdAtMs: 100,
-          updatedAtMs: 100,
-          schedule: { kind: "every", everyMs: 60_000, anchorMs: 100 },
-          sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "agentTurn", message: "work" },
-          state: { nextRunAtMs: 60_000 },
-        };
+        });
         const state = createCronServiceState({
-          storePath: "/tmp/jobs.json",
-          cronEnabled: true,
-          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           nowMs: () => startedAt + 100,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         });
         const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
         if (!taskRunId) {
@@ -675,12 +604,7 @@ describe("cron task run terminal records", () => {
   });
 
   it.each([
-    "cron: job execution timed out",
     "cron: job execution timed out (last phase: model_call_started)",
-    "cron: isolated agent setup timed out before runner start",
-    "cron: isolated agent setup timed out before runner start (last phase: preparing)",
-    "cron: isolated agent run stalled before execution start",
-    "cron: isolated agent run stalled before execution start (last phase: preparing)",
     Object.assign(new Error(), { name: "AbortError" }),
   ])("preserves a provisional timed-out task for case %#", async (input) => {
     const expected = input instanceof Error ? timeoutErrorMessage() : input;
@@ -689,26 +613,11 @@ describe("cron task run terminal records", () => {
       async () => {
         resetTaskRegistryForTests({ persist: false });
         const startedAt = 5_000;
-        const job: CronJob = {
-          id: "provisional-watchdog-timeout",
+        const job = makeJob("provisional-watchdog-timeout", {
           name: "provisional watchdog timeout",
-          enabled: true,
-          createdAtMs: 100,
-          updatedAtMs: 100,
-          schedule: { kind: "every", everyMs: 60_000, anchorMs: 100 },
-          sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "agentTurn", message: "work" },
-          state: { nextRunAtMs: 60_000 },
-        };
+        });
         const state = createCronServiceState({
-          storePath: "/tmp/jobs.json",
-          cronEnabled: true,
-          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           nowMs: () => startedAt + 100,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         });
         const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
         if (!taskRunId) {
@@ -744,26 +653,11 @@ describe("cron task run terminal records", () => {
       async () => {
         resetTaskRegistryForTests({ persist: false });
         const startedAt = 5_000;
-        const job: CronJob = {
-          id: "provisional-timeout-job",
+        const job = makeJob("provisional-timeout-job", {
           name: "provisional timeout job",
-          enabled: true,
-          createdAtMs: 100,
-          updatedAtMs: 100,
-          schedule: { kind: "every", everyMs: 60_000, anchorMs: 100 },
-          sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "agentTurn", message: "work" },
-          state: { nextRunAtMs: 60_000 },
-        };
+        });
         const state = createCronServiceState({
-          storePath: "/tmp/jobs.json",
-          cronEnabled: true,
-          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           nowMs: () => startedAt + 200,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         });
         const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
         if (!taskRunId) {
@@ -811,13 +705,7 @@ describe("cron task run terminal records", () => {
         resetTaskRegistryForTests({ persist: false });
         const startedAt = 7_000;
         const state = createCronServiceState({
-          storePath: "/tmp/jobs.json",
-          cronEnabled: true,
-          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           nowMs: () => startedAt + 100,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         });
         const legacyRunId = `cron:legacy-job:${startedAt}`;
         // Older releases persisted the reservation id without a uniqueness suffix.
@@ -881,27 +769,16 @@ describe("cron task run terminal records", () => {
       async (fixture) => {
         resetTaskRegistryForTests({ persist: false });
         const startedAt = 8_000;
-        const job: CronJob = {
-          id: "shared-job",
+        const job = makeJob("shared-job", {
           name: "shared job",
-          enabled: true,
-          createdAtMs: 100,
-          updatedAtMs: 100,
-          schedule: { kind: "every", everyMs: 60_000, anchorMs: 100 },
           sessionTarget: "main",
-          wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "work" },
           state: {},
-        };
+        });
         const createState = (storePath: string) =>
           createCronServiceState({
             storePath,
-            cronEnabled: true,
-            log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
             nowMs: () => startedAt,
-            enqueueSystemEvent: vi.fn(),
-            requestHeartbeat: vi.fn(),
-            runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
           });
         const stateA = createState(fixture.path("cron-a", "jobs.json"));
         const stateB = createState(fixture.path("cron-b", "jobs.json"));

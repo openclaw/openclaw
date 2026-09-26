@@ -23,11 +23,7 @@ import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js"
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import { getRuntimeConfig } from "../config/io.js";
-import {
-  type AgentEventPayload,
-  type AgentEventRuntimePayload,
-  getAgentEventLifecycleGeneration,
-} from "../infra/agent-events.js";
+import type { AgentEventPayload, AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { getAgentRunContext, getAgentRunContextOwnerStatus } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
@@ -81,7 +77,6 @@ import {
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
-import { projectGatewaySessionRunState } from "./session-utils-display.js";
 import { loadGatewaySessionEntryReadOnly, type GatewaySessionRow } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -168,8 +163,6 @@ function shouldMirrorAgentEventToHiddenSessionMessages(evt: AgentEventPayload): 
 
 const LIVE_TEXT_PACING_MS = 75;
 
-export type ChatEventBroadcast = GatewayBroadcastFn;
-
 export type NodeSendToSession = (sessionKey: string, event: string, payload: unknown) => void;
 
 // Derived from ChatErrorEventSchema.errorKind (gateway-protocol); keep set in sync.
@@ -251,7 +244,7 @@ function excludeConnIds(
 }
 
 export type AgentEventHandlerOptions = {
-  broadcast: ChatEventBroadcast;
+  broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   nodeSendToSession: NodeSendToSession;
   nodeHasSessionSubscribers: (sessionKey: string) => boolean;
@@ -379,18 +372,16 @@ export function createAgentEventHandler({
   updateRunToolErrorSummary,
   resolveSessionActiveRunState,
 }: AgentEventHandlerOptions): AgentEventHandler {
-  const shouldProcessOwnedEvent = (evt: AgentEventRuntimePayload): boolean => {
-    const claimId = evt.contextClaimId;
-    if (!claimId) {
-      return true;
-    }
-    const lifecycleGeneration = evt.lifecycleGeneration;
-    if (!lifecycleGeneration || lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
-      return false;
-    }
-    // A missing claim means detach or supersession revoked this terminal event.
-    return getAgentRunContextOwnerStatus(evt.runId, claimId, lifecycleGeneration) === "active";
-  };
+  const shouldProcessOwnedEvent = (
+    runId: string,
+    claimId: string | undefined,
+    lifecycleGeneration: string | undefined,
+  ): boolean =>
+    !claimId ||
+    Boolean(
+      lifecycleGeneration &&
+      getAgentRunContextOwnerStatus(runId, claimId, lifecycleGeneration) === "active",
+    );
   const clearRunContextForEvent = (evt: AgentEventRuntimePayload): void => {
     if (evt.contextClaimId) {
       clearAgentRunContext(evt.runId, evt.lifecycleGeneration, evt.contextClaimId);
@@ -477,47 +468,17 @@ export function createAgentEventHandler({
     }
   };
 
-  // Native, ACP, and spawn-owned dashboard sessions can carry spawnedBy.
-  // Short-circuit everyone else so high-volume chat streams do not touch the
-  // session store. Results are cached per sessionKey because
-  // spawnedBy is immutable once set and resolveSpawnedBy sits on the hot event
-  // path (delta, flush, final, agent, seq-gap).
-  const spawnedByCache = new Map<string, string | null>();
   const resolveSpawnedBy = (sessionKey: string): string | null => {
-    if (spawnedByCache.has(sessionKey)) {
-      return spawnedByCache.get(sessionKey)!;
-    }
-    // Non-lineage keys return null without polluting the cache; only eligible
-    // child-session results (positive or null) are worth memoising.
-    const isDashboardSession =
-      parseAgentSessionKey(sessionKey)?.rest.startsWith("dashboard:") === true;
+    const parsed = parseAgentSessionKey(sessionKey);
+    const isDashboardSession = parsed?.rest.startsWith("dashboard:") === true;
     if (!isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey) && !isDashboardSession) {
       return null;
     }
-    let result: string | null = null;
-    try {
-      const { entry, canonicalKey } = loadGatewaySessionEntryReadOnly(sessionKey, { clone: false });
-      if (entry) {
-        const rowContext = getSessionRowProjection?.()?.readPreparedRowContext();
-        result =
-          (rowContext
-            ? projectGatewaySessionRunState({
-                key: canonicalKey,
-                entry,
-                now: Date.now(),
-                rowContext,
-              }).subagentOwner
-            : undefined) ||
-          entry.spawnedBy ||
-          null;
-        if (getSessionRowProjection && !rowContext) {
-          // Pending projection facts must not make this temporary fallback permanent.
-          return result;
-        }
-      }
-    } catch {}
-    spawnedByCache.set(sessionKey, result);
-    return result;
+    const agentId =
+      parsed?.agentId ?? tryResolveSessionCompatibilityOwnerAgentId(getRuntimeConfig(), sessionKey);
+    return agentId
+      ? (getSessionRowProjection?.()?.readPreparedSpawnedBy({ key: sessionKey, agentId }) ?? null)
+      : null;
   };
 
   const buildSessionEventSnapshot = (
@@ -611,7 +572,7 @@ export function createAgentEventHandler({
     evt: AgentEventRuntimePayload,
     opts?: TerminalLifecycleOptions,
   ) => {
-    if (!shouldProcessOwnedEvent(evt)) {
+    if (!shouldProcessOwnedEvent(evt.runId, evt.contextClaimId, evt.lifecycleGeneration)) {
       return;
     }
     const lifecyclePhase =
@@ -1403,7 +1364,12 @@ export function createAgentEventHandler({
 
   const handleEvent = (event: AgentEventPayload) => {
     const evt = event as AgentEventRuntimePayload;
-    const isCurrent = () => shouldProcessOwnedEvent(evt);
+    const isCurrent = shouldProcessOwnedEvent.bind(
+      null,
+      evt.runId,
+      evt.contextClaimId,
+      evt.lifecycleGeneration,
+    );
     if (!isCurrent()) {
       return;
     }

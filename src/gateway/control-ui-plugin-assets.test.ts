@@ -114,32 +114,29 @@ describe("native Control UI browser assets", () => {
     await import("./control-ui.js");
   });
 
-  it.each(["global", "workspace", "config"] as const)(
-    "keeps Custom plugin UI off by default for %s plugins",
-    async (origin) => {
-      await withTempConfig({
-        cfg: {},
-        run: async () => {
-          const fixture = activateFixture(origin);
-          fixture.record.trustedOfficialInstall = true;
-          const catalog = await listControlUiPluginCatalog();
-          expect(catalog.plugins).toEqual([]);
-          expect(catalog.diagnostics).toEqual([
-            {
-              pluginId: fixture.record.id,
-              code: "custom-plugin-ui-disabled",
-              message: expect.stringContaining("Settings > Labs"),
-            },
-          ]);
-          expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
-          expect(listControlUiPluginWidgetKinds(["operator.read"])).not.toContainEqual(
-            expect.objectContaining({ pluginId: fixture.record.id }),
-          );
-          expect(await reloadControlUiPluginCatalog(fixture.record.id)).toEqual(catalog);
-        },
-      });
-    },
-  );
+  it("keeps Custom plugin UI off by default for nonbundled plugins", async () => {
+    await withTempConfig({
+      cfg: {},
+      run: async () => {
+        const fixture = activateFixture("workspace");
+        fixture.record.trustedOfficialInstall = true;
+        const catalog = await listControlUiPluginCatalog();
+        expect(catalog.plugins).toEqual([]);
+        expect(catalog.diagnostics).toEqual([
+          {
+            pluginId: fixture.record.id,
+            code: "custom-plugin-ui-disabled",
+            message: expect.stringContaining("Settings > Labs"),
+          },
+        ]);
+        expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
+        expect(listControlUiPluginWidgetKinds(["operator.read"])).not.toContainEqual(
+          expect.objectContaining({ pluginId: fixture.record.id }),
+        );
+        expect(await reloadControlUiPluginCatalog(fixture.record.id)).toEqual(catalog);
+      },
+    });
+  });
 
   it("hot-applies Custom plugin UI admission without replacing the backend plugin", async () => {
     await withTempConfig({
@@ -215,11 +212,11 @@ describe("native Control UI browser assets", () => {
     });
   });
 
-  it.each(
-    [AUTH_NONE, AUTH_TOKEN].flatMap((auth) =>
-      ["", "/openclaw"].map((basePath) => ({ auth, basePath })),
-    ),
-  )(
+  it.each([
+    { auth: AUTH_NONE, basePath: "" },
+    { auth: AUTH_TOKEN, basePath: "" },
+    { auth: AUTH_TOKEN, basePath: "/openclaw" },
+  ])(
     "reports and enforces native asset authentication for $auth.mode Gateways at '$basePath'",
     async ({ auth, basePath }) => {
       const requiresAuth = auth.mode !== "none";

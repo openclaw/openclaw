@@ -10,7 +10,7 @@ import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 
-export const SESSION_LINK_SCAN_RE = /agent:[^\s<>"'`]*[^\s<>"'`.,;:!?)}\]]/g;
+const SESSION_LINK_SCAN_RE = /agent:[^\s<>"'`]*[^\s<>"'`.,;:!?)}\]]/g;
 
 type SessionKeyTarget = {
   sessionKey: string;
@@ -65,7 +65,7 @@ export function parseLocalMarkdownSessionUrl(
     : null;
 }
 
-export function installMarkdownSessionLinks(markdownParser: MarkdownIt, scanPattern: RegExp): void {
+export function installMarkdownSessionLinks(markdownParser: MarkdownIt): void {
   // Capture cleaned hrefs before file decoration can claim session-shaped paths.
   markdownParser.core.ruler.before("file-links", "session-links", (state) => {
     if (state.env?.sessionLinks !== true) {
@@ -124,7 +124,7 @@ export function installMarkdownSessionLinks(markdownParser: MarkdownIt, scanPatt
             label.content = content;
             replacements.push(label);
           };
-          for (const match of token.content.matchAll(scanPattern)) {
+          for (const match of token.content.matchAll(SESSION_LINK_SCAN_RE)) {
             const end = match.index + match[0].length;
             const open = new state.Token("link_open", "a", 1);
             if (

@@ -15,6 +15,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { readUserProfileIdentity, retainUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createExpectedProfileBinding,
@@ -97,7 +98,11 @@ it.each(["running", "queued", "capacity-wait"] as const)(
         }
       }
       const projection = await createSessionRowProjection({ cfg });
-      const connection = createGatewayConnectionState({ bootId: "follow-up", cfg });
+      const connection = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "follow-up",
+        cfg,
+      });
       const runId = "follow-up";
       const claim = claimAgentRunContext(
         runId,
@@ -246,7 +251,11 @@ it("presents current recipient roles without SQLite while rejecting source overr
     );
     addSessionMember(scope, { identityId: member.id, addedBy: owner.id });
     const projection = await createSessionRowProjection({ cfg });
-    const connection = createGatewayConnectionState({ bootId: "presentation", cfg });
+    const connection = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "presentation",
+      cfg,
+    });
     const detach = connection.attachSessionRowProjection(projection);
     for (const client of clients) {
       connection.clients.add(client);

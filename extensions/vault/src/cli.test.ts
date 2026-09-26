@@ -74,17 +74,19 @@ afterEach(() => {
 describe("vault CLI setup plan", () => {
   const setupArgs = ["--openai-id", "providers/openai/apiKey"];
 
-  it.skipIf(process.platform === "win32")(
-    "creates plans privately without overwriting files or following symlinks",
-    async () => {
+  it.skipIf(process.platform === "win32").each([0o700, 0o755])(
+    "creates private plans in a %o directory without overwriting files or following symlinks",
+    async (directoryMode) => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-vault-plan-security-"));
       const privatePath = path.join(dir, "private.json");
       const existingPath = path.join(dir, "existing.json");
       const targetPath = path.join(dir, "target.json");
       const symlinkPath = path.join(dir, "symlink.json");
       try {
+        await fs.chmod(dir, directoryMode);
         await runSetup(privatePath, setupArgs);
         expect((await fs.stat(privatePath)).mode & 0o777).toBe(0o600);
+        expect((await fs.stat(dir)).mode & 0o777).toBe(directoryMode);
         await fs.writeFile(existingPath, "keep-me", "utf8");
         await expect(runSetup(existingPath, setupArgs)).rejects.toThrow("Plan path already exists");
         await expect(fs.readFile(existingPath, "utf8")).resolves.toBe("keep-me");

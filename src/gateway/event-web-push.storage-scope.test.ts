@@ -17,6 +17,7 @@ import type { upsertNativeWebPushSubscription } from "../infra/push-web-store.na
 import type { WebPushWorkerOperations } from "../infra/push-web-store.worker-contract.js";
 import type { prepareWebPushNotificationSender } from "../infra/push-web.js";
 import { SQLITE_WORKER_MAX_REQUESTS_PER_WORKER } from "../infra/sqlite-worker-broker.js";
+import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   closeOpenClawStateDatabaseByPathAsync,
@@ -25,12 +26,7 @@ import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-
 import { createEventWebPushDelivery } from "./event-web-push.js";
 
 type PreparedSender = Awaited<ReturnType<typeof prepareWebPushNotificationSender>>;
-type WebPushCommand = {
-  [Type in keyof WebPushWorkerOperations]: {
-    type: Type;
-    input: WebPushWorkerOperations[Type]["input"];
-  };
-}[keyof WebPushWorkerOperations];
+type WebPushCommand = SqliteWorkerCommand<WebPushWorkerOperations>;
 
 const mocks = vi.hoisted(() => ({
   captureContext: vi.fn(),

@@ -437,8 +437,16 @@ export function loadStoredHiddenSessionCatalogIds(): ReadonlySet<string> {
   }
 }
 
+function storeSidebarSessionPreference(key: string, value: string): void {
+  try {
+    getSafeLocalStorage()?.setItem(key, value);
+  } catch {
+    // Keep the in-memory preference when storage is unavailable.
+  }
+}
+
 export function storeSidebarSessionsGrouping(grouping: SidebarSessionsGrouping) {
-  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_GROUPING_STORAGE_KEY, grouping);
+  storeSidebarSessionPreference(SIDEBAR_SESSION_GROUPING_STORAGE_KEY, grouping);
 }
 
 export function storeSidebarCatalogGrouping(value: CatalogProjectGrouping) {
@@ -446,19 +454,19 @@ export function storeSidebarCatalogGrouping(value: CatalogProjectGrouping) {
 }
 
 export function storeSidebarSessionsShowCron(show: boolean) {
-  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY, String(show));
+  storeSidebarSessionPreference(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY, String(show));
 }
 
 export function storeSidebarSessionsShowPreview(show: boolean) {
-  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY, String(show));
+  storeSidebarSessionPreference(SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY, String(show));
 }
 
 export function storeSidebarSessionsShowSystem(show: boolean) {
-  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY, String(show));
+  storeSidebarSessionPreference(SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY, String(show));
 }
 
 export function storeSidebarSessionStatusFilter(value: SidebarSessionStatusFilter) {
-  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY, value);
+  storeSidebarSessionPreference(SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY, value);
 }
 
 export function storeSidebarSessionOwnerFilter(
@@ -500,16 +508,12 @@ export function storeSidebarSessionSortMode(
   peopleCapability: boolean | undefined,
 ): SidebarSessionSortMode {
   const resolved = resolveSidebarSessionSortMode(mode, peopleCapability !== false);
-  try {
-    getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SORT_MODE_STORAGE_KEY, resolved);
-  } catch {
-    // Keep the in-memory preference when storage is unavailable.
-  }
+  storeSidebarSessionPreference(SIDEBAR_SESSION_SORT_MODE_STORAGE_KEY, resolved);
   return resolved;
 }
 
 export function storeCollapsedSessionSections(sections: ReadonlySet<string>) {
-  getSafeLocalStorage()?.setItem(
+  storeSidebarSessionPreference(
     SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY,
     JSON.stringify([...sections]),
   );

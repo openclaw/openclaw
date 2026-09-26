@@ -5,6 +5,7 @@ import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
+import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTrustedOnePasswordCli } from "../onepassword-op-path.js";
 import { OnePasswordError } from "./errors.js";
 
@@ -89,15 +90,11 @@ function resolveOpBinary(configuredPath: string | undefined, pathEnv: string): s
   return undefined;
 }
 
-function errorRecord(error: unknown): Record<string, unknown> {
-  return error && typeof error === "object" ? (error as Record<string, unknown>) : {};
-}
-
 function classifyOpError(error: unknown): OnePasswordError {
   if (error instanceof OnePasswordError) {
     return error;
   }
-  const record = errorRecord(error);
+  const record = asRecord(error);
   const stderr = typeof record.stderr === "string" ? record.stderr : "";
   const normalized = stderr.toLowerCase();
   if (record.code === "ENOENT") {

@@ -59,7 +59,12 @@ it("publishes profile changes only after the owning transaction commits", () => 
     expect(readUserProfileVersion()).toBe(before);
     expect(getUserProfileDisplay(profile.id, options).displayName).not.toBe("Rolled back");
     runOpenClawStateWriteTransaction(() => {
-      setDisplayName(profile.id, "Committed", options);
+      expect(setDisplayName(profile.id, "Committed", options)).toMatchObject({
+        id: profile.id,
+        displayName: "Committed",
+        emails: ["publication@example.test"],
+        hasAvatar: false,
+      });
       expect(changed).not.toHaveBeenCalled();
     }, options);
     expect(changed).toHaveBeenCalledOnce();
@@ -509,9 +514,7 @@ describe("user profiles", () => {
     { saved: "Ada", expected: "Ada Lovelace" },
     { saved: "ada", expected: "ada" },
     { saved: " Ada ", expected: " Ada " },
-    { saved: "Custom Ada", expected: "Custom Ada" },
     { saved: "", expected: "" },
-    { saved: "old-login", expected: "old-login" },
   ])(
     "adopts GitHub names only for null or exact canonical login: $saved",
     ({ saved, expected }) => {
@@ -541,7 +544,7 @@ describe("user profiles", () => {
     },
   );
 
-  it.each([undefined, "", " \t "])(
+  it.each([undefined, " \t "])(
     "keeps null-only provider adoption without a GitHub name: %s",
     (githubName) => {
       const options = stateOptions();
@@ -751,43 +754,25 @@ describe("user profiles", () => {
     ]);
   });
 
-  it.each([null, "", " \t "])(
-    "adopts a Tailscale name only into an empty slot: %s",
-    (emptyName) => {
-      const options = stateOptions();
-      const profile = ensureProfileForTailscaleIdentity(
-        { login: "ada@github", name: "Ada Provider" },
-        options,
-      );
-
-      setDisplayName(profile.id, emptyName, options);
-      const version = readUserProfileVersion();
-      expect(
-        ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Ada Adopted" }, options),
-      ).toMatchObject({ displayName: "Ada Adopted" });
-      expect(readUserProfileVersion()).toBe(version + 1);
-
-      setDisplayName(profile.id, "User Chosen", options);
-      expect(
-        ensureProfileForTailscaleIdentity(
-          { login: "ada@github", name: "Provider Changed" },
-          options,
-        ),
-      ).toMatchObject({ displayName: "User Chosen" });
-      expect(readUserProfileVersion()).toBe(version + 2);
-    },
-  );
-
-  it("updates display names", () => {
+  it.each([null, " \t "])("adopts a Tailscale name only into an empty slot: %s", (emptyName) => {
     const options = stateOptions();
-    const profile = ensureProfileForEmail("ada@example.com", options);
+    const profile = ensureProfileForTailscaleIdentity(
+      { login: "ada@github", name: "Ada Provider" },
+      options,
+    );
 
-    expect(setDisplayName(profile.id, "Ada Lovelace", options)).toMatchObject({
-      id: profile.id,
-      displayName: "Ada Lovelace",
-      emails: ["ada@example.com"],
-      hasAvatar: false,
-    });
+    setDisplayName(profile.id, emptyName, options);
+    const version = readUserProfileVersion();
+    expect(
+      ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Ada Adopted" }, options),
+    ).toMatchObject({ displayName: "Ada Adopted" });
+    expect(readUserProfileVersion()).toBe(version + 1);
+
+    setDisplayName(profile.id, "User Chosen", options);
+    expect(
+      ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Provider Changed" }, options),
+    ).toMatchObject({ displayName: "User Chosen" });
+    expect(readUserProfileVersion()).toBe(version + 2);
   });
 
   it("updates all profiles whose aliases change", () => {

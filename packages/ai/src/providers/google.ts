@@ -1,8 +1,8 @@
-import { type GenerateContentParameters, GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, type HttpOptions } from "@google/genai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
-// Google provider adapts Gemini streams and tools to the agent runtime.
 import { createAssistantOutput } from "../transports/assistant-output.js";
+import { buildManagedModelFetch } from "../transports/host-policy.js";
 import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
 import { mergeTransportHeaders } from "../transports/transport-stream-shared.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
@@ -17,7 +17,6 @@ import { buildBaseOptions } from "./simple-options.js";
 
 type GoogleOptions = GoogleProviderOptions;
 
-// Counter for generating unique tool call IDs
 let toolCallCounter = 0;
 
 export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions> = (
@@ -37,7 +36,7 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       return createClient(model, apiKey, resolveOpencodeSessionHeaders(model, options));
     },
-    buildParams: () => buildParams(model, context, options),
+    buildParams: () => buildGoogleGenerateContentParams(model, context, options),
     nextToolCallId: (name) => `${name}_${Date.now()}_${++toolCallCounter}`,
   });
 
@@ -66,8 +65,11 @@ function createClient(
   apiKey?: string,
   optionsHeaders?: Record<string, string>,
 ): GoogleGenAI {
-  const httpOptions: { baseUrl?: string; apiVersion?: string; headers?: Record<string, string> } =
-    {};
+  const httpOptions: HttpOptions = {};
+  const fetcher = buildManagedModelFetch(model);
+  if (fetcher) {
+    httpOptions.fetch = fetcher;
+  }
   if (model.baseUrl) {
     httpOptions.baseUrl = model.baseUrl;
     httpOptions.apiVersion = ""; // baseUrl already includes version path, don't append
@@ -78,18 +80,10 @@ function createClient(
     );
   }
 
-  // @google/genai exposes RequestInit options but no custom fetch; unwrap at construction.
+  // Authentication is resolved before construction; the SDK also retains the host fetch policy.
   const resolvedApiKey = apiKey ? getAiTransportHost().resolveSecretSentinel(apiKey) : undefined;
   return new GoogleGenAI({
     apiKey: resolvedApiKey,
     httpOptions: Object.keys(httpOptions).length > 0 ? httpOptions : undefined,
   });
-}
-
-function buildParams(
-  model: Model<"google-generative-ai">,
-  context: Context,
-  options: GoogleOptions = {},
-): GenerateContentParameters {
-  return buildGoogleGenerateContentParams(model, context, options);
 }

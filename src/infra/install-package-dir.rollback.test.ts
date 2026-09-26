@@ -27,10 +27,50 @@ describe("installPackageDir rollback", () => {
     await fixtureRootTracker.cleanup();
   });
 
-  it("preserves the Windows EPERM backup copy fallback", async () => {
+  async function createFixture(name: string) {
     await fixtureRootTracker.setup();
-    const fixtureRoot = await fixtureRootTracker.make("windows-backup-eperm");
-    const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
+    const fixtureRoot = await fixtureRootTracker.make(name);
+    return { fixtureRoot, ...(await createExistingInstallFixture(fixtureRoot)) };
+  }
+
+  function updateOptions(sourceDir: string, targetDir: string) {
+    return {
+      sourceDir,
+      targetDir,
+      mode: "update" as const,
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: false,
+      depsLogMessage: "",
+    };
+  }
+
+  async function installRetainedUpdate(
+    sourceDir: string,
+    targetDir: string,
+    options: Pick<Parameters<typeof installPackageDir>[0], "sourceHardlinks"> = {},
+  ) {
+    let backupDir = "";
+    const result = await installPackageDir(
+      requestDeferredPackageDirInstall({
+        ...updateOptions(sourceDir, targetDir),
+        ...options,
+        afterBackup: async (directory: string) => {
+          backupDir = directory;
+          return { ok: true as const };
+        },
+      }),
+    );
+    expect(result.ok).toBe(true);
+    const transaction = resolvePackageDirInstallTransaction(result);
+    if (!transaction) {
+      throw new Error("Expected a retained package transaction");
+    }
+    return { backupDir, transaction };
+  }
+
+  it("preserves the Windows EPERM backup copy fallback", async () => {
+    const { sourceDir, targetDir } = await createFixture("windows-backup-eperm");
     let denied = false;
     const denyInitialBackupRename = (from: fsSync.PathLike, to: fsSync.PathLike) => {
       if (
@@ -56,14 +96,8 @@ describe("installPackageDir rollback", () => {
     let result;
     try {
       result = await installPackageDir({
-        sourceDir,
-        targetDir,
-        mode: "update",
-        timeoutMs: 1_000,
-        copyErrorPrefix: "failed to copy plugin",
-        hasDeps: false,
+        ...updateOptions(sourceDir, targetDir),
         sourceHardlinks: "package-manager",
-        depsLogMessage: "",
       });
     } finally {
       rename.mockRestore();
@@ -76,9 +110,7 @@ describe("installPackageDir rollback", () => {
   });
 
   it("preserves the canonical tree when ownership closes after backup copy publication", async () => {
-    await fixtureRootTracker.setup();
-    const fixtureRoot = await fixtureRootTracker.make("backup-copy-owner");
-    const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
+    const { sourceDir, targetDir } = await createFixture("backup-copy-owner");
     const expired = new Error("install owner expired after backup publication");
     let ownerActive = true;
     let revoked = false;
@@ -113,22 +145,11 @@ describe("installPackageDir rollback", () => {
     });
 
     const result = await installPackageDir(
-      requestDeferredPackageDirInstall(
-        {
-          sourceDir,
-          targetDir,
-          mode: "update",
-          timeoutMs: 1_000,
-          copyErrorPrefix: "failed to copy plugin",
-          hasDeps: false,
-          depsLogMessage: "",
-        },
-        () => {
-          if (!ownerActive) {
-            throw expired;
-          }
-        },
-      ),
+      requestDeferredPackageDirInstall(updateOptions(sourceDir, targetDir), () => {
+        if (!ownerActive) {
+          throw expired;
+        }
+      }),
     );
 
     expect(revoked).toBe(true);
@@ -142,9 +163,7 @@ describe("installPackageDir rollback", () => {
   it.each(["install", "update"] as const)(
     "preserves a successor when an earlier %s rollback finishes delayed removal",
     async (mode) => {
-      await fixtureRootTracker.setup();
-      const fixtureRoot = await fixtureRootTracker.make("rollback-removal-owner");
-      const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
+      const { fixtureRoot, sourceDir, targetDir } = await createFixture("rollback-removal-owner");
       if (mode === "install") {
         await fs.rm(targetDir, { recursive: true });
       }
@@ -154,13 +173,8 @@ describe("installPackageDir rollback", () => {
         waitMs: 0,
       };
       const installOptions = {
-        sourceDir,
-        targetDir,
+        ...updateOptions(sourceDir, targetDir),
         mode,
-        timeoutMs: 1_000,
-        copyErrorPrefix: "failed to copy plugin",
-        hasDeps: false,
-        depsLogMessage: "",
       };
       const paused = createDeferred();
       const release = createDeferred();
@@ -254,31 +268,8 @@ describe("installPackageDir rollback", () => {
   it.each(["removal", "restoration"] as const)(
     "retains rollback progress for a retry after %s fails",
     async (failure) => {
-      await fixtureRootTracker.setup();
-      const fixtureRoot = await fixtureRootTracker.make("rollback-retry");
-      const { installBaseDir, sourceDir, targetDir } =
-        await createExistingInstallFixture(fixtureRoot);
-      let backupDir = "";
-      const result = await installPackageDir(
-        requestDeferredPackageDirInstall({
-          sourceDir,
-          targetDir,
-          mode: "update",
-          timeoutMs: 1_000,
-          copyErrorPrefix: "failed to copy plugin",
-          hasDeps: false,
-          depsLogMessage: "",
-          afterBackup: async (directory: string) => {
-            backupDir = directory;
-            return { ok: true as const };
-          },
-        }),
-      );
-      expect(result.ok).toBe(true);
-      const transaction = resolvePackageDirInstallTransaction(result);
-      if (!transaction) {
-        throw new Error("Expected a retained package transaction");
-      }
+      const { installBaseDir, sourceDir, targetDir } = await createFixture("rollback-retry");
+      const { backupDir, transaction } = await installRetainedUpdate(sourceDir, targetDir);
       const publishedIdentity = await fs.lstat(targetDir, { bigint: true });
       const ioError = Object.assign(new Error(`${failure} failed`), { code: "EIO" });
       let injected = false;
@@ -333,31 +324,10 @@ describe("installPackageDir rollback", () => {
   ] as const)(
     "preserves a substituted $sourceHardlinks backup when $action is requested",
     async ({ action, sourceHardlinks }) => {
-      await fixtureRootTracker.setup();
-      const fixtureRoot = await fixtureRootTracker.make("substituted-backup");
-      const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
-      let backupDir = "";
-      const result = await installPackageDir(
-        requestDeferredPackageDirInstall({
-          sourceDir,
-          targetDir,
-          mode: "update",
-          timeoutMs: 1_000,
-          copyErrorPrefix: "failed to copy plugin",
-          hasDeps: false,
-          sourceHardlinks,
-          depsLogMessage: "",
-          afterBackup: async (directory: string) => {
-            backupDir = directory;
-            return { ok: true as const };
-          },
-        }),
-      );
-      expect(result.ok).toBe(true);
-      const transaction = resolvePackageDirInstallTransaction(result);
-      if (!transaction) {
-        throw new Error("Expected a retained package transaction");
-      }
+      const { fixtureRoot, sourceDir, targetDir } = await createFixture("substituted-backup");
+      const { backupDir, transaction } = await installRetainedUpdate(sourceDir, targetDir, {
+        sourceHardlinks,
+      });
       const retainedBackup = path.join(fixtureRoot, "retained-backup");
       await fs.rename(backupDir, retainedBackup);
       await fs.mkdir(backupDir);
@@ -380,31 +350,10 @@ describe("installPackageDir rollback", () => {
   it.each(["dev", "ino"] as const)(
     "preserves the published tree when Windows reports an unknown %s during rollback",
     async (field) => {
-      await fixtureRootTracker.setup();
-      const fixtureRoot = await fixtureRootTracker.make("rollback-unknown-identity");
-      const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
-      let backupDir = "";
-      const result = await installPackageDir(
-        requestDeferredPackageDirInstall({
-          sourceDir,
-          targetDir,
-          mode: "update",
-          timeoutMs: 1_000,
-          copyErrorPrefix: "failed to copy plugin",
-          hasDeps: false,
-          sourceHardlinks: "package-manager",
-          depsLogMessage: "",
-          afterBackup: async (directory: string) => {
-            backupDir = directory;
-            return { ok: true as const };
-          },
-        }),
-      );
-      expect(result.ok).toBe(true);
-      const transaction = resolvePackageDirInstallTransaction(result);
-      if (!transaction) {
-        throw new Error("Expected a retained package transaction");
-      }
+      const { sourceDir, targetDir } = await createFixture("rollback-unknown-identity");
+      const { backupDir, transaction } = await installRetainedUpdate(sourceDir, targetDir, {
+        sourceHardlinks: "package-manager",
+      });
       const realLstat = fsSync.lstatSync.bind(fsSync);
       const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const lstat = vi.spyOn(fsSync, "lstatSync").mockImplementation((candidate, options) => {
@@ -432,9 +381,7 @@ describe("installPackageDir rollback", () => {
   );
 
   it("preserves a replacement inode while the original rollback owner remains live", async () => {
-    await fixtureRootTracker.setup();
-    const fixtureRoot = await fixtureRootTracker.make("rollback-inode");
-    const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
+    const { fixtureRoot, sourceDir, targetDir } = await createFixture("rollback-inode");
     const preservedDir = path.join(fixtureRoot, "preserved-install");
     let backupDir = "";
     try {
@@ -444,13 +391,7 @@ describe("installPackageDir rollback", () => {
           const result = await installPackageDir(
             requestDeferredPackageDirInstall(
               {
-                sourceDir,
-                targetDir,
-                mode: "update",
-                timeoutMs: 1_000,
-                copyErrorPrefix: "failed to copy plugin",
-                hasDeps: false,
-                depsLogMessage: "",
+                ...updateOptions(sourceDir, targetDir),
                 afterBackup: async (directory: string) => {
                   backupDir = directory;
                   return { ok: true as const };
