@@ -149,7 +149,12 @@ export async function applyMediaUnderstanding(params: {
     .find(Boolean);
 
   const attachments = normalizeMediaAttachments(ctx);
-  const providerRegistry = buildProviderRegistry(params.providers, cfg);
+  // Deferred and memoized: a turn whose native-vision skip branch never reads
+  // the registry must never pay to build it (runner.ts's
+  // hasExplicitImageUnderstandingConfig). Built at most once per turn.
+  let builtProviderRegistry: ReturnType<typeof buildProviderRegistry> | undefined;
+  const providerRegistry = (): ReturnType<typeof buildProviderRegistry> =>
+    (builtProviderRegistry ??= buildProviderRegistry(params.providers, cfg));
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: resolveMediaAttachmentLocalRoots({
       cfg,
