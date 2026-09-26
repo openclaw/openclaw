@@ -355,7 +355,7 @@ it.each(["missing", "stale"] as const)(
   },
 );
 
-it("retains the prepared native receipt across an alias swap before caller continuation", async () => {
+it("retains canonical borrowers and rejects the changed alias before caller continuation", async () => {
   const options = fixture();
   const originalDirectory = path.join(options.env.OPENCLAW_STATE_DIR, "original");
   const successorDirectory = path.join(options.env.OPENCLAW_STATE_DIR, "successor");
@@ -372,6 +372,10 @@ it("retains the prepared native receipt across an alias swap before caller conti
   const creator = captureOpenClawAgentDatabaseExecution(aliased, {
     expectedCreationIdentity: readDatabasePathIdentitySync(aliased.path),
   });
+  const canonical = captureOpenClawAgentDatabaseExecution({
+    ...options,
+    path: path.join(originalDirectory, "agent.sqlite"),
+  });
   const operation = vi.fn(async () => "must not enter successor");
   try {
     await successor.prepare(source());
@@ -387,15 +391,25 @@ it("retains the prepared native receipt across an alias swap before caller conti
       /identity|observed target/,
     );
     expect(operation).not.toHaveBeenCalled();
+    await expect(
+      canonical.runExisting(source(), (scope) =>
+        scope.execute({
+          type: "session.transcript.initialize",
+          input: { sessionKey: "agent:main:retarget-proof", sessionId: "original-session" },
+        }),
+      ),
+    ).resolves.toEqual({
+      kind: "session-transcript-initialized",
+      sessionKey: "agent:main:retarget-proof",
+      placeholder: { sessionId: "original-session" },
+    });
+    expect(canonical.fileIdentity).toEqual(receipt);
     await closeOpenClawAgentDatabaseByPathAsync(aliased.path, options.agentId);
     expect(() => successor.assertCurrent()).not.toThrow();
     await expect(successor.runExisting(source(), async () => "successor retained")).resolves.toBe(
       "successor retained",
     );
   } finally {
-    // Restore the test's directory alias so native cleanup addresses its original file.
-    fs.unlinkSync(alias);
-    fs.symlinkSync(originalDirectory, alias, linkType);
-    await Promise.allSettled([creator.release(), successor.release()]);
+    await Promise.allSettled([creator.release(), canonical.release(), successor.release()]);
   }
 });

@@ -270,7 +270,7 @@ export function captureOpenClawAgentDatabaseExecution(
       if (!generation) {
         const created = createAgentDatabaseNativeGeneration(
           agentId,
-          pathname,
+          identity.canonicalPath,
           context,
           assertCurrent,
           () => {
@@ -286,12 +286,6 @@ export function captureOpenClawAgentDatabaseExecution(
                 fileIdentity.birthtime !== received.birthtime)
             ) {
               throw new Error("Agent database execution belongs to another physical file");
-            }
-            if (
-              creatingTarget &&
-              readDatabasePathIdentitySync(pathname).canonicalPath !== creatingTarget.canonicalPath
-            ) {
-              throw new Error("Agent creation changed its originally observed target");
             }
             fileIdentity ??= Object.freeze({ ...received });
           },
