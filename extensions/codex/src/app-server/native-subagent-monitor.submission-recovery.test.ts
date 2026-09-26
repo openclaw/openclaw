@@ -1,22 +1,21 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createAgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness-task-runtime";
-import {
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import {
   claimCodexAppServerLiveThread,
   ensureCodexAppServerClientRuntime,
 } from "./client-runtime.js";
-import { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
 import {
+  captureNativeSubagentMonitorWork,
   childTurnCompletedNotification,
   createClient,
   notifyChildStarted,
@@ -34,8 +33,8 @@ import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
   createCodexAppServerBindingStore,
-  type StoredCodexAppServerBinding,
 } from "./session-binding.js";
+import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 
 describe("CodexNativeSubagentMonitor", () => {
   it.each([
@@ -46,6 +45,7 @@ describe("CodexNativeSubagentMonitor", () => {
     "replacement",
   ] as const)("recovers owned submissions after cold monitor recreation (%s)", async (scenario) => {
     await withStateDirEnv("codex-restart-gap-", async ({ stateDir }) => {
+      using monitorWork = captureNativeSubagentMonitorWork();
       const identity = {
         kind: "session" as const,
         agentId: "main",
@@ -71,7 +71,7 @@ describe("CodexNativeSubagentMonitor", () => {
       };
       const openBindingStore = () =>
         createCodexAppServerBindingStore(
-          createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+          createCodexSqliteTestBindingStateStore({
             namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
             maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
             overflowPolicy: "reject-new",
@@ -98,6 +98,7 @@ describe("CodexNativeSubagentMonitor", () => {
         store: ReturnType<typeof openBindingStore>,
         owner: typeof nativeHistory,
         onRecord?: (receipt: CodexNativeSubagentSubmission, pending: Promise<boolean>) => void,
+        onConsume?: (pending: Promise<boolean>) => void,
       ): CodexNativeSubagentSubmissionStore => ({
         assertCurrent: () => {
           const current = store.read(identity);
@@ -115,12 +116,15 @@ describe("CodexNativeSubagentMonitor", () => {
           onRecord?.(receipt, pending);
           return pending;
         },
-        consume: (receipt, guard) =>
-          store.mutate(
+        consume: (receipt, guard) => {
+          const pending = store.mutate(
             identity,
             { kind: "consume-native-subagent-submission", owner, receipt },
             guard,
-          ),
+          );
+          onConsume?.(pending);
+          return pending;
+        },
       });
       const firstHost = await createAdmittedHostCapabilityTestFixture({
         ...hostAttempt,
@@ -142,6 +146,7 @@ describe("CodexNativeSubagentMonitor", () => {
       let firstRecord: Promise<boolean> | undefined;
       let capturedReceipt: CodexNativeSubagentSubmission | undefined;
       const firstDelivery = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+      const firstConsumption = createDeferred<{ pending: Promise<boolean> }>();
       const firstSubmissionStore = makeSubmissionStore(
         firstBindingStore,
         nativeHistory,
@@ -149,6 +154,7 @@ describe("CodexNativeSubagentMonitor", () => {
           capturedReceipt = receipt;
           firstRecord = pending;
         },
+        (pending) => firstConsumption.resolve({ pending }),
       );
       let releaseHeldConsume!: () => void;
       const consumeReleased = new Promise<void>((resolve) => {
@@ -177,29 +183,6 @@ describe("CodexNativeSubagentMonitor", () => {
           deliverAgentHarnessTaskCompletion: firstDelivery,
         },
       });
-      const attempts = new Set<Promise<void>>();
-      // oxlint-disable-next-line typescript/unbound-method -- Invoked below with .call(this, ...) to preserve the observed instance.
-      const originalDelivery = CodexNativeSubagentCompletionDelivery.prototype.deliverPending;
-      const observeAttempt = vi
-        .spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending")
-        .mockImplementation(function (
-          this: CodexNativeSubagentCompletionDelivery,
-          state,
-          child,
-          trigger,
-        ) {
-          const attempt = originalDelivery.call(this, state, child, trigger);
-          attempts.add(attempt);
-          return attempt;
-        });
-      const settleCompletionAttempts = async () => {
-        // Notification dispatch and delivery callbacks precede worker persistence.
-        while (attempts.size > 0) {
-          const pending = [...attempts];
-          attempts.clear();
-          await Promise.all(pending);
-        }
-      };
       let closingFirst: Promise<void> | undefined;
       const closeFirstParent = () =>
         (closingFirst ??= (async () => {
@@ -207,7 +190,7 @@ describe("CodexNativeSubagentMonitor", () => {
           releaseHeldConsume();
           try {
             await firstParent.unregister();
-            await settleCompletionAttempts();
+            expect(await monitorWork.settle()).toEqual([]);
           } finally {
             firstHost.closeHost();
             firstHost.closeAdmission();
@@ -248,7 +231,7 @@ describe("CodexNativeSubagentMonitor", () => {
         closeDatabase = () => database.close();
         const readRows = () =>
           database.prepare("SELECT * FROM task_runs ORDER BY created_at, task_id").all();
-        await settleCompletionAttempts();
+        expect(await monitorWork.settle()).toEqual([]);
         const initial = readRows().find((row) => row.run_id === initialRunId);
         expect(initial).toMatchObject({
           status: "succeeded",
@@ -323,7 +306,7 @@ describe("CodexNativeSubagentMonitor", () => {
                   },
                 },
               });
-              await settleCompletionAttempts();
+              expect(await monitorWork.settle()).toEqual([]);
               expect(readRows().find((row) => row.run_id === followupRunId)).toMatchObject({
                 status: "succeeded",
                 delivery_status: "delivered",
@@ -336,6 +319,10 @@ describe("CodexNativeSubagentMonitor", () => {
           } else {
             expect(taskRuntime.listTaskRecords()).toHaveLength(1);
           }
+        }
+        if (scenario === "admitted") {
+          const { pending } = await firstConsumption.promise;
+          await expect(pending).resolves.toBe(true);
         }
         const beforeRestart = readRows();
         const receiptsBeforeRestart = firstBindingStore.readNativeSubagentSubmissions(
@@ -360,6 +347,7 @@ describe("CodexNativeSubagentMonitor", () => {
             capturedReceipt,
           ]);
         }
+        await closeOpenClawStateDatabaseAsync();
         resetPluginStateStoreForTests();
 
         const reopenedBindingStore = openBindingStore();
@@ -434,16 +422,14 @@ describe("CodexNativeSubagentMonitor", () => {
         try {
           resumedParent.bindTurn("resumed-parent-turn");
           await resumedParent.unregister();
-          if (scenario === "admitted" || scenario === "accepted-before-child-event") {
-            await vi.waitFor(() => expect(delivery).toHaveBeenCalledOnce());
-          } else if (scenario === "delivered-with-receipt") {
+          expect(await monitorWork.settle()).toEqual([]);
+          if (scenario === "delivered-with-receipt") {
             await vi.waitFor(() =>
               expect(
                 reopenedBindingStore.readNativeSubagentSubmissions(identity, resumedHistory),
               ).toEqual([]),
             );
           }
-          await settleCompletionAttempts();
           const afterRestart = readRows();
           expect(afterRestart.find((row) => row.run_id === initialRunId)).toEqual(initial);
           if (scenario === "delivered-with-receipt") {
@@ -469,7 +455,7 @@ describe("CodexNativeSubagentMonitor", () => {
           second.close();
           try {
             await resumedParent.unregister();
-            await settleCompletionAttempts();
+            expect(await monitorWork.settle()).toEqual([]);
           } finally {
             resumedHost.closeHost();
             resumedHost.closeAdmission();
@@ -478,10 +464,10 @@ describe("CodexNativeSubagentMonitor", () => {
       } finally {
         try {
           await closeFirstParent();
-          await settleCompletionAttempts();
+          expect(await monitorWork.settle()).toEqual([]);
         } finally {
           closeDatabase?.();
-          observeAttempt.mockRestore();
+          await closeOpenClawStateDatabaseAsync();
           resetPluginStateStoreForTests();
         }
       }

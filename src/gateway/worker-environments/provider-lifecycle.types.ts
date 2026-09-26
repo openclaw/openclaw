@@ -40,7 +40,10 @@ export type WorkerProviderLifecycleInputOptions = {
     operationId: string;
     sshEndpoint: WorkerSshEndpoint;
     installation: WorkerInstallationArtifact;
-    resolveIdentity: (keyRef: SecretRef) => Promise<WorkerSshIdentity>;
+    resolveIdentity: (
+      keyRef: SecretRef,
+      context: { assertCurrent: () => void },
+    ) => Promise<WorkerSshIdentity>;
     signal: AbortSignal;
     assertCurrent?: () => void;
   }) => Promise<WorkerAdmissionHandshake>;
@@ -49,6 +52,7 @@ export type WorkerProviderLifecycleInputOptions = {
     leaseId: string;
     profile: WorkerProfile;
     keyRef: SecretRef;
+    assertAuthorized: () => void;
   }) => Promise<WorkerSshIdentity>;
   ensureNodeWorkerBundle?: (params: {
     deviceId: string;

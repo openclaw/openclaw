@@ -1570,7 +1570,7 @@ src/agents/embedded-agent-runner/context-engine-maintenance.ts	3
 src/agents/embedded-agent-runner/delivery-evidence.ts	1
 src/agents/embedded-agent-runner/direct-compaction-preparation.ts	1
 src/agents/embedded-agent-runner/extensions.ts	1
-src/agents/embedded-agent-runner/extra-params.ts	8
+src/agents/embedded-agent-runner/extra-params.ts	4
 src/agents/embedded-agent-runner/google-prompt-cache.ts	5
 src/agents/embedded-agent-runner/history.ts	2
 src/agents/embedded-agent-runner/message-visibility.ts	13
@@ -2451,7 +2451,6 @@ src/flows/search-setup.ts	1
 src/gateway/agent-runtime-identity-token.ts	1
 src/gateway/agent-turn/agent-dedupe.ts	3
 src/gateway/agent-turn/agent-restart-recovery-context.ts	1
-src/gateway/agent-turn/agent-run-dispatch.ts	1
 src/gateway/agent-turn/agent-session-persist.ts	3
 src/gateway/agent-turn/internal-facade.ts	4
 src/gateway/board-host-tools.ts	1
