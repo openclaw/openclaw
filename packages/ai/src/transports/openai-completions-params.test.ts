@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { getAiTransportHost } from "../host.js";
 import { FAILED_ASSISTANT_REPLAY_TEXT } from "../replay-turn-classification.js";
 import type { Model } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
@@ -302,12 +303,14 @@ describe("openai completions params", () => {
           return "refused";
         }
       };
-      // Once the margined estimate leaves under 16 tokens (3,150 characters), the budget comes
-      // from the unmargined estimate; once that leaves under 16 too (3,936), the request is refused.
+      // The margined estimate leaves 16 tokens at 3,145 characters and 15 at 3,146, where the
+      // budget moves to the unmargined estimate; that leaves 16 at 3,932 and 15 at 3,933, where
+      // the request is refused.
       expect(capAt(3100)).toBe(30);
-      expect(capAt(3150)).toBe(211);
-      expect(capAt(3872)).toBe(31);
-      expect(capAt(3936)).toBe("refused");
+      expect(capAt(3145)).toBe(16);
+      expect(capAt(3146)).toBe(212);
+      expect(capAt(3932)).toBe(16);
+      expect(capAt(3933)).toBe("refused");
       // Sweep from a margined budget through the unmargined band to exhaustion.
       const caps = Array.from({ length: 1101 }, (_, index) => capAt(3000 + index));
       const sent = caps.filter((cap): cap is number => cap !== "refused");
@@ -343,7 +346,13 @@ describe("openai completions params", () => {
           ),
         ).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
       }
-      // A caller that asks for one token itself is never reduced by context pressure.
+      expect(() =>
+        buildOpenAICompletionsParams({ ...model, contextTokens: 1000 }, context, options),
+      ).toThrowError(
+        "Context window exceeded: estimated input 1000 tokens (without the 1.25x estimate margin) " +
+          "leaves 0 of the 16 output tokens a reply needs within the 1000-token context.",
+      );
+      // A requested cap of 1 is always sent, even past the context; the provider rejects it then.
       expect(
         buildOpenAICompletionsParams({ ...model, contextTokens: 1000 }, context, {
           ...options,
@@ -383,11 +392,39 @@ describe("openai completions params", () => {
         buildOpenAICompletionsParams(model, emptyContext("x".repeat(3200)), options);
       if (expected === undefined) {
         expect(build).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
+        expect(build).toThrowError(
+          "Context window exceeded: estimated input 1000 tokens (with the 1.25x estimate margin) " +
+            "leaves 0 of the 16 output tokens a reply needs within the 1000-token context.",
+        );
       } else {
         expect(build().max_completion_tokens).toBe(expected);
       }
     },
   );
+
+  it("warns when a proxy request is budgeted from the unmargined estimate", () => {
+    const model = makeCompletionsModel({
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      contextWindow: 1000,
+      maxTokens: 1000,
+    });
+    const warning = vi.spyOn(getAiTransportHost(), "logWarn");
+    try {
+      buildOpenAICompletionsParams(model, emptyContext("x".repeat(3100)), undefined);
+      expect(warning).not.toHaveBeenCalled();
+      buildOpenAICompletionsParams(model, emptyContext("x".repeat(3200)), undefined);
+      expect(warning).toHaveBeenCalledWith(
+        "openai-transport",
+        expect.stringContaining(
+          "output=199 effectiveContext=1000 estimatedInput=800 estimate=unmargined marginedInput=1000",
+        ),
+        undefined,
+      );
+    } finally {
+      warning.mockRestore();
+    }
+  });
 
   it("preserves useful clamping and intentionally short completions", () => {
     const model = makeCompletionsModel({
@@ -397,6 +434,14 @@ describe("openai completions params", () => {
     });
     const context = emptyContext("x".repeat(3200));
     expect(buildOpenAICompletionsParams(model, context, undefined).max_completion_tokens).toBe(16);
+    // With thinking enabled too, a requested cap of 1 is sent even when the estimate is past the context.
+    expect(
+      buildOpenAICompletionsParams(
+        { ...model, contextWindow: 1000 },
+        emptyContext("x".repeat(8000)),
+        { maxTokens: 1 },
+      ).max_completion_tokens,
+    ).toBe(1);
     expect(
       buildOpenAICompletionsParams(model, context, { maxTokens: 1 }).max_completion_tokens,
     ).toBe(1);

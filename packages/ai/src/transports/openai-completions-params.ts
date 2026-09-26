@@ -521,9 +521,10 @@ export function buildOpenAICompletionsRequest(
     ) {
       const inputChars = estimateOpenAICompletionsInputChars(params);
       const thinkingRequest = model.reasoning && thinkingEnabled !== false;
-      let estimatedInputTokens = Math.ceil(
+      const marginedInputTokens = Math.ceil(
         (inputChars / CHARS_PER_TOKEN_ESTIMATE) * OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN,
       );
+      let estimatedInputTokens = marginedInputTokens;
       let availableOutputTokens = effectiveContextTokens - estimatedInputTokens - 1;
       // The margin keeps ordinary caps inside strict servers' limits. Without thinking, once it
       // leaves less than a useful reply, budget from the unmargined estimate instead; if that
@@ -534,18 +535,27 @@ export function buildOpenAICompletionsRequest(
         estimatedInputTokens = Math.ceil(inputChars / CHARS_PER_TOKEN_ESTIMATE);
         availableOutputTokens = effectiveContextTokens - estimatedInputTokens - 1;
       }
-      const logBudget = (event: string, output: number) =>
-        emitModelTransportDebug(
-          log,
+      // A budget taken from the unmargined estimate is logged at warn level: it is the
+      // operator-visible sign that a prompt has reached the context cap and that the provider
+      // may still reject it. Ordinary clamping stays at debug level.
+      const logBudget = (event: string, output: number) => {
+        const line =
           `[completions] ${event} provider=${model.provider} api=${model.api} ` +
-            `model=${model.id} requested=${effectiveMaxTokens} output=${output} ` +
-            `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}` +
-            (unmargined ? " estimate=unmargined" : ""),
-        );
+          `model=${model.id} requested=${effectiveMaxTokens} output=${output} ` +
+          `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}` +
+          (unmargined ? ` estimate=unmargined marginedInput=${marginedInputTokens}` : "");
+        if (unmargined) {
+          log.warn(line);
+        } else {
+          emitModelTransportDebug(log, line);
+        }
+      };
+      // The room never counts below one token, so a requested cap of 1 is always sent, even
+      // when the estimate already exceeds the context; a prompt that really does is rejected by
+      // the provider and enters overflow recovery. Any other requested cap within the room is
+      // sent as is, and a cap that context pressure cuts below the floor is refused.
       const remainingBudget = Math.max(1, availableOutputTokens);
       if (clampedMaxTokens > remainingBudget) {
-        // Only a budget that context pressure reduces is held to the floor; a caller's own
-        // short maxTokens that fits the room is sent as requested.
         if (remainingBudget < MIN_USEFUL_OUTPUT_TOKENS) {
           throw Object.assign(
             new Error(
