@@ -42,8 +42,9 @@ function defaultBatchResponse(stage: BatchStage): Response {
         }),
       );
     case "error":
-      throw new Error("unexpected Voyage batch stage");
+      break;
   }
+  throw new Error("unexpected Voyage batch stage");
 }
 
 function fetchInputUrl(input: RequestInfo | URL): string {
