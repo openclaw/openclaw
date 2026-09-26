@@ -75,14 +75,12 @@ import type { SidebarLayout } from "./sidebar-layout-types.ts";
 
 export abstract class ChatPaneBase extends OpenClawLightDomElement {
   private paneLifecycleRoot: Element | null = null;
-  // The first Lit update must render even while hidden; later hidden work parks.
-  // Disconnect releases the waiter so reconnect can schedule in its new lifecycle.
-  private hiddenUpdateResume: (() => void) | undefined;
+  private pendingUpdateResume: (() => void) | undefined;
   private readonly handleVisibilityChange = () => {
+    this.pendingUpdateResume?.();
     // Lit parks hidden updates, but progress watches must follow visibility immediately.
     this.progressCard.hostUpdate();
     if (document.visibilityState !== "hidden") {
-      this.hiddenUpdateResume?.();
       return;
     }
     const state = this.state;
@@ -111,10 +109,25 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     this.paneLifecycleRoot?.dispatchEvent(new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT));
   }
   protected override async scheduleUpdate() {
-    while (this.hasUpdated && this.isConnected && document.visibilityState === "hidden") {
-      await new Promise<void>((resolve) => {
-        this.hiddenUpdateResume = resolve;
-      });
+    // Batch pane commits, keeping the end anchor's pre/post-commit observation
+    // synchronous. Initial and detached updates cannot wait for a visible frame.
+    if (this.hasUpdated && this.isConnected) {
+      do {
+        await new Promise<void>((resolve) => {
+          let frame: number | null = null;
+          const resume = () => {
+            this.pendingUpdateResume = undefined;
+            if (frame !== null) {
+              cancelAnimationFrame(frame);
+            }
+            resolve();
+          };
+          this.pendingUpdateResume = resume;
+          if (document.visibilityState !== "hidden") {
+            frame = requestAnimationFrame(resume);
+          }
+        });
+      } while (this.isConnected && document.visibilityState === "hidden");
     }
     await super.scheduleUpdate();
   }
@@ -125,7 +138,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       this.synchronizeForegroundTranscript,
     );
     this.context?.connectionBootstrap.setForegroundPane(this, null);
-    this.hiddenUpdateResume?.();
+    this.pendingUpdateResume?.();
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     super.disconnectedCallback();
     // A removed Home pane cannot bubble its final loading edge. Notify its
