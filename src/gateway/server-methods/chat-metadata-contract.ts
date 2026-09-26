@@ -4,23 +4,24 @@ import type { ChatAccountSelection } from "../../../packages/gateway-protocol/sr
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 
+export const chatMetadataSessionFields = [
+  "sessionId",
+  "lifecycleRevision",
+  "sessionStartedAt",
+  "acp",
+  "agentHarnessId",
+  "agentRuntimeOverride",
+  "modelSelectionLocked",
+  "pluginOwnerId",
+  "providerOverride",
+  "modelOverride",
+  "authProfileOverride",
+  "authProfileOverrideSource",
+  "authProfileOverrideCompactionCount",
+] as const satisfies readonly (keyof SessionEntry)[];
+
 export type ChatMetadataSessionEntry = Partial<
-  Pick<
-    SessionEntry,
-    | "sessionId"
-    | "lifecycleRevision"
-    | "sessionStartedAt"
-    | "acp"
-    | "agentHarnessId"
-    | "agentRuntimeOverride"
-    | "modelSelectionLocked"
-    | "pluginOwnerId"
-    | "providerOverride"
-    | "modelOverride"
-    | "authProfileOverride"
-    | "authProfileOverrideSource"
-    | "authProfileOverrideCompactionCount"
-  >
+  Pick<SessionEntry, (typeof chatMetadataSessionFields)[number]>
 >;
 
 export type ChatMetadataReadParams = {

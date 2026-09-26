@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   ErrorCodes,
   errorShape,
@@ -14,11 +15,14 @@ import { readOperatorRolePolicyRevision } from "../operator-role-policy.js";
 import { SESSION_READ_SCOPE } from "../operator-scopes.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { hiddenSessionNotFound } from "../session-sharing-policy.js";
+import { hasSessionReadAccessChanged, hiddenSessionNotFound } from "../session-sharing-policy.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import { retainGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
-import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
+import {
+  chatMetadataSessionFields,
+  type ChatMetadataReadParams,
+} from "./chat-metadata-contract.js";
 import { normalizeOptionalChatText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
@@ -63,7 +67,15 @@ export function resolveChatMetadataReadParams(
     }
     // Persisted session state owns account pins; a caller cannot replace them with a draft id.
     const requesterProfileId = resolveAuthenticatedProfileId(client);
-    const session = retainGatewaySessionEntryReadOnly(params.sessionKey, requested.agentId);
+    const session = retainGatewaySessionEntryReadOnly(
+      params.sessionKey,
+      requested.agentId,
+      (previous, current) =>
+        !hasSessionReadAccessChanged(previous, current) &&
+        chatMetadataSessionFields.every((field) =>
+          isDeepStrictEqual(previous[field], current[field]),
+        ),
+    );
     const isCurrent = () => isRequestCurrent() && session.isCurrent();
     const assertVisible = () => {
       const visible = createSessionListEntryFilter({

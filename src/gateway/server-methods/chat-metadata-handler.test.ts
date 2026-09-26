@@ -484,41 +484,61 @@ describe("chat metadata dispatch authority", () => {
     },
   );
 
-  it("rejects a shared session that becomes a foreign draft during metadata preparation", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const fixture = createPersonalMetadataFixture([SESSION_READ_SCOPE]);
-      fixture.role.sessions.others = "view";
-      await state.writeConfig(fixture.config);
-      const other = ensureProfileForEmail("metadata-foreign@example.test");
-      const scope = { agentId: "main", sessionKey: "agent:main:changing-metadata" };
-      await upsertSessionEntryCore(scope, {
-        sessionId: "changing-metadata",
-        updatedAt: 1,
-        visibility: "shared",
-        createdActor: { type: "human", source: "profile", id: other.id },
-      });
-      const entered = createDeferred();
-      const release = createDeferred();
-      fixture.readChatMetadata.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-        return fixture.metadata;
-      });
-      const { pending, respond } = dispatchMetadata(fixture, { sessionKey: scope.sessionKey });
-      const settled = Promise.allSettled([pending]);
-      try {
-        await Promise.race([entered.promise, pending]);
-        expect(fixture.readChatMetadata).toHaveBeenCalledOnce();
-        await patchSessionEntryCore(scope, () => ({ visibility: "draft" }));
-      } finally {
-        release.resolve();
-        await settled;
-      }
+  it.each([
+    { change: "title", patch: { title: "First reply" }, current: true },
+    { change: "activity", patch: { updatedAt: 2 }, current: true },
+    { change: "ordinary patch", patch: { thinkingLevel: "high" }, current: true },
+    { change: "visibility", patch: { visibility: "draft" }, current: false },
+    { change: "account", patch: { authProfileOverride: "test:replacement" }, current: false },
+    { change: "model", patch: { modelOverride: "replacement" }, current: false },
+    { change: "runtime", patch: { agentRuntimeOverride: "replacement" }, current: false },
+    { change: "runtime lock", patch: { modelSelectionLocked: true }, current: false },
+    { change: "lifecycle", patch: { lifecycleRevision: "replacement" }, current: false },
+  ] satisfies { change: string; patch: Partial<SessionEntry>; current: boolean }[])(
+    "revalidates $change changes during metadata preparation",
+    async ({ patch, current }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const fixture = createPersonalMetadataFixture([SESSION_READ_SCOPE]);
+        fixture.role.sessions.others = "view";
+        await state.writeConfig(fixture.config);
+        const other = ensureProfileForEmail("metadata-foreign@example.test");
+        const scope = { agentId: "main", sessionKey: "agent:main:changing-metadata" };
+        await upsertSessionEntryCore(scope, {
+          sessionId: "changing-metadata",
+          updatedAt: 1,
+          visibility: "shared",
+          createdActor: { type: "human", source: "profile", id: other.id },
+        });
+        const entered = createDeferred();
+        const release = createDeferred();
+        fixture.readChatMetadata.mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+          return fixture.metadata;
+        });
+        const { pending, respond } = dispatchMetadata(fixture, { sessionKey: scope.sessionKey });
+        const settled = Promise.allSettled([pending]);
+        try {
+          await Promise.race([entered.promise, pending]);
+          expect(fixture.readChatMetadata).toHaveBeenCalledOnce();
+          await patchSessionEntryCore(scope, () => patch);
+        } finally {
+          release.resolve();
+          await settled;
+        }
 
-      await expect(pending).rejects.toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
-      expect(respond).not.toHaveBeenCalled();
-    });
-  });
+        if (current) {
+          await pending;
+          expect(respond).toHaveBeenCalledExactlyOnceWith(true, fixture.metadata);
+        } else {
+          await expect(pending).rejects.toBeInstanceOf(
+            PreparedModelRuntimePublicationSupersededError,
+          );
+          expect(respond).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
 
   it.each(["role loss", "config replacement", "profile replacement", "abort"] as const)(
     "rejects a neutral draft after %s during metadata preparation",
