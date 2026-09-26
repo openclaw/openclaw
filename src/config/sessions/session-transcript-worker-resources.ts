@@ -260,6 +260,40 @@ export function clearClosedDatabaseCustody(
   }
 }
 
+async function closeDatabaseWorkerResource(
+  resource: HistoryDatabaseResource,
+  lane: SessionDatabaseWorkerLane,
+  idle: boolean,
+): Promise<void> {
+  const pool =
+    lane === historyLane
+      ? historyLane.pool
+      : lane === maintenanceLane
+        ? maintenanceLane.pool
+        : undefined;
+  // Active reads and Bun retain native-exit custody. Idle Node readers can
+  // release the exact database while retaining the worker's loaded code.
+  if (!idle || process.versions.bun || !pool) {
+    await rotateDatabaseWorkers(lane);
+    return;
+  }
+  const through = lane.nativeSequence;
+  try {
+    await pool.closeResources(JSON.stringify([{ path: resource.database.path }]));
+  } catch (error) {
+    try {
+      await rotateDatabaseWorkers(lane);
+    } catch (retirementError) {
+      throw sessionHistoryCleanupError(error, retirementError, "worker retirement");
+    }
+    throw error;
+  }
+  const sequence = resource.nativeSequences.get(lane);
+  if (sequence !== undefined && sequence <= through) {
+    resource.nativeSequences.delete(lane);
+  }
+}
+
 export function acquireHistoryDatabaseResource(
   options: OpenClawAgentDatabaseOptions,
 ): HistoryDatabaseResource {
@@ -283,8 +317,13 @@ export function acquireHistoryDatabaseResource(
     };
     const close = () => {
       if (!owned.closing) {
+        const idle = owned.pending === 0;
         owned.closing = (async () => {
-          await Promise.all([...owned.nativeSequences.keys()].map(rotateDatabaseWorkers));
+          await Promise.all(
+            [...owned.nativeSequences.keys()].map((lane) =>
+              closeDatabaseWorkerResource(owned, lane, idle),
+            ),
+          );
           await Promise.allSettled(owned.hostEffects);
           for (const cleanup of owned.cleanups) {
             await cleanup.run();
