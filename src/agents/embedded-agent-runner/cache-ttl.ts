@@ -51,6 +51,11 @@ export function isCacheTtlEligibleProvider(
     return pluginEligibility;
   }
   return (
+    // Config-only OpenAI-compatible providers have no hook; require an explicit opt-in.
+    (route?.supportsPromptCacheKey === true &&
+      (modelApi === "openai-responses" ||
+        modelApi === "openai-completions" ||
+        modelApi === "openai-chatgpt-responses")) ||
     isAnthropicFamilyCacheTtlEligible({
       provider: normalizedProvider,
       modelId: normalizedModelId,
