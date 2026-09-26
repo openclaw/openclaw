@@ -1,14 +1,57 @@
 #!/usr/bin/env node
 
+import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { readBoundedResponseText } from "../../../lib/bounded-response.mjs";
 
 const port = Number(process.argv[2]);
-if (!Number.isInteger(port) || port < 1 || port > 65535 || process.argv.length !== 3) {
-  throw new Error("Expected one Gateway port");
+const gatewayPid = Number(process.argv[3]);
+const artifactRoot = process.argv[4];
+if (
+  !Number.isInteger(port) ||
+  port < 1 ||
+  port > 65535 ||
+  ![3, 5].includes(process.argv.length) ||
+  (process.argv.length === 5 &&
+    (!Number.isSafeInteger(gatewayPid) || gatewayPid <= 0 || !artifactRoot))
+) {
+  throw new Error("Expected Gateway port and optional Gateway PID and artifact root");
 }
 
+function captureOsState(phase) {
+  if (!artifactRoot) {
+    return;
+  }
+  let output = "Gateway OS diagnostics unavailable on this platform.\n";
+  if (process.platform === "linux") {
+    const result = spawnSync(
+      process.execPath,
+      [
+        fileURLToPath(new URL("../../../lib/vitest-fork-os-observer.mjs", import.meta.url)),
+        String(gatewayPid),
+      ],
+      { encoding: "utf8", timeout: 2_000, killSignal: "SIGKILL", maxBuffer: 16 * 1024 },
+    );
+    output =
+      !result.error && result.status === 0 && result.stdout
+        ? result.stdout
+        : "Gateway OS diagnostics unavailable; bounded observer did not complete.\n";
+  }
+  try {
+    writeFileSync(path.join(artifactRoot, `gateway-startup-os-${phase}.log`), output, {
+      flag: "wx",
+      mode: 0o600,
+    });
+  } catch {
+    process.stderr.write("Gateway OS diagnostics could not be written.\n");
+  }
+}
+
+captureOsState("before");
 const probes = {};
-for (const endpoint of ["/readyz", "/startupz"]) {
+for (const endpoint of ["/readyz", "/startupz", "/healthz"]) {
   const signal = AbortSignal.timeout(2_000);
   try {
     const response = await fetch(`http://127.0.0.1:${port}${endpoint}`, {
@@ -42,6 +85,7 @@ for (const endpoint of ["/readyz", "/startupz"]) {
     };
   }
 }
+captureOsState("after");
 
 // This observation follows a failed readiness wait; it cannot change that outcome.
 process.stdout.write(`${JSON.stringify({ afterReadinessFailure: true, probes })}\n`);

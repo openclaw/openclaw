@@ -120,6 +120,8 @@ const logNames = [
   ),
   "gateway.log",
   "gateway-startup-probes.json",
+  "gateway-startup-os-before.log",
+  "gateway-startup-os-after.log",
   "gateway.log.doctor",
   "missing-load-path/baseline-gateway.log",
   "missing-load-path/startup-readiness.log",

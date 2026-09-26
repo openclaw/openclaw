@@ -1999,7 +1999,7 @@ start_gateway() {
   local readiness_status=0
   openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" "$readiness_mode" || readiness_status=$?
   if [ "$readiness_status" -ne 0 ]; then
-    node scripts/e2e/lib/upgrade-survivor/startup-diagnostics.mjs "$port" \
+    node scripts/e2e/lib/upgrade-survivor/startup-diagnostics.mjs "$port" "$gateway_pid" "$ARTIFACT_ROOT" \
       >"$ARTIFACT_ROOT/gateway-startup-probes.json" || \
       echo "Gateway startup probes unavailable; preserving readiness failure." >&2
     return "$readiness_status"

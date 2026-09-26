@@ -61,19 +61,28 @@ describe.skipIf(process.platform === "win32")("survivor startup failure diagnost
       const requests: string[] = [];
       const port = await listen((req, res) => {
         requests.push(req.url ?? "");
-        res.writeHead(ready ? 200 : 503, { "content-type": "application/json" });
+        res.writeHead(req.url === "/healthz" || ready ? 200 : 503, {
+          "content-type": "application/json",
+        });
         res.end(
           JSON.stringify(
-            req.url === "/readyz"
-              ? { ready, failing: ready ? [] : ["startup"], uptimeMs: 91_000, privateData: secret }
-              : {
-                  ok: ready,
-                  status: ready ? "started" : "starting",
-                  pendingReason: `model-runtime ${secret}`,
-                  uptimeMs: 91_001,
-                  version: "2026.9.6",
-                  privateData: "UNLISTED_STARTUP_FIELD",
-                },
+            req.url === "/healthz"
+              ? { ok: true, privateData: secret }
+              : req.url === "/readyz"
+                ? {
+                    ready,
+                    failing: ready ? [] : ["startup"],
+                    uptimeMs: 91_000,
+                    privateData: secret,
+                  }
+                : {
+                    ok: ready,
+                    status: ready ? "started" : "starting",
+                    pendingReason: `model-runtime ${secret}`,
+                    uptimeMs: 91_001,
+                    version: "2026.9.6",
+                    privateData: "UNLISTED_STARTUP_FIELD",
+                  },
           ),
         );
       });
@@ -94,15 +103,19 @@ describe.skipIf(process.platform === "win32")("survivor startup failure diagnost
   eval "$(declare -f stop_gateway | sed '1s/stop_gateway/real_stop_gateway/')"
   node() {
     if [ "\${1:-}" = scripts/e2e/lib/upgrade-survivor/startup-diagnostics.mjs ]; then
-      command node "$1" "$FIXTURE_PORT"
+      local helper="$1"
+      shift 2
+      command node "$helper" "$FIXTURE_PORT" "$@"
     else
       command node "$@"
     fi
   }
   openclaw_e2e_wait_gateway_ready() { return 42; }
   stop_gateway() {
-    if [ -s "$ARTIFACT_ROOT/gateway-startup-probes.json" ]; then
-      printf 'captured-before-cleanup\\n' >"$HOME/cleanup-order"
+    if [ -s "$ARTIFACT_ROOT/gateway-startup-probes.json" ] && \\
+       [ -s "$ARTIFACT_ROOT/gateway-startup-os-before.log" ] && \\
+       [ -s "$ARTIFACT_ROOT/gateway-startup-os-after.log" ]; then
+      printf '%s\\n' "$gateway_pid" >"$HOME/cleanup-order"
     fi
     real_stop_gateway
   }
@@ -128,10 +141,9 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
       });
       expect(result.status, result.stderr).toBe(42);
       expect(fs.existsSync(path.join(artifacts, "gateway-startup-probes.json"))).toBe(true);
-      expect(fs.readFileSync(path.join(root, "cleanup-order"), "utf8")).toBe(
-        "captured-before-cleanup\n",
-      );
-      expect(requests).toEqual(["/readyz", "/startupz"]);
+      const observedPid = fs.readFileSync(path.join(root, "cleanup-order"), "utf8").trim();
+      expect(observedPid).toMatch(/^[1-9]\d*$/);
+      expect(requests).toEqual(["/readyz", "/startupz", "/healthz"]);
       const destination = path.join(root, "public");
       publishDiagnostics(artifacts, destination, redactSensitiveText);
       const published = fs.readFileSync(path.join(destination, "failure.json"), "utf8");
@@ -139,6 +151,17 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
       expect(published).not.toContain("UNLISTED_STARTUP_FIELD");
       const report = JSON.parse(published);
       expect(report.exitStatus).toBe(42);
+      for (const phase of ["before", "after"]) {
+        const name = `gateway-startup-os-${phase}.log`;
+        expect(fs.statSync(path.join(artifacts, name)).mode & 0o777).toBe(0o600);
+        if (process.platform === "linux") {
+          expect(report.logs[name]).toMatch(
+            new RegExp(`process pid=${observedPid} ppid=\\d+ state=[A-Z]`),
+          );
+        } else {
+          expect(report.logs[name]).toBe("Gateway OS diagnostics unavailable on this platform.\n");
+        }
+      }
       const observation = JSON.parse(report.logs["gateway-startup-probes.json"]);
       expect(observation).toMatchObject({
         afterReadinessFailure: true,
@@ -148,6 +171,7 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
             availability: "captured",
             body: { status: ready ? "started" : "starting", version: "2026.9.6" },
           },
+          "/healthz": { availability: "captured", httpStatus: 200, body: { ok: true } },
         },
       });
       expect(
@@ -178,12 +202,13 @@ it.each(["oversized", "stalled", "redirect"])(
     });
     const result = await run(node, [observer, String(port)]);
     expect(result.status, result.stderr).toBe(0);
-    expect(requests).toEqual(["/readyz", "/startupz"]);
+    expect(requests).toEqual(["/readyz", "/startupz", "/healthz"]);
     expect(JSON.parse(result.stdout)).toMatchObject({
       afterReadinessFailure: true,
       probes: {
         "/readyz": { availability: "unavailable" },
         "/startupz": { availability: "unavailable" },
+        "/healthz": { availability: "unavailable" },
       },
     });
   },
