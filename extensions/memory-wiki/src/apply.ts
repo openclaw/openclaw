@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements apply behavior.
 import path from "node:path";
 import {
   replaceManagedMarkdownBlock,
@@ -8,6 +7,7 @@ import { readFiniteNumberParam } from "openclaw/plugin-sdk/param-readers";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   asNonArrayRecord,
+  normalizeSingleOrTrimmedStringList,
   normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -18,16 +18,11 @@ import {
   renderWikiMarkdown,
   slugifyWikiPageStem,
   slugifyWikiSegment,
-  normalizeSourceIds,
   normalizeWikiClaims,
   type WikiClaim,
 } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
-import {
-  readQueryableWikiPages,
-  resolveQueryableWikiPageByLookup,
-  type QueryableWikiPage,
-} from "./query.js";
+import { readQueryableWikiPages, resolveQueryableWikiPageByLookup } from "./query.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const GENERATED_START = "<!-- openclaw:wiki:generated:start -->";
@@ -249,14 +244,6 @@ async function writeWikiPage(params: {
   return true;
 }
 
-async function resolveWritablePage(params: {
-  config: ResolvedMemoryWikiConfig;
-  lookup: string;
-}): Promise<QueryableWikiPage | null> {
-  const pages = await readQueryableWikiPages(params.config.vault.path);
-  return resolveQueryableWikiPageByLookup(pages, params.lookup);
-}
-
 async function applyCreateSynthesisMutation(params: {
   config: ResolvedMemoryWikiConfig;
   mutation: CreateSynthesisMemoryWikiMutation;
@@ -278,7 +265,7 @@ async function applyCreateSynthesisMutation(params: {
       pageType: "synthesis",
       id: pageId,
       title: params.mutation.title,
-      sourceIds: normalizeSourceIds(params.mutation.sourceIds),
+      sourceIds: normalizeSingleOrTrimmedStringList(params.mutation.sourceIds),
       ...(params.mutation.claims ? { claims: normalizeWikiClaims(params.mutation.claims) } : {}),
       ...(normalizeUniqueStrings(params.mutation.contradictions)
         ? { contradictions: normalizeUniqueStrings(params.mutation.contradictions) }
@@ -310,7 +297,7 @@ function buildUpdatedFrontmatter(params: {
     updatedAt: new Date().toISOString(),
   };
   if (params.mutation.sourceIds) {
-    frontmatter.sourceIds = normalizeSourceIds(params.mutation.sourceIds);
+    frontmatter.sourceIds = normalizeSingleOrTrimmedStringList(params.mutation.sourceIds);
   }
   if (params.mutation.claims) {
     const claims = normalizeWikiClaims(params.mutation.claims);
@@ -320,20 +307,14 @@ function buildUpdatedFrontmatter(params: {
       delete frontmatter.claims;
     }
   }
-  if (params.mutation.contradictions) {
-    const contradictions = normalizeUniqueStrings(params.mutation.contradictions) ?? [];
-    if (contradictions.length > 0) {
-      frontmatter.contradictions = contradictions;
-    } else {
-      delete frontmatter.contradictions;
-    }
-  }
-  if (params.mutation.questions) {
-    const questions = normalizeUniqueStrings(params.mutation.questions) ?? [];
-    if (questions.length > 0) {
-      frontmatter.questions = questions;
-    } else {
-      delete frontmatter.questions;
+  for (const key of ["contradictions", "questions"] as const) {
+    if (params.mutation[key]) {
+      const values = normalizeUniqueStrings(params.mutation[key]) ?? [];
+      if (values.length > 0) {
+        frontmatter[key] = values;
+      } else {
+        delete frontmatter[key];
+      }
     }
   }
   if (params.mutation.confidence === null) {
@@ -351,14 +332,14 @@ async function applyUpdateMetadataMutation(params: {
   config: ResolvedMemoryWikiConfig;
   mutation: UpdateMetadataMemoryWikiMutation;
 }): Promise<{ changed: boolean; pagePath: string; pageId?: string }> {
-  const page = await resolveWritablePage({
-    config: params.config,
-    lookup: params.mutation.lookup,
-  });
+  const page = resolveQueryableWikiPageByLookup(
+    await readQueryableWikiPages(params.config.vault.path),
+    params.mutation.lookup,
+  );
   if (!page) {
     throw new Error(`Wiki page not found: ${params.mutation.lookup}`);
   }
-  const parsed = parseWikiMarkdown(page.raw);
+  const parsed = page.parsed;
   const changed = await writeWikiPage({
     rootDir: params.config.vault.path,
     relativePath: page.relativePath,

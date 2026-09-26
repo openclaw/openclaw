@@ -44,6 +44,7 @@ function resolvePluginRegistryRecordContent(
   const {
     doctorContractFile: _doctorContractFile,
     manifestFile: _manifestFile,
+    sourceAdmissions: _sourceAdmissions,
     packageBuild,
     packageJson,
     ...record

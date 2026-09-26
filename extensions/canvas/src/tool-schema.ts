@@ -1,19 +1,13 @@
-/**
- * Agent-facing Canvas tool schema and allowed action/format enums.
- */
 import {
   optionalFiniteNumberSchema,
   optionalPositiveIntegerSchema,
   stringEnum,
 } from "openclaw/plugin-sdk/channel-actions";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
 
-/** Agent tool actions supported by the Canvas plugin. */
-const CANVAS_ACTIONS = ["present", "hide", "navigate"] as const;
-
-/** TypeBox schema for the model-facing Canvas tool arguments. */
-export const CanvasToolSchema = Type.Object({
-  action: stringEnum(CANVAS_ACTIONS),
+const CanvasToolSchema = Type.Object({
+  action: stringEnum(["present", "hide", "navigate"]),
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
   timeoutMs: optionalPositiveIntegerSchema(),
@@ -25,3 +19,11 @@ export const CanvasToolSchema = Type.Object({
   height: optionalFiniteNumberSchema(),
   url: Type.Optional(Type.String()),
 });
+
+export const canvasToolDefinition = {
+  label: "Canvas",
+  name: "canvas",
+  resultContentSource: "network",
+  description: "Present, hide, or navigate the widget panel on a paired macOS node.",
+  parameters: CanvasToolSchema,
+} satisfies Omit<AnyAgentTool, "execute">;

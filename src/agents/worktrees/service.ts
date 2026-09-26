@@ -1305,7 +1305,7 @@ export class ManagedWorktreeService {
         isLocked,
         hasLiveLease,
         { env: this.env, getConfig: this.getConfig ?? getRuntimeConfig },
-        params.shouldProtectOwner,
+        params,
       );
     const onError = createWorktreeGcErrorHandler({ env: this.env, now, progress, policy: params });
     for (const record of records) {

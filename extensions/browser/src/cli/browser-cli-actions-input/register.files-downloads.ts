@@ -1,6 +1,3 @@
-/**
- * Browser CLI file upload, dialog, and download commands.
- */
 import type { Command } from "commander";
 import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -19,7 +16,6 @@ import {
 
 const DEFAULT_BROWSER_HOOK_TIMEOUT_MS = 120000;
 
-/** Registers Browser file chooser, dialog, and download commands. */
 export function registerBrowserFilesAndDownloadsCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,

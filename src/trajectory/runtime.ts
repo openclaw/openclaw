@@ -1,4 +1,6 @@
 // Trajectory runtime records bounded session events into SQLite-backed storage.
+import { hash } from "node:crypto";
+import { isProxy } from "node:util/types";
 import { createDiagnosticRecord } from "@openclaw/ai/internal/shared";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import type {
@@ -8,6 +10,7 @@ import type {
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSecrets } from "../logging/redact.js";
+import { getSecretRedactionRegistryRevision } from "../logging/secret-redaction-registry.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
@@ -47,6 +50,11 @@ const TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS = 64;
 const TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS = 64;
 const TRAJECTORY_RUNTIME_DATA_MAX_DEPTH = 6;
 const TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES = 4 * 1024;
+const TRAJECTORY_TOOL_CACHE_MAX_CHARS = 16_384;
+const TRAJECTORY_TOOL_CACHE_MAX_ENTRIES = 256;
+const toolParameterProjections = new Map<string, string>();
+let toolParameterSecretRevision = 0;
+
 // Oversized events first shed repeated conversation state while keeping the
 // rest of their schema-v1 payload. The compact fallback then preserves keys
 // that remain useful even when every nonessential field must be dropped.
@@ -289,6 +297,72 @@ function createFileTrajectoryRuntimeSink(writer: TrajectoryRuntimeWriter): Traje
   };
 }
 
+function isTrajectoryJsonData(value: unknown, depth = 0): boolean {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return true;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) && !Object.is(value, -0);
+  }
+  if (
+    typeof value !== "object" ||
+    depth > TRAJECTORY_RUNTIME_DATA_MAX_DEPTH + 1 ||
+    isProxy(value)
+  ) {
+    return false;
+  }
+  const array = Array.isArray(value);
+  if (Object.getPrototypeOf(value) !== (array ? Array.prototype : Object.prototype)) {
+    return false;
+  }
+  const keys = Reflect.ownKeys(value).filter((key) => !array || key !== "length");
+  if (array && keys.length !== value.length) {
+    return false;
+  }
+  return keys.every((key, index) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+    return (
+      typeof key === "string" &&
+      (!array || key === String(index)) &&
+      "value" in descriptor &&
+      descriptor.enumerable &&
+      isTrajectoryJsonData(descriptor.value, depth + 1)
+    );
+  });
+}
+
+function projectTrajectoryToolParameters(parameters: unknown): unknown {
+  const bounded = limitTrajectoryPayloadValue(parameters);
+  // Custom array operations can return opaque objects; preserve their diagnostic projection.
+  if (!isTrajectoryJsonData(bounded)) {
+    return sanitizeDiagnosticPayload(bounded);
+  }
+  const revision = getSecretRedactionRegistryRevision();
+  if (revision !== toolParameterSecretRevision) {
+    toolParameterProjections.clear();
+    toolParameterSecretRevision = revision;
+  }
+  const content = JSON.stringify(bounded);
+  if (content.length > TRAJECTORY_TOOL_CACHE_MAX_CHARS) {
+    return sanitizeDiagnosticPayload(bounded);
+  }
+  // Content owns invalidation: tools can be rebuilt or edited in place between requests.
+  const key = hash("sha256", content);
+  const cached = toolParameterProjections.get(key);
+  if (cached !== undefined) {
+    return JSON.parse(cached);
+  }
+  // This policy is fixed; the recorder still applies current configured/exact secret redaction.
+  const projected = sanitizeDiagnosticPayload(bounded);
+  const serialized = JSON.stringify(projected);
+  if (serialized.length <= TRAJECTORY_TOOL_CACHE_MAX_CHARS) {
+    if (toolParameterProjections.size >= TRAJECTORY_TOOL_CACHE_MAX_ENTRIES) {
+      toolParameterProjections.delete(toolParameterProjections.keys().next().value!);
+    }
+    toolParameterProjections.set(key, serialized);
+  }
+  return projected;
+}
 export function toTrajectoryToolDefinitions(
   tools: ReadonlyArray<{ name?: string; description?: string; parameters?: unknown }>,
 ): TrajectoryToolDefinition[] {
@@ -302,7 +376,7 @@ export function toTrajectoryToolDefinitions(
         {
           name,
           description: tool.description,
-          parameters: sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(tool.parameters)),
+          parameters: projectTrajectoryToolParameters(tool.parameters),
         },
       ];
     })

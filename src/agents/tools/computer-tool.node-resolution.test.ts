@@ -17,6 +17,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { parseNodeWorkerComputerInput } from "../../worker/node-computer-protocol.js";
 import type { ComputerToolTransport } from "./computer-tool.js";
 import { wrapToolWithGatewayCallerIdentity } from "./gateway-caller-context.js";
 
@@ -351,6 +352,152 @@ describe("createComputerTool node resolution", () => {
           await computers.closeEnvironment(attachment.environmentId, attachment.ownerEpoch);
           expect.soft(close.mock.calls.length - closedBeforeEnvironmentStop).toBe(0);
         }
+      } finally {
+        await computers.close();
+        releaseAgentRunDelegatedAuthority(h.authority);
+        resetPluginRuntimeStateForTest();
+        vi.restoreAllMocks();
+      }
+    },
+  );
+
+  it.each([
+    { nextAction: "type", closeFails: false },
+    { nextAction: "screenshot", closeFails: false },
+    { nextAction: "screenshot", closeFails: true },
+  ] as const)(
+    "releases every attached preparation after rejected input followed by $nextAction (discarded close fails=$closeFails)",
+    async ({ nextAction, closeFails }) => {
+      const h = createHarness();
+      h.releaseClaim();
+      h.state.environment = { ...h.state.environment, state: "ready", attachedSessionIds: [] };
+      const computers = createWorkerComputerService(h.options);
+      const preparations: PreparedWorkerComputer[] = [];
+      const closeAttempts = vi.fn<(index: number, reason: string) => void>();
+      const failure = new Error("unused attached desktop close failed");
+      const attachment = {
+        environmentId: h.state.environment.environmentId,
+        ownerEpoch: h.state.environment.ownerEpoch,
+        sessionId: h.claim.sessionId,
+        sessionKey: h.state.placement.sessionKey,
+        agentId: h.state.placement.agentId,
+        generation: 1,
+      };
+      const context = {
+        workerEnvironmentService: {
+          findSessionAttachment: () => attachment,
+          assertSessionAttachment: () => {},
+          touchSessionAttachment: async () => {},
+          prepareAttachedComputer: async (
+            authority: Parameters<typeof computers.prepareAttached>[0],
+          ) => {
+            const prepared = await computers.prepareAttached(authority);
+            if (!prepared) {
+              throw new Error("Expected attached computer");
+            }
+            const index = preparations.length;
+            preparations.push(prepared);
+            const originalClose = prepared.close.bind(prepared);
+            prepared.close = async (reason) => {
+              closeAttempts(index, reason);
+              if (closeFails && index === 1 && reason === "execution-complete") {
+                throw failure;
+              }
+              await originalClose(reason);
+            };
+            return prepared;
+          },
+        },
+      } as unknown as GatewayRequestContext;
+      const originalInvoke = h.privateInvoke.getMockImplementation();
+      if (!originalInvoke) {
+        throw new Error("Expected native computer transport");
+      }
+      h.privateInvoke.mockImplementation(async (invocation) => {
+        const result = await originalInvoke(invocation);
+        const input = parseNodeWorkerComputerInput(JSON.stringify(invocation.params));
+        return result.ok && input.operation === "snapshot"
+          ? { ...result, payload: screenshotPayload().payload }
+          : result;
+      });
+      let cleanup: ((reason: string) => Promise<void>) | undefined;
+      const tool = wrapToolWithGatewayCallerIdentity(
+        createComputerTool({
+          modelHasVision: true,
+          registerRunCleanup: (registered) => {
+            cleanup = registered;
+          },
+        }),
+        {
+          agentId: attachment.agentId,
+          sessionKey: attachment.sessionKey,
+          operationalRunInstance: h.run,
+          approvalAuthority: h.authority,
+          gatewayContextResolver: () => context,
+          receiptAuthority: () => validateAgentRunDelegatedAuthority(h.authority),
+        },
+      );
+      try {
+        if (!cleanup) {
+          throw new Error("Computer execution did not register cleanup");
+        }
+        const rejectedInput = {
+          action: "type",
+          text: "",
+          environmentId: attachment.environmentId,
+        };
+        await expect(tool.execute("invalid-first", rejectedInput)).rejects.toThrow(
+          "text required for type",
+        );
+        expect(preparations).toHaveLength(1);
+        expect(h.nativeExecutionIds).toEqual([]);
+
+        if (nextAction === "type") {
+          await expect(tool.execute("invalid-next", rejectedInput)).rejects.toThrow(
+            "text required for type",
+          );
+        } else {
+          const result = await tool.execute("recover", {
+            action: "screenshot",
+            environmentId: attachment.environmentId,
+          });
+          expect(result.content.some((part) => part.type === "image")).toBe(true);
+          expect(result.details).toMatchObject({
+            node: h.state.node.nodeId,
+            environmentId: attachment.environmentId,
+          });
+        }
+        const operations = () =>
+          h.privateInvoke.mock.calls
+            .map(([invocation]) => parseNodeWorkerComputerInput(JSON.stringify(invocation.params)))
+            .map((input) => input.operation)
+            .filter((operation) => operation !== "capabilities");
+        expect(operations()).toEqual(nextAction === "screenshot" ? ["snapshot"] : []);
+        if (closeFails) {
+          await expect.soft(cleanup("completed")).rejects.toMatchObject({
+            message: "computer: session desktop cleanup failed",
+            errors: [failure],
+          });
+        } else {
+          await cleanup("completed");
+        }
+        await cleanup("completed").catch(() => {});
+
+        // Each preparation has its own service owner, even when target selection
+        // keeps an earlier binding. Run cleanup must release all of those owners.
+        expect
+          .soft(closeAttempts.mock.calls.map(([index]) => index).toSorted((a, b) => a - b))
+          .toEqual(preparations.map((_prepared, index) => index));
+        expect(operations()).toEqual(nextAction === "screenshot" ? ["snapshot", "close"] : []);
+        if (nextAction === "screenshot") {
+          expect(h.nativeExecutionIds).toHaveLength(2);
+          expect(h.nativeExecutionIds[1]).toBe(h.nativeExecutionIds[0]);
+        }
+        const closesBeforeEnvironmentStop = closeAttempts.mock.calls.length;
+        await computers.closeEnvironment(attachment.environmentId, attachment.ownerEpoch);
+        expect
+          .soft(closeAttempts.mock.calls.length - closesBeforeEnvironmentStop)
+          .toBe(closeFails ? 1 : 0);
       } finally {
         await computers.close();
         releaseAgentRunDelegatedAuthority(h.authority);

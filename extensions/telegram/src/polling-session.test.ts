@@ -375,26 +375,26 @@ async function waitForAbortSignal(signal: AbortSignal): Promise<void> {
 }
 
 async function writeSpooledTestUpdates(
-  spoolDir: string,
+  stateDir: string,
   updates: readonly TestTelegramUpdate[],
 ): Promise<void> {
   for (const update of updates) {
-    await writeTelegramSpooledUpdate({ spoolDir, update });
+    await writeTelegramSpooledUpdate({ stateDir, update });
   }
 }
 
-async function pendingUpdateIds(spoolDir: string, limit: number | "all" = 100): Promise<number[]> {
-  return (await listTelegramSpooledUpdates({ spoolDir, limit })).map((update) => update.updateId);
+async function pendingUpdateIds(stateDir: string, limit: number | "all" = 100): Promise<number[]> {
+  return (await listTelegramSpooledUpdates({ stateDir, limit })).map((update) => update.updateId);
 }
 
-async function withTempSpool<T>(fn: (spoolDir: string) => Promise<T>): Promise<T> {
-  const spoolDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+async function withTempSpool<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
   try {
-    return await fn(spoolDir);
+    return await fn(stateDir);
   } finally {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    await fs.rm(spoolDir, { recursive: true, force: true });
+    await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
 
@@ -447,7 +447,7 @@ function createListeningIngressWorker() {
 
 function startIsolatedIngressSession(params: {
   abort: AbortController;
-  spoolDir?: string;
+  stateDir?: string;
   handleUpdate: (update: { update_id?: number }) => Promise<void>;
   createWorker?: IsolatedIngressOptions["createWorker"];
   drainIntervalMs?: number;
@@ -478,7 +478,7 @@ function startIsolatedIngressSession(params: {
     ingress: {
       createWorker,
       drainIntervalMs: params.drainIntervalMs ?? 10,
-      ...(params.spoolDir ? { spoolDir: params.spoolDir } : {}),
+      ...(params.stateDir ? { stateDir: params.stateDir } : {}),
       ...(params.spooledUpdateHandlerTimeoutMs !== undefined
         ? { spooledUpdateHandlerTimeoutMs: params.spooledUpdateHandlerTimeoutMs }
         : {}),
@@ -522,20 +522,20 @@ describe("TelegramPollingSession", () => {
   });
 
   it("does not start an isolated ingress worker when durable queue acquisition fails", async () => {
-    await withTempSpool(async (spoolDir) => {
+    await withTempSpool(async (stateDir) => {
       const abort = new AbortController();
       const queueOpenError = new Error("Telegram ingress queue could not be opened");
       const transport = makeTelegramTransport();
       const bot = makeIsolatedBot();
       createTelegramBotMock.mockReturnValueOnce(bot);
-      installTelegramIngressQueueRuntime(() => spoolDir, queueOpenError);
+      installTelegramIngressQueueRuntime(() => stateDir, queueOpenError);
 
       const { createWorker } = createIdleIngressWorker();
       const session = createPollingSession({
         abortSignal: abort.signal,
         telegramTransport: transport,
         ingress: {
-          spoolDir,
+          stateDir,
           createWorker,
         },
       });
@@ -558,13 +558,13 @@ describe("TelegramPollingSession", () => {
       const init = vi.fn(async () => undefined);
       const update = directUpdate(42, 123, "hello");
       await writeTelegramSpooledUpdate({
-        spoolDir: tempDir,
+        stateDir: tempDir,
         update,
       });
 
       const { createWorker, runPromise } = startIsolatedIngressSession({
         abort,
-        spoolDir: tempDir,
+        stateDir: tempDir,
         handleUpdate,
         init,
       });
@@ -576,7 +576,7 @@ describe("TelegramPollingSession", () => {
         await waitForTelegramTestState(async () =>
           expect(
             await listTelegramSpooledUpdateClaims({
-              spoolDir: tempDir,
+              stateDir: tempDir,
             }),
           ).toEqual([]),
         );
@@ -588,7 +588,6 @@ describe("TelegramPollingSession", () => {
       expect(createWorker).toHaveBeenCalledWith(
         expect.objectContaining({
           initialUpdateId: null,
-          spoolDir: tempDir,
           token: "tok",
         }),
       );
@@ -645,7 +644,7 @@ describe("TelegramPollingSession", () => {
           abortSignal: abort.signal,
           ...(seeded ? { botInfo } : {}),
           ingress: {
-            spoolDir: tempDir,
+            stateDir: tempDir,
             createWorker: worker.createWorker,
             drainIntervalMs: 10,
           },
@@ -703,7 +702,7 @@ describe("TelegramPollingSession", () => {
       const worker = createListeningIngressWorker();
       const { runPromise } = startIsolatedIngressSession({
         abort,
-        spoolDir: tempDir,
+        stateDir: tempDir,
         handleUpdate: vi.fn(async () => undefined),
         createWorker: worker.createWorker,
         drainIntervalMs: 60_000,
@@ -744,7 +743,7 @@ describe("TelegramPollingSession", () => {
       const worker = createListeningIngressWorker();
       const { runPromise } = startIsolatedIngressSession({
         abort,
-        spoolDir: tempDir,
+        stateDir: tempDir,
         handleUpdate: vi.fn(async () => undefined),
         createWorker: worker.createWorker,
         log,
@@ -783,7 +782,7 @@ describe("TelegramPollingSession", () => {
       const worker = createListeningIngressWorker();
       const { runPromise } = startIsolatedIngressSession({
         abort,
-        spoolDir: tempDir,
+        stateDir: tempDir,
         handleUpdate,
         createWorker: worker.createWorker,
         persistUpdateId: vi.fn(async () => await offsetWrite.promise),
@@ -831,7 +830,7 @@ describe("TelegramPollingSession", () => {
       const firstWorker = createListeningIngressWorker();
       const firstSession = startIsolatedIngressSession({
         abort: firstAbort,
-        spoolDir: tempDir,
+        stateDir: tempDir,
         handleUpdate,
         createWorker: firstWorker.createWorker,
         getCommittedUpdateId: firstOffsetPersistence.getCommittedUpdateId,
@@ -879,7 +878,7 @@ describe("TelegramPollingSession", () => {
       const restartWorker = createListeningIngressWorker();
       const restartedSession = startIsolatedIngressSession({
         abort: restartAbort,
-        spoolDir: tempDir,
+        stateDir: tempDir,
         handleUpdate,
         createWorker: restartWorker.createWorker,
         getCommittedUpdateId: restartedOffsetPersistence.getCommittedUpdateId,
@@ -916,7 +915,7 @@ describe("TelegramPollingSession", () => {
       const worker = createListeningIngressWorker();
       const { runPromise } = startIsolatedIngressSession({
         abort,
-        spoolDir: tempDir,
+        stateDir: tempDir,
         handleUpdate: vi.fn(async () => undefined),
         createWorker: worker.createWorker,
         persistUpdateId,
@@ -951,7 +950,7 @@ describe("TelegramPollingSession", () => {
       const update = directUpdate(42, 123, "hello");
       const { runPromise } = startIsolatedIngressSession({
         abort,
-        spoolDir: tempDir,
+        stateDir: tempDir,
         handleUpdate,
         createWorker: worker.createWorker,
         drainIntervalMs: 60_000,
@@ -988,13 +987,13 @@ describe("TelegramPollingSession", () => {
       const handleUpdate = vi.fn(async () => undefined);
       const update = directUpdate(42, 123, "pre-upgrade pending");
       await writeTelegramSpooledUpdate({
-        spoolDir: tempDir,
+        stateDir: tempDir,
         update,
       });
 
       const { createWorker, runPromise } = startIsolatedIngressSession({
         abort,
-        spoolDir: tempDir,
+        stateDir: tempDir,
         handleUpdate,
         getCommittedUpdateId: () => 42,
       });
@@ -1006,7 +1005,7 @@ describe("TelegramPollingSession", () => {
         await waitForTelegramTestState(async () =>
           expect(
             await listTelegramSpooledUpdateClaims({
-              spoolDir: tempDir,
+              stateDir: tempDir,
             }),
           ).toEqual([]),
         );
@@ -1155,7 +1154,7 @@ describe("TelegramPollingSession", () => {
   });
 
   it("keeps a real polling worker alive during Telegram's server-directed flood wait", async () => {
-    await withTempSpool(async (spoolDir) => {
+    await withTempSpool(async (stateDir) => {
       let requestCount = 0;
       const server = createServer((_request, response) => {
         requestCount += 1;
@@ -1205,7 +1204,6 @@ describe("TelegramPollingSession", () => {
               token: "tok",
               accountId: "default",
               initialUpdateId: null,
-              spoolDir,
               apiRoot: `http://127.0.0.1:${address.port}`,
               timeoutSeconds: 1,
             },
@@ -1242,7 +1240,7 @@ describe("TelegramPollingSession", () => {
         log,
         ingress: {
           createWorker,
-          spoolDir,
+          stateDir,
         },
       });
       const runPromise = session.runUntilAbort();
@@ -1609,7 +1607,7 @@ describe("TelegramPollingSession", () => {
       await writeSpooledTestUpdates(tempDir, [forumUpdate(42, "summarize this")]);
       const { runPromise, stopWorker } = startIsolatedIngressSession({
         abort,
-        spoolDir: tempDir,
+        stateDir: tempDir,
         handleUpdate: async (update) => {
           if (update.update_id === 42) {
             events.push("regular:start");
@@ -1655,7 +1653,7 @@ describe("TelegramPollingSession", () => {
     async ({ admission, operation }) => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       try {
-        await withTempSpool(async (spoolDir) => {
+        await withTempSpool(async (stateDir) => {
           const abort = new AbortController();
           const operationStarted = createDeferred<void>();
           const releaseOperation = createDeferred<void>();
@@ -1663,10 +1661,10 @@ describe("TelegramPollingSession", () => {
           const recorded = new Set<string>();
           const participants: TelegramSpooledReplayDeferredParticipant[] = [];
           let settlement: Promise<void> | undefined;
-          await writeSpooledTestUpdates(spoolDir, [directUpdate(42, 111, "held replay write")]);
+          await writeSpooledTestUpdates(stateDir, [directUpdate(42, 111, "held replay write")]);
           const { runPromise, stopWorker } = startIsolatedIngressSession({
             abort,
-            spoolDir,
+            stateDir,
             stop: stopBot,
             ...(admission === "buffered" && operation === "commit"
               ? { spooledUpdateHandlerTimeoutMs: 100 }
@@ -1728,7 +1726,7 @@ describe("TelegramPollingSession", () => {
               await vi.advanceTimersByTimeAsync(200);
               expect(participants[0]?.abortSignal.aborted).toBe(false);
               expect(
-                (await listTelegramSpooledUpdateClaims({ spoolDir })).map(
+                (await listTelegramSpooledUpdateClaims({ stateDir })).map(
                   (claim) => claim.updateId,
                 ),
               ).toEqual([42]);
@@ -1745,15 +1743,15 @@ describe("TelegramPollingSession", () => {
             stopWorker();
             await accountRun;
             await waitForTelegramTestState(async () =>
-              expect(await listTelegramSpooledUpdateClaims({ spoolDir })).toEqual([]),
+              expect(await listTelegramSpooledUpdateClaims({ stateDir })).toEqual([]),
             );
           }
           expect(stopBot).toHaveBeenCalledOnce();
           expect([...recorded]).toEqual(operation === "commit" ? ["first", "second"] : []);
-          expect(await pendingUpdateIds(spoolDir, "all")).toEqual(
+          expect(await pendingUpdateIds(stateDir, "all")).toEqual(
             operation === "commit" ? [] : [42],
           );
-          expect(await failedUpdateIds(spoolDir)).toEqual([]);
+          expect(await failedUpdateIds(stateDir)).toEqual([]);
         });
       } finally {
         vi.useRealTimers();
@@ -1764,7 +1762,7 @@ describe("TelegramPollingSession", () => {
   it("keeps an adopted reply usable across an isolated worker crash until account shutdown", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      await withTempSpool(async (spoolDir) => {
+      await withTempSpool(async (stateDir) => {
         const requests: Array<{ chat_id: number; text: string }> = [];
         const server = createServer((request, response) => {
           let body = "";
@@ -1861,20 +1859,20 @@ describe("TelegramPollingSession", () => {
         let runPromise: Promise<void> | undefined;
         try {
           const update = topicUpdate(42, 10, "finish after worker crash");
-          await writeSpooledTestUpdates(spoolDir, [update]);
+          await writeSpooledTestUpdates(stateDir, [update]);
           const session = createPollingSession({
             abortSignal: abort.signal,
             telegramTransport: transport,
-            ingress: { spoolDir, createWorker, drainIntervalMs: 100 },
+            ingress: { stateDir, createWorker, drainIntervalMs: 100 },
           });
           runPromise = session.runUntilAbort();
           await adopted.promise;
           await waitForTelegramTestState(() => expect(firstWorkerStop).toHaveBeenCalledTimes(1));
           expect(firstMediaSignal?.aborted).toBe(true);
           expect(firstFetchSignal?.aborted).toBe(false);
-          expect(await listTelegramSpooledUpdateClaims({ spoolDir })).toEqual([]);
-          await writeSpooledTestUpdates(spoolDir, [update]);
-          expect(await pendingUpdateIds(spoolDir, "all")).toEqual([]);
+          expect(await listTelegramSpooledUpdateClaims({ stateDir })).toEqual([]);
+          await writeSpooledTestUpdates(stateDir, [update]);
+          expect(await pendingUpdateIds(stateDir, "all")).toEqual([]);
 
           // The adopted handler may outlive the old ingress monitor's stop grace.
           await vi.advanceTimersByTimeAsync(20_000);
@@ -1979,7 +1977,7 @@ describe("TelegramPollingSession", () => {
       const session = createPollingSession({
         abortSignal: abort.signal,
         ingress: {
-          spoolDir: tempDir,
+          stateDir: tempDir,
           createWorker,
           drainIntervalMs: 10,
         },
@@ -2052,7 +2050,7 @@ describe("TelegramPollingSession", () => {
         abortSignal: abort.signal,
         log,
         ingress: {
-          spoolDir: tempDir,
+          stateDir: tempDir,
           createWorker,
           drainIntervalMs: 100,
         },
@@ -2112,7 +2110,7 @@ describe("TelegramPollingSession", () => {
         setStatus,
         telegramTransport: transport,
         ingress: {
-          spoolDir: tempDir,
+          stateDir: tempDir,
           createWorker,
           drainIntervalMs: 100,
         },
@@ -2189,7 +2187,7 @@ describe("TelegramPollingSession", () => {
         telegramTransport: transport1,
         createTelegramTransport,
         ingress: {
-          spoolDir: tempDir,
+          stateDir: tempDir,
           createWorker,
           drainIntervalMs: 100,
         },
@@ -2255,7 +2253,7 @@ describe("TelegramPollingSession", () => {
       abortSignal: abort.signal,
       log,
       ingress: {
-        spoolDir: tempDir,
+        stateDir: tempDir,
         createWorker: worker.createWorker,
         drainIntervalMs: 10,
         spooledUpdateHandlerTimeoutMs: 100,

@@ -969,8 +969,13 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         let incoming = try JSONDecoder().decode(
             OpenClawChatMessage.self,
             from: Data(
-                #"{"role":"user","content":"See attached.","__openclaw":{"idempotencyKey":"run:user"},"MediaPaths":["media/inbound/media-1.m4a"],"MediaTypes":["audio/mp4"]}"#
-                    .utf8))
+                #"""
+                {"role":"user","content":[
+                    {"type":"text","text":"See attached."},
+                    {"type":"file","mimeType":"audio/mp4","fileName":"media-1.m4a",
+                     "runId":"voice-run","preview":{"title":"Voice transcript"}}
+                ],"__openclaw":{"idempotencyKey":"run:user"}}
+                """#.utf8))
 
         let adopted = OpenClawChatViewModel.adoptingCanonicalMessage(incoming, over: existing)
 
@@ -978,5 +983,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         XCTAssertEqual(audio.fileName, "media-1.m4a")
         XCTAssertNil(audio.content)
         XCTAssertEqual(audio.durationSeconds, 14.6)
+        XCTAssertEqual(audio.runId, "voice-run")
+        XCTAssertEqual(audio.preview?.title, "Voice transcript")
     }
 }

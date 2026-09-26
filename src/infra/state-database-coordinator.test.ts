@@ -96,6 +96,13 @@ describe("state database coordinator", () => {
 
     const gateway = acquireGatewayLifecycleCoordinator(params);
     const nestedGateway = acquireGatewayLifecycleCoordinator(params);
+    const lifecyclePath = vi.spyOn(fsSync.realpathSync, "native");
+    try {
+      expect(tryCreateStateLifecycleDelegate(params)).toBeUndefined();
+      expect(lifecyclePath).not.toHaveBeenCalled();
+    } finally {
+      lifecyclePath.mockRestore();
+    }
     const delegation = tryCreateGatewaySchemaFenceDelegate(params);
     expect(delegation).toBeDefined();
     if (!delegation) {
