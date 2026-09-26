@@ -225,23 +225,15 @@ export async function detectZaiEndpoint(params: {
       },
     ];
 
+    const candidates = [...general, ...codingModels, ...codingFallback];
     switch (params.endpoint) {
       case "global":
-        return general.filter((candidate) => candidate.endpoint === "global");
       case "cn":
-        return general.filter((candidate) => candidate.endpoint === "cn");
       case "coding-global":
-        return [
-          ...codingModels.filter((candidate) => candidate.endpoint === "coding-global"),
-          ...codingFallback.filter((candidate) => candidate.endpoint === "coding-global"),
-        ];
       case "coding-cn":
-        return [
-          ...codingModels.filter((candidate) => candidate.endpoint === "coding-cn"),
-          ...codingFallback.filter((candidate) => candidate.endpoint === "coding-cn"),
-        ];
+        return candidates.filter((candidate) => candidate.endpoint === params.endpoint);
       default:
-        return [...general, ...codingModels, ...codingFallback];
+        return candidates;
     }
   })();
 

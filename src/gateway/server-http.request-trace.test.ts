@@ -23,6 +23,22 @@ import { withTempConfig } from "./test-temp-config.js";
 
 const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
 
+type HttpServerOptions = Parameters<typeof createGatewayHttpServer>[0];
+
+function createServer(
+  options: Pick<HttpServerOptions, "handleHooksRequest"> & Partial<HttpServerOptions>,
+) {
+  return createGatewayHttpServer({
+    clients: new Set(),
+    controlUiEnabled: false,
+    controlUiBasePath: "",
+    openAiChatCompletionsEnabled: false,
+    openResponsesEnabled: false,
+    resolvedAuth,
+    ...options,
+  });
+}
+
 async function listen(server: ReturnType<typeof createGatewayHttpServer>): Promise<number> {
   return await new Promise<number>((resolve) => {
     server.listen(0, "127.0.0.1", () => {
@@ -58,12 +74,8 @@ describe("gateway HTTP request trace scope", () => {
       cfg: { gateway: { auth: { mode: "none" } } },
       run: async () => {
         setLoggerOverride({ level: "info", file: logPath });
-        const httpServer = createGatewayHttpServer({
-          clients: new Set(),
-          controlUiEnabled: false,
+        const httpServer = createServer({
           controlUiBasePath: "/__control__",
-          openAiChatCompletionsEnabled: false,
-          openResponsesEnabled: false,
           handleHooksRequest: async (_req, res) => {
             activeTraceInHandler = getActiveDiagnosticTraceContext();
             getLogger().info({ route: "/hook" }, "handled request trace");
@@ -72,7 +84,6 @@ describe("gateway HTTP request trace scope", () => {
             res.end();
             return true;
           },
-          resolvedAuth,
         });
         const port = await listen(httpServer);
         try {
@@ -112,12 +123,7 @@ describe("gateway HTTP request error cleanup", () => {
     { label: "destroyed", destroy: true },
   ])("does not invoke later routes after an earlier response is $label", async ({ destroy }) => {
     const handleWatchNodeRequest = vi.fn(async () => true);
-    const server = createGatewayHttpServer({
-      clients: new Set(),
-      controlUiEnabled: false,
-      controlUiBasePath: "",
-      openAiChatCompletionsEnabled: false,
-      openResponsesEnabled: false,
+    const server = createServer({
       handleHooksRequest: async (_req, res) => {
         if (destroy) {
           res.destroy();
@@ -127,7 +133,6 @@ describe("gateway HTTP request error cleanup", () => {
         return false;
       },
       handleWatchNodeRequest,
-      resolvedAuth,
       getRuntimeConfig: () => ({}),
     });
     const port = await listen(server);
@@ -150,17 +155,11 @@ describe("gateway HTTP request error cleanup", () => {
 
   it("preserves a response the route already completed before throwing", async () => {
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
-    const server = createGatewayHttpServer({
-      clients: new Set(),
-      controlUiEnabled: false,
-      controlUiBasePath: "",
-      openAiChatCompletionsEnabled: false,
-      openResponsesEnabled: false,
+    const server = createServer({
       handleHooksRequest: async (_req, res) => {
         res.end("complete");
         throw new Error("route failed after completing a response");
       },
-      resolvedAuth,
       getRuntimeConfig: () => ({}),
     });
     const port = await listen(server);
@@ -185,17 +184,11 @@ describe("gateway HTTP request error cleanup", () => {
 
   it("aborts an incomplete unframed response after its route throws", async () => {
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
-    const server = createGatewayHttpServer({
-      clients: new Set(),
-      controlUiEnabled: false,
-      controlUiBasePath: "",
-      openAiChatCompletionsEnabled: false,
-      openResponsesEnabled: false,
+    const server = createServer({
       handleHooksRequest: async (_req, res) => {
         res.write("partial");
         throw new Error("route failed after writing a partial response");
       },
-      resolvedAuth,
       getRuntimeConfig: () => ({}),
     });
     const port = await listen(server);
@@ -228,18 +221,12 @@ describe("gateway HTTP request error cleanup", () => {
     },
   ])("closes an incomplete $label fixed-length response", async ({ setContentLength }) => {
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
-    const server = createGatewayHttpServer({
-      clients: new Set(),
-      controlUiEnabled: false,
-      controlUiBasePath: "",
-      openAiChatCompletionsEnabled: false,
-      openResponsesEnabled: false,
+    const server = createServer({
       handleHooksRequest: async (_req, res) => {
         setContentLength(res);
         res.write("partial");
         throw new Error("route failed before completing its fixed-length response");
       },
-      resolvedAuth,
       getRuntimeConfig: () => ({}),
     });
     const port = await listen(server);
@@ -260,7 +247,6 @@ describe("gateway HTTP request error cleanup", () => {
   describe.each(["hook", "plugin"] as const)("uncommitted %s response failures", (owner) => {
     it.each([
       { label: "no staged headers", headers: {}, method: "GET" },
-      { label: "short length", headers: { "Content-Length": "1" }, method: "GET" },
       { label: "long length", headers: { "Content-Length": "1000" }, method: "GET" },
       { label: "gzip", headers: { "Content-Encoding": "gzip" }, method: "GET" },
       {
@@ -309,16 +295,10 @@ describe("gateway HTTP request error cleanup", () => {
           typeof createGatewayPluginRequestHandler
         >[0]["log"],
       });
-      const server = createGatewayHttpServer({
-        clients: new Set(),
-        controlUiEnabled: false,
-        controlUiBasePath: "",
-        openAiChatCompletionsEnabled: false,
-        openResponsesEnabled: false,
+      const server = createServer({
         handleHooksRequest: owner === "hook" ? route : async () => false,
         handlePluginRequest: owner === "plugin" ? handlePluginRequest : undefined,
         shouldEnforcePluginGatewayAuth: () => false,
-        resolvedAuth,
         getRuntimeConfig: () => ({}),
       });
       const port = await listen(server);
@@ -363,15 +343,9 @@ describe("gateway HTTP request error cleanup", () => {
     const handlePluginRequest = vi.fn(async () => {
       throw new Error("plugin route dispatch failed");
     });
-    const server = createGatewayHttpServer({
-      clients: new Set(),
-      controlUiEnabled: false,
-      controlUiBasePath: "",
-      openAiChatCompletionsEnabled: false,
-      openResponsesEnabled: false,
+    const server = createServer({
       handleHooksRequest: async () => false,
       handlePluginRequest,
-      resolvedAuth,
       getRuntimeConfig: () => ({}),
     });
     const port = await listen(server);

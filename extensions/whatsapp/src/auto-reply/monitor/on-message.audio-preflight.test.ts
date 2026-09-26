@@ -81,10 +81,6 @@ vi.mock("../../identity.js", () => ({
   getSenderIdentity: () => ({ e164: "+15550000002", name: "Alice" }),
 }));
 
-vi.mock("../../text-runtime.js", () => ({
-  normalizeE164: (value: string) => value,
-}));
-
 vi.mock("openclaw/plugin-sdk/routing", () => ({
   buildGroupHistoryKey: () => "group-key",
   resolveAgentRoute: () => ({

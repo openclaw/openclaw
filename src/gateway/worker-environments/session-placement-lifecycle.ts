@@ -1,4 +1,6 @@
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type {
   WorkerSessionPlacementRetirement,
@@ -96,6 +98,23 @@ export function isFailedWorkerPlacementEnvironmentGone(params: {
   } catch {
     return false;
   }
+}
+
+export function canRedispatchFailedWorkerPlacement(
+  placement: FailedPlacement,
+  environment: WorkerEnvironmentPlacementFacts | undefined,
+): boolean {
+  return Boolean(
+    placement.activeOwnerEpoch !== null &&
+    !placement.turnClaim &&
+    environment &&
+    environment.environmentId === placement.environmentId &&
+    (environment.providerId !== DEVICE_WORKER_PROVIDER_ID || environment.nodeDeviceId) &&
+    isFailedWorkerPlacementEnvironmentGone({
+      placement,
+      environmentService: { get: () => environment },
+    }),
+  );
 }
 
 function isWorkerPlacementSafeForMutation(

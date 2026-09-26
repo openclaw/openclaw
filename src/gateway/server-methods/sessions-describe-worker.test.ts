@@ -298,7 +298,7 @@ it("projects current target, lineage, children and placement after committed cha
         });
         reportPlacementTransition(
           undefined,
-          placements.startDispatch({
+          await placements.startDispatch({
             sessionId: "replacement",
             agentId: "main",
             sessionKey: targetKey,

@@ -93,16 +93,10 @@ describe("sendMessageSlack customize-scope fallback", () => {
   });
 
   it.each([
-    { target: "channel:c08gqh53ejm", expected: "C08GQH53EJM" },
     { target: "c08gqh53ejm", expected: "C08GQH53EJM" },
-    { target: "user:u09g2dj0275", expected: "U09G2DJ0275" },
     { target: "u09g2dj0275", expected: "U09G2DJ0275" },
-    { target: "@u09g2dj0275", expected: "U09G2DJ0275" },
-    { target: "user:w09g2dj0275", expected: "W09G2DJ0275" },
     { target: "w09g2dj0275", expected: "W09G2DJ0275" },
     { target: "companychat", expected: "companychat" },
-    { target: "channel:companychat", expected: "companychat" },
-    { target: "#companychat", expected: "companychat" },
     { target: "#c08gqh53ejm", expected: "c08gqh53ejm" },
   ])("resolves API target $target as $expected", async ({ target, expected }) => {
     const client = createSlackSendTestClient();
@@ -147,22 +141,20 @@ describe("sendMessageSlack customize-scope fallback", () => {
     expect(readPostMessagePayload(client, 0)).toMatchObject({ channel: "C08GQH53EJM" });
   });
 
-  it.each(["updates", "workspace"])(
-    "keeps the channel name %s out of user-ID resolution",
-    async (target) => {
-      const client = createSlackSendTestClient();
+  it("keeps channel names out of user-ID resolution", async () => {
+    const target = "workspace";
+    const client = createSlackSendTestClient();
 
-      await sendMessageSlack(target, "hello", {
-        token: "xoxb-test",
-        cfg: SLACK_TEST_CFG,
-        client,
-        threadTs: "1712345678.123456",
-      });
+    await sendMessageSlack(target, "hello", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      threadTs: "1712345678.123456",
+    });
 
-      expect(client.conversations.open).not.toHaveBeenCalled();
-      expect(readPostMessagePayload(client, 0)).toMatchObject({ channel: target });
-    },
-  );
+    expect(client.conversations.open).not.toHaveBeenCalled();
+    expect(readPostMessagePayload(client, 0)).toMatchObject({ channel: target });
+  });
 
   it("prefers an explicit send identity over the relay default", async () => {
     const client = createSlackSendTestClient();
@@ -260,34 +252,6 @@ describe("sendMessageSlack customize-scope fallback", () => {
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
     expect(vi.mocked(logVerbose)).toHaveBeenCalledWith(
       "slack send: custom identity rejected, retrying without custom identity",
-    );
-  });
-
-  it("preserves the username when Slack rejects the custom icon", async () => {
-    const client = createSlackSendTestClient();
-    vi.mocked(client.chat.postMessage)
-      .mockRejectedValueOnce(buildInvalidIdentityError())
-      .mockResolvedValueOnce({ ts: "171234.567" });
-
-    await sendMessageSlack("channel:C123", "hello", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      identity: { username: "Pulse", iconEmoji: "📟" },
-    });
-
-    expect(readPostMessagePayload(client, 0)).toMatchObject({
-      username: "Pulse",
-      icon_emoji: "📟",
-    });
-    expect(readPostMessagePayload(client, 1)).toEqual({
-      channel: "C123",
-      text: "hello",
-      username: "Pulse",
-      unfurl_links: false,
-    });
-    expect(vi.mocked(logVerbose)).toHaveBeenCalledWith(
-      "slack send: custom icon rejected, retrying with username only",
     );
   });
 

@@ -230,7 +230,6 @@ describe("production lint suppressions", () => {
         // Intl.Collator.compare is a getter returning a bound function.
         "src/cron/service/list-page-sort.ts|typescript/unbound-method|1",
         "src/cron/service/list-page-sort.ts|unicorn/no-array-sort|1",
-        "src/gateway/server-chat-progress-snapshot.ts|no-implicit-coercion|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",

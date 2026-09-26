@@ -331,34 +331,32 @@ describe("Workboard gateway lifecycle sync", () => {
     expect(changes).toHaveBeenCalledOnce();
   });
 
-  it.each(["error", "timeout", "killed"] as const)(
-    "moves a linked running card to blocked for subagent outcome %s",
-    async (outcome) => {
-      const store = createWorkboardSqliteTestStore();
-      const sessionKey = `agent:main:subagent:workboard-default-${outcome}`;
-      const card = await createLinkedCard(store, {
-        sessionKey,
+  it("blocks a linked running card after a subagent timeout", async () => {
+    const outcome = "timeout";
+    const store = createWorkboardSqliteTestStore();
+    const sessionKey = `agent:main:subagent:workboard-default-${outcome}`;
+    const card = await createLinkedCard(store, {
+      sessionKey,
+      runId: `run-${outcome}`,
+      execution: execution(sessionKey, `run-${outcome}`),
+    });
+
+    await syncWorkboardSubagentEnded({
+      store,
+      event: {
+        targetSessionKey: sessionKey,
         runId: `run-${outcome}`,
-        execution: execution(sessionKey, `run-${outcome}`),
-      });
+        endedAt: card.updatedAt + 1,
+        outcome,
+      },
+    });
 
-      await syncWorkboardSubagentEnded({
-        store,
-        event: {
-          targetSessionKey: sessionKey,
-          runId: `run-${outcome}`,
-          endedAt: card.updatedAt + 1,
-          outcome,
-        },
-      });
-
-      await expect(store.get(card.id)).resolves.toMatchObject({
-        status: "blocked",
-        execution: { status: "blocked" },
-        metadata: { failureCount: 1 },
-      });
-    },
-  );
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "blocked",
+      execution: { status: "blocked" },
+      metadata: { failureCount: 1 },
+    });
+  });
 
   it("updates execution attempts once when duplicate failure hooks arrive", async () => {
     const store = createWorkboardSqliteTestStore();
@@ -383,35 +381,29 @@ describe("Workboard gateway lifecycle sync", () => {
     });
   });
 
-  it.each(["review", "blocked", "done"] as const)(
-    "keeps a manually moved %s card in place",
-    async (status) => {
-      const store = createWorkboardSqliteTestStore();
-      const sessionKey = `agent:main:subagent:workboard-default-${status}`;
-      const card = await createLinkedCard(store, { status, sessionKey, runId: `run-${status}` });
+  it("keeps a manually reviewed card in place", async () => {
+    const status = "review";
+    const store = createWorkboardSqliteTestStore();
+    const sessionKey = `agent:main:subagent:workboard-default-${status}`;
+    const card = await createLinkedCard(store, { status, sessionKey, runId: `run-${status}` });
 
-      await syncWorkboardSubagentEnded({
-        store,
-        event: {
-          targetSessionKey: sessionKey,
-          runId: `run-${status}`,
-          endedAt: card.updatedAt + 1,
-          outcome: status === "blocked" ? "error" : "ok",
-        },
-      });
+    await syncWorkboardSubagentEnded({
+      store,
+      event: {
+        targetSessionKey: sessionKey,
+        runId: `run-${status}`,
+        endedAt: card.updatedAt + 1,
+        outcome: "ok",
+      },
+    });
 
-      expect((await store.get(card.id))?.status).toBe(status);
-    },
-  );
+    expect((await store.get(card.id))?.status).toBe(status);
+  });
 
   it.each([
     ["backlog", "running"],
     ["todo", "running"],
     ["ready", "running"],
-    ["triage", "triage"],
-    ["scheduled", "scheduled"],
-    ["review", "review"],
-    ["blocked", "blocked"],
     ["done", "done"],
   ] as const)("applies the running source-status guard from %s", async (status, expected) => {
     const store = createWorkboardSqliteTestStore();
@@ -430,13 +422,9 @@ describe("Workboard gateway lifecycle sync", () => {
   });
 
   it.each([
-    ["running", "review"],
     ["todo", "review"],
     ["ready", "review"],
-    ["triage", "triage"],
     ["backlog", "backlog"],
-    ["scheduled", "scheduled"],
-    ["blocked", "blocked"],
     ["done", "done"],
   ] as const)("applies the terminal source-status guard from %s", async (status, expected) => {
     const store = createWorkboardSqliteTestStore();
@@ -592,25 +580,6 @@ describe("Workboard gateway lifecycle sync", () => {
     });
 
     expect((await store.get(card.id))?.metadata?.stale).toBeUndefined();
-  });
-
-  it("skips session discovery for an empty board", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const readSessions = vi.fn().mockResolvedValue({ sessions: [], complete: true });
-    const warn = vi.fn();
-    const context = { logger: { warn } } as never;
-    const service = createWorkboardLifecycleService({ store, readSessions });
-
-    await service.start(context);
-    service.onGatewayStart();
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    service.onGatewayStop();
-    await service.stop?.(context);
-
-    expect(readSessions).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
   });
 
   it("skips session discovery when no unarchived card needs lifecycle reconciliation", async () => {

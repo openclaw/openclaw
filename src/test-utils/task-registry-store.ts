@@ -6,6 +6,7 @@ import {
   sameTaskBackingInstance,
   selectCurrentCanonicalTaskBacking,
 } from "../tasks/task-backing-records.js";
+import { prepareCronTaskMaintenance } from "../tasks/task-cron-maintenance-policy.js";
 import { restoreTaskExecutionSnapshot } from "../tasks/task-execution-owner.js";
 import {
   applyFlowPatch,
@@ -219,6 +220,30 @@ export function createInMemoryTaskRegistryStore(
           input: TaskInitialWorkerOperations[Key]["input"],
         ) => TaskInitialWorkerOperations[Key]["output"];
       } = {
+        "tasks.maintainCron": (input) => {
+          const result = prepareCronTaskMaintenance(
+            state.tasks.get(input.taskId),
+            [...state.tasks.values()]
+              .filter(
+                (task) =>
+                  task.runtime === "cron" && task.sourceId === input.selected.sourceId?.trim(),
+              )
+              .toSorted(
+                (a, b) =>
+                  a.createdAt - b.createdAt ||
+                  Buffer.compare(Buffer.from(a.taskId), Buffer.from(b.taskId)),
+              ),
+            input,
+          );
+          assertCurrent();
+          if (result?.persisted) {
+            this.upsertTaskWithDeliveryState({
+              task: result.task,
+              deliveryState: state.deliveryStates.get(input.taskId),
+            });
+          }
+          return result;
+        },
         "tasks.applyRetention": (input) => {
           const stored = state.tasks.get(input.taskId);
           const current = stored && normalizeTaskTimestamps(stored);

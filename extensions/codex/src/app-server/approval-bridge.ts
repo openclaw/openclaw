@@ -5,6 +5,7 @@
 import {
   type AgentApprovalEventData,
   type BeforeToolCallFailureDisposition,
+  type ExecApprovalDecision,
   formatApprovalDisplayPath,
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
@@ -36,7 +37,6 @@ import {
   truncateCodexApprovalDisplayText as truncate,
   type AppServerApprovalOutcome,
   type CodexApprovalKind,
-  type ExecApprovalDecision,
   waitForPluginApprovalDecision,
 } from "./plugin-approval-roundtrip.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
@@ -456,7 +456,7 @@ function buildApprovalContext(params: {
           : "Codex app-server approval";
   const subject =
     (networkApproval
-      ? `Network: ${sanitizePermissionScalar(networkApproval.protocol)}://${sanitizePermissionHostValue(networkApproval.host)}`
+      ? `Network: ${sanitizeCodexApprovalVisibleText(networkApproval.protocol)}://${sanitizePermissionHostValue(networkApproval.host)}`
       : undefined) ??
     permissionLines[0] ??
     (command
@@ -907,7 +907,7 @@ function describeCommandApprovalDetails(requestParams: JsonObject | undefined): 
   const execpolicySummary = summarizeStringArray(
     requestParams?.proposedExecpolicyAmendment,
     "Proposed exec policy",
-    sanitizePermissionScalar,
+    sanitizeCodexApprovalVisibleText,
   );
   if (execpolicySummary) {
     lines.push(execpolicySummary);
@@ -1009,15 +1009,12 @@ function summarizeFileSystemEntries(
       }
     }
     if (samples.length < PERMISSION_SAMPLE_LIMIT) {
-      samples.push(`${sanitizePermissionScalar(access)} ${sanitizePermissionPathValue(path)}`);
+      samples.push(
+        `${sanitizeCodexApprovalVisibleText(access)} ${sanitizePermissionPathValue(path)}`,
+      );
     }
   }
-  if (count === 0) {
-    return undefined;
-  }
-  const remaining = count - samples.length;
-  const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
-  return `entries: ${samples.join(", ")}${remainderSuffix}`;
+  return formatPermissionSamples("entries", samples, count);
 }
 
 function summarizePermissionArray(
@@ -1042,12 +1039,7 @@ function summarizePermissionArray(
     .slice(0, PERMISSION_SAMPLE_LIMIT)
     .map(format.sanitize)
     .filter(Boolean);
-  if (sampleValues.length === 0) {
-    return `${label}: ${values.length}`;
-  }
-  const remaining = values.length - sampleValues.length;
-  const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
-  return `${label}: ${sampleValues.join(", ")}${remainderSuffix}`;
+  return formatPermissionSamples(label, sampleValues, values.length);
 }
 
 function summarizeStringArray(
@@ -1062,13 +1054,7 @@ function summarizeStringArray(
     .filter((entry): entry is string => typeof entry === "string")
     .map((entry) => sanitize(entry))
     .filter(Boolean);
-  if (values.length === 0) {
-    return undefined;
-  }
-  const samples = values.slice(0, PERMISSION_SAMPLE_LIMIT);
-  const remaining = values.length - samples.length;
-  const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
-  return `${label}: ${samples.join(", ")}${remainderSuffix}`;
+  return formatPermissionSamples(label, values.slice(0, PERMISSION_SAMPLE_LIMIT), values.length);
 }
 
 function summarizeNetworkPolicyAmendments(value: JsonValue | undefined): string | undefined {
@@ -1086,19 +1072,32 @@ function summarizeNetworkPolicyAmendments(value: JsonValue | undefined): string 
     }
     count += 1;
     if (samples.length < PERMISSION_SAMPLE_LIMIT) {
-      samples.push(`${sanitizePermissionScalar(action)} ${sanitizePermissionHostValue(host)}`);
+      samples.push(
+        `${sanitizeCodexApprovalVisibleText(action)} ${sanitizePermissionHostValue(host)}`,
+      );
     }
   }
+  return formatPermissionSamples("Proposed network policy", samples, count);
+}
+
+function formatPermissionSamples(
+  label: string,
+  samples: string[],
+  count: number,
+): string | undefined {
   if (count === 0) {
     return undefined;
   }
+  if (samples.length === 0) {
+    return `${label}: ${count}`;
+  }
   const remaining = count - samples.length;
   const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
-  return `Proposed network policy: ${samples.join(", ")}${remainderSuffix}`;
+  return `${label}: ${samples.join(", ")}${remainderSuffix}`;
 }
 
 function sanitizePermissionHostValue(value: string): string {
-  const compact = sanitizePermissionScalar(value).toLowerCase();
+  const compact = sanitizeCodexApprovalVisibleText(value).toLowerCase();
   const withoutScheme = compact.replace(/^[a-z][a-z0-9+.-]*:\/\//, "");
   const authority = withoutScheme.split(/[/?#]/, 1)[0] ?? withoutScheme;
   const withoutUserInfo = authority.includes("@")
@@ -1109,13 +1108,9 @@ function sanitizePermissionHostValue(value: string): string {
 
 function sanitizePermissionPathValue(value: string): string {
   return truncate(
-    formatApprovalDisplayPath(sanitizePermissionScalar(value)),
+    formatApprovalDisplayPath(sanitizeCodexApprovalVisibleText(value)),
     PERMISSION_VALUE_MAX_LENGTH,
   );
-}
-
-function sanitizePermissionScalar(value: string): string {
-  return sanitizeCodexApprovalVisibleText(value);
 }
 
 function permissionHostRisks(value: string): string[] {
@@ -1131,7 +1126,7 @@ function permissionHostRisks(value: string): string[] {
 }
 
 function permissionPathRisks(value: string): string[] {
-  const normalized = sanitizePermissionScalar(value);
+  const normalized = sanitizeCodexApprovalVisibleText(value);
   const risks: string[] = [];
   if (normalized === "/" || normalized === "\\" || /^[A-Za-z]:[\\/]*$/.test(normalized)) {
     risks.push("filesystem root");

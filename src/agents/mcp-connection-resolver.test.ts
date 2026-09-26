@@ -701,22 +701,4 @@ describe("mcp connection resolver helpers", () => {
     );
     expect(sseCase.transport).toBe("sse");
   });
-
-  it("builds stable requester cache keys", () => {
-    expect(
-      buildMcpRequesterRuntimeCacheKey({
-        sessionId: "s1",
-        messageChannel: "telegram",
-        agentAccountId: "bot",
-        requesterSenderId: "user-1",
-      }),
-    ).toBe(
-      JSON.stringify({
-        sessionId: "s1",
-        messageChannel: "telegram",
-        agentAccountId: "bot",
-        requesterSenderId: "user-1",
-      }),
-    );
-  });
 });

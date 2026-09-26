@@ -33,9 +33,13 @@ export function collectIconFixtures(
   let customRoot = false;
   const inspectRoot = (node: ts.Node) => {
     if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) {
-      const base = node.heritageClauses
-        ?.find((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)
-        ?.types[0]?.expression.getText(parsed);
+      const baseType = node.heritageClauses?.find(
+        (clause) => clause.token === ts.SyntaxKind.ExtendsKeyword,
+      )?.types[0];
+      const base =
+        baseType && ts.isExpressionWithTypeArguments(baseType)
+          ? baseType.expression.getText(parsed)
+          : undefined;
       if (base && !["OpenClawLightDomElement", "OpenClawLightDomContentsElement"].includes(base)) {
         customRoot = true;
       }

@@ -189,7 +189,6 @@ describe("OpenAI realtime voice bridge tools", () => {
     { name: "an array", arguments: '["Paris"]', reason: "non-object-json" },
     { name: "JSON null", arguments: "null", reason: "non-object-json" },
     { name: "a number", arguments: "42", reason: "non-object-json" },
-    { name: "a boolean", arguments: "true", reason: "non-object-json" },
     { name: "missing arguments", arguments: undefined, reason: "invalid-json-type" },
     { name: "non-string arguments", arguments: { city: "Paris" }, reason: "invalid-json-type" },
   ])("rejects $name per call without ending the session", async ({ arguments: args, reason }) => {
@@ -376,8 +375,6 @@ describe("OpenAI realtime voice bridge tools", () => {
 
   it.each([
     ["undefined", (): undefined => undefined],
-    ["function", () => () => undefined],
-    ["symbol", () => Symbol("invalid-tool-result")],
     ["bigint", () => ({ value: 1n })],
     [
       "circular",

@@ -1,6 +1,6 @@
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 // Zalo plugin module implements channel behavior.
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
-import type { ChannelPlugin } from "../runtime-api.js";
 import { probeZalo } from "./probe.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
 import { normalizeSecretInputString } from "./secret-input.js";

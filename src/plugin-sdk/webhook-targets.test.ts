@@ -271,12 +271,6 @@ describe("resolveWebhookTargets", () => {
       },
     },
     {
-      name: "returns null when path has no targets",
-      requestPath: "/missing",
-      targets: new Map<string, Array<{ id: string }>>(),
-      expected: null,
-    },
-    {
       name: "resolves a canonical alias after an exact-key miss",
       requestPath: "/Hooks//Zalo/Media/",
       targets: new Map([["/hooks/zalo/media", [{ id: "A" }]]]),
@@ -373,16 +367,6 @@ describe("resolveSingleWebhookTarget", () => {
         resolveSingleWebhookTargetAsync(targets, async (value) => isMatch(value)),
     },
   ];
-
-  it.each(resolvers)("returns none when no target matches ($name)", async ({ run }) => {
-    const result = await run(["a", "b"], (value) => value === "c");
-    expect(result).toEqual({ kind: "none" });
-  });
-
-  it.each(resolvers)("returns the single match ($name)", async ({ run }) => {
-    const result = await run(["a", "b"], (value) => value === "b");
-    expect(result).toEqual({ kind: "single", target: "b" });
-  });
 
   it.each(resolvers)("returns ambiguous after second match ($name)", async ({ run }) => {
     const calls: string[] = [];

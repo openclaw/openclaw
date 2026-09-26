@@ -65,14 +65,6 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   };
 });
 
-vi.mock("./text-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./text-runtime.js")>("./text-runtime.js");
-  return {
-    ...actual,
-    sleep: vi.fn(async () => {}),
-  };
-});
-
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
   const sendMessage = vi.fn(async () => createAcceptedWhatsAppSendResult("text", "msg123"));

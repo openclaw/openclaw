@@ -88,6 +88,15 @@ describe("elevenlabs tts diagnostics", () => {
     const [, init] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
     const headers = new Headers(expectDefined(init, "ElevenLabs request init").headers);
     expect(headers.get("accept")).toBe("audio/mpeg");
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBe(
+      '{"text":"hello","model_id":"eleven_multilingual_v2","voice_settings":{"stability":0.5,"similarity_boost":0.75,"style":0,"use_speaker_boost":true,"speed":1}}',
+    );
+    expect(Object.fromEntries(headers)).toEqual({
+      accept: "audio/mpeg",
+      "content-type": "application/json",
+      "xi-api-key": "test-key",
+    });
   });
 
   it("rejects JSON success bodies as malformed audio", async () => {
@@ -180,10 +189,19 @@ describe("elevenlabs tts diagnostics", () => {
       latencyTier: 2,
     });
     try {
-      const [requestUrl] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
+      const [requestUrl, init] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
       const url = new URL(resolveRequestUrl(requestUrl));
       expect(url.pathname).toBe("/v1/text-to-speech/pMsXgVXv3BLzUgSXRplE/stream");
       expect(url.searchParams.get("optimize_streaming_latency")).toBe("2");
+      expect(init?.method).toBe("POST");
+      expect(init?.body).toBe(
+        '{"text":"hello","model_id":"eleven_multilingual_v2","voice_settings":{"stability":0.5,"similarity_boost":0.75,"style":0,"use_speaker_boost":true,"speed":1}}',
+      );
+      expect(Object.fromEntries(new Headers(init?.headers))).toEqual({
+        accept: "audio/mpeg",
+        "content-type": "application/json",
+        "xi-api-key": "test-key",
+      });
       const reader = result.audioStream.getReader();
       await expect(reader.read()).resolves.toEqual({
         done: false,

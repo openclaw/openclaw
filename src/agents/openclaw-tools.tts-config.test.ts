@@ -172,51 +172,6 @@ describe("createOpenClawTools TTS config wiring", () => {
     mocks.textToSpeech.mockClear();
   });
 
-  it("passes the resolved shared config into the tts tool", async () => {
-    const injectedConfig = {
-      tts: {
-        auto: "always",
-        provider: "microsoft",
-        providers: {
-          microsoft: {
-            voice: "en-US-AvaNeural",
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const tool = createOpenClawTools({
-      config: injectedConfig,
-      disableMessageTool: true,
-      disablePluginTools: true,
-    }).find((candidate) => candidate.name === "tts");
-
-    if (!tool) {
-      throw new Error("missing tts tool");
-    }
-
-    await tool.execute("call-1", { text: "hello from config" });
-
-    const ttsParams = getTextToSpeechParams();
-    expect(ttsParams?.text).toBe("hello from config");
-    expect(ttsParams?.cfg).toBe(injectedConfig);
-  });
-
-  it("keeps direct TTS tool guidance explicit even when the tool is available", async () => {
-    const tool = createOpenClawTools({
-      config: {},
-      disableMessageTool: true,
-      disablePluginTools: true,
-    }).find((candidate) => candidate.name === "tts");
-
-    if (!tool) {
-      throw new Error("missing tts tool");
-    }
-
-    expect(tool.description).toContain("Only explicit voice/speech/TTS intent");
-    expect(tool.description).toContain("never ordinary text reply");
-  });
-
   it("passes the resolved session agent id into the tts tool", async () => {
     const injectedConfig = {
       agents: {

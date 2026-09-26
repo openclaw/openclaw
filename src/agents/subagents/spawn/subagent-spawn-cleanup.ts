@@ -17,6 +17,7 @@ export function bindSubagentSpawnCleanup(params: {
   childSessionKey: string;
   resolveGatewayContext: GatewayContextResolver;
   isCurrent: () => boolean;
+  canAbortAcceptedRun: () => boolean;
   getSessionIdentity: () => {
     expectedSessionId?: string;
     expectedLifecycleRevision?: string;
@@ -31,8 +32,12 @@ export function bindSubagentSpawnCleanup(params: {
         operationalRunInstance: ChatAbortControllerEntry["operationalRunInstance"];
       }
     | undefined;
-  const isCurrent = () => {
-    if (!context || params.resolveGatewayContext() !== context || !params.isCurrent()) {
+  const isCurrent = (method: "sessions.delete" | "chat.abort" = "sessions.delete") => {
+    if (!context || params.resolveGatewayContext() !== context) {
+      return false;
+    }
+    const ownsRequest = method === "chat.abort" ? params.canAbortAcceptedRun() : params.isCurrent();
+    if (!ownsRequest) {
       return false;
     }
     const identity = params.getSessionIdentity();
@@ -58,7 +63,7 @@ export function bindSubagentSpawnCleanup(params: {
     const assertCurrent = () => {
       const currentIdentity = params.getSessionIdentity();
       if (
-        !isCurrent() ||
+        !isCurrent(method) ||
         currentIdentity.expectedSessionId !== identity.expectedSessionId ||
         currentIdentity.expectedLifecycleRevision !== identity.expectedLifecycleRevision
       ) {
@@ -257,6 +262,15 @@ export async function terminateAcceptedCollectorRun(params: {
         const response = await call({
           method: "chat.abort",
           params: { sessionKey: params.childSessionKey, runId: params.gatewayRunId },
+          ...(params.isCurrent
+            ? {
+                assertDispatchCurrent: () => {
+                  if (!params.isCurrent?.()) {
+                    throw new Error("Subagent spawn no longer owns this accepted run");
+                  }
+                },
+              }
+            : {}),
           timeoutMs,
         });
         if (isMatchingAbortResponse(response, params.gatewayRunId)) {

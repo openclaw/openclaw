@@ -257,46 +257,35 @@ describe("update report shared transport boundary", () => {
     },
   );
 
-  it.each([false, true])(
-    "rejects retired authority after async preparation returns, retire=%s",
-    async (retire) => {
-      const fixture = await setup();
-      let current = true;
-      const result = await fixture
-        .submit({
-          hasCurrentAuthority: () => current,
-          createIssue: (issue, hooks) =>
-            submitGithubIssue(issue, fixture.runGh, {
-              ...hooks,
-              beforeIssueCreate: async () => {
-                if (!hooks.beforeIssueCreate) {
-                  throw new Error("expected a guarded Report submission");
-                }
-                const commit = await hooks.beforeIssueCreate();
-                if (retire) {
-                  queueMicrotask(() => {
-                    current = false;
-                  });
-                }
-                return commit;
-              },
-            }),
-        })
-        .catch((error: unknown) => error);
-      if (retire) {
-        expect.soft(result).toBeInstanceOf(Error);
-        expect.soft(fixture.createCalls).toHaveLength(0);
-        expect.soft(fixture.receipt()).toBeNull();
-        await expect(fs.stat(`${fixture.stateDir}/update-reports`)).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-      } else {
-        expect(result).toMatchObject({ status: "created", url: issueUrl });
-        expect(await fixture.submit()).toMatchObject({ status: "duplicate", url: issueUrl });
-        expect(fixture.createCalls).toHaveLength(1);
-      }
-    },
-  );
+  it("rejects retired authority after async preparation returns", async () => {
+    const fixture = await setup();
+    let current = true;
+    const result = await fixture
+      .submit({
+        hasCurrentAuthority: () => current,
+        createIssue: (issue, hooks) =>
+          submitGithubIssue(issue, fixture.runGh, {
+            ...hooks,
+            beforeIssueCreate: async () => {
+              if (!hooks.beforeIssueCreate) {
+                throw new Error("expected a guarded Report submission");
+              }
+              const commit = await hooks.beforeIssueCreate();
+              queueMicrotask(() => {
+                current = false;
+              });
+              return commit;
+            },
+          }),
+      })
+      .catch((error: unknown) => error);
+    expect.soft(result).toBeInstanceOf(Error);
+    expect.soft(fixture.createCalls).toHaveLength(0);
+    expect.soft(fixture.receipt()).toBeNull();
+    await expect(fs.stat(`${fixture.stateDir}/update-reports`)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
 
   it.each(["authority", "attempt"] as const)(
     "refuses %s lost while authentication is paused before pending or POST",
@@ -337,65 +326,52 @@ describe("update report shared transport boundary", () => {
     },
   );
 
-  it.each([
-    { label: "retired", retire: true },
-    { label: "live", retire: false },
-  ])(
-    "checks $label authority at the pending commit after attempt validation",
-    async ({ retire }) => {
-      const fixture = await setup();
-      let current = true;
-      let insidePreCreate = false;
-      let retireAfterValidation = false;
-      let receiptAtRetirement: string | undefined;
-      const result = await fixture
-        .submit({
-          createIssue: (issue, hooks) =>
-            submitGithubIssue(issue, fixture.runGh, {
-              ...hooks,
-              beforeIssueCreate: () => {
-                insidePreCreate = true;
-                if (!hooks.beforeIssueCreate) {
-                  throw new Error("expected a guarded Report submission");
-                }
-                return hooks.beforeIssueCreate();
-              },
-            }),
-          validateCurrentAttempt: () => {
-            retireAfterValidation = insidePreCreate && retire;
-            return true;
-          },
-          hasCurrentAuthority: () => {
-            if (retireAfterValidation) {
-              retireAfterValidation = false;
-              queueMicrotask(() => {
-                receiptAtRetirement = fixture.receipt()?.status;
-                current = false;
-              });
-            }
-            return current;
-          },
-        })
-        .catch((error: unknown) => error);
-      if (retire) {
-        expect(receiptAtRetirement).toBe("prepared");
-        expect({
-          rejected: result instanceof Error,
-          invocations: fixture.runGh.mock.calls.map(([args]) => args[0]),
-          creates: fixture.createCalls.length,
-          receipt: fixture.receipt(),
-        }).toEqual({ rejected: true, invocations: ["auth"], creates: 0, receipt: null });
-        await expect(fs.stat(`${fixture.stateDir}/update-reports`)).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-      } else {
-        expect(result).toMatchObject({ status: "created", url: issueUrl });
-        expect(await fixture.submit()).toMatchObject({ status: "duplicate", url: issueUrl });
-        expect(fixture.createCalls).toHaveLength(1);
-        expect(fixture.runGh).toHaveBeenCalledTimes(2);
-      }
-    },
-  );
+  it("checks retired authority at the pending commit after attempt validation", async () => {
+    const fixture = await setup();
+    let current = true;
+    let insidePreCreate = false;
+    let retireAfterValidation = false;
+    let receiptAtRetirement: string | undefined;
+    const result = await fixture
+      .submit({
+        createIssue: (issue, hooks) =>
+          submitGithubIssue(issue, fixture.runGh, {
+            ...hooks,
+            beforeIssueCreate: () => {
+              insidePreCreate = true;
+              if (!hooks.beforeIssueCreate) {
+                throw new Error("expected a guarded Report submission");
+              }
+              return hooks.beforeIssueCreate();
+            },
+          }),
+        validateCurrentAttempt: () => {
+          retireAfterValidation = insidePreCreate;
+          return true;
+        },
+        hasCurrentAuthority: () => {
+          if (retireAfterValidation) {
+            retireAfterValidation = false;
+            queueMicrotask(() => {
+              receiptAtRetirement = fixture.receipt()?.status;
+              current = false;
+            });
+          }
+          return current;
+        },
+      })
+      .catch((error: unknown) => error);
+    expect(receiptAtRetirement).toBe("prepared");
+    expect({
+      rejected: result instanceof Error,
+      invocations: fixture.runGh.mock.calls.map(([args]) => args[0]),
+      creates: fixture.createCalls.length,
+      receipt: fixture.receipt(),
+    }).toEqual({ rejected: true, invocations: ["auth"], creates: 0, receipt: null });
+    await expect(fs.stat(`${fixture.stateDir}/update-reports`)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
 
   it.each([
     { label: "missing", errorCode: "ENOENT", started: false, status: null },

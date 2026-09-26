@@ -11,7 +11,10 @@ import {
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
-import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
+import type {
+  AgentDatabaseOperations,
+  AgentDatabaseRequestExecutionSource,
+} from "../../state/openclaw-agent-execution-contract.js";
 import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-native.js";
 import {
   captureOpenClawAgentDatabaseExecution,
@@ -25,10 +28,7 @@ import {
 } from "./session-accessor.sqlite-entry-cache.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
-import type {
-  SessionEntryReplacementCommit,
-  SessionEntryReplacementCommitted,
-} from "./session-accessor.sqlite-replacement-types.js";
+import type { SessionEntryReplacementCommitted } from "./session-accessor.sqlite-replacement-types.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 
 type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
@@ -257,7 +257,7 @@ export async function runSessionEntryWorkerMutation<T>(
     identityAgentId: string;
     onResult?: (value: T | undefined) => void;
     afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
-    onLifecycleCommitted?: () => void;
+    onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
   },
   executionOptions: {
     retainedExecution?: OpenClawAgentDatabaseExecution;
@@ -299,7 +299,7 @@ export async function runSessionEntryWorkerMutation<T>(
     try {
       if (receipt) {
         lifecycle.onResult?.(completed?.value);
-        lifecycle.onLifecycleCommitted?.();
+        lifecycle.onLifecycleCommitted?.(receipt.pendingArchiveRecovery);
       }
     } finally {
       // Result adoption precedes observers, but its failure cannot retain publication custody.
@@ -376,12 +376,12 @@ export async function runSessionEntryWorkerMutation<T>(
 export function commitSessionEntryReplacementsInWorker(
   options: ReplacementDatabaseOptions,
   databaseIdentity: string,
-  input: SessionEntryReplacementCommit,
+  input: AgentDatabaseOperations["session.entries.replace"]["input"],
   assertCurrent: () => void,
   lifecycle: {
     identityAgentId: string;
     afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
-    onLifecycleCommitted?: () => void;
+    onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
   },
   retainedExecution?: OpenClawAgentDatabaseExecution,
 ): Promise<SessionEntryReplacementCommitted> {

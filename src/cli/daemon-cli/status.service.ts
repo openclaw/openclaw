@@ -9,6 +9,7 @@ import {
   resolveGatewayService,
   type GatewayService,
 } from "../../daemon/service.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 
 type DaemonServiceState = Pick<
   GatewayServiceState,
@@ -22,6 +23,9 @@ export async function readDaemonServiceStatus(
   const service = resolveGatewayService();
   const state: DaemonServiceState = await readGatewayServiceState(service, args).catch(
     (error: unknown): DaemonServiceState => {
+      if (hasCommandProcessCleanupError(error)) {
+        throw error;
+      }
       const refusal = findServiceOwnershipRefusal(error);
       if (refusal) {
         throw refusal;

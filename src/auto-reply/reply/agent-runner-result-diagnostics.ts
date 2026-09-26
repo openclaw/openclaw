@@ -11,7 +11,6 @@ import {
   accumulateSessionUsageFromTranscript,
   buildInlineRawTracePayload,
   derivePromptSegments,
-  type TraceContextManagementView,
 } from "./agent-runner-trace.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -139,7 +138,7 @@ export async function buildReplyDiagnosticsPayload(params: {
               runResult.meta.contextManagement.postCompactionContextInjected,
           }
         : {}),
-    } satisfies TraceContextManagementView;
+    } satisfies EmbeddedAgentRunResult["meta"]["contextManagement"];
     const sessionUsage = await accumulateSessionUsageFromTranscript({
       agentId: followupRun.run.agentId,
       sessionId: runResult.meta?.agentMeta?.sessionId ?? followupRun.run.sessionId,

@@ -1,3 +1,4 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getPluginHttpRouteCanonicalPath } from "./http-path.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
@@ -25,6 +26,31 @@ const entryViews = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginHttpRouteEntryOwners"),
   () => new WeakMap<PluginHttpRouteRegistration, { owner: RouteOwner; views: RouteViews }>(),
 );
+const routeChangeListeners = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginHttpRouteChangeListeners"),
+  () => new Set<() => void>(),
+);
+
+export function onPluginHttpRoutesChanged(listener: () => void): () => void {
+  routeChangeListeners.add(listener);
+  return () => {
+    routeChangeListeners.delete(listener);
+  };
+}
+
+export function notifyPluginHttpRoutesChanged(): void {
+  for (const listener of routeChangeListeners) {
+    listener();
+  }
+}
+
+export function respondPluginHttpRouteHandoff(_req: IncomingMessage, res: ServerResponse): true {
+  res.statusCode = 503;
+  res.setHeader("Retry-After", "1");
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.end("plugin route is restarting; retry");
+  return true;
+}
 
 function resolveOwner(
   registry: PluginRegistry,
@@ -130,6 +156,7 @@ export function projectPluginHttpRoutes(
       }
     }
   }
+  notifyPluginHttpRoutesChanged();
 }
 
 function removeRoute(entry: PluginHttpRouteRegistration, views: RouteViews) {
@@ -164,6 +191,10 @@ export function replacePluginHttpRoutes(
     routes.splice(index >= 0 ? index : routes.length, 0, entry);
   }
   entryViews.set(entry, { owner, views });
+  notifyPluginHttpRoutesChanged();
   // Weak projections avoid retaining every retired registry through a long-lived cleanup handle.
-  return () => removeRoute(entry, views);
+  return () => {
+    removeRoute(entry, views);
+    notifyPluginHttpRoutesChanged();
+  };
 }

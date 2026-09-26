@@ -1,5 +1,5 @@
 /** Write-side cron codec: converts a finished service event into a run-history entry.
- * Kept separate from task-run-detail.ts so the read/history codec stays free of the
+ * Kept separate from run-history-detail.ts so the read/history codec stays free of the
  * agents failover tree (which transitively pulls the sandbox module graph). */
 import { resolveCronRunErrorReason } from "./run-error-reason.js";
 import type { CronRunLogEntry } from "./run-log-types.js";

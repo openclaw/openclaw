@@ -10,7 +10,6 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import * as transcriptWorker from "../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import * as transcriptHeader from "../../config/sessions/session-accessor.sqlite-transcript-header.js";
 import {
   registerProjectRegistry,
@@ -389,11 +388,18 @@ export function registerSessionOperatorPreparationTests(fixture: {
       (["durable", "incognito"] as const).flatMap((storage) => [
         { storage, fork: false, ending: "complete" as const },
         { storage, fork: true, ending: "complete" as const },
-        { storage, fork: false, ending: "source-and-retry" as const },
+        {
+          storage,
+          fork: false,
+          ending:
+            storage === "durable"
+              ? ("source-after-commit" as const)
+              : ("source-and-retry" as const),
+        },
         { storage, fork: true, ending: "parent-replaced" as const },
       ]),
     )(
-      "retains $storage creation custody across its own header (fork=$fork, ending=$ending)",
+      "retains $storage creation custody across its transcript commit (fork=$fork, ending=$ending)",
       async ({ storage, fork, ending }) => {
         const prefix = storage === "incognito" ? "incognito-" : "";
         const suffix = `${prefix}owned-header-${fork}-${ending}`;
@@ -430,7 +436,6 @@ export function registerSessionOperatorPreparationTests(fixture: {
         const context = contextFor(caller);
         const getCurrentConfig = context.getRuntimeConfig;
         const header = vi.spyOn(transcriptHeader, "ensureTranscriptHeader");
-        const workerHeader = vi.spyOn(transcriptWorker, "initializeSessionTranscriptInWorker");
         const forked = vi.spyOn(sessionFork, "forkSessionFromParentWithDecision");
         const revoked = new Error("original creation source ended after header commit");
         let committedHeaderId: string | undefined;
@@ -469,12 +474,14 @@ export function registerSessionOperatorPreparationTests(fixture: {
                     withCommit: async (run) => {
                       const result = await run(() => source.signal.throwIfAborted());
                       if (!committedHeaderId) {
-                        let childId = header.mock.calls.find(
+                        const committedEntry = loadSessionEntry({
+                          agentId: "main",
+                          sessionKey: childKey,
+                        });
+                        let childId = committedEntry?.sessionId;
+                        childId ??= header.mock.calls.find(
                           ([, scope]) => scope.sessionKey === childKey,
                         )?.[1].sessionId;
-                        childId ??= workerHeader.mock.calls.find(
-                          (call) => call[2].sessionKey === childKey,
-                        )?.[2].sessionId;
                         if (fork) {
                           const index = forked.mock.calls.findIndex(
                             ([params]) => params.sessionKey === childKey,
@@ -496,11 +503,13 @@ export function registerSessionOperatorPreparationTests(fixture: {
                           expect(transcript).toEqual(
                             expect.arrayContaining([expect.objectContaining({ type: "session" })]),
                           );
-                          expect(
-                            loadSessionEntry({ agentId: "main", sessionKey: childKey }),
-                          ).toBeUndefined();
+                          if (storage === "durable" && !fork) {
+                            expect(committedEntry).toMatchObject({ sessionId: childId });
+                          } else {
+                            expect(committedEntry).toBeUndefined();
+                          }
                           committedHeaderId = childId;
-                          if (ending === "source-and-retry") {
+                          if (ending === "source-and-retry" || ending === "source-after-commit") {
                             source.abort(revoked);
                           } else if (ending === "parent-replaced") {
                             await upsertSessionEntryCore(
@@ -534,7 +543,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
             (error: unknown) => ({ error }),
           );
           expect(committedHeaderId).toBeDefined();
-          if (ending === "complete") {
+          if (ending === "complete" || ending === "source-after-commit") {
             expect(outcome).toMatchObject({ result: { ok: true } });
             expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })).toHaveProperty(
               "sessionId",
@@ -581,7 +590,6 @@ export function registerSessionOperatorPreparationTests(fixture: {
           }
         } finally {
           header.mockRestore();
-          workerHeader.mockRestore();
           forked.mockRestore();
         }
       },

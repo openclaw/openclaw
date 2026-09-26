@@ -66,11 +66,8 @@ internal fun aboutBuildIdentity(
   unknownLabel: String,
 ): AboutBuildIdentity {
   val normalizedCommit = gitCommit.trim().lowercase().takeIf(fullGitCommitPattern::matches)
-  val normalizedBuildTimestamp =
-    buildTimestamp.trim().takeIf { it.endsWith("Z") }?.takeIf { timestamp ->
-      runCatching { Instant.parse(timestamp) }.isSuccess
-    }
-  val buildInstant = normalizedBuildTimestamp?.let(Instant::parse)
+  val normalizedBuildTimestamp = buildTimestamp.trim().takeIf { it.endsWith("Z") }
+  val buildInstant = normalizedBuildTimestamp?.let { runCatching { Instant.parse(it) }.getOrNull() }
   val built =
     buildInstant?.let { instant ->
       DateFormat.getDateInstance(DateFormat.MEDIUM, locale).run {
@@ -84,7 +81,7 @@ internal fun aboutBuildIdentity(
     commit = normalizedCommit?.take(12) ?: unknownLabel,
     fullCommit = normalizedCommit,
     built = built,
-    buildTimestamp = normalizedBuildTimestamp,
+    buildTimestamp = normalizedBuildTimestamp.takeIf { buildInstant != null },
   )
 }
 

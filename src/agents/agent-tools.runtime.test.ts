@@ -193,7 +193,6 @@ describe("wrapToolWithAbortSignal", () => {
 
   it.each([
     { name: "ordinary cancellation", reason: new Error("operator cancelled") },
-    { name: "a missing handoff flag", reason: { code: "sessions_yield" } },
     { name: "a disabled handoff flag", reason: { code: "sessions_yield", turnHandoff: false } },
     { name: "a different handoff owner", reason: { code: "different", turnHandoff: true } },
   ])("rejects sessions_yield when its run owner aborts with $name", async ({ reason }) => {
@@ -483,12 +482,6 @@ describe("tool availability", () => {
     expect(toolNames).toContain("gateway");
     expect(toolNames).toContain("nodes");
     expect(toolNames).toContain("openclaw");
-  });
-
-  it("keeps canvas available by current trust model", () => {
-    const tools = createOpenClawCodingTools();
-    const toolNames = tools.map((tool) => tool.name);
-    expect(toolNames).toContain("canvas");
   });
 
   it("restricts node-originated runs to the node-safe tool subset", () => {

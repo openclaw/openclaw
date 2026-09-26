@@ -123,6 +123,7 @@ export async function spawnSubagentDirect(
   let swarmReservationPending = reservationPending;
   const swarmReservation = reservationPending ? holdQueuedSwarmRun(childIdem) : undefined;
   let canCleanupCreatedSession: (() => boolean) | undefined;
+  let canAcceptRegisteredRun: (() => boolean) | undefined;
   let canRetireReservation: (() => boolean) | undefined;
   let releaseOperatorAuthority: (() => void) | undefined;
   let provisionalCleanupOpen = true;
@@ -201,16 +202,20 @@ export async function spawnSubagentDirect(
       expectedLifecycleRevision: initialSession.entry?.lifecycleRevision,
     };
     const ownsCleanup = () => canCleanupCreatedSession?.() ?? provisionalCleanupOpen;
+    const ownsAcceptedRun = () =>
+      ownsCleanup() || (!params.collect && canAcceptRegisteredRun?.() === true);
     const cleanupOwner =
       operatorAuthority && gatewayContextResolver
         ? bindSubagentSpawnCleanup({
             childSessionKey,
             resolveGatewayContext: gatewayContextResolver,
             isCurrent: ownsCleanup,
+            canAbortAcceptedRun: ownsAcceptedRun,
             getSessionIdentity: () => provisionalSessionIdentity,
           })
         : undefined;
     const isCleanupCurrent = cleanupOwner?.isCurrent ?? ownsCleanup;
+    const isAbortCurrent = () => cleanupOwner?.isCurrent("chat.abort") ?? ownsAcceptedRun();
     const cleanupCreatedSession = (emitLifecycleHooks = false) =>
       cleanupProvisionalSession(childSessionKey, {
         emitLifecycleHooks,
@@ -470,26 +475,27 @@ export async function spawnSubagentDirect(
       },
       async cleanupOnFailure({ phase, state, registrationScope }) {
         canCleanupCreatedSession = registrationScope?.canCleanupSession;
+        canAcceptRegisteredRun = registrationScope?.canAcceptLaunch;
         canRetireReservation = registrationScope?.canRetireReservation;
         if (phase === "initialize") {
           await cleanupFailedSpawn();
           return;
         }
-        // The gateway skips its fallback CLI task row because this launch claims
-        // the run's row, and registration is what delivers it. A register failure
-        // means no owner ever recorded the run, so abort the run the gateway
-        // already accepted instead of leaving it executing unrecorded.
+        // A failed required task must stop its accepted run even when a durable
+        // registry row still prevents deleting the session after rollback fails.
         if (
           phase === "register" &&
           acceptedChildRunId &&
           taskRowOwnership === "required" &&
-          isCleanupCurrent()
+          isAbortCurrent()
         ) {
+          const deleteSessionOnMiss = isCleanupCurrent();
           await terminateAcceptedCollectorRun({
             childSessionKey,
             gatewayRunId: acceptedChildRunId,
             ...provisionalSessionIdentity,
-            isCurrent: isCleanupCurrent,
+            isCurrent: deleteSessionOnMiss ? isCleanupCurrent : isAbortCurrent,
+            sessionCleanup: deleteSessionOnMiss ? "delete-on-abort-miss" : "preserve",
             ...(cleanupOwner ? { callGateway: cleanupOwner.callGateway } : {}),
           });
         }
@@ -615,6 +621,7 @@ export async function spawnSubagentDirect(
     }
     childRunId = pipelineResult.runId;
     canCleanupCreatedSession = pipelineResult.registrationScope?.canCleanupSession;
+    canAcceptRegisteredRun = pipelineResult.registrationScope?.canAcceptLaunch;
     canRetireReservation = pipelineResult.registrationScope?.canRetireReservation;
     let collectorSessionKey: string | undefined;
     if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {

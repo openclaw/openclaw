@@ -7,8 +7,6 @@ export type SessionEntryCacheReadOptions = {
   cache: boolean;
   latest?: boolean;
   projection?: "full" | "list";
-  /** Uncached mixed snapshot: retain complete selected rows beside sibling metadata. */
-  fullEntryKeys?: readonly string[];
   /** Stream full JSON once, retaining prompt snapshots only for selected rows. Never cached. */
   retainFullEntry?: (sessionKey: string, entry: SessionEntry) => boolean;
   /** Topology admits metadata first; its worker owns participant hydration. Never cache this view. */
@@ -35,6 +33,7 @@ export type SessionSharingEntry = Pick<
 
 export type SessionEntryReplacementPublication = {
   kind: "session-entry-replacements";
+  pendingArchiveRecovery: boolean;
   previous: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>;
   current: Map<string, SessionSharingEntry>;
   changedKeys: string[];

@@ -175,23 +175,30 @@ it.each(["not-committed", "unknown"] as const)(
   },
 );
 
-it("retains the committed registry when core task creation has no receipt", async () => {
-  const f = fixture();
-  const failure = new Error("task result lost after admission");
-  mocks.prepare.mockReturnValue({
-    kind: "receipt",
-    create: async () => {
-      throw failure;
-    },
-  });
-  const pending = Promise.resolve(f.register()).catch((error: unknown) => error);
-  f.writes[0]!.gate.resolve();
-  expect(await pending).toBe(failure);
-  expect(f.runs.has(f.registration.runId)).toBe(true);
-  expect(f.scope.canCleanupSession()).toBe(false);
-  expect(f.scope.canLaunch()).toBe(false);
-  expect(f.writes).toHaveLength(1);
-});
+it.each(["required", "optional"] as const)(
+  "retains committed registry ownership when %s core task creation has no receipt",
+  async (ownership) => {
+    const f = fixture();
+    if (ownership === "optional") {
+      f.registration.taskRowOwnership = undefined;
+    }
+    const failure = new Error("task result lost after admission");
+    mocks.prepare.mockReturnValue({
+      kind: "receipt",
+      create: async () => {
+        throw failure;
+      },
+    });
+    const pending = Promise.resolve(f.register()).catch((error: unknown) => error);
+    f.writes[0]!.gate.resolve();
+    expect(await pending).toBe(ownership === "required" ? failure : undefined);
+    expect(f.runs.has(f.registration.runId)).toBe(true);
+    expect(f.scope.canCleanupSession()).toBe(false);
+    expect(f.scope.canLaunch()).toBe(ownership === "optional");
+    expect(f.options.ensureListener).toHaveBeenCalledTimes(ownership === "optional" ? 1 : 0);
+    expect(f.writes).toHaveLength(1);
+  },
+);
 
 it("keeps an acknowledged old run tracked when a different run owns the child before publication", async () => {
   const f = fixture();

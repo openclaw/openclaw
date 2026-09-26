@@ -190,6 +190,7 @@ export async function prepareGatewayKernelState(params: {
     workerPlacementModule
       ? await startupTrace.measure("worker-environments.placement-runtime", async () =>
           workerPlacementModule.createGatewayWorkerPlacementRuntime({
+            scheduler,
             placements: workerEnvironmentStartup.placementStore,
             getCommittedRuntimeConfig,
             environments: workerEnvironmentService,

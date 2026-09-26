@@ -1,6 +1,3 @@
-/**
- * BytePlus Seedance video generation provider implementation.
- */
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import {
   downloadGeneratedVideoAsset,
@@ -107,7 +104,6 @@ function resolveBytePlusDurationSeconds(value: unknown): number | undefined {
   });
 }
 
-/** Builds the BytePlus video generation provider registered by the plugin. */
 export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider {
   return {
     id: "byteplus",
@@ -213,12 +209,10 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         body.watermark = req.watermark;
       }
 
-      // Forward declared providerOptions: seed, draft, camerafixed.
       // draft=true forces 480p resolution for faster generation.
       const opts = req.providerOptions ?? {};
       const seed = asSafeIntegerInRange(opts.seed, { min: -1, max: BYTEPLUS_SEED_MAX });
       const draft = opts.draft === true;
-      // Official JSON body field is camera_fixed (with underscore).
       const cameraFixed = typeof opts.camera_fixed === "boolean" ? opts.camera_fixed : undefined;
       if (seed != null) {
         body.seed = seed;

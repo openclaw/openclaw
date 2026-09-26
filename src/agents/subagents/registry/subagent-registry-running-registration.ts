@@ -339,6 +339,7 @@ export async function registerRunningSubagent(params: {
       }
     }
     assertLaunchCurrent();
+    // The acknowledged registry remains the owner when its optional task row fails.
     uncertain = false;
     activate();
   } catch (error) {

@@ -533,7 +533,7 @@ src/config/zod-schema.ts
 src/cron/completion-status.ts
 src/cron/execution-error-constants.ts
 src/cron/run-diagnostics-normalize.ts
-src/cron/task-run-detail.ts
+src/cron/run-history-detail.ts
 src/daemon/arg-split.ts
 src/daemon/constants.ts
 src/daemon/runtime-binary.ts
@@ -544,6 +544,7 @@ src/gateway/control-ui-session-prs-git.runtime.ts
 src/gateway/control-ui-session-prs-landing.ts
 src/gateway/github-remote.ts
 src/gateway/operator-scopes.ts
+src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
 src/gateway/worker-environments/session-attachment.ts
 src/gateway/worker-environments/workspace-actual-manifest.ts
@@ -844,7 +845,9 @@ src/infra/windows-port-pids.ts
 src/infra/windows-private-directory.ts
 src/infra/windows-process-start.ts
 src/infra/worker-cpu.ts
+src/infra/worker-diagnostic-script.ts
 src/infra/worker-idle-gc.ts
+src/infra/worker-memory.ts
 src/infra/worker-task-capacity.ts
 src/infra/worker-task-native-sections.ts
 src/infra/worker-task-pool-completion.ts
@@ -954,6 +957,8 @@ src/plugins/host-hook-cleanup-timeout.ts
 src/plugins/host-hook-json.ts
 src/plugins/host-hook-runtime.ts
 src/plugins/host-hooks.ts
+src/plugins/http-path.ts
+src/plugins/http-route-owner.ts
 src/plugins/install-channel-specs.ts
 src/plugins/install-paths.ts
 src/plugins/install-root-context.ts
@@ -1315,6 +1320,7 @@ src/state/openclaw-state-schema-compatibility.ts
 src/state/openclaw-state-schema-publication.ts
 src/state/openclaw-state-schema.sql
 src/state/openclaw-state-schema.ts
+src/state/openclaw-state-worker-context.capture.ts
 src/state/openclaw-state-worker-context.ts
 src/state/openclaw-state-worker-error-identity.ts
 src/state/openclaw-state-worker-error.ts

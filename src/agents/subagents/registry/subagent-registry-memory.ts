@@ -380,7 +380,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         scope.observation = { state: "superseded" };
       }
     }
-    publishSubagentRunChanges([entry.childSessionKey]);
+    publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
   }
 
   /** Normal cleanup calls this only after its deletion commits; raw map deletion is not evidence. */
@@ -395,7 +395,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         observed.state = "retired";
       }
     }
-    publishSubagentRunChanges([entry.childSessionKey]);
+    publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
   }
 
   override set(runId: string, entry: SubagentRunRecord): this {

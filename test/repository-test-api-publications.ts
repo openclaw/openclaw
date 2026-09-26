@@ -30,7 +30,6 @@ const publications: Record<string, string | symbol> = {
     "openclaw.contextEngineMaintenanceTestApi",
   ),
   "src/agents/embedded-agent-runner/runs.ts": Symbol.for("openclaw.embeddedRunsTestApi"),
-  "src/agents/embedded-agent-tool-media.ts": Symbol.for("openclaw.embeddedSubscribeToolsTestApi"),
   "src/agents/mcp-ui-resource.ts": Symbol.for("openclaw.mcpUiResourceTestApi"),
   "src/agents/media-generation-task-status-shared.ts": Symbol.for(
     "openclaw.mediaGenerationDuplicateGuardTestApi",

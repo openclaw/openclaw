@@ -56,6 +56,8 @@ export async function createPluginReloadRecoveryFixture(
       record: ReturnType<typeof createPluginRecord>,
     ) => void;
     abortOnCandidateStart?: boolean;
+    waitForDrain?: boolean;
+    drainSignal?: AbortSignal;
     checkpoint?: Parameters<typeof reloadGatewayPlugins>[1]["checkpoint"];
     prepareAttached?: () => Promise<void>;
     initialStop?: () => Promise<void>;
@@ -321,6 +323,8 @@ export async function createPluginReloadRecoveryFixture(
           prepareConfigEffects: options.prepareConfigEffects ?? (() => rollbackConfigEffects),
           pluginLifecycle: {
             reason: "reload",
+            waitForDrain: options.waitForDrain,
+            drainSignal: options.drainSignal,
             operationId: "service-recovery",
             pluginIds,
           },
