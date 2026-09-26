@@ -892,18 +892,26 @@ describe("gateway request suspension admission", () => {
     const readHandler = vi.fn<GatewayRequestHandler>(({ respond }) => {
       respond(true, { state: "visible" });
     });
-    const allowed = dispatch({
-      method: "suspend-proof.read",
-      scope: "operator.read",
-      handler: readHandler,
-    });
-    await allowed.request;
-    expect(readHandler).not.toHaveBeenCalled();
-    expect(allowed.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
-    );
+    for (const method of ["suspend-proof.read", "agent.identity.get"]) {
+      const blockedRead = dispatch({
+        method,
+        scope: "operator.read",
+        handler: readHandler,
+        core: method === "agent.identity.get",
+      });
+      await blockedRead.request;
+      expect(readHandler).not.toHaveBeenCalled();
+      expect(blockedRead.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          retryable: true,
+          retryAfterMs: method === "agent.identity.get" ? 60_000 : 1_000,
+          details: expect.objectContaining({ reason: "gateway-suspending" }),
+        }),
+      );
+    }
     suspension?.release();
   });
 
