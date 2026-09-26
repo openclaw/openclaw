@@ -366,8 +366,10 @@ test ! -e "$ONBOARD_TMP_DIR"
     const result = spawnSync("bash", [fixturePath], {
       cwd: process.cwd(),
       encoding: "utf8",
+      timeout: 10_000,
     });
 
+    expect(result.error).toBeUndefined();
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout).toContain("recorded input:wizard input\n");
   });
