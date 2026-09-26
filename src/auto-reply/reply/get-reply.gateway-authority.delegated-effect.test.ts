@@ -8,8 +8,7 @@ import { bindAgentToolGatewayRequest } from "../../agents/tools/in-process-gatew
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import { createHostChannelInboundEventContextBuilder } from "../../channels/inbound-event/host-context-builder.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
-import { registerChannelIngressHostOwner } from "../../channels/message-access/ingress-host-owner.js";
-import { resolveStableChannelMessageIngress } from "../../channels/message-access/runtime.js";
+import { createHostChannelIngressRuntime } from "../../channels/message-access/runtime.js";
 import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
 import { prepareDelegatedSystemAgentApproval } from "../../gateway/server-methods/system-agent-approval.js";
 import type { SystemAgentChatSession } from "../../gateway/server-methods/system-agent.js";
@@ -41,10 +40,7 @@ const SCOPE = "operator.read";
 type ChannelLifecycle = "live" | "unbound" | "retired" | "replaced";
 
 let state: OpenClawTestState | undefined;
-let disposeOwner: (() => void) | undefined;
 afterEach(async () => {
-  disposeOwner?.();
-  disposeOwner = undefined;
   await state?.cleanup();
   state = undefined;
   resetAgentRunRegistryForTest();
@@ -106,22 +102,16 @@ async function prepareChannelBoundResolver(params: {
   let successorResolutions = 0;
   const owner = {
     channelId: "discord",
-    record: {},
-    epoch: {},
     isLive: () => live,
     // The Gateway never goes away; only the channel lifetime is revoked.
     resolveGatewayContext: () => params.gatewayContext,
   };
   let live = true;
-  disposeOwner = registerChannelIngressHostOwner(owner);
   const revoke = () => {
     live = false;
     if (params.lifecycle === "replaced") {
-      disposeOwner?.();
-      disposeOwner = registerChannelIngressHostOwner({
+      createHostChannelIngressRuntime({
         channelId: "discord",
-        record: {},
-        epoch: {},
         isLive: () => true,
         resolveGatewayContext: () => {
           successorResolutions += 1;
@@ -132,7 +122,7 @@ async function prepareChannelBoundResolver(params: {
   };
 
   const sessionKey = "agent:main:discord:direct:person-42";
-  const ingress = await resolveStableChannelMessageIngress({
+  const ingress = await createHostChannelIngressRuntime(owner).resolveStable({
     channelId: "discord",
     accountId: "primary",
     subject: { stableId: "person-42" },

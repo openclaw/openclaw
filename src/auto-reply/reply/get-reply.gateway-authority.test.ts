@@ -3,8 +3,7 @@ import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import { createHostChannelInboundEventContextBuilder } from "../../channels/inbound-event/host-context-builder.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
-import { registerChannelIngressHostOwner } from "../../channels/message-access/ingress-host-owner.js";
-import { resolveStableChannelMessageIngress } from "../../channels/message-access/runtime.js";
+import { createHostChannelIngressRuntime } from "../../channels/message-access/runtime.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   createOpenClawTestState,
@@ -20,9 +19,7 @@ vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
 }));
 
 let state: OpenClawTestState | undefined;
-let disposeOwner: (() => void) | undefined;
 afterEach(async () => {
-  disposeOwner?.();
   await state?.cleanup();
   vi.clearAllMocks();
 });
@@ -51,14 +48,11 @@ it.each(["live", "retired", "replaced", "unbound"])(
     let live = true;
     const owner = {
       channelId: "discord",
-      record: {},
-      epoch: {},
       isLive: () => live,
       resolveGatewayContext: () => (live ? gatewayContext : undefined),
     };
-    disposeOwner = registerChannelIngressHostOwner(owner);
     const sessionKey = "agent:main:discord:direct:person-42";
-    const ingress = await resolveStableChannelMessageIngress({
+    const ingress = await createHostChannelIngressRuntime(owner).resolveStable({
       channelId: "discord",
       accountId: "primary",
       subject: { stableId: "person-42" },
@@ -108,11 +102,9 @@ it.each(["live", "retired", "replaced", "unbound"])(
         live = false;
       } else if (lifecycle === "replaced") {
         live = false;
-        disposeOwner?.();
-        disposeOwner = registerChannelIngressHostOwner({
+        createHostChannelIngressRuntime({
           ...owner,
-          record: {},
-          epoch: {},
+          isLive: () => true,
           resolveGatewayContext: () => ({ owner: "gateway-b" }) as never,
         });
       }

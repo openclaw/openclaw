@@ -310,11 +310,9 @@ describe("bundled channel ingress runtime ownership", () => {
   it.each(["retired", "replaced"] as const)(
     "revokes copied Gateway resolution when the channel is %s while Gateway remains live",
     async (lifecycle) => {
-      // A typed sentinel observes callback invocation without a fabricated Gateway context.
-      const gatewayReached = new Error("Live Gateway resolver reached");
-      const gatewayContextResolver: GatewayContextResolver = () => {
-        throw gatewayReached;
-      };
+      // Ingress admission resolves the live Gateway once, so count redemptions after revocation.
+      const gatewayContext = {} as GatewayRequestContext;
+      const gatewayContextResolver = vi.fn<GatewayContextResolver>(() => gatewayContext);
       const first = createRuntimeBuilder({
         origin: "bundled",
         id: "gateway-channel-owner",
@@ -325,7 +323,7 @@ describe("bundled channel ingress runtime ownership", () => {
       const copied = { ...context };
       copyChannelParticipantAdmissionEvidence(context, copied);
       const retained = readChannelContextGatewayContextResolver(copied);
-      expect(() => retained?.()).toThrow(gatewayReached);
+      expect(retained?.()).toBe(gatewayContext);
       if (!retained) {
         throw new Error("Expected registered channel Gateway resolution");
       }
@@ -335,8 +333,10 @@ describe("bundled channel ingress runtime ownership", () => {
       } else {
         createRuntimeBuilder({ origin: "bundled", id: first.record.id, gatewayContextResolver });
       }
-      expect(gatewayContextResolver).toThrow(gatewayReached);
+      gatewayContextResolver.mockClear();
       expect(retained()).toBeUndefined();
+      expect(gatewayContextResolver).not.toHaveBeenCalled();
+      expect(gatewayContextResolver()).toBe(gatewayContext);
     },
   );
 
