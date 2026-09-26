@@ -1,5 +1,6 @@
 import { statSync } from "node:fs";
 import path from "node:path";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -42,6 +43,9 @@ function resolveRegisteredAgentDatabaseStoredPath(
   params: { agentId: string; path: string },
 ): string {
   const storedPath = resolveOpenClawAgentDatabaseStoredPath(database.path, params.path);
+  if (params.path !== resolveIdentityPathViaExistingAncestorSync(params.path)) {
+    return storedPath;
+  }
   const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
   const { rows } = executeSqliteQuerySync(
     database.db,

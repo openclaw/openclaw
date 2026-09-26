@@ -56,10 +56,10 @@ export function resolveOpenClawAgentDatabaseStoredPath(
   }
   const relativePath = path.relative(stateDir, comparisonPath);
   if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
-    // Native owners pin physical paths; aliased state roots still store portable locators.
+    // Normalize the state root for canonical native paths, preserving external lexical locators.
     const physicalRelative = path.relative(
       resolveIdentityPathViaExistingAncestorSync(stateDir),
-      resolveIdentityPathViaExistingAncestorSync(comparisonPath),
+      comparisonPath,
     );
     return physicalRelative.startsWith("..") || path.isAbsolute(physicalRelative)
       ? absolutePath
