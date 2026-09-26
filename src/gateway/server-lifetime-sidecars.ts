@@ -17,7 +17,6 @@ import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-sch
 import { startIncognitoSessionLifetime } from "./session-incognito-lifetime.js";
 
 type GatewayChatMetadataLifecycle = Awaited<ReturnType<typeof createGatewayChatMetadataLifecycle>>;
-const SECRET_STORE_EXPIRY_INTERVAL_MS = 60_000;
 const GITHUB_PUBLICATION_RECONCILE_INTERVAL_MS = 60_000;
 
 function startGitHubPublicationMaintenance(
@@ -41,42 +40,6 @@ function startGitHubPublicationMaintenance(
   };
   run();
   const interval = setInterval(run, GITHUB_PUBLICATION_RECONCILE_INTERVAL_MS);
-  interval.unref?.();
-  return {
-    stop: async () => {
-      stopped = true;
-      clearInterval(interval);
-      await current;
-    },
-  };
-}
-
-function startSecretStoreExpiryMaintenance(
-  logWarning: (message: string) => void,
-): GatewayPostReadySidecarHandle {
-  let warned = false;
-  let current: Promise<void> | undefined;
-  let stopped = false;
-  const purge = () => {
-    if (stopped || current) {
-      return;
-    }
-    current = purgeExpiredSecretStoreEntries()
-      .then(() => {
-        warned = false;
-      })
-      .catch(() => {
-        if (!warned) {
-          logWarning("Secret store expiry cleanup failed; will retry.");
-          warned = true;
-        }
-      })
-      .finally(() => {
-        current = undefined;
-      });
-  };
-  purge();
-  const interval = setInterval(purge, SECRET_STORE_EXPIRY_INTERVAL_MS);
   interval.unref?.();
   return {
     stop: async () => {
@@ -143,7 +106,25 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
     },
   });
   if (!params.minimalTestGateway) {
-    params.publishSidecars(startSecretStoreExpiryMaintenance(params.logWarning));
+    let warned = false;
+    params.publishSidecars(
+      params.scheduler.schedule({
+        id: "maintenance:secret-expiry",
+        atMs: params.scheduler.now(),
+        everyMs: 60_000,
+        run: () =>
+          purgeExpiredSecretStoreEntries()
+            .then(() => {
+              warned = false;
+            })
+            .catch(() => {
+              if (!warned) {
+                params.logWarning("Secret store expiry cleanup failed; will retry.");
+                warned = true;
+              }
+            }),
+      }),
+    );
   }
   if (params.reconcileGitHubPublications) {
     params.publishSidecars(
