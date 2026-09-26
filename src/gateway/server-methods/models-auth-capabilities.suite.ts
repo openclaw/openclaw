@@ -94,6 +94,7 @@ export function defineModelAuthCapabilityTests({
           "minimax",
           "longcat",
           "clawrouter",
+          "nvidia",
           "cloudflare-ai-gateway",
           "google",
         ].map((pluginId) => {
@@ -137,7 +138,7 @@ export function defineModelAuthCapabilityTests({
         ]),
       );
     }
-    for (const provider of ["longcat", "clawrouter"]) {
+    for (const provider of ["longcat", "clawrouter", "nvidia"]) {
       expect(result.providerCapabilities?.find((item) => item.provider === provider)).toMatchObject(
         {
           quickApiKeySetup: true,
