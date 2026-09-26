@@ -58,7 +58,7 @@ export class RouteDraftComposerFocus {
     data: SessionChatRouteData | undefined,
     activeSessionKey: string | null | undefined,
     consumedData: SessionChatRouteData | null,
-  ): boolean {
+  ): Promise<boolean> | undefined {
     const matchesActivePane = Boolean(
       data &&
       (activeSessionKey === undefined ||
@@ -69,11 +69,31 @@ export class RouteDraftComposerFocus {
       pendingHandoff = undefined;
       this.maintain(data.sessionKey);
     }
-    return Boolean(
-      data &&
-      consumedData !== data &&
-      matchesActivePane &&
-      (data.draft !== undefined || data.focusComposer),
+    if (
+      !data ||
+      consumedData === data ||
+      !matchesActivePane ||
+      (data.draft === undefined && !data.focusComposer)
+    ) {
+      return;
+    }
+    const pane = this.activePane(data.sessionKey);
+    if (!pane?.presented) {
+      return;
+    }
+    // A retained pane can defer its commit beyond the page's update. Keep
+    // the one-shot properties until that pane has consumed them.
+    return Promise.resolve(pane.updateComplete).then(() =>
+      Boolean(this.host.isConnected && pane.presented && this.activePane(data.sessionKey) === pane),
+    );
+  }
+
+  private activePane(sessionKey: string): ChatPaneElement | undefined {
+    return [...this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].find(
+      (pane) =>
+        pane.active &&
+        pane.sessionKey !== undefined &&
+        areUiSessionKeysEquivalent(pane.sessionKey, sessionKey),
     );
   }
 
@@ -116,12 +136,7 @@ export class RouteDraftComposerFocus {
         this.timer = undefined;
         return;
       }
-      const pane = [...this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].find(
-        (candidate) =>
-          candidate.active &&
-          candidate.sessionKey !== undefined &&
-          areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
-      );
+      const pane = this.activePane(sessionKey);
       const composer = pane?.querySelector<HTMLTextAreaElement>(COMPOSER_SELECTOR);
       const activeElement = document.activeElement;
       const focusStillOwned =

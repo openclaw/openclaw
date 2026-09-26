@@ -1,4 +1,5 @@
 import type { Range, Virtualizer } from "@tanstack/virtual-core";
+import type { createTranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
 import { extractTranscriptRange } from "./chat-transcript-range.ts";
 
 type ChatTranscriptPrependAnchor = { messageKey: string; rowKey: string | null; top: number };
@@ -19,6 +20,12 @@ export class TranscriptPrependAnchor {
   /** Keep the retained row mounted while virtual and native offsets reconcile. */
   get rowKey(): string | null {
     return this.pending?.rowKey ?? null;
+  }
+
+  canRestore(
+    state: Pick<ReturnType<typeof createTranscriptOffsetState>, "touching" | "touchScrolling">,
+  ): boolean {
+    return this.pending !== null && !state.touching && !state.touchScrolling;
   }
 
   /** Keep the retained bubble mounted against the committed, not candidate, row map. */
