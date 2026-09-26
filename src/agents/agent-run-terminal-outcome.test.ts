@@ -466,6 +466,55 @@ describe("agent run terminal outcome", () => {
       }
     },
   );
+
+  it.each(["queue", "gateway_draining"] as const)(
+    "preserves provider failure over soft %s timeout regardless of observation order",
+    (timeoutPhase) => {
+      const providerFailure = buildAgentRunTerminalOutcome({
+        status: "error",
+        error: "provider rate limit exceeded",
+        providerStarted: true,
+      });
+      const queueTimeout = buildAgentRunTerminalOutcome({
+        status: "timeout",
+        timeoutPhase,
+      });
+
+      for (const [current, incoming] of [
+        [providerFailure, queueTimeout],
+        [queueTimeout, providerFailure],
+      ] as const) {
+        expect(mergeAgentRunTerminalOutcome(current, incoming)).toMatchObject({
+          reason: "failed",
+          error: "provider rate limit exceeded",
+        });
+      }
+    },
+  );
+
+  it.each(["queue", "gateway_draining"] as const)(
+    "preserves liveness failure over soft %s timeout regardless of observation order",
+    (timeoutPhase) => {
+      const blockedFailure = buildAgentRunTerminalOutcome({
+        status: "error",
+        livenessState: "blocked",
+      });
+      const queueTimeout = buildAgentRunTerminalOutcome({
+        status: "timeout",
+        timeoutPhase,
+      });
+
+      for (const [current, incoming] of [
+        [blockedFailure, queueTimeout],
+        [queueTimeout, blockedFailure],
+      ] as const) {
+        expect(mergeAgentRunTerminalOutcome(current, incoming)).toMatchObject({
+          reason: "blocked",
+          status: "error",
+        });
+      }
+    },
+  );
 });
 
 describe("agent run attempt terminal", () => {
