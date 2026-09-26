@@ -22,10 +22,20 @@ import { startAgentRunExecution } from "./agent-run-execution-phase.js";
 import type { AgentTurnPrincipal } from "./types.js";
 
 const dispatchAgentRunFromGateway = vi.hoisted(() => vi.fn());
+const prepareGatewaySkillAuthoring = vi.hoisted(() => vi.fn());
+const getAdmittedRunDelegatedAuthority = vi.hoisted(() => vi.fn(() => ({})));
 
 vi.mock("./agent-run-dispatch.js", () => ({
   dispatchAgentRunFromGateway,
   resolveAbortedAgentStopReason: () => "rpc",
+}));
+
+vi.mock("../skill-library-authoring.js", () => ({
+  prepareGatewaySkillAuthoring,
+}));
+
+vi.mock("../../agents/admitted-run-context.js", () => ({
+  getAdmittedRunDelegatedAuthority,
 }));
 
 function createExecution(options: { aborted?: boolean; assertContextCurrent?: () => void } = {}) {
@@ -88,6 +98,7 @@ function createExecution(options: { aborted?: boolean; assertContextCurrent?: ()
       imageOrder: [],
       media: [],
       runId: "owner-test",
+      resolvedSessionKey: "agent:main:dashboard:test",
       agentDedupeKeys: [],
       bestEffortDeliver: false,
       lifecycleGeneration: "test",
@@ -99,6 +110,7 @@ function createExecution(options: { aborted?: boolean; assertContextCurrent?: ()
         dedupe: new Map(),
         deps: {},
         logGateway: { error: vi.fn(), warn: vi.fn() },
+        resolveGatewayContext: () => ({}),
       },
       io: {
         emitAcceptance: vi.fn(),
@@ -131,6 +143,8 @@ function createVisibleExecution() {
 describe("startAgentRunExecution Gateway ownership", () => {
   beforeEach(() => {
     dispatchAgentRunFromGateway.mockReset();
+    prepareGatewaySkillAuthoring.mockReset();
+    getAdmittedRunDelegatedAuthority.mockReset().mockReturnValue({});
   });
 
   it.each([false, true])(
@@ -474,4 +488,27 @@ describe("startAgentRunExecution Gateway ownership", () => {
       }
     },
   );
+
+  it("does not fail the whole run when a mid-admission run replacement rejects the skill-authoring bind", async () => {
+    const bind = vi.fn(() => {
+      throw new Error("Personal authoring cannot move to a replacement run. Send a fresh message.");
+    });
+    prepareGatewaySkillAuthoring.mockReturnValue({ bind });
+    const execution = createExecution();
+    dispatchAgentRunFromGateway.mockImplementationOnce(() => undefined);
+
+    await startAgentRunExecution(execution.params);
+
+    const dispatch = dispatchAgentRunFromGateway.mock.calls[0]?.[0];
+    // A replaced admission still reaches onAdmittedRunContext with the new
+    // context; the skill-authoring bind rejects it (real behavior, unmocked),
+    // but that must not propagate out of the callback.
+    expect(() => dispatch?.ingressOpts.onAdmittedRunContext({})).not.toThrow();
+    expect(bind).toHaveBeenCalledOnce();
+    expect(execution.params.context.logGateway.warn).toHaveBeenCalledWith(
+      expect.stringContaining("skill authoring bind skipped after run replacement"),
+    );
+    // The rest of admission (delegated-authority check) still ran normally.
+    expect(getAdmittedRunDelegatedAuthority).toHaveBeenCalledOnce();
+  });
 });
