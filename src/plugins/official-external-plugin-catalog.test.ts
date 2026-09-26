@@ -334,6 +334,12 @@ describe("official external plugin catalog", () => {
 
   it.each([
     { pluginId: "google-meet", packageName: "@openclaw/google-meet", external: true },
+    {
+      pluginId: "google-meet",
+      packageName: "@openclaw/google-meet",
+      packageBuild: { bundledDist: true },
+      external: false,
+    },
     { pluginId: "google-meet", packageName: "@example/google-meet", external: false },
     { pluginId: "other-plugin", packageName: "@openclaw/google-meet", external: false },
     {

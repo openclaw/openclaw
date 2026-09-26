@@ -84,7 +84,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[crabbox](/plugins/reference/crabbox)** (`@openclaw/crabbox-provider`) - included in OpenClaw. Cloud worker provider and lease-backed sandbox backend for the Crabbox CLI.
 
-- **[cua-computer](/plugins/reference/cua-computer)** (`@openclaw/cua-computer`) - included in OpenClaw, and also from ClawHub: `clawhub:@openclaw/cua-computer`. Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts.
+- **[cua-computer](/plugins/reference/cua-computer)** (`@openclaw/cua-computer`) - included in OpenClaw. Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts.
 
 - **[deepgram](/plugins/reference/deepgram)** (`@openclaw/deepgram-provider`) - included in OpenClaw. Deepgram audio transcription with Nova and Flux models, plus realtime speech recognition.
 

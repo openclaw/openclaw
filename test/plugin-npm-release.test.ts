@@ -657,7 +657,8 @@ describe("collectPublishablePluginPackages", () => {
         ({ extensionId }) => extensionId,
       ),
     );
-    for (const { id, minHostVersion } of [
+    for (const { id, minHostVersion, publishToNpm = true } of [
+      { id: "cua-computer", minHostVersion: ">=2026.9.6", publishToNpm: false },
       { id: "logbook", minHostVersion: ">=2026.9.5" },
       { id: "memory-wiki", minHostVersion: ">=2026.9.4" },
       { id: "onepassword", minHostVersion: ">=2026.9.4" },
@@ -670,7 +671,7 @@ describe("collectPublishablePluginPackages", () => {
         openclaw: {
           build: { bundledDist: true },
           install: { minHostVersion },
-          release: { publishToNpm: true, publishToClawHub: true },
+          release: { publishToNpm, publishToClawHub: true },
         },
       });
       expect(bundledIds, id).toContain(id);
