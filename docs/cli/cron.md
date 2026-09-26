@@ -439,7 +439,7 @@ openclaw automations edit <job-id> --session current
 openclaw automations edit <job-id> --session "session:daily-brief"
 ```
 
-`openclaw automations add` warns when `--agent` is omitted on agent-turn jobs and falls back to the default agent (`main`). Pass `--agent <id>` at create time to pin a specific agent.
+`openclaw automations add` warns when `--agent` is omitted on agent-turn jobs and falls back to the default agent (`main`). Pass `--agent <id>` at create time to pin a specific agent. Explicitly blank or whitespace-only `--agent`, `--session-key`, and `--command-cwd` values are rejected before the job is created, the same way `automations edit` rejects them. A wrapper with nothing to supply must omit the flag rather than pass an empty variable, which keeps the default agent, session routing, and Gateway working directory.
 
 Delivery tweaks:
 
