@@ -86,7 +86,7 @@ function isNativeSessionEntryRead(scope: SessionEntryReadScope, agentId: string 
 export async function withSessionEntryReadOnlyInWorker<T>(
   input: SessionEntryReadScope,
   assertCallerCurrent: () => void,
-  consume: (read: Result<SessionEntry | undefined, unknown>) => Promise<T>,
+  consume: (read: ReturnType<typeof loadSessionEntryReadOnlyResultInScope>) => Promise<T>,
 ): Promise<T> {
   const { scope, agentId } = captureSessionEntryReadScope(input);
   assertCallerCurrent();
