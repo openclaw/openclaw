@@ -36,8 +36,21 @@ function bodyStream(text: string): { body: ReadableStream<Uint8Array> } {
   };
 }
 
+function mockTextResponse(text: string, status = 200, statusText?: string): void {
+  mockFetch.mockResolvedValue({
+    ok: status >= 200 && status < 300,
+    status,
+    statusText,
+    ...bodyStream(text),
+  });
+}
+
 function mockJsonResponse(value: unknown = {}, status = 200): void {
-  mockFetch.mockResolvedValue({ ok: true, status, ...bodyStream(JSON.stringify(value)) });
+  mockTextResponse(JSON.stringify(value), status);
+}
+
+function mockNoContentResponse(): void {
+  mockFetch.mockResolvedValue({ ok: true, status: 204 });
 }
 
 function stalledBodyStream(): { body: ReadableStream<Uint8Array> } {
@@ -122,74 +135,53 @@ function expectMockLogNotContains(mock: ReturnType<typeof vi.fn>, expected: stri
 }
 
 // Minimal WebSocket mock for connection-log assertions.
-vi.mock("./ws-runtime.js", () => ({
-  WebSocket: class MockWebSocket {
-    private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
-    private bufferedMessageFlushed = false;
+vi.mock("./ws-runtime.js", async () => {
+  const { EventEmitter } = await import("node:events");
+  return {
+    WebSocket: class MockWebSocket extends EventEmitter {
+      private bufferedMessageFlushed = false;
 
-    constructor(url: string | URL, options?: { maxPayload?: number; handshakeTimeout?: number }) {
-      wsMockState.urls.push(String(url));
-      wsMockState.options.push(options);
-      setTimeout(() => {
-        if (wsMockState.behavior === "open") {
-          this.emit("open");
-          this.emit("close", 1000, Buffer.from("done"));
-        } else if (wsMockState.behavior === "error") {
-          this.emit("error", new Error("WebSocket failed"));
-        } else if (wsMockState.behavior === "unexpected-response") {
-          this.emit("unexpected-response", {}, { statusCode: 200, statusMessage: "OK" });
-        } else if (wsMockState.behavior === "message") {
-          this.emit("message", Buffer.from('{"envelope":{"timestamp":1}}'));
-          this.emit("close", 1000, Buffer.from("done"));
-        } else if (wsMockState.behavior === "buffered-message") {
-          this.emit("open");
-          this.emit("message", Buffer.from('{"envelope":{"timestamp":1}}'));
-        } else if (wsMockState.behavior === "pending") {
-          // Keep the opening handshake unresolved until shutdown closes it.
-        } else {
-          this.emit("close", 1000, Buffer.from("done"));
+      constructor(url: string | URL, options?: { maxPayload?: number; handshakeTimeout?: number }) {
+        super();
+        wsMockState.urls.push(String(url));
+        wsMockState.options.push(options);
+        setTimeout(() => {
+          if (wsMockState.behavior === "open") {
+            this.emit("open");
+            this.emit("close", 1000, Buffer.from("done"));
+          } else if (wsMockState.behavior === "error") {
+            this.emit("error", new Error("WebSocket failed"));
+          } else if (wsMockState.behavior === "unexpected-response") {
+            this.emit("unexpected-response", {}, { statusCode: 200, statusMessage: "OK" });
+          } else if (wsMockState.behavior === "message") {
+            this.emit("message", Buffer.from('{"envelope":{"timestamp":1}}'));
+            this.emit("close", 1000, Buffer.from("done"));
+          } else if (wsMockState.behavior === "buffered-message") {
+            this.emit("open");
+            this.emit("message", Buffer.from('{"envelope":{"timestamp":1}}'));
+          } else if (wsMockState.behavior === "pending") {
+            // Keep the opening handshake unresolved until shutdown closes it.
+          } else {
+            this.emit("close", 1000, Buffer.from("done"));
+          }
+        }, 0);
+      }
+
+      close() {
+        if (wsMockState.behavior === "buffered-message" && !this.bufferedMessageFlushed) {
+          this.bufferedMessageFlushed = true;
+          // ws flushes already-buffered receiver frames before its final close event.
+          this.emit("message", Buffer.from('{"envelope":{"timestamp":2}}'));
         }
-      }, 0);
-    }
-
-    on(event: string, callback: (...args: unknown[]) => void) {
-      const handlers = this.handlers.get(event) ?? [];
-      handlers.push(callback);
-      this.handlers.set(event, handlers);
-      return this;
-    }
-
-    once(event: string, callback: (...args: unknown[]) => void) {
-      const onceCallback = (...args: unknown[]) => {
-        this.handlers.set(
-          event,
-          (this.handlers.get(event) ?? []).filter((handler) => handler !== onceCallback),
-        );
-        callback(...args);
-      };
-      return this.on(event, onceCallback);
-    }
-
-    close() {
-      if (wsMockState.behavior === "buffered-message" && !this.bufferedMessageFlushed) {
-        this.bufferedMessageFlushed = true;
-        // ws flushes already-buffered receiver frames before its final close event.
-        this.emit("message", Buffer.from('{"envelope":{"timestamp":2}}'));
+        this.emit("close", 1000, Buffer.from("done"));
       }
-      this.emit("close", 1000, Buffer.from("done"));
-    }
 
-    terminate() {
-      wsMockState.terminations += 1;
-    }
-
-    private emit(event: string, ...args: unknown[]) {
-      for (const handler of this.handlers.get(event) ?? []) {
-        handler(...args);
+      terminate() {
+        wsMockState.terminations += 1;
       }
-    }
-  },
-}));
+    },
+  };
+});
 
 describe("containerCheck", () => {
   it("cancels /v1/about response bodies after simple health checks", async () => {
@@ -295,12 +287,7 @@ describe("containerRestRequest", () => {
   });
 
   it("bounds REST error response bodies before reporting failures", async () => {
-    mockFetch.mockResolvedValue({
-      ok: false,
-      status: 500,
-      statusText: "Internal Server Error",
-      ...bodyStream("x".repeat(20_000)),
-    });
+    mockTextResponse("x".repeat(20_000), 500, "Internal Server Error");
 
     await expect(rpc("send", undefined)).rejects.toThrow(
       `Signal REST 500: ${"x".repeat(16 * 1024)}`,
@@ -336,11 +323,7 @@ describe("containerRestRequest", () => {
   });
 
   it("handles empty response body", async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      ...bodyStream(""),
-    });
+    mockTextResponse("");
 
     const result = await rpc("version");
     expect(result).toBeUndefined();
@@ -349,11 +332,7 @@ describe("containerRestRequest", () => {
   it("caps oversized REST request timeouts before arming abort timers", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      mockFetch.mockResolvedValue({
-        ok: true,
-        status: 200,
-        ...bodyStream("{}"),
-      });
+      mockJsonResponse();
 
       await rpc("version", undefined, {
         timeoutMs: Number.MAX_SAFE_INTEGER,
@@ -581,10 +560,7 @@ describe("containerSendMessage", () => {
 
 describe("containerSendTyping", () => {
   it("sends typing indicator with PUT", async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 204,
-    });
+    mockNoContentResponse();
 
     const result = await rpc("sendTyping", {
       account: "+14259798283",
@@ -600,10 +576,7 @@ describe("containerSendTyping", () => {
   });
 
   it("stops typing indicator with DELETE", async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 204,
-    });
+    mockNoContentResponse();
 
     await rpc("sendTyping", {
       account: "+14259798283",
@@ -617,10 +590,7 @@ describe("containerSendTyping", () => {
 
 describe("containerRpcRequest typing", () => {
   it("formats group ids for typing indicators", async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 204,
-    });
+    mockNoContentResponse();
 
     await rpc("sendTyping", {
       account: "+14259798283",
@@ -688,10 +658,7 @@ describe("containerRpcRequest send", () => {
 
 describe("containerSendReceipt", () => {
   it("sends read receipt", async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 204,
-    });
+    mockNoContentResponse();
 
     const result = await rpc("sendReceipt", {
       account: "+14259798283",
@@ -711,10 +678,7 @@ describe("containerSendReceipt", () => {
   });
 
   it("sends viewed receipt when type specified", async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 204,
-    });
+    mockNoContentResponse();
 
     await rpc("sendReceipt", {
       account: "+14259798283",
@@ -876,22 +840,13 @@ describe("normalizeBaseUrl edge cases", () => {
 
 describe("containerRestRequest edge cases", () => {
   it("handles error response with empty body", async () => {
-    mockFetch.mockResolvedValue({
-      ok: false,
-      status: 500,
-      statusText: "Internal Server Error",
-      ...bodyStream(""),
-    });
+    mockTextResponse("", 500, "Internal Server Error");
 
     await expect(rpc("send", undefined)).rejects.toThrow("Signal REST 500: Internal Server Error");
   });
 
   it("handles JSON parse errors gracefully", async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      ...bodyStream("not-valid-json"),
-    });
+    mockTextResponse("not-valid-json");
 
     await expect(rpc("version", undefined)).rejects.toThrow("Signal REST returned malformed JSON");
   });
@@ -934,11 +889,7 @@ describe("containerRestRequest edge cases", () => {
     const payload = JSON.stringify({ items });
     expect(payload.length).toBeGreaterThan(2 * 1024 * 1024);
     expect(payload.length).toBeLessThan(16 * 1024 * 1024);
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      ...bodyStream(payload),
-    });
+    mockTextResponse(payload);
 
     const result = await rpc<{ items: Array<{ id: number }> }>("version", undefined, {});
     // Full body round-trips: first and last entries survive, count is exact.
@@ -996,14 +947,8 @@ describe("streamContainerEvents", () => {
     wsMockState.behavior = "buffered-message";
     const abort = new AbortController();
     const removeEventListener = vi.spyOn(abort.signal, "removeEventListener");
-    let releaseFirst!: () => void;
-    const firstDelivery = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    let markFirstStarted!: () => void;
-    const firstStarted = new Promise<void>((resolve) => {
-      markFirstStarted = resolve;
-    });
+    const firstDelivery = Promise.withResolvers<void>();
+    const firstStarted = Promise.withResolvers<void>();
     const timestamps: number[] = [];
     const stream = streamContainerEvents({
       baseUrl: "http://localhost:8080",
@@ -1012,8 +957,8 @@ describe("streamContainerEvents", () => {
       onEvent: async (event) => {
         timestamps.push(event.envelope?.timestamp ?? 0);
         if (timestamps.length === 1) {
-          markFirstStarted();
-          await firstDelivery;
+          firstStarted.resolve();
+          await firstDelivery.promise;
         }
       },
     });
@@ -1022,7 +967,7 @@ describe("streamContainerEvents", () => {
       settled = true;
     });
 
-    await firstStarted;
+    await firstStarted.promise;
     abort.abort();
     const settledBeforeDrain = await Promise.race([
       stream.then(() => true),
@@ -1033,7 +978,7 @@ describe("streamContainerEvents", () => {
     expect(settledBeforeDrain).toBe(false);
     expect(settled).toBe(false);
 
-    releaseFirst();
+    firstDelivery.resolve();
     await expect(stream).resolves.toBeUndefined();
     expect(timestamps).toEqual([1, 2]);
     expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
@@ -1044,26 +989,20 @@ describe("streamContainerEvents", () => {
     wsMockState.behavior = "buffered-message";
     const abort = new AbortController();
     const appendError = new Error("durable append failed during shutdown");
-    let rejectDelivery!: (error: Error) => void;
-    const delivery = new Promise<void>((_resolve, reject) => {
-      rejectDelivery = reject;
-    });
-    let markFirstStarted!: () => void;
-    const firstStarted = new Promise<void>((resolve) => {
-      markFirstStarted = resolve;
-    });
+    const delivery = Promise.withResolvers<void>();
+    const firstStarted = Promise.withResolvers<void>();
     const stream = streamContainerEvents({
       baseUrl: "http://localhost:8080",
       abortSignal: abort.signal,
       onEvent: async () => {
-        markFirstStarted();
-        await delivery;
+        firstStarted.resolve();
+        await delivery.promise;
       },
     });
 
-    await firstStarted;
+    await firstStarted.promise;
     abort.abort();
-    rejectDelivery(appendError);
+    delivery.reject(appendError);
     await expect(stream).rejects.toBe(appendError);
     expect(wsMockState.terminations).toBe(0);
   });
