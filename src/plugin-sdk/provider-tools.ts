@@ -15,6 +15,7 @@ import type {
   ProviderNormalizeToolSchemasContext,
   ProviderToolSchemaDiagnostic,
 } from "./plugin-entry.js";
+import { asOptionalRecord as readOptionalRecord } from "./string-coerce-runtime.js";
 
 export {
   normalizeOpenAIStrictCompatSchema,
@@ -107,6 +108,118 @@ function inspectUnsupportedToolSchemas(
     }
     return [{ toolName: tool.name, toolIndex, violations }];
   });
+}
+const kimiSchemaTypes = new Set([
+  "null",
+  "boolean",
+  "object",
+  "array",
+  "number",
+  "integer",
+  "string",
+]);
+const kimiSchemaMapKeys = new Set([
+  "properties",
+  "patternProperties",
+  "dependentSchemas",
+  "dependencies",
+  "$defs",
+  "definitions",
+]);
+const kimiSchemaValueKeys = new Set([
+  "items",
+  "additionalItems",
+  "prefixItems",
+  "additionalProperties",
+  "anyOf",
+  "oneOf",
+  "allOf",
+  "then",
+  "else",
+  "if",
+  "not",
+  "contains",
+  "propertyNames",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+  "contentSchema",
+]);
+
+function readKimiSchemaTypes(type: unknown): string[] | undefined {
+  const types = Array.isArray(type) ? type : [type];
+  return types.length > 0 &&
+    types.every((entry) => typeof entry === "string" && kimiSchemaTypes.has(entry))
+    ? types
+    : undefined;
+}
+
+function canMoveKimiParentType(branches: unknown[], parentTypes: string[]): boolean {
+  return (
+    branches.length > 0 &&
+    branches.every((branch) => {
+      const record = readOptionalRecord(branch);
+      if (!record || "$ref" in record || "anyOf" in record || "oneOf" in record) {
+        return false;
+      }
+      if (!("type" in record)) {
+        return true;
+      }
+      return (
+        readKimiSchemaTypes(record.type)?.every(
+          (type) =>
+            parentTypes.includes(type) || (type === "integer" && parentTypes.includes("number")),
+        ) === true
+      );
+    })
+  );
+}
+
+function normalizeKimiSchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    return schema.map(normalizeKimiSchema);
+  }
+  const record = readOptionalRecord(schema);
+  if (!record) {
+    return schema;
+  }
+
+  // Traverse schema locations only: annotations such as default/examples/enum can
+  // contain arbitrary user data. Object.fromEntries also preserves own __proto__ keys.
+  const next = Object.fromEntries(
+    Object.entries(record).map(([key, value]) => {
+      const entries = kimiSchemaMapKeys.has(key) ? readOptionalRecord(value) : undefined;
+      if (entries) {
+        return [
+          key,
+          Object.fromEntries(
+            Object.entries(entries).map(([name, child]) => [name, normalizeKimiSchema(child)]),
+          ),
+        ];
+      }
+      return [key, kimiSchemaValueKeys.has(key) ? normalizeKimiSchema(value) : value];
+    }),
+  );
+  const parentTypes = readKimiSchemaTypes(next.type);
+  const branches = next.anyOf;
+  if (!parentTypes || !Array.isArray(branches) || !canMoveKimiParentType(branches, parentTypes)) {
+    return next;
+  }
+
+  // Kimi requires anyOf branch types. Distribute the parent's conjunctive type
+  // only when every typed branch is already a subset, preserving its value set.
+  const { type, ...result } = next;
+  result.anyOf = branches.map((branch) => {
+    const branchRecord = readOptionalRecord(branch);
+    return branchRecord && !("type" in branchRecord)
+      ? Object.fromEntries([["type", type], ...Object.entries(branchRecord)])
+      : branch;
+  });
+  return result;
+}
+
+/** Rewrites tool schemas into the JSON Schema shape accepted by Kimi model families. */
+export function normalizeKimiToolSchemas(ctx: ProviderNormalizeToolSchemasContext): AnyAgentTool[] {
+  return normalizeToolSchemasIfChanged(ctx, normalizeKimiSchema);
 }
 
 /**
