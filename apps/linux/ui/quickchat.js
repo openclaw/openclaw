@@ -905,7 +905,7 @@ function handleChatEvent(payload) {
       event.runId === payload?.runId && event.sessionKey === payload?.sessionKey &&
       event.agentId === payload?.agentId);
     const previous = pendingChatEvents[previousIndex];
-    if (previous && previous.state !== "delta") {
+    if (["final", "error", "aborted"].includes(previous?.state)) {
       return;
     }
     const text = assembleChatDelta(chatMessageText(previous?.message), payload);

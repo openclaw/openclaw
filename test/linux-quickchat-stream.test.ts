@@ -800,6 +800,13 @@ test("a buffered matching final wins over terminal history recovery", async () =
     sessionKey: "global",
     agentId: "work",
     runId: "reply-key",
+    state: "status",
+    status: { phase: "starting_model" },
+  });
+  harness.handleChatEvent({
+    sessionKey: "global",
+    agentId: "work",
+    runId: "reply-key",
     state: "final",
     message: { role: "assistant", content: "Live final" },
   });
@@ -1215,6 +1222,13 @@ test("pre-ack overflow preserves the acknowledged run's text and widgets", async
   harness.setGatewayUp();
   harness.setMessage("hello");
   const sending = harness.send(false);
+  harness.handleChatEvent({
+    sessionKey: "global",
+    agentId: "work",
+    runId: "right-run",
+    state: "status",
+    status: { phase: "starting_model" },
+  });
   harness.handleChatEvent({
     sessionKey: "global",
     agentId: "work",
