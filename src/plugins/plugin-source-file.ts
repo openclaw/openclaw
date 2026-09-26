@@ -4,6 +4,12 @@ import { copyFileDescriptorSync } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { isGitRuntimeStagingName } from "../infra/update-runtime-staging.js";
+
+// Git rollback trees retain links relative to their final location. Only explicit
+// dependency selection may own them; incidental plugin walks must leave them alone.
+export const isPluginSourceEntry = (name: string): boolean =>
+  name !== "node_modules" && name !== ".git" && !isGitRuntimeStagingName(name);
 
 // Capture and native module hooks are synchronous; no read retains this scratch buffer.
 const scratch = Buffer.allocUnsafe(64 * 1024);
