@@ -195,6 +195,34 @@ describe("process start times", () => {
     });
   });
 
+  it("reads Linux procfs start identity on Android/Termux", async () => {
+    // Termux reports process.platform === "android" but exposes Linux procfs, so
+    // the runtime-state identity must resolve instead of failing closed (which
+    // broke cron fencing with "cannot acquire a durable fence without process
+    // start identity").
+    mockProcReads({
+      [`/proc/${process.pid}/stat`]: `${process.pid} (node) S ${"0 ".repeat(18)}98765`,
+      "/proc/42/stat": `42 (node) S ${"0 ".repeat(18)}55555`,
+    });
+
+    await withMockedPlatform("android", async () => {
+      expect(getProcessStartTime(42)).toBe(55555);
+      expect(getFileLockProcessStartTime(42)).toBe(55555);
+    });
+  });
+
+  it("applies the Linux zombie check on Android/Termux", async () => {
+    vi.spyOn(process, "kill").mockImplementation(() => true);
+    mockProcReads({
+      "/proc/42/status": "Name:\tnode\nState:\tZ (zombie)\nThreads:\t1\n",
+    });
+
+    await withMockedPlatform("android", async () => {
+      expect(isPidAlive(42)).toBe(false);
+      expect(isPidDefinitelyDead(42)).toBe(true);
+    });
+  });
+
   it("keeps the runtime-state helper Linux-only", () => {
     return withMockedPlatform("darwin", async () => {
       expect(getProcessStartTime(42)).toBeNull();
@@ -244,10 +272,10 @@ describe("process start times", () => {
     });
   });
 
-  it.each(["darwin", "linux", "win32", "freebsd"] as const)(
+  it.each(["darwin", "linux", "android", "win32", "freebsd"] as const)(
     "retries failed self probes and keeps foreign %s identities fresh",
     async (platform) => {
-      const identity = platform === "linux" ? 0 : 1_752_000_000;
+      const identity = platform === "linux" || platform === "android" ? 0 : 1_752_000_000;
       const foreignPid = process.pid + 1;
       const probe = vi
         .fn<(pid: number) => number | null>()
