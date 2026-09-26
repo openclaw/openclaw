@@ -51,6 +51,7 @@ export type WorkerEnvironmentServiceRecord = {
   environmentId: string;
   providerId: string;
   profileId: string;
+  inference?: "worker";
   leaseId: string | null;
   nodeDeviceId?: string | null;
   sharedHost: boolean | null;

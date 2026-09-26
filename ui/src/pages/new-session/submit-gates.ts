@@ -261,8 +261,12 @@ export function resolveNewSessionSubmitBlock(
       ),
     };
   }
+  const placementTarget = host.placementTargetForSubmission();
+  const cloudProfileId = placementTarget?.kind === "profile" ? placementTarget.profileId : "";
+  const cloudProfile = gateway.cloudProfiles.find((profile) => profile.id === cloudProfileId);
   const modelUnavailableMessage =
-    kind === "session" && place.modelControl.modelSelectionBlockedReason(place.selectedAgent());
+    kind === "session" &&
+    place.modelControl.modelSelectionBlockedReason(place.selectedAgent(), cloudProfile?.inference);
   if (modelUnavailableMessage) {
     return { gate: "model-unavailable", reason: modelUnavailableMessage };
   }
@@ -282,19 +286,15 @@ export function resolveNewSessionSubmitBlock(
   if ((place.deviceId || place.autoDevice) && deviceRuntimeUnsupportedReason) {
     return { gate: "device-runtime", reason: deviceRuntimeUnsupportedReason };
   }
-  const placementTarget = host.placementTargetForSubmission();
   if (
     placementTarget &&
     (!client.recoveryScope || !client.recoveryScopeReady || gateway.cloudProfilesPending)
   ) {
     return { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
   }
-  const cloudProfileId = placementTarget?.kind === "profile" ? placementTarget.profileId : "";
   if (
     cloudProfileId &&
-    (!gateway.cloudProfilesReady ||
-      !gateway.cloudProfiles.some((profile) => profile.id === cloudProfileId) ||
-      Boolean(host.cloudRuntimeUnsupportedReason()))
+    (!gateway.cloudProfilesReady || !cloudProfile || Boolean(host.cloudRuntimeUnsupportedReason()))
   ) {
     const reason = host.cloudRuntimeUnsupportedReason() ?? t("newSession.placementNotReady");
     return { gate: "cloud", reason };

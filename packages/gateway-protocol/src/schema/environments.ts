@@ -228,6 +228,7 @@ export const WorkerExecutionModeSchema = Type.Union([
 const WorkerEnvironmentProfileSummarySchema = closedObject({
   id: NonEmptyString,
   providerId: NonEmptyString,
+  inference: Type.Optional(Type.Literal("worker")),
   readyWorkers: Type.Optional(Type.Integer({ minimum: 0 })),
   providerDisplayId: Type.Optional(
     Type.String({ pattern: "^[a-z][a-z0-9-]{0,63}(?![\\s\\S])", maxLength: 64 }),

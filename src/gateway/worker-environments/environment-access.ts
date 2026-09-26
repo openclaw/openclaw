@@ -5,6 +5,7 @@ import type { WorkerProvider } from "../../plugins/types.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
 import { StaleWorkerBuildError, type ExpectedWorkerBuild } from "./admission.js";
+import { workerInferenceMetadata } from "./inference-placement.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
@@ -164,6 +165,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       : undefined;
     return {
       ...record,
+      ...workerInferenceMetadata(record),
       ...(record.preparation && preparedProject
         ? {
             preparation: {

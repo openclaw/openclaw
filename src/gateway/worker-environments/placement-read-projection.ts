@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
+import { workerInferenceMetadata } from "./inference-placement.js";
 import { readWorkerPlacementMovesReadOnly } from "./placement-move-intent.js";
 import type {
   WorkerEnvironmentPlacementFacts,
@@ -57,6 +58,7 @@ export function readWorkerSessionPlacementProjectionInDatabase(
           providerId: record.providerId,
           profileId: record.profileId,
           profileSnapshot: record.profileSnapshot,
+          ...workerInferenceMetadata(record),
           state: record.state,
           leaseId: record.leaseId,
           ownerEpoch: record.ownerEpoch,

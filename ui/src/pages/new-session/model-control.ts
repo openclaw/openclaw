@@ -438,7 +438,11 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     });
   }
 
-  modelSelectionBlockedReason(agent: GatewayAgentRow | undefined): string | undefined {
+  modelSelectionBlockedReason(
+    agent: GatewayAgentRow | undefined,
+    inference?: "worker",
+  ): string | undefined {
+    const runtime = this.resolveAgentRuntime({ agent, context: this.pendingContext });
     return resolveDraftModelSelectionBlockedReason({
       model: this.effectiveModel,
       agentRuntime: this.agentRuntime,
@@ -448,6 +452,10 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       accountSelected: Boolean(this.draftAccount),
       accountReady: this.accountSelectionReady(),
       metadataPending: this.metadataReader.pending,
+      inference:
+        runtime?.id === "openclaw" && runtime.cloudPlacementExecutionMode === "worker-turn"
+          ? inference
+          : undefined,
     });
   }
 

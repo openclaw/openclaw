@@ -215,14 +215,24 @@ instead, still omitting an initial message and explicit model/runtime selection.
 Select `profileId`, not the ordinary paired-device target: ordinary device
 placement remains proxied.
 
+In the Control UI, choose the named worker-inference profile and keep the agent's
+configured model and OpenClaw runtime defaults. The profile and active placement
+identify worker inference without exposing provider settings or credentials.
+Existing sessions use their bound environment's recorded choice, not later edits
+to the profile. Stopped, reclaimed, and inexact placements do not establish a
+current worker-inference binding.
+
 **Current limitation:** explicit model/runtime selection still uses Gateway
 model availability and auth checks; worker proxy auth values do not satisfy those
 checks. An explicit `agentRuntime` requires an explicit canonical `model` and an
 available Gateway runtime choice. The model picker is not a catalog of the node's
 local registry. Use the configured-default flow above; do not copy worker
 auth values to the Gateway or disable auth checks to make an explicit selection pass.
-Gateway authentication, agent/model authorization, tool permissions, session and
-placement access, and current-run authority still apply.
+These are selection-time checks: they do not make Gateway provider auth a
+requirement for continuing an already-bound worker-inference session, including
+an earlier accepted model selection. Gateway authentication, agent/model
+authorization, tool permissions, session and placement access, and current-run
+authority still apply.
 
 The launch carries a feature-gated inference choice and the existing model
 reference, not model endpoints, headers, or provider credentials. Missing local
