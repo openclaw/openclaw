@@ -65,7 +65,7 @@ export type EmbeddedRunFailoverRetryController = ReturnType<
   typeof createEmbeddedRunFailoverRetryController
 >;
 type AuthRetryTrace = TraceAttempt & { reason: FailoverReason };
-type TransientRetryReason = FailoverReason | "output_limit";
+type TransientRetryReason = FailoverReason | "output_limit" | "tool_call_rejection";
 
 type RateLimitAuthProfileContext = {
   failoverProvider: string;
@@ -289,7 +289,8 @@ export function createEmbeddedRunFailoverRetryController(input: {
         retry.reason !== "overloaded" &&
         retry.reason !== "server_error" &&
         retry.reason !== "timeout" &&
-        retry.reason !== "output_limit"
+        retry.reason !== "output_limit" &&
+        retry.reason !== "tool_call_rejection"
       ) {
         recordDecision("rejected", "non_transient");
         return false;
@@ -341,16 +342,17 @@ export function createEmbeddedRunFailoverRetryController(input: {
       }
       const nowMs = Date.now();
       const retryWindowStartMs = transientRetryWindowStartMs ?? nowMs;
-      if (retry.reason !== "output_limit") {
+      const generatedOutputFailure =
+        retry.reason === "output_limit" || retry.reason === "tool_call_rejection";
+      if (!generatedOutputFailure) {
         transientRetryWindowStartMs = retryWindowStartMs;
       }
       const delayMs = resolveTransientRetryDelayMs({
         retryNumber: retryCount + 1,
         retryAfterMs: retry.retryAfterMs,
-        // Reaching an output ceiling can take minutes of useful generation.
+        // Reaching a ceiling or rejecting generated arguments can follow minutes of useful work.
         // Keep its count budget and run deadline without the outage time window.
-        elapsedMs:
-          rateLimit || retry.reason === "output_limit" ? undefined : nowMs - retryWindowStartMs,
+        elapsedMs: rateLimit || generatedOutputFailure ? undefined : nowMs - retryWindowStartMs,
       });
       if (delayMs === undefined) {
         recordDecision("rejected", "retry_delay_unavailable");

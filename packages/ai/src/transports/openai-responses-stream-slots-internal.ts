@@ -1,5 +1,6 @@
 import type { ResponseReasoningItem } from "openai/resources/responses/responses.js";
 import type { AssistantMessage, TextContent } from "../types.js";
+import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.js";
 import {
   isResponsesProviderTool,
   ResponsesOutputIdentityError,
@@ -52,7 +53,7 @@ type ResponsesOutputState = {
 export type ResponsesOutputTracker = ReturnType<typeof createResponsesOutputTracker>;
 
 export function createResponsesOutputTracker(params: {
-  output: Pick<AssistantMessage, "content">;
+  output: Pick<AssistantMessage, "content" | "diagnostics">;
   canRetryIdentityConflict?: () => boolean;
 }) {
   const outputs = new Map<string | number, ResponsesOutputState>();
@@ -60,6 +61,23 @@ export function createResponsesOutputTracker(params: {
   let providerToolObserved = false;
   let visibleTextEmitted = false;
   let terminalAllowsRetry = false;
+  let refusalObserved = false;
+  let terminalFacts:
+    | Readonly<{
+        hasRefusal: boolean;
+        hasError: boolean;
+        hasIncompleteDetails: boolean;
+      }>
+    | undefined;
+  const recordRefusal = () => {
+    if (!refusalObserved) {
+      refusalObserved = true;
+      appendAssistantMessageDiagnostic(params.output, {
+        type: "provider_refusal",
+        timestamp: Date.now(),
+      });
+    }
+  };
   const identity = (item: ResponsesOutputIdentityItem): string | undefined => {
     if ((item.type === "reasoning" || item.type === "message") && item.id) {
       return `${item.type}:${item.id}`;
@@ -119,26 +137,47 @@ export function createResponsesOutputTracker(params: {
       currentEventType = event.type;
       // An earlier conflict cannot establish whether a later terminal will reject the response.
       terminalAllowsRetry = false;
+      terminalFacts = undefined;
+      // Observation precedes output admission, including the rejected-call drain.
+      // Never let a later snapshot erase an earlier explicit refusal.
       if (
-        event.type === "response.output_item.added" ||
-        event.type === "response.output_item.done"
+        event.type === "response.refusal.delta" ||
+        (event.type === "response.content_part.added" && event.part.type === "refusal")
       ) {
-        providerToolObserved ||= isResponsesProviderTool(event.item);
-      } else if (event.type === "response.completed" || event.type === "response.incomplete") {
-        let terminalHasRefusal = false;
-        for (const item of event.response.output ?? []) {
-          providerToolObserved ||= isResponsesProviderTool(item);
-          terminalHasRefusal ||=
-            item.type === "message" && (item.content ?? []).some((part) => part.type === "refusal");
+        recordRefusal();
+      }
+      const terminalEvent =
+        event.type === "response.completed" || event.type === "response.incomplete"
+          ? event
+          : undefined;
+      const items =
+        event.type === "response.output_item.added" || event.type === "response.output_item.done"
+          ? [event.item]
+          : (terminalEvent?.response.output ?? []);
+      for (const item of items) {
+        providerToolObserved ||= isResponsesProviderTool(item);
+        if (
+          item.type === "message" &&
+          (item.content ?? []).some((part) => part.type === "refusal")
+        ) {
+          recordRefusal();
         }
+      }
+      if (terminalEvent) {
+        terminalFacts = {
+          hasRefusal: refusalObserved,
+          hasError: terminalEvent.response.error != null,
+          hasIncompleteDetails: terminalEvent.response.incomplete_details != null,
+        };
         terminalAllowsRetry =
-          event.type === "response.completed" &&
-          event.response.status === "completed" &&
-          event.response.error == null &&
-          event.response.incomplete_details == null &&
-          !terminalHasRefusal;
+          terminalEvent.type === "response.completed" &&
+          terminalEvent.response.status === "completed" &&
+          !terminalFacts.hasError &&
+          !terminalFacts.hasIncompleteDetails &&
+          !terminalFacts.hasRefusal;
       }
     },
+    getTerminalFacts: () => terminalFacts,
     get,
     set(
       item: ResponsesOutputIdentityItem,

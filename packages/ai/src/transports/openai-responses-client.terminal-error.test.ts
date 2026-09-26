@@ -54,6 +54,220 @@ const model = {
 } satisfies Model<"openai-responses">;
 
 describe("managed Responses transport terminal errors", () => {
+  it.each([
+    ...["refusal", "error"].flatMap((kind) =>
+      ["terminal", "item-done", "malformed-terminal"].map((cadence) => ({ kind, cadence })),
+    ),
+    { kind: "drained-refusal", cadence: "item-done" },
+    { kind: "incomplete-details", cadence: "terminal" },
+  ])("preserves bounded $kind facts before $cadence tool rejection", async ({ kind, cadence }) => {
+    const rejectedCall = {
+      type: "function_call",
+      id: "fc_denied",
+      call_id: "call_denied",
+      name: "write",
+      status: cadence === "malformed-terminal" ? "completed" : "incomplete",
+      arguments: '{"path":',
+    };
+    const refusal = {
+      type: "message",
+      id: "msg_denied",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "refusal", refusal: "PRIVATE_REFUSAL_MARKER" }],
+    };
+    sseState.outcomes.push({
+      response: new Response(null, { status: 200 }),
+      data: (async function* () {
+        if (cadence === "item-done") {
+          yield {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: { ...rejectedCall, status: "in_progress", arguments: "" },
+          };
+          yield { type: "response.output_item.done", output_index: 0, item: rejectedCall };
+        }
+        if (kind === "drained-refusal") {
+          // Body handling is already fenced; observation must still retain refusal.
+          yield {
+            type: "response.content_part.added",
+            output_index: 1,
+            item_id: "msg_denied",
+            content_index: 0,
+            part: { type: "refusal", refusal: "" },
+          };
+          yield {
+            type: "response.refusal.delta",
+            output_index: 1,
+            item_id: "msg_denied",
+            content_index: 0,
+            delta: "PRIVATE_REFUSAL_MARKER",
+          };
+        }
+        yield {
+          type: "response.completed",
+          response: {
+            id: "resp_denied",
+            status: "completed",
+            ...(kind === "error"
+              ? { error: { code: "content_filter", message: "PRIVATE_ERROR_MARKER" } }
+              : {}),
+            ...(kind === "incomplete-details" ? { incomplete_details: {} } : {}),
+            output: [...(kind === "refusal" ? [refusal] : []), rejectedCall],
+          },
+        };
+      })(),
+    });
+    const stream = await createOpenAIResponsesTransportStreamFn()(
+      model,
+      { messages: [], tools: [] },
+      { apiKey: "synthetic-key", transport: "sse" },
+    );
+    const events: string[] = [];
+    for await (const event of stream) {
+      events.push(event.type);
+    }
+    const result = await stream.result();
+    expect(result.errorCode).toBe(
+      cadence === "malformed-terminal" ? "malformed_tool_call_arguments" : "incomplete_tool_call",
+    );
+    expect(events).not.toContain("toolcall_end");
+    const hasRefusal = kind === "refusal" || kind === "drained-refusal";
+    expect(result.diagnostics).toContainEqual({
+      type: "openai_responses_terminal",
+      timestamp: expect.any(Number),
+      details: {
+        eventType: "response.completed",
+        responseStatus: "completed",
+        stopReason: cadence === "item-done" ? "toolUse" : "stop",
+        hasRefusal,
+        hasError: kind === "error",
+        hasIncompleteDetails: kind === "incomplete-details",
+        endTurn: "absent",
+      },
+    });
+    expect(result.diagnostics?.filter(({ type }) => type === "provider_refusal")).toHaveLength(
+      hasRefusal ? 1 : 0,
+    );
+    expect(JSON.stringify(result.diagnostics)).not.toContain("PRIVATE_REFUSAL_MARKER");
+    expect(JSON.stringify(result.diagnostics)).not.toContain("PRIVATE_ERROR_MARKER");
+  });
+
+  it.each([
+    { status: "completed", stopReason: "stop" },
+    { status: undefined, stopReason: "stop" },
+    { status: "failed", stopReason: "error" },
+    { status: "cancelled", stopReason: "error" },
+    { status: "incomplete", stopReason: "length" },
+    { status: "queued", stopReason: "stop" },
+    { status: "in_progress", stopReason: "stop" },
+    { status: null, stopReason: "stop" },
+    { status: "unexpected-status", stopReason: "error" },
+  ])(
+    "preserves completed-event status $status before rejecting unfinished calls",
+    async ({ status, stopReason }) => {
+      sseState.outcomes.push({
+        response: new Response(null, { status: 200 }),
+        data: (async function* () {
+          yield {
+            type: "response.completed",
+            response: {
+              id: "resp_rejected_status",
+              model: "synthetic-model",
+              ...(status === undefined ? {} : { status }),
+              output: [
+                {
+                  type: "function_call",
+                  id: "fc_rejected",
+                  call_id: "call_rejected",
+                  name: "write",
+                  status: "incomplete",
+                  arguments: '{"path":',
+                },
+              ],
+            },
+          };
+        })(),
+      });
+      const stream = await createOpenAIResponsesTransportStreamFn()(
+        model,
+        { messages: [], tools: [] },
+        { apiKey: "synthetic-key", transport: "sse" },
+      );
+      const result = await stream.result();
+      if (status === "unexpected-status") {
+        expect(result.errorCode).not.toBe("incomplete_tool_call");
+        expect(result.errorMessage).toContain("Unhandled stop reason");
+        expect(
+          result.diagnostics?.some(({ type }) => type === "openai_responses_terminal"),
+        ).not.toBe(true);
+        return;
+      }
+      expect(result.errorCode).toBe("incomplete_tool_call");
+      expect(result.content).toEqual([]);
+      expect(result.diagnostics).toContainEqual({
+        type: "openai_responses_terminal",
+        timestamp: expect.any(Number),
+        details: {
+          eventType: "response.completed",
+          stopReason,
+          responseStatus: status === undefined ? "absent" : status,
+          hasRefusal: false,
+          hasError: false,
+          hasIncompleteDetails: false,
+          endTurn: "absent",
+        },
+      });
+    },
+  );
+
+  it("retains contradictory incomplete details on a completed response", async () => {
+    sseState.outcomes.push({
+      response: new Response(null, { status: 200 }),
+      data: (async function* () {
+        yield {
+          type: "response.completed",
+          response: {
+            id: "resp_rejected_reason",
+            status: "completed",
+            incomplete_details: { reason: "max_output_tokens" },
+            output: [
+              {
+                type: "function_call",
+                id: "fc_rejected",
+                call_id: "call_rejected",
+                name: "write",
+                status: "incomplete",
+                arguments: '{"path":',
+              },
+            ],
+          },
+        };
+      })(),
+    });
+    const stream = await createOpenAIResponsesTransportStreamFn()(
+      model,
+      { messages: [], tools: [] },
+      { apiKey: "synthetic-key", transport: "sse" },
+    );
+    const result = await stream.result();
+    expect(result.errorCode).toBe("incomplete_tool_call");
+    expect(result.diagnostics).toContainEqual({
+      type: "openai_responses_terminal",
+      timestamp: expect.any(Number),
+      details: {
+        eventType: "response.completed",
+        stopReason: "stop",
+        responseStatus: "completed",
+        hasRefusal: false,
+        hasError: false,
+        hasIncompleteDetails: true,
+        incompleteReason: "max_output_tokens",
+        endTurn: "absent",
+      },
+    });
+  });
+
   it.each(["incomplete", "completed", "filtered", "failed", "eof", "aborted"] as const)(
     "fences later tool completions after truncated output until %s",
     async (ending) => {
@@ -223,6 +437,10 @@ describe("managed Responses transport terminal errors", () => {
         timestamp: expect.any(Number),
         details: {
           eventType: "response.incomplete",
+          responseStatus: status === undefined ? "absent" : status,
+          hasRefusal: false,
+          hasError: false,
+          hasIncompleteDetails: true,
           stopReason:
             status === undefined || status === "incomplete"
               ? "length"
@@ -300,6 +518,10 @@ describe("managed Responses transport terminal errors", () => {
         timestamp: expect.any(Number),
         details: {
           eventType: "response.incomplete",
+          responseStatus: "incomplete",
+          hasRefusal: false,
+          hasError: false,
+          hasIncompleteDetails: true,
           stopReason: reason === "content_filter" ? "error" : "length",
           incompleteReason:
             reason === undefined || reason === "provider-private-reason" ? "unknown" : reason,

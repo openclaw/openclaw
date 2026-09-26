@@ -156,6 +156,10 @@ describe("Responses turn continuation", () => {
             details: {
               eventType: scenario.incomplete ? "response.incomplete" : "response.completed",
               stopReason: scenario.incomplete ? "length" : "stop",
+              responseStatus: scenario.incomplete ? "incomplete" : "completed",
+              hasRefusal: false,
+              hasError: false,
+              hasIncompleteDetails: scenario.incomplete === true,
               ...(scenario.incomplete ? { incompleteReason: "max_output_tokens" } : {}),
               endTurn:
                 typeof providerEndTurn === "boolean"

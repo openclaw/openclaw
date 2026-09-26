@@ -26,7 +26,10 @@ import type { createEmbeddedRunContextRecoveryState } from "./context-recovery-s
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { buildErrorAgentMeta } from "./helpers.js";
-import { resolveSettledToolBatchEvidence } from "./incomplete-turn-recovery.js";
+import {
+  resolveSettledToolBatchEvidence,
+  shouldContinueTranscriptAfterToolCallRejection,
+} from "./incomplete-turn-recovery.js";
 import { recoverEmbeddedRunOverflow } from "./overflow-context-recovery.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 import type { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
@@ -364,7 +367,20 @@ export async function recoverEmbeddedRunAttempt(input: {
     recordRecoveryDecision("accepted", "timeout_recovery");
     return retry();
   }
-  const recoveryReason = outputLimitFailure ? "output_limit" : failureReason;
+  const toolCallRejection =
+    !runtime.pluginHarnessOwnsTransport &&
+    shouldContinueTranscriptAfterToolCallRejection({
+      attempt,
+      assistant: recoveryAssistant,
+      aborted: aborted || externalAbort || signalOwnedInterruption || terminalInterrupted,
+      timedOut: timedOut || idleTimedOut,
+      promptError: Boolean(promptError),
+    });
+  const recoveryReason = toolCallRejection
+    ? "tool_call_rejection"
+    : outputLimitFailure
+      ? "output_limit"
+      : failureReason;
   // The finished attempt has released its tools. Continue its transcript, including
   // partial output and uncertain effects; never resubmit the original user request.
   if (
@@ -400,7 +416,9 @@ export async function recoverEmbeddedRunAttempt(input: {
           data: {
             phase: "retrying",
             message:
-              reason === "rate_limit" || reason === "output_limit"
+              reason === "rate_limit" ||
+              reason === "output_limit" ||
+              reason === "tool_call_rejection"
                 ? `Retrying… ${retryAttempt + 1}/${maxRetries + 1}`
                 : `Provider temporarily unavailable. Retrying in ${Math.ceil(delayMs / 1_000)}s (${retryAttempt}/${maxRetries}).`,
             retryAttempt,
@@ -423,7 +441,8 @@ export async function recoverEmbeddedRunAttempt(input: {
     });
     recordRecoveryDecision("accepted", "transient_retry");
     return retry({
-      lastRetryFailoverReason: outputLimitFailure ? input.lastRetryFailoverReason : failureReason,
+      lastRetryFailoverReason:
+        outputLimitFailure || toolCallRejection ? input.lastRetryFailoverReason : failureReason,
     });
   }
   if (

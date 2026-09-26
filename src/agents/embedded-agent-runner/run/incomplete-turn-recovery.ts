@@ -37,6 +37,44 @@ const EMPTY_RESPONSE_RETRY_INSTRUCTION =
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
 
+/**
+ * A provider-completed tool call that the transport rejected before dispatch.
+ * The rejected call never executed and was dropped at the transport boundary.
+ */
+function isPreDispatchToolCallRejection(
+  assistant: EmbeddedRunAttemptResult["lastAssistant"] | null | undefined,
+): boolean {
+  if (!assistant || assistant.stopReason !== "error" || isTerminalAssistantError(assistant)) {
+    return false;
+  }
+  const terminalFacts =
+    assistant.diagnostics?.filter(({ type }) => type === "openai_responses_terminal") ?? [];
+  // Post-effect continuation needs positive terminal evidence before any parser
+  // code or legacy text can admit it. Early validation may leave later refusal or
+  // failure events unread; absence of those facts is not proof of completion.
+  // An omitted wire status is distinct: the producer explicitly records absent.
+  if (
+    terminalFacts.length === 0 ||
+    terminalFacts.some(
+      ({ details }) =>
+        details?.eventType !== "response.completed" ||
+        (details.responseStatus !== "completed" && details.responseStatus !== "absent") ||
+        (details.stopReason !== "stop" && details.stopReason !== "toolUse") ||
+        details.hasRefusal !== false ||
+        details.hasError !== false ||
+        details.hasIncompleteDetails !== false ||
+        details.incompleteReason !== undefined,
+    )
+  ) {
+    return false;
+  }
+  return (
+    assistant.errorCode === MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE ||
+    isPreDispatchToolCallRejectionMessage(assistant.errorMessage) ||
+    assistant.errorCode === "incomplete_tool_call"
+  );
+}
+
 export function shouldRetrySilentErrorAssistantTurn(params: {
   attempt: Pick<
     EmbeddedRunAttemptResult,
@@ -93,6 +131,52 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   }
 
   return hasOnlyAssistantReasoningContent(assistant);
+}
+
+/**
+ * Continue the current transcript after a pre-dispatch tool-call rejection that
+ * followed committed tool effects. The transcript is valid through the last
+ * settled tool result, so the model can re-issue the call without replaying the
+ * original prompt. Replay-safe rejections keep the resubmit path above; anything
+ * with unsettled, asynchronous, or turn-ending tool work still surfaces the error.
+ */
+export function shouldContinueTranscriptAfterToolCallRejection(params: {
+  attempt: IncompleteTurnAttempt;
+  assistant: EmbeddedRunAttemptResult["lastAssistant"] | null | undefined;
+  aborted: boolean;
+  timedOut: boolean;
+  promptError: boolean;
+}): boolean {
+  const { attempt, assistant } = params;
+  if (
+    params.aborted ||
+    params.timedOut ||
+    params.promptError ||
+    !isPreDispatchToolCallRejection(assistant)
+  ) {
+    return false;
+  }
+  // Replay-safe turns retain their existing retry policy, even when visible
+  // content makes that policy decline a retry. This path is only for effects.
+  if (isCurrentAttemptReplaySafe(attempt)) {
+    return false;
+  }
+  if (
+    attempt.terminal.kind === "failed" ||
+    attempt.clientToolCalls ||
+    attempt.yieldDetected ||
+    attempt.didSendDeterministicApprovalPrompt ||
+    hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
+    hasAsyncActivity(attempt.toolMetas)
+  ) {
+    return false;
+  }
+  const settledEvidence = resolveSettledToolBatchEvidence(attempt);
+  return (
+    settledEvidence.allToolsProvenSettled &&
+    !settledEvidence.intentionalTermination &&
+    !settledEvidence.hasUnsettledToolError
+  );
 }
 
 function shouldSkipNonVisibleTurnRetry(params: {
