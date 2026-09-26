@@ -3,6 +3,10 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embedding-vectors.js";
+import {
+  embeddingProviderOwnsDestination,
+  resolveEmbeddingEndpointUrl,
+} from "../../packages/memory-host-sdk/src/host/embeddings-remote-client.js";
 import { withRemoteHttpResponse } from "../../packages/memory-host-sdk/src/host/remote-http.js";
 import {
   MEMORY_SEARCH_DEADLINE_CONTROL,
@@ -133,7 +137,7 @@ function resolveRequestInputType(
 }
 
 function buildHeaders(params: {
-  apiKey: string | undefined;
+  apiKey?: string | undefined;
   provider: Record<string, unknown> | undefined;
   remote: Record<string, unknown> | undefined;
 }): Record<string, string> {
@@ -382,9 +386,6 @@ async function createOpenAICompatibleEmbeddingClient(
   const remoteBaseUrl = normalizeOptionalString(options.remote?.baseUrl);
   const providerBaseUrl = normalizeOptionalString(configuredProvider?.baseUrl);
   const baseUrl = normalizeBaseUrl(remoteBaseUrl ?? providerBaseUrl);
-  // The embedding SDK also loads the provider registry; keep this shared policy edge lazy.
-  const { embeddingProviderOwnsDestination, resolveEmbeddingEndpointUrl } =
-    await import("../plugin-sdk/memory-core-host-engine-embeddings.js");
   const providerOwnsDestination =
     providerBaseUrl !== undefined && embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl });
   const model = normalizeModel(options.model, options.provider);
@@ -440,6 +441,47 @@ async function createOpenAICompatibleEmbeddingClient(
 export const openAICompatibleEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
   id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
   transport: "remote",
+  resolveIndexIdentity: (options) => {
+    // Synchronous mirror of the runtime cacheKeyData below: endpoint and model
+    // changes must be visible to consumers that key cached state on provider
+    // configuration, without reading secrets. The sanitized headers are
+    // configuration-derived (the sanitizer drops auth-bearing names), so
+    // mirroring them here keeps the identity hash equal to the runtime one.
+    const resolvedProvider = resolveConfiguredProvider(options);
+    const remoteBaseUrl = normalizeOptionalString(options.remote?.baseUrl);
+    const providerBaseUrl = normalizeOptionalString(resolvedProvider?.config.baseUrl);
+    const baseUrl = normalizeBaseUrl(remoteBaseUrl ?? providerBaseUrl);
+    const providerOwnsDestination =
+      providerBaseUrl !== undefined &&
+      embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl });
+    const cacheHeaders = sanitizeCacheHeaders(
+      buildHeaders({
+        provider: providerOwnsDestination ? resolvedProvider?.config.headers : undefined,
+        remote: options.remote?.headers,
+      }),
+    );
+    const model = normalizeModel(options.model, options.provider);
+    const dimensions = normalizeDimensions(options.dimensions);
+    const inputType = normalizeOptionalInputType(options.inputType);
+    const queryInputType = normalizeOptionalInputType(options.queryInputType);
+    const documentInputType = normalizeOptionalInputType(options.documentInputType);
+    return {
+      model,
+      cacheKeyData: {
+        provider:
+          resolvedProvider?.providerId ??
+          options.provider?.trim() ??
+          OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
+        baseUrl,
+        model,
+        ...(dimensions !== undefined ? { dimensions } : {}),
+        ...(inputType ? { inputType } : {}),
+        ...(queryInputType ? { queryInputType } : {}),
+        ...(documentInputType ? { documentInputType } : {}),
+        ...(cacheHeaders ? { headers: cacheHeaders } : {}),
+      },
+    };
+  },
   create: async (options) => {
     const client = await createOpenAICompatibleEmbeddingClient(options);
     const embedBatch: EmbeddingProvider["embedBatch"] = async (inputs, callOptions) => {
