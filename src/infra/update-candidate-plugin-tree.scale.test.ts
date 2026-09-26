@@ -54,7 +54,11 @@ it.each(["copy", "retain"] as const)(
     if (mode === "copy") {
       await copyUpdateCandidatePluginTrees(plan, { targetStateDir, candidateRoot });
     } else {
-      await linkUpdateCandidatePluginTrees(plan, { targetStateDir, candidateRoot });
+      await linkUpdateCandidatePluginTrees(plan, {
+        targetStateDir,
+        candidateRoot,
+        assertCurrent: () => {},
+      });
     }
     await fs.rename(source, path.join(root, "replaced-source"));
     for (const owner of owners) {

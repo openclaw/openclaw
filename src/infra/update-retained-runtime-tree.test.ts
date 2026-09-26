@@ -47,7 +47,13 @@ async function fixture(setup?: (source: string) => Promise<void>) {
     launcher,
     destination,
     plan,
-    link: () => linkUpdateCandidatePluginTrees(plan, { targetStateDir, candidateRoot }),
+    link: (assertCurrent = () => {}) =>
+      linkUpdateCandidatePluginTrees(plan, {
+        targetStateDir,
+        candidateRoot,
+        assertCurrent,
+        onProgress: assertCurrent,
+      }),
   };
 }
 
@@ -311,6 +317,10 @@ it.each([0, 1])("copies shared inode occurrence %i when hard links are refused",
   const sharedEntries = f.plan.entries.filter(
     (entry) => entry.kind === "file" && entry.ino === before.ino.toString(),
   );
+  f.plan.entries = [
+    ...sharedEntries,
+    ...f.plan.entries.filter((entry) => !sharedEntries.includes(entry)),
+  ];
   // Exercise copy-before-link and link-before-copy without relying on directory order.
   const fallback = sharedEntries[index]!.path;
   const link = fs.link;
@@ -382,5 +392,156 @@ it.each(["next-entry", "copy-publication"] as const)(
     }
     await expect(f.link()).rejects.toThrow("changed after snapshot inventory");
     expect(fsSync.existsSync(path.join(f.destination, path.relative(f.source, later)))).toBe(false);
+  },
+);
+
+async function fileWindowFixture() {
+  const f = await fixture(async (source) => {
+    await fs.mkdir(path.join(source, "parallel"));
+    for (let index = 0; index < 9; index += 1) {
+      await fs.writeFile(
+        path.join(source, "parallel", `${index}.js`),
+        `export default ${index};\n`,
+      );
+    }
+  });
+  const parent = path.join(f.source, "parallel");
+  const files = f.plan.entries.filter((entry) => path.dirname(entry.path) === parent);
+  f.plan.entries = [...files, ...f.plan.entries.filter((entry) => !files.includes(entry))];
+  // Complete admission reads in one microtask turn so native writes expose their
+  // overlap independently of filesystem read latency and callback ordering.
+  const lstat = fs.lstat;
+  vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+    if (typeof args[0] === "string" && path.dirname(args[0]) === parent) {
+      return fsSync.lstatSync(args[0], { bigint: true });
+    }
+    return await lstat(...args);
+  });
+  const disk = await fs.statfs(f.source);
+  disk.type = 0xef53;
+  vi.spyOn(fs, "statfs").mockResolvedValue(disk);
+  return { ...f, files };
+}
+
+it("overlaps independent file writes with a bounded window and one parent creation", async () => {
+  const f = await fileWindowFixture();
+  const link = fs.link;
+  let active = 0;
+  let maximum = 0;
+  vi.spyOn(fs, "link").mockImplementation(async (...args) => {
+    active += 1;
+    maximum = Math.max(maximum, active);
+    try {
+      return await link(...args);
+    } finally {
+      active -= 1;
+    }
+  });
+  const mkdir = vi.spyOn(fs, "mkdir");
+  expect(await f.link()).toEqual({ linked: 11, copied: 1 });
+  expect(maximum).toBe(4);
+  expect(active).toBe(0);
+  expect(
+    mkdir.mock.calls.filter(([directory]) => directory === path.join(f.destination, "parallel")),
+  ).toHaveLength(1);
+  for (const entry of f.files) {
+    const retained = path.join(f.destination, path.relative(f.source, entry.path));
+    expect((await fs.stat(retained)).ino.toString()).toBe(entry.ino);
+  }
+});
+
+it("settles admitted writes before rejecting a failed window and leaves later entries untouched", async () => {
+  const f = await fileWindowFixture();
+  const failure = new Error("retained link failed");
+  const link = fs.link;
+  let active = 0;
+  const attempted: string[] = [];
+  vi.spyOn(fs, "link").mockImplementation(async (existing, destination) => {
+    attempted.push(String(existing));
+    if (existing === f.files[1]!.path) {
+      throw failure;
+    }
+    active += 1;
+    try {
+      await link(existing, destination);
+    } finally {
+      active -= 1;
+    }
+  });
+  await expect(
+    f.link().catch((error: unknown) => {
+      expect(active).toBe(0);
+      throw error;
+    }),
+  ).rejects.toBe(failure);
+  expect(attempted).not.toContain(f.files[4]!.path);
+  expect(fsSync.existsSync(path.join(f.destination, "node_modules"))).toBe(false);
+});
+
+it.each(["parent", "relocation", "alias"] as const)(
+  "rechecks authority after awaited %s preparation before writing",
+  async (stage) => {
+    const f = await fixture(async (source) => {
+      await fs.writeFile(
+        path.join(source, "node_modules", ".bin", "tool"),
+        `#!/bin/sh\nexec "${source}/dist/state/worker.js"\n`,
+      );
+    });
+    const revoked = new Error("update authority revoked");
+    let current = true;
+    const retainedLauncher = path.join(f.destination, "node_modules", ".bin", "tool");
+    const alias = path.join(f.plan.privateRoot, "module-alias");
+    if (stage === "parent") {
+      f.plan.entries.sort(
+        (left, right) => Number(right.path === f.worker) - Number(left.path === f.worker),
+      );
+      const mkdir = fs.mkdir;
+      vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
+        const result = await mkdir(...args);
+        if (args[0] === path.join(f.destination, "dist", "state")) {
+          current = false;
+        }
+        return result;
+      });
+    } else if (stage === "relocation") {
+      const readFile = fs.readFile;
+      vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+        const contents = await readFile(...args);
+        if (args[0] === retainedLauncher) {
+          current = false;
+        }
+        return contents;
+      });
+    } else {
+      f.plan.aliases.push([alias, f.destination]);
+      const lstat = fs.lstat;
+      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        try {
+          return await lstat(...args);
+        } finally {
+          if (args[0] === alias) {
+            current = false;
+          }
+        }
+      });
+    }
+    await expect(
+      f.link(() => {
+        if (!current) {
+          throw revoked;
+        }
+      }),
+    ).rejects.toBe(revoked);
+    if (stage === "relocation") {
+      expect(await fs.readFile(retainedLauncher, "utf8")).toBe(
+        await fs.readFile(f.launcher, "utf8"),
+      );
+    } else {
+      expect(
+        fsSync.existsSync(
+          stage === "alias" ? alias : path.join(f.destination, "dist", "state", "worker.js"),
+        ),
+      ).toBe(false);
+    }
   },
 );
