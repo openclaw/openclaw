@@ -137,7 +137,7 @@ export function buildEmbeddedExtensionFactories(params: {
   if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
     const semanticAgentId =
-      params.agentId ?? params.sessionManager.getSessionTarget?.()?.agentId ?? "main";
+      params.sessionManager.getSessionTarget?.()?.agentId ?? params.agentId ?? "main";
     const readSemanticConfig = createRuntimeConfigReader(params.cfg ?? {});
     const semanticCurationEligible = () =>
       isDecisionAssistanceEligible(readSemanticConfig(), semanticAgentId);

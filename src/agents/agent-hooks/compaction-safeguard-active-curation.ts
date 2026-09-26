@@ -73,6 +73,7 @@ export async function prepareActiveCompactionCuration(params: {
       snapshot,
       signal: params.signal,
       timeoutMs: params.timeoutMs,
+      isEligible: () => getCurrentCompactionSemanticMode(params.sessionManager) === "apply",
     });
   } catch (error) {
     params.signal.throwIfAborted();
@@ -194,6 +195,7 @@ export async function resolveCuratedCompactionCandidate(params: {
       omittedSegmentIds: params.omittedSegmentIds,
       signal: params.signal,
       timeoutMs: params.timeoutMs,
+      isEligible: () => getCurrentCompactionSemanticMode(params.sessionManager) === "apply",
     });
   } catch (error) {
     params.signal.throwIfAborted();

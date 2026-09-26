@@ -92,6 +92,31 @@ describe("compaction semantic snapshot", () => {
     expect(snapshot.obligations[0]?.sourceSegmentId).toBe(snapshot.segments[0]?.id);
   });
 
+  it("bounds a combined tool frame even when each result is individually small", () => {
+    const assistant = message({
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "one", name: "read", arguments: {} },
+        { type: "toolCall", id: "two", name: "read", arguments: {} },
+      ],
+    });
+    const results = ["one", "two"].map((id) =>
+      message({
+        role: "toolResult",
+        toolCallId: id,
+        toolName: "read",
+        content: [{ type: "text", text: "x".repeat(4000) }],
+      }),
+    );
+    const snapshot = buildCompactionSemanticSnapshot({ messages: [assistant, ...results] });
+    expect(snapshot.segments).toHaveLength(1);
+    expect(snapshot.segments[0]?.text).toHaveLength(6000);
+    expect(snapshot.segments[0]?.originalChars).toBeGreaterThan(8000);
+    expect(snapshot.segments[0]?.protectionReasons).toContain("oversized-segment");
+    expect(snapshot.segments[0]?.protected).toBe(true);
+    expect(snapshot.complete).toBe(false);
+  });
+
   it("treats oversized source conservatively instead of making it droppable", () => {
     const oversized = message({
       role: "assistant",

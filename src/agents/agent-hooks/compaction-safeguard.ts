@@ -772,6 +772,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             snapshot: semanticSnapshot,
             signal: semanticSignal,
             timeoutMs: semanticTimeoutMs,
+            isEligible: () => getCurrentCompactionSemanticMode(ctx.sessionManager) === "shadow",
           }),
           evaluateCompactionFidelity({
             runtime: { evaluate: evaluateDecision },
@@ -780,6 +781,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             candidateSummary: summary,
             signal: semanticSignal,
             timeoutMs: semanticTimeoutMs,
+            isEligible: () => getCurrentCompactionSemanticMode(ctx.sessionManager) === "shadow",
           }),
         ]);
         semanticSignal.throwIfAborted();

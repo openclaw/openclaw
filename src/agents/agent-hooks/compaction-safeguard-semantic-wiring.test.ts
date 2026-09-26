@@ -55,6 +55,7 @@ beforeEach(() => {
   compactionLogger.warn.mockClear();
 });
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   testing.setSummarizeInStagesForTest();
   resetPluginRuntimeStateForTest();
@@ -195,15 +196,23 @@ async function runCompactionScenario(params: {
 
 describe("compaction semantic observer wiring", () => {
   it("joins both Decision requests before propagating caller cancellation", async () => {
+    vi.useFakeTimers();
     const controller = new AbortController();
     const abortError = new Error("cancel asymmetric semantic observation");
     let started = 0;
+    let resolveStarted!: () => void;
+    const startedBarrier = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
     let releaseSlowRequest: (() => void) | undefined;
     const slowRequest = new Promise<void>((resolve) => {
       releaseSlowRequest = resolve;
     });
     const { config, builder } = installDecisionFixture("preserved", async (_batch, context) => {
       started += 1;
+      if (started === 2) {
+        resolveStarted();
+      }
       if (started === 1) {
         await new Promise<never>((_resolve, reject) => {
           context.signal.addEventListener(
@@ -248,19 +257,22 @@ describe("compaction semantic observer wiring", () => {
       (error: unknown) => ({ status: "rejected" as const, error }),
     );
 
-    await vi.waitFor(() => expect(started).toBe(2));
-    controller.abort(abortError);
-    await expect(
-      Promise.race([
-        completion.then(() => "settled" as const),
-        new Promise<"pending">((resolve) => {
-          setTimeout(() => resolve("pending"), 20);
-        }),
-      ]),
-    ).resolves.toBe("pending");
-    expect(builder.registry.decisionProviders[0]?.host.inspect(config).activeRequests).toBe(1);
-
-    releaseSlowRequest?.();
+    let settled = false;
+    void completion.then(() => {
+      settled = true;
+    });
+    try {
+      await startedBarrier;
+      controller.abort(abortError);
+      // Flush all queued promise reactions without racing a wall-clock timer.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      expect(builder.registry.decisionProviders[0]?.host.inspect(config).activeRequests).toBe(1);
+    } finally {
+      // Failed settlement assertions must still let provider disposal finish.
+      releaseSlowRequest?.();
+      await completion;
+    }
     await expect(completion).resolves.toEqual({ status: "rejected", error: abortError });
     expect(builder.registry.decisionProviders[0]?.host.inspect(config).activeRequests).toBe(0);
   });
