@@ -17,6 +17,7 @@ export type AgentWorkspaceContextParams = Parameters<typeof resolveBootstrapFile
   scope: "full" | "instructions-only";
   memoryToolRouted?: boolean;
   memoryTools?: {
+    /** Complete policy-admitted tool set available to the active memory prompt builder. */
     toolNames: readonly string[];
     citationsMode?: Parameters<typeof prepareMemorySystemPromptAddition>[0]["citationsMode"];
     sandboxed?: boolean;
@@ -114,26 +115,23 @@ export async function prepareAgentWorkspaceContext(
   const memoryReferenceFiles = memoryToolRoutedBootstrapFiles.map((file) =>
     projectContextFile(toContextFile(file), params.projectPath),
   );
-  // Optional memory preparation must not discard a successfully captured instruction snapshot.
-  const memoryRecallInstructions =
-    memoryToolRouted && params.memoryTools
-      ? await prepareMemorySystemPromptAddition({
-          availableTools: new Set(params.memoryTools.toolNames),
-          citationsMode: params.memoryTools.citationsMode,
-          agentId: params.agentId,
-          agentSessionKey: params.sessionKey,
-          sandboxed: params.memoryTools.sandboxed,
-        }).catch((error: unknown) => {
-          if (params.onMemoryPreparationError) {
-            params.onMemoryPreparationError(error);
-          } else {
-            params.warn?.(
-              `failed to prepare workspace memory recall instructions: ${String(error)}`,
-            );
-          }
-          return undefined;
-        })
-      : undefined;
+  // Provider guidance is independent of file routing; failure must preserve the instruction snapshot.
+  const memoryRecallInstructions = params.memoryTools
+    ? await prepareMemorySystemPromptAddition({
+        availableTools: new Set(params.memoryTools.toolNames),
+        citationsMode: params.memoryTools.citationsMode,
+        agentId: params.agentId,
+        agentSessionKey: params.sessionKey,
+        sandboxed: params.memoryTools.sandboxed,
+      }).catch((error: unknown) => {
+        if (params.onMemoryPreparationError) {
+          params.onMemoryPreparationError(error);
+        } else {
+          params.warn?.(`failed to prepare workspace memory recall instructions: ${String(error)}`);
+        }
+        return undefined;
+      })
+    : undefined;
   return {
     bootstrapFiles,
     contextFiles,
