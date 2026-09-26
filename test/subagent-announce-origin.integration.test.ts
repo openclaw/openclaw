@@ -171,6 +171,31 @@ describe("resolveSubagentCompletionOrigin", () => {
   });
 
   it.each([
+    {
+      name: "does not promote a non-threaded Slack DM message id into a thread",
+      bindings: [
+        {
+          channel: "slack",
+          accountId: "acct-1",
+          targetSessionKey: "agent:main:main",
+          targetKind: "session" as const,
+          conversationId: "1712345678.123456",
+          parentConversationId: "D08GQH53EJM",
+        },
+      ],
+      childSessionKey: "agent:worker:subagent:child",
+      requesterOrigin: {
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:d08gqh53ejm",
+      },
+      expected: {
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:d08gqh53ejm",
+      },
+      spawnMode: "session" as const,
+    },
     ...["slack", "folded-chat"].map((channel) => ({
       name: `preserves a thread for case-folded ${channel} bound targets`,
       bindings: [

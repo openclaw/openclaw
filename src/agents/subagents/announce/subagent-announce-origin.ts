@@ -149,9 +149,18 @@ function resolveBoundConversationOrigin(params: {
   const requesterConversationId = params.requesterConversation?.conversationId?.trim() ?? "";
   const requesterTo = params.requesterOrigin?.to?.trim();
   const boundTarget = deliveryContextFromConversation(conversation);
-  const inferredThreadId =
-    boundTarget?.threadId ??
-    (parentConversationId && parentConversationId !== conversationId ? conversationId : undefined);
+  const requesterHasThread =
+    params.requesterOrigin?.threadId != null && params.requesterOrigin.threadId !== "";
+  // Non-threaded ingress often stores the message id as conversationId with the
+  // channel as parent. Plugin projection and the generic fallback both look like
+  // a thread in that case. Only keep a bound thread when the requester origin
+  // was already threaded.
+  const inferredThreadId = requesterHasThread
+    ? (boundTarget?.threadId ??
+      (parentConversationId && parentConversationId !== conversationId
+        ? conversationId
+        : undefined))
+    : undefined;
   const to =
     requesterTo &&
     conversationId &&
