@@ -222,7 +222,7 @@ describeLive("xai plugin live", () => {
         usedCodeExecution?: boolean;
       };
 
-      expect(details.model).toBe("grok-4.3");
+      expect(details.model).toBe("grok-4.7");
       expect(details.usedCodeExecution).toBe(true);
       expect(details.content).toContain("42");
     });
@@ -257,7 +257,7 @@ describeLive("xai plugin live", () => {
         usedCodeExecution?: boolean;
       };
 
-      expect(details.model).toBe("grok-4.3");
+      expect(details.model).toBe("grok-4.7");
       expect(details.usedCodeExecution).toBe(true);
       expect(details.content).toContain("5050");
     });

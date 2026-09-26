@@ -9,41 +9,19 @@ type GenerateImageParams = Parameters<
 const {
   resolveApiKeyForProviderMock,
   postJsonRequestMock,
-  postMultipartRequestMock,
-  assertOkOrThrowHttpErrorMock,
   resolveProviderHttpRequestConfigMock,
-  createProviderOperationDeadlineMock,
   resolveProviderOperationTimeoutMsMock,
-  sanitizeConfiguredModelProviderRequestMock,
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "xai-key" })),
   postJsonRequestMock: vi.fn(),
-  postMultipartRequestMock: vi.fn(),
-  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => {
-    const headers = new Headers(params.defaultHeaders as HeadersInit | undefined);
-    // Stub mirroring the xAI attribution policy headers (real wire is locked in provider-attribution.test.ts).
-    if (params.provider === "xai") {
-      const version = process.env.OPENCLAW_VERSION?.trim() || "unknown";
-      headers.set("User-Agent", `openclaw/${version}`);
-      headers.set("originator", "openclaw");
-      headers.set("version", version);
-    }
-    return {
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.x.ai/v1",
-      allowPrivateNetwork: false,
-      headers,
-      dispatcherPolicy: undefined,
-    };
-  }),
-  createProviderOperationDeadlineMock: vi.fn((params: Record<string, unknown>) => ({
-    timeoutMs: params.timeoutMs,
-    label: params.label,
-  })),
-  resolveProviderOperationTimeoutMsMock: vi.fn(
-    (params: Record<string, unknown>) => params.defaultTimeoutMs ?? 60000,
-  ),
-  sanitizeConfiguredModelProviderRequestMock: vi.fn((request) => request),
+  resolveProviderHttpRequestConfigMock:
+    vi.fn<
+      (typeof import("openclaw/plugin-sdk/provider-http"))["resolveProviderHttpRequestConfig"]
+    >(),
+  resolveProviderOperationTimeoutMsMock:
+    vi.fn<
+      (typeof import("openclaw/plugin-sdk/provider-http"))["resolveProviderOperationTimeoutMs"]
+    >(),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
@@ -55,28 +33,14 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
     "openclaw/plugin-sdk/provider-http",
   );
   return {
-    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-    createProviderOperationDeadline: createProviderOperationDeadlineMock,
+    ...actual,
     postJsonRequest: postJsonRequestMock,
-    postMultipartRequest: postMultipartRequestMock,
-    readProviderJsonResponse: actual.readProviderJsonResponse,
-    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-    resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
-    sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => {
-  const normalizeMockOptionalString = (value: unknown) =>
-    typeof value === "string" ? value.trim() : undefined;
-  const normalizeMockOptionalLowercaseString = (value: unknown) =>
-    typeof value === "string" ? value.trim().toLowerCase() : undefined;
-  const readMockStringValue = (value: unknown) =>
-    typeof value === "string" ? value.trim() : undefined;
-  return {
-    normalizeOptionalString: normalizeMockOptionalString,
-    normalizeOptionalLowercaseString: normalizeMockOptionalLowercaseString,
-    readStringValue: readMockStringValue,
+    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock.mockImplementation(
+      actual.resolveProviderHttpRequestConfig,
+    ),
+    resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock.mockImplementation(
+      actual.resolveProviderOperationTimeoutMs,
+    ),
   };
 });
 
@@ -112,11 +76,8 @@ describe("xai image generation provider", () => {
     resolveApiKeyForProviderMock.mockClear();
     vi.unstubAllEnvs();
     postJsonRequestMock.mockReset();
-    assertOkOrThrowHttpErrorMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
-    createProviderOperationDeadlineMock.mockClear();
     resolveProviderOperationTimeoutMsMock.mockClear();
-    sanitizeConfiguredModelProviderRequestMock.mockClear();
   });
 
   it("builds provider with correct models, default, and capabilities", () => {
@@ -211,7 +172,11 @@ describe("xai image generation provider", () => {
     expect(httpParams?.capability).toBe("image");
     expect(httpParams?.baseUrl).toBe("https://custom.x.ai/v1");
     const request = requirePostJsonCall();
-    expect(request.url).toContain("/images/generations");
+    expect(request.url).toBe("https://custom.x.ai/v1/images/generations");
+    expect(request.headers?.get("authorization")).toBe("Bearer xai-key");
+    expect(request.headers?.get("user-agent")).toBeNull();
+    expect(request.headers?.get("originator")).toBeNull();
+    expect(request.headers?.get("version")).toBeNull();
     expect(provider.defaultTimeoutMs).toBe(600_000);
     expect(request.timeoutMs).toBe(600_000);
     expect(request.body?.aspect_ratio).toBe("20:9");

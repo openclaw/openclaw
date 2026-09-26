@@ -1,12 +1,10 @@
 // Xai tests cover web search plugin behavior.
 import { createTestWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildXaiCatalogModels, resolveXaiCatalogEntry } from "./model-definitions.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
-import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
 import { createXaiWebSearchProvider as createXaiWebSearchContractProvider } from "./web-search-contract-api.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 
@@ -523,32 +521,6 @@ describe("xai web search config resolution", () => {
 
     expect(next).toEqual(config);
     expect(prompter.note).not.toHaveBeenCalled();
-  });
-
-  it("reuses the plugin web search api key for provider auth fallback", () => {
-    expect(
-      resolveFallbackXaiAuth(
-        xaiPluginConfig({ webSearch: { apiKey: "xai-provider-fallback" } }) as never,
-      ),
-    ).toEqual({
-      apiKey: "xai-provider-fallback",
-      source: "plugins.entries.xai.config.webSearch.apiKey",
-    });
-  });
-
-  it("returns a managed marker for SecretRef-backed plugin auth fallback", () => {
-    expect(
-      resolveFallbackXaiAuth(
-        xaiPluginConfig({
-          webSearch: {
-            apiKey: { source: "file", provider: "vault", id: "/xai/api-key" },
-          },
-        }) as never,
-      ),
-    ).toEqual({
-      apiKey: NON_ENV_SECRETREF_MARKER,
-      source: "plugins.entries.xai.config.webSearch.apiKey",
-    });
   });
 
   it("routes Grok web search through plugin webSearch.baseUrl", async () => {

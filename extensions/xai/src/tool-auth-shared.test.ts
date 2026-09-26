@@ -1,6 +1,5 @@
 // Xai tests cover tool auth shared plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveNonEnvSecretRefApiKeyMarker } from "openclaw/plugin-sdk/secret-input";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isXaiToolEnabled,
@@ -54,7 +53,7 @@ describe("xai tool auth helpers", () => {
         plugins: xaiWebSearchSecretRefPlugins("file", "vault", "/xai/tool-key"),
       }),
     ).toEqual({
-      apiKey: resolveNonEnvSecretRefApiKeyMarker("file"),
+      apiKey: "secretref-managed",
       source: "plugins.entries.xai.config.webSearch.apiKey",
     });
   });
