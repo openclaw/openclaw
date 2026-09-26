@@ -1202,7 +1202,7 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
     (p) => p[0] === "agents" && p[1] === "entries",
   );
   const prefersList = authoredRoster?.kind === "list" && !explicitTargetsEntries;
-  const readRosterEntries = (cfg: OpenClawConfig): Record<string, unknown> => {
+  const readRosterEntries = (cfg: unknown): Record<string, unknown> => {
     const agents = (cfg as { agents?: unknown }).agents;
     const list = isRecord(agents) && Array.isArray(agents.list) ? agents.list : undefined;
     if (prefersList && list) {
