@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   getActivePluginRegistry,
@@ -26,7 +27,6 @@ import {
   invokeSessionDispatch,
   makeDispatchTestContext,
 } from "./sessions-dispatch.test-support.js";
-import type { GatewayClient } from "./types.js";
 
 type DeviceFixture = {
   makeTempDir: (prefix: string) => string;
@@ -130,7 +130,7 @@ export function registerNativeDeviceDispatchTests({
       );
       const context = makeDispatchTestContext({
         getRuntimeConfig: () => config,
-        logGateway: { warn: vi.fn() } as never,
+        logGateway: createSubsystemLogger("gateway/native-device-dispatch-test"),
         workerEnvironmentService: service,
         workerPlacementDispatchService: { dispatch },
         workerSessionPlacementService: { getMany: () => new Map() },
@@ -156,7 +156,7 @@ export function registerNativeDeviceDispatchTests({
               minProtocol: 1,
               maxProtocol: 1,
             },
-          } as GatewayClient,
+          },
           extraHandlers: { "sessions.dispatch": getSessionDispatchHandler() },
         });
         return respond;
