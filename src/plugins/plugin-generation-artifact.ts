@@ -19,7 +19,6 @@ import {
   importTargetNames,
   createPluginSourceLinkCapture,
   pluginSourceStatIdentity,
-  verifyPluginSourceInputs,
   pluginSourceContentHash,
   readPluginSourceBytes,
   createPluginPackageMetadataCapture,
@@ -46,10 +45,10 @@ export function capturePluginGenerationArtifact(
   const directory = sourceCapture.directory;
   const packages = new Map<string, PluginPackageCapture>();
   const capturedPaths = new Map<string, string>();
-  const originalSources = new Map<string, string>();
+  const originalSources = new Map<string, { source: string; packageSourceRoot?: string }>();
   const hardlinkedSources = new Set<string>();
   const metadataCapture = createPluginPackageMetadataCapture({
-    sourceForCaptured: (filename) => originalSources.get(filename),
+    sourceForCaptured: (filename) => originalSources.get(filename)?.source,
     packageForFile: (filename) => packageForFile(filename),
   });
   const sourceAliases: Record<string, string> = {};
@@ -169,7 +168,10 @@ export function capturePluginGenerationArtifact(
         }
       };
       capturedPaths.set(path.resolve(source), target);
-      originalSources.set(target, path.resolve(source));
+      originalSources.set(target, {
+        source: path.resolve(source),
+        packageSourceRoot: inPackage(capturedBoundary, target) ? boundary : undefined,
+      });
       // SDK companion loaders receive copied paths; those exact aliases retain this owner.
       capturedPaths.set(target, target);
       if (!capturedPaths.has(real)) {
@@ -345,7 +347,7 @@ export function capturePluginGenerationArtifact(
           const url = new URL(resolved);
           const filename = fileURLToPath(url);
           const captured = moduleSource?.(filename) ?? filename;
-          url.pathname = pathToFileURL(originalSources.get(captured) ?? captured).pathname;
+          url.pathname = pathToFileURL(originalSources.get(captured)?.source ?? captured).pathname;
           return url.href;
         };
         const addDependency = (name: string, importer = source) => {
@@ -600,8 +602,12 @@ export function capturePluginGenerationArtifact(
     execute?.(() =>
       capturePluginModuleSource(filename, (root, source) => copyPackage(root, source, false, true)),
     );
-  const packageForFile = (filename: string) =>
-    findPluginCapturedPackage(packages, filename, directory)?.owner;
+  const packageForFile = (filename: string) => {
+    const root = originalSources.get(filename)?.packageSourceRoot;
+    return root
+      ? packages.get(root)
+      : findPluginCapturedPackage(packages, filename, directory)?.owner;
+  };
 
   try {
     const sourceRoot = fs.realpathSync(rootDir);
@@ -615,16 +621,19 @@ export function capturePluginGenerationArtifact(
       );
       capturedPaths.set(alias, capturedPaths.get(entry)!);
     }
-    const assertSourceCurrent = () => {
-      if (
-        fs.realpathSync(rootDir) !== sourceRoot ||
-        (entryFile && fs.realpathSync(entryFile) !== entry)
-      ) {
-        throw new Error("Plugin source root changed after capture");
-      }
-      verifyPluginSourceInputs(inputs, inputs.keys());
-    };
-    assertSourceCurrent();
+    const sourceLookup = createPluginGenerationSourceLookup({
+      rootDir,
+      sourceRoot,
+      entryFile,
+      entry,
+      inputs,
+      capturedRoot: root,
+      boundaryRoot: directory,
+      capturedPaths,
+      hardlinkedSources,
+      assertModuleAvailable,
+    });
+    sourceLookup.assertSourceCurrent();
     pendingInputs.clear();
     additions.clear();
     const captures = [moduleCaptures, hardlinkedSources, metadataCapture, packages];
@@ -634,26 +643,17 @@ export function capturePluginGenerationArtifact(
       rootDir: root,
       sourceAliases,
       linkHost: sourceCapture.linkHost,
-      sourceForCaptured: (file: string) => originalSources.get(path.resolve(file)),
+      sourceForCaptured: (file: string) => originalSources.get(path.resolve(file))?.source,
       boundaryRoot: directory,
       // The receipt attests the initial snapshot; first-demand inputs extend only its identity ledger.
       sourceDigest: digest.copy().digest("hex"),
-      ...createPluginGenerationSourceLookup({
-        rootDir,
-        sourceRoot,
-        capturedRoot: root,
-        boundaryRoot: directory,
-        capturedPaths,
-        hardlinkedSources,
-        assertModuleAvailable,
-      }),
-      assertSourceCurrent,
+      ...sourceLookup,
       moduleRoot: (filename: string) =>
         originalSources.has(filename) ? packageForFile(filename)?.capturedRoot : undefined,
       assertModuleAvailable,
       prepareModule: (filename: string) => {
         const owner = packageForFile(filename);
-        const source = originalSources.get(filename);
+        const source = originalSources.get(filename)?.source;
         const needsEntry =
           execute && source && /\.[cm]?[jt]sx?$/.test(source) && !moduleCaptures.has(filename);
         if (!owner || ((owner.state === "entry" || owner.state === "body") && !needsEntry)) {

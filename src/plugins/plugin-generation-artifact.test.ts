@@ -87,7 +87,15 @@ it.each([
     expect(fs.readFileSync(artifact.resolve(demanded), "utf8")).toBe("exports.value = 1;");
     expect(artifact.sourceDigest).toBe(initialDigest);
   }
+  const capturedEntry = artifact.resolve(entry);
+  const originalEntry = fs.realpathSync(entry);
+  expect(artifact.moduleRoot(capturedEntry)).toBe(artifact.rootDir);
+  expect(artifact.prepareModule(capturedEntry)).toEqual([]);
+  expect(artifact.sourceForCaptured(capturedEntry)).toBe(originalEntry);
   artifact.dispose();
+  expect(artifact.moduleRoot(capturedEntry)).toBeUndefined();
+  expect(artifact.prepareModule(capturedEntry)).toEqual([]);
+  expect(artifact.sourceForCaptured(capturedEntry)).toBe(originalEntry);
   if (change !== "entry before demand") {
     expect(artifact.assertSourceCurrent).not.toThrow();
   }
@@ -105,6 +113,46 @@ it.each([
   }
   expect(artifact.assertSourceCurrent).toThrow();
 });
+
+it.each([false, true])(
+  "retains relative node_modules ownership with a later dependency: %s",
+  (dependency) => {
+    const source = temp.make("plugin-nested-source-owner-");
+    const entry = path.join(source, "entry.cjs");
+    const peer = path.join(source, "node_modules", "fixture", "peer.cjs");
+    fs.mkdirSync(path.dirname(peer), { recursive: true });
+    fs.writeFileSync(
+      entry,
+      "exports.value = require('./node_modules/fixture/peer.cjs').value;" +
+        (dependency ? "exports.dependency = require('fixture');" : ""),
+    );
+    if (dependency) {
+      fs.writeFileSync(
+        path.join(source, "package.json"),
+        JSON.stringify({ dependencies: { fixture: "1.0.0" } }),
+      );
+      fs.writeFileSync(
+        path.join(path.dirname(peer), "package.json"),
+        JSON.stringify({ name: "fixture", main: "peer.cjs" }),
+      );
+    }
+    const bytes = "exports.value = 'captured';";
+    fs.writeFileSync(peer, bytes);
+    const artifact = capturePluginGenerationArtifact(source, entry);
+    cleanups.push(artifact.dispose);
+    const captured = path.join(artifact.rootDir, "node_modules", "fixture", "peer.cjs");
+    expect(fs.readFileSync(captured, "utf8")).toBe(bytes);
+    expect(artifact.sourceForCaptured(captured)).toBe(fs.realpathSync(peer));
+    if (dependency) {
+      const dependencyRoot = artifact.sourceAliases[path.dirname(peer)];
+      expect(dependencyRoot).toEqual(expect.any(String));
+      expect(artifact.moduleRoot(captured)).toBe(dependencyRoot);
+    } else {
+      expect(artifact.moduleRoot(captured)).toBeUndefined();
+    }
+    expect(artifact.prepareModule(captured)).toEqual([]);
+  },
+);
 
 it.each([
   ...["prepare", "capture"].flatMap((acquisition) =>

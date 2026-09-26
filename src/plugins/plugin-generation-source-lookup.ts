@@ -3,7 +3,11 @@ import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
 import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js";
-import { createPluginSourceCapture } from "./plugin-package-metadata-capture.js";
+import {
+  createPluginSourceCapture,
+  type PluginSourceInput,
+  verifyPluginSourceInputs,
+} from "./plugin-package-metadata-capture.js";
 
 function canonicalSource(rootDir: string, sourceRoot: string, source: string): string {
   const lexical = path.resolve(source);
@@ -91,6 +95,9 @@ function captureRecoverySource({
 export function createPluginGenerationSourceLookup({
   rootDir,
   sourceRoot,
+  entryFile,
+  entry,
+  inputs,
   capturedRoot,
   boundaryRoot,
   capturedPaths,
@@ -99,17 +106,30 @@ export function createPluginGenerationSourceLookup({
 }: {
   rootDir: string;
   sourceRoot: string;
+  entryFile?: string;
+  entry?: string;
+  inputs: ReadonlyMap<string, PluginSourceInput>;
   capturedRoot: string;
   boundaryRoot: string;
   capturedPaths: ReadonlyMap<string, string>;
   hardlinkedSources: ReadonlySet<string>;
   assertModuleAvailable: (filename: string) => void;
 }) {
+  const assertSourceCurrent = () => {
+    if (
+      fs.realpathSync(rootDir) !== sourceRoot ||
+      (entryFile && fs.realpathSync(entryFile) !== entry)
+    ) {
+      throw new Error("Plugin source root changed after capture");
+    }
+    verifyPluginSourceInputs(inputs, inputs.keys());
+  };
   const resolveCaptured = (source: string) => {
     const captured = getCapturedSource(capturedPaths, rootDir, sourceRoot, source);
     return captured && isPathInside(capturedRoot, captured) ? captured : undefined;
   };
   return {
+    assertSourceCurrent,
     hasSource: (source: string) => resolveCaptured(source) !== undefined,
     resolve: (source: string, rejectHardlinks = false) => {
       // Public exports may be loaded for the first time after the original package
