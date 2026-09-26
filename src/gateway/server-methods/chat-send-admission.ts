@@ -42,7 +42,6 @@ import {
   prepareChatSendAdmissionContext,
 } from "./chat-send-admission-context.js";
 import {
-  inspectGoalChatSendRetry,
   readChatSendDedupeResponse,
   resolveChatSendRequestConflict,
   respondChatSendAdmissionError,
@@ -50,7 +49,7 @@ import {
   respondChatSessionRoutingChanged,
   type ChatSendPreAdmissionParams,
 } from "./chat-send-pre-admission.js";
-import { createPendingChatSendReservationAccess } from "./chat-send-reservation.js";
+import * as chatSendReservation from "./chat-send-reservation.js";
 import { bindChatSendPreparedSession } from "./chat-send-session-binding.js";
 import { captureAdmittedChatSendSessionSettings } from "./chat-send-session-settings.js";
 import {
@@ -105,7 +104,7 @@ export async function admitChatSend(
   });
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const pendingAttemptId = randomUUID();
-  const pendingReservation = createPendingChatSendReservationAccess({
+  const pendingReservation = chatSendReservation.createPendingChatSendReservationAccess({
     context,
     client,
     key: pendingChatSendKey,
@@ -116,7 +115,7 @@ export async function admitChatSend(
   });
   const readPendingReservation = pendingReservation.read;
   const inspectRetryAndReserve = () => {
-    const goalRetry = inspectGoalChatSendRetry(params);
+    const goalRetry = chatSendReservation.inspectGoalChatSendRetry(params);
     if (goalRetry.kind !== "new") {
       return { goalReservationConflict: false, goalRetry, retrySettled: false };
     }
