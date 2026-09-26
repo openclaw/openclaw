@@ -140,10 +140,10 @@ export const telegramChannelConfigUiHints = {
   },
   "threadBindings.spawnSessions": {
     label: "Telegram Thread-Bound Session Spawn",
-    help: "Allow sessions_spawn(thread=true) and ACP thread spawns to auto-bind Telegram current conversations when supported.",
+    help: "Allow /acp spawn --thread to bind Telegram topics when supported. Agent sessions_spawn(thread=true) never binds a Telegram conversation; it needs a channel that opens a separate thread.",
   },
   "threadBindings.defaultSpawnContext": {
     label: "Telegram Thread Spawn Context",
-    help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
+    help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork". Telegram cannot host agent-spawned thread sessions, so this has no effect for Telegram requests.',
   },
 } satisfies Record<string, ChannelConfigUiHint>;
