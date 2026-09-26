@@ -1,15 +1,5 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
-  "test/line-question-gateway.test.ts",
-  "src/channels/message/durable-receive.test.ts",
-  "src/channels/message/ingress-drain.async-work.test.ts",
-  "src/channels/message/ingress-monitor.admission.test.ts",
-  "src/channels/message/ingress-monitor.capacity.test.ts",
-  "src/channels/message/ingress-monitor.inspection.test.ts",
-  "src/channels/message/ingress-monitor.restart-drain.test.ts",
-  "src/channels/message/ingress-monitor.test.ts",
-  "src/channels/message/ingress-queue.pruning.test.ts",
-  "src/channels/message/ingress-queue.test.ts",
   "src/agents/session-placement-admission.caller-scope.test.ts",
   "src/trajectory/runtime-store-writer.test.ts",
   "src/trajectory/runtime.test.ts",
@@ -758,6 +748,16 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/worker-environments/worker-turn-transcript-footprint.test.ts",
   "src/plugin-sdk/session-transcript-mirror-runtime.test.ts",
   "src/plugin-sdk/session-transcript-runtime-visible-delta.test.ts",
+  "test/line-question-gateway.test.ts",
+  "src/channels/message/durable-receive.test.ts",
+  "src/channels/message/ingress-drain.async-work.test.ts",
+  "src/channels/message/ingress-monitor.admission.test.ts",
+  "src/channels/message/ingress-monitor.capacity.test.ts",
+  "src/channels/message/ingress-monitor.inspection.test.ts",
+  "src/channels/message/ingress-monitor.restart-drain.test.ts",
+  "src/channels/message/ingress-monitor.test.ts",
+  "src/channels/message/ingress-queue.pruning.test.ts",
+  "src/channels/message/ingress-queue.test.ts",
 ];
 
 const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);

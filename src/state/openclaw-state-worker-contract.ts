@@ -192,12 +192,12 @@ export type OpenClawStateWorkerOperations = WorktreeRetirementOperations &
     };
     "agentProvenance.list": { input: undefined; output: AgentProvenance[] };
     "secrets.purge": { input: SecretStoreExpiryCutoffs; output: number };
-    "channelIngress.prune": { input: ChannelIngressPruneInput; output: number };
     "promotions.markNotified": { input: { slugs: string[]; now: number }; output: true };
     "promotions.recordClaim": { input: PreparedPromotionClaim; output: void };
     "managedImages.read": { input: { attachmentId: string }; output: ManagedImageRecord | null };
     "managedImages.entries": { input: { sessionKey?: string }; output: ManagedImageRecordEntry[] };
     "managedImages.originalMediaIds": { input: undefined; output: string[] };
+    "channelIngress.prune": { input: ChannelIngressPruneInput; output: number };
     "doctor.databaseBloat": {
       input: undefined;
       output: ReturnType<typeof readSqliteDatabaseBloat>;

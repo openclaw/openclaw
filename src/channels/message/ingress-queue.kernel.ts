@@ -1,6 +1,95 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
+import { FAILED_NULL_PAYLOAD_SENTINEL } from "./ingress-queue.codec.js";
+
+const getQueue = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, "channel_ingress_events">>(db);
+
+type ChannelIngressMutation = {
+  queueName: string;
+  id: string;
+  token: string | null;
+  now: number;
+};
+
+function selectedMutation(db: DatabaseSync, input: ChannelIngressMutation) {
+  const base = getQueue(db)
+    .updateTable("channel_ingress_events")
+    .where("queue_name", "=", input.queueName)
+    .where("event_id", "=", input.id);
+  return input.token === null
+    ? base.where("status", "=", "pending")
+    : base.where("status", "=", "claimed").where("claim_token", "=", input.token);
+}
+
+export function refreshChannelIngressClaimInDatabase(
+  db: DatabaseSync,
+  input: ChannelIngressMutation,
+): boolean {
+  return (
+    affectedRows(
+      executeSqliteQuerySync(
+        db,
+        selectedMutation(db, input).set({ claimed_at: input.now, updated_at: input.now }),
+      ),
+    ) > 0
+  );
+}
+
+export function releaseChannelIngressInDatabase(
+  db: DatabaseSync,
+  input: ChannelIngressMutation & { recordAttempt?: boolean; lastError?: string },
+): boolean {
+  return (
+    affectedRows(
+      executeSqliteQuerySync(
+        db,
+        selectedMutation(db, input).set((eb) => ({
+          status: "pending",
+          claim_token: null,
+          claim_owner: null,
+          claimed_at: null,
+          // A claim can lose its owner before processing starts. Returning it
+          // must not consume retry budget or erase the previous real failure.
+          ...(input.recordAttempt === false
+            ? {}
+            : { attempts: eb("attempts", "+", 1), last_attempt_at: input.now }),
+          ...(input.lastError === undefined ? {} : { last_error: input.lastError }),
+          updated_at: input.now,
+        })),
+      ),
+    ) > 0
+  );
+}
+
+export function failChannelIngressInDatabase(
+  db: DatabaseSync,
+  input: ChannelIngressMutation & { reason: string; message?: string },
+): boolean {
+  return (
+    affectedRows(
+      executeSqliteQuerySync(
+        db,
+        selectedMutation(db, input).set((eb) => ({
+          status: "failed",
+          failed_at: input.now,
+          failed_reason: input.reason,
+          last_error: input.message ?? null,
+          payload_json: eb
+            .case()
+            .when("payload_json", "=", "null")
+            .then(FAILED_NULL_PAYLOAD_SENTINEL)
+            .else(eb.ref("payload_json"))
+            .end(),
+          claim_token: null,
+          claim_owner: null,
+          claimed_at: null,
+          updated_at: input.now,
+        })),
+      ),
+    ) > 0
+  );
+}
 
 export function listChannelIngressAccountsInDatabase(
   db: DatabaseSync,

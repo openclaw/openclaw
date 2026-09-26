@@ -28,11 +28,17 @@ import {
   corruptClaimRecord,
   completedRecord,
 } from "./ingress-queue.codec.js";
+import {
+  failChannelIngressInDatabase,
+  refreshChannelIngressClaimInDatabase,
+  releaseChannelIngressInDatabase,
+} from "./ingress-queue.kernel.js";
 import type {
   ChannelIngressQueueClaim,
   ChannelIngressQueueClaimRef,
   ChannelIngressQueueCompletedRecord,
   ChannelIngressQueueCorruptClaim,
+  ChannelIngressQueuePruneOptions,
   ChannelIngressQueueRecord,
   ChannelIngressRow,
 } from "./ingress-queue.types.js";
@@ -41,6 +47,7 @@ export type {
   ChannelIngressQueueClaim,
   ChannelIngressQueueClaimRef,
   ChannelIngressQueueCorruptClaim,
+  ChannelIngressQueuePruneOptions,
   ChannelIngressQueueRecord,
 } from "./ingress-queue.types.js";
 
@@ -90,18 +97,6 @@ type ChannelIngressQueueResubmitResult<
       kind: "unrecoverable";
       record: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
     };
-
-/** Retention options for pending, completed, and failed ingress queue rows. */
-export type ChannelIngressQueuePruneOptions = {
-  pendingTtlMs?: number;
-  completedTtlMs?: number;
-  failedTtlMs?: number;
-  pendingMaxEntries?: number;
-  completedMaxEntries?: number;
-  failedMaxEntries?: number;
-  protectIds?: Iterable<string>;
-  now?: number;
-};
 
 /** Result of enqueueing a possibly duplicate ingress event id. */
 type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> =
@@ -917,23 +912,13 @@ export function createChannelIngressQueue<
     const refreshedAt = refreshOptions?.refreshedAt ?? now();
     const database = openChannelIngressDatabase(options.stateDir);
     return runOpenClawStateWriteTransaction(
-      (tx) => {
-        const kysely = getChannelIngressKysely(tx.db);
-        const result = executeSqliteQuerySync(
-          tx.db,
-          kysely
-            .updateTable("channel_ingress_events")
-            .set({
-              claimed_at: refreshedAt,
-              updated_at: refreshedAt,
-            })
-            .where("queue_name", "=", queueName)
-            .where("event_id", "=", eventId)
-            .where("status", "=", "claimed")
-            .where("claim_token", "=", claimRef.claim.token),
-        );
-        return affectedRows(result) > 0;
-      },
+      (tx) =>
+        refreshChannelIngressClaimInDatabase(tx.db, {
+          queueName,
+          id: eventId,
+          token: claimRef.claim.token,
+          now: refreshedAt,
+        }),
       { path: database.path },
     );
   };
@@ -1132,36 +1117,15 @@ export function createChannelIngressQueue<
     const releasedAt = releaseOptions?.releasedAt ?? now();
     const database = openChannelIngressDatabase(options.stateDir);
     return runOpenClawStateWriteTransaction(
-      (tx) => {
-        const kysely = getChannelIngressKysely(tx.db);
-        const baseUpdate = kysely
-          .updateTable("channel_ingress_events")
-          .set((eb) => ({
-            status: "pending",
-            claim_token: null,
-            claim_owner: null,
-            claimed_at: null,
-            // A claim can lose its owner before processing starts. Returning it
-            // must not consume retry budget or erase the previous real failure.
-            ...(releaseOptions?.recordAttempt === false
-              ? {}
-              : {
-                  attempts: eb("attempts", "+", 1),
-                  last_attempt_at: releasedAt,
-                }),
-            ...(releaseOptions?.lastError === undefined
-              ? {}
-              : { last_error: releaseOptions.lastError }),
-            updated_at: releasedAt,
-          }))
-          .where("queue_name", "=", queueName)
-          .where("event_id", "=", eventId);
-        const update =
-          token === null
-            ? baseUpdate.where("status", "=", "pending")
-            : baseUpdate.where("status", "=", "claimed").where("claim_token", "=", token);
-        return affectedRows(executeSqliteQuerySync(tx.db, update)) > 0;
-      },
+      (tx) =>
+        releaseChannelIngressInDatabase(tx.db, {
+          queueName,
+          id: eventId,
+          token,
+          now: releasedAt,
+          recordAttempt: releaseOptions?.recordAttempt,
+          lastError: releaseOptions?.lastError,
+        }),
       { path: database.path },
     );
   };
@@ -1175,34 +1139,15 @@ export function createChannelIngressQueue<
     const failedAt = failOptions.failedAt ?? now();
     const database = openChannelIngressDatabase(options.stateDir);
     return runOpenClawStateWriteTransaction(
-      (tx) => {
-        const kysely = getChannelIngressKysely(tx.db);
-        const baseUpdate = kysely
-          .updateTable("channel_ingress_events")
-          .set((eb) => ({
-            status: "failed",
-            failed_at: failedAt,
-            failed_reason: failOptions.reason,
-            last_error: failOptions.message ?? null,
-            payload_json: eb
-              .case()
-              .when("payload_json", "=", "null")
-              .then(FAILED_NULL_PAYLOAD_SENTINEL)
-              .else(eb.ref("payload_json"))
-              .end(),
-            claim_token: null,
-            claim_owner: null,
-            claimed_at: null,
-            updated_at: failedAt,
-          }))
-          .where("queue_name", "=", queueName)
-          .where("event_id", "=", eventId);
-        const update =
-          token === null
-            ? baseUpdate.where("status", "=", "pending")
-            : baseUpdate.where("status", "=", "claimed").where("claim_token", "=", token);
-        return affectedRows(executeSqliteQuerySync(tx.db, update)) > 0;
-      },
+      (tx) =>
+        failChannelIngressInDatabase(tx.db, {
+          queueName,
+          id: eventId,
+          token,
+          now: failedAt,
+          reason: failOptions.reason,
+          message: failOptions.message,
+        }),
       { path: database.path },
     );
   };
