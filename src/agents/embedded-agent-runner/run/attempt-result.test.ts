@@ -447,6 +447,43 @@ describe("attempt result projection", () => {
       ],
       expected: true,
     },
+    ...["MEDIA:https://example.com/result.png", "[[audio_as_voice]]"].map((text) => ({
+      label: `assistant output ${text}`,
+      assistantTexts: [text],
+      messagesSnapshot: settledToolMessages(),
+      expected: false,
+    })),
+    {
+      label: "snapshot-only media",
+      assistantTexts: [],
+      messagesSnapshot: [
+        ...settledToolMessages(),
+        makeAssistantMessageFixture({
+          stopReason: "stop",
+          content: [{ type: "text", text: "MEDIA:https://example.com/result.png" }],
+        }),
+      ],
+      expected: false,
+    },
+    {
+      label: "media from a previous user turn",
+      assistantTexts: [],
+      messagesSnapshot: [
+        makeAssistantMessageFixture({
+          stopReason: "stop",
+          content: [{ type: "text", text: "MEDIA:https://example.com/old.png" }],
+        }),
+        { role: "user" as const, content: "Check again", timestamp: 1 },
+        ...settledToolMessages(),
+      ],
+      expected: true,
+    },
+    {
+      label: "reply target without output",
+      assistantTexts: ["[[reply_to_current]]"],
+      messagesSnapshot: settledToolMessages(),
+      expected: true,
+    },
     {
       label: "unattributed visible text",
       assistantTexts: ["here is the answer"],

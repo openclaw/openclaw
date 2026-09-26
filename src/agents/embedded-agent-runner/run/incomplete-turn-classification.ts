@@ -63,6 +63,19 @@ export function hasComposedVisibleAnswerAfterSettledTools(params: {
     (message) => message.role === "user",
   );
   const currentMessages = params.messagesSnapshot.slice(latestUserIndex + 1);
+  const hasMediaOutput = (text: string): boolean => {
+    const parsed = parseReplyDirectives(text);
+    return Boolean(parsed.mediaUrls?.length || parsed.audioAsVoice);
+  };
+  if (
+    params.assistantTexts.some(hasMediaOutput) ||
+    currentMessages.some(
+      (message) =>
+        message.role === "assistant" && hasMediaOutput(resolveRawAssistantAnswerText(message)),
+    )
+  ) {
+    return true;
+  }
   const lastToolResultIndex = currentMessages.findLastIndex(
     (message) => message.role === "toolResult",
   );

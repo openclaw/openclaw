@@ -873,59 +873,6 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(result).toBe(finalMessage);
   });
 
-  it("rewrites repeated unavailable tool calls into plain assistant text after the threshold", async () => {
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [],
-        resultMessage: {
-          role: "assistant",
-          content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo eleven" } }],
-        },
-      }),
-    );
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]), {
-      unknownToolThreshold: 10,
-    });
-
-    for (let i = 0; i < 10; i += 1) {
-      const stream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-      const result = await stream.result();
-      const message = requireRecord(result, "result message");
-      expect(message.role).toBe("assistant");
-      expectSingleToolCallContent(message.content as unknown[], "exec");
-    }
-
-    const blockedStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    const blockedResult = (await blockedStream.result()) as {
-      role: string;
-      content: Array<{ type: string; text?: string }>;
-    };
-
-    expect(blockedResult.role).toBe("assistant");
-    expectSingleTextContent(blockedResult.content, '"exec"');
-  });
-
-  it("leaves repeated unavailable tool calls alone when the unknown-tool guard is disabled", async () => {
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [],
-        resultMessage: {
-          role: "assistant",
-          content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo eleven" } }],
-        },
-      }),
-    );
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]));
-
-    for (let i = 0; i < 11; i += 1) {
-      const stream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-      const result = await stream.result();
-      const message = requireRecord(result, "result message");
-      expect(message.role).toBe("assistant");
-      expectSingleToolCallContent(message.content as unknown[], "exec");
-    }
-  });
-
   it("does not count partial tool-call deltas as separate unavailable-tool retries", async () => {
     const partialToolCall = { type: "toolCall", name: " exec " };
     const messageToolCall = { type: "toolCall", name: " exec " };

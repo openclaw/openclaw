@@ -3,9 +3,8 @@ import { copyCoreTtsAttemptResultProvenance } from "../../tools/tts-tool-result-
 import { hasOutboundDeliveryEvidence } from "../delivery-evidence.js";
 import type { ToolSummaryTrace } from "../types.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
-import type { runEmbeddedAttemptWithBackend } from "./backend.js";
 
-type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+type EmbeddedRunAttemptForRunner = EmbeddedRunAttemptWithReceiptEvidence;
 
 export function normalizeEmbeddedRunAttemptResult(
   attempt: EmbeddedRunAttemptForRunner,

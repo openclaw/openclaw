@@ -98,6 +98,14 @@ const outputLimitScenario = {
   usage: createMockUsage(440_445, 128_000),
 } satisfies TransportDropScenario;
 
+const emptyLengthScenario = {
+  assistant: buildEmbeddedRunnerAssistant({
+    stopReason: "length",
+    content: [],
+    usage: createMockUsage(1000, 4096),
+  }),
+} satisfies TransportDropScenario;
+
 describe("recoverEmbeddedRunAttempt", () => {
   it.each([
     { retryAvailable: true, decision: "accepted", reason: "transient_retry" },
@@ -151,130 +159,236 @@ describe("recoverEmbeddedRunAttempt", () => {
       );
     },
   );
-  it("continues an output-limited response before any tool executes", async () => {
-    const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
-      ...outputLimitScenario,
-      noTools: true,
-    });
-    expect(recovery).toMatchObject({ action: "retry" });
-    expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
-  });
-
-  it("does not revive an earlier output-limit error after a completed response", async () => {
-    const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
-      ...outputLimitScenario,
-      completedAssistant: buildEmbeddedRunnerAssistant({
-        stopReason: "stop",
-        content: [{ type: "text", text: "The result is verified." }],
-      }),
-    });
-    expect(recovery).toEqual({ action: "proceed" });
-    expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
-  });
-
-  it("continues output-limited work from settled results after visible progress", async () => {
-    const {
-      recovery,
-      markOwnedTranscriptRetry,
-      continueFromCurrentTranscript,
-      failoverRetryController,
-      onAgentEvent,
-    } = await recoverAfterTransportDrop({
-      ...outputLimitScenario,
-      assistantTexts: ["The change is saved. I am checking its results."],
+  describe.each([
+    { kind: "Responses incomplete tool call", scenario: outputLimitScenario },
+    { kind: "empty length stop", scenario: emptyLengthScenario },
+  ])("$kind", ({ scenario }) => {
+    it("continues an output-limited response before any tool executes", async () => {
+      const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
+        ...scenario,
+        noTools: true,
+      });
+      expect(recovery).toMatchObject({ action: "retry" });
+      expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
     });
 
-    expect(recovery).toMatchObject({ action: "retry", lastRetryFailoverReason: null });
-    expect(markOwnedTranscriptRetry).toHaveBeenCalledOnce();
-    expect(continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
-      includeToolFailureInstruction: false,
+    it("does not revive an earlier output-limit error after a completed response", async () => {
+      const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
+        ...scenario,
+        completedAssistant: buildEmbeddedRunnerAssistant({
+          stopReason: "stop",
+          content: [{ type: "text", text: "The result is verified." }],
+        }),
+      });
+      expect(recovery).toEqual({ action: "proceed" });
+      expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
     });
-    expect(failoverRetryController.transientRetryCount).toBe(1);
-    expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
-    expect(onAgentEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: "run_status",
-        data: expect.objectContaining({ phase: "retrying", reason: "output_limit" }),
-      }),
-    );
-  });
 
-  it("keeps repeated output-limit recovery inside the existing retry budget", async () => {
-    const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } =
-      await recoverAfterTransportDrop(outputLimitScenario);
-    expect(recovery.action).toBe("retry");
-    failoverRetryController.observeAttempt({ providerRetryMaxRetries: 1 });
+    it("continues output-limited work from settled results after visible progress", async () => {
+      const {
+        recovery,
+        markOwnedTranscriptRetry,
+        continueFromCurrentTranscript,
+        failoverRetryController,
+        onAgentEvent,
+      } = await recoverAfterTransportDrop({
+        ...scenario,
+        preToolText: "The change is saved. I am checking its results.",
+      });
 
-    expect(await recover()).toEqual({ action: "proceed" });
-    expect(failoverRetryController.transientRetryCount).toBe(1);
-    expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
-    expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
-  });
-
-  it("does not bypass the output-limit budget through empty-error retries", async () => {
-    const fixture = await recoverAfterTransportDrop({
-      ...outputLimitScenario,
-      noTools: true,
-      retryAvailable: false,
+      expect(recovery).toMatchObject({ action: "retry", lastRetryFailoverReason: null });
+      expect(markOwnedTranscriptRetry).toHaveBeenCalledOnce();
+      expect(continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
+        includeToolFailureInstruction: false,
+      });
+      expect(failoverRetryController.transientRetryCount).toBe(1);
+      expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
+      expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+      expect(onAgentEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stream: "run_status",
+          data: expect.objectContaining({ phase: "retrying", reason: "output_limit" }),
+        }),
+      );
     });
-    expect(fixture.recovery).toEqual({ action: "proceed" });
 
-    await expect(handleAssistantFailureAfterRecovery(fixture)).resolves.toMatchObject({
-      action: "proceed",
-      emptyErrorRetries: 0,
-    });
-    expect(fixture.continueFromCurrentTranscript).not.toHaveBeenCalled();
-    expect(fixture.failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(fixture.failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
-  });
-
-  it("continues slow output generation without consuming the transient outage window", async () => {
-    const startedAt = Date.now();
-    const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    try {
+    it("keeps repeated output-limit recovery inside the existing retry budget", async () => {
       const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } =
-        await recoverAfterTransportDrop(outputLimitScenario);
+        await recoverAfterTransportDrop(scenario);
       expect(recovery.action).toBe("retry");
-      now.mockReturnValue(startedAt + 16 * 60_000);
+      failoverRetryController.observeAttempt({ providerRetryMaxRetries: 1 });
 
-      expect(await recover()).toMatchObject({ action: "retry" });
-      expect(failoverRetryController.transientRetryCount).toBe(2);
-      expect(continueFromCurrentTranscript).toHaveBeenCalledTimes(2);
-      now.mockReturnValue(startedAt + 32 * 60_000);
-      await expect(
-        failoverRetryController.maybeRetryTransient({ reason: "server_error" }),
-      ).resolves.toBe(true);
-      now.mockReturnValue(startedAt + 34 * 60_000);
-      await expect(
-        failoverRetryController.maybeRetryTransient({ reason: "server_error" }),
-      ).resolves.toBe(false);
-    } finally {
-      now.mockRestore();
-    }
+      expect(await recover()).toEqual({ action: "proceed" });
+      expect(failoverRetryController.transientRetryCount).toBe(1);
+      expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
+      expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
+      expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+    });
+
+    it("does not bypass the output-limit budget through empty-error retries", async () => {
+      const fixture = await recoverAfterTransportDrop({
+        ...scenario,
+        noTools: true,
+        retryAvailable: false,
+      });
+      expect(fixture.recovery).toEqual({ action: "proceed" });
+
+      await expect(handleAssistantFailureAfterRecovery(fixture)).resolves.toMatchObject({
+        action: "proceed",
+        emptyErrorRetries: 0,
+      });
+      expect(fixture.continueFromCurrentTranscript).not.toHaveBeenCalled();
+      expect(fixture.failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
+      expect(fixture.failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+    });
+
+    it("continues slow output generation without consuming the transient outage window", async () => {
+      const startedAt = Date.now();
+      const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+      try {
+        const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } =
+          await recoverAfterTransportDrop(scenario);
+        expect(recovery.action).toBe("retry");
+        now.mockReturnValue(startedAt + 16 * 60_000);
+
+        expect(await recover()).toMatchObject({ action: "retry" });
+        expect(failoverRetryController.transientRetryCount).toBe(2);
+        expect(continueFromCurrentTranscript).toHaveBeenCalledTimes(2);
+        now.mockReturnValue(startedAt + 32 * 60_000);
+        await expect(
+          failoverRetryController.maybeRetryTransient({ reason: "server_error" }),
+        ).resolves.toBe(true);
+        now.mockReturnValue(startedAt + 34 * 60_000);
+        await expect(
+          failoverRetryController.maybeRetryTransient({ reason: "server_error" }),
+        ).resolves.toBe(false);
+      } finally {
+        now.mockRestore();
+      }
+    });
+
+    it.each<[string, TransportDropScenario]>([
+      ["a tool result is missing", { missingToolResult: true }],
+      ["a lifecycle item remains active", { activeCount: 1 }],
+      ["asynchronous tool work remains", { asyncStarted: true }],
+      ["a tool intentionally ended the turn", { terminate: true }],
+      ["approval is pending", { didSendDeterministicApprovalPrompt: true }],
+      ["the harness owns transport recovery", { pluginHarnessOwnsTransport: true }],
+      ["the attempt yielded", { yieldDetected: true }],
+      ["the retry budget is disabled", { retryAvailable: false }],
+      ["the run was cancelled", { terminal: { kind: "aborted", source: "external" } }],
+      [
+        "the run deadline expired",
+        { terminal: { kind: "timeout", phase: "prompt", source: "run_budget" } },
+      ],
+    ])("does not continue output-limited work when %s", async (_label, overrides) => {
+      const { recovery, markOwnedTranscriptRetry, continueFromCurrentTranscript } =
+        await recoverAfterTransportDrop({ ...scenario, ...overrides });
+      expect(recovery).toEqual({ action: "proceed" });
+      expect(markOwnedTranscriptRetry).not.toHaveBeenCalled();
+      expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
+    });
   });
 
-  it.each<[string, TransportDropScenario]>([
-    ["a tool result is missing", { missingToolResult: true }],
-    ["a lifecycle item remains active", { activeCount: 1 }],
-    ["asynchronous tool work remains", { asyncStarted: true }],
-    ["a tool intentionally ended the turn", { terminate: true }],
-    ["approval is pending", { didSendDeterministicApprovalPrompt: true }],
-    ["the harness owns transport recovery", { pluginHarnessOwnsTransport: true }],
-    ["the attempt yielded", { yieldDetected: true }],
-    ["the retry budget is disabled", { retryAvailable: false }],
-    ["the run was cancelled", { terminal: { kind: "aborted", source: "external" } }],
-    [
-      "the run deadline expired",
-      { terminal: { kind: "timeout", phase: "prompt", source: "run_budget" } },
-    ],
-  ])("does not continue output-limited work when %s", async (_label, scenario) => {
-    const { recovery, markOwnedTranscriptRetry, continueFromCurrentTranscript } =
-      await recoverAfterTransportDrop({ ...outputLimitScenario, ...scenario });
+  it.each<{ label: string } & TransportDropScenario>([
+    {
+      label: "partial answer",
+      assistant: buildEmbeddedRunnerAssistant({
+        stopReason: "length",
+        content: [{ type: "text", text: "The result so far" }],
+      }),
+    },
+    {
+      label: "completed answer before the empty stop",
+      assistantTexts: ["The result is verified."],
+    },
+    { label: "assistant media", preToolText: "MEDIA:https://example.com/result.png" },
+    {
+      label: "snapshot-only assistant media",
+      preToolText: "MEDIA:https://example.com/result.png",
+      assistantTexts: [],
+    },
+    { label: "voice output", preToolText: "[[audio_as_voice]]" },
+    { label: "tool media", toolMediaUrls: ["https://example.com/result.png"] },
+    { label: "source reply already delivered", sourceReplyDelivered: true },
+    { label: "silent cron tool result", trigger: "cron", toolResultText: "NO_REPLY" },
+  ])("preserves $label after a length stop", async ({ label: _label, ...scenario }) => {
+    const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
+      ...emptyLengthScenario,
+      ...scenario,
+    });
     expect(recovery).toEqual({ action: "proceed" });
-    expect(markOwnedTranscriptRetry).not.toHaveBeenCalled();
     expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
+  });
+
+  it.each(["pending", "delivered", "error"] as const)(
+    "preserves %s source delivery after an empty length stop",
+    async (state) => {
+      const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
+        ...emptyLengthScenario,
+        resolveReplyDelivery: async () => {
+          if (state === "error") {
+            throw new Error("delivery unavailable");
+          }
+          return state;
+        },
+      });
+      expect(recovery).toEqual({ action: "proceed" });
+      expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([undefined, "[[reply_to_current]]"])(
+    "continues after an earlier answer was delivered (reply target: %s)",
+    async (preToolText) => {
+      const previousAssistant = buildEmbeddedRunnerAssistant({
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "toolCall",
+            id: "previous_reply",
+            name: "message",
+            arguments: { action: "send", message: "The previous result is ready." },
+          },
+        ],
+      });
+      const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
+        ...emptyLengthScenario,
+        preToolText,
+        precedingMessages: [
+          { role: "user", content: "Send the previous result.", timestamp: 0 },
+          previousAssistant,
+          {
+            role: "toolResult",
+            toolCallId: "previous_reply",
+            toolName: "message",
+            content: [{ type: "text", text: "Delivered." }],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+        answerSegments: [
+          { textEnd: 0, messageEnd: 1, finalMessageStart: 1, lastAssistant: previousAssistant },
+        ],
+        resolveReplyDelivery: async (minimumAssistantMessageIndex = 0) =>
+          minimumAssistantMessageIndex <= 1 ? "delivered" : "missing",
+      });
+      expect(recovery.action).toBe("retry");
+      expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("routes a zero-output length overflow to compaction before output retries", async () => {
+    await expect(
+      recoverAfterTransportDrop({
+        assistant: buildEmbeddedRunnerAssistant({
+          stopReason: "length",
+          content: [],
+          usage: createMockUsage(199000, 0),
+        }),
+        compactionEnabled: true,
+      }),
+    ).rejects.toThrow("overflow compaction requested");
   });
 
   it.each([

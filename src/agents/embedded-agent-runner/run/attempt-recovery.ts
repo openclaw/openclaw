@@ -1,4 +1,5 @@
 import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
+import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
@@ -12,12 +13,18 @@ import { classifyFailoverSignal } from "../../failover/classify.js";
 import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../../live-model-switch.js";
+import { observeReplyDelivery } from "../../reply-completion.js";
 import type { normalizeUsage } from "../../usage.js";
+import { resolveSourceReplyDelivery } from "../delivery-evidence.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
 import type { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
-import { hasAsyncActivity, isCurrentAttemptReplaySafe } from "./attempt-terminal-evidence.js";
+import {
+  hasAsyncActivity,
+  hasAttemptTerminalState,
+  isCurrentAttemptReplaySafe,
+} from "./attempt-terminal-evidence.js";
 import { buildEmbeddedRunBlockedResult } from "./blocked-run-result.js";
 import { resolveCodexAppServerRecoveryRetry } from "./codex-app-server-recovery.js";
 import { resolveCompactionLiveModelSelection } from "./compaction-live-model-selection.js";
@@ -26,7 +33,9 @@ import type { createEmbeddedRunContextRecoveryState } from "./context-recovery-s
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { buildErrorAgentMeta } from "./helpers.js";
+import { hasComposedVisibleAnswerAfterSettledTools } from "./incomplete-turn-classification.js";
 import { resolveSettledToolBatchEvidence } from "./incomplete-turn-recovery.js";
+import { resolveSilentToolResultReplyPayload } from "./incomplete-turn-resolution.js";
 import { recoverEmbeddedRunOverflow } from "./overflow-context-recovery.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 import type { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
@@ -161,8 +170,40 @@ export async function recoverEmbeddedRunAttempt(input: {
     !attempt.didSendDeterministicApprovalPrompt;
   // Embedded settings disable session retries; this owner must resume output limits.
   const recoveryAssistant = currentAttemptCompletedAssistant ?? attemptAssistant;
+  // A bodyless length stop can interrupt unfinished work after a tool returned.
+  // Resume its transcript before considering the terminal, tool-free finalizer.
+  const emptyLengthStop =
+    recoveryAssistant?.stopReason === "length" &&
+    recoveryAssistant.content.length === 0 &&
+    !isContextOverflow(recoveryAssistant, runtime.contextTokenBudget) &&
+    !hasAttemptTerminalState(attempt) &&
+    !hasComposedVisibleAnswerAfterSettledTools(attempt) &&
+    !resolveSilentToolResultReplyPayload({
+      isCronTrigger: params.trigger === "cron",
+      payloadCount: 0,
+      aborted,
+      timedOut,
+      attempt,
+    });
+  const emptyLengthNeedsContinuation =
+    emptyLengthStop &&
+    resolveSourceReplyDelivery(
+      attempt,
+      await observeReplyDelivery(
+        params.resolveReplyDelivery,
+        (attempt.answerSegments?.at(-1)?.messageEnd ?? -1) + 1,
+        (error) =>
+          log.warn(
+            `reply delivery observation failed; retaining custody: ${formatErrorMessage(error)}`,
+          ),
+      ),
+    ) === "missing";
+  if (emptyLengthStop) {
+    runInput.laneController.throwIfAborted();
+  }
   const outputLimitFailure = Boolean(
-    recoveryAssistant && isResponsesOutputLimitToolCallError(recoveryAssistant),
+    recoveryAssistant &&
+    (isResponsesOutputLimitToolCallError(recoveryAssistant) || emptyLengthNeedsContinuation),
   );
   const canContinueOutputLimit =
     !runtime.pluginHarnessOwnsTransport &&

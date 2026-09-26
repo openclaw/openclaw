@@ -2,6 +2,7 @@ import { vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
+import type { ReplyDeliveryObserver } from "../../reply-completion.js";
 import {
   buildEmbeddedRunnerAssistant,
   createMockUsage,
@@ -9,8 +10,10 @@ import {
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
 import { recoverEmbeddedRunAttempt } from "./attempt-recovery.js";
+import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
+import { normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
 export type TransportDropScenario = {
@@ -18,6 +21,14 @@ export type TransportDropScenario = {
   assistant?: AssistantMessage;
   providerOwner?: PreparedProviderFailoverOwner;
   assistantTexts?: string[];
+  precedingMessages?: EmbeddedRunAttemptWithReceiptEvidence["messagesSnapshot"];
+  answerSegments?: EmbeddedRunAttemptWithReceiptEvidence["answerSegments"];
+  toolMediaUrls?: string[];
+  sourceReplyDelivered?: EmbeddedRunAttemptWithReceiptEvidence["sourceReplyDelivered"];
+  trigger?: "cron";
+  toolResultText?: string;
+  preToolText?: string;
+  resolveReplyDelivery?: ReplyDeliveryObserver;
   errorMessage?: string;
   errorBody?: string;
   errorCode?: string;
@@ -84,7 +95,16 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
   const provider = erroredAssistant.provider;
   const modelId = erroredAssistant.model;
   const messagesSnapshot = [
+    ...(scenario.precedingMessages ?? []),
     { role: "user", content: "why is it unauthorized?" },
+    ...(scenario.preToolText
+      ? [
+          buildEmbeddedRunnerAssistant({
+            stopReason: "stop",
+            content: [{ type: "text", text: scenario.preToolText }],
+          }),
+        ]
+      : []),
     ...(toolCalls.length > 0 ? [toolAssistant] : []),
     ...toolCalls
       .filter((id) => !scenario.missingToolResult || id !== "call_2")
@@ -93,11 +113,16 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
         toolCallId: id,
         toolName: "exec",
         isError: id === scenario.failedToolCallId,
+        content: scenario.toolResultText
+          ? [{ type: "text", text: scenario.toolResultText }]
+          : undefined,
       })),
     erroredAssistant,
   ] as never;
-  const attempt = makeEmbeddedRunnerAttempt({
-    assistantTexts: scenario.assistantTexts ?? [],
+  const rawAttempt: EmbeddedRunAttemptWithReceiptEvidence = makeEmbeddedRunnerAttempt({
+    assistantTexts: scenario.assistantTexts ?? (scenario.preToolText ? [scenario.preToolText] : []),
+    toolMediaUrls: scenario.toolMediaUrls,
+    sourceReplyDelivered: scenario.sourceReplyDelivered,
     messagesSnapshot,
     toolMetas: toolCalls.map((toolCallId) => ({
       toolCallId,
@@ -128,6 +153,8 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
       ? { currentAttemptReplayMetadata: { replaySafe: true, hadPotentialSideEffects: false } }
       : {}),
   });
+  rawAttempt.answerSegments = scenario.answerSegments;
+  const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
   const terminalState = resolveEmbeddedRunAttemptTerminalState({
     attempt,
     assistant: erroredAssistant,
@@ -163,6 +190,8 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
         runParams: {
           config: scenario.config ?? {},
           agentId: "main",
+          trigger: scenario.trigger,
+          resolveReplyDelivery: scenario.resolveReplyDelivery,
           sessionId: "session:transport-drop",
           runId: "run:transport-drop",
           onAgentEvent,
