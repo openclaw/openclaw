@@ -28,6 +28,7 @@ import {
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import { matchesCompactionOperation } from "./chat-progress.ts";
+import type { ChatHistoryCursor } from "./session-message-cache.ts";
 import type { CompactionStatus, ProviderPolicyNotice } from "./tool-stream-contract.ts";
 
 const chatSessionProjections = new WeakMap<
@@ -55,6 +56,7 @@ const CHAT_PROJECTION_SCOPE_KEYS = [
 type ChatSessionProjectionOwner = ChatComposerScope & {
   sessionKey: string;
   chatMessages: unknown[];
+  chatHistoryCursor?: ChatHistoryCursor;
   chatSubmissions?: ApplicationChatSubmissions;
   currentSessionId?: string | null;
   chatDisplayedLeafEntryId?: string | null;
@@ -591,6 +593,7 @@ export function reduceChatSessionProjection(
   }
   projection = reduceSessionProjection(projection, { ...preparedEvent, scope });
   if (event.type === "sessionReset" && projection !== current) {
+    delete owner.chatHistoryCursor;
     resetCompactionProjection(owner);
     owner.providerPolicyNotice = null;
   }

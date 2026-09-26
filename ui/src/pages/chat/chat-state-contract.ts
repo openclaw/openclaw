@@ -13,7 +13,7 @@ import type { SessionCapability, SessionMessageSubscription } from "../../lib/se
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import type { ChatRunError, LocalTerminalReconcile } from "./run-lifecycle.ts";
-import type { ChatMessageCache } from "./session-message-cache.ts";
+import type { ChatHistoryCursor, ChatMessageCache } from "./session-message-cache.ts";
 import type { StreamCausalBoundaryState } from "./stream-causal-boundary.ts";
 import type { ProviderPolicyNotice, RunOutputUsage } from "./tool-stream-contract.ts";
 
@@ -41,6 +41,7 @@ export type ChatState = StreamCausalBoundaryState & {
   chatHistoryPagination: ChatHistoryPagination;
   chatMessages: unknown[];
   chatMessagesBySession?: ChatMessageCache;
+  chatHistoryCursor?: ChatHistoryCursor;
   /** Active leaf of the history snapshot currently rendered by this pane. */
   chatDisplayedLeafEntryId?: string | null;
   chatThinkingLevel: string | null;

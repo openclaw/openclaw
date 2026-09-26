@@ -29,6 +29,13 @@ export type ChatSessionSnapshot = {
   sessionId: string | null;
 };
 
+/** A delta cursor is usable only with the transcript already adopted by this pane. */
+export type ChatHistoryCursor = {
+  cursor: string;
+  snapshotKey: string;
+  sessionId: string | null;
+};
+
 type CachedChatSessionSnapshot = {
   snapshot: ChatSessionSnapshot;
   weight: number;
@@ -53,6 +60,38 @@ type ChatMessageCacheHost = Pick<
   "assistantAgentId" | "agentsList" | "hello"
 >;
 
+type ChatHistoryCursorHost = ChatMessageCacheHost & {
+  sessionKey: string;
+  currentSessionId?: string | null;
+  chatHistoryCursor?: ChatHistoryCursor;
+};
+
+export function readChatHistoryCursor(state: ChatHistoryCursorHost): string | undefined {
+  const receipt = state.chatHistoryCursor;
+  if (
+    receipt?.snapshotKey === resolveChatSnapshotKey(state, { sessionKey: state.sessionKey }) &&
+    receipt.sessionId === (state.currentSessionId ?? null)
+  ) {
+    return receipt.cursor;
+  }
+  delete state.chatHistoryCursor;
+  return undefined;
+}
+
+export function setChatHistoryCursor(
+  state: ChatHistoryCursorHost,
+  cursor: string | undefined,
+): void {
+  state.chatHistoryCursor =
+    cursor === undefined
+      ? undefined
+      : {
+          cursor,
+          snapshotKey: resolveChatSnapshotKey(state, { sessionKey: state.sessionKey }),
+          sessionId: state.currentSessionId ?? null,
+        };
+}
+
 export function observeChatCache(cache: ChatMessageCache, observer: ChatCacheObserver): void {
   chatCacheObservers.set(cache, observer);
 }
@@ -67,8 +106,7 @@ function deleteChatSnapshot(
 }
 
 export function applyChatCacheSnapshot(
-  state: {
-    sessionKey: string;
+  state: ChatHistoryCursorHost & {
     chatDisplayedLeafEntryId?: string | null;
     chatHistoryPagination: ChatHistoryPagination;
     chatMessages: unknown[];
@@ -91,6 +129,8 @@ export function applyChatCacheSnapshot(
   state.chatHistoryPagination = snapshot.pagination;
   state.currentSessionId = snapshot.sessionId;
   state.chatDisplayedLeafEntryId = snapshot.displayedLeafEntryId;
+  // Older split races could persist an empty transcript with a sibling's cursor.
+  setChatHistoryCursor(state, snapshot.messages.length === 0 ? undefined : snapshot.deltaCursor);
 }
 
 export function appendChatMessageToCache(

@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
@@ -19,7 +20,11 @@ import {
 } from "./chat-pane.test-support.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { resetTranscriptTestDom } from "./components/chat-transcript.test-support.ts";
-import type { ChatMessageCache, ChatSessionSnapshot } from "./session-message-cache.ts";
+import {
+  readChatSessionSnapshot,
+  type ChatMessageCache,
+  type ChatSessionSnapshot,
+} from "./session-message-cache.ts";
 import * as snapshotDatabase from "./session-snapshot-database.ts";
 import { markPrewarmedChatSnapshotReady, prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
@@ -134,9 +139,47 @@ afterEach(() => {
 });
 
 describe("first chat startup snapshot ordering", () => {
-  it.each([false, true])(
-    "hydrates each split before cursor revalidation (sibling refreshed: %s)",
-    async (siblingRefreshed) => {
+  it.each([
+    { name: "empty", messages: [] },
+    { name: "recovered", messages: liveMessages },
+  ])(
+    "rechecks an empty stored snapshot before accepting $name network history",
+    async ({ messages }) => {
+      const h = mountPane();
+      connectSessionOwner(h);
+      h.request.mockImplementation(async (_method, params) =>
+        asOptionalRecord(params)?.cursor
+          ? {
+              kind: "delta",
+              messages: [],
+              deltaCursor: "live-cursor",
+              sessionInfo: h.liveResult.sessionInfo,
+            }
+          : { ...h.liveResult, messages },
+      );
+      const loading = h.start();
+      h.read.resolve({ ...stored, messages: [] });
+      await loading;
+      expect(h.request).toHaveBeenCalledExactlyOnceWith(
+        "chat.startup",
+        expect.not.objectContaining({ cursor: expect.anything() }),
+        { signal: expect.any(AbortSignal) },
+      );
+      expect(h.state.chatMessages).toEqual(messages);
+
+      await h.start();
+      expect(h.request).toHaveBeenLastCalledWith(
+        "chat.startup",
+        expect.objectContaining({ cursor: "live-cursor" }),
+        { signal: expect.any(AbortSignal) },
+      );
+      expect(h.state.chatMessages).toEqual(messages);
+    },
+  );
+
+  it.each(["unchanged", "refreshed", "deadline", "ordinary-refresh"] as const)(
+    "hydrates both splits when the sibling is %s",
+    async (ordering) => {
       const memory: ChatMessageCache = new Map();
       const store = new SessionSnapshotStore(memory);
       const firstRead = createDeferred<ChatSessionSnapshot | null>();
@@ -146,36 +189,37 @@ describe("first chat startup snapshot ordering", () => {
         .mockReturnValueOnce(secondRead.promise);
       const first = mountPane(true, sessionKey, false, store, memory);
       const second = mountPane(true, sessionKey, false, store, memory);
-      const delta = {
-        kind: "delta",
-        messages: [],
-        deltaCursor: siblingRefreshed ? first.liveResult.deltaCursor : stored.deltaCursor,
-        sessionInfo: first.liveResult.sessionInfo,
-      };
-      first.request.mockResolvedValue(siblingRefreshed ? first.liveResult : delta);
-      second.request.mockResolvedValue(delta);
-      first.connect();
+      const { sessions } = connectSessionOwner(first);
       second.connect();
+      second.state.client = first.client;
+      second.state.sessions = sessions;
+      const currentCursor = ordering === "unchanged" ? stored.deltaCursor : "live-cursor";
+      first.request.mockImplementation(async (_method, params) =>
+        asOptionalRecord(params)?.cursor === currentCursor
+          ? {
+              kind: "delta",
+              messages: [],
+              deltaCursor: currentCursor,
+              sessionInfo: first.liveResult.sessionInfo,
+            }
+          : first.liveResult,
+      );
       const loading = [first.start(), second.start()];
       firstRead.resolve(stored);
-      if (siblingRefreshed) {
-        await loading[0];
+      await loading[0];
+      if (ordering === "deadline") {
+        await vi.advanceTimersByTimeAsync(300);
+      } else if (ordering === "ordinary-refresh") {
+        await loadChatHistory(second.state, { deferBranches: true });
       }
-      secondRead.resolve(siblingRefreshed ? null : stored);
+      secondRead.resolve(ordering === "unchanged" ? stored : null);
       await Promise.all(loading);
-      const expectedMessages = siblingRefreshed ? liveMessages : stored.messages;
+      const expectedMessages = ordering === "unchanged" ? stored.messages : liveMessages;
       expect(first.state.chatMessages).toEqual(expectedMessages);
       expect(second.state.chatMessages).toEqual(expectedMessages);
-      for (const pane of [first, second]) {
-        expect(pane.request).toHaveBeenCalledExactlyOnceWith(
-          "chat.startup",
-          expect.objectContaining({
-            sessionKey,
-            cursor: pane === second ? delta.deltaCursor : stored.deltaCursor,
-          }),
-          { signal: expect.any(AbortSignal) },
-        );
-      }
+      expect(readChatSessionSnapshot(memory, second.state, { sessionKey })?.messages).toEqual(
+        expectedMessages,
+      );
     },
   );
 
