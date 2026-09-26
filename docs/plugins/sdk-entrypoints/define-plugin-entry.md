@@ -144,6 +144,13 @@ export default definePluginEntry({
   Core resolves profile identities against current profile data, including merges.
   User items without attribution display as **User**.
 
+  `importSessionCatalogHistory(...)` mirrors the most recent 200 items within a
+  512 KiB serialized-item budget. Reads are newest-first; persistence restores
+  source order. The importer makes at most 200 page requests and stops when a
+  provider repeats an opaque continuation cursor, retaining the final page's
+  items within the existing budgets. Finite empty pages may continue to older
+  history; the import does not promise an exhaustive native-history migration.
+
   A Gateway-hosted catalog may set `audience: "gateway-operators"` when every
   authenticated operator with `operator.read` may view its rows. Such a provider
   may implement `copyToGatewaySession(...)` to return a bounded display name and
