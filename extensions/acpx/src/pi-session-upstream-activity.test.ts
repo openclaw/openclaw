@@ -47,18 +47,18 @@ async function injectFileShortReads(filePath: string, maxBytes: number): Promise
   } as FileHandle["read"]);
 }
 
-describe("Pi session upstream activity", () => {
-  it("detects external turns, suppresses own echoes, and confirms deletion", async () => {
-    const sessionDirectory = await createPiStoreFixture(
-      temporaryDirectories,
-      "hi",
-      "Pi catalog session",
-      { command: "pwd" },
-      true,
-    );
-    const continued = await linkContinuedPiSession("agent:main:pi", "pi-session");
-    const file = path.join(sessionDirectory, "session.jsonl");
-    const probe = {
+async function createActivityFixture(ownRecentUserTexts: string[] = []) {
+  const sessionDirectory = await createPiStoreFixture(
+    temporaryDirectories,
+    "hi",
+    "Pi catalog session",
+    { command: "pwd" },
+    true,
+  );
+  const continued = await linkContinuedPiSession("agent:main:pi", "pi-session");
+  return {
+    file: path.join(sessionDirectory, "session.jsonl"),
+    probe: {
       sessionKey: continued.sessionKey,
       agentId: "main",
       threadId: "pi-session",
@@ -66,8 +66,14 @@ describe("Pi session upstream activity", () => {
       upstreamKind: continued.upstream!.kind,
       upstreamRef: continued.upstream!.ref,
       marker: continued.upstream!.marker,
-      ownRecentUserTexts: ["sent from OpenClaw"],
-    };
+      ownRecentUserTexts,
+    },
+  };
+}
+
+describe("Pi session upstream activity", () => {
+  it("detects external turns, suppresses own echoes, and confirms deletion", async () => {
+    const { file, probe } = await createActivityFixture(["sent from OpenClaw"]);
 
     await fs.appendFile(
       file,
@@ -83,7 +89,7 @@ describe("Pi session upstream activity", () => {
     expect(ownEcho).toEqual([
       expect.objectContaining({
         kind: "activity",
-        sessionKey: continued.sessionKey,
+        sessionKey: probe.sessionKey,
         humanTurns: 0,
       }),
     ]);
@@ -104,14 +110,14 @@ describe("Pi session upstream activity", () => {
     expect(external).toEqual([
       expect.objectContaining({
         kind: "activity",
-        sessionKey: continued.sessionKey,
+        sessionKey: probe.sessionKey,
         humanTurns: 1,
       }),
     ]);
 
     await fs.rm(file);
     await expect(checkPiUpstreamActivity([probe])).resolves.toEqual([
-      { kind: "missing", sessionKey: continued.sessionKey },
+      { kind: "missing", sessionKey: probe.sessionKey },
     ]);
   });
 
@@ -133,16 +139,7 @@ describe("Pi session upstream activity", () => {
   });
 
   it("completes bounded scan windows across positional short reads", async () => {
-    const sessionDirectory = await createPiStoreFixture(
-      temporaryDirectories,
-      "hi",
-      "Pi catalog session",
-      { command: "pwd" },
-      true,
-    );
-    const continued = await linkContinuedPiSession("agent:main:pi", "pi-session");
-    const file = path.join(sessionDirectory, "session.jsonl");
-    const marker = continued.upstream!.marker;
+    const { file, probe } = await createActivityFixture();
     await fs.appendFile(
       file,
       `${JSON.stringify({
@@ -154,20 +151,7 @@ describe("Pi session upstream activity", () => {
     await injectFileShortReads(file, 17);
     const completeSize = (await fs.stat(file)).size;
 
-    await expect(
-      checkPiUpstreamActivity([
-        {
-          sessionKey: continued.sessionKey,
-          agentId: "main",
-          threadId: "pi-session",
-          hostId: "gateway",
-          upstreamKind: continued.upstream!.kind,
-          upstreamRef: continued.upstream!.ref,
-          marker,
-          ownRecentUserTexts: [],
-        },
-      ]),
-    ).resolves.toEqual([
+    await expect(checkPiUpstreamActivity([probe])).resolves.toEqual([
       expect.objectContaining({
         kind: "activity",
         humanTurns: 1,
@@ -177,41 +161,12 @@ describe("Pi session upstream activity", () => {
 
     await fs.appendFile(file, '{"type":"message"');
     await expect(
-      checkPiUpstreamActivity([
-        {
-          sessionKey: continued.sessionKey,
-          agentId: "main",
-          threadId: "pi-session",
-          hostId: "gateway",
-          upstreamKind: continued.upstream!.kind,
-          upstreamRef: continued.upstream!.ref,
-          marker: { offset: completeSize },
-          ownRecentUserTexts: [],
-        },
-      ]),
+      checkPiUpstreamActivity([{ ...probe, marker: { offset: completeSize } }]),
     ).resolves.toEqual([]);
   });
 
   it("preserves Pi date parsing for numeric-looking activity timestamps", async () => {
-    const sessionDirectory = await createPiStoreFixture(
-      temporaryDirectories,
-      "hi",
-      "Pi catalog session",
-      { command: "pwd" },
-      true,
-    );
-    const continued = await linkContinuedPiSession("agent:main:pi", "pi-session");
-    const file = path.join(sessionDirectory, "session.jsonl");
-    const probe = {
-      sessionKey: continued.sessionKey,
-      agentId: "main",
-      threadId: "pi-session",
-      hostId: "gateway",
-      upstreamKind: continued.upstream!.kind,
-      upstreamRef: continued.upstream!.ref,
-      marker: continued.upstream!.marker,
-      ownRecentUserTexts: [],
-    };
+    const { file, probe } = await createActivityFixture();
 
     await fs.appendFile(
       file,
@@ -253,25 +208,7 @@ describe("Pi session upstream activity", () => {
   });
 
   it("stops the cursor before the first unclassifiable complete row", async () => {
-    const sessionDirectory = await createPiStoreFixture(
-      temporaryDirectories,
-      "hi",
-      "Pi catalog session",
-      { command: "pwd" },
-      true,
-    );
-    const continued = await linkContinuedPiSession("agent:main:pi", "pi-session");
-    const file = path.join(sessionDirectory, "session.jsonl");
-    const probe = {
-      sessionKey: continued.sessionKey,
-      agentId: "main",
-      threadId: "pi-session",
-      hostId: "gateway",
-      upstreamKind: continued.upstream!.kind,
-      upstreamRef: continued.upstream!.ref,
-      marker: continued.upstream!.marker,
-      ownRecentUserTexts: [],
-    };
+    const { file, probe } = await createActivityFixture();
     await fs.appendFile(
       file,
       `${JSON.stringify({

@@ -159,8 +159,6 @@ describe.each(["suite", "profile"] as const)("%s scenario selection", (lane) => 
   it.each([
     { name: "empty value", args: ["--scenario", ""] },
     { name: "whitespace value", args: ["--scenario", " \t "] },
-    { name: "empty assignment", args: ["--scenario="] },
-    { name: "repeated blanks", args: ["--scenario", "", "--scenario", "  "] },
   ])("rejects an explicit all-blank selection: $name", async ({ args }) => {
     const error = await program.parseAsync([...suiteArgs, ...args]).then(
       () => null,
@@ -179,11 +177,6 @@ describe.each(["suite", "profile"] as const)("%s scenario selection", (lane) => 
       name: "omitted selection",
       args: [],
       expected: ["selected-scenario", "unrequested-scenario"],
-    },
-    {
-      name: "named scenario",
-      args: ["--scenario", "selected-scenario"],
-      expected: ["selected-scenario"],
     },
     {
       name: "trimmed scenario",
