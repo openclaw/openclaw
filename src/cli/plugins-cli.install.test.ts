@@ -255,11 +255,7 @@ function primeSuccessfulPluginPersistence(pluginId = "demo") {
   return { cfg, enabledCfg };
 }
 
-function primeSuccessfulClawHubPluginInstall(
-  params: {
-    explicitVersion?: boolean;
-  } = {},
-) {
+function primeSuccessfulClawHubPluginInstall() {
   const result = primeSuccessfulPluginPersistence("demo");
 
   installPluginFromClawHubMock.mockResolvedValue(
@@ -1804,7 +1800,7 @@ describe("plugins cli install", () => {
   });
 
   it("keeps explicit ClawHub versions pinned in install records", async () => {
-    primeSuccessfulClawHubPluginInstall({ explicitVersion: true });
+    primeSuccessfulClawHubPluginInstall();
 
     await runCapabilityAcceptedPluginsInstallCommand(["plugins", "install", "clawhub:demo@1.2.3"]);
 

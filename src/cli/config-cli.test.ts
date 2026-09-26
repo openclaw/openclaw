@@ -1475,7 +1475,10 @@ describe("config cli", () => {
 
       await runConfigCommand(["config", "validate"]);
 
-      expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+      expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({
+        observe: false,
+        prepareValidation: "strict",
+      });
       expect(mockExit).not.toHaveBeenCalled();
       expect(mockError).not.toHaveBeenCalled();
       expectLogIncludes("Config valid:");

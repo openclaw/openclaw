@@ -48,6 +48,7 @@ import {
   buildCwdBoundHashedArgPattern,
   resolvePolicyTargetCandidatePath,
 } from "../infra/exec-command-resolution.js";
+import * as commandResolution from "../infra/exec-command-resolution.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import * as mutableFilePolicy from "../infra/system-run-mutable-file-policy.js";
 import {

@@ -89,7 +89,6 @@ describe("update-cli", () => {
     mockNpmGlobalCommands,
     mockPackageInstallAtCaseDir,
     mockPackageInstallStatus,
-    primeNpmChannelTag,
     runUpdateCliScenario,
     setTty,
     setupInstalledPackageAtNodeModules,
