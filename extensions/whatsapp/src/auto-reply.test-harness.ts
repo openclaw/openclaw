@@ -401,6 +401,7 @@ export async function sendWebGroupInboundMessage(params: {
   mentionedJids?: string[];
   selfE164?: string;
   selfJid?: string;
+  selfLid?: string;
   spies: ReturnType<typeof createWebInboundDeliverySpies>;
   conversationId?: string;
   accountId?: string;
@@ -418,6 +419,7 @@ export async function sendWebGroupInboundMessage(params: {
         senderName: params.senderName,
         selfE164: params.selfE164,
         selfJid: params.selfJid,
+        selfLid: params.selfLid,
         sendComposing: params.spies.sendComposing,
         reply: params.spies.reply,
         sendMedia: params.spies.sendMedia,
