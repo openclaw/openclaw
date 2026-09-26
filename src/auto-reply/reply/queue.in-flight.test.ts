@@ -16,9 +16,9 @@ import type { FollowupRun, QueueDropPolicy, QueueSettings } from "./queue/types.
 describe("followup queue in-flight ownership", () => {
   const keys = new Set<string>();
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const key of keys) {
-      clearFollowupQueue(key);
+      await clearFollowupQueue(key);
     }
     keys.clear();
   });
@@ -61,13 +61,13 @@ describe("followup queue in-flight ownership", () => {
 
       try {
         expect(
-          enqueueFollowupRun(key, active, createSettings(dropPolicy), "none", runFollowup),
+          await enqueueFollowupRun(key, active, createSettings(dropPolicy), "none", runFollowup),
         ).toBe(true);
         await entered.promise;
 
         expect(getFollowupQueueDepth(key)).toBe(0);
         expect(
-          enqueueFollowupRun(
+          await enqueueFollowupRun(
             key,
             {
               ...createRun({ prompt: "pending" }),
@@ -78,7 +78,7 @@ describe("followup queue in-flight ownership", () => {
           ),
         ).toBe(true);
         expect(
-          enqueueFollowupRun(
+          await enqueueFollowupRun(
             key,
             createRun({ prompt: "survivor" }),
             createSettings(dropPolicy),
@@ -123,17 +123,22 @@ describe("followup queue in-flight ownership", () => {
     };
 
     try {
-      expect(enqueueFollowupRun(key, active, createSettings("new"), "none", runFollowup)).toBe(
-        true,
-      );
+      expect(
+        await enqueueFollowupRun(key, active, createSettings("new"), "none", runFollowup),
+      ).toBe(true);
       await entered.promise;
 
       expect(getFollowupQueueDepth(key)).toBe(0);
       expect(
-        enqueueFollowupRun(key, createRun({ prompt: "pending" }), createSettings("new"), "none"),
+        await enqueueFollowupRun(
+          key,
+          createRun({ prompt: "pending" }),
+          createSettings("new"),
+          "none",
+        ),
       ).toBe(true);
       expect(
-        enqueueFollowupRun(
+        await enqueueFollowupRun(
           key,
           {
             ...createRun({ prompt: "rejected" }),
@@ -195,7 +200,9 @@ describe("followup queue in-flight ownership", () => {
     };
 
     for (const run of group) {
-      expect(enqueueFollowupRun(key, run, initialSettings, "none", undefined, false)).toBe(true);
+      expect(await enqueueFollowupRun(key, run, initialSettings, "none", undefined, false)).toBe(
+        true,
+      );
     }
     scheduleFollowupDrain(key, runFollowup);
 
@@ -207,7 +214,7 @@ describe("followup queue in-flight ownership", () => {
 
       const oldSettings: QueueSettings = { ...initialSettings, cap: 1, dropPolicy: "old" };
       expect(
-        enqueueFollowupRun(
+        await enqueueFollowupRun(
           key,
           {
             ...createRun({ prompt: "pending-old" }),
@@ -217,21 +224,28 @@ describe("followup queue in-flight ownership", () => {
           "none",
         ),
       ).toBe(true);
-      expect(enqueueFollowupRun(key, createRun({ prompt: "survivor" }), oldSettings, "none")).toBe(
-        true,
-      );
+      expect(
+        await enqueueFollowupRun(key, createRun({ prompt: "survivor" }), oldSettings, "none"),
+      ).toBe(true);
 
       expect(queue?.items.map((item) => item.prompt)).toEqual(["group-1", "group-2", "survivor"]);
       expect(pendingComplete).toHaveBeenCalledOnce();
       expect(groupCompletions.map((complete) => complete.mock.calls.length)).toEqual([0, 0]);
 
       await aggregate?.turnAdoptionLifecycle?.onAdopted?.();
+      // Admission empties the group from the in-memory list. Durable
+      // representation moves to `inFlight`, which the persisted snapshot
+      // includes until the aggregate settles, so the identities are not lost.
       expect(queue?.items.map((item) => item.prompt)).toEqual(["survivor"]);
+      expect([...(queue?.inFlight ?? [])].map((item) => item.prompt)).toEqual([
+        "group-1",
+        "group-2",
+      ]);
       expect(queue?.inFlight.size).toBe(2);
       expect(getFollowupQueueDepth(key)).toBe(1);
 
       expect(
-        enqueueFollowupRun(
+        await enqueueFollowupRun(
           key,
           {
             ...createRun({ prompt: "rejected-new" }),
@@ -271,7 +285,7 @@ describe("followup queue in-flight ownership", () => {
     };
 
     try {
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         key,
         createRun({ prompt: "summary-active" }),
         settings,
@@ -279,7 +293,7 @@ describe("followup queue in-flight ownership", () => {
         undefined,
         false,
       );
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         key,
         createRun({ prompt: "summary-pending" }),
         settings,
@@ -289,7 +303,13 @@ describe("followup queue in-flight ownership", () => {
       );
       scheduleFollowupDrain(key, runFollowup);
       await activeEntered.promise;
-      enqueueFollowupRun(key, createRun({ prompt: "item-pending" }), settings, "none", runFollowup);
+      await enqueueFollowupRun(
+        key,
+        createRun({ prompt: "item-pending" }),
+        settings,
+        "none",
+        runFollowup,
+      );
 
       const retire = prepareStaleFollowupDrainRetirement(key);
       expect(retire).toBeTypeOf("function");
@@ -328,7 +348,7 @@ describe("followup queue in-flight ownership", () => {
     };
 
     try {
-      enqueueFollowupRun(key, run, settings, "none", runFollowup);
+      await enqueueFollowupRun(key, run, settings, "none", runFollowup);
       await firstEntered.promise;
       const queue = getExistingFollowupQueue(key);
       const retireFirstGeneration = prepareStaleFollowupDrainRetirement(key);

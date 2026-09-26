@@ -145,7 +145,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  clearSessionQueues([sessionKey, sourceSessionId]);
+  await clearSessionQueues([sessionKey, sourceSessionId]);
   setCommandLaneConcurrency(sessionLane, 1);
   await Promise.all(queuedCommandSettlements);
   queuedCommandSettlements.clear();
@@ -247,7 +247,7 @@ type QueuedSessionWork = {
   hasCommandRun: () => boolean;
 };
 
-function enqueueSessionWork(label: string): QueuedSessionWork {
+async function enqueueSessionWork(label: string): Promise<QueuedSessionWork> {
   const followupFixture = createQueueTestRun({ prompt: `${label} follow-up` });
   const followup: FollowupRun = {
     ...followupFixture,
@@ -259,7 +259,7 @@ function enqueueSessionWork(label: string): QueuedSessionWork {
     },
   };
   expect(
-    enqueueFollowupRun(sessionKey, followup, { mode: "followup" }, "none", undefined, false),
+    await enqueueFollowupRun(sessionKey, followup, { mode: "followup" }, "none", undefined, false),
   ).toBe(true);
 
   setCommandLaneConcurrency(sessionLane, 0);
@@ -491,7 +491,7 @@ describe("session message-cut methods", () => {
   });
 
   it("clears queued session work after a successful branch switch", async () => {
-    const work = enqueueSessionWork("branch switch");
+    const work = await enqueueSessionWork("branch switch");
     expectSessionWorkQueued(work);
 
     const respond = await invoke("sessions.branches.switch", "off-path-entry");
@@ -501,7 +501,7 @@ describe("session message-cut methods", () => {
   });
 
   it("clears queued session work after a successful rewind", async () => {
-    const work = enqueueSessionWork("rewind");
+    const work = await enqueueSessionWork("rewind");
     expectSessionWorkQueued(work);
 
     const respond = await invoke("sessions.rewind", "user-entry");
@@ -515,7 +515,7 @@ describe("session message-cut methods", () => {
   });
 
   it("preserves queued session work after a rejected branch switch", async () => {
-    const work = enqueueSessionWork("rejected branch switch");
+    const work = await enqueueSessionWork("rejected branch switch");
     expectSessionWorkQueued(work);
 
     const respond = await invoke("sessions.branches.switch", "missing");

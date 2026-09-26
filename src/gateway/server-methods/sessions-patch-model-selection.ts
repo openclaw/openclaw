@@ -78,20 +78,20 @@ export function persistSessionPatchModelSelection(params: {
 }
 
 /** Refresh only after commit, while this patch still holds session mutation ordering. */
-export function refreshSessionPatchQueuedSelection(params: {
+export async function refreshSessionPatchQueuedSelection(params: {
   cfg: OpenClawConfig;
   entry: SessionEntry;
   patch: SessionsPatchParams;
   sessionKey: string;
   agentId: string;
   catalog?: ModelCatalogEntry[];
-}): void {
+}): Promise<void> {
   if (!("agentRuntime" in params.patch) && typeof params.patch.model !== "string") {
     return;
   }
   const { cfg, entry, sessionKey, agentId } = params;
   const model = resolveSessionModelRef(cfg, entry, agentId);
-  refreshQueuedFollowupSession({
+  await refreshQueuedFollowupSession({
     key: sessionKey,
     nextProvider: model.provider,
     nextModel: model.model,

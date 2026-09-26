@@ -150,7 +150,7 @@ export async function killSubagentRun(params: {
   session: ReturnType<typeof resolveSubagentKillSession>;
   cancellationControl?: TaskCancellationControl;
   suppressTaskDelivery?: boolean;
-  beforeSessionKill?: () => boolean;
+  beforeSessionKill?: () => boolean | Promise<boolean>;
   isCurrent?: (entry: SubagentRunRecord) => boolean;
   withdrawQueuedReservation: () => void;
   refreshDescendants: () => void;
@@ -289,7 +289,7 @@ export async function killSubagentRun(params: {
       params.refreshDescendants();
       // The session fence is active before resolving/signaling other owners.
       // A refused full-session Stop must not interrupt their admissions or this collector.
-      if (params.beforeSessionKill?.() === false) {
+      if ((await params.beforeSessionKill?.()) === false) {
         admission = "declined";
         return;
       }
@@ -530,7 +530,7 @@ export async function killSubagentRun(params: {
         if (declinedBeforeQueueClear) {
           return stopAccepted ? await settleTargetCancellation() : declinedBeforeQueueClear;
         }
-        const cleared = runtime.clearSessionQueues([childSessionKey, sessionId]);
+        const cleared = await runtime.clearSessionQueues([childSessionKey, sessionId]);
         if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
           logVerbose(
             `subagents control kill: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,

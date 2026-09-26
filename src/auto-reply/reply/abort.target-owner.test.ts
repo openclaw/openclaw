@@ -27,8 +27,8 @@ const sessionKey = "agent:main:slack:group:g12345678";
 
 beforeAll(() => dirs.setup());
 afterAll(() => dirs.cleanup());
-afterEach(() => {
-  clearSessionQueues([sessionKey]);
+afterEach(async () => {
+  await clearSessionQueues([sessionKey]);
   testing.resetReplyRunRegistry();
 });
 
@@ -183,7 +183,7 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
       });
     } finally {
       operation.complete();
-      clearSessionQueues([globalKey]);
+      await clearSessionQueues([globalKey]);
     }
   });
 
@@ -361,7 +361,7 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
       resetTriggered: false,
     });
     replacement.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       sessionKey,
       createQueueTestRun({ prompt: "next conversation" }),
       { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },

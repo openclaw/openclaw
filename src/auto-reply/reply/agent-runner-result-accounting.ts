@@ -421,7 +421,7 @@ export async function accountFollowupTurn(params: {
     !accounting.preserveUserFacingSessionState
   ) {
     const entry = turn.session.current();
-    refreshQueuedFollowupSession({
+    await refreshQueuedFollowupSession({
       key: queueKey,
       previousSessionId: turn.queued.run.sessionId,
       nextSessionId: entry?.sessionId ?? turn.queued.run.sessionId,
@@ -441,7 +441,7 @@ export async function accountFollowupTurn(params: {
     const refreshed = turn.session.current();
     if (refreshed) {
       turn.session.publish(refreshed);
-      refreshQueuedFollowupSession({
+      await refreshQueuedFollowupSession({
         key: queueKey ?? "",
         previousSessionId,
         nextSessionId: refreshed.sessionId,

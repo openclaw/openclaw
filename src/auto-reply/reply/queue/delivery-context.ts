@@ -317,6 +317,11 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     ...(source.currentInboundEventKind === "room_event"
       ? { currentInboundEventKind: "room_event" }
       : {}),
+    // A retry copy keeps terminal settlement. Dropping these markers would make
+    // work that already executed, failed delivery, or was canceled runnable again.
+    ...(source.canceled === true ? { canceled: true as const } : {}),
+    ...(source.delivered === true ? { delivered: true as const } : {}),
+    ...(source.discarded === true ? { discarded: true as const } : {}),
     run: source.run,
   };
 }

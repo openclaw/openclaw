@@ -58,7 +58,7 @@ describe("session personal bootstrap in collected turns", () => {
               participantId,
             });
           }
-          enqueueFollowupRun(key, run, settings);
+          await enqueueFollowupRun(key, run, settings);
         }
         scheduleFollowupDrain(key, runFollowup);
         await done.promise;
@@ -75,7 +75,7 @@ describe("session personal bootstrap in collected turns", () => {
           });
         }
       } finally {
-        clearFollowupQueue(key);
+        await clearFollowupQueue(key);
         audit.close();
       }
     },

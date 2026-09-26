@@ -15,6 +15,13 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import {
+  createQueueCase,
+  enqueueRoutedRuns,
+  enqueueSlackRun,
+  enqueueTestRun,
+  enqueueTestRuns,
+} from "./queue.collect.test-helpers.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
   admitFollowupRunLifecycle,
@@ -45,59 +52,6 @@ type InternalFollowupRun = FollowupRun & {
 
 installQueueRuntimeErrorSilencer();
 
-function enqueueTestRun(
-  key: string,
-  params: Parameters<typeof createRun>[0],
-  settings: QueueSettings,
-  runOverrides?: Partial<FollowupRun["run"]>,
-) {
-  const run = createRun(params);
-  if (runOverrides) {
-    run.run = { ...run.run, ...runOverrides };
-  }
-  return enqueueFollowupRun(key, run, settings);
-}
-
-function enqueueSlackRun(
-  key: string,
-  settings: QueueSettings,
-  prompt: string,
-  runOverrides: Partial<FollowupRun["run"]>,
-  routeOverrides: Partial<Parameters<typeof createRun>[0]> = {},
-) {
-  return enqueueTestRun(
-    key,
-    { prompt, originatingChannel: "slack", originatingTo: "channel:A", ...routeOverrides },
-    settings,
-    runOverrides,
-  );
-}
-
-function createQueueCase(key: string, overrides: Partial<QueueSettings> = {}, expectedCalls = 1) {
-  return { key, ...createDrainRecorder(expectedCalls), settings: createQueueSettings(overrides) };
-}
-
-function enqueueTestRuns(
-  key: string,
-  settings: QueueSettings,
-  ...runs: Parameters<typeof createRun>[0][]
-) {
-  for (const run of runs) {
-    enqueueTestRun(key, run, settings);
-  }
-}
-
-function enqueueRoutedRuns(
-  key: string,
-  settings: QueueSettings,
-  route: Omit<Parameters<typeof createRun>[0], "prompt">,
-  ...prompts: string[]
-) {
-  for (const prompt of prompts) {
-    enqueueTestRun(key, { prompt, ...route }, settings);
-  }
-}
-
 describe("followup queue collect routing", () => {
   it("carries queued local cron-authority unavailability through a followup drain", async () => {
     const key = `test-followup-cron-authority-${Date.now()}`;
@@ -109,7 +63,7 @@ describe("followup queue collect routing", () => {
       cronCreatorAuthorityUnavailable: "queued-local-operator",
       onAdopted: async () => {},
     };
-    enqueueFollowupRun(key, run, { ...createQueueSettings(), mode: "followup" });
+    await enqueueFollowupRun(key, run, { ...createQueueSettings(), mode: "followup" });
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
@@ -136,8 +90,8 @@ describe("followup queue collect routing", () => {
       onAdopted: async () => {},
     };
     const settings = createQueueSettings();
-    enqueueFollowupRun(key, first, settings);
-    enqueueFollowupRun(key, second, settings);
+    await enqueueFollowupRun(key, first, settings);
+    await enqueueFollowupRun(key, second, settings);
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
@@ -206,15 +160,15 @@ describe("followup queue collect routing", () => {
       };
       try {
         const settings = createQueueSettings({ mode: "followup" });
-        enqueueFollowupRun(key, createRun({ prompt: "earlier turn" }), settings);
-        enqueueFollowupRun(key, pending, settings);
+        await enqueueFollowupRun(key, createRun({ prompt: "earlier turn" }), settings);
+        await enqueueFollowupRun(key, pending, settings);
         await vi.advanceTimersByTimeAsync(3_000);
         expect(Date.now() - lastHeartbeat).toBeLessThan(1_000);
 
         if (transition === "admission") {
           await admitFollowupRunLifecycle(pending);
         } else if (transition === "abandonment") {
-          clearFollowupQueue(key);
+          await clearFollowupQueue(key);
         } else if (transition === "abort") {
           abort.abort();
         } else {
@@ -236,7 +190,7 @@ describe("followup queue collect routing", () => {
           expect(delivered).toEqual(["earlier turn", "deeper queued turn"]);
         }
       } finally {
-        clearFollowupQueue(key);
+        await clearFollowupQueue(key);
         vi.useRealTimers();
       }
     },
@@ -301,13 +255,13 @@ describe("followup queue collect routing", () => {
     expect(events).toEqual(["admission-started", "admission-rejected", "complete"]);
   });
 
-  it("does not enqueue when the external lifecycle rejects the run identity", () => {
+  it("does not enqueue when the external lifecycle rejects the run identity", async () => {
     const key = `test-rejected-lifecycle-${Date.now()}`;
     const onEnqueued = vi.fn(() => false);
     const run = createRun({ prompt: "duplicate owner" });
     run.turnAdoptionLifecycle = { onAdopted: async () => {}, onDeferred: onEnqueued };
 
-    const enqueued = enqueueFollowupRun(key, run, {
+    const enqueued = await enqueueFollowupRun(key, run, {
       mode: "followup",
       debounceMs: 10_000,
       cap: 50,
@@ -317,7 +271,7 @@ describe("followup queue collect routing", () => {
     expect(enqueued).toBe(false);
     expect(onEnqueued).toHaveBeenCalledTimes(1);
     expect(getExistingFollowupQueue(key)?.items).toEqual([]);
-    clearFollowupQueue(key);
+    await clearFollowupQueue(key);
   });
 
   it("collects when channel+destination match", async () => {
@@ -334,7 +288,7 @@ describe("followup queue collect routing", () => {
         originatingChatType: "channel",
       });
       run.replyOperationRunStates = [receipt];
-      enqueueFollowupRun(key, run, settings);
+      await enqueueFollowupRun(key, run, settings);
     }
 
     await drainRecordedQueue(key, runFollowup, done);
@@ -356,7 +310,7 @@ describe("followup queue collect routing", () => {
       ["one", "101.001"],
       ["two", "101.002"],
     ] as const) {
-      enqueueTestRun(
+      await enqueueTestRun(
         key,
         {
           prompt,
@@ -389,7 +343,7 @@ describe("followup queue collect routing", () => {
       ["one", "101.001"],
       ["two", "101.002"],
     ] as const) {
-      enqueueTestRun(
+      await enqueueTestRun(
         key,
         {
           prompt,
@@ -424,7 +378,7 @@ describe("followup queue collect routing", () => {
         ["one", "101.001"],
         ["two", "101.002"],
       ] as const) {
-        enqueueTestRun(
+        await enqueueTestRun(
           key,
           {
             prompt,
@@ -458,7 +412,7 @@ describe("followup queue collect routing", () => {
       2,
     );
     for (const peerId of ["peer", "direct:peer"]) {
-      enqueueSlackRun(key, settings, peerId, { conversationRoutePeerId: peerId });
+      await enqueueSlackRun(key, settings, peerId, { conversationRoutePeerId: peerId });
     }
     await drainRecordedQueue(key, runFollowup, done);
     expect(calls.map((call) => call.run.conversationRoutePeerId)).toEqual(["peer", "direct:peer"]);
@@ -478,7 +432,7 @@ describe("followup queue collect routing", () => {
       ["one", "message-1"],
       ["two", "message-2"],
     ] as const) {
-      enqueueTestRun(
+      await enqueueTestRun(
         key,
         {
           prompt,
@@ -511,7 +465,7 @@ describe("followup queue collect routing", () => {
       ["first", "message-1", "first"],
       ["all", "message-2", "all"],
     ] as const) {
-      enqueueTestRun(
+      await enqueueTestRun(
         key,
         {
           prompt,
@@ -539,7 +493,7 @@ describe("followup queue collect routing", () => {
       2,
     );
 
-    enqueueTestRuns(
+    await enqueueTestRuns(
       key,
       settings,
       {
@@ -572,8 +526,8 @@ describe("followup queue collect routing", () => {
       2,
     );
     const route = { originatingChatType: "channel" };
-    enqueueSlackRun(key, settings, "first", { [policy]: first }, route);
-    enqueueSlackRun(key, settings, "second", { [policy]: second }, route);
+    await enqueueSlackRun(key, settings, "first", { [policy]: first }, route);
+    await enqueueSlackRun(key, settings, "second", { [policy]: second }, route);
     await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls.map((call) => call.run[policy])).toEqual([first, second]);
@@ -594,10 +548,10 @@ describe("followup queue collect routing", () => {
       originatingTo: "same-target",
       originatingChatType: "direct",
     };
-    enqueueTestRun(key, { prompt: "legacy client", ...route }, settings, {
+    await enqueueTestRun(key, { prompt: "legacy client", ...route }, settings, {
       taskSuggestionDeliveryMode: undefined,
     });
-    enqueueTestRun(key, { prompt: "actionable client", ...route }, settings, {
+    await enqueueTestRun(key, { prompt: "actionable client", ...route }, settings, {
       taskSuggestionDeliveryMode: "gateway",
     });
     await drainRecordedQueue(key, runFollowup, done);
@@ -634,9 +588,9 @@ describe("followup queue collect routing", () => {
         originatingChatType: "direct",
       });
       dropped.queuedFollowupReplyDisposition = sourceDisposition;
-      enqueueFollowupRun(key, dropped, settings);
+      await enqueueFollowupRun(key, dropped, settings);
       if (elided) {
-        enqueueTestRun(
+        await enqueueTestRun(
           key,
           {
             prompt: "separate overflow route",
@@ -646,7 +600,7 @@ describe("followup queue collect routing", () => {
           settings,
         );
       }
-      enqueueTestRun(
+      await enqueueTestRun(
         key,
         {
           prompt: "live WebChat message",
@@ -696,7 +650,7 @@ describe("followup queue collect routing", () => {
       3,
     );
 
-    enqueueTestRuns(
+    await enqueueTestRuns(
       key,
       settings,
       {
@@ -751,7 +705,7 @@ describe("followup queue collect routing", () => {
     ] as const;
 
     for (const [prompt, target] of queued) {
-      enqueueTestRun(
+      await enqueueTestRun(
         key,
         {
           prompt,
@@ -781,7 +735,7 @@ describe("followup queue collect routing", () => {
     expect(calls[5]?.prompt).toContain("survivor 3");
   });
 
-  it("evicts oldest overflow context metadata when the item cap is reached", () => {
+  it("evicts oldest overflow context metadata when the item cap is reached", async () => {
     const key = `test-collect-overflow-elision-bound-${Date.now()}`;
     const settings = createQueueSettings({ cap: 2 });
 
@@ -809,16 +763,16 @@ describe("followup queue collect routing", () => {
       "channel:B",
       "channel:survivor",
     ]);
-    clearFollowupQueue(key);
+    await clearFollowupQueue(key);
   });
 
-  it("bounds retained overflow cancellation identities by the item cap", () => {
+  it("bounds retained overflow cancellation identities by the item cap", async () => {
     const key = `test-collect-overflow-source-bound-${Date.now()}`;
     const completions = Array.from({ length: 8 }, () => vi.fn());
     const settings = createQueueSettings({ cap: 2 });
 
     for (const [index, onComplete] of completions.entries()) {
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         key,
         {
           ...createRun({
@@ -842,10 +796,10 @@ describe("followup queue collect routing", () => {
     expect(completions.map((onComplete) => onComplete.mock.calls.length)).toEqual([
       1, 1, 0, 0, 0, 0, 0, 0,
     ]);
-    clearFollowupQueue(key);
+    await clearFollowupQueue(key);
   });
 
-  it("does not register a drop:new source that the full queue rejects", () => {
+  it("does not register a drop:new source that the full queue rejects", async () => {
     const key = `test-drop-new-lifecycle-${Date.now()}`;
     const onEnqueued = vi.fn();
     const onAbandoned = vi.fn();
@@ -853,9 +807,9 @@ describe("followup queue collect routing", () => {
     const onComplete = vi.fn();
     const settings = createQueueSettings({ mode: "followup", cap: 1, dropPolicy: "new" });
 
-    expect(enqueueFollowupRun(key, createRun({ prompt: "existing" }), settings)).toBe(true);
+    expect(await enqueueFollowupRun(key, createRun({ prompt: "existing" }), settings)).toBe(true);
     expect(
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         key,
         {
           ...createRun({ prompt: "rejected" }),
@@ -876,7 +830,7 @@ describe("followup queue collect routing", () => {
     expect(onAbandoned).toHaveBeenCalledOnce();
     expect(onComplete).toHaveBeenCalledOnce();
     expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual(["existing"]);
-    clearFollowupQueue(key);
+    await clearFollowupQueue(key);
   });
 
   it("keeps retained excess contexts isolated after evicting the oldest metadata", async () => {
@@ -886,18 +840,22 @@ describe("followup queue collect routing", () => {
       3,
     );
 
-    const accepted = ["A", "B", "C", "D"].map((target) =>
-      enqueueFollowupRun(
-        key,
-        createRun({
-          prompt: `content ${target}`,
-          originatingChannel: "slack",
-          originatingTo: `channel:${target}`,
-          originatingChatType: "channel",
-        }),
-        settings,
-      ),
-    );
+    // Admission order decides which context is evicted, so enqueue sequentially.
+    const accepted: boolean[] = [];
+    for (const target of ["A", "B", "C", "D"]) {
+      accepted.push(
+        await enqueueFollowupRun(
+          key,
+          createRun({
+            prompt: `content ${target}`,
+            originatingChannel: "slack",
+            originatingTo: `channel:${target}`,
+            originatingChatType: "channel",
+          }),
+          settings,
+        ),
+      );
+    }
     expect(accepted).toEqual([true, true, true, true]);
 
     await drainRecordedQueue(key, runFollowup, done);
@@ -920,14 +878,14 @@ describe("followup queue collect routing", () => {
       { cap: 1 },
       2,
     );
-    enqueueSlackRun(
+    await enqueueSlackRun(
       key,
       settings,
       "guest content",
       { senderId: "guest", senderIsOwner: false },
       { originatingChatType: "channel" },
     );
-    enqueueSlackRun(
+    await enqueueSlackRun(
       key,
       settings,
       "owner content",
@@ -954,9 +912,9 @@ describe("followup queue collect routing", () => {
     );
     const route = { originatingChatType: "channel" };
     const guest = { senderId: "guest", senderIsOwner: false };
-    enqueueSlackRun(key, settings, "dropped guest", guest, route);
-    enqueueSlackRun(key, settings, "surviving guest", guest, route);
-    enqueueSlackRun(
+    await enqueueSlackRun(key, settings, "dropped guest", guest, route);
+    await enqueueSlackRun(key, settings, "surviving guest", guest, route);
+    await enqueueSlackRun(
       key,
       settings,
       "owner content",
@@ -986,7 +944,7 @@ describe("followup queue collect routing", () => {
     );
 
     for (const prompt of ["direct A", "direct B", "direct C"] as const) {
-      enqueueSlackRun(
+      await enqueueSlackRun(
         key,
         settings,
         prompt,
@@ -995,7 +953,7 @@ describe("followup queue collect routing", () => {
       );
     }
     for (const prompt of ["channel D", "channel E", "channel F"]) {
-      enqueueTestRun(
+      await enqueueTestRun(
         key,
         {
           prompt,
@@ -1037,7 +995,7 @@ describe("followup queue collect routing", () => {
         ["dropped", "provider-local-id"],
         ["survivor", "survivor-id"],
       ] as const) {
-        enqueueTestRun(
+        await enqueueTestRun(
           key,
           {
             prompt,
@@ -1091,7 +1049,7 @@ describe("followup queue collect routing", () => {
       ["retained", "model-c", "auth-c", "channel"],
       ["survivor", "model-d", "auth-d", "channel"],
     ] as const) {
-      enqueueSlackRun(
+      await enqueueSlackRun(
         key,
         settings,
         prompt,
@@ -1120,10 +1078,10 @@ describe("followup queue collect routing", () => {
       3,
     );
     const route = { originatingChatType: "channel" };
-    enqueueSlackRun(key, settings, "first source", { [policy]: first }, route);
-    enqueueSlackRun(key, settings, "second source", { [policy]: second }, route);
+    await enqueueSlackRun(key, settings, "first source", { [policy]: first }, route);
+    await enqueueSlackRun(key, settings, "second source", { [policy]: second }, route);
     for (const prompt of ["survivor one", "survivor two"]) {
-      enqueueTestRun(
+      await enqueueTestRun(
         key,
         {
           prompt,
@@ -1155,10 +1113,22 @@ describe("followup queue collect routing", () => {
       3,
     );
     const route = { originatingChatType: "channel" };
-    enqueueSlackRun(key, settings, "policy one", { runtimePolicySessionKey: "policy:one" }, route);
-    enqueueSlackRun(key, settings, "policy two", { runtimePolicySessionKey: "policy:two" }, route);
+    await enqueueSlackRun(
+      key,
+      settings,
+      "policy one",
+      { runtimePolicySessionKey: "policy:one" },
+      route,
+    );
+    await enqueueSlackRun(
+      key,
+      settings,
+      "policy two",
+      { runtimePolicySessionKey: "policy:two" },
+      route,
+    );
     for (const prompt of ["survivor one", "survivor two"]) {
-      enqueueTestRun(
+      await enqueueTestRun(
         key,
         {
           prompt,
@@ -1188,7 +1158,7 @@ describe("followup queue collect routing", () => {
       2,
     );
 
-    enqueueTestRuns(
+    await enqueueTestRuns(
       key,
       settings,
       {
@@ -1225,7 +1195,7 @@ describe("followup queue collect routing", () => {
         2,
       );
 
-      enqueueTestRuns(
+      await enqueueTestRuns(
         key,
         settings,
         {
@@ -1263,7 +1233,7 @@ describe("followup queue collect routing", () => {
       originatingTo: "same-target",
       originatingChatType: "direct",
     });
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       key,
       {
         ...droppedBase,
@@ -1278,7 +1248,7 @@ describe("followup queue collect routing", () => {
       },
       settings,
     );
-    enqueueSlackRun(
+    await enqueueSlackRun(
       key,
       settings,
       "public channel content",
@@ -1286,7 +1256,7 @@ describe("followup queue collect routing", () => {
       { originatingTo: "same-target", originatingChatType: "channel" },
     );
     controller.abort();
-    refreshQueuedFollowupSession({
+    await refreshQueuedFollowupSession({
       key,
       nextModel: "current-model",
     });
@@ -1309,7 +1279,7 @@ describe("followup queue collect routing", () => {
     const done = createDeferred();
     const settings = createQueueSettings({ cap: 1 });
 
-    enqueueTestRun(
+    await enqueueTestRun(
       key,
       {
         prompt: "source A",
@@ -1319,7 +1289,7 @@ describe("followup queue collect routing", () => {
       },
       settings,
     );
-    enqueueTestRun(
+    await enqueueTestRun(
       key,
       {
         prompt: "source B",
@@ -1343,7 +1313,7 @@ describe("followup queue collect routing", () => {
     });
     await firstStarted.promise;
 
-    enqueueTestRun(
+    await enqueueTestRun(
       key,
       {
         prompt: "surviving C",
@@ -1381,8 +1351,8 @@ describe("followup queue collect routing", () => {
         originatingChatType: chatType,
       });
 
-    enqueueFollowupRun(key, createContextRun("context A", "direct"), settings);
-    enqueueFollowupRun(key, createContextRun("context B", "channel"), settings);
+    await enqueueFollowupRun(key, createContextRun("context A", "direct"), settings);
+    await enqueueFollowupRun(key, createContextRun("context B", "channel"), settings);
 
     scheduleFollowupDrain(key, async (run) => {
       calls.push(run);
@@ -1393,8 +1363,8 @@ describe("followup queue collect routing", () => {
     });
     await firstStarted.promise;
 
-    enqueueFollowupRun(key, createContextRun("context C", "channel"), settings);
-    enqueueFollowupRun(key, createContextRun("context D", "channel"), settings);
+    await enqueueFollowupRun(key, createContextRun("context C", "channel"), settings);
+    await enqueueFollowupRun(key, createContextRun("context D", "channel"), settings);
     releaseFirst.resolve();
 
     await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
@@ -1412,7 +1382,7 @@ describe("followup queue collect routing", () => {
     let attempt = 0;
     const settings = createQueueSettings({ cap: 1 });
 
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       key,
       {
         ...createRun({
@@ -1425,7 +1395,7 @@ describe("followup queue collect routing", () => {
       },
       settings,
     );
-    enqueueTestRun(
+    await enqueueTestRun(
       key,
       {
         prompt: "public survivor",
@@ -1461,7 +1431,7 @@ describe("followup queue collect routing", () => {
       { cap: 1 },
     );
 
-    enqueueTestRuns(
+    await enqueueTestRuns(
       key,
       settings,
       {
@@ -1481,7 +1451,7 @@ describe("followup queue collect routing", () => {
     scheduleFollowupDrain(key, async (run) => {
       calls.push(run);
       if (calls.length === 1) {
-        enqueueTestRun(
+        await enqueueTestRun(
           key,
           {
             prompt: "surviving C",
@@ -1515,7 +1485,7 @@ describe("followup queue collect routing", () => {
       2,
     );
 
-    enqueueTestRuns(
+    await enqueueTestRuns(
       key,
       settings,
       {
@@ -1553,8 +1523,8 @@ describe("followup queue collect routing", () => {
       2,
     );
 
-    enqueueTestRun(key, { prompt: "unresolved origin" }, settings);
-    enqueueRoutedRuns(
+    await enqueueTestRun(key, { prompt: "unresolved origin" }, settings);
+    await enqueueRoutedRuns(
       key,
       settings,
       { originatingChannel: "slack", originatingTo: "channel:B", originatingChatType: "channel" },
@@ -1583,7 +1553,7 @@ describe("followup queue collect routing", () => {
       2,
     );
 
-    enqueueTestRuns(
+    await enqueueTestRuns(
       key,
       settings,
       {
@@ -1619,7 +1589,7 @@ describe("followup queue collect routing", () => {
       `test-collect-user-request-kind-${Date.now()}`,
     );
 
-    enqueueRoutedRuns(
+    await enqueueRoutedRuns(
       key,
       settings,
       {
@@ -1649,7 +1619,7 @@ describe("followup queue collect routing", () => {
     const begin = () => () => undefined;
     const lifecycle = { onAdopted: async () => {}, onSettled: () => undefined };
 
-    enqueueTestRun(
+    await enqueueTestRun(
       key,
       {
         prompt: "[OpenClaw room event]",
@@ -1668,7 +1638,7 @@ describe("followup queue collect routing", () => {
     first.abortSignal = controller.signal;
     first.deliveryCorrelations = [{ begin }];
     first.turnAdoptionLifecycle = lifecycle;
-    enqueueTestRun(
+    await enqueueTestRun(
       key,
       {
         prompt: "second",
@@ -1702,8 +1672,8 @@ describe("followup queue collect routing", () => {
     const route = { originatingChannel: "slack" as const, originatingTo: "channel:A" };
     const retryPrompt = "[System] Please deliver this reply now by calling message(action=send).";
 
-    enqueueFollowupRun(key, createRun({ prompt: "normal one", ...route }), settings);
-    enqueueFollowupRun(
+    await enqueueFollowupRun(key, createRun({ prompt: "normal one", ...route }), settings);
+    await enqueueFollowupRun(
       key,
       {
         ...createRun({ prompt: retryPrompt, ...route }),
@@ -1712,7 +1682,7 @@ describe("followup queue collect routing", () => {
       },
       settings,
     );
-    enqueueFollowupRun(key, createRun({ prompt: "normal two", ...route }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "normal two", ...route }), settings);
 
     await drainRecordedQueue(key, runFollowup, done);
 
@@ -1744,20 +1714,20 @@ describe("followup queue collect routing", () => {
       expectedRevisionHash: "1".repeat(64),
     };
 
-    enqueueFollowupRun(key, createRun({ prompt: "normal" }), settings);
-    enqueueFollowupRun(key, revisionRun, settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "normal" }), settings);
+    await enqueueFollowupRun(key, revisionRun, settings);
     await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls.map((call) => call.prompt)).toEqual(["normal", "revise proposal"]);
   });
 
-  it("can prepend priority followups before already queued items", () => {
+  it("can prepend priority followups before already queued items", async () => {
     const key = `test-priority-followup-front-${Date.now()}`;
     const settings = createQueueSettings({ mode: "followup" });
 
-    enqueueFollowupRun(key, createRun({ prompt: "queued later one" }), settings);
-    enqueueFollowupRun(key, createRun({ prompt: "queued later two" }), settings);
-    enqueueFollowupRun(
+    await enqueueFollowupRun(key, createRun({ prompt: "queued later one" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "queued later two" }), settings);
+    await enqueueFollowupRun(
       key,
       createRun({ prompt: "priority retry" }),
       settings,
@@ -1775,13 +1745,13 @@ describe("followup queue collect routing", () => {
     expect(getExistingFollowupQueue(key)?.items[0]?.protectFromQueueOverflow).toBe(true);
   });
 
-  it("preserves prepended priority followups during old-item overflow eviction", () => {
+  it("preserves prepended priority followups during old-item overflow eviction", async () => {
     const key = `test-priority-followup-overflow-${Date.now()}`;
     const settings = createQueueSettings({ mode: "followup", cap: 2, dropPolicy: "old" });
 
-    enqueueFollowupRun(key, createRun({ prompt: "queued later one" }), settings);
-    enqueueFollowupRun(key, createRun({ prompt: "queued later two" }), settings);
-    enqueueFollowupRun(
+    await enqueueFollowupRun(key, createRun({ prompt: "queued later one" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "queued later two" }), settings);
+    await enqueueFollowupRun(
       key,
       createRun({ prompt: "priority retry" }),
       settings,
@@ -1790,7 +1760,7 @@ describe("followup queue collect routing", () => {
       false,
       { position: "front" },
     );
-    enqueueFollowupRun(key, createRun({ prompt: "queued later three" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "queued later three" }), settings);
 
     expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual([
       "priority retry",
@@ -1798,11 +1768,11 @@ describe("followup queue collect routing", () => {
     ]);
   });
 
-  it("keeps a cap-one protected priority followup instead of evicting it", () => {
+  it("keeps a cap-one protected priority followup instead of evicting it", async () => {
     const key = `test-priority-followup-cap-one-${Date.now()}`;
     const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
-    const priorityAccepted = enqueueFollowupRun(
+    const priorityAccepted = await enqueueFollowupRun(
       key,
       createRun({ prompt: "priority retry" }),
       settings,
@@ -1811,7 +1781,7 @@ describe("followup queue collect routing", () => {
       false,
       { position: "front" },
     );
-    const normalAccepted = enqueueFollowupRun(
+    const normalAccepted = await enqueueFollowupRun(
       key,
       createRun({ prompt: "normal after priority" }),
       settings,
@@ -1825,7 +1795,7 @@ describe("followup queue collect routing", () => {
     expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(0);
   });
 
-  it("does not advance debounce stamp when overflow rejects an incoming message", () => {
+  it("does not advance debounce stamp when overflow rejects an incoming message", async () => {
     const key = `test-priority-followup-debounce-reject-${Date.now()}`;
     const settings = createQueueSettings({
       mode: "followup",
@@ -1834,7 +1804,7 @@ describe("followup queue collect routing", () => {
       dropPolicy: "old",
     });
 
-    const priorityAccepted = enqueueFollowupRun(
+    const priorityAccepted = await enqueueFollowupRun(
       key,
       createRun({ prompt: "priority retry" }),
       settings,
@@ -1849,7 +1819,11 @@ describe("followup queue collect routing", () => {
     const stampedAt = queue!.lastEnqueuedAt;
     expect(stampedAt).toBeGreaterThan(0);
 
-    const rejected = enqueueFollowupRun(key, createRun({ prompt: "busy chat noise" }), settings);
+    const rejected = await enqueueFollowupRun(
+      key,
+      createRun({ prompt: "busy chat noise" }),
+      settings,
+    );
     expect(rejected).toBe(false);
     expect(getExistingFollowupQueue(key)?.lastEnqueuedAt).toBe(stampedAt);
     expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual([
@@ -1857,7 +1831,7 @@ describe("followup queue collect routing", () => {
     ]);
   });
 
-  it("leaves the queue untouched when protected overflow cannot drop enough items", () => {
+  it("leaves the queue untouched when protected overflow cannot drop enough items", async () => {
     const key = `test-priority-followup-atomic-overflow-${Date.now()}`;
     const initialSettings: QueueSettings = {
       mode: "followup",
@@ -1870,7 +1844,7 @@ describe("followup queue collect routing", () => {
       cap: 1,
     };
 
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       key,
       createRun({ prompt: "priority retry" }),
       initialSettings,
@@ -1879,10 +1853,10 @@ describe("followup queue collect routing", () => {
       false,
       { position: "front" },
     );
-    enqueueFollowupRun(key, createRun({ prompt: "normal one" }), initialSettings);
-    enqueueFollowupRun(key, createRun({ prompt: "normal two" }), initialSettings);
+    await enqueueFollowupRun(key, createRun({ prompt: "normal one" }), initialSettings);
+    await enqueueFollowupRun(key, createRun({ prompt: "normal two" }), initialSettings);
 
-    const accepted = enqueueFollowupRun(
+    const accepted = await enqueueFollowupRun(
       key,
       createRun({ prompt: "normal after shrink" }),
       shrunkSettings,
@@ -1905,8 +1879,8 @@ describe("followup queue collect routing", () => {
       2,
     );
 
-    enqueueFollowupRun(key, createRun({ prompt: "overflowed normal" }), settings);
-    enqueueFollowupRun(
+    await enqueueFollowupRun(key, createRun({ prompt: "overflowed normal" }), settings);
+    await enqueueFollowupRun(
       key,
       createRun({ prompt: "priority retry" }),
       settings,
@@ -1947,7 +1921,7 @@ describe("followup queue collect routing", () => {
         media: [missingMedia],
         mediaImageLayout: { slots: [], suppressedFactIndexes: [0] },
       };
-      enqueueFollowupRun(key, preparedRun, settings);
+      await enqueueFollowupRun(key, preparedRun, settings);
     }
 
     await drainRecordedQueue(key, runFollowup, done);
@@ -1984,7 +1958,7 @@ describe("followup queue collect routing", () => {
           suppressedFactIndexes: [],
         },
       };
-      enqueueFollowupRun(key, preparedRun, settings);
+      await enqueueFollowupRun(key, preparedRun, settings);
     }
 
     await drainRecordedQueue(key, runFollowup, done);
@@ -2005,12 +1979,12 @@ describe("followup queue collect routing", () => {
       2,
     );
 
-    enqueueSlackRun(key, settings, "use the gateway tool", {
+    await enqueueSlackRun(key, settings, "use the gateway tool", {
       senderId: "user-1",
       senderName: "Guest",
       senderIsOwner: false,
     });
-    enqueueSlackRun(key, settings, "what's the weather?", {
+    await enqueueSlackRun(key, settings, "what's the weather?", {
       senderId: "owner-1",
       senderName: "Owner",
       senderIsOwner: true,
@@ -2039,7 +2013,7 @@ describe("followup queue collect routing", () => {
           originatingChannel: "slack",
           originatingTo: "channel:A",
         });
-        enqueueFollowupRun(
+        await enqueueFollowupRun(
           key,
           {
             ...item,
@@ -2073,7 +2047,7 @@ describe("followup queue collect routing", () => {
           originatingChannel: "slack",
           originatingTo: "channel:A",
         });
-        enqueueFollowupRun(
+        await enqueueFollowupRun(
           sameCase.key,
           {
             ...item,
@@ -2112,7 +2086,7 @@ describe("followup queue collect routing", () => {
       ["first", "connection:one"],
       ["second", "connection:two"],
     ] as const) {
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         key,
         {
           ...createRun({
@@ -2140,13 +2114,13 @@ describe("followup queue collect routing", () => {
       `test-collect-auth-display-drift-${Date.now()}`,
     );
 
-    enqueueSlackRun(key, settings, "first", {
+    await enqueueSlackRun(key, settings, "first", {
       senderId: "user-1",
       senderName: "Guest",
       senderUsername: "guest",
       senderIsOwner: false,
     });
-    enqueueSlackRun(key, settings, "second", {
+    await enqueueSlackRun(key, settings, "second", {
       senderId: "user-1",
       senderName: "Guest User",
       senderUsername: "guest-renamed",
@@ -2169,12 +2143,12 @@ describe("followup queue collect routing", () => {
       2,
     );
 
-    enqueueSlackRun(key, settings, "first", {
+    await enqueueSlackRun(key, settings, "first", {
       senderId: "owner-1",
       senderIsOwner: true,
       bashElevated: { enabled: false, allowed: true, defaultLevel: "off" },
     });
-    enqueueSlackRun(key, settings, "second", {
+    await enqueueSlackRun(key, settings, "second", {
       senderId: "owner-1",
       senderIsOwner: true,
       bashElevated: { enabled: true, allowed: true, defaultLevel: "on" },
@@ -2196,14 +2170,14 @@ describe("followup queue collect routing", () => {
     );
 
     const run = { provider: "openai", model: "gpt-5.4", senderId: "user-1", senderIsOwner: false };
-    enqueueSlackRun(
+    await enqueueSlackRun(
       key,
       settings,
       "first",
       { ...run, senderName: "First Name" },
       { originatingTo: "A" },
     );
-    enqueueSlackRun(
+    await enqueueSlackRun(
       key,
       settings,
       "second",
@@ -2226,7 +2200,7 @@ describe("followup queue collect routing", () => {
       3,
     );
 
-    enqueueTestRuns(
+    await enqueueTestRuns(
       key,
       settings,
       {
@@ -2265,15 +2239,15 @@ describe("followup queue collect routing", () => {
 
     const route = { originatingTo: "A" };
     const guest = { senderId: "user-a", senderName: "A", senderIsOwner: false };
-    enqueueSlackRun(key, settings, "first", guest, route);
-    enqueueSlackRun(
+    await enqueueSlackRun(key, settings, "first", guest, route);
+    await enqueueSlackRun(
       key,
       settings,
       "second",
       { senderId: "owner-1", senderName: "Owner", senderIsOwner: true },
       route,
     );
-    enqueueSlackRun(key, settings, "third", guest, route);
+    await enqueueSlackRun(key, settings, "third", guest, route);
 
     await drainRecordedQueue(key, runFollowup, done);
 
@@ -2289,7 +2263,7 @@ describe("followup queue collect routing", () => {
       `test-collect-slack-thread-same-${Date.now()}`,
     );
 
-    enqueueRoutedRuns(
+    await enqueueRoutedRuns(
       key,
       settings,
       {
@@ -2311,7 +2285,7 @@ describe("followup queue collect routing", () => {
       `test-collect-thread-normalized-${Date.now()}`,
     );
 
-    enqueueTestRuns(
+    await enqueueTestRuns(
       key,
       settings,
       {
@@ -2340,7 +2314,7 @@ describe("followup queue collect routing", () => {
     const { calls, done, runFollowup } = createDrainRecorder();
     const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
 
-    enqueueTestRuns(
+    await enqueueTestRuns(
       key,
       settings,
       {
@@ -2370,7 +2344,7 @@ describe("followup queue collect routing", () => {
       2,
     );
 
-    enqueueTestRuns(
+    await enqueueTestRuns(
       key,
       settings,
       {
@@ -2408,8 +2382,8 @@ describe("followup queue collect routing", () => {
     };
     const settings = createQueueSettings();
 
-    enqueueFollowupRun(key, createRun({ prompt: "one" }), settings);
-    enqueueFollowupRun(key, createRun({ prompt: "two" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "one" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "two" }), settings);
 
     await drainRecordedQueue(key, runFollowup, done);
     expect(calls[0]?.prompt).toContain("Queued #1\none");
@@ -2435,12 +2409,12 @@ describe("followup queue collect routing", () => {
     };
     const settings = createQueueSettings();
 
-    enqueueSlackRun(key, settings, "guest message", {
+    await enqueueSlackRun(key, settings, "guest message", {
       senderId: "user-1",
       senderName: "Guest",
       senderIsOwner: false,
     });
-    enqueueSlackRun(key, settings, "owner message", {
+    await enqueueSlackRun(key, settings, "owner message", {
       senderId: "owner-1",
       senderName: "Owner",
       senderIsOwner: true,
@@ -2485,8 +2459,8 @@ describe("followup queue collect routing", () => {
       const second = createRun({ prompt: "second" });
       second.run = first.run;
 
-      enqueueFollowupRun(key, first, settings);
-      enqueueFollowupRun(key, second, settings);
+      await enqueueFollowupRun(key, first, settings);
+      await enqueueFollowupRun(key, second, settings);
       scheduleFollowupDrain(key, async (run) => {
         calls.push(run);
         done.resolve();
@@ -2514,7 +2488,7 @@ describe("followup queue collect routing", () => {
       );
       await expect(fs.stat(oldTranscriptPath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
-      clearFollowupQueue(key);
+      await clearFollowupQueue(key);
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
@@ -2527,8 +2501,8 @@ describe("followup queue collect routing", () => {
     const controller = new AbortController();
     const onComplete = vi.fn();
 
-    enqueueFollowupRun(key, createRun({ prompt: "dropped" }), settings);
-    enqueueFollowupRun(
+    await enqueueFollowupRun(key, createRun({ prompt: "dropped" }), settings);
+    await enqueueFollowupRun(
       key,
       {
         ...createRun({ prompt: "aborted" }),
@@ -2576,9 +2550,9 @@ describe("followup queue collect routing", () => {
     const settings = createQueueSettings({ cap: 2 });
 
     const guest = { senderId: "user-1", senderName: "Guest", senderIsOwner: false };
-    enqueueSlackRun(key, settings, "dropped guest message", guest);
-    enqueueSlackRun(key, settings, "guest message", guest);
-    enqueueSlackRun(key, settings, "owner message", {
+    await enqueueSlackRun(key, settings, "dropped guest message", guest);
+    await enqueueSlackRun(key, settings, "guest message", guest);
+    await enqueueSlackRun(key, settings, "owner message", {
       senderId: "owner-1",
       senderName: "Owner",
       senderIsOwner: true,
@@ -2602,7 +2576,7 @@ describe("followup queue collect routing", () => {
       { mode: "followup", cap: 1 },
     );
 
-    enqueueRoutedRuns(
+    await enqueueRoutedRuns(
       key,
       settings,
       {
@@ -2638,7 +2612,7 @@ describe("followup queue collect routing", () => {
     };
     const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       key,
       {
         ...createRun({ prompt: "dropped ambient" }),
@@ -2647,7 +2621,7 @@ describe("followup queue collect routing", () => {
       },
       settings,
     );
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       key,
       {
         ...createRun({ prompt: "live ambient" }),
@@ -2684,7 +2658,7 @@ describe("followup queue collect routing", () => {
       3,
     );
 
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       key,
       {
         ...createRun({ prompt: "dropped ambient" }),
@@ -2692,7 +2666,7 @@ describe("followup queue collect routing", () => {
       },
       settings,
     );
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       key,
       {
         ...createRun({ prompt: "dropped request" }),
@@ -2700,7 +2674,7 @@ describe("followup queue collect routing", () => {
       },
       settings,
     );
-    enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
 
     await drainRecordedQueue(key, runFollowup, done);
 
@@ -2725,7 +2699,7 @@ describe("followup queue collect routing", () => {
     };
     const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       key,
       {
         ...createRun({ prompt: "dropped ambient" }),
@@ -2736,7 +2710,7 @@ describe("followup queue collect routing", () => {
       },
       settings,
     );
-    enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
     controller.abort();
 
     expect(onComplete).not.toHaveBeenCalled();
@@ -2756,7 +2730,7 @@ describe("followup queue collect routing", () => {
     const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
     for (const [index, prompt] of ["first dropped", "second dropped"].entries()) {
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         key,
         {
           ...createRun({ prompt }),
@@ -2770,7 +2744,7 @@ describe("followup queue collect routing", () => {
         settings,
       );
     }
-    enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
 
     scheduleFollowupDrain(key, async (run) => {
       calls.push(run);
@@ -2803,7 +2777,7 @@ describe("followup queue collect routing", () => {
     });
     const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       key,
       {
         ...createRun({ prompt: "dropped lifecycle source" }),
@@ -2818,7 +2792,7 @@ describe("followup queue collect routing", () => {
       },
       settings,
     );
-    enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
 
     scheduleFollowupDrain(key, async (run) => {
       if (run.prompt.includes("[Queue overflow]")) {
@@ -2865,7 +2839,7 @@ describe("followup queue collect routing", () => {
     };
     const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       key,
       {
         ...createRun({ prompt: "dropped ambient" }),
@@ -2875,7 +2849,7 @@ describe("followup queue collect routing", () => {
       },
       settings,
     );
-    enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
 
     scheduleFollowupDrain(key, runFollowup);
     await firstAttempt.promise;
@@ -2933,8 +2907,8 @@ describe("followup queue collect routing", () => {
       onAbandoned: () => {},
     };
 
-    enqueueFollowupRun(key, first, settings);
-    enqueueFollowupRun(key, second, settings);
+    await enqueueFollowupRun(key, first, settings);
+    await enqueueFollowupRun(key, second, settings);
 
     scheduleFollowupDrain(key, async (run) => {
       const prompt = run.prompt.includes("first") ? "first" : "second";
@@ -2976,7 +2950,7 @@ describe("followup queue collect routing", () => {
       ["first", "context one"],
       ["second", "context two"],
     ] as const) {
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         key,
         {
           ...createRun({ prompt }),
@@ -3017,7 +2991,7 @@ describe("followup queue collect routing", () => {
         ["survivor", survivor.signal],
       ] as const
     ).entries()) {
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         key,
         {
           ...createRun({ prompt }),
@@ -3067,14 +3041,14 @@ describe("followup queue collect routing", () => {
     const done = createDeferred();
     const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
 
-    enqueueFollowupRun(key, createRun({ prompt: "first" }), settings);
-    enqueueFollowupRun(key, createRun({ prompt: "second" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "first" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "second" }), settings);
 
     scheduleFollowupDrain(key, async (run) => {
       expect(run.abortSignal).toBeUndefined();
       expect(run.queueAbortSignal?.aborted).toBe(false);
       await run.turnAdoptionLifecycle?.onAdopted?.();
-      clearFollowupQueue(key);
+      await clearFollowupQueue(key);
       expect(run.queueAbortSignal?.aborted).toBe(true);
       done.resolve();
     });
@@ -3091,7 +3065,11 @@ describe("followup queue collect routing", () => {
       const { calls, done } = createDrainRecorder();
       const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
 
-      const enqueueSource = (prompt: string, onComplete: () => void, abortSignal?: AbortSignal) => {
+      const enqueueSource = async (
+        prompt: string,
+        onComplete: () => void,
+        abortSignal?: AbortSignal,
+      ) => {
         const source: FollowupRun = {
           ...createRun({ prompt }),
           turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
@@ -3099,14 +3077,14 @@ describe("followup queue collect routing", () => {
         if (abortSignal) {
           source.abortSignal = abortSignal;
         }
-        enqueueFollowupRun(key, source, settings);
+        await enqueueFollowupRun(key, source, settings);
       };
       if (canceledPosition === "first") {
-        enqueueSource("canceled", canceledComplete, canceled.signal);
-        enqueueSource("survivor", survivorComplete);
+        await enqueueSource("canceled", canceledComplete, canceled.signal);
+        await enqueueSource("survivor", survivorComplete);
       } else {
-        enqueueSource("survivor", survivorComplete);
-        enqueueSource("canceled", canceledComplete, canceled.signal);
+        await enqueueSource("survivor", survivorComplete);
+        await enqueueSource("canceled", canceledComplete, canceled.signal);
       }
 
       scheduleFollowupDrain(key, async (run) => {
@@ -3145,7 +3123,7 @@ describe("followup queue collect routing", () => {
     };
     const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       key,
       {
         ...createRun({ prompt: "owner A summary" }),
@@ -3154,7 +3132,7 @@ describe("followup queue collect routing", () => {
       },
       settings,
     );
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       key,
       {
         ...createRun({ prompt: "owner B live" }),
@@ -3191,7 +3169,7 @@ describe("followup queue collect routing", () => {
     };
     const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       key,
       {
         ...createRun({ prompt: "elided and cancelled" }),
@@ -3200,8 +3178,8 @@ describe("followup queue collect routing", () => {
       },
       settings,
     );
-    enqueueFollowupRun(key, createRun({ prompt: "retained summary" }), settings);
-    enqueueFollowupRun(key, createRun({ prompt: "live item" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "retained summary" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "live item" }), settings);
     elided.abort();
 
     await drainRecordedQueue(key, runFollowup, done);
@@ -3219,7 +3197,7 @@ describe("followup queue collect routing", () => {
     const retainedComplete = vi.fn();
     const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       key,
       {
         ...createRun({ prompt: "elided source" }),
@@ -3227,7 +3205,7 @@ describe("followup queue collect routing", () => {
       },
       settings,
     );
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       key,
       {
         ...createRun({ prompt: "retained source" }),
@@ -3235,7 +3213,7 @@ describe("followup queue collect routing", () => {
       },
       settings,
     );
-    enqueueFollowupRun(key, createRun({ prompt: "live item" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "live item" }), settings);
 
     scheduleFollowupDrain(key, async (run) => {
       calls.push(run);
@@ -3287,9 +3265,9 @@ describe("followup queue collect routing", () => {
       onAbandoned: () => {},
     };
 
-    enqueueFollowupRun(key, first, settings);
-    enqueueFollowupRun(key, second, settings);
-    enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
+    await enqueueFollowupRun(key, first, settings);
+    await enqueueFollowupRun(key, second, settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
 
     scheduleFollowupDrain(key, async (run) => {
       if (run.prompt.includes("[Queue overflow]")) {

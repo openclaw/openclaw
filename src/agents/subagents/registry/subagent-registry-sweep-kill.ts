@@ -283,7 +283,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
         if (!ownsSessionIncarnation()) {
           return await completeRetiredKill();
         }
-        runtime.clearSessionQueues([params.entry.childSessionKey, killIntent.sessionId]);
+        await runtime.clearSessionQueues([params.entry.childSessionKey, killIntent.sessionId]);
         if ((active || hasLiveRunContext) && !aborted) {
           return false;
         }

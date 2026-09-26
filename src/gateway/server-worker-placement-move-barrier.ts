@@ -65,7 +65,7 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
             authorize?.();
           }
         });
-        clearSessionQueues(lifecycleIdentities);
+        await clearSessionQueues(lifecycleIdentities);
         params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
         if (sourceDisposition === "abandon") {
           // Explicit abandonment revokes the old owner locally; its unreachable

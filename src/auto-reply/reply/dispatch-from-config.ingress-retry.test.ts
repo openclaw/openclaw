@@ -101,7 +101,7 @@ describe("dispatch retry after queued ingress abandonment", () => {
             };
           }
           expect(
-            enqueueFollowupRun(
+            await enqueueFollowupRun(
               key,
               run,
               {
@@ -118,7 +118,7 @@ describe("dispatch retry after queued ingress abandonment", () => {
           if (abandonment === "watchdog-after-commit") {
             renewalFailed = true;
             expect(
-              enqueueFollowupRun(
+              await enqueueFollowupRun(
                 key,
                 createQueueTestRun({
                   prompt: "Healthy pending sibling",
@@ -137,7 +137,7 @@ describe("dispatch retry after queued ingress abandonment", () => {
           }
           runState.admission = { status: "accepted", mode: "followup" };
           if (abandonment === "abandon-before-commit") {
-            clearSessionQueues([key]);
+            await clearSessionQueues([key]);
           }
           return undefined;
         });
@@ -209,7 +209,7 @@ describe("dispatch retry after queued ingress abandonment", () => {
           expect(duplicateDispatcher.sendFinalReply).not.toHaveBeenCalled();
         } finally {
           drain.dispose();
-          clearSessionQueues([key]);
+          await clearSessionQueues([key]);
         }
       });
     },

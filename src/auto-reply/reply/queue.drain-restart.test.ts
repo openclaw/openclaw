@@ -59,7 +59,7 @@ describe("followup queue drain restart after idle window", () => {
       await withPreparedModelRuntimePluginGenerationScope(predecessorGeneration, () =>
         parent.run(async () => {
           expect(getPreparedModelRuntimePluginGeneration()).toBe(predecessorGeneration);
-          enqueueFollowupRun(key, createRun({ prompt: "detached" }), settings);
+          await enqueueFollowupRun(key, createRun({ prompt: "detached" }), settings);
           scheduleFollowupDrain(key, async () => {
             await parentReleased.promise;
             const suspension = tryBeginGatewaySuspendAdmission(() => {});
@@ -90,7 +90,7 @@ describe("followup queue drain restart after idle window", () => {
     } finally {
       parent.release();
       parentReleased.resolve();
-      clearSessionQueues([key]);
+      await clearSessionQueues([key]);
       resetGatewayWorkAdmission();
     }
   });
@@ -103,19 +103,19 @@ describe("followup queue drain restart after idle window", () => {
     const settings: QueueSettings = { mode: "followup", debounceMs: 60_000, cap: 50 };
 
     try {
-      enqueueFollowupRun(key, createRun({ prompt: "clear during debounce" }), settings);
+      await enqueueFollowupRun(key, createRun({ prompt: "clear during debounce" }), settings);
       scheduleFollowupDrain(key, async () => {});
       await vi.waitFor(() => {
         expect(getActiveGatewayRootWorkCount()).toBe(1);
       });
 
-      clearSessionQueues([key]);
+      await clearSessionQueues([key]);
 
       await vi.waitFor(() => {
         expect(getActiveGatewayRootWorkCount()).toBe(0);
       });
     } finally {
-      clearSessionQueues([key]);
+      await clearSessionQueues([key]);
       env.restore();
       resetGatewayWorkAdmission();
     }
@@ -132,7 +132,7 @@ describe("followup queue drain restart after idle window", () => {
       staleCalls.push(run);
     });
 
-    enqueueFollowupRun(key, createRun({ prompt: "after-empty-schedule" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "after-empty-schedule" }), settings);
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -168,14 +168,14 @@ describe("followup queue drain restart after idle window", () => {
       }
     };
 
-    enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
     scheduleFollowupDrain(key, runFollowup);
     await firstProcessed.promise;
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
 
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       key,
       createRun({ prompt: "after-idle" }),
       settings,
@@ -209,14 +209,14 @@ describe("followup queue drain restart after idle window", () => {
       secondProcessed.resolve();
     };
 
-    enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
     scheduleFollowupDrain(key, staleFollowup);
     await firstProcessed.promise;
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
 
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       key,
       createRun({ prompt: "after-idle" }),
       settings,
@@ -244,7 +244,7 @@ describe("followup queue drain restart after idle window", () => {
       freshCalls.push(run);
     };
 
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       key,
       createRun({ prompt: "queued-while-busy" }),
       settings,
@@ -291,7 +291,7 @@ describe("followup queue drain restart after idle window", () => {
         }
       };
 
-      enqueueB.enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
+      await enqueueB.enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
       drainA.scheduleFollowupDrain(key, runFollowup);
       await firstProcessed.promise;
 
@@ -299,7 +299,7 @@ describe("followup queue drain restart after idle window", () => {
         setImmediate(resolve);
       });
 
-      enqueueB.enqueueFollowupRun(
+      await enqueueB.enqueueFollowupRun(
         key,
         createRun({ prompt: "after-idle" }),
         settings,
@@ -317,7 +317,7 @@ describe("followup queue drain restart after idle window", () => {
       expect(calls[0]?.prompt).toBe("before-idle");
       expect(calls[1]?.prompt).toBe("after-idle");
     } finally {
-      clearSessionQueues([key]);
+      await clearSessionQueues([key]);
       drainA.clearFollowupDrainCallback(key);
       resetRecentQueuedMessageIdDedupe();
     }
@@ -341,9 +341,9 @@ describe("followup queue drain restart after idle window", () => {
       }
     };
 
-    enqueueFollowupRun(key, createRun({ prompt: "first" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "first" }), settings);
     scheduleFollowupDrain(key, runFollowup);
-    enqueueFollowupRun(key, createRun({ prompt: "second" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "second" }), settings);
     if (!runFollowupResolve) {
       throw new Error("Expected followup run release callback to be initialized");
     }
@@ -371,7 +371,7 @@ describe("followup queue drain restart after idle window", () => {
       retried.resolve();
     };
 
-    enqueueFollowupRun(key, createRun({ prompt: "wait-for-lane" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "wait-for-lane" }), settings);
     scheduleFollowupDrain(key, runFollowup);
 
     await retried.promise;
@@ -399,7 +399,7 @@ describe("followup queue drain restart after idle window", () => {
     };
 
     try {
-      enqueueFollowupRun(key, createRun({ prompt: "queued during restart" }), settings);
+      await enqueueFollowupRun(key, createRun({ prompt: "queued during restart" }), settings);
       scheduleFollowupDrain(key, runFollowup);
       await firstFailed.promise;
       await vi.waitFor(() => {
@@ -408,7 +408,7 @@ describe("followup queue drain restart after idle window", () => {
       expect(attempts).toBe(1);
       expect(getExistingFollowupQueue(key)).toBeUndefined();
     } finally {
-      clearSessionQueues([key]);
+      await clearSessionQueues([key]);
       resetGatewayWorkAdmission();
     }
   });
@@ -429,7 +429,11 @@ describe("followup queue drain restart after idle window", () => {
     };
 
     try {
-      enqueueFollowupRun(key, createRun({ prompt: "retry while admission is open" }), settings);
+      await enqueueFollowupRun(
+        key,
+        createRun({ prompt: "retry while admission is open" }),
+        settings,
+      );
       scheduleFollowupDrain(key, runFollowup);
       await delivered.promise;
       await vi.waitFor(() => {
@@ -437,7 +441,7 @@ describe("followup queue drain restart after idle window", () => {
       });
       expect(attempts).toBe(2);
     } finally {
-      clearSessionQueues([key]);
+      await clearSessionQueues([key]);
       resetGatewayWorkAdmission();
     }
   });
@@ -463,7 +467,11 @@ describe("followup queue drain restart after idle window", () => {
     };
 
     try {
-      enqueueFollowupRun(key, createRun({ prompt: "queued during restart commit" }), settings);
+      await enqueueFollowupRun(
+        key,
+        createRun({ prompt: "queued during restart commit" }),
+        settings,
+      );
       scheduleFollowupDrain(key, runFollowup);
       await firstFailed.promise;
       markGatewayRestartDraining();
@@ -473,7 +481,7 @@ describe("followup queue drain restart after idle window", () => {
       expect(attempts).toBe(1);
       expect(getExistingFollowupQueue(key)).toBeUndefined();
     } finally {
-      clearSessionQueues([key]);
+      await clearSessionQueues([key]);
       resetGatewayWorkAdmission();
     }
   });
@@ -501,7 +509,11 @@ describe("followup queue drain restart after idle window", () => {
     };
 
     try {
-      enqueueFollowupRun(key, createRun({ prompt: "queued during pending restart" }), settings);
+      await enqueueFollowupRun(
+        key,
+        createRun({ prompt: "queued during pending restart" }),
+        settings,
+      );
       scheduleFollowupDrain(key, runFollowup);
       const signal = await firstFailed.promise;
       await new Promise<void>((resolve) => {
@@ -519,7 +531,7 @@ describe("followup queue drain restart after idle window", () => {
       });
       expect(getExistingFollowupQueue(key)).toBeUndefined();
     } finally {
-      clearSessionQueues([key]);
+      await clearSessionQueues([key]);
       resetGatewayWorkAdmission();
     }
   });
@@ -544,7 +556,7 @@ describe("followup queue drain restart after idle window", () => {
       retried.resolve();
     };
 
-    enqueueFollowupRun(key, createRun({ prompt: "wait-for-lane" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "wait-for-lane" }), settings);
     scheduleFollowupDrain(key, staleFollowup);
     await firstStarted.promise;
 
@@ -592,7 +604,7 @@ describe("followup queue drain restart after idle window", () => {
         const followup = createRun({ prompt });
         followup.run.senderIsOwner = senderIsOwner;
         followup.run.inputProvenance = inputProvenance;
-        enqueueFollowupRun(key, followup, settings);
+        await enqueueFollowupRun(key, followup, settings);
       }
       scheduleFollowupDrain(key, runFollowup);
 
@@ -637,7 +649,7 @@ describe("followup queue drain restart after idle window", () => {
           sessionEntry: undefined,
         },
       });
-      enqueueFollowupRun(key, followup, settings);
+      await enqueueFollowupRun(key, followup, settings);
     }
     scheduleFollowupDrain(key, async (run) => collected.resolve(run));
     const followup = await collected.promise;
@@ -669,15 +681,19 @@ describe("followup queue drain restart after idle window", () => {
       attempts++;
       prompts.push(run.prompt);
       if (attempts === 1) {
-        enqueueFollowupRun(key, createRun({ prompt: "newer dropped while waiting" }), settings);
-        enqueueFollowupRun(key, createRun({ prompt: "newer kept while waiting" }), settings);
+        await enqueueFollowupRun(
+          key,
+          createRun({ prompt: "newer dropped while waiting" }),
+          settings,
+        );
+        await enqueueFollowupRun(key, createRun({ prompt: "newer kept while waiting" }), settings);
         throw new FollowupRunDeferredError("reply lane busy");
       }
       retried.resolve();
     };
 
-    enqueueFollowupRun(key, createRun({ prompt: "original dropped while busy" }), settings);
-    enqueueFollowupRun(key, createRun({ prompt: "original kept while busy" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "original dropped while busy" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "original kept while busy" }), settings);
     scheduleFollowupDrain(key, runFollowup);
 
     await retried.promise;
@@ -706,19 +722,23 @@ describe("followup queue drain restart after idle window", () => {
         const queue = getExistingFollowupQueue(key);
         retainedIdentityCount =
           queue?.summaryElisions.reduce((count, entry) => count + entry.sources.length, 0) ?? 0;
-        clearFollowupQueue(key);
+        await clearFollowupQueue(key);
         completed.resolve();
         return;
       }
       if (attempts <= 2) {
-        enqueueFollowupRun(key, createRun({ prompt: `dropped on retry ${attempts}` }), settings);
-        enqueueFollowupRun(key, createRun({ prompt: `kept on retry ${attempts}` }), settings);
+        await enqueueFollowupRun(
+          key,
+          createRun({ prompt: `dropped on retry ${attempts}` }),
+          settings,
+        );
+        await enqueueFollowupRun(key, createRun({ prompt: `kept on retry ${attempts}` }), settings);
         throw new FollowupRunDeferredError("reply lane busy");
       }
     };
 
-    enqueueFollowupRun(key, createRun({ prompt: "original dropped" }), settings);
-    enqueueFollowupRun(key, createRun({ prompt: "original kept" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "original dropped" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "original kept" }), settings);
     scheduleFollowupDrain(key, runFollowup);
     await completed.promise;
 
@@ -765,8 +785,8 @@ describe("followup queue drain restart after idle window", () => {
       let timerFired = false;
 
       try {
-        expect(enqueueFollowupRun(key, first, summarizeSettings)).toBe(true);
-        expect(enqueueFollowupRun(key, second, summarizeSettings)).toBe(true);
+        expect(await enqueueFollowupRun(key, first, summarizeSettings)).toBe(true);
+        expect(await enqueueFollowupRun(key, second, summarizeSettings)).toBe(true);
         const queue = getExistingFollowupQueue(key);
         expect(queue).toMatchObject({
           dropPolicy: "summarize",
@@ -776,7 +796,7 @@ describe("followup queue drain restart after idle window", () => {
         expect(queue?.summarySources).toEqual([first]);
         expect(queue?.items).toEqual([second]);
 
-        const admitted = enqueueFollowupRun(key, third, {
+        const admitted = await enqueueFollowupRun(key, third, {
           ...summarizeSettings,
           dropPolicy,
         });
@@ -805,7 +825,7 @@ describe("followup queue drain restart after idle window", () => {
         }
         if (getExistingFollowupQueue(key)) {
           forcedCleanup = true;
-          clearSessionQueues([key]);
+          await clearSessionQueues([key]);
         }
         await timer;
         await vi.waitFor(() => {
@@ -825,7 +845,7 @@ describe("followup queue drain restart after idle window", () => {
         expect(nonOutcomeSettled).toHaveBeenCalledTimes(1);
         expect(getExistingFollowupQueue(key)).toBeUndefined();
       } finally {
-        clearSessionQueues([key]);
+        await clearSessionQueues([key]);
         resetGatewayWorkAdmission();
       }
     },
@@ -842,16 +862,16 @@ describe("followup queue drain restart after idle window", () => {
       firstProcessed.resolve();
     };
 
-    enqueueFollowupRun(key, createRun({ prompt: "before-clear" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "before-clear" }), settings);
     scheduleFollowupDrain(key, runFollowup);
     await firstProcessed.promise;
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
 
-    clearSessionQueues([key]);
+    await clearSessionQueues([key]);
 
-    enqueueFollowupRun(key, createRun({ prompt: "after-clear" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "after-clear" }), settings);
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -871,14 +891,14 @@ describe("followup queue drain restart after idle window", () => {
       firstProcessed.resolve();
     };
 
-    enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
     scheduleFollowupDrain(key, runFollowup);
     await firstProcessed.promise;
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
 
-    enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
+    await enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -903,7 +923,7 @@ describe("followup queue drain restart after idle window", () => {
     };
 
     try {
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         key,
         queued,
         settings,
@@ -921,14 +941,14 @@ describe("followup queue drain restart after idle window", () => {
       expect(abandoned).toHaveBeenCalledOnce();
       expect(settled).toHaveBeenCalledOnce();
       resetGatewayWorkAdmission();
-      enqueueFollowupRun(key, createRun({ prompt: "fresh lifecycle" }), settings);
+      await enqueueFollowupRun(key, createRun({ prompt: "fresh lifecycle" }), settings);
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
       expect(staleCalls).toHaveLength(0);
       expect(getExistingFollowupQueue(key)?.items).toHaveLength(1);
     } finally {
-      clearSessionQueues([key]);
+      await clearSessionQueues([key]);
       resetGatewayWorkAdmission();
     }
   });

@@ -72,6 +72,14 @@ type QueueInsertPosition = "tail" | "front";
 export type EnqueueFollowupRunOptions = {
   position?: QueueInsertPosition;
   steerCandidate?: boolean;
+  /** Skip the durable write so the caller can persist a larger atomic mutation. */
+  deferPersist?: boolean;
+  /**
+   * When set with `deferPersist`, overflow and reject completions are appended
+   * here instead of running immediately so the caller can roll back on persist
+   * failure.
+   */
+  collectDeferredDrops?: FollowupRun[];
 };
 
 export type FollowupQueueDisposition = "queue-cap" | "queue-cap-old" | "queue-cap-new";
@@ -110,12 +118,38 @@ export function isFollowupRunDeferredError(error: unknown): error is FollowupRun
   return error instanceof FollowupRunDeferredError;
 }
 
+export class FollowupTerminalDeliveryError extends Error {
+  constructor(
+    message = "Follow-up terminal delivery failed after execution",
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "FollowupTerminalDeliveryError";
+  }
+}
+
+export function isFollowupTerminalDeliveryError(
+  error: unknown,
+): error is FollowupTerminalDeliveryError {
+  return error instanceof FollowupTerminalDeliveryError;
+}
+
 export type FollowupRun = {
   /** External-turn eligibility; queued execution refreshes the session-selected profile. */
   personalBootstrapEligible?: boolean;
   prompt: string;
   /** Original operator capability retained by this turn's queue/run lifecycle. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /**
+   * Re-check of the session authority a restored turn was admitted under.
+   *
+   * Restore compares permission mode, session root, and tool overrides once.
+   * A session can tighten again between that check and the delayed drain, so
+   * admission runs this immediately before execution and fail-closes when it
+   * reports a change. It reads the live entry each call rather than reusing the
+   * restore-time read, which is cached and would answer with stale authority.
+   */
+  restoredSessionAuthorityChanged?: () => boolean;
   /** Latest session to claim without rewriting the queued run before store refresh. */
   admissionSessionId?: string;
   /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */
@@ -135,6 +169,28 @@ export type FollowupRun = {
   abortSignal?: AbortSignal;
   /** Queue-owned cancellation fence used when lifecycle cleanup invalidates pending work. */
   queueAbortSignal?: AbortSignal;
+  /**
+   * Durable fail-closed tombstone for in-process cancellation. Abort signals are
+   * not serialized; restore skips these rows instead of replaying canceled work.
+   */
+  canceled?: true;
+  /**
+   * Durable completion tombstone written after channel delivery succeeds and
+   * before the row is omitted. Restore fail-closes these items so a crash
+   * between send and acknowledgement cannot replay the follow-up.
+   */
+  delivered?: true;
+  /**
+   * Durable fail-closed tombstone written after execution when terminal
+   * delivery failed. Restore skip these rows instead of replaying side effects.
+   */
+  discarded?: true;
+  /**
+   * Runtime-only: the queued sources a synthetic overflow summary run stands
+   * for. Delivery receipts settle these identities, which the durable snapshot
+   * retains, rather than the synthetic run, which is never serialized.
+   */
+  overflowSummarySources?: readonly FollowupRun[];
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   /** Canonical ownership lifecycle for durable ingress / reply-lane transfer. */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
@@ -294,6 +350,45 @@ export type FollowupRun = {
     skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
     skillLibraryAuthoring?: import("../../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
   };
+};
+
+/**
+ * Canonical runtime shape for active, pending, and restored follow-up queues.
+ * Runtime-only fields (abortController, inFlight, activeSummarySources) are
+ * reconstructed fresh when persistence restores queue state from disk.
+ */
+export type FollowupQueueState = {
+  abortController: AbortController;
+  items: FollowupRun[];
+  draining: boolean;
+  /** Exact operational drain generation; recovery may retire only this owner. */
+  drainOwner?: object;
+  /** Identities retained in `items` while delivery awaits; pending cap and depth must exclude them. */
+  inFlight: Set<FollowupRun>;
+  lastEnqueuedAt: number;
+  mode: QueueMode;
+  debounceMs: number;
+  cap: number;
+  dropPolicy: QueueDropPolicy;
+  droppedCount: number;
+  summaryLines: string[];
+  summarySources: FollowupRun[];
+  /** Serializes parked steer acceptance so later parked candidates wait their turn. */
+  steerAcceptanceTail: Promise<boolean>;
+  /** Sources currently used by an async summary delivery cannot be evicted mid-run. */
+  activeSummarySources: WeakSet<FollowupRun>;
+  summaryElisions: Array<{
+    contextKey: string;
+    count: number;
+    /** Compact sources stay strong so cancellation follows summarized content until delivery. */
+    sources: FollowupRun[];
+    /** Summary lines stay index-aligned with sources across context isolation and eviction. */
+    summaryLines: string[];
+    /** Weak source mapping keeps concurrent summary consumption identity-safe. */
+    sourceRefs: WeakMap<FollowupRun, FollowupRun>;
+  }>;
+  evictedSummaryCount: number;
+  lastRun?: FollowupRun["run"];
 };
 
 export function isFollowupRunAborted(

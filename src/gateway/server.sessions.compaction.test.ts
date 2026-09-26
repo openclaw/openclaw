@@ -867,7 +867,7 @@ test("sessions.compact preserves accepted queued follow-up work", async () => {
     run: {},
   } as unknown as FollowupRun;
   expect(
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       sessionKey,
       queuedRun,
       { mode: "followup", debounceMs: 60_000 },
@@ -890,7 +890,7 @@ test("sessions.compact preserves accepted queued follow-up work", async () => {
     expect(embeddedRunMock.compactEmbeddedAgentSession).not.toHaveBeenCalled();
     expectNoSessionQueueCleanup();
   } finally {
-    clearFollowupQueue(sessionKey);
+    await clearFollowupQueue(sessionKey);
     ws.close();
   }
 });
@@ -907,7 +907,7 @@ test.each([
     run: {},
   } as unknown as FollowupRun;
   if (withFollowup) {
-    getFollowupQueue(sessionKey, { mode: "collect" }).inFlight.add(queuedRun);
+    (await getFollowupQueue(sessionKey, { mode: "collect" })).inFlight.add(queuedRun);
   }
   setCommandLaneConcurrency(lane, 0);
   let commandRan = false;
@@ -937,7 +937,7 @@ test.each([
     expect(embeddedRunMock.compactEmbeddedAgentSession).not.toHaveBeenCalled();
     expectNoSessionQueueCleanup();
   } finally {
-    clearFollowupQueue(sessionKey);
+    await clearFollowupQueue(sessionKey);
     setCommandLaneConcurrency(lane, 1);
     await queuedCommand;
     ws.close();
@@ -947,7 +947,7 @@ test.each([
 
 test("sessions.compact preserves summary-elided queued follow-up work", async () => {
   const { sessionKey } = await createCompactionSession("sess-compact-elided-followup-queue");
-  const queue = getFollowupQueue(sessionKey, { mode: "followup" });
+  const queue = await getFollowupQueue(sessionKey, { mode: "followup" });
   const elidedRun = {
     prompt: "please also update the changelog",
     enqueuedAt: Date.now(),
@@ -975,7 +975,7 @@ test("sessions.compact preserves summary-elided queued follow-up work", async ()
     expect(embeddedRunMock.compactEmbeddedAgentSession).not.toHaveBeenCalled();
     expectNoSessionQueueCleanup();
   } finally {
-    clearFollowupQueue(sessionKey);
+    await clearFollowupQueue(sessionKey);
     ws.close();
   }
 });

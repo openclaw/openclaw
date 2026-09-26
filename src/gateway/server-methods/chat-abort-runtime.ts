@@ -169,7 +169,7 @@ export function abortQueuedCollectorSession(
     let sessionAbort:
       | Result<
           {
-            plan: ReturnType<typeof prepareChatSessionAbort>;
+            plan: Awaited<ReturnType<typeof prepareChatSessionAbort>>;
             result: ChatSessionAbortResult;
           },
           ErrorShape
@@ -283,10 +283,10 @@ export function abortQueuedCollectorSession(
               }
             },
           },
-          beforeSessionKill: () => {
+          beforeSessionKill: async () => {
             // Resolve Gateway owners under the kill runtime's session fence.
             // Signal them only after this collector's FIFO reservation is held.
-            const plan = prepareChatSessionAbort(
+            const plan = await prepareChatSessionAbort(
               {
                 ...params,
                 ops: createChatAbortOps(params.context),
@@ -310,7 +310,7 @@ export function abortQueuedCollectorSession(
               ok: true,
               value: { plan, result: plan.result },
             };
-            plan.abort();
+            await plan.abort();
             return plan.canCascade;
           },
         },
@@ -385,7 +385,7 @@ type ChatSessionAbortParams = {
     targets: Array<{ runId: string; entry: ChatAbortControllerEntry }>,
   ) => void;
   /** Internal session-wide cleanup after exact resolution and all matching owner checks. */
-  onAuthorizedAfterQueuedAbort?: () => boolean;
+  onAuthorizedAfterQueuedAbort?: () => boolean | Promise<boolean>;
   /** Runs after authorized synchronous abort, before terminal/partial persistence can yield. */
   onCancellationStarted?: () => void;
 };
@@ -400,7 +400,7 @@ type ChatSessionAbortResult = {
 };
 
 /** Resolve once at the cancellation boundary; persist captured partials only after Stop. */
-function prepareChatSessionAbort(
+async function prepareChatSessionAbort(
   params: ChatSessionAbortParams,
   workerCancellation: WorkerInferenceCancellation | undefined,
   selectedRunId?: string,
@@ -497,13 +497,13 @@ function prepareChatSessionAbort(
     // rejection now, but finish() still joins the original operation and its cause.
     void workerCancellationPersistence?.catch(() => undefined);
   };
-  const abortAdditional = () => {
+  const abortAdditional = async () => {
     if (canRunLifecycleCleanup && params.onAuthorizedAfterQueuedAbort) {
       params.assertCurrent?.();
-      result.aborted = params.onAuthorizedAfterQueuedAbort() || result.aborted;
+      result.aborted = (await params.onAuthorizedAfterQueuedAbort()) || result.aborted;
     }
   };
-  const abortAuthorizedRuns = () => {
+  const abortAuthorizedRuns = async () => {
     params.assertCurrent?.();
     params.onControllerTargets?.(authorizedRuns);
     if (!hasAuthorizedGatewayRuns) {
@@ -515,7 +515,7 @@ function prepareChatSessionAbort(
       }
       // With no owned Gateway run, the exact persisted session is the boundary,
       // matching sessions.steer's operator.write behavior for ownerless work.
-      abortAdditional();
+      await abortAdditional();
       if (!hasWorkerRun || !params.requester.isAdmin || !canCancelWorkerSession) {
         return result;
       }
@@ -553,18 +553,20 @@ function prepareChatSessionAbort(
         continue;
       }
       if (
-        abortQueuedChatTurnById(params.context.chatQueuedTurns, {
-          runId,
-          sessionKey,
-          stopReason: params.stopReason,
-        }).aborted
+        (
+          await abortQueuedChatTurnById(params.context.chatQueuedTurns, {
+            runId,
+            sessionKey,
+            stopReason: params.stopReason,
+          })
+        ).aborted
       ) {
         recordRun(runId);
       }
     }
     // Hidden and preserved side runs must also block broad cleanup: authorization
     // alone must not let the callback abort work intentionally excluded above.
-    abortAdditional();
+    await abortAdditional();
     for (const { runId, sessionKey, sessionId, agentId, entry } of authorizedRuns) {
       params.assertCurrent?.();
       if (
@@ -688,7 +690,7 @@ export async function abortChatRunsForSessionKeyWithPartials(
         : { aborted: false, runIds: [], unauthorized: false, error: result.error };
     }
   }
-  const plan = prepareChatSessionAbort(params, captureWorkerInferenceForSession(params));
+  const plan = await prepareChatSessionAbort(params, captureWorkerInferenceForSession(params));
   let result = plan.result;
   let descendants: Awaited<ReturnType<typeof abortControlledSubagents>>;
   let failure: { error: unknown } | undefined;
@@ -699,13 +701,13 @@ export async function abortChatRunsForSessionKeyWithPartials(
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         assertCurrent: params.assertCurrent,
-        beforeKill: () => {
-          result = plan.abort();
+        beforeKill: async () => {
+          result = await plan.abort();
           return true;
         },
       });
     } else {
-      result = plan.abort();
+      result = await plan.abort();
     }
     if (!result.unauthorized && !result.error) {
       params.assertCurrent?.();

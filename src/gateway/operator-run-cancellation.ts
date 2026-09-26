@@ -92,12 +92,14 @@ function createGatewayOperatorRunCancellation(params: {
     entry.projectSessionTerminalPersistence === undefined &&
     entry.projectSessionTerminalPersisted !== true &&
     isChatAbortControllerEntryAbortable(entry);
-  const cancelQueuedTurn = () => {
+  const cancelQueuedTurn = async () => {
     const queued = context.chatQueuedTurns.get(runId);
     if (!ownsLifetime() || queued?.controller !== controller || queued.abortable === false) {
       return;
     }
-    abortQueuedChatTurnById(context.chatQueuedTurns, {
+    // The queue's cancellation tombstone is a durable write on the shared-state
+    // worker; a rejection must reach this caller instead of being dropped.
+    await abortQueuedChatTurnById(context.chatQueuedTurns, {
       runId,
       sessionKey: queued.sessionKey,
       stopReason: "rpc",
@@ -107,7 +109,7 @@ function createGatewayOperatorRunCancellation(params: {
     // Queue custody supersedes the source admission even before its active entry
     // is removed. A collected source cannot fall back to aborting another owner.
     if (context.chatQueuedTurns.get(runId)?.controller === controller) {
-      cancelQueuedTurn();
+      await cancelQueuedTurn();
       return;
     }
     if (!ownsActiveRun()) {

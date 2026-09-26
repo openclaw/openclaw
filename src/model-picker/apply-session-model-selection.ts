@@ -467,7 +467,7 @@ export async function applySessionModelSelectionInternal(
       sessionKey: params.sessionKey,
       patch: { key: params.sessionKey, model: params.patchModel ?? effectiveModelRef },
     });
-    refreshQueuedFollowupSession({
+    await refreshQueuedFollowupSession({
       key: params.sessionKey,
       nextProvider: provider,
       nextModel: model,

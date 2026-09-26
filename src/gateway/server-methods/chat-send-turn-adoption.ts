@@ -123,6 +123,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
         ownerDeviceId: normalizeOptionalChatText(params.ownerDeviceId),
         // Queue cancellation supersedes the source run's earlier custody acknowledgement.
         onAborted: () => recordQueuedTerminal("aborted"),
+        onCancellationRequested: async () => await lifecycle.onCancellationRequested?.(),
       });
       if (enqueued && !releaseWorkAdmission) {
         // Retain the session fence until this detached queued ownership ends.

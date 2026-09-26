@@ -44,7 +44,7 @@ describe("collected followup transcripts", () => {
       ["first", firstRecorder, firstComplete, firstCorrelation],
       ["second", secondRecorder, secondComplete, secondCorrelation],
     ] as const) {
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         key,
         {
           ...createRun({ prompt }),
@@ -65,7 +65,7 @@ describe("collected followup transcripts", () => {
       async (run) => {
         await admitFollowupRunLifecycle(run);
         queuedSourcesAfterAdmission = getExistingFollowupQueue(key)?.items.length;
-        refreshQueuedFollowupSession({
+        await refreshQueuedFollowupSession({
           key,
           previousSessionId: run.run.sessionId,
           nextSessionId: "after-preflight-compaction",

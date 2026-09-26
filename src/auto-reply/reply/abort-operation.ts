@@ -245,7 +245,7 @@ export async function executeFastAbortRequest(
         cfg,
         requesterSessionKey,
         requesterAgentId: agentId,
-        beforeKill: () => {
+        beforeKill: async () => {
           if (params.isCommandTargetCurrent?.() === false) {
             throw new Error("The selected session changed before it could be stopped.");
           }
@@ -276,7 +276,7 @@ export async function executeFastAbortRequest(
             if (sourceAbortKey) {
               abortTarget(sourceAbortKey, sourceSessionId);
             }
-            const cleared = clearSessionQueues(
+            const cleared = await clearSessionQueues(
               abortTargetKeys
                 .flatMap((abortTargetKey) => [abortTargetKey, sessionIdsByKey.get(abortTargetKey)])
                 .concat(sourceAbortKey, sourceSessionId),

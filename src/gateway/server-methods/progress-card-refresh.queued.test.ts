@@ -74,7 +74,7 @@ afterEach(async () => {
     await cleanup();
   }
   for (const key of queueKeys) {
-    clearFollowupQueue(key);
+    await clearFollowupQueue(key);
   }
   queueKeys.clear();
   await vi.advanceTimersByTimeAsync(0);
@@ -128,7 +128,7 @@ function fixture(options: { parkSteer?: boolean } = {}) {
       queued: FollowupRun;
       adoption: ReturnType<typeof createChatSendTurnAdoptionLifecycle>;
       controller: AbortController;
-      parked?: ReturnType<typeof parkSteerCandidate>;
+      parked?: Awaited<ReturnType<typeof parkSteerCandidate>>;
     }
   >();
   const runFollowup = createFollowupRunner({
@@ -213,14 +213,14 @@ function fixture(options: { parkSteer?: boolean } = {}) {
       },
     };
     const parked = options.parkSteer
-      ? parkSteerCandidate(sessionKey, queued, queueSettings, runFollowup)
+      ? await parkSteerCandidate(sessionKey, queued, queueSettings, runFollowup)
       : undefined;
     if (options.parkSteer) {
       expect(parked).toBeDefined();
     } else {
-      expect(enqueueFollowupRun(sessionKey, queued, queueSettings, "none", undefined, false)).toBe(
-        true,
-      );
+      expect(
+        await enqueueFollowupRun(sessionKey, queued, queueSettings, "none", undefined, false),
+      ).toBe(true);
     }
     sources.set(runId, { queued, adoption, controller, parked });
     setGatewayDedupeEntry({
@@ -372,7 +372,7 @@ describe("queued progress refresh settlement", () => {
     const source = f.first();
     expect(await source.parked?.admit()).toBe("steer");
     await admitFollowupRunLifecycle(source.queued);
-    source.parked?.consume("consumed");
+    await source.parked?.consume("consumed");
     expect(f.context.chatQueuedTurns.has(source.runId)).toBe(false);
     expect(f.releases.get(source.runId)).toHaveBeenCalledOnce();
     expectAccepted(await f.refresh());
@@ -390,7 +390,7 @@ describe("queued progress refresh settlement", () => {
       queuedFollowupReplyDisposition: undefined,
     };
     expect(
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         f.sessionKey,
         replacement,
         { ...queueSettings, cap: 1 },
@@ -413,11 +413,13 @@ describe("queued progress refresh settlement", () => {
       const source = f.first();
       if (mode === "single") {
         expect(
-          abortQueuedChatTurnById(f.context.chatQueuedTurns, {
-            runId: source.runId,
-            sessionKey: f.sessionKey,
-            stopReason: "rpc",
-          }).aborted,
+          (
+            await abortQueuedChatTurnById(f.context.chatQueuedTurns, {
+              runId: source.runId,
+              sessionKey: f.sessionKey,
+              stopReason: "rpc",
+            })
+          ).aborted,
         ).toBe(true);
       } else if (mode === "bulk") {
         const entry = f.context.chatQueuedTurns.get(source.runId);
@@ -425,7 +427,11 @@ describe("queued progress refresh settlement", () => {
           throw new Error("Missing queued refresh owner");
         }
         expect(
-          abortQueuedChatTurns(f.context.chatQueuedTurns, [{ runId: source.runId, entry }], "rpc"),
+          await abortQueuedChatTurns(
+            f.context.chatQueuedTurns,
+            [{ runId: source.runId, entry }],
+            "rpc",
+          ),
         ).toEqual([source.runId]);
       } else {
         source.controller.abort();

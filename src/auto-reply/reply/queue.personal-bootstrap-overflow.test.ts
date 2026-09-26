@@ -56,11 +56,11 @@ describe.each(["ordinary summary", "compacted sources", "deferred retry"] as con
       let summaryAttempts = 0;
       let currentOwner = "owner-at-enqueue";
       const tailPrompt = "pending tail";
-      const clear = () => {
-        clearFollowupQueue(key);
+      const clear = async () => {
+        await clearFollowupQueue(key);
         clearFollowupDrainCallback(key);
       };
-      const enqueue = (prompt: string, eligible: boolean | undefined) => {
+      const enqueue = async (prompt: string, eligible: boolean | undefined) => {
         const source = createQueueTestRun({ prompt });
         source.personalBootstrapEligible = eligible;
         source.run.sessionKey = key;
@@ -71,7 +71,7 @@ describe.each(["ordinary summary", "compacted sources", "deferred retry"] as con
           onSettled: vi.fn(),
         };
         sources.push(source);
-        expect(enqueueFollowupRun(key, source, settings)).toBe(true);
+        expect(await enqueueFollowupRun(key, source, settings)).toBe(true);
         return source;
       };
       state.execute.mockImplementation(async (params: AgentTurnParams) => {
@@ -129,19 +129,19 @@ describe.each(["ordinary summary", "compacted sources", "deferred retry"] as con
         } catch (error) {
           // Detached drain errors must fail the test, not become a retry loop
           // or a pending phase promise that only fails at the test deadline.
-          clear();
+          await clear();
           completed.reject(error);
         }
       };
 
       try {
-        const first = enqueue("first summarized request", testCase.eligibility[0]);
-        enqueue("second summarized request", testCase.eligibility[1]);
+        const first = await enqueue("first summarized request", testCase.eligibility[0]);
+        await enqueue("second summarized request", testCase.eligibility[1]);
         if (path === "ordinary summary") {
-          enqueue("pending predecessor", true);
+          await enqueue("pending predecessor", true);
         }
         if (path !== "deferred retry") {
-          enqueue(tailPrompt, true);
+          await enqueue(tailPrompt, true);
         }
         currentOwner = "current-session-owner";
         scheduleFollowupDrain(key, runFollowup);
@@ -152,7 +152,7 @@ describe.each(["ordinary summary", "compacted sources", "deferred retry"] as con
           expect(executions).toEqual([]);
           // Overflow while admission is suspended compacts the original source;
           // the retry must preserve its eligibility along with the newer source.
-          enqueue(tailPrompt, true);
+          await enqueue(tailPrompt, true);
           currentOwner = "owner-after-deferral";
         }
         const queue = getExistingFollowupQueue(key);
@@ -180,7 +180,7 @@ describe.each(["ordinary summary", "compacted sources", "deferred retry"] as con
         expect(executions[0]?.profile).toBe(testCase.personalized ? currentOwner : undefined);
       } finally {
         releaseFirstAttempt.resolve();
-        clear();
+        await clear();
       }
     });
   },

@@ -303,7 +303,7 @@ it("does not cancel a yielded parent when Stop only clears a queued follow-up", 
   const followup = createQueueTestRun({ prompt: "Queued follow-up" });
   followup.run = { ...followup.run, agentId: "main", sessionId: parentId, sessionKey: parentKey };
   expect(
-    enqueueFollowupRun(parentKey, followup, { mode: "followup" }, "none", undefined, false),
+    await enqueueFollowupRun(parentKey, followup, { mode: "followup" }, "none", undefined, false),
   ).toBe(true);
   const respond = vi.fn();
   const context = createChatAbortContext({
@@ -328,6 +328,6 @@ it("does not cancel a yielded parent when Stop only clears a queued follow-up", 
     ]);
     expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(before);
   } finally {
-    clearSessionQueues([parentKey, parentId]);
+    await clearSessionQueues([parentKey, parentId]);
   }
 });

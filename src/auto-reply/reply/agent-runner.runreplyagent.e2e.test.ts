@@ -352,8 +352,8 @@ beforeAll(async () => {
   await getRunReplyAgent();
 });
 
-beforeEach(() => {
-  clearSessionQueues(["main"]);
+beforeEach(async () => {
+  await clearSessionQueues(["main"]);
   replyRunTesting.resetReplyRunRegistry();
   state.compactEmbeddedAgentSessionMock.mockReset();
   state.compactEmbeddedAgentSessionMock.mockResolvedValue({
@@ -384,7 +384,7 @@ beforeEach(() => {
     fallback: parkedSteer.fallback,
     consume: parkedSteer.consume,
   });
-  vi.mocked(enqueueFollowupRun).mockReset().mockReturnValue(true);
+  vi.mocked(enqueueFollowupRun).mockReset().mockResolvedValue(true);
   vi.mocked(refreshQueuedFollowupSession).mockReset();
   vi.mocked(scheduleFollowupDrain).mockReset();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
@@ -903,7 +903,7 @@ describe("runReplyAgent active steering", () => {
     } finally {
       firstAcceptance.resolve(true);
       await Promise.allSettled([firstRun, ...(secondRun ? [secondRun] : [])]);
-      clearSessionQueues(["main"]);
+      await clearSessionQueues(["main"]);
       active.complete();
     }
   });
@@ -2100,7 +2100,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it("records queue-cap rejection while cleaning up typing", async () => {
-    vi.mocked(enqueueFollowupRun).mockImplementationOnce((...args) => {
+    vi.mocked(enqueueFollowupRun).mockImplementationOnce(async (...args) => {
       args[1].onQueueDisposition?.("queue-cap-new");
       return false;
     });

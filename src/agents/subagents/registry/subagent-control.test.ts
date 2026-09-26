@@ -64,7 +64,7 @@ type ControlRuntime = typeof import("./subagent-control.runtime.js");
 const controlRuntimeMocks = vi.hoisted(() => ({
   abortEmbeddedAgentRun: vi.fn<ControlRuntime["abortEmbeddedAgentRun"]>(() => false),
   isEmbeddedAgentRunActive: vi.fn<ControlRuntime["isEmbeddedAgentRunActive"]>(() => false),
-  clearSessionQueues: vi.fn<ControlRuntime["clearSessionQueues"]>(() => ({
+  clearSessionQueues: vi.fn<ControlRuntime["clearSessionQueues"]>(async () => ({
     followupCleared: 0,
     laneCleared: 0,
     keys: [],
@@ -363,7 +363,7 @@ describe("killSubagentRunAdmin", () => {
     setSubagentControlDepsForTest({
       isEmbeddedAgentRunActive: () => true,
       abortEmbeddedAgentRun: abort,
-      clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+      clearSessionQueues: async () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
     });
 
     const pendingKill = killSubagentRunAdmin({
@@ -431,7 +431,7 @@ describe("killSubagentRunAdmin", () => {
     setSubagentControlDepsForTest({
       isEmbeddedAgentRunActive: () => false,
       abortEmbeddedAgentRun: abort,
-      clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+      clearSessionQueues: async () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
     });
 
     const pendingKill = killSubagentRunAdmin({
@@ -959,7 +959,7 @@ describe("killSubagentRunAdmin", () => {
     setSubagentControlDepsForTest({
       isEmbeddedAgentRunActive: () => false,
       abortEmbeddedAgentRun: abort,
-      clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+      clearSessionQueues: async () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
     });
 
     const pendingKill = killSubagentRunAdmin({
@@ -1123,7 +1123,7 @@ describe("controlled subagent cancellation races", () => {
 
     const isActive = vi.fn(() => false);
     const abort = vi.fn(() => false);
-    const clearQueues = vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] }));
+    const clearQueues = vi.fn(async () => ({ followupCleared: 0, laneCleared: 0, keys: [] }));
     setSubagentControlDepsForTest({
       isEmbeddedAgentRunActive: isActive,
       abortEmbeddedAgentRun: abort,
@@ -1227,7 +1227,7 @@ describe("controlled subagent cancellation races", () => {
       releasePersistence = resolve;
     });
     const abort = vi.fn(() => false);
-    const clearQueues = vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] }));
+    const clearQueues = vi.fn(async () => ({ followupCleared: 0, laneCleared: 0, keys: [] }));
     setSubagentControlDepsForTest({
       isEmbeddedAgentRunActive: () => false,
       abortEmbeddedAgentRun: abort,
@@ -1320,7 +1320,7 @@ describe("controlled subagent cancellation races", () => {
     });
     addSubagentRunForTests(entry);
     const abort = vi.fn(() => true);
-    const clearQueues = vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] }));
+    const clearQueues = vi.fn(async () => ({ followupCleared: 0, laneCleared: 0, keys: [] }));
     setSubagentControlDepsForTest({
       isEmbeddedAgentRunActive: () => {
         replaceSessionEntrySync(
@@ -1607,7 +1607,7 @@ describe("controlled subagent cancellation races", () => {
     setSubagentControlDepsForTest({
       isEmbeddedAgentRunActive: () => recoveryActive,
       abortEmbeddedAgentRun: abort,
-      clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+      clearSessionQueues: async () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
     });
 
     const pendingKill = killAllControlledSubagentRuns({
@@ -1673,7 +1673,7 @@ describe("controlled subagent cancellation races", () => {
       setSubagentControlDepsForTest({
         isEmbeddedAgentRunActive: () => false,
         abortEmbeddedAgentRun: () => false,
-        clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+        clearSessionQueues: async () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
       });
 
       const dispatch = vi.fn(async () => {});
@@ -1865,7 +1865,7 @@ describe("killAllControlledSubagentRuns", () => {
           }
           return true;
         },
-        clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+        clearSessionQueues: async () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
       });
       const controller = {
         controllerSessionKey,
@@ -2030,7 +2030,7 @@ describe("killAllControlledSubagentRuns", () => {
         return ["abort refusal", "claim release"].includes(failure);
       },
       abortEmbeddedAgentRun: () => !["abort refusal", "claim release"].includes(failure),
-      clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+      clearSessionQueues: async () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
     });
     try {
       const pending = killAllControlledSubagentRuns({
@@ -2159,7 +2159,7 @@ describe("killAllControlledSubagentRuns", () => {
       setSubagentControlDepsForTest({
         isEmbeddedAgentRunActive: () => true,
         abortEmbeddedAgentRun: () => true,
-        clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+        clearSessionQueues: async () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
       });
       try {
         await started.promise;
