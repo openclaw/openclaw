@@ -74,10 +74,16 @@ it.each(["quoted reply", "buffered text"] as const)(
   async (followUp) => {
     const onMessage = vi.fn<InboxOnMessage>(async () => {});
     const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+    const finalMessagePrepared = createDeferred<void>();
     const { listener, sock } = await startInboxMonitor(onMessage, {
       debounceMs: 60_000,
       durableInboundQueue: queue,
-      shouldDebounce: (message) => !message.quote?.id,
+      shouldDebounce: (message) => {
+        if (message.event.id === "group-a-fourth") {
+          finalMessagePrepared.resolve();
+        }
+        return !message.quote?.id;
+      },
     });
     const first = buildNotifyMessageUpsert({
       id: "group-a-first",
@@ -127,7 +133,7 @@ it.each(["quoted reply", "buffered text"] as const)(
         type: "notify",
         messages: [...first.messages, ...second.messages, third, ...fourth.messages],
       });
-      await settleInboundWork();
+      await finalMessagePrepared.promise;
     } finally {
       await listener.close();
     }

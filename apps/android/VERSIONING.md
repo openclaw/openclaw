@@ -26,6 +26,12 @@ complete history of obsolete releases, so a revision published and rolled back
 between runs cannot be detected automatically. Staged, halted, or ambiguous
 current production releases stop planning; resolve them before another run.
 
+Historical uploaded APK/AAB codes count toward the next code's minimum, regardless
+of their old numbering format. Their digits do not establish a version or form
+factor. Each current public build must have a matching release source ref before
+planning can use it as a release-note baseline. An unmapped public build stops
+planning so its version and source can be verified.
+
 ## Commands
 
 ```bash

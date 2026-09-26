@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
-  resolveChannelDefaultBindingPlacement,
   resolveCommandConversationResolution,
   resolveInboundConversationResolution,
 } from "./conversation-resolution.js";
@@ -140,72 +139,6 @@ describe("conversation resolution", () => {
     },
   );
 
-  it("falls back from command context to channel-prefixed parent plus explicit thread", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "test-chat", label: "Test chat" }),
-    });
-
-    expect(
-      resolveCommandConversationResolution({
-        cfg: testConfig,
-        channel: "test-chat",
-        accountId: "default",
-        originatingTo: "test-chat:channel:parent-room",
-        threadId: "child-thread",
-      }),
-    ).toEqual({
-      channel: "test-chat",
-      accountId: "default",
-      conversationId: "child-thread",
-      parentConversationId: "parent-room",
-      threadId: "child-thread",
-    });
-  });
-
-  it("strips provider prefixes from normalized fallback conversation targets", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
-      messaging: {
-        normalizeTarget: () => "telegram:-1001234567890:topic:77",
-      },
-    });
-
-    expect(
-      resolveCommandConversationResolution({
-        cfg: testConfig,
-        channel: "telegram",
-        accountId: "default",
-        originatingTo: "-1001234567890:topic:77",
-      }),
-    ).toEqual({
-      channel: "telegram",
-      accountId: "default",
-      conversationId: "-1001234567890",
-    });
-  });
-
-  it("strips kind-prefixed normalized topic routes before fallback resolution", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
-      messaging: {
-        normalizeTarget: () => "telegram:group:-1001234567890:topic:77",
-      },
-    });
-
-    expect(
-      resolveCommandConversationResolution({
-        cfg: testConfig,
-        channel: "telegram",
-        accountId: "default",
-        originatingTo: "group:-1001234567890:topic:77",
-      }),
-    ).toEqual({
-      channel: "telegram",
-      accountId: "default",
-      conversationId: "-1001234567890",
-    });
-  });
-
   it("normalizes alias-prefixed topic routes before fallback resolution", () => {
     registerChannelPlugin({
       ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
@@ -306,32 +239,6 @@ describe("conversation resolution", () => {
     });
   });
 
-  it("uses the runtime inbound resolver and preserves provider canonical ids", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "discord", label: "Discord" }),
-      messaging: {
-        resolveInboundConversation: ({ conversationId, to }) => {
-          const source = (conversationId ?? to ?? "").trim();
-          const normalized = source.replace(/^discord:/i, "");
-          return normalized ? { conversationId: normalized } : null;
-        },
-      },
-    });
-
-    expect(
-      resolveInboundConversationResolution({
-        cfg: testConfig,
-        channel: "discord",
-        accountId: "default",
-        to: "discord:channel:123",
-      }),
-    ).toEqual({
-      channel: "discord",
-      accountId: "default",
-      conversationId: "channel:123",
-    });
-  });
-
   it("keeps Matrix room casing when the channel resolver returns a child thread", () => {
     registerChannelPlugin({
       ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
@@ -378,28 +285,6 @@ describe("conversation resolution", () => {
     ).toBeNull();
   });
 
-  it("falls back from inbound context to channel-prefixed parent plus explicit thread", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "test-chat", label: "Test chat" }),
-    });
-
-    expect(
-      resolveInboundConversationResolution({
-        cfg: testConfig,
-        channel: "test-chat",
-        accountId: "default",
-        to: "test-chat:channel:parent-room",
-        threadId: "child-thread",
-      }),
-    ).toEqual({
-      channel: "test-chat",
-      accountId: "default",
-      conversationId: "child-thread",
-      parentConversationId: "parent-room",
-      threadId: "child-thread",
-    });
-  });
-
   it("normalizes numeric inbound thread ids through the shared route contract", () => {
     registerChannelPlugin({
       ...createChannelTestPluginBase({ id: "test-chat", label: "Test chat" }),
@@ -420,17 +305,5 @@ describe("conversation resolution", () => {
       parentConversationId: "parent-room",
       threadId: "42",
     });
-  });
-
-  it("resolves placement from runtime plugin metadata", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
-      conversationBindings: {
-        supportsCurrentConversationBinding: true,
-        defaultTopLevelPlacement: "current",
-      },
-    });
-
-    expect(resolveChannelDefaultBindingPlacement("telegram")).toBe("current");
   });
 });

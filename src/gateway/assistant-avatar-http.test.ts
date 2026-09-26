@@ -73,62 +73,51 @@ const AVIF_BYTES = Buffer.from(
   "base64",
 );
 
-it.each(
+it.each([
+  ["local", "image/apng", "avatar.png", APNG_BYTES],
+  ["escaped-base64", "image/apng", undefined, APNG_BYTES],
+  ["local", "image/webp", "avatar.webp", ANIMATED_WEBP],
+  ["data", "image/webp", undefined, ANIMATED_WEBP],
+  ["data", "image/bmp", undefined, BMP_BYTES],
+  ["percent-data", "image/avif", undefined, AVIF_BYTES],
   [
-    { format: "APNG", filename: "avatar.png", mime: "image/apng", body: APNG_BYTES },
-    { format: "animated WebP", filename: "avatar.webp", mime: "image/webp", body: ANIMATED_WEBP },
-    { format: "BMP", filename: undefined, mime: "image/bmp", body: BMP_BYTES },
-    { format: "AVIF", filename: undefined, mime: "image/avif", body: AVIF_BYTES },
-    {
-      format: "Latin-1 SVG",
-      filename: undefined,
-      mime: "image/svg+xml;charset=iso-8859-1",
-      body: Buffer.from(
-        '<svg xmlns="http://www.w3.org/2000/svg"><text>café</text></svg>',
-        "latin1",
-      ),
-    },
-  ].flatMap((fixture) =>
-    (fixture.filename
-      ? ["local", "data", "percent-data", "escaped-base64"]
-      : ["data", "percent-data"]
-    ).map((sourceKind) => Object.assign({}, fixture, { sourceKind })),
-  ),
-)(
-  "preserves the bytes of a $sourceKind $format avatar",
-  async ({ filename, mime, body, sourceKind }) => {
-    const workspace = tempRoots.make("openclaw-avatar-animation-");
-    if (filename) {
-      fs.writeFileSync(path.join(workspace, filename), body);
-    }
-    const base64 = body.toString("base64");
-    const avatar =
-      sourceKind === "local"
-        ? filename
-        : sourceKind === "percent-data"
-          ? `data:${mime},${Array.from(body, (byte) => `%${byte.toString(16).padStart(2, "0")}`).join("")}`
-          : `data:${mime};base64,${sourceKind === "escaped-base64" ? encodeURIComponent(base64) : base64}`;
-    const config: OpenClawConfig = {
-      agents: { list: [{ id: "main", workspace, identity: { avatar } }] },
-    };
-    const { avatar: url } = await resolveGatewayAssistantAvatar({
-      cfg: config,
-      identity: await resolveAssistantIdentity({ cfg: config, agentId: "main" }),
-      httpBasePath: "",
-    });
-    const response = makeMockHttpResponse();
-    await handleControlUiAvatarRequest(
-      { url, method: "GET", headers: {} } as IncomingMessage,
-      response.res,
-      { config },
-    );
-    expect(response.res.statusCode).toBe(200);
-    expect(response.end).toHaveBeenCalledWith(body);
-    if (sourceKind !== "local") {
-      expect(response.setHeader).toHaveBeenCalledWith("content-type", mime);
-    }
-  },
-);
+    "percent-data",
+    "image/svg+xml;charset=iso-8859-1",
+    undefined,
+    Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><text>café</text></svg>', "latin1"),
+  ],
+] as const)("preserves the bytes of a %s %s avatar", async (sourceKind, mime, filename, body) => {
+  const workspace = tempRoots.make("openclaw-avatar-animation-");
+  if (filename) {
+    fs.writeFileSync(path.join(workspace, filename), body);
+  }
+  const base64 = body.toString("base64");
+  const avatar =
+    sourceKind === "local"
+      ? filename
+      : sourceKind === "percent-data"
+        ? `data:${mime},${Array.from(body, (byte) => `%${byte.toString(16).padStart(2, "0")}`).join("")}`
+        : `data:${mime};base64,${sourceKind === "escaped-base64" ? encodeURIComponent(base64) : base64}`;
+  const config: OpenClawConfig = {
+    agents: { list: [{ id: "main", workspace, identity: { avatar } }] },
+  };
+  const { avatar: url } = await resolveGatewayAssistantAvatar({
+    cfg: config,
+    identity: await resolveAssistantIdentity({ cfg: config, agentId: "main" }),
+    httpBasePath: "",
+  });
+  const response = makeMockHttpResponse();
+  await handleControlUiAvatarRequest(
+    { url, method: "GET", headers: {} } as IncomingMessage,
+    response.res,
+    { config },
+  );
+  expect(response.res.statusCode).toBe(200);
+  expect(response.end).toHaveBeenCalledWith(body);
+  if (sourceKind !== "local") {
+    expect(response.setHeader).toHaveBeenCalledWith("content-type", mime);
+  }
+});
 
 it.each(["local", "data"])(
   "serves a cached authenticated thumbnail for a versioned %s avatar",

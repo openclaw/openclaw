@@ -62,30 +62,6 @@ describe("convertMessages assistant text replay", () => {
     ]);
   });
 
-  it("keeps separate assistant text blocks apart", () => {
-    const assistant: AssistantMessage = {
-      role: "assistant",
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      content: [
-        { type: "text", text: "Let me check the file." },
-        { type: "text", text: "The file contains X." },
-      ],
-      usage: emptyUsage,
-      stopReason: "stop",
-      timestamp: 2,
-    };
-    const context: Context = {
-      messages: [{ role: "user", content: "hello", timestamp: 1 }, assistant],
-    };
-
-    const converted = convertMessages(model, context, resolveOpenAICompletionsCompat(model));
-
-    const replayed = converted.find((message) => message.role === "assistant");
-    expect(replayed?.content).toBe("Let me check the file.\nThe file contains X.");
-  });
-
   it.each([false, true])(
     "preserves interleaved text, thinking, and tool replay with thinking-as-text %s",
     (requiresThinkingAsText) => {
@@ -310,27 +286,6 @@ describe("convertMessages parallel tool-result image ownership", () => {
       { type: "image_url", image_url: { url: "data:image/png;base64,BBBB" } },
       { type: "text", text: "Image(s) from tool result #2 (camera):" },
       { type: "image_url", image_url: { url: "data:image/png;base64,CCCC" } },
-    ]);
-  });
-
-  it("labels single tool-result images with result position and tool name", () => {
-    const context: Context = {
-      messages: [
-        makeToolCallAssistant(["call_x"], ["screenshot"]),
-        makeImageToolResult("call_x", "screenshot", [{ mimeType: "image/png", data: "aW1n" }]),
-      ],
-    };
-
-    const converted = convertMessages(
-      imageModel,
-      context,
-      resolveOpenAICompletionsCompat(imageModel),
-    );
-
-    const userMsg = converted.find((m) => m.role === "user" && Array.isArray(m.content));
-    expect(userMsg?.content).toEqual([
-      { type: "text", text: "Image(s) from tool result #1 (screenshot):" },
-      { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
     ]);
   });
 

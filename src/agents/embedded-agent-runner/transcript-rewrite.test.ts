@@ -56,6 +56,18 @@ function appendSessionMessages(
   return messages.map((message) => sessionManager.appendMessage(message));
 }
 
+async function createPersistedRewriteTarget(sessionId: string) {
+  const directory = tempDirs.make(`openclaw-${sessionId}-`);
+  const target = {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath: path.join(directory, "sessions.json"),
+  };
+  await replaceSessionEntry(target, { sessionId, updatedAt: 1 });
+  return { directory, target };
+}
+
 function createTextContent(text: string) {
   return [{ type: "text", text }];
 }
@@ -71,14 +83,7 @@ function createReadRewriteSession(options?: { tailAssistantText?: string }) {
       content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
       timestamp: 2,
     }),
-    asAppendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      toolName: "read",
-      content: createTextContent("x".repeat(8_000)),
-      isError: false,
-      timestamp: 3,
-    }),
+    asAppendMessage(createToolResultReplacement("read", "x".repeat(8_000), 3)),
     asAppendMessage({
       role: "assistant",
       content: createTextContent(options?.tailAssistantText ?? "summarized"),
@@ -96,14 +101,7 @@ function createExecRewriteSession() {
   const sessionManager = SessionManager.inMemory();
   const entryIds = appendSessionMessages(sessionManager, [
     asAppendMessage(makeUserMessage("run tool", 1)),
-    asAppendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      toolName: "exec",
-      content: createTextContent("before rewrite"),
-      isError: false,
-      timestamp: 2,
-    }),
+    asAppendMessage(createToolResultReplacement("exec", "before rewrite", 2)),
     asAppendMessage({
       role: "assistant",
       content: createTextContent("summarized"),
@@ -153,14 +151,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
   ])(
     "preserves admitted input custody through repeated history rewrites ($collected, $excludeFromContext)",
     async ({ collected, excludeFromContext }) => {
-      const directory = tempDirs.make("openclaw-admitted-rewrite-");
-      const target = {
-        agentId: "main",
-        sessionId: "admitted-rewrite",
-        sessionKey: "agent:main:admitted-rewrite",
-        storePath: path.join(directory, "sessions.json"),
-      };
-      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const { directory, target } = await createPersistedRewriteTarget("admitted-rewrite");
       const manager = SessionManager.open(target, directory);
       const toolEntryId = appendSessionMessages(manager, [
         asAppendMessage({ role: "user", content: "read file", timestamp: 1 }),
@@ -359,21 +350,23 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     },
   );
 
-  it("branches from the first replaced message and re-appends the remaining suffix", async () => {
+  it("preserves active-branch labels after rewritten entries are re-appended", async () => {
     const { sessionManager, toolResultEntryId } = createReadRewriteSession();
-
-    const result = expectDefined(
-      await rewriteTranscriptEntriesInSessionManager({
-        sessionManager,
-        replacements: [
-          {
-            entryId: expectDefined(toolResultEntryId, "toolResultEntryId test invariant"),
-            message: createToolResultReplacement("read", "[externalized file_123]", 3),
-          },
-        ],
-      }),
-      "rewriteTranscriptEntriesInSessionManager({ sessionManager, replacemen... test invariant",
+    const summaryEntry = expectDefined(
+      findAssistantEntryByText(sessionManager, "summarized"),
+      "summary entry",
     );
+    sessionManager.appendLabelChange(summaryEntry.id, "bookmark");
+
+    const result = await rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: expectDefined(toolResultEntryId, "toolResultEntryId test invariant"),
+          message: createToolResultReplacement("read", "[externalized file_123]", 3),
+        },
+      ],
+    });
 
     expect(result.changed).toBe(true);
     expect(result.rewrittenEntries).toBe(1);
@@ -390,30 +383,6 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     expect(rewrittenToolResult.content).toEqual([
       { type: "text", text: "[externalized file_123]" },
     ]);
-  });
-
-  it("preserves active-branch labels after rewritten entries are re-appended", async () => {
-    const { sessionManager, toolResultEntryId } = createReadRewriteSession();
-    const summaryEntry = expectDefined(
-      findAssistantEntryByText(sessionManager, "summarized"),
-      "summary entry",
-    );
-    sessionManager.appendLabelChange(summaryEntry.id, "bookmark");
-
-    const result = expectDefined(
-      await rewriteTranscriptEntriesInSessionManager({
-        sessionManager,
-        replacements: [
-          {
-            entryId: expectDefined(toolResultEntryId, "toolResultEntryId test invariant"),
-            message: createToolResultReplacement("read", "[externalized file_123]", 3),
-          },
-        ],
-      }),
-      "rewriteTranscriptEntriesInSessionManager({ sessionManager, replacemen... test invariant",
-    );
-
-    expect(result.changed).toBe(true);
     const rewrittenSummaryEntry = expectDefined(
       findAssistantEntryByText(sessionManager, "summarized"),
       "rewritten summary entry",
@@ -447,18 +416,15 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       );
       installSessionToolResultGuard(sessionManager, { runId: "run-rewrite" });
 
-      const result = expectDefined(
-        await rewriteTranscriptEntriesInSessionManager({
-          sessionManager,
-          replacements: [
-            {
-              entryId: expectDefined(toolResultEntryId, "toolResultEntryId test invariant"),
-              message: createToolResultReplacement("read", "[externalized file_123]", 3),
-            },
-          ],
-        }),
-        "rewriteTranscriptEntriesInSessionManager({ sessionManager, replacemen... test invariant",
-      );
+      const result = await rewriteTranscriptEntriesInSessionManager({
+        sessionManager,
+        replacements: [
+          {
+            entryId: expectDefined(toolResultEntryId, "toolResultEntryId test invariant"),
+            message: createToolResultReplacement("read", "[externalized file_123]", 3),
+          },
+        ],
+      });
 
       expect(result.changed).toBe(true);
       const branch = sessionManager.getBranch();
@@ -497,18 +463,15 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
         message.role === "assistant" ? { block: true } : undefined,
     });
 
-    const result = expectDefined(
-      await rewriteTranscriptEntriesInSessionManager({
-        sessionManager,
-        replacements: [
-          {
-            entryId: expectDefined(toolResultEntryId, "toolResultEntryId test invariant"),
-            message: createToolResultReplacement("exec", "[exact replacement]", 2),
-          },
-        ],
-      }),
-      "rewriteTranscriptEntriesInSessionManager({ sessionManager, replacemen... test invariant",
-    );
+    const result = await rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: expectDefined(toolResultEntryId, "toolResultEntryId test invariant"),
+          message: createToolResultReplacement("exec", "[exact replacement]", 2),
+        },
+      ],
+    });
 
     expect(result.changed).toBe(true);
     const branchMessages = getBranchMessages(sessionManager);
@@ -530,14 +493,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
   it.each([false, true])(
     "keeps one active suffix after repeated successful rewrites (reset=%s)",
     async (withReset) => {
-      const dir = tempDirs.make("openclaw-rewrite-reset-");
-      const target = {
-        agentId: "main",
-        sessionId: "rewrite-reset",
-        sessionKey: "agent:main:rewrite-reset",
-        storePath: path.join(dir, "sessions.json"),
-      };
-      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const { directory: dir, target } = await createPersistedRewriteTarget("rewrite-reset");
       let manager = SessionManager.open(target, dir);
       manager.appendMessage({ role: "user", content: "prefix", timestamp: 1 });
       manager.appendMessage({ role: "user", content: "replacement-0", timestamp: 2 });
@@ -783,14 +739,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
   );
 
   it("rejects stale loaded suffix bytes even when persisted entry ids are unchanged", async () => {
-    const directory = tempDirs.make("openclaw-stale-rewrite-");
-    const target = {
-      agentId: "main",
-      sessionId: "stale-rewrite",
-      sessionKey: "agent:main:stale-rewrite",
-      storePath: path.join(directory, "sessions.json"),
-    };
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const { directory, target } = await createPersistedRewriteTarget("stale-rewrite");
     const manager = SessionManager.open(target, directory);
     const first = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
     const tail = manager.appendMessage({ role: "user", content: "old tail", timestamp: 2 });
@@ -819,14 +768,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
   )(
     "rejects a view loaded before an opaque navigation $mutation (bounded=$bounded)",
     async ({ bounded, mutation }) => {
-      const directory = tempDirs.make("openclaw-navigation-snapshot-");
-      const target = {
-        agentId: "main",
-        sessionId: "navigation-snapshot",
-        sessionKey: "agent:main:navigation-snapshot",
-        storePath: path.join(directory, "sessions.json"),
-      };
-      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const { directory, target } = await createPersistedRewriteTarget("navigation-snapshot");
       let manager = SessionManager.open(target, directory);
       const first = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
       const second = manager.appendMessage({ role: "user", content: "second", timestamp: 2 });
@@ -871,14 +813,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
   it.each([undefined, 3, 1])(
     "preserves the selected logical parent across a rewrite (maxEvents=%s)",
     async (maxEvents) => {
-      const directory = tempDirs.make("openclaw-logical-rewrite-");
-      const target = {
-        agentId: "main",
-        sessionId: "logical-rewrite",
-        sessionKey: "agent:main:logical-rewrite",
-        storePath: path.join(directory, "sessions.json"),
-      };
-      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const { directory, target } = await createPersistedRewriteTarget("logical-rewrite");
       let manager = SessionManager.open(target, directory);
       const first = manager.appendMessage({ role: "user", content: "selected", timestamp: 1 });
       const abandoned = manager.appendMessage({ role: "user", content: "abandoned", timestamp: 2 });
@@ -910,14 +845,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
   it.each([0, 2])(
     "keeps an unhydrated prefix when rewriting bounded entry %i",
     async (replacementIndex) => {
-      const directory = tempDirs.make("openclaw-bounded-rewrite-");
-      const target = {
-        agentId: "main",
-        sessionId: "bounded-rewrite",
-        sessionKey: "agent:main:bounded-rewrite",
-        storePath: path.join(directory, "sessions.json"),
-      };
-      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const { directory, target } = await createPersistedRewriteTarget("bounded-rewrite");
       const full = SessionManager.open(target, directory);
       for (let index = 0; index < 24; index++) {
         full.appendMessage({

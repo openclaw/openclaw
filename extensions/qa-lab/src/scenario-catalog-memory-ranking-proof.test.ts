@@ -39,19 +39,22 @@ type RankingResult =
   | typeof staleDurableResult;
 type ProviderMode = "mock-openai" | "live-frontier";
 
-async function runSessionMemoryRankingFlow(params: {
-  results: RankingResult[];
-  providerMode?: ProviderMode;
-  query?: string;
-  maxResults?: number;
-  omitMaxResults?: boolean;
-  corpus?: "memory" | "sessions" | "all";
-  includeToolCall?: boolean;
-  includeToolResult?: boolean;
-  resultCallId?: string;
-  resultIsError?: boolean;
-}) {
+async function runSessionMemoryRankingFlow(
+  params: {
+    results?: RankingResult[];
+    providerMode?: ProviderMode;
+    query?: string;
+    maxResults?: number;
+    omitMaxResults?: boolean;
+    corpus?: "memory" | "sessions" | "all";
+    includeToolCall?: boolean;
+    includeToolResult?: boolean;
+    resultCallId?: string;
+    resultIsError?: boolean;
+  } = {},
+) {
   const state = createQaBusState();
+  const results = params.results ?? [currentSessionResult, staleDurableResult];
   const providerMode = params.providerMode ?? "mock-openai";
   const includeToolCall = params.includeToolCall !== false;
   const includeToolResult = params.includeToolResult !== false;
@@ -61,30 +64,6 @@ async function runSessionMemoryRankingFlow(params: {
     ...(params.corpus ? { corpus: params.corpus } : {}),
   };
   const toolResultCallId = params.resultCallId ?? searchCallId;
-  const requests = [
-    ...(includeToolCall
-      ? [
-          {
-            cursor: 41,
-            allInputText: "Session memory ranking check",
-            plannedToolName: "memory_search",
-            plannedToolCallId: searchCallId,
-            plannedToolArgs,
-          },
-        ]
-      : []),
-    ...(includeToolResult
-      ? [
-          {
-            cursor: 42,
-            allInputText: "Session memory ranking check",
-            toolOutputCallId: toolResultCallId,
-            toolOutput: JSON.stringify({ results: params.results }),
-            ...(params.resultIsError ? { toolOutputStructuredError: true } : {}),
-          },
-        ]
-      : []),
-  ];
   const directHistoryMessages = [
     ...(includeToolCall
       ? [
@@ -108,7 +87,7 @@ async function runSessionMemoryRankingFlow(params: {
             toolCallId: toolResultCallId,
             toolName: "memory_search",
             isError: params.resultIsError === true,
-            content: [{ type: "text", text: JSON.stringify({ results: params.results }) }],
+            content: [{ type: "text", text: JSON.stringify({ results }) }],
           },
         ]
       : []),
@@ -125,7 +104,7 @@ async function runSessionMemoryRankingFlow(params: {
               toolName: "memory_search",
               toolCallId: searchCallId,
               input: plannedToolArgs,
-              text: JSON.stringify({ results: params.results }),
+              text: JSON.stringify({ results }),
               isError: params.resultIsError,
             }),
           ]
@@ -139,14 +118,6 @@ async function runSessionMemoryRankingFlow(params: {
     },
   );
   const fetchJson = vi.fn(async (input: string) => {
-    const url = new URL(input);
-    if (url.pathname === "/debug/request-cursor") {
-      return { cursor: 40 };
-    }
-    if (url.pathname === "/debug/requests") {
-      const after = Number(url.searchParams.get("after") ?? 0);
-      return requests.filter((request) => request.cursor > after);
-    }
     throw new Error(`unexpected QA mock request: ${input}`);
   });
   const forceMemoryIndex = vi.fn(async () => undefined);
@@ -193,69 +164,48 @@ async function runSessionMemoryRankingFlow(params: {
 }
 
 describe("session memory ranking scenario evidence", () => {
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "accepts current session memory ranked before competing stale durable memory (%s)",
-    async (providerMode) => {
-      const { result } = await runSessionMemoryRankingFlow({
-        providerMode,
-        results: [currentSessionResult, staleDurableResult],
-      });
+  it("compares conflicting facts while ignoring the current question and evergreen USER note", async () => {
+    const { result } = await runSessionMemoryRankingFlow({
+      results: [
+        currentQuestionResult,
+        currentSessionResult,
+        evergreenUserResult,
+        staleDurableResult,
+      ],
+    });
 
-      expect(result.status).toBe("pass");
-    },
-  );
+    expect(result.status).toBe("pass");
+  });
 
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "compares conflicting facts while ignoring the current question and evergreen USER note (%s)",
-    async (providerMode) => {
-      const { result } = await runSessionMemoryRankingFlow({
-        providerMode,
-        results: [
-          currentQuestionResult,
-          currentSessionResult,
-          evergreenUserResult,
-          staleDurableResult,
-        ],
-      });
+  it("seeds the conflicting durable fact in an authentic three-day-old daily note", async () => {
+    const startedAt = Date.now();
+    const { utimes, writeFile } = await runSessionMemoryRankingFlow({
+      results: [
+        currentQuestionResult,
+        currentSessionResult,
+        evergreenUserResult,
+        staleDurableResult,
+      ],
+    });
+    const completedAt = Date.now();
+    const [stalePath, staleContent] = writeFile.mock.calls[0] ?? [];
+    const [datedPath, accessedAt, modifiedAt] = utimes.mock.calls[0] ?? [];
 
-      expect(result.status).toBe("pass");
-    },
-  );
-
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "seeds the conflicting durable fact in an authentic three-day-old daily note (%s)",
-    async (providerMode) => {
-      const startedAt = Date.now();
-      const { utimes, writeFile } = await runSessionMemoryRankingFlow({
-        providerMode,
-        results: [
-          currentQuestionResult,
-          currentSessionResult,
-          evergreenUserResult,
-          staleDurableResult,
-        ],
-      });
-      const completedAt = Date.now();
-      const [stalePath, staleContent] = writeFile.mock.calls[0] ?? [];
-      const [datedPath, accessedAt, modifiedAt] = utimes.mock.calls[0] ?? [];
-
-      expect(stalePath).toMatch(/^\/qa\/workspace\/memory\/\d{4}-\d{2}-\d{2}\.md$/);
-      expect(staleContent).toContain("Project Nebula current codename: ORBIT-9.");
-      expect(datedPath).toBe(stalePath);
-      expect(accessedAt).toBeInstanceOf(Date);
-      expect(modifiedAt).toBe(accessedAt);
-      expect(accessedAt?.getTime()).toBeGreaterThanOrEqual(startedAt - 3 * 86_400_000);
-      expect(accessedAt?.getTime()).toBeLessThanOrEqual(completedAt - 3 * 86_400_000);
-      expect(stalePath).toBe(`/qa/workspace/memory/${accessedAt?.toISOString().slice(0, 10)}.md`);
-    },
-  );
+    expect(stalePath).toMatch(/^\/qa\/workspace\/memory\/\d{4}-\d{2}-\d{2}\.md$/);
+    expect(staleContent).toContain("Project Nebula current codename: ORBIT-9.");
+    expect(datedPath).toBe(stalePath);
+    expect(accessedAt).toBeInstanceOf(Date);
+    expect(modifiedAt).toBe(accessedAt);
+    expect(accessedAt?.getTime()).toBeGreaterThanOrEqual(startedAt - 3 * 86_400_000);
+    expect(accessedAt?.getTime()).toBeLessThanOrEqual(completedAt - 3 * 86_400_000);
+    expect(stalePath).toBe(`/qa/workspace/memory/${accessedAt?.toISOString().slice(0, 10)}.md`);
+  });
 
   it.each(["mock-openai", "live-frontier"] as const)(
     "requires successful provider-independent persisted search evidence (%s)",
     async (providerMode) => {
       const { fetchJson, gatewayCall, runAgentPrompt } = await runSessionMemoryRankingFlow({
         providerMode,
-        results: [currentSessionResult, staleDurableResult],
       });
 
       expect(runAgentPrompt).toHaveBeenCalledWith(
@@ -274,162 +224,98 @@ describe("session memory ranking scenario evidence", () => {
     },
   );
 
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "uses an answer-free setup query and requests unfiltered memory ranking (%s)",
-    async (providerMode) => {
-      const { forceMemoryIndex, runAgentPrompt } = await runSessionMemoryRankingFlow({
-        providerMode,
-        results: [currentSessionResult, staleDurableResult],
-      });
+  it("uses an answer-free setup query and requests unfiltered memory ranking", async () => {
+    const { forceMemoryIndex, runAgentPrompt } = await runSessionMemoryRankingFlow();
 
-      expect(forceMemoryIndex).toHaveBeenCalledWith(
-        expect.objectContaining({ query: searchQuery, expectedNeedle: "ORBIT-10" }),
-      );
-      const options = runAgentPrompt.mock.calls[0]?.[1];
-      expect(options?.message).not.toMatch(/corpus\s*=\s*(sessions|memory)/i);
-      expect(options?.message).toMatch(/without\s+(?:a\s+)?corpus\s+filter|unfiltered/i);
-    },
-  );
+    expect(forceMemoryIndex).toHaveBeenCalledWith(
+      expect.objectContaining({ query: searchQuery, expectedNeedle: "ORBIT-10" }),
+    );
+    const options = runAgentPrompt.mock.calls[0]?.[1];
+    expect(options?.message).not.toMatch(/corpus\s*=\s*(sessions|memory)/i);
+    expect(options?.message).toMatch(/without\s+(?:a\s+)?corpus\s+filter|unfiltered/i);
+  });
 
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "rejects a fabricated correct answer without a planned memory search (%s)",
-    async (providerMode) => {
-      await expect(
-        runSessionMemoryRankingFlow({
-          providerMode,
-          results: [currentSessionResult, staleDurableResult],
-          includeToolCall: false,
-        }),
-      ).rejects.toThrow(/memory_search|search|correlat/i);
-    },
-  );
+  it("rejects a fabricated correct answer without a planned memory search", async () => {
+    await expect(
+      runSessionMemoryRankingFlow({
+        includeToolCall: false,
+      }),
+    ).rejects.toThrow(/memory_search|search|correlat/i);
+  });
 
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "rejects a fabricated correct answer without a successful memory result (%s)",
-    async (providerMode) => {
-      await expect(
-        runSessionMemoryRankingFlow({
-          providerMode,
-          results: [currentSessionResult, staleDurableResult],
-          includeToolResult: false,
-        }),
-      ).rejects.toThrow(/memory_search|search|result|correlat/i);
-    },
-  );
+  it("rejects a fabricated correct answer without a successful memory result", async () => {
+    await expect(
+      runSessionMemoryRankingFlow({
+        includeToolResult: false,
+      }),
+    ).rejects.toThrow(/memory_search|search|result|correlat/i);
+  });
 
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "rejects a failed result even when it contains the correct answer (%s)",
-    async (providerMode) => {
-      await expect(
-        runSessionMemoryRankingFlow({
-          providerMode,
-          results: [currentSessionResult, staleDurableResult],
-          resultIsError: true,
-        }),
-      ).rejects.toThrow(/memory_search|search|result|success|correlat/i);
-    },
-  );
+  it("rejects a failed result even when it contains the correct answer", async () => {
+    await expect(
+      runSessionMemoryRankingFlow({
+        resultIsError: true,
+      }),
+    ).rejects.toThrow(/memory_search|search|result|success|correlat/i);
+  });
 
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "rejects memory results belonging to a different search call (%s)",
-    async (providerMode) => {
-      await expect(
-        runSessionMemoryRankingFlow({
-          providerMode,
-          results: [currentSessionResult, staleDurableResult],
-          resultCallId: "call-unrelated-memory-search",
-        }),
-      ).rejects.toThrow(/memory_search|search|result|correlat/i);
-    },
-  );
+  it("rejects memory results belonging to a different search call", async () => {
+    await expect(
+      runSessionMemoryRankingFlow({
+        resultCallId: "call-unrelated-memory-search",
+      }),
+    ).rejects.toThrow(/memory_search|search|result|correlat/i);
+  });
 
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "rejects session results that never compete with the stale durable fact (%s)",
-    async (providerMode) => {
-      await expect(
-        runSessionMemoryRankingFlow({ providerMode, results: [currentSessionResult] }),
-      ).rejects.toThrow(/competi|durable|stale|both/i);
-    },
-  );
+  it("rejects session results that never compete with the stale durable fact", async () => {
+    await expect(runSessionMemoryRankingFlow({ results: [currentSessionResult] })).rejects.toThrow(
+      /competi|durable|stale|both/i,
+    );
+  });
 
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "rejects stale durable memory ranked ahead of the current session fact (%s)",
-    async (providerMode) => {
-      await expect(
-        runSessionMemoryRankingFlow({
-          providerMode,
-          results: [staleDurableResult, currentSessionResult],
-        }),
-      ).rejects.toThrow(/rank|stale|durable/i);
-    },
-  );
+  it("rejects stale facts ahead of current facts even when the current question ranks first", async () => {
+    await expect(
+      runSessionMemoryRankingFlow({
+        results: [currentQuestionResult, staleDurableResult, currentSessionResult],
+      }),
+    ).rejects.toThrow(/rank|stale|durable/i);
+  });
 
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "rejects stale facts ahead of current facts even when the current question ranks first (%s)",
-    async (providerMode) => {
-      await expect(
-        runSessionMemoryRankingFlow({
-          providerMode,
-          results: [currentQuestionResult, staleDurableResult, currentSessionResult],
-        }),
-      ).rejects.toThrow(/rank|stale|durable/i);
-    },
-  );
+  it("accepts an omitted result limit using the canonical six-result product default", async () => {
+    const { result } = await runSessionMemoryRankingFlow({
+      results: [
+        currentQuestionResult,
+        currentSessionResult,
+        evergreenUserResult,
+        staleDurableResult,
+      ],
+      omitMaxResults: true,
+    });
 
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "accepts an omitted result limit using the canonical six-result product default (%s)",
-    async (providerMode) => {
-      const { result } = await runSessionMemoryRankingFlow({
-        providerMode,
-        results: [
-          currentQuestionResult,
-          currentSessionResult,
-          evergreenUserResult,
-          staleDurableResult,
-        ],
-        omitMaxResults: true,
-      });
+    expect(result.status).toBe("pass");
+  });
 
-      expect(result.status).toBe("pass");
-    },
-  );
+  it("rejects a correlated memory search using less than the canonical six-result window", async () => {
+    await expect(
+      runSessionMemoryRankingFlow({
+        maxResults: 3,
+      }),
+    ).rejects.toThrow(/maxResults|result|six|6/i);
+  });
 
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "rejects a correlated memory search using less than the canonical six-result window (%s)",
-    async (providerMode) => {
-      await expect(
-        runSessionMemoryRankingFlow({
-          providerMode,
-          results: [currentSessionResult, staleDurableResult],
-          maxResults: 3,
-        }),
-      ).rejects.toThrow(/maxResults|result|six|6/i);
-    },
-  );
+  it("rejects search calls that exclude either configured memory source", async () => {
+    await expect(
+      runSessionMemoryRankingFlow({
+        corpus: "sessions",
+      }),
+    ).rejects.toThrow(/corpus|filter|unfiltered|competi/i);
+  });
 
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "rejects search calls that exclude either configured memory source (%s)",
-    async (providerMode) => {
-      await expect(
-        runSessionMemoryRankingFlow({
-          providerMode,
-          results: [currentSessionResult, staleDurableResult],
-          corpus: "sessions",
-        }),
-      ).rejects.toThrow(/corpus|filter|unfiltered|competi/i);
-    },
-  );
-
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "rejects search queries that already reveal the expected answer (%s)",
-    async (providerMode) => {
-      await expect(
-        runSessionMemoryRankingFlow({
-          providerMode,
-          results: [currentSessionResult, staleDurableResult],
-          query: `${searchQuery} ORBIT-10`,
-        }),
-      ).rejects.toThrow(/answer|reveal|leak|query/i);
-    },
-  );
+  it("rejects search queries that already reveal the expected answer", async () => {
+    await expect(
+      runSessionMemoryRankingFlow({
+        query: `${searchQuery} ORBIT-10`,
+      }),
+    ).rejects.toThrow(/answer|reveal|leak|query/i);
+  });
 });

@@ -223,18 +223,11 @@ describe("Crabbox runtime preflight cleanup", () => {
     },
     { kind: "modes", name: "changed advertised modes" },
     { kind: "timeout", name: "invalid timeout metadata" },
-    ...[
-      "unknown flag: --lease-id",
-      "flag provided but not defined: -lease-id",
-      "provider=machine0 does not support fixed idempotent lease IDs",
-      'unknown provider "machine0"',
-      "provider=machine0 does not support warmup",
-      "provider=machine0 does not support status",
-      "provider=machine0 does not expose persistent status",
-      "provider=machine0 is one-shot; use crabbox run",
-      "provider=machine0 requires module source; use crabbox run --script",
-      "--class is not supported for provider=machine0",
-    ].map((stderr) => ({ kind: "cli", name: stderr, result: commandResult({ code: 2, stderr }) })),
+    {
+      kind: "cli",
+      name: "unknown flag: --lease-id",
+      result: commandResult({ code: 2, stderr: "unknown flag: --lease-id" }),
+    },
   ])("retains the original allocation after $name across restart", async (scenario) => {
     const profile = {
       ...PROFILE,

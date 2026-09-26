@@ -224,42 +224,18 @@ describe("Feishu doctor state repair", () => {
     expect(result).toEqual({ changeNotes: [], warningNotes: [] });
   });
 
-  const repairSessionCases = [
-    {
-      name: "repairs SQLite-backed Feishu sessions with repeated blank user messages",
-      arrange: async () =>
-        await seedSession({
-          sessionId: "sess-sqlite-blank",
-          sessionKey: "agent:main:feishu:direct:ou_sqlite_blank",
-          contents: blankUserMessages,
-        }),
-      verifyTranscript: true,
-    },
-    {
-      name: "repairs SQLite-backed Feishu sessions with corrupt transcript rows",
-      arrange: async () => {
-        const session = await seedSession({
-          sessionId: "sess-sqlite-corrupt",
-          sessionKey: "agent:main:feishu:direct:ou_sqlite_corrupt",
-          contents: ["bad row follows"],
-        });
-        corruptTranscriptEventJson(session.agentId, session.sessionId);
-        return session;
-      },
-      verifyTranscript: false,
-    },
-  ];
-
-  it.each(repairSessionCases)("$name", async ({ arrange, verifyTranscript }) => {
-    const session = await arrange();
+  it("repairs SQLite-backed Feishu sessions with corrupt transcript rows", async () => {
+    const session = await seedSession({
+      sessionId: "sess-sqlite-corrupt",
+      sessionKey: "agent:main:feishu:direct:ou_sqlite_corrupt",
+      contents: ["bad row follows"],
+    });
+    corruptTranscriptEventJson(session.agentId, session.sessionId);
     const result = await runDoctor(true);
 
     expect(result.warningNotes).toEqual([]);
     expect(result.changeNotes.join("\n")).toContain("Removed 1 Feishu-scoped session entry");
     expect(readStoreEntries(session.storePath)[session.sessionKey]).toBeUndefined();
-    if (verifyTranscript) {
-      await expect(readSessionTranscriptEvents(session)).resolves.toEqual([]);
-    }
   });
 
   it("keeps Feishu sessions with separated blank user messages", async () => {

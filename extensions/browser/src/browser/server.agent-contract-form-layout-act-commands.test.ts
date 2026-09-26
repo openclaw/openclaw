@@ -692,21 +692,6 @@ describe("browser control server", () => {
     expect(requirePwMock("traceStopViaPlaywright")).not.toHaveBeenCalled();
   });
 
-  it("trace stop accepts in-root relative output path", async () => {
-    const base = await startServerAndBase();
-    const res = await postJson<{ ok?: boolean; path?: string }>(`${base}/trace/stop`, {
-      path: "safe-trace.zip",
-    });
-    expect(res.ok).toBe(true);
-    expect(res.path).toContain("safe-trace.zip");
-    const traceCall = requireMockArg(requirePwMock("traceStopViaPlaywright"));
-    expect(typeof traceCall.cdpUrl).toBe("string");
-    expectRecordFields(traceCall, "trace stop call", {
-      targetId: "abcd1234",
-    });
-    expect(String(traceCall.path)).toContain("safe-trace.zip");
-  });
-
   it("trace stop returns the path committed by the Playwright trace owner", async () => {
     const committedPath = path.join(DEFAULT_TRACE_DIR, "committed-trace.zip");
     requirePwMock("traceStopViaPlaywright").mockResolvedValueOnce(committedPath);

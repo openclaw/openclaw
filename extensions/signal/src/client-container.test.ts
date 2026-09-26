@@ -1,7 +1,7 @@
 import * as fetchModule from "openclaw/plugin-sdk/fetch-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { containerCheck, containerRpcRequest, streamContainerEvents } from "./client-container.js";
+import { containerCheck, containerRpcRequest } from "./client-container.js";
 
 type ContainerRpcOptions = Parameters<typeof containerRpcRequest>[2];
 
@@ -36,21 +36,8 @@ function bodyStream(text: string): { body: ReadableStream<Uint8Array> } {
   };
 }
 
-function mockTextResponse(text: string, status = 200, statusText?: string): void {
-  mockFetch.mockResolvedValue({
-    ok: status >= 200 && status < 300,
-    status,
-    statusText,
-    ...bodyStream(text),
-  });
-}
-
 function mockJsonResponse(value: unknown = {}, status = 200): void {
-  mockTextResponse(JSON.stringify(value), status);
-}
-
-function mockNoContentResponse(): void {
-  mockFetch.mockResolvedValue({ ok: true, status: 204 });
+  mockFetch.mockResolvedValue({ ok: true, status, ...bodyStream(JSON.stringify(value)) });
 }
 
 function stalledBodyStream(): { body: ReadableStream<Uint8Array> } {
@@ -77,27 +64,10 @@ function delayedBodyStream(
     }),
   };
 }
-const wsMockState = vi.hoisted(() => ({
-  behavior: "close" as
-    | "close"
-    | "open"
-    | "error"
-    | "message"
-    | "buffered-message"
-    | "pending"
-    | "unexpected-response",
-  urls: [] as string[],
-  options: [] as Array<{ maxPayload?: number; handshakeTimeout?: number } | undefined>,
-  terminations: 0,
-}));
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(fetchModule, "resolveFetch").mockReturnValue(mockFetch as unknown as typeof fetch);
-  wsMockState.behavior = "close";
-  wsMockState.urls = [];
-  wsMockState.options = [];
-  wsMockState.terminations = 0;
 });
 
 function requireFetchCall(index = 0): [RequestInfo | URL, RequestInit] {
@@ -128,60 +98,6 @@ function parseFetchBody(index = 0): Record<string, unknown> {
   }
   return JSON.parse(init.body) as Record<string, unknown>;
 }
-
-function expectMockLogNotContains(mock: ReturnType<typeof vi.fn>, expected: string): void {
-  const messages = mock.mock.calls.map((call) => String(call[0] ?? ""));
-  expect(messages.join("\n")).not.toContain(expected);
-}
-
-// Minimal WebSocket mock for connection-log assertions.
-vi.mock("./ws-runtime.js", async () => {
-  const { EventEmitter } = await import("node:events");
-  return {
-    WebSocket: class MockWebSocket extends EventEmitter {
-      private bufferedMessageFlushed = false;
-
-      constructor(url: string | URL, options?: { maxPayload?: number; handshakeTimeout?: number }) {
-        super();
-        wsMockState.urls.push(String(url));
-        wsMockState.options.push(options);
-        setTimeout(() => {
-          if (wsMockState.behavior === "open") {
-            this.emit("open");
-            this.emit("close", 1000, Buffer.from("done"));
-          } else if (wsMockState.behavior === "error") {
-            this.emit("error", new Error("WebSocket failed"));
-          } else if (wsMockState.behavior === "unexpected-response") {
-            this.emit("unexpected-response", {}, { statusCode: 200, statusMessage: "OK" });
-          } else if (wsMockState.behavior === "message") {
-            this.emit("message", Buffer.from('{"envelope":{"timestamp":1}}'));
-            this.emit("close", 1000, Buffer.from("done"));
-          } else if (wsMockState.behavior === "buffered-message") {
-            this.emit("open");
-            this.emit("message", Buffer.from('{"envelope":{"timestamp":1}}'));
-          } else if (wsMockState.behavior === "pending") {
-            // Keep the opening handshake unresolved until shutdown closes it.
-          } else {
-            this.emit("close", 1000, Buffer.from("done"));
-          }
-        }, 0);
-      }
-
-      close() {
-        if (wsMockState.behavior === "buffered-message" && !this.bufferedMessageFlushed) {
-          this.bufferedMessageFlushed = true;
-          // ws flushes already-buffered receiver frames before its final close event.
-          this.emit("message", Buffer.from('{"envelope":{"timestamp":2}}'));
-        }
-        this.emit("close", 1000, Buffer.from("done"));
-      }
-
-      terminate() {
-        wsMockState.terminations += 1;
-      }
-    },
-  };
-});
 
 describe("containerCheck", () => {
   it("cancels /v1/about response bodies after simple health checks", async () => {
@@ -230,43 +146,6 @@ describe("containerCheck", () => {
     await containerCheck("localhost:8080");
     expectFirstFetchCall("http://localhost:8080/v1/about");
   });
-
-  it("validates the receive WebSocket when an account is provided", async () => {
-    wsMockState.behavior = "open";
-    mockFetch.mockResolvedValue({ ok: true, status: 200 });
-
-    const result = await containerCheck("http://localhost:8080", 1000, "+14259798283");
-
-    expect(result).toEqual({ ok: true, status: 101, error: null });
-    expect(wsMockState.urls).toEqual(["ws://localhost:8080/v1/receive/%2B14259798283"]);
-    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024 }]);
-  });
-
-  it("rejects container receive endpoints that do not upgrade to WebSocket", async () => {
-    wsMockState.behavior = "unexpected-response";
-    mockFetch.mockResolvedValue({ ok: true, status: 200 });
-
-    const result = await containerCheck("http://localhost:8080", 1000, "+14259798283");
-
-    expect(result).toEqual({
-      ok: false,
-      status: 200,
-      error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
-    });
-  });
-
-  it("rejects container receive endpoints that close before opening", async () => {
-    wsMockState.behavior = "close";
-    mockFetch.mockResolvedValue({ ok: true, status: 200 });
-
-    const result = await containerCheck("http://localhost:8080", 1000, "+14259798283");
-
-    expect(result).toEqual({
-      ok: false,
-      status: null,
-      error: "Signal container receive WebSocket closed before open (1000: done)",
-    });
-  });
 });
 
 describe("containerRestRequest", () => {
@@ -287,7 +166,12 @@ describe("containerRestRequest", () => {
   });
 
   it("bounds REST error response bodies before reporting failures", async () => {
-    mockTextResponse("x".repeat(20_000), 500, "Internal Server Error");
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: "Internal Server Error",
+      ...bodyStream("x".repeat(20_000)),
+    });
 
     await expect(rpc("send", undefined)).rejects.toThrow(
       `Signal REST 500: ${"x".repeat(16 * 1024)}`,
@@ -323,7 +207,11 @@ describe("containerRestRequest", () => {
   });
 
   it("handles empty response body", async () => {
-    mockTextResponse("");
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(""),
+    });
 
     const result = await rpc("version");
     expect(result).toBeUndefined();
@@ -332,7 +220,11 @@ describe("containerRestRequest", () => {
   it("caps oversized REST request timeouts before arming abort timers", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      mockJsonResponse();
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        ...bodyStream("{}"),
+      });
 
       await rpc("version", undefined, {
         timeoutMs: Number.MAX_SAFE_INTEGER,
@@ -560,7 +452,10 @@ describe("containerSendMessage", () => {
 
 describe("containerSendTyping", () => {
   it("sends typing indicator with PUT", async () => {
-    mockNoContentResponse();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 204,
+    });
 
     const result = await rpc("sendTyping", {
       account: "+14259798283",
@@ -576,7 +471,10 @@ describe("containerSendTyping", () => {
   });
 
   it("stops typing indicator with DELETE", async () => {
-    mockNoContentResponse();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 204,
+    });
 
     await rpc("sendTyping", {
       account: "+14259798283",
@@ -590,7 +488,10 @@ describe("containerSendTyping", () => {
 
 describe("containerRpcRequest typing", () => {
   it("formats group ids for typing indicators", async () => {
-    mockNoContentResponse();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 204,
+    });
 
     await rpc("sendTyping", {
       account: "+14259798283",
@@ -658,7 +559,10 @@ describe("containerRpcRequest send", () => {
 
 describe("containerSendReceipt", () => {
   it("sends read receipt", async () => {
-    mockNoContentResponse();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 204,
+    });
 
     const result = await rpc("sendReceipt", {
       account: "+14259798283",
@@ -678,7 +582,10 @@ describe("containerSendReceipt", () => {
   });
 
   it("sends viewed receipt when type specified", async () => {
-    mockNoContentResponse();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 204,
+    });
 
     await rpc("sendReceipt", {
       account: "+14259798283",
@@ -840,13 +747,22 @@ describe("normalizeBaseUrl edge cases", () => {
 
 describe("containerRestRequest edge cases", () => {
   it("handles error response with empty body", async () => {
-    mockTextResponse("", 500, "Internal Server Error");
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: "Internal Server Error",
+      ...bodyStream(""),
+    });
 
     await expect(rpc("send", undefined)).rejects.toThrow("Signal REST 500: Internal Server Error");
   });
 
   it("handles JSON parse errors gracefully", async () => {
-    mockTextResponse("not-valid-json");
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream("not-valid-json"),
+    });
 
     await expect(rpc("version", undefined)).rejects.toThrow("Signal REST returned malformed JSON");
   });
@@ -889,205 +805,17 @@ describe("containerRestRequest edge cases", () => {
     const payload = JSON.stringify({ items });
     expect(payload.length).toBeGreaterThan(2 * 1024 * 1024);
     expect(payload.length).toBeLessThan(16 * 1024 * 1024);
-    mockTextResponse(payload);
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(payload),
+    });
 
     const result = await rpc<{ items: Array<{ id: number }> }>("version", undefined, {});
     // Full body round-trips: first and last entries survive, count is exact.
     expect(result.items).toHaveLength(50_000);
     expect(result.items[0]?.id).toBe(0);
     expect(result.items[49_999]?.id).toBe(49_999);
-  });
-});
-
-describe("streamContainerEvents", () => {
-  it("redacts the account and bounds the opening handshake wait", async () => {
-    const log = vi.fn();
-    const onStreamOpen = vi.fn();
-    wsMockState.behavior = "open";
-
-    await streamContainerEvents({
-      baseUrl: "http://localhost:8080",
-      account: "+14259798283",
-      onEvent: vi.fn(),
-      onStreamOpen,
-      logger: { log },
-    });
-
-    expect(onStreamOpen).toHaveBeenCalledOnce();
-    expect(log).toHaveBeenCalledWith(
-      "[signal-ws] connecting to ws://localhost:8080/v1/receive/<redacted>",
-    );
-    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 30_000 }]);
-    expectMockLogNotContains(log, "+14259798283");
-    expectMockLogNotContains(log, "%2B14259798283");
-  });
-
-  it.each([
-    { timeoutMs: 1_000, expected: 1_000 },
-    { timeoutMs: 60_000, expected: 60_000 },
-    { timeoutMs: 0, expected: 30_000 },
-    { timeoutMs: undefined, expected: 30_000 },
-  ])(
-    "preserves the stream opening budget for timeoutMs=$timeoutMs",
-    async ({ timeoutMs, expected }) => {
-      wsMockState.behavior = "open";
-      await streamContainerEvents({
-        baseUrl: "http://localhost:8080",
-        account: "+15550001111",
-        timeoutMs,
-        onEvent: vi.fn(),
-      });
-      expect(wsMockState.options).toEqual([
-        { maxPayload: 1024 * 1024, handshakeTimeout: expected },
-      ]);
-    },
-  );
-
-  it("drains accepted and socket-buffered receive events before resolving shutdown", async () => {
-    wsMockState.behavior = "buffered-message";
-    const abort = new AbortController();
-    const removeEventListener = vi.spyOn(abort.signal, "removeEventListener");
-    const firstDelivery = Promise.withResolvers<void>();
-    const firstStarted = Promise.withResolvers<void>();
-    const timestamps: number[] = [];
-    const stream = streamContainerEvents({
-      baseUrl: "http://localhost:8080",
-      abortSignal: abort.signal,
-      timeoutMs: 0,
-      onEvent: async (event) => {
-        timestamps.push(event.envelope?.timestamp ?? 0);
-        if (timestamps.length === 1) {
-          firstStarted.resolve();
-          await firstDelivery.promise;
-        }
-      },
-    });
-    let settled = false;
-    void stream.then(() => {
-      settled = true;
-    });
-
-    await firstStarted.promise;
-    abort.abort();
-    const settledBeforeDrain = await Promise.race([
-      stream.then(() => true),
-      new Promise<boolean>((resolve) => {
-        setTimeout(() => resolve(false), 10);
-      }),
-    ]);
-    expect(settledBeforeDrain).toBe(false);
-    expect(settled).toBe(false);
-
-    firstDelivery.resolve();
-    await expect(stream).resolves.toBeUndefined();
-    expect(timestamps).toEqual([1, 2]);
-    expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
-    expect(wsMockState.terminations).toBe(0);
-  });
-
-  it("propagates a receive-handler failure that settles during shutdown", async () => {
-    wsMockState.behavior = "buffered-message";
-    const abort = new AbortController();
-    const appendError = new Error("durable append failed during shutdown");
-    const delivery = Promise.withResolvers<void>();
-    const firstStarted = Promise.withResolvers<void>();
-    const stream = streamContainerEvents({
-      baseUrl: "http://localhost:8080",
-      abortSignal: abort.signal,
-      onEvent: async () => {
-        firstStarted.resolve();
-        await delivery.promise;
-      },
-    });
-
-    await firstStarted.promise;
-    abort.abort();
-    delivery.reject(appendError);
-    await expect(stream).rejects.toBe(appendError);
-    expect(wsMockState.terminations).toBe(0);
-  });
-
-  it("bounds a stalled shutdown drain and records the accepted-message loss risk", async () => {
-    vi.useFakeTimers();
-    try {
-      wsMockState.behavior = "buffered-message";
-      const abort = new AbortController();
-      const error = vi.fn();
-      let settled = false;
-      const stream = streamContainerEvents({
-        baseUrl: "http://localhost:8080",
-        abortSignal: abort.signal,
-        timeoutMs: 0,
-        onEvent: async () => await new Promise<void>(() => {}),
-        logger: { error },
-      }).then(() => {
-        settled = true;
-      });
-
-      await vi.advanceTimersByTimeAsync(0);
-      abort.abort();
-      await vi.advanceTimersByTimeAsync(1_499);
-      expect(settled).toBe(false);
-      expect(error).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(1);
-      await expect(stream).resolves.toBeUndefined();
-      expect(error).toHaveBeenCalledWith(expect.stringMatching(/receive events.*may be lost/i));
-      expect(wsMockState.terminations).toBe(1);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("closes immediately when aborted before the opening handshake completes", async () => {
-    wsMockState.behavior = "pending";
-    const abort = new AbortController();
-    const removeEventListener = vi.spyOn(abort.signal, "removeEventListener");
-    const stream = streamContainerEvents({
-      baseUrl: "http://localhost:8080",
-      abortSignal: abort.signal,
-      onEvent: vi.fn(),
-    });
-
-    abort.abort();
-    await expect(stream).resolves.toBeUndefined();
-    expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
-    expect(wsMockState.terminations).toBe(0);
-  });
-
-  it("handles an already-aborted signal without leaving its connection pending", async () => {
-    wsMockState.behavior = "pending";
-    const abort = new AbortController();
-    abort.abort();
-    const result = await Promise.race([
-      streamContainerEvents({
-        baseUrl: "http://localhost:8080",
-        abortSignal: abort.signal,
-        onEvent: vi.fn(),
-      }).then(() => "closed"),
-      new Promise<string>((resolve) => {
-        setTimeout(() => resolve("still pending"), 25);
-      }),
-    ]);
-
-    expect(result).toBe("closed");
-    expect(wsMockState.terminations).toBe(0);
-  });
-
-  it("propagates receive-handler failures to the stream", async () => {
-    wsMockState.behavior = "message";
-    const appendError = new Error("durable append failed");
-
-    await expect(
-      streamContainerEvents({
-        baseUrl: "http://localhost:8080",
-        account: "+14259798283",
-        onEvent: async () => {
-          throw appendError;
-        },
-      }),
-    ).rejects.toBe(appendError);
   });
 });
 

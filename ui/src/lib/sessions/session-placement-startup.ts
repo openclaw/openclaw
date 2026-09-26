@@ -185,16 +185,11 @@ async function resolveActivePlacement(
       // A planned Gateway interruption says nothing about the worker's health.
       lookupFailures = result.status === "awaiting-gateway" ? 0 : lookupFailures + 1;
       const submissionCancelled = !isCurrent();
-      if (submissionCancelled || lookupFailures >= PLACEMENT_LOOKUP_FAILURE_LIMIT) {
-        if (!params.cleanupOnCancellation() && submissionCancelled) {
-          return { status: "interrupted" };
-        }
+      if (submissionCancelled) {
+        return cancelSessionPlacement(client, params, params.cleanupOnCancellation);
+      }
+      if (lookupFailures >= PLACEMENT_LOOKUP_FAILURE_LIMIT) {
         const cleanupError = await reclaimSessionPlacement(client, params);
-        if (submissionCancelled) {
-          return cleanupError
-            ? { status: "cleanup-rejected", error: cleanupError }
-            : { status: "cancelled" };
-        }
         const placementError = "session placement could not be verified";
         return {
           status: "cleanup-rejected",
@@ -249,14 +244,8 @@ async function resolveActivePlacement(
       globalThis.setTimeout(resolve, DISPATCH_RECONCILE_INTERVAL_MS);
     });
   }
-  if (!params.cleanupOnCancellation() && !isCurrent()) {
-    return { status: "interrupted" };
-  }
   if (!isCurrent()) {
-    const cleanupError = await reclaimSessionPlacement(client, params);
-    return cleanupError
-      ? { status: "cleanup-rejected", error: cleanupError }
-      : { status: "cancelled" };
+    return cancelSessionPlacement(client, params, params.cleanupOnCancellation);
   }
   return {
     status: "cleanup-rejected",
@@ -398,11 +387,7 @@ export async function startSessionPlacementInitialTurn(
     try {
       const dispatched = await client.request<SessionsDispatchResult>(
         "sessions.dispatch",
-        sessionPlacementDispatchParams({
-          key: params.key,
-          agentId: params.agentId,
-          target: params.target,
-        }),
+        sessionPlacementDispatchParams(params),
       );
       resolution = await resolveActivePlacement(
         client,

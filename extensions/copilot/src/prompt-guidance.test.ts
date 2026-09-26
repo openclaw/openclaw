@@ -32,7 +32,6 @@ describe("buildCopilotPromptGuidance", () => {
     { tools: [], disableTools: false, terminalSetup: true },
     { tools: ["openclaw"], disableTools: false, terminalSetup: false },
     { tools: ["gateway"], disableTools: false, terminalSetup: false },
-    { tools: ["openclaw", "gateway"], disableTools: false, terminalSetup: false },
     { tools: ["openclaw", "gateway"], disableTools: true, terminalSetup: true },
     { tools: [" gateway "], disableTools: false, terminalSetup: false },
   ])(

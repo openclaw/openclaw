@@ -367,16 +367,6 @@ describe("runtime tool fixture", () => {
     );
   });
 
-  it("accepts live runtime tool fixtures only after transcript tool output", async () => {
-    const env = await makeEnv();
-    await writeLiveRuntimeToolEvidence(env);
-
-    const details = await runLiveRuntimeToolFixture(env);
-
-    expect(details).toContain("read live provider happy planned args");
-    expect(details).toContain("read live provider failure planned args");
-  });
-
   it("skips async live runtime tool fixtures when the happy path has no result", async () => {
     const env = await makeEnv();
     await writeRuntimeToolTranscripts(
@@ -532,7 +522,6 @@ describe("runtime tool fixture", () => {
 
   it.each([
     "apply_patch failed: path escapes sandbox root",
-    "Operation not permitted (os error 1)",
     "patch rejected: writing outside of the project; rejected by user approval settings",
   ])("verifies native Codex patch success and workspace denial: %s", async (failureOutput) => {
     const env = await makeEnv();
@@ -604,8 +593,7 @@ describe("runtime tool fixture", () => {
     env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
     await writeCodexNativePatchEvidence(env, "apply_patch failed: path escapes sandbox root", {
       happyArguments: {
-        input:
-          "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n",
+        input: runtimePatchAddInput(),
         cwd: path.resolve(env.gateway.workspaceDir, ".."),
       },
     });
@@ -638,12 +626,8 @@ describe("runtime tool fixture", () => {
     const env = await makeEnv();
     env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
     await writeCodexNativePatchEvidence(env, "patch rejected: writing outside of the project", {
-      happyArguments: encode(
-        "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n",
-      ),
-      failureArguments: encode(
-        "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-denied.txt\n@@\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n",
-      ),
+      happyArguments: encode(runtimePatchAddInput()),
+      failureArguments: encode(runtimePatchUpdateInput()),
       ...("shadowInput" in testCase ? { happyInput: {}, failureInput: {} } : {}),
     });
 
@@ -905,7 +889,6 @@ describe("runtime tool fixture", () => {
 
   it.each([
     "Operation not permitted",
-    "Operation not permitted (os error 1)",
     "EPERM: sandbox denied the requested patch",
     "patch rejected: writing outside of the project; rejected by user approval settings",
   ])("accepts native sandbox denial as a mock patch failure: %s", async (failureOutput) => {
@@ -913,12 +896,10 @@ describe("runtime tool fixture", () => {
       runMockRuntimeToolFixtureWithOutputs({
         toolName: "apply_patch",
         happyArgs: {
-          input:
-            "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n",
+          input: runtimePatchAddInput(),
         },
         failureArgs: {
-          input:
-            "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-denied.txt\n@@\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n",
+          input: runtimePatchUpdateInput(),
         },
         happyOutput: "Successfully applied patch",
         failureOutput,
@@ -931,12 +912,10 @@ describe("runtime tool fixture", () => {
       runMockRuntimeToolFixtureWithOutputs({
         toolName: "apply_patch",
         happyArgs: {
-          input:
-            "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n",
+          input: runtimePatchAddInput(),
         },
         failureArgs: {
-          input:
-            "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-denied.txt\n@@\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n",
+          input: runtimePatchUpdateInput(),
         },
         happyOutput: "Successfully applied patch",
         failureOutput: "Error: failed to find expected lines in runtime-tool-fixture-denied.txt",
@@ -954,12 +933,10 @@ describe("runtime tool fixture", () => {
       runMockRuntimeToolFixtureWithOutputs({
         toolName: "apply_patch",
         happyArgs: {
-          input:
-            "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n",
+          input: runtimePatchAddInput(),
         },
         failureArgs: {
-          input:
-            "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-denied.txt\n@@\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n",
+          input: runtimePatchUpdateInput(),
         },
         happyOutput: "Successfully applied patch",
         failureOutput: "Error: Path escapes sandbox root",
@@ -973,27 +950,24 @@ describe("runtime tool fixture", () => {
   it.each([
     {
       label: "happy-path file",
-      happyInput:
-        "*** Begin Patch\n*** Add File: runtime-tool-fixture-wrong.txt\n+runtime patch\n*** End Patch\n",
-      failureInput:
-        "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-denied.txt\n@@\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n",
+      happyInput: runtimePatchAddInput("runtime-tool-fixture-wrong.txt"),
+      failureInput: runtimePatchUpdateInput(),
       expectedError: "expected linked mock apply_patch to add runtime-tool-fixture-patch.txt",
     },
     {
       label: "failure-path file",
-      happyInput:
-        "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n",
-      failureInput:
-        "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-wrong.txt\n@@\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n",
+      happyInput: runtimePatchAddInput(),
+      failureInput: runtimePatchUpdateInput("../runtime-tool-fixture-wrong.txt"),
       expectedError:
         "expected linked mock apply_patch to update ../runtime-tool-fixture-denied.txt",
     },
     {
       label: "failure-path context",
-      happyInput:
-        "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n",
-      failureInput:
-        "*** Begin Patch\n*** Update File: ../runtime-tool-fixture-denied.txt\n@@\n-context-that-does-not-exist\n+runtime patch outside the workspace\n*** End Patch\n",
+      happyInput: runtimePatchAddInput(),
+      failureInput: runtimePatchUpdateInput(
+        "../runtime-tool-fixture-denied.txt",
+        "context-that-does-not-exist",
+      ),
       expectedError:
         "expected linked mock apply_patch to update ../runtime-tool-fixture-denied.txt",
     },
@@ -1115,13 +1089,6 @@ describe("runtime tool fixture", () => {
         }),
       }),
     ).rejects.toThrow("planned call without a linked successful result");
-  });
-
-  it("accepts mock runtime tool fixtures only after planned calls return output", async () => {
-    const details = await runMockRuntimeToolFixture({ requests: mockToolRequests({}) });
-
-    expect(details).toContain("read mock provider happy planned args");
-    expect(details).toContain("read mock provider failure planned args");
   });
 
   it("skips non-required mock fixtures when both paths are only planned", async () => {

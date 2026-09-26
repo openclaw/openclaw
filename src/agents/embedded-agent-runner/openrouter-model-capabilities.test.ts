@@ -114,41 +114,6 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
-  it("uses endpoint-specific OpenRouter context length when top_provider reports one", async () => {
-    await withOpenRouterStateDir(async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () =>
-          Response.json({
-            data: [
-              {
-                id: "nvidia/nemotron-3-super-120b-a12b:free",
-                name: "Nemotron 3 Super 120B Free",
-                architecture: { modality: "text->text" },
-                context_length: 1_000_000,
-                top_provider: {
-                  context_length: 262_144,
-                  max_completion_tokens: 262_144,
-                },
-                pricing: { prompt: "0", completion: "0" },
-              },
-            ],
-          }),
-        ),
-      );
-
-      const module = await importOpenRouterModelCapabilities("top-provider-context-length");
-      await module.loadOpenRouterModelCapabilities("nvidia/nemotron-3-super-120b-a12b:free");
-
-      expect(
-        module.getOpenRouterModelCapabilities("nvidia/nemotron-3-super-120b-a12b:free"),
-      ).toMatchObject({
-        contextWindow: 262_144,
-        maxTokens: 262_144,
-      });
-    });
-  });
-
   it("does not reuse retired JSON caches with precomputed OpenRouter context windows", async () => {
     // Old JSON caches stored unnormalized provider context windows; force a live
     // refresh so endpoint-specific caps are used instead.

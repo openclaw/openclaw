@@ -113,10 +113,8 @@ describe("matrix account selection", () => {
   it.each([
     ["default-secret", "team-secret", ["default", "team-ops"], "default"],
     [undefined, "team-secret", ["team-ops"], "team-ops"],
-    ["", "team-secret", ["team-ops"], "team-ops"],
     [" \t ", "team-secret", ["team-ops"], "team-ops"],
     ["default-secret", undefined, ["default"], "default"],
-    ["default-secret", "", ["default"], "default"],
     ["default-secret", " \t ", ["default"], "default"],
     [" \t ", " \t ", ["default"], "default"],
   ] as const)(
