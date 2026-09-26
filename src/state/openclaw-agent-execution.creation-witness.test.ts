@@ -8,6 +8,7 @@ import {
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
@@ -48,6 +49,77 @@ function source(
     },
   };
 }
+
+it("shares an execution owner across directory aliases, later turns, and cleanup", async () => {
+  const options = fixture();
+  const alias = path.join(options.env.OPENCLAW_STATE_DIR, "alias");
+  const directory = path.dirname(options.path);
+  fs.mkdirSync(directory, { recursive: true });
+  fs.symlinkSync(directory, alias, process.platform === "win32" ? "junction" : "dir");
+  const aliased = { ...options, path: path.join(alias, path.basename(options.path)) };
+  const creator = captureOpenClawAgentDatabaseExecution(aliased, {
+    expectedCreationIdentity: readDatabasePathIdentitySync(aliased.path),
+  });
+  const sibling = captureOpenClawAgentDatabaseExecution(options);
+  const sessionKey = "agent:main:alias-proof";
+  const command = {
+    type: "session.transcript.initialize" as const,
+    input: { sessionKey, sessionId: "alias-session" },
+  };
+  const existingTranscript = { kind: "session-transcript-initialized", sessionKey };
+  try {
+    await creator.prepare(source());
+    await expect(creator.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
+      {
+        ...existingTranscript,
+        placeholder: { sessionId: "alias-session" },
+      },
+    );
+    await expect(sibling.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
+      existingTranscript,
+    );
+    expect(sibling.path).toBe(options.path);
+    expect(sibling.fileIdentity).toEqual(creator.fileIdentity);
+    await Promise.all([creator.release(), sibling.release()]);
+    const later = captureOpenClawAgentDatabaseExecution(options);
+    try {
+      await expect(later.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
+        existingTranscript,
+      );
+      await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
+      expect(() => later.assertCurrent()).toThrow(/closed/);
+    } finally {
+      await later.release();
+    }
+    const reopened = captureOpenClawAgentDatabaseExecution(aliased);
+    try {
+      await expect(
+        reopened.runExisting(source(), (scope) => scope.execute(command)),
+      ).resolves.toEqual(existingTranscript);
+      await closeOpenClawAgentDatabaseByPathAsync(aliased.path, options.agentId);
+      expect(() => reopened.assertCurrent()).toThrow(/closed/);
+    } finally {
+      await reopened.release();
+    }
+    fs.unlinkSync(options.path);
+    const replacement = captureOpenClawAgentDatabaseExecution(options, {
+      expectedCreationIdentity: readDatabasePathIdentitySync(options.path),
+    });
+    try {
+      await replacement.prepare(source());
+      await expect(
+        replacement.runExisting(source(), (scope) => scope.execute(command)),
+      ).resolves.toEqual({
+        ...existingTranscript,
+        placeholder: { sessionId: "alias-session" },
+      });
+    } finally {
+      await replacement.release();
+    }
+  } finally {
+    await Promise.allSettled([creator.release(), sibling.release()]);
+  }
+});
 
 it.each(["missing", "schema-missing"] as const)(
   "prepares its originally observed %s store and records native birth without changing identity",
@@ -315,7 +387,11 @@ it("retains the prepared native receipt across an alias swap before caller conti
       /identity|observed target/,
     );
     expect(operation).not.toHaveBeenCalled();
+    await closeOpenClawAgentDatabaseByPathAsync(aliased.path, options.agentId);
     expect(() => successor.assertCurrent()).not.toThrow();
+    await expect(successor.runExisting(source(), async () => "successor retained")).resolves.toBe(
+      "successor retained",
+    );
   } finally {
     // Restore the test's directory alias so native cleanup addresses its original file.
     fs.unlinkSync(alias);

@@ -1,3 +1,4 @@
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   runQueuedStoreWrite,
@@ -26,7 +27,9 @@ export function runOpenClawAgentWriteAdmission<T>(
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
 ): Promise<T> {
-  const storePath = resolveOpenClawAgentSqlitePath(options);
+  const storePath = readDatabasePathIdentitySync(
+    resolveOpenClawAgentSqlitePath(options),
+  ).canonicalPath;
   return runQueuedStoreWrite({
     queues: admission.queues,
     storePath,
@@ -47,7 +50,9 @@ export function runOpenClawAgentWorkerWrite<T>(
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
 ): Promise<T> {
-  const storePath = resolveOpenClawAgentSqlitePath(options);
+  const storePath = readDatabasePathIdentitySync(
+    resolveOpenClawAgentSqlitePath(options),
+  ).canonicalPath;
   return runOpenClawAgentWriteAdmission(
     options,
     async () => {

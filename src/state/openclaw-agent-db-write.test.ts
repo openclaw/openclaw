@@ -79,23 +79,34 @@ describe("agent database write admission", () => {
   );
 
   it("queues inherited worker callbacks without borrowing the worker's reentrancy", async () => {
+    const alias = path.join(path.dirname(options.path), "alias");
+    fs.symlinkSync(
+      path.dirname(options.path),
+      alias,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const aliased = { ...options, path: path.join(alias, path.basename(options.path)) };
     const calls: number[] = [];
     const writes: Promise<number>[] = [];
     const reservation = reserveWorkerOperation(() => {
       for (const value of [1, 2, 3]) {
         writes.push(
-          withOpenClawAgentDatabaseWrite(options, () => {
+          withOpenClawAgentDatabaseWrite(value === 2 ? aliased : options, () => {
             calls.push(value);
             return value;
           }),
         );
       }
     });
-    await reservation.entered;
-    await setImmediate();
-    expect(calls).toEqual([]);
-    reservation.release();
-    await reservation.done;
+    try {
+      await reservation.entered;
+      await setImmediate();
+      expect(calls).toEqual([]);
+    } finally {
+      reservation.release();
+      await reservation.done;
+      await Promise.all(writes);
+    }
     await expect(Promise.all(writes)).resolves.toEqual([1, 2, 3]);
     expect(calls).toEqual([1, 2, 3]);
   });
