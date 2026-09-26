@@ -55,7 +55,8 @@ export async function runObservedStartupLaunch(params: {
       | "file-backed-diagnostic"
       | "parent-retained-diagnostic"
       | "exit-tag-pathological-diagnostic"
-      | "exit-tag-ascii-path-diagnostic",
+      | "exit-tag-ascii-path-diagnostic"
+      | "exit-tag-code-page-header-diagnostic",
     scriptPath = params.scriptPath,
   ) {
     const expectedExitTag = variant.startsWith("exit-tag-") ? 42 : undefined;
@@ -276,11 +277,38 @@ export async function runObservedStartupLaunch(params: {
     const variants = [
       "exit-tag-pathological-diagnostic",
       "exit-tag-ascii-path-diagnostic",
+      "exit-tag-code-page-header-diagnostic",
     ] as const;
     try {
       await fs.writeFile(params.scriptPath, tagged);
       const pathological = await run(variants[0]);
-      if (pathological.exitTagMatched !== true && !params.signal.aborted) {
+      if (pathological.exitTagMatched === true && !params.signal.aborted) {
+        const header = /^@chcp [0-9]+ >nul\r\n/u.exec(original.toString("latin1"))?.[0];
+        if (header) {
+          // Keep the observed preamble bytes; this probe must not choose a code page.
+          await fs.writeFile(
+            params.scriptPath,
+            Buffer.concat([
+              original.subarray(0, header.length),
+              Buffer.from("@if errorlevel 1 exit /b 43\r\n", "ascii"),
+              tagged,
+            ]),
+          );
+          await run(variants[2]);
+        } else {
+          await fs.writeFile(
+            path.join(params.proofRoot, `${params.mode}-${variants[2]}.observation.json`),
+            JSON.stringify({
+              mode: params.mode,
+              variant: variants[2],
+              event: "not-run",
+              lifecycleQualification: false,
+              reason: "Original Startup script has no ASCII @chcp <page> >nul CRLF preamble",
+              scriptPath: params.scriptPath,
+            }),
+          );
+        }
+      } else if (pathological.exitTagMatched !== true && !params.signal.aborted) {
         // Only the disposable script lives in the generation owner; evidence stays in proofRoot.
         const neutralRoot = params.lifetime.createTempDir("openclaw-startup-ascii-");
         const canonicalRoot = await fs.realpath(neutralRoot);
