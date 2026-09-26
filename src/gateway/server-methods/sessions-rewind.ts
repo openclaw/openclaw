@@ -623,7 +623,7 @@ async function mutateSessionAtMessage(
               )),
             ];
       if (action !== "fork") {
-        clearSessionQueues(lifecycleIdentities);
+        await clearSessionQueues(lifecycleIdentities);
       } else {
         recordSessionCreated(cfg, {
           sessionKey: result.key,

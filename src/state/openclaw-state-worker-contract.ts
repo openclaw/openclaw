@@ -54,6 +54,7 @@ import type * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import type { DeviceIdentity } from "../infra/device-identity-store.js";
 import type { DevicePairingWorkerOperations } from "../infra/device-pairing-worker-contract.js";
 import type { ExecAuthorizationWorkerOperations } from "../infra/exec-approvals-contracts.js";
+import type { FollowupQueueWorkerOperations } from "../infra/followup-queue-sqlite.contract.js";
 import type { CurrentConversationBindingWorkerOperations } from "../infra/outbound/current-conversation-bindings.worker-contract.js";
 import type { PreparedPromotionClaim } from "../infra/promotions-feed.kernel.js";
 import type { ApnsRegistrationWorkerOperations } from "../infra/push-apns-store.worker-contract.js";
@@ -123,6 +124,7 @@ export type OpenClawStateWorkerOperations = UpdateRunReconciliationOperations &
   CaptureWorkerOperations &
   TuiLastSessionWorkerOperations &
   AcpSessionWriteOperations &
+  FollowupQueueWorkerOperations &
   WorktreeRetirementOperations &
   WorktreeRegistryReadOperations &
   SessionStateWorkerOperations &

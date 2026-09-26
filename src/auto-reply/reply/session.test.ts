@@ -971,7 +971,7 @@ describe("initSessionState thread forking", () => {
     sessionForkMocks.forkSessionFromParent.mockResolvedValueOnce(undefined);
     const promptState = getEmbeddedSessionPromptState(threadSessionKey);
     promptState.sentUserTurnIds.add("retained-turn");
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       threadSessionKey,
       createQueueTestRun({ prompt: "retained followup" }),
       { mode: "followup" },
@@ -1015,7 +1015,7 @@ describe("initSessionState thread forking", () => {
       expect(cancel).not.toHaveBeenCalled();
     } finally {
       clearEmbeddedSessionPromptStates([threadSessionKey]);
-      clearSessionQueues([threadSessionKey]);
+      await clearSessionQueues([threadSessionKey]);
       activeReply.complete();
     }
   });

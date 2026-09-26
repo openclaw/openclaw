@@ -183,7 +183,7 @@ describe("abort detection", () => {
     });
   }
 
-  function enqueueQueuedFollowupRun(params: {
+  async function enqueueQueuedFollowupRun(params: {
     root: string;
     cfg: OpenClawConfig;
     sessionId: string;
@@ -209,7 +209,7 @@ describe("abort detection", () => {
         blockReplyBreak: "text_end",
       },
     };
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       params.sessionKey,
       followupRun,
       { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
@@ -241,7 +241,7 @@ describe("abort detection", () => {
   afterEach(() => {
     for (const key of trackedAbortMemoryKeys) {
       setAbortMemory(key, false);
-      clearFollowupQueue(key);
+      await clearFollowupQueue(key);
     }
     trackedAbortMemoryKeys.clear();
     vi.restoreAllMocks();
@@ -443,7 +443,7 @@ describe("abort detection", () => {
       sessionIdsByKey: { [sessionKey]: sessionId },
     });
     cfg.commands = { ownerAllowFrom: ["telegram:123"] };
-    enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
+    await enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
     const pending = runStopCommand({
       cfg,
       sessionKey,
@@ -469,7 +469,7 @@ describe("abort detection", () => {
       ownerAllowFrom: ["telegram:123"],
     };
     runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(activeSessionId);
-    enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
+    await enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
     expect(getFollowupQueueDepth(sessionKey)).toBe(1);
 
     const result = await runStopCommand({
@@ -495,7 +495,7 @@ describe("abort detection", () => {
     const { root, cfg } = await createAbortConfig({
       sessionIdsByKey: { [storeKey]: sessionId },
     });
-    enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey: storeKey });
+    await enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey: storeKey });
 
     const result = await runStopCommand({
       cfg,
@@ -521,7 +521,7 @@ describe("abort detection", () => {
     vi.mocked(markSessionAbortTarget).mockRejectedValueOnce(
       new Error("simulated persistence failure"),
     );
-    enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
+    await enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
 
     const result = await runStopCommand({
       cfg,
@@ -560,7 +560,7 @@ describe("abort detection", () => {
       sessionId,
       sessionKey: canonicalKey,
     });
-    enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey: canonicalKey });
+    await enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey: canonicalKey });
 
     const result = await runStopCommand({
       cfg,
@@ -632,8 +632,8 @@ describe("abort detection", () => {
         sessionKey,
       });
     });
-    enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
-    await addSubagentFixture({
+    await enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
+    addSubagentFixture({
       runId: "slow-child-run",
       childSessionKey: childKey,
       requesterSessionKey: sessionKey,
@@ -701,7 +701,7 @@ describe("abort detection", () => {
     const { root, cfg } = await createAbortConfig({
       sessionIdsByKey: { [sessionKey]: sessionId },
     });
-    enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
+    await enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
     acpManagerMocks.resolveSession.mockReturnValue({
       kind: "ready",
       sessionKey,
@@ -734,7 +734,7 @@ describe("abort detection", () => {
       resetTriggered: false,
     });
     native.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
-    enqueueQueuedFollowupRun({ root, cfg, sessionId: "native-session", sessionKey });
+    await enqueueQueuedFollowupRun({ root, cfg, sessionId: "native-session", sessionKey });
     bindAcpSessionForTest(acpKey);
     acpManagerMocks.resolveSession.mockReturnValue({ kind: "ready", sessionKey: acpKey, meta: {} });
     const entered = createDeferred();
@@ -823,13 +823,13 @@ describe("abort detection", () => {
       sessionId: "source-active-session",
       resetTriggered: false,
     });
-    enqueueQueuedFollowupRun({
+    await enqueueQueuedFollowupRun({
       root,
       cfg,
       sessionId: "source-active-session",
       sessionKey: sourceSessionKey,
     });
-    enqueueQueuedFollowupRun({
+    await enqueueQueuedFollowupRun({
       root,
       cfg,
       sessionId: "acp-store-session",
@@ -923,13 +923,13 @@ describe("abort detection", () => {
         [acpSessionKey]: "acp-store-session",
       },
     });
-    enqueueQueuedFollowupRun({
+    await enqueueQueuedFollowupRun({
       root,
       cfg,
       sessionId: "source-store-session",
       sessionKey: sourceSessionKey,
     });
-    enqueueQueuedFollowupRun({
+    await enqueueQueuedFollowupRun({
       root,
       cfg,
       sessionId: "acp-store-session",
@@ -1053,13 +1053,13 @@ describe("abort detection", () => {
       sessionId: "acp-active-session",
       resetTriggered: false,
     });
-    enqueueQueuedFollowupRun({
+    await enqueueQueuedFollowupRun({
       root,
       cfg,
       sessionId: "source-active-session",
       sessionKey: sourceSessionKey,
     });
-    enqueueQueuedFollowupRun({
+    await enqueueQueuedFollowupRun({
       root,
       cfg,
       sessionId: "acp-active-session",

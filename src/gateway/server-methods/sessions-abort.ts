@@ -521,7 +521,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     };
     const onAuthorizedAfterQueuedAbort =
       !requestedRunId && (clearQueued || persistedSessionId)
-        ? () => {
+        ? async () => {
             assertAbortCurrent();
             let queueCleared = false;
             if (clearQueued && canonicalKey !== "global") {
@@ -530,7 +530,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
               if (clearCapturedFollowups) {
                 queueCleared = clearCapturedFollowups() > 0;
               } else {
-                const cleared = clearSessionQueues(queueKeys);
+                const cleared = await clearSessionQueues(queueKeys);
                 queueCleared = cleared.followupCleared > 0 || cleared.laneCleared > 0;
               }
             }

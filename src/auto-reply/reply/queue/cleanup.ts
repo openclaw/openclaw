@@ -133,7 +133,9 @@ export function prepareSessionFollowupCleanup(params: {
   };
 }
 
-export function clearSessionQueues(keys: Array<string | undefined>): ClearSessionQueueResult {
+export async function clearSessionQueues(
+  keys: Array<string | undefined>,
+): Promise<ClearSessionQueueResult> {
   const seen = new Set<string>();
   let followupCleared = 0;
   let laneCleared = 0;
@@ -144,7 +146,7 @@ export function clearSessionQueues(keys: Array<string | undefined>): ClearSessio
       continue;
     }
     seen.add(cleaned);
-    followupCleared += clearFollowupQueue(cleaned);
+    followupCleared += await clearFollowupQueue(cleaned);
     clearFollowupDrainCallback(cleaned);
     laneCleared += clearCommandLane(resolveEmbeddedSessionLane(cleaned));
   }

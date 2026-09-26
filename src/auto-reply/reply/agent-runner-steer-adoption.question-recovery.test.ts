@@ -134,7 +134,7 @@ describe("question response custody through reply adoption", () => {
         releaseFirst.resolve();
         await Promise.allSettled(followup.mock.results.map((result) => result.value));
         clearAgentRunContext("accepted-backing-work");
-        clearSessionQueues([key]);
+        await clearSessionQueues([key]);
       }
     });
   });
@@ -221,7 +221,7 @@ describe("question response custody through reply adoption", () => {
         expect(firstAbandoned).not.toHaveBeenCalled();
         expect(queueMessage.mock.calls.map(([message]) => message)).toEqual(["first input"]);
         expect(
-          enqueueFollowupRun(
+          await enqueueFollowupRun(
             key,
             createQueueTestRun({ prompt: "waiting input", messageId: second.messageId }),
             { mode: "followup", debounceMs: 0 },
@@ -233,7 +233,7 @@ describe("question response custody through reply adoption", () => {
       } finally {
         firstOutcome.resolve();
         await Promise.allSettled([firstSteer, waitingSteer]);
-        clearSessionQueues([key]);
+        await clearSessionQueues([key]);
       }
     });
   });
@@ -295,8 +295,8 @@ describe("question response custody through reply adoption", () => {
           toolAuthorityFingerprint: fingerprint,
         });
         void adoption.catch(() => undefined);
-        const tryDuplicate = () =>
-          enqueueFollowupRun(
+        const tryDuplicate = async () =>
+          await enqueueFollowupRun(
             key,
             createQueueTestRun({ prompt: text, messageId: run.messageId }),
             { mode: "followup", debounceMs: 0 },
@@ -316,7 +316,7 @@ describe("question response custody through reply adoption", () => {
           expect(abandoned).not.toHaveBeenCalled();
           expect(settled).not.toHaveBeenCalled();
           expect(adopted).not.toHaveBeenCalled();
-          expect(tryDuplicate()).toBe(false);
+          expect(await tryDuplicate()).toBe(false);
           expect(followup).not.toHaveBeenCalled();
           const siblingSource = new AbortController();
           const siblingSettled = vi.fn();
@@ -325,7 +325,7 @@ describe("question response custody through reply adoption", () => {
           sibling.abortSignal = siblingSource.signal;
           sibling.turnAdoptionLifecycle = { onAdopted: async () => {}, onSettled: siblingSettled };
           expect(
-            enqueueFollowupRun(
+            await enqueueFollowupRun(
               key,
               sibling,
               { mode: "followup", debounceMs: 0 },
@@ -340,7 +340,7 @@ describe("question response custody through reply adoption", () => {
           expect(siblingCleanup).toHaveBeenCalledExactlyOnceWith(sibling);
           expect(abandoned).not.toHaveBeenCalled();
           expect(settled).not.toHaveBeenCalled();
-          expect(tryDuplicate()).toBe(false);
+          expect(await tryDuplicate()).toBe(false);
           delivery.resolve(
             confirmation === "confirmed"
               ? undefined
@@ -351,13 +351,13 @@ describe("question response custody through reply adoption", () => {
           expect(adopted).toHaveBeenCalledOnce();
           expect(settled).toHaveBeenCalledOnce();
           expect(abandoned).not.toHaveBeenCalled();
-          expect(tryDuplicate()).toBe(false);
+          expect(await tryDuplicate()).toBe(false);
           expect(followup).not.toHaveBeenCalled();
           expect(cancel).toHaveBeenCalledTimes(confirmation === "unconfirmed" ? 1 : 0);
         } finally {
           delivery.resolve();
           await adoption.catch(() => undefined);
-          clearSessionQueues([key]);
+          await clearSessionQueues([key]);
         }
       });
     },
@@ -773,7 +773,7 @@ describe("question response custody through reply adoption", () => {
             if (entrypoint === "steer") {
               expect
                 .soft(
-                  enqueueFollowupRun(
+                  await enqueueFollowupRun(
                     key,
                     { ...run },
                     { mode: "followup", debounceMs: 0 },
@@ -790,7 +790,7 @@ describe("question response custody through reply adoption", () => {
             await answerOutcome;
             await adoption.catch(() => undefined);
             claim.dispose();
-            clearSessionQueues([key]);
+            await clearSessionQueues([key]);
             if (hidden) {
               clearAgentRunContext("accepted-backing-work");
             }

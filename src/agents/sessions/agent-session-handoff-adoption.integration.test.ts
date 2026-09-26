@@ -330,7 +330,7 @@ describe("AgentSession handoff adoption integration", () => {
       releaseOwner();
       activeOperation.complete();
       clearActiveEmbeddedRun(sessionId, queueHandle, queueKey);
-      clearSessionQueues([queueKey]);
+      await clearSessionQueues([queueKey]);
       embeddedRunsTesting.resetActiveEmbeddedRuns();
       replyRunTesting.resetReplyRunRegistry();
       resetRecentQueuedMessageIdDedupe();

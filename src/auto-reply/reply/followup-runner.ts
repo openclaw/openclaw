@@ -26,6 +26,7 @@ import { executeFollowupTurn } from "./followup-turn-execution.js";
 import {
   completeFollowupRunLifecycle,
   FollowupRunDeferredError,
+  FollowupTerminalDeliveryError,
   type FollowupRun,
 } from "./queue.js";
 import { isFollowupRunAborted, type QueuedFollowupReplyBatch } from "./queue/types.js";
@@ -33,6 +34,7 @@ import type { ReplyOperation } from "./reply-run-registry.js";
 
 type FollowupDrainDisposition =
   | { kind: "consumed" }
+  | { kind: "undelivered"; error: unknown }
   | { kind: "deferred"; reason: string }
   | { kind: "retry"; error: unknown };
 
@@ -260,13 +262,16 @@ export function createFollowupRunner(
           `followup queue: terminal handling failed after execution; refusing replay: ${formatErrorMessage(error)}`,
         );
         operation?.fail("run_failed", error);
+        disposition = { kind: "undelivered", error };
       } else {
         disposition = { kind: "retry", error };
       }
     } finally {
       const sourceDisposition = admittedTurn?.queued.queuedFollowupReplyDisposition;
+      // An undelivered execution still closes its source: the queued caller must
+      // observe the failed completion even though the runner refuses replay.
       if (
-        disposition.kind === "consumed" &&
+        (disposition.kind === "consumed" || disposition.kind === "undelivered") &&
         admittedTurn &&
         sourceDisposition?.kind === "deliver"
       ) {
@@ -301,7 +306,7 @@ export function createFollowupRunner(
           );
         }
       }
-      if (disposition.kind === "consumed") {
+      if (disposition.kind === "consumed" || disposition.kind === "undelivered") {
         completeFollowupRunLifecycle(queued);
       }
       if (disposition.kind !== "deferred" && admittedRunId) {
@@ -314,6 +319,12 @@ export function createFollowupRunner(
     if (disposition.kind === "deferred") {
       throw new FollowupRunDeferredError(
         `Follow-up reply lane is still active (${disposition.reason})`,
+      );
+    }
+    if (disposition.kind === "undelivered") {
+      throw new FollowupTerminalDeliveryError(
+        "follow-up terminal delivery failed after execution",
+        { cause: disposition.error },
       );
     }
     if (disposition.kind === "retry") {

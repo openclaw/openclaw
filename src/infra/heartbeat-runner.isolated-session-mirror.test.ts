@@ -252,29 +252,85 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
     });
   });
 
-  it.each(["inexact route", "failed delivery", "replaced lifecycle"] as const)(
-    "does not project an alert after %s",
-    async (scenario) => {
-      await withMirror(
-        async ({ run, awareness, replaceTarget }) => {
-          if (scenario === "failed delivery") {
-            deliverOutboundPayloadsInternal.mockRejectedValueOnce(new Error("channel unavailable"));
-          } else if (scenario === "replaced lifecycle") {
-            beforeMockDeliveryConfirmation.mockImplementationOnce(() =>
-              replaceTarget("target-lifecycle-2"),
-            );
-          }
-          const result = await run();
-          expect(result.status).toBe(scenario === "failed delivery" ? "failed" : "ran");
-          if (scenario === "inexact route") {
-            expect(latestDeliveryRequest()).toMatchObject({
-              channel: "whatsapp",
-              to: "+15551234567",
-            });
-          }
-          await expect(awareness()).resolves.toBeUndefined();
-        },
-        scenario === "inexact route" ? "inexact" : true,
+  it("does not project an alert from an inexact fallback route", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const { cfg, nowMs, target, targetSessionKey } = await seedExistingHeartbeatTarget({
+        tmpDir,
+        storePath,
+        exactRoute: false,
+      });
+      replySpy.mockResolvedValueOnce({ text: "Status needs attention." });
+
+      const result = await runHeartbeat(cfg, replySpy, nowMs);
+
+      expect(result.status).toBe("ran");
+      expect(latestDeliveryRequest()).toMatchObject({ channel: "whatsapp", to: target });
+      await expect(drainTargetAwareness(cfg, targetSessionKey)).resolves.toBeUndefined();
+    });
+  });
+
+  it("does not project a direct alert when platform delivery fails", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const { cfg, nowMs, targetSessionKey } = await seedExistingHeartbeatTarget({
+        tmpDir,
+        storePath,
+      });
+      replySpy.mockResolvedValueOnce({ text: "Status needs attention." });
+      deliverOutboundPayloadsInternal.mockRejectedValueOnce(new Error("channel unavailable"));
+
+      const result = await runHeartbeat(cfg, replySpy, nowMs);
+
+      expect(result.status).toBe("failed");
+      await expect(drainTargetAwareness(cfg, targetSessionKey)).resolves.toBeUndefined();
+    });
+  });
+
+  it("lets a reset clear awareness after delivery is identified", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const { cfg, nowMs, targetSessionKey } = await seedExistingHeartbeatTarget({
+        tmpDir,
+        storePath,
+      });
+      const completionEntered = createDeferred();
+      const releaseCompletion = createDeferred();
+      beforeMockDeliveryCompletion.mockImplementationOnce(async () => {
+        completionEntered.resolve();
+        await releaseCompletion.promise;
+      });
+      replySpy.mockResolvedValueOnce({ text: "Status needs attention." });
+
+      const heartbeat = runHeartbeat(cfg, replySpy, nowMs);
+      let result!: Awaited<ReturnType<typeof runHeartbeatOnce>>;
+      let systemEventsCleared: number | undefined;
+      try {
+        await withTestTimeout(
+          completionEntered.promise,
+          5_000,
+          "heartbeat delivery confirmation was not observed",
+        );
+        systemEventsCleared = (
+          await clearSessionResetRuntimeState([targetSessionKey], {
+            agentId: "main",
+          })
+        ).systemEventsCleared;
+      } finally {
+        releaseCompletion.resolve();
+        result = await withTestTimeout(heartbeat, 5_000, "heartbeat did not finish delivery");
+      }
+
+      expect(result.status).toBe("ran");
+      expect(systemEventsCleared).toBe(1);
+      await expect(drainTargetAwareness(cfg, targetSessionKey)).resolves.toBeUndefined();
+    });
+  });
+
+  it("does not attach an alert after the target lifecycle resets during delivery", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const { cfg, nowMs, targetSessionKey, replaceTargetLifecycle } =
+        await seedExistingHeartbeatTarget({ tmpDir, storePath });
+      replySpy.mockResolvedValueOnce({ text: "Status needs attention." });
+      beforeMockDeliveryConfirmation.mockImplementationOnce(() =>
+        replaceTargetLifecycle("target-lifecycle-2"),
       );
     },
   );

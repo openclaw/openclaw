@@ -21,6 +21,8 @@ export type QueuedChatTurnEntry = {
   /** False once collect-mode transfers cancellation to the aggregate owner. */
   abortable?: boolean;
   abortListener?: () => void;
+  /** Persists the queue tombstone before an operator cancellation is acknowledged. */
+  onCancellationRequested?: () => void | Promise<void>;
   agentId?: string;
   ownerConnId?: string;
   ownerDeviceId?: string;
@@ -59,7 +61,14 @@ type RegisterQueuedChatTurnParams = {
   holdPendingInputWithdrawal?: QueuedChatTurnEntry["holdPendingInputWithdrawal"];
   /** Record cancellation while the exact queued entry is still current. */
   onAborted?: (reason: ChatAbortDiagnosticReason) => void;
+  onCancellationRequested?: () => void | Promise<void>;
 };
+
+function resolveExactRunId(runId: string): string | undefined {
+  // chat.send idempotency keys are exact protocol identities. Trimming here
+  // would diverge from the active-run and dedupe registries.
+  return runId.length > 0 ? runId : undefined;
+}
 
 function createQueuedChatAbortSignalReason(stopReason: string | undefined): Error | undefined {
   // Queued turns can outlive active registrations; their signal owns restart disposition.
@@ -92,8 +101,7 @@ function deleteQueuedChatTurnEntry(
 }
 
 export function registerQueuedChatTurn(params: RegisterQueuedChatTurnParams): boolean {
-  // Run IDs are exact idempotency keys shared with the active-run registry; never trim them.
-  const runId = params.runId;
+  const runId = resolveExactRunId(params.runId);
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!runId || !sessionKey) {
     return false;
@@ -115,6 +123,7 @@ export function registerQueuedChatTurn(params: RegisterQueuedChatTurnParams): bo
     agentId: normalizeOptionalString(params.agentId)?.toLowerCase(),
     ownerConnId: normalizeOptionalString(params.ownerConnId),
     ownerDeviceId: normalizeOptionalString(params.ownerDeviceId),
+    onCancellationRequested: params.onCancellationRequested,
     ...(params.holdPendingInputWithdrawal
       ? { holdPendingInputWithdrawal: params.holdPendingInputWithdrawal }
       : {}),
@@ -139,12 +148,13 @@ export function completeQueuedChatTurn(
   runId: string,
   controller: AbortController,
 ): boolean {
-  if (!runId) {
+  const key = resolveExactRunId(runId);
+  if (!key) {
     return false;
   }
-  const entry = chatQueuedTurns.get(runId);
+  const entry = chatQueuedTurns.get(key);
   return entry?.controller === controller
-    ? deleteQueuedChatTurnEntry(chatQueuedTurns, runId, entry)
+    ? deleteQueuedChatTurnEntry(chatQueuedTurns, key, entry)
     : false;
 }
 
@@ -157,7 +167,8 @@ export function retireQueuedChatTurnCancellation(
   runId: string,
   controller: AbortController,
 ): boolean {
-  const entry = runId ? chatQueuedTurns.get(runId) : undefined;
+  const key = resolveExactRunId(runId);
+  const entry = key ? chatQueuedTurns.get(key) : undefined;
   if (!entry || entry.controller !== controller) {
     return false;
   }
@@ -170,7 +181,7 @@ export function retireQueuedChatTurnCancellation(
  * Abort a single queued turn by runId. Does not authorize; caller must check.
  * Returns false when missing or already aborted/removed.
  */
-export function abortQueuedChatTurnById(
+export async function abortQueuedChatTurnById(
   chatQueuedTurns: QueuedChatTurnMap,
   params: {
     runId: string;
@@ -180,8 +191,8 @@ export function abortQueuedChatTurnById(
     /** When true, allow abort even if sessionKey does not match (owner already authorized). */
     allowSessionMismatch?: boolean;
   },
-): { aborted: boolean } {
-  const runId = params.runId;
+): Promise<{ aborted: boolean }> {
+  const runId = resolveExactRunId(params.runId);
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!runId || !sessionKey) {
     return { aborted: false };
@@ -192,6 +203,11 @@ export function abortQueuedChatTurnById(
   }
   if (!params.allowSessionMismatch && entry.sessionKey !== sessionKey) {
     return { aborted: false };
+  }
+  if (params.stopReason !== "restart") {
+    // Await: the durable tombstone must land before the abort proceeds, and a
+    // failed write must still reject the cancellation.
+    await entry.onCancellationRequested?.();
   }
   if (!entry.controller.signal.aborted) {
     entry.abortDiagnosticReason = resolveChatAbortDiagnosticReason(entry.controller.signal, {
@@ -270,15 +286,18 @@ export function listQueuedChatTurnsForSession(params: {
  * Abort all provided queued turns (already authorized by caller).
  * Order: abort signals first, then remove from map, so drain cannot promote mid-loop.
  */
-export function abortQueuedChatTurns(
+export async function abortQueuedChatTurns(
   chatQueuedTurns: QueuedChatTurnMap,
   matches: readonly QueuedChatTurnMatch[],
   stopReason?: string,
-): string[] {
+): Promise<string[]> {
   const runIds: string[] = [];
   for (const { runId, entry } of matches) {
     if (chatQueuedTurns.get(runId) !== entry) {
       continue;
+    }
+    if (stopReason !== "restart") {
+      await entry.onCancellationRequested?.();
     }
     if (!entry.controller.signal.aborted) {
       entry.abortDiagnosticReason = resolveChatAbortDiagnosticReason(entry.controller.signal, {

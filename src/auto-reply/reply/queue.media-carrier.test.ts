@@ -47,13 +47,54 @@ const carrierRun = {
     targetSessionId: "session-1",
     provider: "openai",
     model: "gpt-route",
-  },
-  scheduledToolPolicy: { version: 1, mode: "trusted" },
-  runtimePluginToolGrant: { pluginId: "workboard", toolNames: ["workboard_complete"] },
-} satisfies Partial<FollowupRun["run"]>;
-afterEach(() => {
+    memberRoleIds: ["operator", "member"],
+    trustedInternalHandoff: {
+      kind: "subagent-completion",
+      sourceSessionKey: "agent:child",
+      targetSessionKey: "agent:parent",
+      targetSessionId: "session-1",
+      provider: "openai",
+      model: "gpt-route",
+    },
+    scheduledToolPolicy: { version: 1, mode: "trusted" },
+    runtimePluginToolGrant: {
+      pluginId: "workboard",
+      toolNames: ["workboard_complete"],
+    },
+  };
+}
+
+function expectCombinedCarrierFacts(run: FollowupRun | undefined): void {
+  expect(run).toBeDefined();
+  expect(run?.toolsAllow).toEqual(["exec"]);
+  expect(run?.toolsAllow ? readToolAllowlistIntersection(run.toolsAllow) : undefined).toEqual([
+    ["exec"],
+    ["exec", "message"],
+  ]);
+  expect(run?.disableTools).toBe(true);
+  expect(run?.run).toMatchObject({
+    provider: "openai",
+    model: "gpt-route",
+    memberRoleIds: ["operator", "member"],
+    trustedInternalHandoff: {
+      kind: "subagent-completion",
+      sourceSessionKey: "agent:child",
+      targetSessionKey: "agent:parent",
+      targetSessionId: "session-1",
+      provider: "openai",
+      model: "gpt-route",
+    },
+    scheduledToolPolicy: { version: 1, mode: "trusted" },
+    runtimePluginToolGrant: {
+      pluginId: "workboard",
+      toolNames: ["workboard_complete"],
+    },
+  });
+}
+
+afterEach(async () => {
   for (const key of queueKeys) {
-    clearFollowupQueue(key);
+    await clearFollowupQueue(key);
   }
   queueKeys.clear();
   for (const cleanup of evidenceCleanups) {
@@ -147,58 +188,80 @@ describe("followup prompt metadata carrier", () => {
     }
   });
 
-  it.each(["same", "mixed"] as const)(
-    "keeps collected facts stable across deferred %s-participant admission",
-    async (kind) => {
-      const audit = createChannelAdmissionAudit({ enabled: true });
-      evidenceCleanups.add(() => audit.close());
-      const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 1);
-      queueKeys.add(q.key);
-      for (const [prompt, path, contentType, skillName, sharedSkillName] of [
-        [
-          "[media attached: /tmp/a.png (image/png)]\nfirst",
-          "/tmp/a.png",
-          "image/png",
-          "a",
-          "shared-first",
-        ],
-        [
-          "[media attached: /tmp/b.pdf (application/pdf)]\nsecond",
-          "/tmp/b.pdf",
-          "application/pdf",
-          "b",
-          "shared-last",
-        ],
-      ] as const) {
-        const run = createQueueTestRun({ prompt });
-        run.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["exec", "message"]]);
-        run.disableTools = true;
-        run.run = { ...run.run, ...structuredClone(carrierRun) };
-        if (kind === "mixed") {
-          Object.assign(run, { originatingChannel: "test", originatingTo: "room:shared" });
-          Object.assign(run.run, {
-            senderId: "ambiguous-transport-sender",
-            senderName: "Ambiguous Sender",
-            senderUsername: "ambiguous",
-            senderE164: "+15550000000",
-            senderIsOwner: true,
-            traceAuthorized: true,
-            ownerNumbers: ["+15550000000"],
-          });
-        }
-        run.images = [{ type: "image", data: path, mimeType: contentType }];
-        run.imageOrder = ["inline"];
-        run.media = [{ path, contentType }];
-        run.explicitSkillSelections = [
-          { name: skillName, path: `/tmp/skills/${skillName}/SKILL.md` },
-          { name: sharedSkillName, path: "/tmp/skills/shared/SKILL.md" },
-        ];
-        run.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
-          audit,
-          channelId: "test",
-          participantId: kind === "mixed" ? skillName : "person-1",
-        });
-        q.add(run);
+  it("keeps participant evidence out of sender-scoped collect routing", () => {
+    const audit = createChannelAdmissionAudit({ enabled: true });
+    evidenceCleanups.add(() => audit.close());
+    const runs = ["person-1", "person-2"].map((senderId) => {
+      const item = createQueueTestRun({
+        prompt: `from ${senderId}`,
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+      });
+      item.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+        audit,
+        channelId: "slack",
+        accountId: "default",
+        participantId: senderId,
+      });
+      item.run = {
+        ...item.run,
+        senderId,
+        senderE164: `+1555000${senderId.at(-1)}`,
+        senderIsOwner: false,
+      };
+      return item;
+    });
+
+    expect(resolveFollowupDeliveryContextKey(runs[0]!)).not.toBe(
+      resolveFollowupDeliveryContextKey(runs[1]!),
+    );
+  });
+  it("keeps collected prompt bytes and ordered facts stable across deferred admission", async () => {
+    const audit = createChannelAdmissionAudit({ enabled: true });
+    evidenceCleanups.add(() => audit.close());
+    const key = `prompt-media-collect-${Date.now()}`;
+    queueKeys.add(key);
+    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
+    const done = createDeferred();
+    const calls: FollowupRun[] = [];
+
+    for (const [prompt, path, contentType, skillName, sharedSkillName] of [
+      [
+        "[media attached: /tmp/a.png (image/png)]\nfirst",
+        "/tmp/a.png",
+        "image/png",
+        "a",
+        "shared-first",
+      ],
+      [
+        "[media attached: /tmp/b.pdf (application/pdf)]\nsecond",
+        "/tmp/b.pdf",
+        "application/pdf",
+        "b",
+        "shared-last",
+      ],
+    ] as const) {
+      const run = createQueueTestRun({ prompt });
+      addCombinedCarrierFacts(run);
+      run.images = [{ type: "image", data: path, mimeType: contentType }];
+      run.imageOrder = ["inline"];
+      run.media = [{ path, contentType }];
+      run.explicitSkillSelections = [
+        { name: skillName, path: `/tmp/skills/${skillName}/SKILL.md` },
+        { name: sharedSkillName, path: "/tmp/skills/shared/SKILL.md" },
+      ];
+      run.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+        audit,
+        channelId: "test",
+        participantId: "person-1",
+      });
+      await enqueueFollowupRun(key, run, settings);
+    }
+
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      if (calls.length === 1) {
+        throw new FollowupRunDeferredError();
       }
       q.start(async (run) => {
         q.calls.push(run);
@@ -281,7 +344,7 @@ describe("followup prompt metadata carrier", () => {
       for (const [index, settings] of [first, second, second, first].entries()) {
         const run = createQueueTestRun({ prompt: `task ${index}`, messageId: `choice-${index}` });
         run.run = { ...run.run, traceAuthorized: true, ...settings };
-        enqueueFollowupRun(key, run, { mode: "collect", debounceMs: 0 });
+        await enqueueFollowupRun(key, run, { mode: "collect", debounceMs: 0 });
       }
       scheduleFollowupDrain(key, async (run) => {
         calls.push(run);
@@ -300,18 +363,71 @@ describe("followup prompt metadata carrier", () => {
       expect(calls[2]?.prompt).toContain("task 3");
     },
   );
-});
-describe("queued Gateway attach evidence", () => {
-  installQueueRuntimeErrorSilencer();
-  const admissions: ExecutionIdentityAdmissionWork[] = [];
-  beforeEach(() => {
-    admissions.length = 0;
-    evidenceCleanups.add(
-      configureExecutionIdentityAdmissionSink((work) => {
-        admissions.push(work);
-        return true;
-      }),
-    );
+
+  it("removes sender authority when collected evidence identifies mixed participants", async () => {
+    const audit = createChannelAdmissionAudit({ enabled: true });
+    evidenceCleanups.add(() => audit.close());
+    const key = `prompt-metadata-mixed-${Date.now()}`;
+    queueKeys.add(key);
+    const done = createDeferred();
+    const calls: FollowupRun[] = [];
+
+    for (const [participantId, skillName] of [
+      ["person-1", "a"],
+      ["person-2", "b"],
+    ] as const) {
+      const run = createQueueTestRun({
+        prompt: `from ${participantId}`,
+        originatingChannel: "test",
+        originatingTo: "room:shared",
+      });
+      addCombinedCarrierFacts(run);
+      run.explicitSkillSelections = [
+        { name: skillName, path: `/tmp/skills/${skillName}/SKILL.md` },
+      ];
+      run.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+        audit,
+        channelId: "test",
+        participantId,
+      });
+      run.run = {
+        ...run.run,
+        senderId: "ambiguous-transport-sender",
+        senderName: "Ambiguous Sender",
+        senderUsername: "ambiguous",
+        senderE164: "+15550000000",
+        senderIsOwner: true,
+        traceAuthorized: true,
+        ownerNumbers: ["+15550000000"],
+      };
+      await enqueueFollowupRun(key, run, { mode: "collect", debounceMs: 0 });
+    }
+
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      done.resolve();
+    });
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.explicitSkillSelections).toEqual([
+      { name: "a", path: "/tmp/skills/a/SKILL.md" },
+      { name: "b", path: "/tmp/skills/b/SKILL.md" },
+    ]);
+    expect(consumeChannelAdmissionEvidence(calls[0]?.channelAdmissionEvidence)).toMatchObject({
+      ingressState: "unknown",
+      invoker: { state: "unknown" },
+    });
+    expect(calls[0]?.run).toMatchObject({
+      senderId: undefined,
+      senderName: undefined,
+      senderUsername: undefined,
+      senderE164: undefined,
+      senderIsOwner: false,
+      traceAuthorized: false,
+      ownerNumbers: [],
+    });
+    expectCombinedCarrierFacts(calls[0]);
   });
   async function admit(run: FollowupRun) {
     const prepared = prepareChannelRunAdmission({

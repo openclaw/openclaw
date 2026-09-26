@@ -165,7 +165,7 @@ describe("authenticated request mutation custody", () => {
         const fingerprints = runs.map((run) => resolveFollowupRunToolAuthorityFingerprint(run));
         expect(fingerprints[0]).toBe(fingerprints[1]);
         for (const run of runs) {
-          expect(enqueueFollowupRun(key, run, createQueueSettings())).toBe(true);
+          expect(await enqueueFollowupRun(key, run, createQueueSettings())).toBe(true);
         }
         for (const retained of captures) {
           retained.release();
@@ -206,7 +206,7 @@ describe("authenticated request mutation custody", () => {
         ]);
         expect(fingerprints[2]).not.toBe(fingerprints[0]);
       } finally {
-        clearFollowupQueue(key);
+        await clearFollowupQueue(key);
         for (const retained of captures) {
           retained.release();
         }

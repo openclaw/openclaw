@@ -68,6 +68,10 @@ import * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import { executeDevicePairingMutationInWorker } from "../infra/device-pairing-dispatch.worker.js";
 import { isDevicePairingMutationCommand } from "../infra/device-pairing-worker-contract.js";
 import { commitExecAuthorizationsInWorker } from "../infra/exec-approvals-authorization.worker.js";
+import {
+  executeFollowupQueueWorkerCommand,
+  isFollowupQueueWorkerCommand,
+} from "../infra/followup-queue-sqlite.worker.js";
 import * as conversationBindings from "../infra/outbound/current-conversation-bindings.worker.js";
 import { executePromotionCommand } from "../infra/promotions-feed.worker.js";
 import { isApnsRegistrationWorkerCommand } from "../infra/push-apns-store.worker-contract.js";
@@ -198,6 +202,9 @@ export function executeSharedStateCommand(
   }
   if (isLegacyMcpOAuthWorkerCommand(command)) {
     return executeLegacyMcpOAuthWorkerCommand(open(), command);
+  }
+  if (isFollowupQueueWorkerCommand(command)) {
+    return executeFollowupQueueWorkerCommand(open(), command);
   }
   if (command.type === "execApprovals.commitAuthorizations" || isOperatorApprovalCommand(command)) {
     const databaseOptions = {

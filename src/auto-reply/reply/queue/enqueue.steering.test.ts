@@ -34,26 +34,26 @@ describe("parked steering admission", () => {
           drained.resolve();
         }
       };
-      enqueueFollowupRun(key, older, settings, "message-id", runFollowup, false);
-      const firstReservation = parkSteerCandidate(key, first, settings, runFollowup)!;
+      await enqueueFollowupRun(key, older, settings, "message-id", runFollowup, false);
+      const firstReservation = (await parkSteerCandidate(key, first, settings, runFollowup))!;
       await expect(firstReservation.admit()).resolves.toBe("steer");
-      const newerReservation = parkSteerCandidate(key, newer, settings, runFollowup)!;
+      const newerReservation = (await parkSteerCandidate(key, newer, settings, runFollowup))!;
       const newerAdmission = newerReservation.admit();
-      firstReservation.fallback();
+      await firstReservation.fallback();
       await expect(newerAdmission).resolves.toBe("steer");
       expect(delivered).toEqual([]);
       if (outcome === "accepted") {
-        newerReservation.accepted(true);
-        newerReservation.consume("consumed");
+        await newerReservation.accepted(true);
+        await newerReservation.consume("consumed");
       } else {
-        newerReservation.fallback();
+        await newerReservation.fallback();
       }
       await drained.promise;
       expect(delivered).toEqual(expected.map((run) => run.prompt));
       for (const run of [older, first, newer]) {
-        expect(enqueueFollowupRun(key, { ...run }, settings, "message-id", runFollowup)).toBe(
-          false,
-        );
+        await expect(
+          enqueueFollowupRun(key, { ...run }, settings, "message-id", runFollowup),
+        ).resolves.toBe(false);
       }
     },
   );
@@ -69,9 +69,9 @@ describe("parked steering admission", () => {
     const last = createQueueTestRun({ prompt: "last", messageId: "last" });
     const cancellation = new AbortController();
     middle.abortSignal = cancellation.signal;
-    const firstReservation = parkSteerCandidate(key, first, settings, runFollowup)!;
-    const middleReservation = parkSteerCandidate(key, middle, settings, runFollowup)!;
-    const lastReservation = parkSteerCandidate(key, last, settings, runFollowup)!;
+    const firstReservation = (await parkSteerCandidate(key, first, settings, runFollowup))!;
+    const middleReservation = (await parkSteerCandidate(key, middle, settings, runFollowup))!;
+    const lastReservation = (await parkSteerCandidate(key, last, settings, runFollowup))!;
     await expect(firstReservation.admit()).resolves.toBe("steer");
     const middleAdmission = middleReservation.admit();
     const admittedLast = vi.fn();
@@ -81,14 +81,14 @@ describe("parked steering admission", () => {
     });
     cancellation.abort();
     await expect(middleAdmission).resolves.toBe("cancelled");
-    middleReservation.consume();
+    await middleReservation.consume();
     await vi.advanceTimersByTimeAsync(0);
     expect(admittedLast).not.toHaveBeenCalled();
-    firstReservation.accepted(true);
+    await firstReservation.accepted(true);
     await expect(lastAdmission).resolves.toBe("steer");
-    firstReservation.consume("consumed");
-    lastReservation.accepted(true);
-    lastReservation.consume("consumed");
+    await firstReservation.consume("consumed");
+    await lastReservation.accepted(true);
+    await lastReservation.consume("consumed");
     expect(runFollowup).not.toHaveBeenCalled();
   });
 
@@ -130,18 +130,18 @@ describe("parked steering admission", () => {
           drained.resolve();
         }
       };
-      enqueueFollowupRun(key, active, settings, "message-id", runFollowup);
+      await enqueueFollowupRun(key, active, settings, "message-id", runFollowup);
       await activeEntered.promise;
       try {
-        const firstReservation = parkSteerCandidate(key, first, settings, runFollowup)!;
+        const firstReservation = (await parkSteerCandidate(key, first, settings, runFollowup))!;
         await expect(firstReservation.admit()).resolves.toBe("steer");
-        firstReservation.fallback();
-        const newerReservation = parkSteerCandidate(key, newer, settings, runFollowup)!;
+        await firstReservation.fallback();
+        const newerReservation = (await parkSteerCandidate(key, newer, settings, runFollowup))!;
         await expect(newerReservation.admit()).resolves.toBe("steer");
         expect(getExistingFollowupQueue(key)?.items).toEqual([active, first, newer]);
         expect(disposition).not.toHaveBeenCalled();
         firstCurrent = false;
-        newerReservation.fallback();
+        await newerReservation.fallback();
         expect(getExistingFollowupQueue(key)?.items).toEqual([
           active,
           dropPolicy === "new" ? first : newer,

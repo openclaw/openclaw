@@ -183,8 +183,8 @@ async function patchSession(
   return responses[0]!;
 }
 
-function queueRuntimeSelection(sessionKey: string) {
-  const queue = getFollowupQueue(sessionKey, { mode: "followup" });
+async function queueRuntimeSelection(sessionKey: string) {
+  const queue = await getFollowupQueue(sessionKey, { mode: "followup" });
   const queued = {
     agentId: "main",
     agentDir: "/tmp/agent",
@@ -736,7 +736,7 @@ describe("explicit session model runtimes", () => {
           contextTokens: 1000,
         },
       );
-      const queued = queueRuntimeSelection(sessionKey);
+      const queued = await queueRuntimeSelection(sessionKey);
       let response: Awaited<ReturnType<typeof patchSession>>;
       try {
         response = await patchSession({
@@ -750,7 +750,7 @@ describe("explicit session model runtimes", () => {
           requestedRouteResolution: "resolved",
         });
       } finally {
-        clearFollowupQueue(sessionKey);
+        await clearFollowupQueue(sessionKey);
       }
       expect(response[0]).toBe(true);
       const stored = loadSessionEntry({ agentId: "main", sessionKey });
@@ -944,7 +944,7 @@ describe("explicit session model runtimes", () => {
       error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
     });
     expect(loadSessionEntry({ agentId: "main", sessionKey })?.agentRuntimeOverride).toBe("codex");
-    const queued = queueRuntimeSelection(sessionKey);
+    const queued = await queueRuntimeSelection(sessionKey);
     try {
       expect(
         await createGatewaySession({
@@ -959,7 +959,7 @@ describe("explicit session model runtimes", () => {
         requestedRouteResolution: "resolved",
       });
     } finally {
-      clearFollowupQueue(sessionKey);
+      await clearFollowupQueue(sessionKey);
     }
   });
 

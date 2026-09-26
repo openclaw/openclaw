@@ -6,6 +6,7 @@ import type { TypingMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
@@ -78,7 +79,7 @@ type FollowupAdmissionResult =
   | { kind: "deferred"; reason: "active-run" }
   | {
       kind: "skipped";
-      reason: "aborted" | "lifecycle-invalidated";
+      reason: "aborted" | "lifecycle-invalidated" | "restored-authority-changed";
       operation?: ReplyOperation;
     };
 
@@ -111,6 +112,20 @@ export async function admitFollowupTurn(params: {
     params.queued.operatorAuthority?.assertCurrent();
   };
   assertOperatorCurrent();
+  // Restore admitted this turn under the authority it was queued with. Check
+  // here to avoid pointless work, and again after every await below: config
+  // resolution and reply admission both yield, and the session can tighten
+  // while they do.
+  const restoredAuthorityChanged = () => params.queued.restoredSessionAuthorityChanged?.() === true;
+  const logRestoredAuthorityFailClose = () => {
+    defaultRuntime.error?.(
+      `fail-closed restored followup before execution: session permission or tool overrides changed while the turn waited (${params.queued.run.sessionKey ?? "unknown session"})`,
+    );
+  };
+  if (restoredAuthorityChanged()) {
+    logRestoredAuthorityFailClose();
+    return { kind: "skipped", reason: "restored-authority-changed" };
+  }
   const resolvedConfig = await resolveQueuedReplyExecutionConfig(params.queued.run.config, {
     originatingChannel: params.queued.originatingChannel,
     messageProvider: params.queued.run.messageProvider,
@@ -357,6 +372,13 @@ export async function admitFollowupTurn(params: {
             if (resolveTurnSendPolicy(noticeEntry, turn.queued) === "deny") {
               return;
             }
+            if (restoredAuthorityChanged()) {
+              // This callback delivers through the production follow-up route, so
+              // it is a channel effect: a session tightened during the awaited
+              // preflight work must stop here, before the notice goes out.
+              logRestoredAuthorityFailClose();
+              return;
+            }
             await params.onCompactionNoticePayload?.(
               createCompactionNoticePayload({
                 phase,
@@ -453,6 +475,12 @@ export async function admitFollowupTurn(params: {
         turn.preflightFailurePayload = markReplyPayloadForSourceSuppressionDelivery({ text });
       }
     }
+    // The compaction notice is an outbound delivery, so it is already a channel
+    // effect: revalidate before sending it, not only before returning the turn.
+    if (restoredAuthorityChanged()) {
+      logRestoredAuthorityFailClose();
+      return { kind: "skipped", reason: "restored-authority-changed" };
+    }
     if (
       pendingTerminalCompactionNotice &&
       turn.sendPolicy === "allow" &&
@@ -466,6 +494,11 @@ export async function admitFollowupTurn(params: {
         }),
         turn,
       );
+      // That await can outlast a policy change too.
+      if (restoredAuthorityChanged()) {
+        logRestoredAuthorityFailClose();
+        return { kind: "skipped", reason: "restored-authority-changed" };
+      }
     }
     return { kind: "admitted", turn };
   } catch (error) {

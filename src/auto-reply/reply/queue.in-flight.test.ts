@@ -17,26 +17,75 @@ function queueCase(settings: Partial<QueueSettings> = {}) {
   queues.add(q.key);
   return q;
 }
-afterEach(() => {
+afterEach(async () => {
   for (const key of queues) {
-    clearFollowupQueue(key);
+    await clearFollowupQueue(key);
   }
   queues.clear();
 });
 
 describe("followup queue in-flight ownership", () => {
-  it("keeps an active single delivery out of summarized overflow", async () => {
-    const q = queueCase();
+  it.each(["old", "summarize"] as const)(
+    "keeps an active single delivery out of %s overflow victims",
+    async (dropPolicy) => {
+      const q = queueCase({ dropPolicy });
+      const entered = createDeferred();
+      const release = createDeferred();
+      const activeComplete = vi.fn();
+      const pendingComplete = vi.fn();
+      const active = {
+        ...createRun({ prompt: "active" }),
+        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: activeComplete },
+      };
+      try {
+        expect(await q.add(active)).toBe(true);
+        q.start(async (run) => {
+          q.calls.push(run);
+          await run.turnAdoptionLifecycle?.onAdopted?.();
+          if (run === active) {
+            entered.resolve();
+            await release.promise;
+          }
+          completeFollowupRunLifecycle(run);
+        });
+        await entered.promise;
+        expect(getFollowupQueueDepth(q.key)).toBe(0);
+        expect(
+          await q.add({
+            ...createRun({ prompt: "pending" }),
+            turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: pendingComplete },
+          }),
+        ).toBe(true);
+        expect(await q.enqueue({ prompt: "survivor" })).toBe(true);
+        const queue = getExistingFollowupQueue(q.key);
+        expect(queue?.inFlight.has(active)).toBe(true);
+        expect(queue?.items.map((item) => item.prompt)).toEqual(["active", "survivor"]);
+        expect(getFollowupQueueDepth(q.key)).toBe(1);
+        expect(activeComplete).not.toHaveBeenCalled();
+        expect(pendingComplete).toHaveBeenCalledTimes(dropPolicy === "old" ? 1 : 0);
+        expect(queue?.summarySources.map((item) => item.prompt)).toEqual(
+          dropPolicy === "summarize" ? ["pending"] : [],
+        );
+      } finally {
+        release.resolve();
+      }
+
+      await expect.poll(() => getExistingFollowupQueue(q.key)).toBeUndefined();
+      expect(activeComplete).toHaveBeenCalledOnce();
+      expect(pendingComplete).toHaveBeenCalledOnce();
+      expect(q.calls.at(-1)?.prompt).toBe("survivor");
+    },
+  );
+
+  it("admits one pending item under drop:new while another item is active", async () => {
+    const q = queueCase({ dropPolicy: "new" });
     const entered = createDeferred();
     const release = createDeferred();
-    const activeComplete = vi.fn();
-    const pendingComplete = vi.fn();
-    const active = {
-      ...createRun({ prompt: "active" }),
-      turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: activeComplete },
-    };
+    const rejectedEnqueued = vi.fn();
+    const rejectedComplete = vi.fn();
+    const active = createRun({ prompt: "active" });
     try {
-      expect(q.add(active)).toBe(true);
+      expect(await q.add(active)).toBe(true);
       q.start(async (run) => {
         q.calls.push(run);
         await run.turnAdoptionLifecycle?.onAdopted?.();
@@ -48,27 +97,30 @@ describe("followup queue in-flight ownership", () => {
       });
       await entered.promise;
       expect(getFollowupQueueDepth(q.key)).toBe(0);
+      expect(await q.enqueue({ prompt: "pending" })).toBe(true);
       expect(
-        q.add({
-          ...createRun({ prompt: "pending" }),
-          turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: pendingComplete },
+        await q.add({
+          ...createRun({ prompt: "rejected" }),
+          turnAdoptionLifecycle: {
+            onAdopted: async () => {},
+            onDeferred: rejectedEnqueued,
+            onSettled: rejectedComplete,
+          },
         }),
-      ).toBe(true);
-      expect(q.enqueue({ prompt: "survivor" })).toBe(true);
-      const queue = getExistingFollowupQueue(q.key);
-      expect(queue?.inFlight.has(active)).toBe(true);
-      expect(queue?.items.map((item) => item.prompt)).toEqual(["active", "survivor"]);
+      ).toBe(false);
+
       expect(getFollowupQueueDepth(q.key)).toBe(1);
-      expect(activeComplete).not.toHaveBeenCalled();
-      expect(pendingComplete).not.toHaveBeenCalled();
-      expect(queue?.summarySources.map((item) => item.prompt)).toEqual(["pending"]);
+      expect(getExistingFollowupQueue(q.key)?.items.map((item) => item.prompt)).toEqual([
+        "active",
+        "pending",
+      ]);
+      expect(rejectedEnqueued).not.toHaveBeenCalled();
+      expect(rejectedComplete).toHaveBeenCalledOnce();
     } finally {
       release.resolve();
     }
     await expect.poll(() => getExistingFollowupQueue(q.key)).toBeUndefined();
-    expect(activeComplete).toHaveBeenCalledOnce();
-    expect(pendingComplete).toHaveBeenCalledOnce();
-    expect(q.calls.at(-1)?.prompt).toBe("survivor");
+    expect(q.calls.at(-1)?.prompt).toBe("pending");
   });
 
   it("protects a collect group and counts only active identities still present", async () => {
@@ -81,7 +133,7 @@ describe("followup queue in-flight ownership", () => {
     let aggregate: FollowupRun | undefined;
     for (const [index, onSettled] of groupCompletions.entries()) {
       expect(
-        q.add({
+        await q.add({
           ...createRun({
             prompt: `group-${index + 1}`,
             originatingChannel: "slack",
@@ -107,7 +159,7 @@ describe("followup queue in-flight ownership", () => {
       expect(getFollowupQueueDepth(q.key)).toBe(0);
       const oldSettings: QueueSettings = { ...q.settings, cap: 1, dropPolicy: "old" };
       expect(
-        q.add(
+        await q.add(
           {
             ...createRun({ prompt: "pending-old" }),
             turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: pendingComplete },
@@ -115,16 +167,24 @@ describe("followup queue in-flight ownership", () => {
           oldSettings,
         ),
       ).toBe(true);
-      expect(q.add(createRun({ prompt: "survivor" }), oldSettings)).toBe(true);
+      expect(await q.add(createRun({ prompt: "survivor" }), oldSettings)).toBe(true);
+
       expect(queue?.items.map((item) => item.prompt)).toEqual(["group-1", "group-2", "survivor"]);
       expect(pendingComplete).toHaveBeenCalledOnce();
       expect(groupCompletions.map((complete) => complete.mock.calls.length)).toEqual([0, 0]);
       await aggregate?.turnAdoptionLifecycle?.onAdopted?.();
+      // Admission empties the group from the in-memory list. Durable
+      // representation moves to `inFlight`, which the persisted snapshot
+      // includes until the aggregate settles, so the identities are not lost.
       expect(queue?.items.map((item) => item.prompt)).toEqual(["survivor"]);
+      expect([...(queue?.inFlight ?? [])].map((item) => item.prompt)).toEqual([
+        "group-1",
+        "group-2",
+      ]);
       expect(queue?.inFlight.size).toBe(2);
       expect(getFollowupQueueDepth(q.key)).toBe(1);
       expect(
-        q.add(
+        await q.add(
           {
             ...createRun({ prompt: "rejected-new" }),
             turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: rejectedComplete },
@@ -146,8 +206,8 @@ describe("followup queue in-flight ownership", () => {
     const activeEntered = createDeferred();
     const releaseZombie = createDeferred();
     try {
-      q.enqueue({ prompt: "summary-active" });
-      q.enqueue({ prompt: "summary-pending" });
+      await q.enqueue({ prompt: "summary-active" });
+      await q.enqueue({ prompt: "summary-pending" });
       q.start(async (run) => {
         q.calls.push(run);
         if (q.calls.length === 1) {
@@ -156,7 +216,7 @@ describe("followup queue in-flight ownership", () => {
         }
       });
       await activeEntered.promise;
-      q.enqueue({ prompt: "item-pending" });
+      await q.enqueue({ prompt: "item-pending" });
       const retire = prepareStaleFollowupDrainRetirement(q.key);
       expect(retire).toBeTypeOf("function");
       retire?.();
@@ -181,7 +241,7 @@ describe("followup queue in-flight ownership", () => {
     const run = createRun({ prompt: "retry-same-source" });
     let attempts = 0;
     try {
-      q.add(run);
+      await q.add(run);
       q.start(async () => {
         attempts += 1;
         if (attempts === 1) {

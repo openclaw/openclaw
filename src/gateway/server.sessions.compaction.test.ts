@@ -681,7 +681,7 @@ test("sessions.compact preserves accepted queued follow-up work", async () => {
     run: {},
   } as unknown as FollowupRun;
   expect(
-    enqueueFollowupRun(
+    await enqueueFollowupRun(
       sessionKey,
       queuedRun,
       { mode: "followup", debounceMs: 60_000 },
@@ -704,7 +704,7 @@ test("sessions.compact preserves accepted queued follow-up work", async () => {
     expect(embeddedRunMock.compactEmbeddedAgentSession).not.toHaveBeenCalled();
     expectNoSessionQueueCleanup();
   } finally {
-    clearFollowupQueue(sessionKey);
+    await clearFollowupQueue(sessionKey);
     ws.close();
   }
 });
@@ -712,6 +712,14 @@ test("sessions.compact preserves accepted queued follow-up work", async () => {
 test("sessions.compact preserves accepted command-lane work", async () => {
   const { sessionKey } = await createCompactionSession("sess-compact-command-queue");
   const lane = resolveEmbeddedSessionLane(sessionKey);
+  const queuedRun = {
+    prompt: "please also update the changelog",
+    enqueuedAt: Date.now(),
+    run: {},
+  } as unknown as FollowupRun;
+  if (withFollowup) {
+    (await getFollowupQueue(sessionKey, { mode: "collect" })).inFlight.add(queuedRun);
+  }
   setCommandLaneConcurrency(lane, 0);
   let commandRan = false;
   const queuedCommand = enqueueCommandInLane(lane, async () => {
@@ -737,11 +745,47 @@ test("sessions.compact preserves accepted command-lane work", async () => {
     expect(embeddedRunMock.compactEmbeddedAgentSession).not.toHaveBeenCalled();
     expectNoSessionQueueCleanup();
   } finally {
+    await clearFollowupQueue(sessionKey);
     setCommandLaneConcurrency(lane, 1);
     await queuedCommand;
     ws.close();
   }
   expect(commandRan).toBe(true);
+});
+
+test("sessions.compact preserves summary-elided queued follow-up work", async () => {
+  const { sessionKey } = await createCompactionSession("sess-compact-elided-followup-queue");
+  const queue = await getFollowupQueue(sessionKey, { mode: "followup" });
+  const elidedRun = {
+    prompt: "please also update the changelog",
+    enqueuedAt: Date.now(),
+    run: {},
+  } as unknown as FollowupRun;
+  queue.droppedCount = 1;
+  queue.summaryElisions.push({
+    contextKey: "test",
+    count: 1,
+    sources: [elidedRun],
+    summaryLines: ["elided summary"],
+    sourceRefs: new WeakMap(),
+  });
+
+  const { ws } = await openClient();
+  try {
+    const compacted = await rpcReq(ws, "sessions.compact", { key: "main" });
+
+    expect(compacted.ok).toBe(false);
+    expect(compacted.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "Session main has queued work; retry after it finishes.",
+    });
+    expect(getExistingFollowupQueue(sessionKey)?.summaryElisions).toHaveLength(1);
+    expect(embeddedRunMock.compactEmbeddedAgentSession).not.toHaveBeenCalled();
+    expectNoSessionQueueCleanup();
+  } finally {
+    await clearFollowupQueue(sessionKey);
+    ws.close();
+  }
 });
 
 test("sessions.compact refuses real compaction while a worker inference owns the session", async () => {

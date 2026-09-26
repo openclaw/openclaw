@@ -24,7 +24,9 @@ import { sessionAbortHandlers } from "./sessions-abort.js";
 useChatAbortRegistryFixture();
 const key = "agent:main:queued-stop";
 const sessionId = "original-stop-session";
-afterEach(() => clearSessionQueues([key, sessionId]));
+afterEach(async () => {
+  await clearSessionQueues([key, sessionId]);
+});
 
 async function setup() {
   const client = roleClient("view", "queued-stop-owner");
@@ -91,12 +93,12 @@ async function setup() {
   };
 }
 
-function followup(prompt: string, targetSessionId = sessionId) {
+async function followup(prompt: string, targetSessionId = sessionId) {
   const run = createQueueTestRun({ prompt });
   Object.assign(run.run, { agentId: "main", sessionKey: key, sessionId: targetSessionId });
   const settled = vi.fn();
   run.turnAdoptionLifecycle = { admission: "cancel-only", onAdopted: () => {}, onSettled: settled };
-  enqueueFollowupRun(key, run, createQueueSettings(), "none", undefined, false);
+  await enqueueFollowupRun(key, run, createQueueSettings(), "none", undefined, false);
   return { run, settled };
 }
 
@@ -108,8 +110,8 @@ it("UI-style narrow Stop clears owned lane entries through their signals and pre
     owner: { connId: fixture.client.connId },
   });
   fixture.context.chatQueuedTurns.set("foreign", foreign);
-  const ownFollowup = followup("owned");
-  const foreignFollowup = followup("foreign", "previous-incarnation");
+  const ownFollowup = await followup("owned");
+  const foreignFollowup = await followup("foreign", "previous-incarnation");
   const queue = FOLLOWUP_QUEUES.get(key);
   const lane = resolveEmbeddedSessionLane(key);
   const entered = createDeferred();
@@ -169,9 +171,12 @@ it.each(["session", "queue", "new-source", "source"] as const)(
   "narrow clearQueued does not adopt %s changed by an earlier Stop callback",
   async (change) => {
     const fixture = await setup();
-    const original = followup("original");
+    const original = await followup("original");
     const queue = expectDefined(FOLLOWUP_QUEUES.get(key), "captured queue");
-    let successor: ReturnType<typeof followup> | undefined;
+    let successor: Awaited<ReturnType<typeof followup>> | undefined;
+    // Enqueue is durable now, so the callback's own work settles asynchronously.
+    // Track it and join before asserting, so the change is fully landed either way.
+    let callbackWork: Promise<unknown> = Promise.resolve();
     fixture.queued.controller.signal.addEventListener(
       "abort",
       () => {
@@ -179,9 +184,13 @@ it.each(["session", "queue", "new-source", "source"] as const)(
           original.run.run.sessionId = "successor-session";
         } else if (change === "queue") {
           FOLLOWUP_QUEUES.delete(key);
-          successor = followup("successor queue");
+          callbackWork = followup("successor queue").then((created) => {
+            successor = created;
+          });
         } else if (change === "new-source") {
-          successor = followup("later source");
+          callbackWork = followup("later source").then((created) => {
+            successor = created;
+          });
         } else {
           fixture.revoke();
         }
@@ -193,6 +202,7 @@ it.each(["session", "queue", "new-source", "source"] as const)(
     } else {
       await fixture.stop();
     }
+    await callbackWork;
     expect(fixture.queued.controller.signal.aborted).toBe(true);
     expect(fixture.active.controller.signal.aborted).toBe(change !== "source");
     expect(original.settled).toHaveBeenCalledTimes(change === "new-source" ? 1 : 0);
@@ -210,8 +220,8 @@ it.each(["session", "queue", "new-source", "source"] as const)(
 
 it("settles detached pending sources after revocation and preserves later active Stop effects", async () => {
   const fixture = await setup();
-  const first = followup("first");
-  const second = followup("second");
+  const first = await followup("first");
+  const second = await followup("second");
   first.settled.mockImplementation(() => {
     fixture.revoke();
     throw new Error("cleanup callback failed");

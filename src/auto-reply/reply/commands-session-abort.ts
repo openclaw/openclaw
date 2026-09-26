@@ -77,7 +77,7 @@ async function applyAbortTarget(params: {
     throw new Error("The selected session changed before it could be stopped.");
   }
   if (params.clearQueues) {
-    const cleared = clearSessionQueues([abortTarget.key, abortTarget.sessionId]);
+    const cleared = await clearSessionQueues([abortTarget.key, abortTarget.sessionId]);
     if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
       logVerbose(
         `stop: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,

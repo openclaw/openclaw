@@ -23,23 +23,26 @@ afterEach(() => {
 });
 
 describe("clearSessionResetRuntimeState", () => {
-  it("disposes prompt projections with the archived session", () => {
+  it("disposes prompt projections with the archived session", async () => {
     const state = getEmbeddedSessionPromptState("old-session");
     state.sentUserTurnIds.add("sent-user-turn");
 
-    clearSessionResetRuntimeState(["old-session"], { agentId: "main" });
+    await clearSessionResetRuntimeState(["old-session"], { agentId: "main" });
 
     expect(getEmbeddedSessionPromptState("old-session")).not.toBe(state);
   });
 
-  it("clears reset queues and drains system events for normalized keys", () => {
+  it("clears reset queues and drains system events for normalized keys", async () => {
     enqueueSystemEvent("stale alpha", withSystemEventOwner({ sessionKey: "alpha" }, "main"));
     enqueueSystemEvent("stale beta", withSystemEventOwner({ sessionKey: "beta" }, "main"));
     enqueueSystemEvent("fresh gamma", withSystemEventOwner({ sessionKey: "gamma" }, "main"));
 
-    const result = clearSessionResetRuntimeState([" alpha ", undefined, " ", "alpha", "beta"], {
-      agentId: "main",
-    });
+    const result = await clearSessionResetRuntimeState(
+      [" alpha ", undefined, " ", "alpha", "beta"],
+      {
+        agentId: "main",
+      },
+    );
 
     expect(result.keys).toEqual(["alpha", "beta"]);
     expect(result.systemEventsCleared).toBe(2);
@@ -48,12 +51,12 @@ describe("clearSessionResetRuntimeState", () => {
     expect(peekSystemEvents("agent:main:gamma")).toEqual(["fresh gamma"]);
   });
 
-  it("preserves events owned by other agents during an agent-scoped reset", () => {
+  it("preserves events owned by other agents during an agent-scoped reset", async () => {
     enqueueSystemEvent("main", withSystemEventOwner({ sessionKey: "global" }, "main"));
     enqueueSystemEvent("alpha", withSystemEventOwner({ sessionKey: "global" }, "alpha"));
     enqueueSystemEvent("beta", withSystemEventOwner({ sessionKey: "global" }, "beta"));
 
-    const result = clearSessionResetRuntimeState(["global", "agent:beta:global"], {
+    const result = await clearSessionResetRuntimeState(["global", "agent:beta:global"], {
       agentId: " Alpha ",
     });
 
@@ -63,7 +66,7 @@ describe("clearSessionResetRuntimeState", () => {
     expect(peekSystemEvents("agent:beta:global")).toEqual(["beta"]);
   });
 
-  it("releases active reply work owned by the archived reset session id", () => {
+  it("releases active reply work owned by the archived reset session id", async () => {
     const cancel = vi.fn();
     const operation = createReplyOperation({
       sessionKey: "agent:main:slack:room:1",
@@ -77,7 +80,7 @@ describe("clearSessionResetRuntimeState", () => {
     });
     operation.setPhase("running");
 
-    clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
+    await clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
       agentId: "main",
       activeReplySessionId: "old-session",
     });
@@ -92,7 +95,7 @@ describe("clearSessionResetRuntimeState", () => {
     expect(nextOperation.sessionId).toBe("new-session");
   });
 
-  it("does not clear a fresh active reply under the same key when only the archived id is reset", () => {
+  it("does not clear a fresh active reply under the same key when only the archived id is reset", async () => {
     const operation = createReplyOperation({
       sessionKey: "agent:main:slack:room:1",
       sessionId: "new-session",
@@ -100,7 +103,7 @@ describe("clearSessionResetRuntimeState", () => {
     });
     operation.setPhase("running");
 
-    clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
+    await clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
       agentId: "main",
       activeReplySessionId: "old-session",
     });
@@ -108,7 +111,7 @@ describe("clearSessionResetRuntimeState", () => {
     expect(replyRunRegistry.get("agent:main:slack:room:1")).toBe(operation);
   });
 
-  it("does not clear a replacement admitted while the archived run is cancelling", () => {
+  it("does not clear a replacement admitted while the archived run is cancelling", async () => {
     let replacement: ReturnType<typeof createReplyOperation> | undefined;
     const operation = createReplyOperation({
       sessionKey: "agent:main:slack:room:1",
@@ -130,7 +133,7 @@ describe("clearSessionResetRuntimeState", () => {
     });
     operation.setPhase("running");
 
-    clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
+    await clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
       agentId: "main",
       activeReplySessionId: "old-session",
     });
@@ -139,14 +142,14 @@ describe("clearSessionResetRuntimeState", () => {
     expect(replyRunRegistry.get("agent:main:slack:room:1")).toBe(replacement);
   });
 
-  it("leaves queued reservations for the archived id so session init can rebind them", () => {
+  it("leaves queued reservations for the archived id so session init can rebind them", async () => {
     const operation = createReplyOperation({
       sessionKey: "agent:main:slack:room:1",
       sessionId: "old-session",
       resetTriggered: false,
     });
 
-    clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
+    await clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
       agentId: "main",
       activeReplySessionId: "old-session",
     });

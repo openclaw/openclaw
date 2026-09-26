@@ -417,7 +417,7 @@ async function ensureSessionRuntimeCleanup(params: {
   const processScopeKeys = new Set(queueKeys);
   processScopeKeys.add(params.key);
   clearFinishedSessionsForScopes(processScopeKeys);
-  clearSessionResetRuntimeState([...queueKeys], {
+  await clearSessionResetRuntimeState([...queueKeys], {
     activeReplySessionId: params.sessionId,
     agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
   });

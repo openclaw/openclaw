@@ -406,7 +406,7 @@ it.each(["sessionId", "lifecycleRevision"] as const)(
       });
       replacementReply.attachBackend({ kind: "embedded", cancel, isStreaming: () => false });
       replacementReply.setPhase("running");
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         parentKey,
         createQueueTestRun({ prompt: "replacement follow-up" }),
         { mode: "followup" },
@@ -459,7 +459,7 @@ it.each(["sessionId", "lifecycleRevision"] as const)(
       expect(getFollowupQueueDepth(parentKey)).toBe(1);
     } finally {
       replacementReply?.complete();
-      clearSessionQueues([parentKey]);
+      await clearSessionQueues([parentKey]);
       unregisterInternalHook("command:reset", replaceParent);
     }
   },

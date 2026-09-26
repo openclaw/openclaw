@@ -167,7 +167,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
         if (!ownsSessionIncarnation()) {
           return await completeKill(true);
         }
-        runtime.clearSessionQueues([params.entry.childSessionKey, killIntent.sessionId]);
+        await runtime.clearSessionQueues([params.entry.childSessionKey, killIntent.sessionId]);
         if ((active || hasLiveRunContext) && !aborted) {
           return false;
         }

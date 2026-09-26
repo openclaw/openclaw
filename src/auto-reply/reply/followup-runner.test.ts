@@ -48,15 +48,30 @@ vi.mock("./followup-delivery.js", () => ({
   resolveFollowupDeliveryDecision: (...args: unknown[]) => state.resolveDecision(...args),
 }));
 
-vi.mock("./queue.js", () => ({
-  completeFollowupRunLifecycle: (...args: unknown[]) => state.completeLifecycle(...args),
-  FollowupRunDeferredError: class FollowupRunDeferredError extends Error {},
-}));
+vi.mock("./queue.js", () => {
+  class FollowupRunDeferredError extends Error {
+    constructor(message?: string) {
+      super(message);
+      this.name = "FollowupRunDeferredError";
+    }
+  }
+  class FollowupTerminalDeliveryError extends Error {
+    constructor(message?: string, options?: { cause?: unknown }) {
+      super(message, options);
+      this.name = "FollowupTerminalDeliveryError";
+    }
+  }
+  return {
+    completeFollowupRunLifecycle: (...args: unknown[]) => state.completeLifecycle(...args),
+    FollowupRunDeferredError,
+    FollowupTerminalDeliveryError,
+  };
+});
 
 vi.mock("../../runtime.js", () => ({ defaultRuntime: { error: vi.fn() } }));
 
 const { createFollowupRunner } = await import("./followup-runner.js");
-const { FollowupRunDeferredError } = await import("./queue.js");
+const { FollowupRunDeferredError, FollowupTerminalDeliveryError } = await import("./queue.js");
 
 function createQueuedRun(overrides: Partial<FollowupRun> = {}): FollowupRun {
   return {
@@ -559,9 +574,9 @@ describe("createFollowupRunner", () => {
     });
     state.deliver.mockRejectedValue(failure);
 
-    await createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(
-      turn.queued,
-    );
+    await expect(
+      createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(turn.queued),
+    ).rejects.toBeInstanceOf(FollowupTerminalDeliveryError);
 
     expect(state.execute).toHaveBeenCalledOnce();
     expect(state.account).toHaveBeenCalledOnce();
@@ -716,7 +731,7 @@ describe("createFollowupRunner", () => {
         };
       });
 
-      await createFollowupRunner({
+      const running = createFollowupRunner({
         typing: createTypingController(),
         typingMode: "never",
         defaultModel: "claude",
@@ -726,6 +741,14 @@ describe("createFollowupRunner", () => {
           },
         },
       })(turn.queued);
+      if (outcome === "delivery-failed") {
+        // Terminal delivery failure surfaces to the drain owner after settlement
+        // so it retries settlement only. Cleanup still has to close the adoption,
+        // which is what the assertions below cover.
+        await expect(running).rejects.toThrow("follow-up terminal delivery failed after execution");
+      } else {
+        await running;
+      }
 
       await expect(adopt()).resolves.toBe(false);
       expect(openAtCleanup).toBe(true);

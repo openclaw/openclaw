@@ -54,6 +54,13 @@ export const TSGO_CORE_TEST_SHARDS = [
     config: "test/tsconfig/tsconfig.core.test.config-cli.json",
   },
   { name: "messaging", group: "src", config: "test/tsconfig/tsconfig.core.test.messaging.json" },
+  {
+    // Split out of "messaging": src/auto-reply alone carries enough test roots
+    // that the combined shard crossed the rebalance threshold.
+    name: "messaging-reply",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.messaging-reply.json",
+  },
   { name: "services", group: "src", config: "test/tsconfig/tsconfig.core.test.services.json" },
   { name: "other", group: "src", config: "test/tsconfig/tsconfig.core.test.other.json" },
   {

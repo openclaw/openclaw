@@ -502,7 +502,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
   });
 
   it("emits the same sanitized diagnostic when the retry cannot be enqueued", async () => {
-    vi.mocked(enqueueFollowupRun).mockReturnValueOnce(false);
+    vi.mocked(enqueueFollowupRun).mockResolvedValueOnce(false);
 
     const { result, finalAssistantText } = await runPrivateFinalCase({});
 
@@ -518,7 +518,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       sessionId: "session",
       resetTriggered: false,
     });
-    vi.mocked(enqueueFollowupRun).mockReturnValueOnce(true);
+    vi.mocked(enqueueFollowupRun).mockResolvedValueOnce(true);
 
     vi.mocked(scheduleFollowupDrain).mockImplementation((key) => {
       expect(key).toBe(sessionKey);

@@ -700,7 +700,7 @@ describe("trigger handling", () => {
           blockReplyBreak: "text_end",
         },
       };
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         targetSessionKey,
         followupRun,
         { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },

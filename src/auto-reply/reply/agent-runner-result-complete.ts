@@ -77,7 +77,7 @@ export async function completeReplyAgentRun(input: {
       sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;
     if (refreshedSessionEntry) {
       activeSessionEntry = refreshedSessionEntry;
-      refreshQueuedFollowupSession({
+      await refreshQueuedFollowupSession({
         key: queueKey,
         previousSessionId,
         nextSessionId: refreshedSessionEntry.sessionId,
@@ -179,7 +179,7 @@ export async function completeReplyAgentRun(input: {
     if (recovery.kind === "diagnostic") {
       finalPayloads = [...finalPayloads, recovery.payload];
     } else if (recovery.kind === "retry") {
-      const retryEnqueued = enqueueFollowupRun(
+      const retryEnqueued = await enqueueFollowupRun(
         queueKey,
         recovery.run,
         resolvedQueue,

@@ -1187,7 +1187,7 @@ export async function createGatewaySession(
       isNew: createdNewEntry,
     };
     if (!createdNewEntry && (params.agentRuntime !== undefined || params.model !== undefined)) {
-      refreshSessionPatchQueuedSelection({
+      await refreshSessionPatchQueuedSelection({
         cfg: params.cfg,
         entry: created.entry,
         patch: { key: target.canonicalKey, agentRuntime: params.agentRuntime, model: params.model },

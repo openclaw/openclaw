@@ -2170,10 +2170,199 @@ const INFRA_SHARD_PREFIXES = [
 
 function resolveInfraShardName(file: string): string {
   const name = relative("src/infra", file).replaceAll("\\", "/");
-  const owner = INFRA_SHARD_PREFIXES.find(([, prefixes]) =>
-    prefixes.some((prefix) => name.startsWith(prefix)),
-  );
-  return `core-runtime-infra-${owner?.[0] ?? "misc"}`;
+  if (name.startsWith("approval") || name.startsWith("exec")) {
+    return "core-runtime-infra-approval-exec";
+  }
+  if (name.startsWith("heartbeat-runner")) {
+    return "core-runtime-infra-heartbeat-runner";
+  }
+  if (name.startsWith("heartbeat")) {
+    return "core-runtime-infra-heartbeat-core";
+  }
+  if (name.startsWith("outbound/message-action")) {
+    return "core-runtime-infra-outbound-actions";
+  }
+  if (name.startsWith("outbound/")) {
+    return "core-runtime-infra-outbound-core";
+  }
+  if (
+    name.startsWith("net/") ||
+    name.startsWith("install") ||
+    name.startsWith("npm") ||
+    name.startsWith("brew") ||
+    name.startsWith("binaries")
+  ) {
+    return "core-runtime-infra-net-install";
+  }
+  if (name.startsWith("device")) {
+    return "core-runtime-infra-device";
+  }
+  if (name.startsWith("gateway-lock") || name.startsWith("gateway-process-argv")) {
+    return "core-runtime-infra-gateway-lock-argv";
+  }
+  if (name.startsWith("gateway-processes")) {
+    return "core-runtime-infra-gateway-processes";
+  }
+  if (name.startsWith("gateway-watch")) {
+    return "core-runtime-infra-gateway-watch";
+  }
+  if (name.startsWith("node") || name.startsWith("bonjour") || name.startsWith("network")) {
+    return "core-runtime-infra-network-node";
+  }
+  if (
+    name.startsWith("archive") ||
+    name.startsWith("backup") ||
+    name.startsWith("diagnostic") ||
+    name.startsWith("diagnostics")
+  ) {
+    return "core-runtime-infra-diagnostics-state";
+  }
+  if (
+    name.startsWith("command-analysis/") ||
+    name.startsWith("command-explainer/") ||
+    name.startsWith("file-") ||
+    name.startsWith("fs-") ||
+    name.startsWith("json") ||
+    name.startsWith("path") ||
+    name.startsWith("shell") ||
+    name.startsWith("tmp-openclaw-dir")
+  ) {
+    return "core-runtime-infra-files-commands";
+  }
+  if (name.startsWith("provider-usage") || name.startsWith("push-")) {
+    return "core-runtime-infra-provider-push";
+  }
+  if (
+    name.startsWith("followup-queue") ||
+    name.startsWith("kysely") ||
+    name.startsWith("session") ||
+    name.startsWith("sqlite") ||
+    name.startsWith("stale-lock") ||
+    name.startsWith("state-migrations")
+  ) {
+    return "core-runtime-infra-storage-state";
+  }
+  if (
+    name.startsWith("channel") ||
+    name.startsWith("plugin") ||
+    name.startsWith("pairing") ||
+    name.startsWith("voicewake")
+  ) {
+    return "core-runtime-infra-channel-plugin";
+  }
+  if (
+    name.startsWith("package") ||
+    name.startsWith("ports") ||
+    name.startsWith("process") ||
+    name.startsWith("restart") ||
+    name.startsWith("runtime") ||
+    name.startsWith("run-node") ||
+    name.startsWith("system") ||
+    name.startsWith("update")
+  ) {
+    return "core-runtime-infra-system-runtime";
+  }
+  if (
+    name.startsWith("dotenv") ||
+    name.startsWith("env") ||
+    name.startsWith("gemini-auth") ||
+    name.startsWith("google-api") ||
+    name.startsWith("home-dir") ||
+    name.startsWith("host-env") ||
+    name.startsWith("openclaw-exec-env") ||
+    name.startsWith("secret") ||
+    name.startsWith("secure-random")
+  ) {
+    return "core-runtime-infra-env-auth";
+  }
+  if (
+    name.startsWith("build-stamp") ||
+    name.startsWith("changelog") ||
+    name.startsWith("clawhub") ||
+    name.startsWith("detect-package-manager") ||
+    name.startsWith("git-") ||
+    name.startsWith("openclaw-root") ||
+    name.startsWith("tsdown") ||
+    name.startsWith("vitest")
+  ) {
+    return "core-runtime-infra-repo-tooling";
+  }
+  if (
+    name.startsWith("scp") ||
+    name.startsWith("ssh") ||
+    name.startsWith("tailnet") ||
+    name.startsWith("tailscale") ||
+    name.startsWith("tcp") ||
+    name.startsWith("tls/") ||
+    name.startsWith("transport") ||
+    name.startsWith("widearea") ||
+    name.startsWith("windows") ||
+    name.startsWith("ws") ||
+    name.startsWith("wsl")
+  ) {
+    return "core-runtime-infra-network-platform";
+  }
+  if (
+    name.startsWith("abort") ||
+    name.startsWith("backoff") ||
+    name.startsWith("errors") ||
+    name.startsWith("fatal-error") ||
+    name.startsWith("fetch") ||
+    name.startsWith("fixed-window") ||
+    name.startsWith("format-time/") ||
+    name.startsWith("http-body") ||
+    name.startsWith("plain-object") ||
+    name.startsWith("prototype-keys") ||
+    name.startsWith("retry") ||
+    name.startsWith("warning-filter")
+  ) {
+    return "core-runtime-infra-core-utils";
+  }
+  if (
+    name.startsWith("browser") ||
+    name.startsWith("cli-") ||
+    name.startsWith("clipboard") ||
+    name.startsWith("control-ui") ||
+    name.startsWith("embedded") ||
+    name.startsWith("is-main")
+  ) {
+    return "core-runtime-infra-cli-ui";
+  }
+  if (
+    name.startsWith("agent-events") ||
+    name.startsWith("event-session") ||
+    name.startsWith("infra-") ||
+    name.startsWith("non-fatal") ||
+    name.startsWith("supervisor") ||
+    name.startsWith("unhandled")
+  ) {
+    return "core-runtime-infra-events-runtime";
+  }
+  if (
+    name.startsWith("boundary") ||
+    name.startsWith("hardlink") ||
+    name.startsWith("replace-file") ||
+    name.startsWith("resolve-system-bin") ||
+    name.startsWith("safe-package-install") ||
+    name.startsWith("stable-node-path") ||
+    name.startsWith("watch-node")
+  ) {
+    return "core-runtime-infra-file-safety";
+  }
+  if (name.startsWith("dedupe") || name.startsWith("disk-space")) {
+    return "core-runtime-infra-misc-dedupe-disk";
+  }
+  if (
+    name.startsWith("inline-option-token") ||
+    name.startsWith("map-size") ||
+    name.startsWith("machine-name")
+  ) {
+    return "core-runtime-infra-misc-values";
+  }
+  if (name.startsWith("os-summary")) {
+    return "core-runtime-infra-misc-os";
+  }
+  return "core-runtime-infra-misc";
 }
 
 function createInfraSplitShards(): NodeTestSplitShard[] {
@@ -2186,8 +2375,10 @@ function createInfraSplitShards(): NodeTestSplitShard[] {
     groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
   }
   groups.set("core-runtime-infra-storage-state", [
-    ...(groups.get("core-runtime-infra-storage-state") ?? []),
-    ...databaseWorkerCoreTestFiles,
+    ...new Set([
+      ...(groups.get("core-runtime-infra-storage-state") ?? []),
+      ...databaseWorkerCoreTestFiles,
+    ]),
   ]);
 
   return [

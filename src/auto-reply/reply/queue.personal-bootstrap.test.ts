@@ -15,32 +15,58 @@ describe("session personal bootstrap in collected turns", () => {
     expect(collectRuntimeMetadata([]).personalBootstrapEligible).toBeUndefined();
   });
 
-  it("preserves the session profile but removes mixed-participant sender authority", async () => {
-    const selectedProfile = "session-owner";
-    const audit = createChannelAdmissionAudit({ enabled: true });
-    const key = "personal-bootstrap-collect";
-    const { calls, done, runFollowup } = createDrainRecorder();
-    const settings = createQueueSettings();
-    try {
-      for (const [index, participantId] of ["alice", "bob"].entries()) {
-        const run = createQueueTestRun({
-          prompt: "queued message",
-          originatingChannel: "slack",
-          originatingTo: "channel:A",
-        });
-        // Pending turns may predate reassignment. Collection carries the selected
-        // source's session profile; execution refreshes it from persisted ownership.
-        run.personalBootstrapEligible = true;
-        run.run.bootstrapUserProfileId = index === 0 ? "previous-session-owner" : selectedProfile;
-        run.run.senderId = "shared-transport";
-        run.run.senderIsOwner = true;
-        run.run.traceAuthorized = true;
-        run.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
-          audit,
-          channelId: "slack",
-          participantId,
-        });
-        enqueueFollowupRun(key, run, settings);
+  it.each([
+    { kind: "same participant", secondParticipant: "alice", selectedProfile: "session-owner" },
+    { kind: "different participants", secondParticipant: "bob", selectedProfile: "session-owner" },
+    { kind: "unknown participant", secondParticipant: undefined, selectedProfile: "session-owner" },
+    { kind: "no human session owner", secondParticipant: "bob", selectedProfile: undefined },
+  ])(
+    "preserves the source turn's session profile with $kind",
+    async ({ kind, secondParticipant, selectedProfile }) => {
+      const audit = createChannelAdmissionAudit({ enabled: true });
+      const key = `personal-bootstrap-collect-${kind}`;
+      const { calls, done, runFollowup } = createDrainRecorder();
+      const settings = createQueueSettings();
+      try {
+        for (const [index, participantId] of ["alice", secondParticipant].entries()) {
+          const run = createQueueTestRun({
+            prompt: "queued message",
+            originatingChannel: "slack",
+            originatingTo: "channel:A",
+          });
+          // Pending turns may predate reassignment. Collection carries the selected
+          // source's session profile; execution refreshes it from persisted ownership.
+          run.personalBootstrapEligible = true;
+          run.run.bootstrapUserProfileId = index === 0 ? "previous-session-owner" : selectedProfile;
+          run.run.senderId = "shared-transport";
+          run.run.senderIsOwner = true;
+          run.run.traceAuthorized = true;
+          if (participantId) {
+            run.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+              audit,
+              channelId: "slack",
+              participantId,
+            });
+          }
+          await enqueueFollowupRun(key, run, settings);
+        }
+        scheduleFollowupDrain(key, runFollowup);
+        await done.promise;
+        expect(calls).toHaveLength(1);
+        expect(calls[0]?.run.bootstrapUserProfileId).toBe(selectedProfile);
+        expect(calls[0]?.personalBootstrapEligible).toBe(true);
+        if (kind === "different participants" || kind === "no human session owner") {
+          // Personal context is not sender authority: mixed verified callers still
+          // lose the source sender's privileges under the existing collection rule.
+          expect(calls[0]?.run).toMatchObject({
+            senderId: undefined,
+            senderIsOwner: false,
+            traceAuthorized: false,
+          });
+        }
+      } finally {
+        await clearFollowupQueue(key);
+        audit.close();
       }
       scheduleFollowupDrain(key, runFollowup);
       await done.promise;

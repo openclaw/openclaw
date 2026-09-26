@@ -15,7 +15,9 @@ installQueueRuntimeErrorSilencer();
 const key = "agent:main:queue-stop";
 const alias = "original-session";
 const keys = [key, alias];
-afterEach(() => clearSessionQueues(keys));
+afterEach(async () => {
+  await clearSessionQueues(keys);
+});
 
 function source(prompt: string, sessionId = "original-session") {
   const item = createQueueTestRun({ prompt });
@@ -42,20 +44,36 @@ function prepare(assertCurrent = () => {}) {
 }
 
 describe("session-owned pending followup cleanup", () => {
-  it("does not treat an absent producer agent as the default agent", () => {
-    const original = source("pending admission");
-    original.item.run.agentId = "";
-    enqueueFollowupRun(key, original.item, createQueueSettings(), "none", undefined, false);
-    expect(prepare()()).toBe(0);
-    expect(original.settled).not.toHaveBeenCalled();
-  });
+  it.each([
+    { agentId: "main", admissionSessionId: undefined, cleared: 1 },
+    { agentId: "main", admissionSessionId: alias, cleared: 1 },
+    { agentId: "main", admissionSessionId: "successor-session", cleared: 0 },
+    { agentId: "", admissionSessionId: undefined, cleared: 0 },
+  ])(
+    "requires the captured producer agent and admission target ($agentId, $admissionSessionId)",
+    async ({ agentId, admissionSessionId, cleared }) => {
+      const original = source("pending admission");
+      original.item.run.agentId = agentId;
+      original.item.admissionSessionId = admissionSessionId;
+      await enqueueFollowupRun(key, original.item, createQueueSettings(), "none", undefined, false);
+      expect(prepare()()).toBe(cleared);
+      expect(original.settled).toHaveBeenCalledTimes(cleared);
+    },
+  );
 
-  it("removes only captured own pending, summary and elided sources with exact accounting", () => {
+  it("removes only captured own pending, summary and elided sources with exact accounting", async () => {
     const runs = Array.from({ length: 6 }, (_, index) =>
       source(`source-${index}`, index % 2 ? "foreign-session" : alias),
     );
     for (const { item } of runs) {
-      enqueueFollowupRun(key, item, createQueueSettings({ cap: 2 }), "none", undefined, false);
+      await enqueueFollowupRun(
+        key,
+        item,
+        createQueueSettings({ cap: 2 }),
+        "none",
+        undefined,
+        false,
+      );
     }
     const queue = expectDefined(FOLLOWUP_QUEUES.get(key), "overflow queue");
     expect(queue.droppedCount).toBe(4);
@@ -77,10 +95,17 @@ describe("session-owned pending followup cleanup", () => {
     }
   });
 
-  it("preserves injecting, in-flight and active-summary sources and their drain owner", () => {
+  it("preserves injecting, in-flight and active-summary sources and their drain owner", async () => {
     const runs = Array.from({ length: 5 }, (_, index) => source(`protected-${index}`));
     for (const { item } of runs) {
-      enqueueFollowupRun(key, item, createQueueSettings({ cap: 2 }), "none", undefined, false);
+      await enqueueFollowupRun(
+        key,
+        item,
+        createQueueSettings({ cap: 2 }),
+        "none",
+        undefined,
+        false,
+      );
     }
     const queue = expectDefined(FOLLOWUP_QUEUES.get(key), "protected queue");
     const activeSummary = expectDefined(queue.summarySources[0], "active summary");
@@ -109,10 +134,10 @@ describe("session-owned pending followup cleanup", () => {
 
   it.each(["agent", "key", "admission", "run-object", "new-source"] as const)(
     "does not adopt a changed %s after preparation",
-    (change) => {
+    async (change) => {
       const original = source("original");
       const settings = createQueueSettings();
-      enqueueFollowupRun(key, original.item, settings, "none", undefined, false);
+      await enqueueFollowupRun(key, original.item, settings, "none", undefined, false);
       const queue = expectDefined(FOLLOWUP_QUEUES.get(key), "original queue");
       const cleanup = prepare();
       const successor = source("successor");
@@ -125,7 +150,8 @@ describe("session-owned pending followup cleanup", () => {
       } else if (change === "run-object") {
         original.item.run = { ...original.item.run };
       } else {
-        queue.items.splice(0, 1, successor.item);
+        FOLLOWUP_QUEUES.delete(key);
+        await enqueueFollowupRun(key, successor.item, settings, "none", undefined, false);
       }
       expect(cleanup()).toBe(0);
       expect(original.settled).not.toHaveBeenCalled();
@@ -139,15 +165,15 @@ describe("session-owned pending followup cleanup", () => {
 
   it.each(["unchanged", "lifecycle", "admission", "in-flight", "active-summary"] as const)(
     "follows only the recorded compact-source custody after capture (%s)",
-    (change) => {
+    async (change) => {
       const original = source("original");
       original.item.admissionSessionId = alias;
       const settings = createQueueSettings({ cap: 2 });
       const foreign = Array.from({ length: 4 }, (_, index) =>
         source(`foreign-${index}`, "foreign-session"),
       );
-      enqueueFollowupRun(key, original.item, settings, "none", undefined, false);
-      enqueueFollowupRun(
+      await enqueueFollowupRun(key, original.item, settings, "none", undefined, false);
+      await enqueueFollowupRun(
         key,
         expectDefined(foreign[0], "first foreign source").item,
         settings,
@@ -157,7 +183,7 @@ describe("session-owned pending followup cleanup", () => {
       );
       const cleanup = prepare();
       for (const { item } of foreign.slice(1)) {
-        enqueueFollowupRun(key, item, settings, "none", undefined, false);
+        await enqueueFollowupRun(key, item, settings, "none", undefined, false);
       }
       const queue = expectDefined(FOLLOWUP_QUEUES.get(key), "overflowed queue");
       const elision = expectDefined(queue.summaryElisions[0], "original source elision");
@@ -191,7 +217,7 @@ describe("session-owned pending followup cleanup", () => {
     },
   );
 
-  it("preserves a different admission session when capture begins after overflow compaction", () => {
+  it("preserves a different admission session when capture begins after overflow compaction", async () => {
     const original = source("retargeted admission");
     original.item.admissionSessionId = "successor-session";
     const settings = createQueueSettings({ cap: 1 });
@@ -200,7 +226,7 @@ describe("session-owned pending followup cleanup", () => {
       source("foreign-1", "foreign").item,
       source("foreign-2", "foreign").item,
     ]) {
-      enqueueFollowupRun(key, item, settings, "none", undefined, false);
+      await enqueueFollowupRun(key, item, settings, "none", undefined, false);
     }
     const queue = expectDefined(FOLLOWUP_QUEUES.get(key), "elided queue");
     const compact = expectDefined(queue.summaryElisions[0]?.sources[0], "compacted original");
@@ -219,8 +245,8 @@ describe("session-owned pending followup cleanup", () => {
       finished.resolve();
     });
     const settings = createQueueSettings({ mode: "followup" });
-    enqueueFollowupRun(key, owned.item, settings, "none", delivered, false);
-    enqueueFollowupRun(key, foreign.item, settings, "none", delivered, false);
+    await enqueueFollowupRun(key, owned.item, settings, "none", delivered, false);
+    await enqueueFollowupRun(key, foreign.item, settings, "none", delivered, false);
     expect(prepare()()).toBe(1);
     kickFollowupDrainIfIdle(key);
     await finished.promise;
@@ -230,7 +256,7 @@ describe("session-owned pending followup cleanup", () => {
 
   it.each(["steer", "abandoned"] as const)(
     "settles all detached sources after a %s callback revokes and throws, without later effects",
-    (callback) => {
+    async (callback) => {
       const first = source("first");
       const second = source("second");
       const later = source("later queue");
@@ -253,7 +279,7 @@ describe("session-owned pending followup cleanup", () => {
         [key, second.item],
         [alias, later.item],
       ] as const) {
-        enqueueFollowupRun(queueKey, item, createQueueSettings(), "none", undefined, false);
+        await enqueueFollowupRun(queueKey, item, createQueueSettings(), "none", undefined, false);
       }
       const queue = expectDefined(FOLLOWUP_QUEUES.get(key), "accepted queue");
       const cleanup = prepare(() => {

@@ -37,7 +37,7 @@ async function killLatestSubagentRun(params: {
   tree: KillTree;
   scope: KillScope;
   suppressTaskDelivery?: boolean;
-  beforeSessionKill?: () => boolean;
+  beforeSessionKill?: () => boolean | Promise<boolean>;
   expectedRunId?: string;
   expectedGeneration?: number;
   expectedOwnerKey?: string;
@@ -311,8 +311,8 @@ export async function killSubagentRunAdmin(
   params: SubagentAdminKillParams,
   control?: {
     assertCurrent: () => void;
+    beforeSessionKill?: () => boolean | Promise<boolean>;
     prepareRead?: () => Promise<void> | undefined;
-    beforeSessionKill?: () => boolean;
     preparePublication?: KillPublicationPreparation;
   },
 ): Promise<SubagentAdminKillResult> {
