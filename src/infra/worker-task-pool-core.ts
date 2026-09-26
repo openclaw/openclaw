@@ -34,10 +34,7 @@ import {
   type OwnedWorkerTaskSettlement,
 } from "./worker-task-pool-owned.js";
 import { closeWorkerPoolResources } from "./worker-task-pool-resources.js";
-import {
-  createWorkerTaskPoolRetirement,
-  type WorkerTaskPoolRetirement,
-} from "./worker-task-pool-retirement.js";
+import { createWorkerTaskPoolRetirement } from "./worker-task-pool-retirement.js";
 import type {
   OwnedWorkerTask,
   WorkerTaskPoolDispatch,
@@ -98,7 +95,7 @@ class WorkerTaskPoolCore<Input, Output> {
       pendingBytes: this.pendingBytes,
     }),
   };
-  private readonly retirement: WorkerTaskPoolRetirement<Input, Output>;
+  private readonly retirement;
   private readonly queue: Task<Input, Output>[] = [];
   private readonly maxWorkers: number;
   private readonly maxPendingTasks: number;
