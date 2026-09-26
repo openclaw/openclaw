@@ -132,6 +132,44 @@ function migrateBlankAgentWorkspaceRaw(
     : { config: raw, changed: false, changes, warnings: [] };
 }
 
+/** In-place removal shared with Doctor so recovery/doctor repair uses exactly
+ * the same traversal and messages as the load/write migration: defaults, the
+ * keyed entries map, and the legacy list form are all handled (no early return
+ * that would skip a residual list when entries exist). */
+export function applyBlankAgentWorkspaceRemoval(
+  raw: Record<string, unknown>,
+  changes: string[],
+): void {
+  const agents = isRecord(raw.agents) ? (raw.agents as Record<string, unknown>) : undefined;
+  if (!agents) {
+    return;
+  }
+  if (isRecord(agents.defaults) && isBlankString(agents.defaults.workspace)) {
+    delete agents.defaults.workspace;
+    changes.push("Removed blank agents.defaults.workspace.");
+  }
+  if (isRecord(agents.entries)) {
+    for (const [key, entry] of Object.entries(agents.entries)) {
+      if (isRecord(entry) && isBlankString(entry.workspace)) {
+        delete entry.workspace;
+        changes.push(
+          `Removed blank agents.entries.${key}.workspace; the default workspace directory applies.`,
+        );
+      }
+    }
+  }
+  if (Array.isArray(agents.list)) {
+    for (const [index, entry] of agents.list.entries()) {
+      if (isRecord(entry) && isBlankString(entry.workspace)) {
+        delete entry.workspace;
+        changes.push(
+          `Removed blank agents.list[${index}].workspace; the default workspace directory applies.`,
+        );
+      }
+    }
+  }
+}
+
 /** Index every agent workspace that is blank in the saved source config,
  * normalized across the legacy list and canonical entries roster forms, plus
  * the defaults workspace. Only these paths count as "saved blanks" for

@@ -18,7 +18,7 @@ describe("blank agent workspace migration", () => {
 
     expect(raw).toEqual({ agents: { entries: { main: { model: "openai/gpt-5.6" } } } });
     expect(changes).toEqual([
-      "Removed blank agents.entries.main.workspace; the agent keeps its default workspace directory.",
+      "Removed blank agents.entries.main.workspace; the default workspace directory applies.",
     ]);
   });
 
@@ -31,9 +31,7 @@ describe("blank agent workspace migration", () => {
     migration.apply(raw, changes);
 
     expect(raw).toEqual({ agents: { defaults: { model: "openai/gpt-5.6" } } });
-    expect(changes).toEqual([
-      "Removed blank agents.defaults.workspace; the agent keeps its default workspace directory.",
-    ]);
+    expect(changes).toEqual(["Removed blank agents.defaults.workspace."]);
   });
 
   it("preserves a non-blank workspace", () => {
@@ -56,6 +54,29 @@ describe("blank agent workspace migration", () => {
 
     expect(raw).toEqual({ agents: { defaults: { model: "openai/gpt-5.6" } } });
     expect(changes).toEqual([]);
+  });
+
+  it("removes a residual legacy-list blank even when keyed entries exist (same traversal as runtime)", () => {
+    // Doctor previously visited only the keyed entries map and early-returned,
+    // skipping a residual agents.list; the runtime migration removes both. The
+    // shared transform makes Doctor and runtime agree on the same traversal.
+    const raw: Record<string, unknown> = {
+      agents: {
+        entries: { main: { model: "openai/gpt-5.6", workspace: " " } },
+        list: [{ id: "legacy", workspace: "" }],
+      },
+    };
+    const changes: string[] = [];
+
+    migration.apply(raw, changes);
+
+    expect(raw).toEqual({
+      agents: { entries: { main: { model: "openai/gpt-5.6" } }, list: [{ id: "legacy" }] },
+    });
+    expect(changes).toEqual([
+      "Removed blank agents.entries.main.workspace; the default workspace directory applies.",
+      "Removed blank agents.list[0].workspace; the default workspace directory applies.",
+    ]);
   });
 });
 

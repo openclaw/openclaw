@@ -1,3 +1,4 @@
+import { applyBlankAgentWorkspaceRemoval } from "../../../config/legacy.blank-agent-workspace.js";
 // Legacy migration: remove explicitly blank agent workspace values.
 //
 // Releases before strict blank rejection (PR 150929) treated an empty or
@@ -12,7 +13,7 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
-import { hasOwnKey, isRecord, visitAgentConfigScopes } from "./legacy-config-record-shared.js";
+import { isRecord } from "./legacy-config-record-shared.js";
 
 const BLANK_WORKSPACE_RULES: LegacyConfigRule[] = [
   {
@@ -49,17 +50,9 @@ export const LEGACY_CONFIG_MIGRATION_RUNTIME_WORKSPACE: LegacyConfigMigrationSpe
       "Removes explicitly blank agent workspace values so upgrades keep each agent's established default workspace directory.",
     legacyRules: BLANK_WORKSPACE_RULES,
     apply(raw, changes) {
-      visitAgentConfigScopes(raw, (scope, path) => {
-        if (
-          hasOwnKey(scope, "workspace") &&
-          typeof scope.workspace === "string" &&
-          !scope.workspace.trim()
-        ) {
-          delete scope.workspace;
-          changes.push(
-            `Removed blank ${path}.workspace; the agent keeps its default workspace directory.`,
-          );
-        }
-      });
+      // Delegate to the shared blank-workspace transform so Doctor repair uses
+      // exactly the same traversal as the load/write migration (defaults, keyed
+      // entries, and the legacy list form) and can never disagree with runtime.
+      applyBlankAgentWorkspaceRemoval(raw, changes);
     },
   });
