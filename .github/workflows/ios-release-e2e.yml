@@ -50,12 +50,11 @@ jobs:
           [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
           [[ "$E2E_MODE" == stock || "$E2E_MODE" == compare ]] || exit 1
           [[ "$TARGET_SHA" == "$GITHUB_SHA" ]] || exit 1
-          echo "target_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Checkout exact qualification target
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ steps.start.outputs.target_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Verify target and require target-owned harness

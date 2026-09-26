@@ -400,7 +400,6 @@ describe("release qualification workflow authority", () => {
       },
     });
     expect(execution.status === 0).toBe(admitted);
-    expect(readFileSync(output, "utf8").includes(`target_sha=${target}\n`)).toBe(admitted);
     const proof = JSON.parse(readFileSync(path.join(root, "ios-release-e2e-proof.json"), "utf8"));
     expect(proof).toMatchObject({
       status: "failed",
@@ -436,7 +435,7 @@ describe("release qualification workflow authority", () => {
     const checkout = steps.find((step: { uses?: string }) =>
       step.uses?.startsWith("actions/checkout@"),
     );
-    expect(checkout.with.ref).toBe("${{ steps.start.outputs.target_sha }}");
+    expect(checkout.with.ref).toBe("${{ github.sha }}");
     expect(checkout.with["persist-credentials"]).toBe(false);
     const verify = steps.find((step: { name: string }) => step.name.startsWith("Verify target"));
     expect(verify.run).toContain('[[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]');
