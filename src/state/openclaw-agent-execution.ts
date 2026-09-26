@@ -331,13 +331,13 @@ export function captureOpenClawAgentDatabaseExecution(
       return context.admission.identity.key;
     },
     assertCurrent,
-    borrow(pathname, expected, creating) {
+    borrow(borrowedPath, expected, creating) {
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;
       const creatingTarget = creating ? Object.freeze({ ...creating }) : undefined;
       const assertReferenceCurrent = () => {
         assertCurrent();
         if (!fileIdentity || creatingTarget) {
-          const current = readDatabasePathIdentitySync(pathname);
+          const current = readDatabasePathIdentitySync(borrowedPath);
           if (
             current.canonicalPath !== identity.canonicalPath ||
             (creatingTarget?.key.startsWith("file:") &&
@@ -350,7 +350,7 @@ export function captureOpenClawAgentDatabaseExecution(
         for (const file of [expectedIdentity, fileIdentity]) {
           if (file) {
             assertExistingDatabaseIdentity(
-              pathname,
+              borrowedPath,
               `file:${file.physicalIdentity}`,
               file.birthtime,
             );
@@ -361,7 +361,7 @@ export function captureOpenClawAgentDatabaseExecution(
       if (creatingTarget && !fileIdentity && generation) {
         throw new Error("Agent creation cannot capture another pending native opener");
       }
-      retainAlias(pathname);
+      retainAlias(borrowedPath);
       observeOpenClawDatabaseMaintenanceResource(unregisterAgent);
       borrowers += 1;
       clearIdleTimer();
@@ -393,7 +393,7 @@ export function captureOpenClawAgentDatabaseExecution(
       };
       return {
         agentId,
-        path: pathname,
+        path: borrowedPath,
         get fileIdentity() {
           assertBorrowed();
           return fileIdentity;
@@ -535,8 +535,8 @@ export function captureOpenClawAgentDatabaseExecution(
     retainAlias(pathname);
     retainAlias(identity.canonicalPath);
     unregisterShared = registerOpenClawStateDatabaseAsyncResource({
-      close: async (identity) => {
-        if (!identity || identity.key === context.admission.identity.key) {
+      close: async (sharedIdentity) => {
+        if (!sharedIdentity || sharedIdentity.key === context.admission.identity.key) {
           await owner.close();
         }
       },
