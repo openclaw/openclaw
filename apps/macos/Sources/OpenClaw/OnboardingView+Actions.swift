@@ -47,9 +47,13 @@ extension OnboardingView {
     }
 
     var effectivePreferredGatewayID: String? {
+        let persisted = Self.normalizedGatewayID(GatewayDiscoveryPreferences.preferredStableID())
+        guard let local = Self.normalizedGatewayID(preferredGatewayID) else {
+            return persisted
+        }
         // Config-watcher endpoint changes clear the persisted owner. Ignore the
         // stale @State copy until the view's next render catches up.
-        Self.normalizedGatewayID(GatewayDiscoveryPreferences.preferredStableID())
+        return local == persisted ? local : persisted
     }
 
     func handleBack() {

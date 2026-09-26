@@ -18,9 +18,9 @@ struct PostAppUpdateReceipt: Codable, Equatable {
     let fromVersion: String
     let toVersion: String
     let recordedAt: Date
-    fileprivate(set) var gatewayUpdateIncomplete: Bool
-    fileprivate(set) var notificationAttempts: Int
-    fileprivate(set) var notificationInFlight: Bool
+    let gatewayUpdateIncomplete: Bool
+    let notificationAttempts: Int
+    let notificationInFlight: Bool
 
     init(
         fromVersion: String,
@@ -126,8 +126,13 @@ enum PostAppUpdateReceiptStore {
         receipt: PostAppUpdateReceipt,
         defaults: UserDefaults = AppDefaults.standard) -> PostAppUpdateReceipt
     {
-        var updated = receipt
-        updated.gatewayUpdateIncomplete = incomplete
+        let updated = PostAppUpdateReceipt(
+            fromVersion: receipt.fromVersion,
+            toVersion: receipt.toVersion,
+            recordedAt: receipt.recordedAt,
+            gatewayUpdateIncomplete: incomplete,
+            notificationAttempts: receipt.notificationAttempts,
+            notificationInFlight: receipt.notificationInFlight)
         self.persist(updated, defaults: defaults)
         return updated
     }
@@ -139,8 +144,13 @@ enum PostAppUpdateReceiptStore {
     {
         // One later-launch retry handles restart races. The bound prevents
         // permanent auth/schema errors from reopening this window forever.
-        var updated = receipt
-        updated.notificationAttempts = min(receipt.notificationAttempts + 1, self.notificationRetryLimit)
+        let updated = PostAppUpdateReceipt(
+            fromVersion: receipt.fromVersion,
+            toVersion: receipt.toVersion,
+            recordedAt: receipt.recordedAt,
+            gatewayUpdateIncomplete: receipt.gatewayUpdateIncomplete,
+            notificationAttempts: min(receipt.notificationAttempts + 1, self.notificationRetryLimit),
+            notificationInFlight: receipt.notificationInFlight)
         self.persist(updated, defaults: defaults)
         return updated
     }
@@ -151,8 +161,13 @@ enum PostAppUpdateReceiptStore {
         receipt: PostAppUpdateReceipt,
         defaults: UserDefaults = AppDefaults.standard) -> PostAppUpdateReceipt
     {
-        var updated = receipt
-        updated.notificationInFlight = inFlight
+        let updated = PostAppUpdateReceipt(
+            fromVersion: receipt.fromVersion,
+            toVersion: receipt.toVersion,
+            recordedAt: receipt.recordedAt,
+            gatewayUpdateIncomplete: receipt.gatewayUpdateIncomplete,
+            notificationAttempts: receipt.notificationAttempts,
+            notificationInFlight: inFlight)
         self.persist(updated, defaults: defaults)
         // Cross the persistence boundary before the Gateway request. A crash
         // after enqueue must not replay this one-time welcome on next launch.
@@ -383,11 +398,11 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
 
         // App-only relaunches stay invisible. The window belongs only to
         // confirmed managed Gateway work and its recovery path.
-        let action = Self.gatewayAction(
+        switch Self.gatewayAction(
             status: managedStatus,
             ownsManagedRuntime: ownsManagedRuntime,
             gatewayUpdateIncomplete: receipt.gatewayUpdateIncomplete)
-        switch action {
+        {
         case .none:
             self.finishSilently()
             return
@@ -396,16 +411,24 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
                 connectionMode: connectionMode,
                 receipt: receipt)
             return
-        case .repair, .update:
-            if action == .update {
-                self.setGatewayUpdateIncomplete(true, receipt: receipt)
-            }
+        case .repair:
             self.model.phase = .updating
             self.show()
             let outcome = await CLIInstaller.updateManaged(
                 targetVersion: receipt.toVersion,
                 restartGateway: restartGateway,
-                repair: action == .repair)
+                repair: true)
+            { [weak self] message in
+                self?.model.message = message
+            }
+            guard self.consume(outcome) else { return }
+        case .update:
+            self.setGatewayUpdateIncomplete(true, receipt: receipt)
+            self.model.phase = .updating
+            self.show()
+            let outcome = await CLIInstaller.updateManaged(
+                targetVersion: receipt.toVersion,
+                restartGateway: restartGateway)
             { [weak self] message in
                 self?.model.message = message
             }
