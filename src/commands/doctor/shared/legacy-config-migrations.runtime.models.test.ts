@@ -11,6 +11,7 @@ import {
   collectBlockedLegacyOpenAICodexProviderPlan,
   LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS,
 } from "./legacy-config-migrations.runtime.models.js";
+import { rewriteKnownModelRefs } from "./legacy-config-migrations.runtime.models.refs.js";
 
 describe("legacy vLLM Qwen thinking parameter detection", () => {
   it.each([
@@ -686,5 +687,60 @@ describe("stale contextWindow migration", () => {
     migration!.apply(raw, changes);
 
     expect(changes).toHaveLength(0);
+  });
+});
+
+describe("rewriteKnownModelRefs deep nesting", () => {
+  // Regression: deeply nested config used to overflow the call stack because
+  // rewriteModelRefs recursed once per nesting level. The traversal is now
+  // iterative, so arbitrary depth must complete without RangeError.
+  it("completes without RangeError for deeply nested config", () => {
+    const depth = 5000;
+    let value: unknown = "anthropic/claude-3-sonnet";
+    for (let i = 0; i < depth; i++) {
+      value = { x: value };
+    }
+    const changes: string[] = [];
+
+    expect(() => rewriteKnownModelRefs(value, "config", changes)).not.toThrow();
+  });
+
+  it("rewrites a deeply nested model ref and reports its notice", () => {
+    // A recognized retired model ref (openai/gpt-4) buried under many levels
+    // must still be reached for normalization, rewritten to its successor,
+    // flagged as changed, and emit a notice naming the full deep path.
+    const depth = 3000;
+    let value: unknown = { model: "openai/gpt-4" };
+    for (let i = 0; i < depth; i++) {
+      value = { agents: value };
+    }
+    const changes: string[] = [];
+
+    const result = rewriteKnownModelRefs(value, "config", changes);
+
+    expect(result.changed).toBe(true);
+    expect(changes).toHaveLength(1);
+    // The notice names the full deep path down to the rewritten leaf.
+    const expectedPath = "config" + ".agents".repeat(depth) + ".model";
+    expect(changes[0]).toBe(`Upgraded ${expectedPath} from "openai/gpt-4" to "openai/gpt-5.5".`);
+    // The deeply nested leaf model was rewritten in place.
+    let cursor: unknown = result.value;
+    for (let i = 0; i < depth; i++) {
+      cursor = (cursor as Record<string, unknown>).agents;
+    }
+    expect((cursor as { model: string }).model).toBe("openai/gpt-5.5");
+  });
+
+  it("preserves depth-first notice order for mixed arrays", () => {
+    // An array with an object entry before a string entry must report the
+    // object's notice first, matching the recursive version's traversal.
+    const value = [{ model: "openai/gpt-4" }, "openai/gpt-4o"];
+    const changes: string[] = [];
+
+    rewriteKnownModelRefs(value, "config.fallbacks", changes);
+
+    expect(changes).toHaveLength(2);
+    expect(changes[0]).toContain("config.fallbacks.0.model");
+    expect(changes[1]).toContain("config.fallbacks.1");
   });
 });
