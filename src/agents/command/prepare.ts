@@ -312,13 +312,18 @@ export async function prepareAgentCommandExecution(
     sessionKey,
     sessionEntry: sessionEntryRaw,
   });
+  // Synthetic turns carry no dispatch delivery-mode facts, and a plain
+  // agent-command turn arrives without any either; hashing either kind from
+  // per-turn absence would reset the CLI binding on every transition to or
+  // from a chat turn, so both derive the session-stable mode instead.
   if (
     sessionEntryRaw &&
     commandOpts.cliSessionBindingFacts === undefined &&
-    isSyntheticSourceReplyTurn({
-      inputProvenance: commandOpts.inputProvenance,
-      isHeartbeat: commandOpts.bootstrapContextRunKind === "heartbeat",
-    })
+    (commandOpts.sourceReplyDeliveryMode === undefined ||
+      isSyntheticSourceReplyTurn({
+        inputProvenance: commandOpts.inputProvenance,
+        isHeartbeat: commandOpts.bootstrapContextRunKind === "heartbeat",
+      }))
   ) {
     commandOpts = {
       ...commandOpts,
