@@ -136,3 +136,81 @@ export function resolveRequesterOriginForChild(params: {
     threadId: params.requesterThreadId,
   });
 }
+
+/**
+ * Raw requester conversation fields visible to a spawn path.
+ *
+ * CLI runtimes (e.g. claude-cli) issue loopback tool calls with no `agentTo`:
+ * they identify the current conversation through the
+ * `currentMessagingTarget`/`currentChannelId` and `currentThreadTs` fields.
+ * Regular channel turns instead populate `agentTo`/`agentThreadId`. Delivery
+ * follows the ambient current target, but thread binding is keyed to the
+ * explicitly directed conversation (see resolver below): when a channel turn
+ * names `agentTo` it must bind there even when ambient current-* fields also
+ * exist; only when `agentTo` is absent (the CLI case) does binding fall back to
+ * the same current-target fields delivery uses, so a CLI turn can bind while
+ * completion/progress delivery already knows where to send.
+ */
+export type SpawnRequesterConversationSource = {
+  /** Ambient per-turn messaging target; used for CLI turns without an explicit recipient. */
+  currentMessagingTarget?: string;
+  /** Current channel conversation id supplied to CLI loopback tools. */
+  currentChannelId?: string;
+  /** Explicit channel-turn recipient; always wins for thread binding when present. */
+  agentTo?: string;
+  /** Current thread timestamp/root supplied to CLI loopback tools. */
+  currentThreadTs?: string | number;
+  /** Explicit thread id resolved by regular channel turns; wins when present. */
+  agentThreadId?: string | number;
+};
+
+function normalizeNonEmptySpawnConversationValue(
+  value: string | number | undefined,
+): string | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : undefined;
+  }
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+// Thread ids keep their original numeric/string form for requester metadata;
+// the binding path stringifies them itself when the channel needs text.
+function normalizeNonEmptySpawnThreadValue(
+  value: string | number | undefined,
+): string | number | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+/**
+ * Resolves the requester conversation target/thread for spawn thread binding.
+ *
+ * Thread binding is keyed to the conversation the spawn is *explicitly*
+ * directed at: an explicit channel-turn `agentTo`/`agentThreadId` always wins,
+ * preserving existing binding behavior (a turn can name a target that differs
+ * from the ambient current conversation). CLI runtimes never set `agentTo` and
+ * identify the current conversation only through `currentMessagingTarget`/
+ * `currentChannelId` and `currentThreadTs`; for those calls the resolver falls
+ * back to the current target, then the current channel id — the same fields
+ * delivery uses — so a CLI turn can bind a thread.
+ */
+export function resolveSpawnRequesterConversationTarget(source: SpawnRequesterConversationSource): {
+  to?: string;
+  threadId?: string | number;
+} {
+  const to =
+    normalizeNonEmptySpawnConversationValue(source.agentTo) ??
+    normalizeNonEmptySpawnConversationValue(source.currentMessagingTarget) ??
+    normalizeNonEmptySpawnConversationValue(source.currentChannelId);
+  const threadId =
+    normalizeNonEmptySpawnThreadValue(source.agentThreadId) ??
+    normalizeNonEmptySpawnThreadValue(source.currentThreadTs);
+  return {
+    ...(to ? { to } : {}),
+    ...(threadId !== undefined ? { threadId } : {}),
+  };
+}

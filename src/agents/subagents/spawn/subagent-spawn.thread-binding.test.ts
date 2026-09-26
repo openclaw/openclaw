@@ -406,4 +406,186 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     expect(registeredRun?.requesterOrigin?.accountId).toBe("sut");
     expect(registeredRun?.requesterOrigin?.to).toBe("room:!parent:example");
   });
+
+  it("binds a CLI-runtime thread spawn from currentChannelId when agentTo is absent", async () => {
+    // claude-cli loopback tool calls identify the conversation via
+    // currentChannelId/currentThreadTs and never set agentTo. Thread binding
+    // previously read agentTo alone and failed even though delivery already used
+    // currentChannelId (issue #158945).
+    const bindCalls: Array<Record<string, unknown>> = [];
+    currentSessionBindingService = {
+      getCapabilities: () => ({
+        adapterAvailable: true,
+        bindSupported: true,
+        placements: ["child"],
+      }),
+      bind: async (request) => {
+        bindCalls.push(request as unknown as Record<string, unknown>);
+        return {
+          targetSessionKey: request.targetSessionKey,
+          targetKind: request.targetKind,
+          status: "active",
+          conversation: {
+            channel: request.conversation.channel,
+            accountId: request.conversation.accountId,
+            conversationId: "$thread-root",
+            parentConversationId: request.conversation.conversationId,
+          },
+        };
+      },
+      listBySession: () => [],
+    };
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "reply with a marker",
+        thread: true,
+        mode: "session",
+        context: "isolated",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "matrix",
+        agentAccountId: "default",
+        agentTo: undefined,
+        agentThreadId: undefined,
+        currentMessagingTarget: undefined,
+        currentChannelId: "room:parent",
+        currentThreadTs: undefined,
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(bindCalls).toHaveLength(1);
+    const bindingConversation = bindCalls[0]?.conversation as
+      | { channel?: string; accountId?: string; conversationId?: string }
+      | undefined;
+    expect(bindingConversation?.channel).toBe("matrix");
+    expect(bindingConversation?.conversationId).toBe("parent");
+    const registeredRun = firstRegisteredSubagentRun();
+    expect(registeredRun?.requesterOrigin?.channel).toBe("matrix");
+    expect(registeredRun?.requesterOrigin?.to).toBe("room:parent");
+  });
+
+  it("rejects a CLI-runtime thread spawn before binding when spawns are disabled for the current channel", async () => {
+    // The wider CLI origin (currentChannelId with no agentTo) must still pass
+    // through the same channel thread-binding authority gate as agentTo origins:
+    // when thread-bound spawns are disabled for the resolved channel, the bind
+    // service must never be reached.
+    const sessionConfig = currentConfig.session as
+      | { threadBindings?: { spawnSessions?: boolean } }
+      | undefined;
+    currentConfig.session = {
+      ...sessionConfig,
+      threadBindings: { ...sessionConfig?.threadBindings, spawnSessions: false },
+    };
+    const bindCalls: Array<Record<string, unknown>> = [];
+    currentSessionBindingService = {
+      getCapabilities: () => ({
+        adapterAvailable: true,
+        bindSupported: true,
+        placements: ["child"],
+      }),
+      bind: async (request) => {
+        bindCalls.push(request as unknown as Record<string, unknown>);
+        throw new Error("bind must not be reached when spawns are disabled");
+      },
+      listBySession: () => [],
+    };
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "reply with a marker",
+        thread: true,
+        mode: "session",
+        context: "isolated",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "matrix",
+        agentAccountId: "default",
+        agentTo: undefined,
+        agentThreadId: undefined,
+        currentMessagingTarget: undefined,
+        currentChannelId: "room:parent",
+        currentThreadTs: undefined,
+      },
+    );
+
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.error).toContain("Thread-bound session spawns are disabled for matrix");
+    }
+    expect(bindCalls).toHaveLength(0);
+    expect(hoisted.registerSubagentRunMock.mock.calls).toHaveLength(0);
+  });
+
+  it("does not bind a CLI-runtime thread spawn into a conversation the channel rejects for the caller", async () => {
+    // The generic loopback path lets a caller supply x-openclaw-current-channel-id.
+    // Conversation authority is owned by the channel: its
+    // resolveInboundConversation is the final arbiter of whether the caller may
+    // bind in that conversation. When it rejects the target (a conversation the
+    // caller cannot access), prepareSpawnThreadBinding must fail resolution and
+    // never reach the binding service, even though thread spawning is enabled.
+    const allowedRooms = new Set(["parent"]);
+    setActivePluginRegistryForTest(
+      createTestRegistryForTest([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBaseForTest({ id: "matrix", label: "Matrix" }),
+            messaging: {
+              resolveInboundConversation: ({ to }: { to?: string }) => {
+                const roomId = to?.trim().replace(/^(?:matrix:)?(?:channel:|room:)/iu, "");
+                return roomId && allowedRooms.has(roomId) ? { conversationId: roomId } : null;
+              },
+              resolveDeliveryTarget: ({ conversationId }: { conversationId: string }) => ({
+                to: `room:${conversationId}`,
+              }),
+            },
+          },
+        },
+      ]),
+    );
+    const bindCalls: Array<Record<string, unknown>> = [];
+    currentSessionBindingService = {
+      getCapabilities: () => ({
+        adapterAvailable: true,
+        bindSupported: true,
+        placements: ["child"],
+      }),
+      bind: async (request) => {
+        bindCalls.push(request as unknown as Record<string, unknown>);
+        throw new Error("bind must not be reached when the channel rejects the conversation");
+      },
+      listBySession: () => [],
+    };
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "reply with a marker",
+        thread: true,
+        mode: "session",
+        context: "isolated",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "matrix",
+        agentAccountId: "default",
+        agentTo: undefined,
+        agentThreadId: undefined,
+        currentMessagingTarget: undefined,
+        currentChannelId: "room:not-a-conversation-for-this-caller",
+        currentThreadTs: undefined,
+      },
+    );
+
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.error).toContain("Could not resolve a matrix conversation");
+    }
+    expect(bindCalls).toHaveLength(0);
+    expect(hoisted.registerSubagentRunMock.mock.calls).toHaveLength(0);
+  });
 });
