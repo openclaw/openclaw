@@ -37,7 +37,7 @@ function readManifest(): StepFunManifest {
 }
 
 describe("stepfun provider registration", () => {
-  it("adds Step 3.7 Flash without changing existing defaults", () => {
+  it("adds Step 5 Preview as the default without dropping existing rows", () => {
     const standard = buildStepFunProvider();
     const plan = buildStepFunPlanProvider();
     const standardModel = standard.models?.find((model) => model.id === "step-3.7-flash");
@@ -46,8 +46,29 @@ describe("stepfun provider registration", () => {
       throw new Error("StepFun Standard catalog did not provide Step 3.7 Flash");
     }
 
-    expect(STEPFUN_DEFAULT_MODEL_REF).toBe("stepfun/step-3.5-flash");
-    expect(STEPFUN_PLAN_DEFAULT_MODEL_REF).toBe("stepfun-plan/step-3.5-flash");
+    expect(STEPFUN_DEFAULT_MODEL_REF).toBe("stepfun/step-5-preview");
+    expect(STEPFUN_PLAN_DEFAULT_MODEL_REF).toBe("stepfun-plan/step-5-preview");
+    const standardStep5 = standard.models?.find((model) => model.id === "step-5-preview");
+    const planStep5 = plan.models?.find((model) => model.id === "step-5-preview");
+    expect(standardStep5).toMatchObject({
+      name: "Step 5 Preview",
+      reasoning: true,
+      input: ["text", "image"],
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "high", max: "high" },
+      contextWindow: 1048576,
+      maxTokens: 65536,
+      cost: { input: 1, output: 2.86, cacheRead: 0.05, cacheWrite: 0 },
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high"],
+        maxTokensField: "max_tokens",
+      },
+    });
+    expect(planStep5).toMatchObject({
+      contextWindow: 1048576,
+      maxTokens: 65536,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
     const standard35 = standard.models?.find((model) => model.id === "step-3.5-flash");
     expect(standard35?.compat?.supportsReasoningEffort).not.toBe(true);
     expect(standard35?.cost).toEqual({
@@ -209,7 +230,7 @@ describe("stepfun provider registration", () => {
       expect(result?.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]).toEqual({
         alias: "Existing",
       });
-      expect(result?.agents?.defaults?.models?.[`${providerId}/step-3.5-flash`]).toEqual(
+      expect(result?.agents?.defaults?.models?.[`${providerId}/step-5-preview`]).toEqual(
         expect.objectContaining({ alias: expect.any(String) }),
       );
       expect(result?.models?.providers?.[providerId]).toBeDefined();
