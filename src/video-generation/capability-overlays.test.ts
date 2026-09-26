@@ -218,3 +218,190 @@ describe("video-generation capability overlays", () => {
     },
   );
 });
+
+describe("video-generation reference input limits", () => {
+  function checkReferenceInputs(
+    capabilities: VideoGenerationProviderCapabilities,
+    counts: { images?: number; videos?: number; audios?: number } = {},
+  ): string | undefined {
+    return buildVideoGenerationCapabilityFailure({
+      providerId: "video-plugin",
+      model: "model",
+      provider: {
+        id: "video-plugin",
+        capabilities,
+        async generateVideo() {
+          throw new Error("capability checks must not generate videos");
+        },
+      },
+      inputImageCount: counts.images ?? 0,
+      inputVideoCount: counts.videos ?? 0,
+      inputAudioCount: counts.audios ?? 0,
+    });
+  }
+
+  it.each([
+    {
+      name: "mode-specific image",
+      capabilities: { maxInputImages: 5, imageToVideo: { enabled: true, maxInputImages: 2 } },
+      atLimit: { images: 2 },
+      aboveLimit: { images: 3 },
+      error: "video-plugin/model supports at most 2 reference image(s), 3 requested; skipping",
+    },
+    {
+      name: "mode-specific video",
+      capabilities: { maxInputVideos: 5, videoToVideo: { enabled: true, maxInputVideos: 2 } },
+      atLimit: { videos: 2 },
+      aboveLimit: { videos: 3 },
+      error: "video-plugin/model supports at most 2 reference video(s), 3 requested; skipping",
+    },
+    {
+      name: "mode-specific audio",
+      capabilities: { maxInputAudios: 5, generate: { maxInputAudios: 2 } },
+      atLimit: { audios: 2 },
+      aboveLimit: { audios: 3 },
+      error: "video-plugin/model supports at most 2 reference audio(s), 3 requested; skipping",
+    },
+    {
+      name: "flat image fallback",
+      capabilities: { maxInputImages: 2, imageToVideo: { enabled: true } },
+      atLimit: { images: 2 },
+      aboveLimit: { images: 3 },
+      error: "video-plugin/model supports at most 2 reference image(s), 3 requested; skipping",
+    },
+    {
+      name: "flat video fallback",
+      capabilities: { maxInputVideos: 2, videoToVideo: { enabled: true } },
+      atLimit: { videos: 2 },
+      aboveLimit: { videos: 3 },
+      error: "video-plugin/model supports at most 2 reference video(s), 3 requested; skipping",
+    },
+    {
+      name: "flat audio fallback",
+      capabilities: { maxInputAudios: 2 },
+      atLimit: { audios: 2 },
+      aboveLimit: { audios: 3 },
+      error: "video-plugin/model supports at most 2 reference audio(s), 3 requested; skipping",
+    },
+  ])("accepts the $name limit and rejects one more input", (testCase) => {
+    expect(checkReferenceInputs(testCase.capabilities, testCase.atLimit)).toBeUndefined();
+    expect(checkReferenceInputs(testCase.capabilities, testCase.aboveLimit)).toBe(testCase.error);
+  });
+
+  it.each([
+    {
+      name: "explicit image zero",
+      capabilities: { maxInputImages: 5, imageToVideo: { enabled: true, maxInputImages: 0 } },
+      counts: { images: 1 },
+      error:
+        "video-plugin/model does not support reference image inputs; skipping to avoid silent image drop",
+    },
+    {
+      name: "explicit video zero",
+      capabilities: { maxInputVideos: 5, videoToVideo: { enabled: true, maxInputVideos: 0 } },
+      counts: { videos: 1 },
+      error:
+        "video-plugin/model does not support reference video inputs; skipping to avoid silent video drop",
+    },
+    {
+      name: "explicit audio zero",
+      capabilities: { maxInputAudios: 5, generate: { maxInputAudios: 0 } },
+      counts: { audios: 1 },
+      error:
+        "video-plugin/model does not support reference audio inputs; skipping to avoid silent audio drop",
+    },
+    {
+      name: "undeclared image limit",
+      capabilities: { imageToVideo: { enabled: true } },
+      counts: { images: 1 },
+      error:
+        "video-plugin/model does not support reference image inputs; skipping to avoid silent image drop",
+    },
+    {
+      name: "undeclared video limit",
+      capabilities: { videoToVideo: { enabled: true } },
+      counts: { videos: 1 },
+      error:
+        "video-plugin/model does not support reference video inputs; skipping to avoid silent video drop",
+    },
+    {
+      name: "undeclared audio limit",
+      capabilities: {},
+      counts: { audios: 1 },
+      error:
+        "video-plugin/model does not support reference audio inputs; skipping to avoid silent audio drop",
+    },
+  ])("rejects requested references with $name", (testCase) => {
+    expect(checkReferenceInputs(testCase.capabilities, testCase.counts)).toBe(testCase.error);
+  });
+
+  it("does not consult reference limits when the request has no reference inputs", () => {
+    const readLimit = vi.fn<() => number>(() => {
+      throw new Error("unrequested reference limit was read");
+    });
+    expect(
+      checkReferenceInputs({
+        generate: {
+          get maxInputImages() {
+            return readLimit();
+          },
+          get maxInputVideos() {
+            return readLimit();
+          },
+          get maxInputAudios() {
+            return readLimit();
+          },
+        },
+      }),
+    ).toBeUndefined();
+    expect(readLimit).not.toHaveBeenCalled();
+  });
+
+  it("reports mixed reference failures in image, video, then audio order", () => {
+    const capabilities = {
+      videoToVideo: {
+        enabled: true,
+        maxInputImages: 1,
+        maxInputVideos: 1,
+        maxInputAudios: 1,
+      },
+    };
+    expect(checkReferenceInputs(capabilities, { images: 2, videos: 2, audios: 2 })).toBe(
+      "video-plugin/model supports at most 1 reference image(s), 2 requested; skipping",
+    );
+    expect(checkReferenceInputs(capabilities, { images: 1, videos: 2, audios: 2 })).toBe(
+      "video-plugin/model supports at most 1 reference video(s), 2 requested; skipping",
+    );
+    expect(checkReferenceInputs(capabilities, { images: 1, videos: 1, audios: 2 })).toBe(
+      "video-plugin/model supports at most 1 reference audio(s), 2 requested; skipping",
+    );
+    expect(checkReferenceInputs(capabilities, { images: 1, videos: 1, audios: 1 })).toBeUndefined();
+  });
+
+  it("stops after the first failure without reading later or shadowed flat limits", () => {
+    const readUnusedLimit = vi.fn<() => number>(() => {
+      throw new Error("later or shadowed limit was read");
+    });
+    expect(
+      checkReferenceInputs(
+        {
+          get maxInputImages() {
+            return readUnusedLimit();
+          },
+          videoToVideo: {
+            enabled: true,
+            maxInputImages: 1,
+            get maxInputVideos() {
+              return readUnusedLimit();
+            },
+            get maxInputAudios() {
+              return readUnusedLimit();
+            },
+          },
+        },
+        { images: 2, videos: 2, audios: 2 },
+      ),
+    ).toBe("video-plugin/model supports at most 1 reference image(s), 2 requested; skipping");
+    expect(readUnusedLimit).not.toHaveBeenCalled();
+  });
+});

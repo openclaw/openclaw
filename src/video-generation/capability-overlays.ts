@@ -61,30 +61,19 @@ export function buildVideoGenerationCapabilityFailure(params: {
     }
   }
 
-  if (inputImageCount > 0) {
-    const maxImages = capabilities?.maxInputImages ?? provider.capabilities.maxInputImages ?? 0;
-    if (inputImageCount > maxImages) {
-      return maxImages === 0
-        ? `${label} does not support reference image inputs; skipping to avoid silent image drop`
-        : `${label} supports at most ${maxImages} reference image(s), ${inputImageCount} requested; skipping`;
-    }
-  }
-
-  if (inputVideoCount > 0) {
-    const maxVideos = capabilities?.maxInputVideos ?? provider.capabilities.maxInputVideos ?? 0;
-    if (inputVideoCount > maxVideos) {
-      return maxVideos === 0
-        ? `${label} does not support reference video inputs; skipping to avoid silent video drop`
-        : `${label} supports at most ${maxVideos} reference video(s), ${inputVideoCount} requested; skipping`;
-    }
-  }
-
-  if (inputAudioCount > 0) {
-    const maxAudio = capabilities?.maxInputAudios ?? provider.capabilities.maxInputAudios ?? 0;
-    if (inputAudioCount > maxAudio) {
-      return maxAudio === 0
-        ? `${label} does not support reference audio inputs; skipping to avoid silent audio drop`
-        : `${label} supports at most ${maxAudio} reference audio(s), ${inputAudioCount} requested; skipping`;
+  // Keep image, video, then audio precedence and resolve only requested limits.
+  for (const [count, limitKey, kind] of [
+    [inputImageCount, "maxInputImages", "image"],
+    [inputVideoCount, "maxInputVideos", "video"],
+    [inputAudioCount, "maxInputAudios", "audio"],
+  ] as const) {
+    if (count > 0) {
+      const maximum = capabilities?.[limitKey] ?? provider.capabilities[limitKey] ?? 0;
+      if (count > maximum) {
+        return maximum === 0
+          ? `${label} does not support reference ${kind} inputs; skipping to avoid silent ${kind} drop`
+          : `${label} supports at most ${maximum} reference ${kind}(s), ${count} requested; skipping`;
+      }
     }
   }
 
