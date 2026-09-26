@@ -1207,6 +1207,57 @@ describe("FeishuStreamingSession", () => {
     );
   });
 
+  it("reports the final text as not accepted when CardKit rejects the final update after a visible preview", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(4_600);
+    const updateBodies: string[] = [];
+    const replaceBodies: string[] = [];
+    // CardKit closes streaming mode ~10 minutes after it was enabled; every later
+    // content write is rejected while the earlier preview stays visible in the chat.
+    const deps = mockFetches(updateBodies, new Set<number>(), replaceBodies, new Map([[0, 500]]));
+    const log = vi.fn();
+
+    const session = new FeishuStreamingSession(
+      {} as never,
+      {
+        appId: "app_final_update_after_stream_closed",
+        appSecret: "secret",
+      },
+      log,
+      deps,
+    );
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_8",
+        messageId: "om_8",
+        sequence: 1,
+        currentText: "working",
+        sentText: "working",
+        hasNote: false,
+      },
+      lastUpdateTime: 3_000,
+    });
+
+    await expect(session.closeWithResult("working\n\nfinal answer")).rejects.toMatchObject({
+      name: "FeishuStreamingFinalizationError",
+      result: {
+        visibleReplySent: true,
+        content: "working",
+        messageId: "om_8",
+        finalTextAccepted: false,
+      },
+    });
+
+    expect(updateBodies).toHaveLength(1);
+    expect(replaceBodies).toHaveLength(0);
+    expect(log).toHaveBeenCalledWith(
+      "Final update failed: Error: Update card content failed with HTTP 500",
+    );
+    expect(log).toHaveBeenCalledWith(
+      "Final text not accepted by streaming card; reply must be delivered outside the card",
+    );
+  });
+
   it("reports no visible content when final close update fails before any accepted text", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(4_800);

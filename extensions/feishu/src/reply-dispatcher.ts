@@ -579,12 +579,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           closed = error.result;
           finalizationError = error;
         }
-        result = createFeishuReplyDeliveryResult({
-          results: [closed],
-          visibleReplySent: closed.visibleReplySent,
-          content: closed.content,
-          kind: "card",
-        });
+        result = {
+          ...createFeishuReplyDeliveryResult({
+            results: [closed],
+            visibleReplySent: closed.visibleReplySent,
+            content: closed.content,
+            kind: "card",
+          }),
+          ...(closed.finalTextAccepted === false ? { finalTextAccepted: false } : {}),
+        };
         if (result.visibleReplySent) {
           markVisibleReplySent();
         }
@@ -987,7 +990,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     content: string | undefined,
     infoKind?: string,
   ): Promise<FeishuReplyDeliveryResult | undefined> => {
-    if (result?.visibleReplySent === true || !content?.trim()) {
+    // A visible card whose final write was rejected only shows a stale preview; the
+    // completed answer still has to reach the chat through a static card/message.
+    if (
+      (result?.visibleReplySent === true && result.finalTextAccepted !== false) ||
+      !content?.trim()
+    ) {
       return result;
     }
     return sendChunkedTextReply({

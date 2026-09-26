@@ -2679,6 +2679,62 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to a static card when the streaming card rejected the final text after a visible preview", async () => {
+    sendStructuredCardFeishuMock.mockResolvedValueOnce({ messageId: "om-static" });
+    const { options } = createDispatcherHarness();
+    const delivery = await options.deliver({ text: "completed final answer" }, { kind: "final" });
+    // CardKit closed streaming mode (for example after its ~10 minute stream lifetime);
+    // the card still shows the earlier accepted preview but refused the completed answer.
+    requireStreamingInstance(0).closeWithResult.mockRejectedValueOnce(
+      new FeishuStreamingFinalizationError(
+        new Error("Update card content failed: streaming mode is closed (code=300309)"),
+        {
+          visibleReplySent: true,
+          content: "stale preview",
+          messageId: "om-stale-card",
+          finalTextAccepted: false,
+        },
+      ),
+    );
+
+    await expect(options.onIdle?.()).rejects.toThrow("streaming mode is closed");
+    await expect(delivery?.finalization).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
+        content: "completed final answer",
+        messageIds: ["om-static"],
+        visibleReplySent: true,
+      },
+    });
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "completed final answer" }),
+    );
+
+    await options.deliver({ text: "completed final answer" }, { kind: "final" });
+    await options.onIdle?.();
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a visible streaming card when the final text was accepted before close failed", async () => {
+    const { options } = createDispatcherHarness();
+    const delivery = await options.deliver({ text: "accepted final" }, { kind: "final" });
+    requireStreamingInstance(0).closeWithResult.mockRejectedValueOnce(
+      new FeishuStreamingFinalizationError(new Error("close failed"), {
+        visibleReplySent: true,
+        content: "accepted final",
+        messageId: "om-stream",
+      }),
+    );
+
+    await expect(options.onIdle?.()).rejects.toThrow("close failed");
+    await expect(delivery?.finalization).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: { content: "accepted final", visibleReplySent: true },
+    });
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("falls back to post mode when over-limit streaming content was never accepted", async () => {
     sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om-post" });
     const { options } = createDispatcherHarness();
