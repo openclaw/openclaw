@@ -51,6 +51,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Groq (LPU inference)](/providers/groq)
 - [Hugging Face (Inference)](/providers/huggingface)
 - [Kilocode](/providers/kilocode)
+- [Levanto Sage (typed decisions, not chat)](/providers/levanto)
 - [LiteLLM (unified gateway)](/providers/litellm)
 - [llama.cpp (managed or existing server)](/plugins/llama-cpp)
 - [llmman (local + hybrid local/hosted models)](/providers/llmman)

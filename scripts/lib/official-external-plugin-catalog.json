@@ -448,6 +448,21 @@
       }
     },
     {
+      "name": "@openclaw/levanto",
+      "description": "OpenClaw Levanto Sage native decision provider",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": { "id": "levanto", "label": "Levanto Sage" },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/levanto",
+          "npmSpec": "@openclaw/levanto",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.6"
+        }
+      }
+    },
+    {
       "name": "@openclaw/lobster",
       "description": "Lobster workflow tool plugin (typed pipelines + resumable approvals)",
       "source": "official",

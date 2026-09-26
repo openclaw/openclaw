@@ -1,0 +1,35 @@
+{
+  "name": "@openclaw/levanto",
+  "version": "2026.9.5",
+  "description": "OpenClaw Levanto Sage native decision provider",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/levanto",
+      "npmSpec": "@openclaw/levanto",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.9.6"
+    },
+    "compat": {
+      "pluginApi": ">=2026.9.6"
+    },
+    "build": {
+      "bundledDist": false,
+      "openclawVersion": "2026.9.5"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}

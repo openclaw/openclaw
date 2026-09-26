@@ -1,0 +1,131 @@
+{
+  "id": "levanto",
+  "name": "Levanto Sage",
+  "description": "Native Yes/No, Choice, Scale, Sort, and Tags decisions with explicit abstention.",
+  "categories": [
+    "models"
+  ],
+  "enabledByDefault": false,
+  "activation": {
+    "onStartup": true
+  },
+  "providers": [
+    "levanto"
+  ],
+  "contracts": {
+    "decisionProviders": [
+      "levanto"
+    ]
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "levanto",
+        "envVars": [
+          "LEVANTO_API_KEY"
+        ]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "levanto",
+      "method": "api-key",
+      "choiceId": "levanto-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Levanto API key",
+      "groupId": "levanto",
+      "groupLabel": "Levanto Sage",
+      "optionKey": "levantoApiKey",
+      "cliFlag": "--levanto-api-key",
+      "cliOption": "--levanto-api-key <key>",
+      "cliDescription": "Levanto API key",
+      "modelTarget": "utility"
+    }
+  ],
+  "modelCatalog": {
+    "providers": {
+      "levanto": {
+        "baseUrl": "https://sage.levanto.ai",
+        "authScope": "agent",
+        "models": [
+          {
+            "id": "levanto-sage",
+            "name": "Sage",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "levanto-sage",
+                "input": [
+                  "text",
+                  "image"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": true
+                  },
+                  "choice": {
+                    "probabilities": "independent",
+                    "abstention": true,
+                    "minOptions": 2,
+                    "maxOptions": 120,
+                    "maxImageOptions": 20
+                  },
+                  "score": {
+                    "probabilities": "none",
+                    "abstention": false,
+                    "minOptions": 5,
+                    "maxOptions": 5
+                  },
+                  "sort": {
+                    "probabilities": "none",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 120
+                  },
+                  "tags": {
+                    "probabilities": "independent",
+                    "abstention": true,
+                    "minOptions": 1,
+                    "maxOptions": 120
+                  }
+                },
+                "confidence": "provider-specific",
+                "reasoning": {
+                  "modes": [
+                    "auto",
+                    "off",
+                    "on"
+                  ],
+                  "default": "auto",
+                  "metadata": true
+                },
+                "limits": {
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": [
+                      "image/png",
+                      "image/jpeg",
+                      "image/webp"
+                    ],
+                    "remoteUrls": false
+                  }
+                },
+                "billing": {
+                  "unit": "decision-units",
+                  "source": "provider-docs"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
