@@ -152,4 +152,25 @@ describe("renderProviderUsageDetails", () => {
       vi.useRealTimers();
     }
   });
+
+  it("shows how long ago runtime-observed windows were seen", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const now = Date.parse("2026-09-25T12:00:00Z");
+      vi.setSystemTime(now);
+      const windows = [{ label: "5h", usedPercent: 40, resetAt: now + 2 * 60 * 60_000 }];
+      const observed = document.createElement("div");
+      render(renderProviderUsageDetails({ windows, observedAt: now - 12 * 60_000 }), observed);
+
+      const age = observed.querySelector<HTMLElement>(".provider-usage-observed");
+      expect(age?.textContent?.trim()).toBe("Observed 12m ago");
+      expect(age?.title).not.toBe("");
+
+      const polled = document.createElement("div");
+      render(renderProviderUsageDetails({ windows }), polled);
+      expect(polled.querySelector(".provider-usage-observed")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

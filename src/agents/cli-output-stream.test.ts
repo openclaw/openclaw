@@ -911,3 +911,54 @@ it.each([
   expect(completed).toEqual([]);
   expect(parser.getOutput()?.errorText).toBeTruthy();
 });
+
+it("reports Claude rate-limit windows and still observes the session id", () => {
+  const observed: unknown[] = [];
+  const sessionIds: string[] = [];
+  const rateLimitEvent = {
+    type: "rate_limit_event",
+    rate_limit_info: {
+      status: "allowed",
+      unifiedWindows: { five_hour: { utilization: 0.25, resetsAt: 1790305200 } },
+    },
+    session_id: "session-limits",
+  };
+  const parser = createCliJsonlStreamingParser({
+    backend: {
+      command: "claude",
+      output: "jsonl",
+      jsonlDialect: "claude-stream-json",
+      sessionIdFields: ["session_id"],
+    },
+    providerId: "claude-cli",
+    onAssistantDelta: () => {},
+    onSessionId: (sessionId) => sessionIds.push(sessionId),
+    onRateLimitWindows: (windows) => observed.push(windows),
+  });
+
+  parser.push(`${JSON.stringify(rateLimitEvent)}\n`);
+  parser.finish();
+
+  expect(observed).toEqual([[{ label: "5h", usedPercent: 25, resetAt: 1790305200_000 }]]);
+  expect(sessionIds).toEqual(["session-limits"]);
+});
+
+it("does not report rate-limit windows outside the Claude stream-json dialect", () => {
+  const observed: unknown[] = [];
+  const parser = createCliJsonlStreamingParser({
+    backend: { command: "gemini", output: "jsonl", jsonlDialect: "gemini-stream-json" },
+    providerId: "google-gemini-cli",
+    onAssistantDelta: () => {},
+    onRateLimitWindows: (windows) => observed.push(windows),
+  });
+
+  parser.push(
+    `${JSON.stringify({
+      type: "rate_limit_event",
+      rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.25, resetsAt: 1 } } },
+    })}\n`,
+  );
+  parser.finish();
+
+  expect(observed).toEqual([]);
+});

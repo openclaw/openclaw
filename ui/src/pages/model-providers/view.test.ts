@@ -878,6 +878,32 @@ describe("renderModelProviders", () => {
     );
     expect(button(container, "Set API key")).toBeUndefined();
   });
+
+  it("offers no credential actions on a usage-only card", () => {
+    const container = mount(
+      props({
+        cards: [
+          card({
+            id: "claude-cli",
+            displayName: "Claude Code",
+            credentialProviderIds: [],
+            usageOnly: true,
+            usage: {
+              provider: "claude-cli",
+              displayName: "Claude Code",
+              windows: [{ label: "5h", usedPercent: 20, resetAt: Date.now() + 60_000 }],
+              observedAt: Date.now(),
+            },
+          }),
+        ],
+      }),
+    );
+    const row = container.querySelector('[data-provider-id="claude-cli"]')!;
+    expect(text(row)).toContain("5h");
+    expect(row.querySelectorAll("button")).toHaveLength(0);
+    expect(text(row)).not.toContain("Not configured");
+    expect(text(row)).not.toContain("Credentials");
+  });
 });
 
 it("filters provider access without hiding global defaults and exposes an empty result", () => {

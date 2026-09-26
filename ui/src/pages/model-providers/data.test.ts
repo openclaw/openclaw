@@ -537,6 +537,36 @@ describe("buildModelProviderCards", () => {
     expect(firstCard(cards).usage?.costHistory?.periodDays).toBe(30);
   });
 
+  it("keeps Claude Code usage on its own card beside the Anthropic row", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      providerUsage: {
+        updatedAt: 2,
+        providers: [
+          {
+            provider: "anthropic",
+            displayName: "Claude",
+            windows: [],
+            plan: "Admin API",
+            summary: "30d spend",
+          },
+          {
+            provider: "claude-cli",
+            displayName: "Claude Code",
+            windows: [{ label: "5h", usedPercent: 30, resetAt: 900_000 }],
+            observedAt: 1,
+          },
+        ],
+      },
+    });
+    const byId = new Map(cards.map((card) => [card.id, card]));
+    expect(byId.get("anthropic")?.usage).toMatchObject({ plan: "Admin API", summary: "30d spend" });
+    expect(byId.get("claude-cli")?.displayName).toBe("Claude Code");
+    expect(byId.get("claude-cli")?.usage).toMatchObject({ provider: "claude-cli", observedAt: 1 });
+    expect(byId.get("claude-cli")?.usageOnly).toBe(true);
+    expect(byId.get("anthropic")?.usageOnly).toBeUndefined();
+  });
+
   it("attaches local session spend via alias ids and includes cost-only providers", () => {
     const totals = {
       input: 100,

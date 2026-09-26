@@ -9,6 +9,10 @@ import {
   type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  readClaudeCodeUsageSnapshot,
+  recordObservedProviderUsageWindows,
+} from "../../infra/provider-usage.observed.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -381,6 +385,96 @@ describe("usage.status provider usage cache", () => {
     }
   });
 
+  it("stops serving a cached window at its reset time and refreshes before the TTL", async () => {
+    mocks.loadProviderUsageSummary.mockImplementation(async () => ({
+      updatedAt: now,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [
+            { label: "5h", usedPercent: 10, resetAt: 5_000 },
+            { label: "Week", usedPercent: 40, resetAt: 900_000 },
+          ],
+          plan: "Plus",
+        },
+      ],
+    }));
+    const first = (await runUsageStatus()) as UsageSummary;
+    expect(first.providers[0]?.windows.map((window) => window.label)).toEqual(["5h", "Week"]);
+
+    now = 5_000;
+    const served = (await runUsageStatus()) as UsageSummary;
+
+    expect(served.providers[0]?.windows.map((window) => window.label)).toEqual(["Week"]);
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not refresh on every read for a window reported past its reset", async () => {
+    mocks.loadProviderUsageSummary.mockImplementation(async () => ({
+      updatedAt: now,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [{ label: "5h", usedPercent: 10, resetAt: 500 }],
+        },
+      ],
+    }));
+    await runUsageStatus();
+    now = 2_000;
+    const served = (await runUsageStatus()) as UsageSummary;
+    now = 3_000;
+    await runUsageStatus();
+
+    // Shown as the provider reported it, refreshed only on the normal TTL.
+    expect(served.providers[0]?.windows.map((window) => window.label)).toEqual(["5h"]);
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes before the TTL when the first Claude Code windows are observed", async () => {
+    // Mirrors the loader: the observed row comes from the store at load time.
+    mocks.loadProviderUsageSummary.mockImplementation(async () => {
+      const observed = readClaudeCodeUsageSnapshot(now);
+      return {
+        updatedAt: now,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            windows: [{ label: "5h", usedPercent: 10 }],
+          },
+          ...(observed ? [observed] : []),
+        ],
+      };
+    });
+    const providerIds = (summary: unknown) =>
+      (summary as UsageSummary).providers.map((provider) => provider.provider);
+
+    expect(providerIds(await runUsageStatus())).toEqual(["openai"]);
+
+    now = 2_000;
+    recordObservedProviderUsageWindows(
+      "claude-cli",
+      [{ label: "5h", usedPercent: 30, resetAt: 900_000 }],
+      now,
+    );
+    await vi.waitFor(async () => {
+      expect(providerIds(await runUsageStatus())).toEqual(["openai", "claude-cli"]);
+    });
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+
+    // A newer reading of the same window waits for the normal refresh.
+    now = 3_000;
+    recordObservedProviderUsageWindows(
+      "claude-cli",
+      [{ label: "5h", usedPercent: 31, resetAt: 900_000 }],
+      now,
+    );
+    await runUsageStatus();
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps a provider's last-good snapshot when its refresh times out", async () => {
     const first = (await runUsageStatus()) as UsageSummary;
     now = 61_000;
@@ -406,6 +500,59 @@ describe("usage.status provider usage cache", () => {
       expect(retained.updatedAt).toBe(first.updatedAt);
       expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("reports the timeout when every window it would retain has reset", async () => {
+    mocks.loadProviderUsageSummary.mockResolvedValueOnce({
+      updatedAt: now,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [{ label: "5h", usedPercent: 10, resetAt: 5_000 }],
+        },
+      ],
+    });
+    await runUsageStatus();
+    now = 6_000;
+    mocks.loadProviderUsageSummary.mockResolvedValueOnce({
+      updatedAt: now,
+      providers: [{ provider: "openai", displayName: "OpenAI", windows: [], error: "Timeout" }],
+    });
+
+    await runUsageStatus();
+    await mocks.loadProviderUsageSummary.mock.results[1]?.value;
+    await vi.waitFor(async () => {
+      const served = (await runUsageStatus()) as UsageSummary;
+      expect(served.providers).toEqual([
+        expect.objectContaining({ provider: "openai", error: "Timeout" }),
+      ]);
+    });
+  });
+
+  it("expires a window that resets while its refresh is still loading", async () => {
+    mocks.loadProviderUsageSummary.mockImplementation(async () => {
+      const reported = {
+        updatedAt: now,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            windows: [
+              { label: "5h", usedPercent: 10, resetAt: 1_500 },
+              { label: "Week", usedPercent: 40, resetAt: 900_000 },
+            ],
+          },
+        ],
+      };
+      // The providers answer after the 5h window has reset.
+      now = 2_000;
+      return reported;
+    });
+    await runUsageStatus();
+    const served = (await runUsageStatus()) as UsageSummary;
+
+    expect(served.providers[0]?.windows.map((window) => window.label)).toEqual(["Week"]);
   });
 
   it("invalidates cached usage when the runtime config changes", async () => {

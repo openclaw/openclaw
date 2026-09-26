@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { readClaudeCliRateLimitWindows } from "./cli-output-records.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import { parseCliOutput } from "./cli-output.js";
 import {
@@ -738,5 +739,89 @@ describe("parseCliJsonl record usage", () => {
       cacheWrite: undefined,
       total: undefined,
     });
+  });
+});
+
+describe("readClaudeCliRateLimitWindows", () => {
+  // Observed from claude 2.1.280 stream-json output (identifiers removed).
+  const rateLimitEvent = {
+    type: "rate_limit_event",
+    rate_limit_info: {
+      status: "allowed",
+      resetsAt: 1790305200,
+      rateLimitType: "five_hour",
+      overageStatus: "rejected",
+      overageDisabledReason: "out_of_credits",
+      isUsingOverage: false,
+      unifiedWindows: {
+        five_hour: { utilization: 0.03, resetsAt: 1790305200 },
+        seven_day: { utilization: 0.48, resetsAt: 1790784000 },
+      },
+    },
+  };
+
+  it("maps unified windows to percent used and millisecond reset times", () => {
+    expect(readClaudeCliRateLimitWindows(rateLimitEvent)).toEqual([
+      { label: "5h", usedPercent: 3, resetAt: 1790305200_000 },
+      { label: "Week", usedPercent: 48, resetAt: 1790784000_000 },
+    ]);
+  });
+
+  it("reports whole percentages without binary-fraction noise", () => {
+    expect(
+      readClaudeCliRateLimitWindows({
+        type: "rate_limit_event",
+        rate_limit_info: {
+          unifiedWindows: { five_hour: { utilization: 0.56, resetsAt: 1790340000 } },
+        },
+      }),
+    ).toEqual([{ label: "5h", usedPercent: 56, resetAt: 1790340000_000 }]);
+  });
+
+  it("keeps valid windows when a sibling window is malformed", () => {
+    expect(
+      readClaudeCliRateLimitWindows({
+        type: "rate_limit_event",
+        rate_limit_info: {
+          unifiedWindows: {
+            five_hour: { utilization: "high", resetsAt: 1790305200 },
+            seven_day: { utilization: 1.4 },
+            seven_day_overage_included: { utilization: 0.2, resetsAt: 1790784000 },
+          },
+        },
+      }),
+    ).toEqual([{ label: "Week", usedPercent: 100 }]);
+  });
+
+  it("drops reset times that overflow or fall outside the Date range", () => {
+    expect(
+      readClaudeCliRateLimitWindows({
+        type: "rate_limit_event",
+        rate_limit_info: {
+          unifiedWindows: {
+            five_hour: { utilization: 0.1, resetsAt: Number.MAX_VALUE },
+            seven_day: { utilization: 0.2, resetsAt: 8_640_000_000_001 },
+          },
+        },
+      }),
+    ).toEqual([
+      { label: "5h", usedPercent: 10 },
+      { label: "Week", usedPercent: 20 },
+    ]);
+  });
+
+  it("ignores events without unified windows and other record types", () => {
+    expect(
+      readClaudeCliRateLimitWindows({
+        type: "rate_limit_event",
+        rate_limit_info: { status: "allowed", rateLimitType: "five_hour", resetsAt: 1790305200 },
+      }),
+    ).toBeUndefined();
+    expect(
+      readClaudeCliRateLimitWindows({
+        type: "result",
+        rate_limit_info: rateLimitEvent.rate_limit_info,
+      }),
+    ).toBeUndefined();
   });
 });

@@ -75,6 +75,11 @@ export type ProviderUsageSnapshot = {
   plan?: string;
   /** Account identity (email) the usage was fetched under, when known. */
   accountEmail?: string;
+  /**
+   * When a runtime last reported these windows (epoch ms). Set only for usage
+   * observed from runtime output rather than fetched, so it can be out of date.
+   */
+  observedAt?: number;
   error?: string;
 };
 

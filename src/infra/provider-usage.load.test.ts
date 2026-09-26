@@ -10,6 +10,10 @@ import {
   resetProviderUsageSnapshotWithPluginMock,
 } from "./provider-usage-plugin-runtime.test-mocks.js";
 import { loadProviderUsageSummary } from "./provider-usage.load.js";
+import {
+  clearObservedProviderUsageWindows,
+  recordObservedProviderUsageWindows,
+} from "./provider-usage.observed.js";
 import { ignoredErrors } from "./provider-usage.shared.js";
 import {
   loadUsageWithAuth,
@@ -473,5 +477,85 @@ describe("provider-usage.load", () => {
     } finally {
       vi.stubGlobal("fetch", previousFetch);
     }
+  });
+
+  describe("Claude Code subscription row", () => {
+    const observedWindows = [
+      { label: "5h", usedPercent: 3, resetAt: usageNow + 3_600_000 },
+      { label: "Week", usedPercent: 48, resetAt: usageNow + 86_400_000 },
+    ];
+    const observedAt = usageNow - 60_000;
+    const claudeCodeRow = {
+      provider: "claude-cli",
+      displayName: "Claude Code",
+      windows: observedWindows,
+      observedAt,
+    };
+    afterEach(() => clearObservedProviderUsageWindows());
+
+    it("reports Claude Code's windows when Anthropic has no usage credential", async () => {
+      recordObservedProviderUsageWindows("claude-cli", observedWindows, observedAt);
+
+      const summary = await loadProviderUsageSummary({
+        providers: ["anthropic"],
+        config: {},
+        env: {},
+        authStore: { version: 1, profiles: {} },
+        now: usageNow,
+        fetch: createProviderUsageFetch(async () => {
+          throw new Error("usage fetch should not run");
+        }) as unknown as typeof fetch,
+      });
+
+      expect(summary.providers).toEqual([claudeCodeRow]);
+    });
+
+    it.each([
+      [
+        "a setup-token scope refusal",
+        {
+          windows: [],
+          error: "HTTP 403: OAuth token does not meet scope requirement user:profile",
+        },
+      ],
+      ["a timeout", { windows: [], error: "Timeout" }],
+      ["an Admin API row", { windows: [], plan: "Admin API", summary: "30d spend" }],
+      [
+        "fetched subscription windows",
+        { windows: [{ label: "5h", usedPercent: 4 }], plan: "Max (20x)" },
+      ],
+    ])(
+      "keeps the Anthropic row unchanged beside the Claude Code row for %s",
+      async (_name, result) => {
+        recordObservedProviderUsageWindows("claude-cli", observedWindows, observedAt);
+        const anthropic = { provider: "anthropic", displayName: "Claude", ...result };
+        resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(anthropic);
+
+        const summary = await loadUsageWithAuth(
+          loadProviderUsageSummary,
+          [{ provider: "anthropic", token: "token" }],
+          createProviderUsageFetch(async () => makeResponse(200, "{}")),
+        );
+
+        expect(summary.providers).toEqual([anthropic, claudeCodeRow]);
+      },
+    );
+
+    it("does not add the Claude Code row when Claude usage was not requested", async () => {
+      recordObservedProviderUsageWindows("claude-cli", observedWindows, observedAt);
+      resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue({
+        provider: "openai",
+        displayName: "Codex",
+        windows: [{ label: "3h", usedPercent: 12 }],
+      });
+
+      const summary = await loadUsageWithAuth(
+        loadProviderUsageSummary,
+        [{ provider: "openai", token: "token" }],
+        createProviderUsageFetch(async () => makeResponse(200, "{}")),
+      );
+
+      expect(summary.providers.map((provider) => provider.provider)).toEqual(["openai"]);
+    });
   });
 });

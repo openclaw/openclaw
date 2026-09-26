@@ -35,8 +35,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
+  type ProviderUsageSnapshot,
   resolveUsageProviderId,
 } from "../infra/provider-usage.js";
+import { readClaudeCodeUsageSnapshot } from "../infra/provider-usage.observed.js";
 import { resolveActiveProviderThinkingProfile } from "../plugins/provider-thinking-active.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
@@ -65,6 +67,7 @@ import { createStatusModelResolver } from "./status-model-auth.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
 import { appendSessionCostLine, buildStatusUptimeValue } from "./status-runtime-lines.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
+import { selectStatusUsageEntry, sessionRunsOnHostClaudeLogin } from "./status-usage-entry.js";
 
 // Status text assembly gathers runtime/model/session/task facts, then delegates
 // final formatting to status-message.runtime through lazy imports.
@@ -455,7 +458,44 @@ export async function buildStatusReplyParts(
     resolveUsageProviderId(usageStatusProvider, { credentialType: usageCredentialType }) ??
     resolveUsageProviderId(usageProvider, { credentialType: usageCredentialType });
   let usageLine: string | null = null;
-  if (
+  const formatUsageLine = (usageEntry: ProviderUsageSnapshot | undefined) => {
+    if (
+      !usageEntry ||
+      usageEntry.error ||
+      (usageEntry.windows.length === 0 &&
+        !usageEntry.billing?.length &&
+        !usageEntry.summary?.trim())
+    ) {
+      return null;
+    }
+    const summaryLine = formatUsageWindowSummary(usageEntry, {
+      now: Date.now(),
+      maxWindows: 2,
+      includeResets: true,
+    });
+    return summaryLine ? `📊 Usage: ${summaryLine}` : null;
+  };
+  // A Claude Code session on the host login shows the windows Claude Code
+  // reported for that login; no usage request can reach them.
+  const claudeCodeUsage =
+    usageStatusProvider === "claude-cli" ? readClaudeCodeUsageSnapshot(Date.now()) : undefined;
+  const hostClaudeCodeUsage =
+    claudeCodeUsage &&
+    sessionRunsOnHostClaudeLogin({
+      statusProvider: usageStatusProvider,
+      authProvider: usageProvider,
+      modelId: activeRuntimeIsAuthoritative ? modelRefs.active.model || model : selectedLookupModel,
+      sessionKey,
+      sessionEntry,
+      config: cfg,
+      agentId: statusAgentId,
+      agentDir: statusAgentDir,
+    })
+      ? claudeCodeUsage
+      : undefined;
+  if (hostClaudeCodeUsage) {
+    usageLine = formatUsageLine(hostClaudeCodeUsage);
+  } else if (
     currentUsageProvider &&
     shouldLoadUsageSummary({
       provider: currentUsageProvider,
@@ -490,23 +530,7 @@ export async function buildStatusReplyParts(
           clearTimeout(usageTimeout);
         }
       });
-      const usageEntry = usageSummary.providers[0];
-      if (
-        usageEntry &&
-        !usageEntry.error &&
-        (usageEntry.windows.length > 0 ||
-          Boolean(usageEntry.billing?.length) ||
-          Boolean(usageEntry.summary?.trim()))
-      ) {
-        const summaryLine = formatUsageWindowSummary(usageEntry, {
-          now: Date.now(),
-          maxWindows: 2,
-          includeResets: true,
-        });
-        if (summaryLine) {
-          usageLine = `📊 Usage: ${summaryLine}`;
-        }
-      }
+      usageLine = formatUsageLine(selectStatusUsageEntry(usageSummary.providers));
     } catch {
       usageLine = null;
     }

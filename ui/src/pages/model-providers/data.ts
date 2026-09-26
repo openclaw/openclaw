@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
+import { CLAUDE_CODE_USAGE_PROVIDER } from "../../../../src/infra/provider-usage.observed.js";
 import type {
   ProviderUsageSnapshot,
   UsageSummary,
@@ -83,6 +84,8 @@ export type ModelProviderCard = {
   checkingModels?: boolean;
   /** Live provider-reported usage (quota windows, billing, cost history). */
   usage?: ProviderUsageSnapshot;
+  /** Usage for a login a runtime owns; OpenClaw holds no credential to manage here. */
+  usageOnly?: boolean;
   /** Locally-computed session spend for the requested window. */
   localCost?: ModelProviderLocalCost;
 };
@@ -345,7 +348,13 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
   }
 
   for (const snapshot of input.providerUsage?.providers ?? []) {
-    const id = canonicalModelAuthProviderId(snapshot.provider);
+    // Claude Code usage belongs to the host's Claude login, not to the
+    // Anthropic credential the claude-cli alias otherwise maps to, so it keeps
+    // its own card instead of replacing the Anthropic row. Claude Code owns that
+    // login: the card reports usage and offers no credential actions, which
+    // would store an OpenClaw credential that later Claude Code runs pick up.
+    const claudeCode = snapshot.provider === CLAUDE_CODE_USAGE_PROVIDER;
+    const id = claudeCode ? snapshot.provider : canonicalModelAuthProviderId(snapshot.provider);
     if (!id) {
       continue;
     }
@@ -353,6 +362,9 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
       findDraft(drafts, [id]) ??
       ensureDraft(drafts, id, snapshot.displayName || providerDisplayLabel(id));
     draft.ids.add(id);
+    if (claudeCode) {
+      draft.card.usageOnly = true;
+    }
     // usage.status snapshots carry cost history and errors that the
     // auth-status embed drops, so they win when both are present.
     draft.card.usage = snapshot;

@@ -8,7 +8,6 @@ import { shouldPreserveUnavailableSessionAuthProfileOverride } from "../../sessi
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveUserProfileAuthLink } from "../../state/user-model-accounts.js";
-import { resolveNativeModelPrimary } from "../agent-scope.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
@@ -25,8 +24,8 @@ import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js"
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import { resolveModelRouteIntent } from "../model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
-import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
+import { resolveConfiguredModelAuthProfileId } from "./configured-model-profile.js";
 import { createSelectedAuthProfileUnavailableError } from "./selection-error.js";
 import { ensureAuthProfileStore } from "./store-runtime.js";
 
@@ -622,19 +621,14 @@ export async function resolveSessionAuthSelection(params: {
   // Person-linked pins carry user strength and outrank the agent's static @profile.
   const rotatedPinnedProfileId =
     rotatedSource === "user" || rotatedSource === "user-link" ? rotatedProfileId : undefined;
-  const configuredProfile = splitTrailingAuthProfile(
-    resolveNativeModelPrimary(params.cfg, params.agentId) ?? "",
-  ).profile;
-  const defaultModel = configuredProfile
-    ? resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId })
-    : undefined;
   const configuredProfileId =
     params.configuredProfileId?.trim() ||
-    (defaultModel &&
-    resolveModelCatalogIdentityKey({ provider: params.provider, id: modelId }) ===
-      resolveModelCatalogIdentityKey({ provider: defaultModel.provider, id: defaultModel.model })
-      ? configuredProfile
-      : undefined);
+    resolveConfiguredModelAuthProfileId({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      provider: params.provider,
+      modelId,
+    });
   const profileId = rotatedPinnedProfileId ?? configuredProfileId ?? rotatedProfileId;
   if (!profileId) {
     return undefined;

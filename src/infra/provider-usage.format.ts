@@ -1,4 +1,5 @@
 // Formats provider usage summaries for CLI and status output.
+import { formatTimeAgo } from "./format-time/format-relative.js";
 import { clampPercent } from "./provider-usage.shared.js";
 import type {
   ProviderUsageBilling,
@@ -85,7 +86,15 @@ export function formatUsageWindowSummary(
     const resetSuffix = reset ? ` ⏱${reset}` : "";
     return `${window.label} ${remaining.toFixed(0)}% left${resetSuffix}`;
   });
+  if (snapshot.observedAt !== undefined) {
+    parts.push(`as of ${formatObservedAge(snapshot.observedAt, now)}`);
+  }
   return parts.join(" · ");
+}
+
+// Runtime-observed windows can lag a login switch; say how old they are.
+function formatObservedAge(observedAt: number, now: number): string {
+  return formatTimeAgo(Math.max(0, now - observedAt));
 }
 
 export function formatUsageReportLines(summary: UsageSummary, opts?: { now?: number }): string[] {
@@ -104,7 +113,11 @@ export function formatUsageReportLines(summary: UsageSummary, opts?: { now?: num
       lines.push(`  ${entry.displayName}${planSuffix}: ${entry.summary?.trim() || "no data"}`);
       continue;
     }
-    lines.push(`  ${entry.displayName}${planSuffix}`);
+    const observedSuffix =
+      entry.observedAt === undefined
+        ? ""
+        : ` (as of ${formatObservedAge(entry.observedAt, opts?.now ?? Date.now())})`;
+    lines.push(`  ${entry.displayName}${planSuffix}${observedSuffix}`);
     if (entry.summary?.trim()) {
       lines.push(`    ${entry.summary.trim()}`);
     }

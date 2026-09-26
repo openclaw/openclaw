@@ -11,6 +11,10 @@ import { resolveFetch } from "./fetch.js";
 import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
+  CLAUDE_CODE_USAGE_PROVIDER,
+  readClaudeCodeUsageSnapshot,
+} from "./provider-usage.observed.js";
+import {
   PROVIDER_USAGE_TIMEOUT_MS,
   ignoredErrors,
   providerUsageLabel,
@@ -187,6 +191,29 @@ export async function loadProviderUsageSummary(
         (providerOrder.get(left.provider) ?? Number.MAX_SAFE_INTEGER) -
         (providerOrder.get(right.provider) ?? Number.MAX_SAFE_INTEGER),
     );
+  // Usage follows the route an agent runs on. Claude Code keeps its own login,
+  // which OpenClaw never uses for usage requests, so its subscription windows
+  // come from the turn reports Claude Code streams and are shown as their own
+  // Claude Code row. They are never merged into the Anthropic row, whose
+  // credential may be a different account or a pay-per-use key.
+  // The row carries when the windows were reported: a host login switch only
+  // shows up after Claude Code's next turn, so readers can judge staleness.
+  const claudeCodeUsage = descriptors.some(
+    ({ provider }) => provider === "anthropic" || provider === CLAUDE_CODE_USAGE_PROVIDER,
+  )
+    ? readClaudeCodeUsageSnapshot(now)
+    : undefined;
+  if (
+    claudeCodeUsage &&
+    !snapshots.some((entry) => entry.provider === CLAUDE_CODE_USAGE_PROVIDER)
+  ) {
+    const anthropicIndex = snapshots.findIndex((entry) => entry.provider === "anthropic");
+    snapshots.splice(
+      anthropicIndex === -1 ? snapshots.length : anthropicIndex + 1,
+      0,
+      claudeCodeUsage,
+    );
+  }
   const providers = snapshots.filter(
     (entry) =>
       entry.windows.length > 0 ||

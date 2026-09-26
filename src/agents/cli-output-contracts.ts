@@ -1,3 +1,4 @@
+import type { UsageWindow } from "../infra/provider-usage.types.js";
 import type {
   CliBackendConfig,
   CliBackendJsonlUsage,
@@ -142,4 +143,6 @@ export type CliJsonlStreamingParserOptions = {
   onNativeTools?: (tools: unknown) => void;
   onAssistantMessage?: (message: unknown) => void;
   onUsage?: (usage: CliUsage, terminal: boolean) => void;
+  /** Claude subscription windows from a `rate_limit_event`, observed as the turn streams. */
+  onRateLimitWindows?: (windows: UsageWindow[]) => void;
 };

@@ -350,18 +350,20 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
         </div>
         <div class="settings-row__control">
           ${card.usage?.plan ? renderSettingsValue(card.usage.plan) : nothing}
-          ${renderProviderStatus(card)}
+          ${card.usageOnly ? nothing : renderProviderStatus(card)}
         </div>
       </div>
       ${
-        card.profiles.length > 0 && props.canViewProfiles
-          ? renderProviderProfiles(card, {
-              ...props,
-              canMutate: props.canMutate && !props.configBusy,
-              onAddAccount: props.canConnect(card) ? () => props.onConnect(card) : undefined,
-              addAccountDisabled: props.loginBusy || configMutationDisabled(props),
-            })
-          : renderCredentialSummary(card, props.credentialAgentLabel)
+        card.usageOnly
+          ? nothing
+          : card.profiles.length > 0 && props.canViewProfiles
+            ? renderProviderProfiles(card, {
+                ...props,
+                canMutate: props.canMutate && !props.configBusy,
+                onAddAccount: props.canConnect(card) ? () => props.onConnect(card) : undefined,
+                addAccountDisabled: props.loginBusy || configMutationDisabled(props),
+              })
+            : renderCredentialSummary(card, props.credentialAgentLabel)
       }
       <div
         class="model-providers__global-metrics"
@@ -377,8 +379,12 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
         }
         ${renderLocalCost(card, props.costDays)}
       </div>
-      ${renderProviderActions(card, props)} ${renderKeyEditor(card, props)}
-      ${renderProbeResult(props.probeResults[card.id])} ${renderMutationMessage(message)}
+      ${
+        card.usageOnly
+          ? nothing
+          : html`${renderProviderActions(card, props)} ${renderKeyEditor(card, props)}
+            ${renderProbeResult(props.probeResults[card.id])} ${renderMutationMessage(message)}`
+      }
     </div>
   `;
 }

@@ -2921,6 +2921,7 @@ export const en: TranslationMap & {
       costCategories: "Cost categories",
       remaining: "{percent}% left",
       resets: "Resets {date}",
+      observed: "Observed {time}",
     },
     presets: {},
     scope: {},

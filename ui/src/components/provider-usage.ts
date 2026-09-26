@@ -8,11 +8,11 @@ import type {
 } from "../../../src/infra/provider-usage.types.js";
 import { t } from "../i18n/index.ts";
 import { formatUiExternalText } from "../lib/format-error.ts";
-import { formatCompactTokenCount } from "../lib/format.ts";
+import { formatCompactTokenCount, formatRelativeTimestamp } from "../lib/format.ts";
 
 export type ProviderUsageDetails = Pick<
   ProviderUsageSnapshot,
-  "windows" | "billing" | "costHistory" | "summary" | "error"
+  "windows" | "billing" | "costHistory" | "summary" | "error" | "observedAt"
 >;
 
 type ProviderUsageDetailsOptions = {
@@ -67,6 +67,17 @@ function formatProviderReset(resetAt: number | undefined): string | null {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(resetAt));
+}
+
+// Runtime-observed windows can lag a login switch; say how old they are.
+function renderProviderObservedAt(observedAt: number | undefined) {
+  if (observedAt === undefined || !Number.isFinite(observedAt)) {
+    return nothing;
+  }
+  const exact = formatProviderReset(observedAt);
+  return html`<div class="provider-usage-observed" title=${exact ?? nothing}>
+    ${t("usage.providerUsage.observed", { time: formatRelativeTimestamp(observedAt) })}
+  </div>`;
 }
 
 function renderProviderBilling(snapshot: ProviderUsageDetails) {
@@ -292,6 +303,7 @@ export function renderProviderUsageDetails(
             `
         : nothing
     }
+    ${renderProviderObservedAt(snapshot.observedAt)}
     ${
       snapshot.billing && snapshot.billing.length > 0
         ? html`<div class="provider-usage-billing">${renderProviderBilling(snapshot)}</div>`

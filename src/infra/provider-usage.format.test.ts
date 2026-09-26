@@ -55,6 +55,18 @@ describe("provider-usage.format", () => {
     expect(summary).toBe("A 90% left · B 80% left");
   });
 
+  it("says how old runtime-observed windows are", () => {
+    const summary = formatUsageWindowSummary(
+      {
+        ...makeSnapshot([{ label: "5h", usedPercent: 56, resetAt: now + 60_000 }]),
+        observedAt: now - 3 * 60 * 60_000,
+      },
+      { now },
+    );
+
+    expect(summary).toBe("5h 44% left · as of 3h ago");
+  });
+
   it("treats non-positive max windows as all windows and clamps overused percentages", () => {
     const summary = formatUsageWindowSummary(
       makeSnapshot([
@@ -201,6 +213,22 @@ describe("provider-usage.format", () => {
       } as UsageSummary,
       opts: { now },
       expected: ["Usage:", "  Claude (Pro)", "    Daily: 75% left · resets 2h"],
+    },
+    {
+      name: "labels runtime-observed windows with when they were reported",
+      summary: {
+        updatedAt: now,
+        providers: [
+          {
+            provider: "claude-cli",
+            displayName: "Claude Code",
+            observedAt: now - 12 * 60_000,
+            windows: [{ label: "5h", usedPercent: 56, resetAt: now + 2 * 60 * 60_000 }],
+          },
+        ],
+      } as UsageSummary,
+      opts: { now },
+      expected: ["Usage:", "  Claude Code (as of 12m ago)", "    5h: 44% left · resets 2h"],
     },
   ])("$name", ({ summary, opts, expected }) => {
     expect(formatUsageReportLines(summary, opts)).toEqual(expected);

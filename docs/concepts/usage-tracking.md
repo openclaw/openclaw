@@ -20,7 +20,7 @@ title: "Usage tracking"
 - CLI: `openclaw status --usage` prints a full per-provider usage/quota breakdown.
 - CLI: `openclaw models status` lists OAuth/token auth profiles and shows a usage-window summary next to each provider that has one.
 - Control UI: **Usage** shows provider plan and billing cards above OpenClaw's session-derived token and estimated-cost analysis. Anthropic and OpenAI Admin API credentials add provider-reported today, 7-day, and 30-day spend, daily trends, token totals, top models, and cost categories.
-- Control UI: the chat composer's context ring popover shows **plan usage** for subscription providers — per-window bars (5-hour, weekly, model-scoped) with reset times, the provider plan when known (for example `Max (20x)`), and extra-usage credits. Sessions billed through a plan hide per-token dollar estimates; API-billed sessions keep `Est. cost` and the cost-by-type breakdown. Claude Code CLI (`claude-cli`) setups reuse the same Anthropic subscription usage.
+- Control UI: the chat composer's context ring popover shows **plan usage** for subscription providers — per-window bars (5-hour, weekly, model-scoped) with reset times, the provider plan when known (for example `Max (20x)`), and extra-usage credits. Sessions billed through a plan hide per-token dollar estimates; API-billed sessions keep `Est. cost` and the cost-by-type breakdown. The popover still reads the Anthropic row for Claude Code CLI (`claude-cli`) sessions; their subscription windows appear as a separate **Claude Code** usage row on the Usage and Models pages and in `/status` (see below).
 - macOS menu bar: a root "Usage" section appears below Context when provider usage snapshots are available. See [Menu bar](/platforms/mac/menu-bar).
 
 Since v2026.5.7, `openclaw channels list` no longer prints provider usage; it points users to `openclaw status` or `openclaw models list` instead.
@@ -360,6 +360,36 @@ provider-neutral for CLI, app, and Control UI consumers.
   when Anthropic reports them. An explicit Anthropic Admin API key, or an
   auto-detected `sk-ant-admin...` provider profile, instead shows 30-day
   organization cost and Messages API history.
+- **Claude Code** (`claude-cli`): usage follows the route an agent runs on.
+  Claude Code keeps its own login, which OpenClaw never uses for usage
+  requests, so the **Claude Code** row shows the 5-hour and weekly windows from
+  the `rate_limit_event` Claude Code streams during local turns under the
+  Gateway host's own login. It is its own row and card beside the Anthropic
+  one, never merged into it, because an Anthropic credential can be a
+  pay-per-use key or a different account. Claude Code manages that login, so
+  the Models page card shows usage only, with no credential actions. The
+  windows are held in Gateway memory until their reset time, so the row
+  appears after the first such turn following a Gateway start and reaches
+  Gateway clients (`usage.status`, the Control UI), not a separate
+  `openclaw status --usage` process. `/status` shows the Claude Code row for a
+  Claude Code session on the host login: its latest Claude Code turn since the
+  Gateway started met the recording rules below, and its next turn would use
+  no paired node and no auth profile, whether pinned on the session, set on the
+  agent's configured model, or picked automatically. Other sessions keep their
+  provider's usage line instead.
+  Turns are not recorded when they run on a paired node, under an OpenClaw
+  auth profile, with a credential or API endpoint in the Claude Code
+  environment (any `ANTHROPIC_*` variable other than a model selector such as
+  `ANTHROPIC_MODEL`, OpenClaw's Admin API usage and API-key rotation keys, or
+  Vertex project settings; a Claude Code token or auth endpoint; or a provider
+  switch such as Bedrock, Vertex, Foundry, or a gateway), or with a different
+  or skill-provided `CLAUDE_CONFIG_DIR`.
+  The row reflects the last recorded report, carries when
+  it was reported (`observedAt` in `usage.status`, shown as `as of ...` in
+  `/status` and as `Observed ...` on the Control UI usage cards), and clears
+  whenever model authentication changes. Claude Code reports its windows when
+  they change, so after a host `claude auth login` switch or a clear the row
+  can take more than one turn to reappear.
 - **ClawRouter**: API key (`CLAWROUTER_API_KEY`). Shows a monthly budget window
   and typed USD budget when configured; otherwise shows aggregate spend and a
   request/token/cost summary.
