@@ -507,28 +507,18 @@ describe("bootstrapWorker", () => {
     expect(npmRunner.calls[1]?.options.input).toContain("npm pack");
     expect(npmRunner.calls[1]?.options.input).not.toContain("npm install");
     expect(npmRunner.calls[1]?.options.input).toContain("--registry=https://registry.npmjs.org/");
-    expect(npmRunner.calls[1]?.options.input).toContain("package/dist/worker/worker.mjs");
-    expect(npmRunner.calls[1]?.options.input).toContain(
-      "package/dist/worker/file-tool-planning.worker.mjs",
-    );
-    expect(npmRunner.calls[1]?.options.input).toContain(
-      "package/dist/worker/github-exec-launcher.mjs",
-    );
-    expect(npmRunner.calls[1]?.options.input).toContain(
-      "package/dist/worker/image-processor.worker.mjs",
-    );
-    expect(npmRunner.calls[1]?.options.input).toContain(
-      "package/dist/worker/service-child-group-anchor.mjs",
-    );
-    expect(npmRunner.calls[1]?.options.input).toContain(
-      "package/dist/worker/service-child-relay.mjs",
-    );
-    expect(npmRunner.calls[1]?.options.input).toContain(
-      "package/dist/worker/sqlite-store.worker.mjs",
-    );
-    expect(npmRunner.calls[1]?.options.input).toContain(
-      "package/dist/worker/workspace-rsync-receiver.mjs",
-    );
+    for (const artifact of [
+      "worker.mjs",
+      "file-tool-planning.worker.mjs",
+      "github-exec-launcher.mjs",
+      "image-processor.worker.mjs",
+      "service-child-group-anchor.mjs",
+      "service-child-relay.mjs",
+      "sqlite-store.worker.mjs",
+      "workspace-rsync-receiver.mjs",
+    ]) {
+      expect(npmRunner.calls[1]?.options.input).toContain(`package/dist/worker/${artifact}`);
+    }
     expect(npmRunner.calls[1]?.options.input).not.toContain("node_modules");
     expect(npmRunner.calls[1]?.argv.at(-1)).toContain(`openclaw@${VERSION}`);
   });
