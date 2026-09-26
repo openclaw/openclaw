@@ -197,10 +197,16 @@ it("protects a sweep of live leases without writer admission or checkout inspect
   expect(measurements).toMatchObject({ writes: 0, registryReads: 1, checkoutInspections: 0 });
 });
 
-it("protects a leased worktree created after the sweep snapshot before inspecting Git", async () => {
+it("protects a late lease without loading removed history for cleanup limits", async () => {
   const root = tempDirs.make("openclaw-gc-late-lease-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
   addLeasedWorktree(env, root, "initial");
+  registry.insertRegistryWorktree(env, {
+    ...registry.getRegistryWorktree(env, "initial")!,
+    id: "removed-history",
+    removedAt: 0,
+  });
+  const reads = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
   const inspections = vi.spyOn(checkoutInspection, "inspectManagedWorktreeCheckout");
   const result = await new ManagedWorktreeService({ env, now: () => IDLE_GC_MS + 2 }).gc({
     limits: { maxCount: 0 },
@@ -213,4 +219,18 @@ it("protects a leased worktree created after the sweep snapshot before inspectin
   expect(result.protectedCount).toBe(2);
   expect(result.issues.every((issue) => issue.reason === "run lease is active")).toBe(true);
   expect(inspections).not.toHaveBeenCalled();
+  const batches = await Promise.all(
+    reads.mock.calls.flatMap(([, command], index) =>
+      command.type === "worktrees.list" ? [reads.mock.results[index]?.value] : [],
+    ),
+  );
+  expect(batches.length).toBeGreaterThan(0);
+  for (const batch of batches) {
+    expect(batch).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "removed-history" })]),
+    );
+  }
+  expect(await new ManagedWorktreeService({ env }).listRegistryRecords()).toEqual(
+    expect.arrayContaining([expect.objectContaining({ id: "removed-history", removedAt: 0 })]),
+  );
 });
