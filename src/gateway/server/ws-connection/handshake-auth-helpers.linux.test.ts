@@ -6,11 +6,8 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import type { ConnectParams } from "../../../../packages/gateway-protocol/src/schema.js";
-import {
-  isNativeAppUiClient,
-  resolvePairingLocality,
-  shouldAllowSilentLocalPairing,
-} from "./handshake-auth-helpers.js";
+import { isNativeAppUiClient } from "../../../utils/message-channel.js";
+import { resolvePairingLocality, shouldAllowSilentLocalPairing } from "./handshake-auth-helpers.js";
 
 const LINUX_NATIVE_CONNECT_PARAMS = {
   client: {

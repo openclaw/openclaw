@@ -68,6 +68,23 @@ export function isOperatorUiClient(client?: GatewayClientInfoLike | null): boole
   );
 }
 
+const NATIVE_APP_UI_CLIENT_IDS = new Set<string>([
+  GATEWAY_CLIENT_NAMES.MACOS_APP,
+  GATEWAY_CLIENT_NAMES.LINUX_APP,
+  GATEWAY_CLIENT_NAMES.IOS_APP,
+  GATEWAY_CLIENT_NAMES.ANDROID_APP,
+]);
+
+/** Return whether a client is a first-party native app UI: openclaw-macos, -linux, -ios or -android. */
+export function isNativeAppUiClient(client?: GatewayClientInfoLike | null): boolean {
+  const clientId = normalizeGatewayClientName(client?.id);
+  return (
+    normalizeGatewayClientMode(client?.mode) === GATEWAY_CLIENT_MODES.UI &&
+    clientId !== undefined &&
+    NATIVE_APP_UI_CLIENT_IDS.has(clientId)
+  );
+}
+
 /** Return whether a client is the browser Control UI. */
 export function isBrowserOperatorUiClient(client?: GatewayClientInfoLike | null): boolean {
   const clientId = normalizeGatewayClientName(client?.id);

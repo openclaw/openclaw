@@ -292,6 +292,46 @@ describe("normalizeChatSendRequest", () => {
     });
   });
 
+  it("strips the reserved reconnect marker for a non-operator UI client", () => {
+    const iosClient = humanClient();
+    iosClient.connect.client.id = "openclaw-ios";
+    expect(
+      normalizeChatSendRequest({
+        params: validParams({ __controlUiReconnectResume: true }),
+        client: iosClient,
+      }),
+    ).toMatchObject({
+      ok: true,
+      value: { rawMessage: "hello", reconnectResumeRequested: false },
+    });
+  });
+
+  it("still resumes for an operator UI client", () => {
+    expect(
+      normalizeChatSendRequest({
+        params: validParams({ __controlUiReconnectResume: true }),
+        client: humanClient(),
+      }),
+    ).toMatchObject({
+      ok: true,
+      value: { rawMessage: "hello", reconnectResumeRequested: true },
+    });
+  });
+
+  it("keeps the reserved reconnect marker rejected for a public webchat client", () => {
+    const webchatClient = humanClient();
+    webchatClient.connect.client.id = "webchat-ui";
+    webchatClient.connect.client.mode = "webchat";
+    const result = normalizeChatSendRequest({
+      params: validParams({ __controlUiReconnectResume: true }),
+      client: webchatClient,
+    });
+    if (result.ok) {
+      throw new Error("expected the reserved marker to stay rejected");
+    }
+    expect(result.error).toContain("__controlUiReconnectResume");
+  });
+
   it("rejects an empty text-and-attachment request", () => {
     const result = normalizeChatSendRequest({
       params: validParams({ message: "  " }),
