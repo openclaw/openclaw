@@ -90,6 +90,13 @@ The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
 contract for existing adapters. The factory's inferred return type additionally
 provides the typed single-command `execute` method.
 
+Agent registration invalidates discovery when a missing store enters creating
+admission or an existing store begins its actual registration transaction. A
+validated native reopen leaves discovery snapshots current. The host rechecks
+the source after each notification and settles attempted registration even when
+its commit receipt is unavailable; committed topology publication retains the
+original shared-state generation.
+
 ## Carry facts, publish after commit
 
 Placement turn claims and releases execute through the shared-state writer,

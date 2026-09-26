@@ -57,7 +57,7 @@ export function createAgentDatabaseMaintenanceOwner(context: {
     execute(command: MaintenanceCommand) {
       if (command.type === "session.maintenance.release") {
         releasePreparation(command.input.id);
-        return;
+        return undefined;
       }
       if (command.type === "session.maintenance.prepare" && maintenance) {
         context.assertFileIdentity();
@@ -74,7 +74,7 @@ export function createAgentDatabaseMaintenanceOwner(context: {
           databaseOptions: context.databaseOptions,
         });
         preparations.set(command.input.id, { plan: command.input, prepared });
-        return;
+        return undefined;
       }
       if (command.type === "session.maintenance.metadata" && maintenance && replacements) {
         const opened = context.openWriter();

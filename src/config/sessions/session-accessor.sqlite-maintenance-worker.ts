@@ -99,7 +99,7 @@ export function runSessionMaintenanceMetadataInWorker(params: {
           ? (execution, source) => {
               let attempted = false;
               const cleanupSource: AgentDatabaseRequestExecutionSource = {
-                assertCurrent: execution.assertCurrent,
+                assertCurrent: () => execution.assertCurrent(),
                 createAdmission(binding) {
                   return () => ({
                     nativeLocations: binding.nativeLocations,

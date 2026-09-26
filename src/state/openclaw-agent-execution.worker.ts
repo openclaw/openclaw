@@ -216,8 +216,15 @@ function openAgentDatabaseBackend(
       let registration: OpenClawAgentDatabaseRegistrationCommit | undefined;
       let openingResult: Result<OpenClawAgentDatabase, unknown>;
       try {
-        const opened = openOpenClawAgentDatabase(options, lease, (receipt) => {
-          registration = receipt;
+        const opened = openOpenClawAgentDatabase(options, lease, {
+          starting: () =>
+            requestSqliteWorkerOperationAdmission({
+              stage: "prepare",
+              facts: { kind: "agent-registration-start", lease: lease.receipt },
+            }),
+          committed(receipt) {
+            registration = receipt;
+          },
         });
         database = opened;
         releaseBorrow = retainAgentDatabase(opened.db);
@@ -431,10 +438,8 @@ function openAgentDatabaseBackend(
       );
     }
     if (command.type === "session.transcript.initialize" && transcript) {
-      const assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity =
-        transcript.assertIdentity;
-      assertIdentity(command.input);
-      const initialize = transcript.initialize;
+      const kernel: NonNullable<typeof transcript> = transcript;
+      kernel.assertIdentity(command.input);
       const opened = openWriter();
       return runOpenClawAgentWriteTransaction(
         (current) => {
@@ -446,7 +451,7 @@ function openAgentDatabaseBackend(
             kind: "session-transcript-initialized",
             sessionKey: command.input.sessionKey,
           };
-          initialize(
+          kernel.initialize(
             current,
             { agentId: input.agentId, path: input.databasePath, ...command.input },
             command.input.cwd,
@@ -483,9 +488,7 @@ function openAgentDatabaseBackend(
               if (!transcript) {
                 throw new Error("Session transcript initialization was not prepared");
               }
-              const assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity =
-                transcript.assertIdentity;
-              assertIdentity(initialization);
+              transcript.assertIdentity(initialization);
               transcript.initialize(
                 current,
                 { agentId: input.agentId, path: input.databasePath, ...initialization },

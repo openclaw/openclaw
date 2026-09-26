@@ -76,7 +76,7 @@ describe("agent registration commit publication", () => {
 
     runOpenClawStateWriteTransaction(
       () => {
-        registerOpenClawAgentDatabase(fixture.target, witness);
+        registerOpenClawAgentDatabase(fixture.target, { committed: witness });
         expect(witness).not.toHaveBeenCalled();
         expect(trace).toEqual([]);
       },
@@ -113,9 +113,9 @@ describe("agent registration commit publication", () => {
     prepared.assertCurrent();
     expect(before.assertCurrent).toThrow("registry changed");
     expect(during.result).toEqual({ status: "available", entries: [] });
-    registerOpenClawAgentDatabase(fixture.target, (receipt) =>
-      registration.recordCommitted(receipt),
-    );
+    registerOpenClawAgentDatabase(fixture.target, {
+      committed: (receipt) => registration.recordCommitted(receipt),
+    });
     expect(during.assertCurrent).toThrow("registry changed");
     const committed = await prepared.read();
     committed.assertCurrent();
@@ -141,7 +141,7 @@ describe("agent registration commit publication", () => {
     expect(() =>
       runOpenClawStateWriteTransaction(
         () => {
-          registerOpenClawAgentDatabase(fixture.target, witness);
+          registerOpenClawAgentDatabase(fixture.target, { committed: witness });
           expect(witness).not.toHaveBeenCalled();
           expect(trace).toEqual([]);
           throw rollback;
@@ -159,16 +159,36 @@ describe("agent registration commit publication", () => {
     const fixture = createFixture();
     const { trace } = observeStores(fixture.shared);
     const witness = vi.fn();
+    const starting = vi.fn();
 
     registerOpenClawAgentDatabase(
       {
         ...fixture.target,
         path: path.join(fixture.env.OPENCLAW_STATE_DIR, "imports", "copy.sqlite"),
       },
-      witness,
+      { starting, committed: witness },
     );
 
+    expect(starting).not.toHaveBeenCalled();
     expect(witness).not.toHaveBeenCalled();
+    expect(trace).toEqual([]);
+    expect(fixture.registrations()).toEqual([]);
+  });
+
+  it("refuses registration before writing when its start observer rejects", () => {
+    const fixture = createFixture();
+    const { trace } = observeStores(fixture.shared);
+    const refused = new Error("Registration source revoked before its write");
+    const committed = vi.fn();
+    expect(() =>
+      registerOpenClawAgentDatabase(fixture.target, {
+        starting() {
+          throw refused;
+        },
+        committed,
+      }),
+    ).toThrow(refused);
+    expect(committed).not.toHaveBeenCalled();
     expect(trace).toEqual([]);
     expect(fixture.registrations()).toEqual([]);
   });
@@ -176,15 +196,17 @@ describe("agent registration commit publication", () => {
   it("does not repeat a registration witness for a cache hit or validated reopen", async () => {
     const fixture = createFixture();
     const witness = vi.fn();
-    const opened = openOpenClawAgentDatabase(fixture.target, undefined, witness);
+    const opened = openOpenClawAgentDatabase(fixture.target, undefined, { committed: witness });
     expect(witness).toHaveBeenCalledExactlyOnceWith(fixture.receipt);
     const before = fixture.registrations();
     const { trace } = observeStores(fixture.shared);
 
-    expect(openOpenClawAgentDatabase(fixture.target, undefined, witness)).toBe(opened);
+    expect(openOpenClawAgentDatabase(fixture.target, undefined, { committed: witness })).toBe(
+      opened,
+    );
     await closeOpenClawAgentDatabaseByPathAsync(fixture.target.path, fixture.target.agentId);
     expect(opened.db.isOpen).toBe(false);
-    const reopened = openOpenClawAgentDatabase(fixture.target, undefined, witness);
+    const reopened = openOpenClawAgentDatabase(fixture.target, undefined, { committed: witness });
 
     expect(reopened.db === opened.db).toBe(false);
     expect(reopened.db.isOpen).toBe(true);
@@ -202,7 +224,9 @@ describe("agent registration commit publication", () => {
       throw failure;
     });
 
-    expect(() => openOpenClawAgentDatabase(fixture.target, undefined, witness)).toThrow(failure);
+    expect(() =>
+      openOpenClawAgentDatabase(fixture.target, undefined, { committed: witness }),
+    ).toThrow(failure);
 
     expect(witness).toHaveBeenCalledExactlyOnceWith(fixture.receipt);
     expect(trace).toEqual([{ kind: "stores", inTransaction: false }]);
@@ -225,7 +249,7 @@ describe("agent registration commit publication", () => {
       const witness = vi.fn((receipt: OpenClawAgentDatabaseRegistrationCommit) => {
         registration.recordCommitted(receipt);
       });
-      registerOpenClawAgentDatabase(fixture.target, witness);
+      registerOpenClawAgentDatabase(fixture.target, { committed: witness });
       expect(witness).toHaveBeenCalledExactlyOnceWith(fixture.receipt);
       expect(local.trace).toEqual([{ kind: "stores", inTransaction: false }]);
       local.stop();

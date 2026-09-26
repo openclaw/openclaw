@@ -4,7 +4,7 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
-import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import {
   beginSessionWorkAdmission,
   isSessionLifecycleMutationActive,
@@ -591,9 +591,9 @@ it("rolls back planner statistics when maintenance ownership is revoked before c
       .get("idx_agent_session_nodes_updated_at");
   let current = true;
   let reachedCommit = false;
-  const createAdmission = admission.createSqliteWorkerOperationAdmission;
+  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
   const authorization = vi
-    .spyOn(admission, "createSqliteWorkerOperationAdmission")
+    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
     .mockImplementation((callback, attachment) =>
       createAdmission((request, grant) => {
         if (request.stage === "commit") {

@@ -47,7 +47,7 @@ import { createOpenClawAgentDatabaseAdmissionOwner } from "./openclaw-agent-db-a
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
-  OpenClawAgentDatabaseRegistrationCommit,
+  OpenClawAgentDatabaseRegistrationObserver,
 } from "./openclaw-agent-db-contract.js";
 import {
   registerOpenClawAgentDatabaseIdentity,
@@ -192,11 +192,11 @@ export function clearOpenClawAgentDatabaseOpenFailure(
 export function openOpenClawAgentDatabase(
   options: OpenClawAgentDatabaseOptions,
   preparedLease?: ReturnType<typeof prepareOpenClawAgentDatabaseWorkerLease>,
-  onRegistrationCommitted?: (receipt: OpenClawAgentDatabaseRegistrationCommit) => void,
+  registrationObserver?: OpenClawAgentDatabaseRegistrationObserver,
 ): OpenClawAgentDatabase {
   const run = () =>
     runSqliteIntegrityOperationSync(
-      openOpenClawAgentDatabaseSteps(options, undefined, preparedLease, onRegistrationCommitted),
+      openOpenClawAgentDatabaseSteps(options, undefined, preparedLease, registrationObserver),
     );
   const scope = getOpenClawDatabaseMaintenanceScope();
   return scope ? scope.run(run) : run();
@@ -210,7 +210,7 @@ function* openOpenClawAgentDatabaseSteps(
   options: OpenClawAgentDatabaseOptions,
   pending?: PendingAgentDatabaseOpen,
   preparedLease?: ReturnType<typeof prepareOpenClawAgentDatabaseWorkerLease>,
-  onRegistrationCommitted?: (receipt: OpenClawAgentDatabaseRegistrationCommit) => void,
+  registrationObserver?: OpenClawAgentDatabaseRegistrationObserver,
 ): SqliteIntegrityOperation<OpenClawAgentDatabase> {
   const agentId = normalizeAgentId(options.agentId);
   assertAgentDatabaseAdmitted(agentId, { env: options.env });
@@ -446,7 +446,7 @@ function* openOpenClawAgentDatabaseSteps(
     if (!isValidatedReopen) {
       registerOpenClawAgentDatabase(
         { agentId, path: pathname, env: options.env },
-        onRegistrationCommitted,
+        registrationObserver,
       );
       setOpenClawAgentDatabaseValidation(database);
     }

@@ -64,6 +64,11 @@ export type OpenClawAgentDatabaseRegistrationCommit = Readonly<{
   stateDatabaseIdentity: string;
 }>;
 
+export type OpenClawAgentDatabaseRegistrationObserver = {
+  starting?: () => void;
+  committed?: (receipt: OpenClawAgentDatabaseRegistrationCommit) => void;
+};
+
 export type OpenClawAgentDatabaseOwnerInspection =
   | { status: "owned"; agentId: string }
   | { status: "unowned" }
