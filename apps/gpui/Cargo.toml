@@ -42,8 +42,8 @@ wry = { version = "=0.57.0", default-features = false, features = ["os-webview"]
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"
 block2 = "0.6.2"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDate", "NSUUID"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAppearance", "NSView"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSDate", "NSUUID"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAccessibilityProtocols", "NSAppearance", "NSApplication", "NSCell", "NSEvent", "NSImage", "NSMenu", "NSMenuItem", "NSView"] }
 objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore"] }
 
 # Pinned forks retain the tested accessibility and background-activation fixes.

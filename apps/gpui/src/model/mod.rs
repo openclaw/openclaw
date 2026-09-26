@@ -3,6 +3,7 @@ pub mod attachments;
 pub mod chat;
 pub mod commands;
 pub mod composer;
+pub mod gateway_menu;
 pub mod grouping;
 pub mod markdown;
 pub mod model_controls;
@@ -31,3 +32,5 @@ pub mod sidebar_activity;
 pub mod sidebar_batch;
 pub mod sidebar_catalog;
 pub mod sidebar_pr;
+
+pub mod build_info;

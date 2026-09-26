@@ -1,7 +1,10 @@
 use gpui_kit::{Bounds, Pixels, Window};
 use wry::{NewWindowResponse, PageLoadEvent, WebView, WebViewBuilder};
 
-use super::{Command, Events, SurfaceBounds, WebViewEvent, WebViewSpec, WebViewStore, is_web_url};
+use super::{
+    Command, ControlUiCommand, Events, SurfaceBounds, WebViewEvent, WebViewSpec, WebViewStore,
+    is_web_url,
+};
 
 #[cfg(target_os = "macos")]
 #[path = "webview_surface_macos.rs"]
@@ -500,6 +503,38 @@ pub(super) fn request_presentation(view: &WebView) {
     let _ = view.evaluate_script("window.dispatchEvent(new Event('openclaw:native-presentation-request')); window.__OPENCLAW_GPUI_READING_FRAME__?.();");
 }
 
+pub(super) fn control_command(
+    view: &WebView,
+    spec: &WebViewSpec,
+    wake: async_channel::Sender<()>,
+    command: ControlUiCommand,
+) -> Result<async_channel::Receiver<bool>, String> {
+    let auth = spec
+        .auth
+        .as_ref()
+        .ok_or("Control UI authentication is missing")?;
+    let base = crate::model::web_urls::control_base_url(&auth.gateway_url)?;
+    let origin = serde_json::json!(base.origin().ascii_serialization());
+    let mount = serde_json::json!(base.path().trim_end_matches('/'));
+    let event = match command {
+        ControlUiCommand::SystemBusyness => "openclaw:debug-overlay-request",
+    };
+    let event = serde_json::json!(event);
+    let (completed, reply) = async_channel::bounded(1);
+    // Readiness is owned by ShellChromeOwner; recheck the document at dispatch
+    // so a navigation or Access redirect cannot receive a stale native action.
+    view.evaluate_script_with_callback(
+        &format!(
+            "(() => {{ const mount = {mount}; if (location.origin !== {origin} || (mount && location.pathname !== mount && !location.pathname.startsWith(mount + '/')) || window.__OPENCLAW_NATIVE_COMMANDS_READY__ !== true) return false; window.dispatchEvent(new CustomEvent({event})); return true; }})()"
+        ),
+        move |result| {
+            let _ = completed.try_send(result == "true");
+            let _ = wake.try_send(());
+        },
+    ).map_err(|_| "Could not open System busyness.".to_owned())?;
+    Ok(reply)
+}
+
 fn external_scheme(value: &str) -> bool {
     url::Url::parse(value).is_ok_and(|url| matches!(url.scheme(), "mailto" | "tel"))
 }
@@ -524,12 +559,12 @@ const SHORTCUT_SCRIPT: &str = r#"(() => {
       post(JSON.stringify({type:'gpui-escape',nonce}));
       return;
     }
-    const key = event.code === 'Backquote' ? '`' : event.code.startsWith('Key') ? event.code.slice(3).toLowerCase() : event.key.toLowerCase();
+    const key = event.code === 'Backquote' ? '`' : event.code === 'Comma' ? ',' : event.code.startsWith('Key') ? event.code.slice(3).toLowerCase() : event.key.toLowerCase();
     const mod = /Mac/.test(navigator.platform) ? event.metaKey : event.ctrlKey;
     const app = mod && !event.altKey && !event.shiftKey && [',','k','n','b','r','[',']','w','1','2','3','4','5','6','7','8','9'].includes(key);
     const panel = (event.ctrlKey && !event.metaKey && key === '`') || (mod && !event.altKey && event.shiftKey && ['b','s'].includes(key)) || (mod && event.altKey && event.shiftKey && ['u','k','d','j','g','e'].includes(key));
-    const newSession = mod && event.shiftKey && !event.altKey && key === 'o';
-    if (!app && !panel && !newSession) return;
+    const shell = mod && event.shiftKey && !event.altKey && ['o',',','d'].includes(key);
+    if (!app && !panel && !shell) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     post(JSON.stringify({type:'gpui-shortcut',nonce,key,shift:event.shiftKey,alt:event.altKey}));

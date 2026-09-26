@@ -1,6 +1,10 @@
 use super::AppView;
 use crate::ui::{
-    components::{icon_button::icon_button, icons::icon as ui_icon},
+    components::{
+        icon_button::icon_button,
+        icons::icon as ui_icon,
+        identity_menu::{gateway_label, menu_label},
+    },
     theme::{
         self, Appearance, Palette,
         tokens::{TypographyExt, avatar, icon, icon_button as buttons, menu, space, text},
@@ -17,13 +21,6 @@ use gpui_kit::{
     *,
 };
 use serde_json::Value;
-
-#[derive(Clone, Copy)]
-enum ConnectionAction {
-    Reconnect,
-    Switch,
-    SignOut,
-}
 
 pub(in crate::ui) fn append_identity_navigation(
     mut menu: PopupMenu,
@@ -56,19 +53,8 @@ pub(in crate::ui) fn append_identity_navigation(
                 })
             })
     });
-    let connection_epoch = app.epoch;
-    let can_sign_out = app.session.is_some() || app.access_identity.is_some();
-    let version = app
-        .session
-        .as_ref()
-        .and_then(|session| {
-            session
-                .hello()
-                .pointer("/server/version")
-                .and_then(Value::as_str)
-        })
-        .unwrap_or("OpenClaw")
-        .to_owned();
+    let current_id = app.profile.as_ref().map(|profile| profile.id.clone());
+    let version = crate::model::build_info::footer_label(std::time::SystemTime::now());
     let header_view = view.clone();
     let profile_view = view.clone();
     menu = menu
@@ -105,7 +91,7 @@ pub(in crate::ui) fn append_identity_navigation(
                     .h_flex()
                     .w_full()
                     .h(menu::IDENTITY_HEADER_HEIGHT)
-                    .gap(space::MD)
+                    .gap(menu::IDENTITY_AVATAR_GAP)
                     .ml(menu::IDENTITY_LABEL_INSET)
                     .child(avatar)
                     .child(
@@ -144,12 +130,13 @@ pub(in crate::ui) fn append_identity_navigation(
             }),
         )
         .separator();
+    menu = append_gateways(menu, current_id, view.clone(), cx);
     for (title, path, icon, hint) in [
         (
             "Settings",
             "/settings/appearance",
             IconName::Settings,
-            Some("⌘,"),
+            Some("⌘⇧,"),
         ),
         ("Usage", "/usage", IconName::Coins, None),
     ] {
@@ -174,13 +161,20 @@ pub(in crate::ui) fn append_identity_navigation(
             None,
             view.clone(),
         ))
-        .item(identity_page_item(
-            "System busyness",
-            "/debug",
-            IconName::Activity,
-            None,
-            view.clone(),
-        ))
+        .item({
+            let view = view.clone();
+            PopupMenuItem::element(|_, cx| {
+                menu_label(
+                    "System busyness",
+                    IconName::Activity,
+                    Some("⌘⇧D"),
+                    Palette::get(cx),
+                )
+            })
+            .on_click(move |_, window, cx| {
+                let _ = view.update(cx, |this, cx| this.open_system_busyness(window, cx));
+            })
+        })
         .separator();
     menu = menu.submenu_with_icon(
         Some(ui_icon(IconName::CircleQuestionMark, icon::MENU)),
@@ -219,29 +213,6 @@ pub(in crate::ui) fn append_identity_navigation(
             menu
         },
     );
-    let connection_view = view.clone();
-    menu = menu.separator().submenu("Gateways", window, cx, move |mut menu, _, _| {
-        menu = menu.item(PopupMenuItem::new("Manage Gateways…").on_click(|_, _, cx| {
-            crate::gateway_windows::manage(cx);
-        }));
-        for (label, action) in [("Reconnect", ConnectionAction::Reconnect), ("Switch Gateway…", ConnectionAction::Switch), ("Sign out", ConnectionAction::SignOut)] {
-            let view = connection_view.clone();
-            menu = menu.item(PopupMenuItem::new(label).disabled(matches!(action, ConnectionAction::SignOut) && !can_sign_out).on_click(move |_, window, cx| {
-                let _ = view.update(cx, |this, cx| {
-                    if this.epoch != connection_epoch {
-                        this.mutation_error("Connection changed. Reopen the account menu before changing it.".into());
-                        return;
-                    }
-                    match action {
-                        ConnectionAction::Reconnect => this.retry(window, cx),
-                        ConnectionAction::Switch => this.switch_gateway(window, cx),
-                        ConnectionAction::SignOut => this.sign_out(window, cx),
-                    }
-                });
-            }));
-        }
-        menu
-    });
     let about_view = view.clone();
     let menu_view = cx.entity().downgrade();
     menu.separator().item(PopupMenuItem::element(move |_, cx| {
@@ -319,33 +290,48 @@ fn identity_page_item(
         })
 }
 
-fn menu_label(title: &str, icon: IconName, hint: Option<&str>, p: Palette) -> AnyElement {
-    div()
-        .h_flex()
-        .w_full()
-        .h(menu::IDENTITY_ROW_HEIGHT)
-        .gap(space::MD)
-        .ml(menu::IDENTITY_LABEL_INSET)
-        .typography(text::MENU)
-        .text_color(p.text)
-        .child(
-            div()
-                .w(icon::LEADING)
-                .h(icon::LEADING)
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(ui_icon(icon, icon::MENU).text_color(p.muted)),
-        )
-        .child(div().flex_1().truncate().child(title.to_owned()))
-        .when_some(hint, |el, hint| {
-            el.child(
-                div()
-                    .typography(text::BUILD)
-                    .text_color(p.muted)
-                    .child(hint.to_owned()),
+fn append_gateways(
+    mut menu: PopupMenu,
+    current_id: Option<String>,
+    view: WeakEntity<AppView>,
+    cx: &App,
+) -> PopupMenu {
+    let rows = crate::gateway_windows::snapshot(current_id.as_deref(), cx);
+    menu = menu.label("GATEWAY");
+    for row in rows.iter() {
+        let id = row.id.clone();
+        let display = row.clone();
+        menu = menu.item(
+            PopupMenuItem::element(move |_, cx| gateway_label(&display, Palette::get(cx)))
+                .on_click(move |_, _, cx| crate::gateway_windows::open_id(&id, cx)),
+        );
+    }
+    if let Some(current) = rows.iter().find(|row| row.checked && !row.primary) {
+        let id = current.id.clone();
+        menu = menu.item(
+            PopupMenuItem::element(|_, cx| {
+                menu_label("Set as primary…", IconName::Star, None, Palette::get(cx))
+            })
+            .on_click(move |_, _, cx| {
+                if let Err(error) = crate::gateway_windows::set_primary(&id, cx) {
+                    let _ = view.update(cx, |this, cx| {
+                        this.mutation_error(error);
+                        cx.notify();
+                    });
+                }
+            }),
+        );
+    }
+    menu.item(
+        PopupMenuItem::element(|_, cx| {
+            menu_label(
+                "Gateway settings…",
+                IconName::Server,
+                None,
+                Palette::get(cx),
             )
         })
-        .into_any_element()
+        .on_click(|_, _, cx| crate::gateway_windows::manage(cx)),
+    )
+    .separator()
 }

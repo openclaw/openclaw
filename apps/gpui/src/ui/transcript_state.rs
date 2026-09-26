@@ -60,6 +60,7 @@ impl AppView {
             serde_json::to_value(params).expect("history parameters"),
             cx,
             move |this, result, cx| {
+                let commands_scope = this.composer_commands_scope();
                 let old_count = this.chat.messages.len();
                 let old_offset = this.transcript_list.logical_scroll_top();
                 let changed = match result {
@@ -89,6 +90,7 @@ impl AppView {
                         this.transcript_list.remeasure();
                     }
                     this.composer_history_loaded(cx);
+                    this.refresh_composer_commands(commands_scope, cx);
                     this.reveal_search_target(cx);
                     cx.notify();
                 }

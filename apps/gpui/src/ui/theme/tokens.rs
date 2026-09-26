@@ -320,7 +320,11 @@ pub mod menu {
     pub const NATIVE_PADDING: Pixels = space::XS;
     pub const NATIVE_ROW_GAP: Pixels = space::XXS;
     pub const IDENTITY_ROW_HEIGHT: Pixels = px(30.);
-    pub const IDENTITY_LABEL_INSET: Pixels = px(-primitives::space::XXS);
+    pub const GATEWAY_STATUS_SIZE: Pixels = px(7.);
+    pub const GATEWAY_CHECK_SIZE: Pixels = px(12.);
+    // PopupMenu reserves its 12px icon plus 4px gap when Help has an icon.
+    pub const IDENTITY_LABEL_INSET: Pixels = px(-18.);
+    pub const IDENTITY_AVATAR_GAP: Pixels = px(3.);
     pub const IDENTITY_HELP_MIN_WIDTH: Pixels = px(160.);
     pub const IDENTITY_HELP_MAX_WIDTH: Pixels = px(220.);
 }

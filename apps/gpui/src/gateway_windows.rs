@@ -11,6 +11,10 @@ use crate::gateway::{
     config::{self, ConnectionConfig},
     profiles::{GatewayProfile, ProfileStore},
 };
+pub use crate::model::gateway_menu::GatewayStatus;
+use crate::model::gateway_menu::{
+    MenuRow, NativeMenuEntry, menu_rows, native_entries, profile_statuses,
+};
 use crate::ui::theme::tokens::window as metrics;
 
 /// `OPENCLAW_GPUI_BACKGROUND=1` opens and reuses windows without activating the
@@ -25,67 +29,62 @@ pub struct OpenGateway {
     pub index: usize,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum GatewayStatus {
-    Connected,
-    Connecting,
-    NeedsSignIn,
-    #[default]
-    Offline,
+#[derive(Action, Clone, PartialEq, Deserialize)]
+#[action(namespace = openclaw, no_json)]
+pub struct NewGatewayWindow {
+    pub index: usize,
 }
 
-impl GatewayStatus {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Connected => "🟢",
-            Self::Connecting => "🟡",
-            Self::NeedsSignIn => "🟠",
-            Self::Offline => "⚪",
-        }
-    }
+struct GatewayWindow {
+    handle: AnyWindowHandle,
+    view_id: EntityId,
 }
 
 pub struct GatewayWindows {
     runtime: Handle,
     pub profiles: Vec<GatewayProfile>,
     pub primary: Option<String>,
-    windows: BTreeMap<String, AnyWindowHandle>,
-    statuses: BTreeMap<String, GatewayStatus>,
+    windows: BTreeMap<String, Vec<GatewayWindow>>,
+    statuses: BTreeMap<EntityId, (String, GatewayStatus)>,
+    menu_rows: Option<Vec<MenuRow>>,
     focused: Option<String>,
     manager: Option<AnyWindowHandle>,
 }
 impl Global for GatewayWindows {}
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct MenuRow {
-    pub id: String,
-    pub name: String,
-    pub number: Option<usize>,
-    pub primary: bool,
-    pub checked: bool,
-    pub status: GatewayStatus,
+pub fn snapshot(current: Option<&str>, cx: &App) -> Vec<MenuRow> {
+    let Some(fleet) = cx.try_global::<GatewayWindows>() else {
+        return Vec::new();
+    };
+    let statuses = profile_statuses(
+        fleet
+            .statuses
+            .values()
+            .map(|(id, status)| (id.as_str(), *status)),
+    );
+    menu_rows(
+        &fleet.profiles,
+        fleet.primary.as_deref(),
+        current,
+        &statuses,
+    )
 }
 
-pub fn menu_rows(
-    profiles: &[GatewayProfile],
-    primary: Option<&str>,
-    focused: Option<&str>,
-    statuses: &BTreeMap<String, GatewayStatus>,
-) -> Vec<MenuRow> {
-    let mut ordered: Vec<_> = profiles.iter().collect();
-    ordered.sort_by_key(|p| (Some(p.id.as_str()) != primary, p.order, &p.id));
-    ordered
+pub fn set_primary(id: &str, cx: &mut App) -> Result<(), String> {
+    ProfileStore::load()?.set_primary(id)?;
+    reload(cx)
+}
+
+pub fn open_id(id: &str, cx: &mut App) {
+    if let Some(profile) = cx
+        .global::<GatewayWindows>()
+        .profiles
         .iter()
-        .enumerate()
-        .map(|(index, p)| MenuRow {
-            id: p.id.clone(),
-            name: p.name.clone(),
-            number: (index < 9).then_some(index + 1),
-            primary: Some(p.id.as_str()) == primary,
-            checked: Some(p.id.as_str()) == focused,
-            status: statuses.get(&p.id).copied().unwrap_or_default(),
-        })
-        .collect()
+        .find(|p| p.id == id)
+        .cloned()
+    {
+        open_profile(profile, cx);
+    }
 }
 
 pub fn install(runtime: Handle, store: &ProfileStore, cx: &mut App) {
@@ -95,34 +94,53 @@ pub fn install(runtime: Handle, store: &ProfileStore, cx: &mut App) {
         primary: store.primary_id().map(str::to_owned),
         windows: BTreeMap::new(),
         statuses: BTreeMap::new(),
+        menu_rows: None,
         focused: None,
         manager: None,
     });
     for index in 0..9 {
-        cx.bind_keys([KeyBinding::new(
-            &format!("cmd-{}", index + 1),
-            OpenGateway { index },
-            None,
-        )]);
+        cx.bind_keys([
+            KeyBinding::new(&format!("cmd-{}", index + 1), OpenGateway { index }, None),
+            KeyBinding::new(
+                &format!("cmd-alt-{}", index + 1),
+                NewGatewayWindow { index },
+                None,
+            ),
+        ]);
     }
     cx.on_action(|action: &OpenGateway, cx| {
-        let profile = cx
-            .global::<GatewayWindows>()
-            .profiles
-            .get(action.index)
-            .cloned();
-        if let Some(profile) = profile {
-            open_profile(profile, cx);
+        if let Some(row) = snapshot(None, cx).get(action.index) {
+            open_id(&row.id, cx);
+        }
+    });
+    cx.on_action(|action: &NewGatewayWindow, cx| {
+        if let Some(row) = snapshot(None, cx).get(action.index)
+            && let Some(profile) = cx
+                .global::<GatewayWindows>()
+                .profiles
+                .iter()
+                .find(|p| p.id == row.id)
+                .cloned()
+        {
+            let config = config::for_profile(&profile);
+            open(Some(profile), config, cx);
         }
     });
     cx.on_action(|_: &crate::ManageGateways, cx| manage(cx));
     cx.on_window_closed(|cx, _| {
         let remaining = cx.windows();
         let fleet = cx.global_mut::<GatewayWindows>();
-        fleet.windows.retain(|_, handle| remaining.contains(handle));
-        fleet
-            .statuses
-            .retain(|id, _| fleet.windows.contains_key(id));
+        fleet.windows.retain(|_, windows| {
+            windows.retain(|window| remaining.contains(&window.handle));
+            !windows.is_empty()
+        });
+        fleet.statuses.retain(|view, _| {
+            fleet
+                .windows
+                .values()
+                .flatten()
+                .any(|window| window.view_id == *view)
+        });
         if fleet
             .focused
             .as_ref()
@@ -137,6 +155,7 @@ pub fn install(runtime: Handle, store: &ProfileStore, cx: &mut App) {
             fleet.manager = None;
         }
         refresh_menus(cx);
+        cx.refresh_windows();
         if remaining.is_empty() {
             cx.quit();
         }
@@ -151,13 +170,25 @@ pub fn reload(cx: &mut App) -> Result<(), String> {
     fleet.profiles = store.list();
     fleet.primary = store.primary_id().map(str::to_owned);
     refresh_menus(cx);
+    cx.refresh_windows();
     Ok(())
 }
 
 pub fn focus(profile: Option<&str>, cx: &mut App) {
-    let Some(fleet) = cx.try_global::<GatewayWindows>() else {
+    if cx.try_global::<GatewayWindows>().is_none() {
         return;
-    };
+    }
+    let active = cx.active_window();
+    if let Some(id) = profile
+        && let Some(windows) = cx.global_mut::<GatewayWindows>().windows.get_mut(id)
+        && let Some(index) = windows
+            .iter()
+            .position(|window| Some(window.handle) == active)
+    {
+        let window = windows.remove(index);
+        windows.push(window);
+    }
+    let fleet = cx.global::<GatewayWindows>();
     if fleet.focused.as_deref() == profile {
         return;
     }
@@ -165,49 +196,66 @@ pub fn focus(profile: Option<&str>, cx: &mut App) {
     refresh_menus(cx);
 }
 
-pub fn status(profile: Option<&str>, status: GatewayStatus, cx: &mut App) {
+pub fn status<T: 'static>(profile: Option<&str>, status: GatewayStatus, cx: &mut Context<T>) {
     let Some(id) = profile else {
         return;
     };
     let Some(fleet) = cx.try_global::<GatewayWindows>() else {
         return;
     };
-    if fleet.statuses.get(id) == Some(&status) {
+    let view_id = cx.entity_id();
+    if fleet
+        .statuses
+        .get(&view_id)
+        .is_some_and(|(_, previous)| *previous == status)
+    {
         return;
     }
     cx.global_mut::<GatewayWindows>()
         .statuses
-        .insert(id.to_owned(), status);
+        .insert(view_id, (id.to_owned(), status));
     refresh_menus(cx);
+    cx.refresh_windows();
 }
 
 pub fn close_profile(id: &str, cx: &mut App) -> bool {
-    let handle = cx.global_mut::<GatewayWindows>().windows.remove(id);
-    handle.is_some_and(|handle| {
-        handle
+    let windows = cx
+        .global_mut::<GatewayWindows>()
+        .windows
+        .remove(id)
+        .unwrap_or_default();
+    let mut closed = false;
+    for window in windows {
+        closed |= window
+            .handle
             .update(cx, |_, window, _| window.remove_window())
-            .is_ok()
-    })
+            .is_ok();
+    }
+    closed
 }
 
 pub fn open_profile(profile: GatewayProfile, cx: &mut App) {
-    if let Some(handle) = cx
+    let handles: Vec<_> = cx
         .global::<GatewayWindows>()
         .windows
         .get(&profile.id)
-        .copied()
-        && handle
+        .map(|windows| windows.iter().rev().map(|window| window.handle).collect())
+        .unwrap_or_default();
+    for handle in handles {
+        if handle
             .update(cx, |_, window, _| {
                 if activates() {
                     window.activate_window();
                 }
             })
             .is_ok()
-    {
-        if activates() {
-            cx.activate(true);
+        {
+            focus(Some(&profile.id), cx);
+            if activates() {
+                cx.activate(true);
+            }
+            return;
         }
-        return;
     }
     let config = config::for_profile(&profile);
     open(Some(profile), config, cx);
@@ -222,11 +270,12 @@ pub fn open(
     let title = profile.as_ref().map_or("OpenClaw", |p| &p.name).to_owned();
     let id = profile.as_ref().map(|p| p.id.clone());
     let bounds = Bounds::centered(None, metrics::GATEWAY_SIZE, cx);
+    let mut view_id = None;
     match cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_min_size: Some(metrics::GATEWAY_MIN_SIZE),
-            app_id: Some("org.openclaw.gpui".into()),
+            app_id: Some("ai.openclaw.gpui".into()),
             focus: activates(),
             ..TitleBar::window_options()
         },
@@ -234,14 +283,20 @@ pub fn open(
             window.set_window_title(&title);
             crate::ui::theme::apply(window, cx);
             let view = cx.new(|cx| crate::ui::AppView::new(runtime, config, profile, window, cx));
+            view_id = Some(view.entity_id());
             cx.new(|cx| Root::new(view, window, cx))
         },
     ) {
         Ok(handle) => {
-            if let Some(id) = id {
+            if let (Some(id), Some(view_id)) = (id, view_id) {
                 cx.global_mut::<GatewayWindows>()
                     .windows
-                    .insert(id.clone(), handle.into());
+                    .entry(id.clone())
+                    .or_default()
+                    .push(GatewayWindow {
+                        handle: handle.into(),
+                        view_id,
+                    });
                 focus(Some(&id), cx);
             }
             if activates() {
@@ -295,71 +350,31 @@ pub fn manage(cx: &mut App) {
 
 fn refresh_menus(cx: &mut App) {
     let fleet = cx.global::<GatewayWindows>();
-    let rows = menu_rows(
-        &fleet.profiles,
-        fleet.primary.as_deref(),
-        fleet.focused.as_deref(),
-        &fleet.statuses,
-    );
-    let mut items = Vec::new();
-    for (index, row) in rows.iter().enumerate() {
-        items.push(
-            MenuItem::action(
-                format!("{}  {}", row.status.label(), row.name),
-                OpenGateway { index },
-            )
-            .checked(row.checked),
-        );
-        if row.primary && rows.len() > 1 {
-            items.push(MenuItem::separator());
-        }
-    }
-    if !rows.is_empty() {
-        items.push(MenuItem::separator());
-    }
-    items.push(MenuItem::action("Manage Gateways…", crate::ManageGateways));
-    crate::set_menus(Menu::new("Gateways").items(items), cx);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{GatewayStatus, menu_rows};
-    use crate::gateway::profiles::{GatewayKind, GatewayProfile};
-    use std::collections::BTreeMap;
-
-    #[test]
-    fn menu_keeps_primary_first_numbers_nine_and_checks_only_focused_profile() {
-        let profiles: Vec<_> = (0..11)
-            .map(|n| GatewayProfile {
-                id: format!("g{n}"),
-                name: format!("Gateway {n}"),
-                order: n,
-                kind: GatewayKind::Direct {
-                    url: format!("wss://g{n}.example/"),
-                },
-            })
-            .collect();
-        let statuses = BTreeMap::from([("g3".into(), GatewayStatus::Connected)]);
-        let rows = menu_rows(&profiles, Some("g5"), Some("g3"), &statuses);
-        assert_eq!(
-            rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
-            [
-                "g5", "g0", "g1", "g2", "g3", "g4", "g6", "g7", "g8", "g9", "g10"
-            ]
-        );
-        assert!(rows[0].primary);
-        assert!(!rows[0].checked);
-        assert!(rows[4].checked);
-        assert_eq!(rows[4].status, GatewayStatus::Connected);
-        assert_eq!(rows.iter().filter(|r| r.checked).count(), 1);
-        assert_eq!(
-            rows.iter().filter_map(|r| r.number).collect::<Vec<_>>(),
-            (1..=9).collect::<Vec<_>>()
-        );
-        assert!(
-            menu_rows(&profiles, Some("g5"), None, &statuses)
+    let rows = snapshot(fleet.focused.as_deref(), cx);
+    let structure_changed = fleet.menu_rows.as_ref().is_none_or(|previous| {
+        previous.len() != rows.len()
+            || !previous
                 .iter()
-                .all(|r| !r.checked)
-        );
+                .zip(&rows)
+                .all(|(a, b)| a.has_same_structure(b))
+    });
+    if structure_changed || !cfg!(target_os = "macos") {
+        let items = native_entries(&rows).into_iter().map(|entry| match entry {
+            NativeMenuEntry::Gateway {
+                index,
+                new_window: false,
+            } => MenuItem::action(rows[index].name.clone(), OpenGateway { index })
+                .checked(rows[index].checked),
+            NativeMenuEntry::Gateway {
+                index,
+                new_window: true,
+            } => MenuItem::action(rows[index].new_window_title(), NewGatewayWindow { index }),
+            NativeMenuEntry::Separator => MenuItem::separator(),
+            NativeMenuEntry::Manage => MenuItem::action("Manage Gateways…", crate::ManageGateways),
+        });
+        crate::set_menus(Menu::new("Gateways").items(items), cx);
     }
+    #[cfg(target_os = "macos")]
+    crate::gateway_menu_macos::update(&rows);
+    cx.global_mut::<GatewayWindows>().menu_rows = Some(rows);
 }

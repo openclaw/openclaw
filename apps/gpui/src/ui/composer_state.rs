@@ -1,5 +1,5 @@
 use crate::{
-    gateway::composer_rpc::ChatSend,
+    gateway::composer_rpc::{CatalogScope, ChatSend},
     model::{
         attachments::Attachment,
         chat::{Message, RequestScope},
@@ -36,7 +36,7 @@ pub(super) struct ComposerUi {
     pub reading: usize,
     pub pending: HashMap<String, PendingSend>,
     pub suppress_enter: bool,
-    pub catalog_cache: HashMap<(u64, Option<String>, String), Vec<Command>>,
+    pub catalog_cache: HashMap<(u64, CatalogScope), Vec<Command>>,
 }
 
 impl ComposerUi {

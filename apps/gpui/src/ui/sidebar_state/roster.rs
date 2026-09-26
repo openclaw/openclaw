@@ -77,6 +77,7 @@ impl AppView {
                     .and_then(|value| SessionPage::parse(value).map_err(|error| error.to_string()))
                 {
                     Ok(mut page) => {
+                        let commands_scope = this.composer_commands_scope();
                         this.sidebar_state.owners_known = page.owners.is_some();
                         this.sidebar_state.owners = page.owners.take().unwrap_or_default();
                         retain_newer_rows(&this.rows, &mut page.sessions);
@@ -114,6 +115,7 @@ impl AppView {
                                 .collect();
                         }
                         this.sidebar_state.created_order.observe(&this.rows);
+                        this.refresh_composer_commands(commands_scope, cx);
                         this.refresh_sidebar_avatars(cx);
                         this.sync_sidebar_activity(cx);
                         this.sync_sidebar_pull_requests(cx);
@@ -156,6 +158,7 @@ impl AppView {
         payload: &Value,
         cx: &mut Context<Self>,
     ) {
+        let commands_scope = self.composer_commands_scope();
         let watched = self.sidebar_state.pull_requests.watched_keys();
         let bindings: Vec<_> = self
             .rows
@@ -224,6 +227,7 @@ impl AppView {
         self.sync_sidebar_activity(cx);
         self.sync_sidebar_pull_requests(cx);
         self.refresh_sidebar_avatars(cx);
+        self.refresh_composer_commands(commands_scope, cx);
         cx.notify();
     }
     pub(in crate::ui) fn toggle_children(&mut self, key: String, cx: &mut Context<Self>) {

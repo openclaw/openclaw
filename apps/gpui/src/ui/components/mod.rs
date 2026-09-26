@@ -6,6 +6,7 @@ pub(crate) mod facepile;
 pub(crate) mod hover_card;
 pub(crate) mod icon_button;
 pub(crate) mod icons;
+pub(crate) mod identity_menu;
 pub(crate) mod list;
 mod list_row;
 pub(crate) mod menu;

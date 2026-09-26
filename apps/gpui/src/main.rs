@@ -1,6 +1,10 @@
 mod assets;
 mod gateway;
+#[cfg(target_os = "macos")]
+mod gateway_menu_macos;
 mod gateway_windows;
+#[cfg(target_os = "macos")]
+mod macos_app_icon;
 mod model;
 mod ui;
 mod web_data_store;
@@ -23,6 +27,8 @@ gpui_kit::actions!(
         CloseWindow,
         MinimizeWindow,
         OpenSettings,
+        SystemBusyness,
+        SignOutGateway,
         TogglePanels,
         PanelBrowser,
         PanelTerminal,
@@ -141,6 +147,8 @@ fn main() {
         .with_assets(assets::AppAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            #[cfg(target_os = "macos")]
+            macos_app_icon::install();
             ui::init_session_menu_shortcuts(cx);
             if let Err(error) = cx.text_system().add_fonts(vec![
                 std::borrow::Cow::Borrowed(include_bytes!(
@@ -190,7 +198,8 @@ fn main() {
                 KeyBinding::new("escape", Escape, None),
                 KeyBinding::new("cmd-w", CloseWindow, None),
                 KeyBinding::new("cmd-m", MinimizeWindow, None),
-                KeyBinding::new("cmd-,", OpenSettings, None),
+                KeyBinding::new("cmd-shift-,", OpenSettings, None),
+                KeyBinding::new("cmd-shift-d", SystemBusyness, None),
                 KeyBinding::new("ctrl-`", PanelTerminal, None),
                 KeyBinding::new("cmd-shift-b", PanelWorkspace, None),
                 KeyBinding::new("cmd-shift-s", PanelCompanion, None),
@@ -215,6 +224,7 @@ fn set_menus(gateways: Menu, cx: &mut App) {
     cx.set_menus([
         Menu::new("OpenClaw").items([
             MenuItem::action("Settings…", OpenSettings),
+            MenuItem::action("Sign Out of Gateway…", SignOutGateway),
             MenuItem::separator(),
             MenuItem::action("Quit OpenClaw", Quit),
         ]),
