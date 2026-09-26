@@ -101,7 +101,7 @@ export async function readWorkspaceStateSnapshot(
       const reply = await executeExistingOpenClawStateRead(
         { path: context.admission.databasePath, env: context.environment },
         { type: "workspace.snapshot", workspaceDir: capturedWorkspaceDir },
-        { current: true },
+        { context, current: true },
       );
       context.admission.assertCurrent();
       assertCurrent?.();
