@@ -369,25 +369,6 @@ describe("config observe recovery", () => {
     });
   });
 
-  it("auto-restores when metadata disappears from an otherwise valid config", async () => {
-    await withSuiteHome(async (home) => {
-      const { deps, configPath, auditPath } = makeDeps(home);
-      await seedConfigBackup(configPath, recoverableTelegramConfig);
-      const clobbered = await writeConfigRaw(configPath, {
-        update: { channel: "beta" },
-        gateway: { mode: "local" },
-        channels: { telegram: { enabled: true, dmPolicy: "pairing", groupPolicy: "allowlist" } },
-      });
-
-      const recovered = await recoverSuspiciousConfigRead({ deps, configPath, ...clobbered });
-
-      expect((recovered.parsed as { meta?: unknown }).meta).toEqual(recoverableTelegramConfig.meta);
-      const observe = await readLastObserveEvent(auditPath);
-      expect(observe?.restoredFromBackup).toBe(true);
-      expectSuspiciousIncludes(observe, "missing-meta-vs-last-good");
-    });
-  });
-
   it("auto-restores when gateway mode disappears from the last-good shape", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath } = makeDeps(home);
@@ -474,6 +455,28 @@ describe("config observe recovery", () => {
       const observe = await readLastObserveEvent(auditPath);
       expect(observe?.restoredFromBackup).toBe(true);
       expectSuspiciousMatching(observe, /^size-drop-vs-last-good:/);
+    });
+  });
+
+  it("does not auto-restore when only metadata is missing from a valid config (#126806)", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, auditPath } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      const clobbered = await writeConfigRaw(configPath, {
+        update: { channel: "beta" },
+        gateway: { mode: "local" },
+        channels: { telegram: { enabled: true, dmPolicy: "pairing", groupPolicy: "allowlist" } },
+      });
+
+      const recovered = await recoverSuspiciousConfigRead({ deps, configPath, ...clobbered });
+
+      // `missing-meta-vs-last-good` alone is not a restore signal: a valid config
+      // without `meta` was hand-authored, so restoring would silently revert it
+      // on a read-only command. Detection stays (observe path), restore does not.
+      expect((recovered.parsed as { meta?: unknown }).meta).toBeUndefined();
+      expect(recovered.raw).toBe(clobbered.raw);
+      expect(await listClobberFiles(configPath)).toEqual([]);
+      expect(await readObserveEvents(auditPath)).toEqual([]);
     });
   });
 
@@ -575,21 +578,6 @@ describe("config observe recovery", () => {
       });
     },
   );
-
-  it("loadConfig auto-restores tiny valid clobbers before using defaults", async () => {
-    await withSuiteHome(async (home) => {
-      const { io, configPath, warn } = createTestConfigIO(home);
-      await seedConfigBackup(configPath, recoverableCoreConfig);
-      await writeConfigRaw(configPath, {
-        meta: { lastTouchedVersion: "2026.5.28" },
-      });
-
-      const config = io.loadConfig();
-
-      expect(config.gateway?.mode).toBe("local");
-      expectWarnContaining(warn, "Config auto-restored from backup:");
-    });
-  });
 
   it("loadConfig skips health observation when observation is disabled", async () => {
     await withSuiteHome(async (home) => {
@@ -967,26 +955,6 @@ describe("config observe recovery", () => {
         expect(recovered).toEqual(clobbered);
         await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
         await expect(readObserveEvents(auditPath)).resolves.toEqual([]);
-      });
-    },
-  );
-
-  it.each(["async", "sync"] as const)(
-    "%s recovery uses canonical metadata fingerprints",
-    async (mode) => {
-      await withSuiteHome(async (home) => {
-        const { deps, configPath } = makeDeps(home);
-        const backup = { meta: { authoredBy: "operator" }, gateway: { mode: "local" } };
-        await seedConfigBackup(configPath, backup);
-        const clobbered = await writeConfigRaw(configPath, { gateway: { mode: "local" } });
-        const input = { deps, configPath, ...clobbered, prepareBackup: approveRecoveryCandidate };
-
-        const recovered =
-          mode === "async"
-            ? await maybeRecoverSuspiciousConfigRead(input)
-            : maybeRecoverSuspiciousConfigReadSync(input);
-
-        expect(recovered.parsed).toEqual(backup);
       });
     },
   );

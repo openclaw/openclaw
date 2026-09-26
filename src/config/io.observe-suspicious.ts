@@ -50,6 +50,26 @@ export function resolveConfigObserveSuspiciousReasons(params: {
   return reasons;
 }
 
+// `missing-meta-vs-last-good` is intentionally excluded from auto-restore: the
+// writer always stamps `meta`, so a valid config lacking it was hand-authored,
+// and restoring would silently revert a read-only load. Observe warns.
+function isRecoverableConfigReadSuspiciousReason(reason: string): boolean {
+  return (
+    reason === "gateway-mode-missing-vs-last-good" ||
+    reason === "update-channel-only-root" ||
+    reason.startsWith("size-drop-vs-last-good:")
+  );
+}
+
+// A valid read whose anomalies recovery would not repair is the operator's
+// accepted state (e.g. a hand-authored config without `meta`): the bytes stay
+// live, so observation must advance the accepted baseline to them. Recording
+// only repairable anomalies would leave a stale pre-edit fingerprint in place
+// and let a later recognized clobber restore over the accepted settings.
+export function isAcceptedConfigRead(params: { valid: boolean; suspicious: string[] }): boolean {
+  return params.valid && !params.suspicious.some(isRecoverableConfigReadSuspiciousReason);
+}
+
 export function resolveConfigReadRecoveryContext(params: {
   current: ConfigHealthFingerprint;
   parsed: unknown;
@@ -63,7 +83,7 @@ export function resolveConfigReadRecoveryContext(params: {
     parsed: params.parsed,
     lastKnownGood: params.backupBaseline,
   });
-  if (suspicious.length === 0) {
+  if (!suspicious.some(isRecoverableConfigReadSuspiciousReason)) {
     return null;
   }
   const suspiciousSignature = `${params.current.hash}:${suspicious.join(",")}`;

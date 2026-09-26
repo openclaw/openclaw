@@ -1,7 +1,6 @@
 import type fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { root } from "../infra/fs-safe.js";
 import { appendConfigAuditRecord, appendConfigAuditRecordSync } from "./io.audit.js";
 import {
@@ -16,9 +15,15 @@ import {
 } from "./io.health-state.js";
 import type { ConfigHealthFingerprint, ConfigHealthSnapshot } from "./io.health-state.types.js";
 import {
+  parseBackupConfigRaw,
+  prepareLastGoodRecoverySource,
+} from "./io.last-good-recovery-source.js";
+import {
   createConfigRecoveryStatEffect,
   createConfigBackupMissingEffect,
   createConfigBackupReadEffect,
+  commitRecoveryFileIfCurrent,
+  createRecoveryCommitEffect,
   type ConfigRecoveryEffect,
 } from "./io.observe-recovery-effects.js";
 import {
@@ -67,82 +72,6 @@ type ConfigReadRecoveryParams = {
 };
 
 type ConfigReadRecoveryResult = Pick<ConfigRecoveryCandidate, "raw" | "parsed">;
-
-async function commitRecoveryFileIfCurrent(params: {
-  health: ReturnType<typeof captureConfigHealthStateStore>;
-  beforeCommit?: () => void;
-  write: (assertCurrent: () => void) => Promise<unknown>;
-}): Promise<boolean> {
-  let superseded: Error | undefined;
-  try {
-    await params.write(() => {
-      params.beforeCommit?.();
-      if (!params.health.isCurrent()) {
-        superseded = new Error("Config recovery observation was superseded");
-        throw superseded;
-      }
-    });
-    return true;
-  } catch (error) {
-    if (superseded && error === superseded) {
-      return false;
-    }
-    throw error;
-  }
-}
-
-function createRecoveryCommitEffect(params: {
-  deps: ObserveRecoveryDeps;
-  configPath: string;
-  raw: string;
-  beforeCommit?: () => void;
-}): ConfigRecoveryEffect<boolean> {
-  const options = {
-    filePath: params.configPath,
-    content: params.raw,
-    dirMode: 0o700,
-    mode: 0o600,
-    tempPrefix: path.basename(params.configPath),
-    fileSystem: params.deps.fs,
-  };
-  return {
-    sync: () => {
-      replaceFileAtomicSync(options);
-      return true;
-    },
-    async: (health) =>
-      commitRecoveryFileIfCurrent({
-        health,
-        beforeCommit: params.beforeCommit,
-        write: (assertCurrent) =>
-          replaceFileAtomic({
-            ...options,
-            // Every rename attempt must revalidate; copy fallback has no final guard.
-            copyFallbackOnPermissionError: false,
-            fileSystem: {
-              promises: {
-                ...params.deps.fs.promises,
-                rename: (source: fs.PathLike, destination: fs.PathLike) => {
-                  assertCurrent();
-                  return params.deps.fs.promises.rename(source, destination);
-                },
-              },
-            },
-          }),
-      }),
-  };
-}
-
-function parseBackupConfigRaw(
-  deps: ObserveRecoveryDeps,
-  backupRaw: string,
-): { parsed: unknown } | null {
-  try {
-    return { parsed: deps.json5.parse(backupRaw) };
-  } catch {
-    return null;
-  }
-}
 
 export async function maybeRecoverSuspiciousConfigRead(
   params: ConfigReadRecoveryParams,
@@ -304,8 +233,15 @@ function* planSuspiciousConfigRead(
     return null;
   }
   const backupPath = `${configPath}.bak`;
-  // Missing backups cannot recover config; avoid opening the health worker just to confirm that.
-  if (yield createConfigBackupMissingEffect(deps, backupPath)) {
+  const lastGoodPath = `${configPath}.last-good`;
+  // With neither recovery source on disk no plan can restore anything, so
+  // return before fingerprinting the file or opening the health worker.
+  // Only when a source may exist does the plan continue, because a missing
+  // `.bak` alongside a promoted `.last-good` payload is still recoverable.
+  if (
+    (yield createConfigBackupMissingEffect(deps, backupPath)) &&
+    (yield createConfigBackupMissingEffect(deps, lastGoodPath))
+  ) {
     return null;
   }
   const stat = (yield createConfigRecoveryStatEffect(deps, configPath)) as fs.Stats | null;
@@ -342,32 +278,83 @@ function* planSuspiciousConfigRead(
     return null;
   }
   const { suspicious, suspiciousSignature } = recoveryContext;
+  // Missing backups cannot recover config; avoid reading one just to confirm that.
+  // A hand-authored accepted baseline is exempt: recovery may still prefer a
+  // verified `.last-good` payload promoted for those exact bytes.
+  const baseline = entry.lastKnownGood;
+  const handAuthoredBaseline = Boolean(baseline?.hash && !baseline.hasMeta);
+  if (!handAuthoredBaseline && (yield createConfigBackupMissingEffect(deps, backupPath))) {
+    return null;
+  }
   const backupRaw = (yield createConfigBackupReadEffect(deps, backupPath)) as string | null;
-  if (!backupRaw) {
-    return null;
+  const backupParse = backupRaw ? parseBackupConfigRaw(deps, backupRaw) : null;
+  // A metadata-free accepted baseline can only be hand-authored (product
+  // writers always stamp `meta`), so a `.bak` holding different bytes predates
+  // the operator's file and restoring it would silently revert that config.
+  // Recovery therefore prefers the retained `.last-good` payload when Gateway
+  // promoted one and its hash still matches the accepted baseline; without a
+  // verified copy the state stays on the explicit doctor path.
+  // Source selection needs only the retained baseline's hash, so it happens
+  // before any source-specific preparation: an unusable `.bak` must not gate
+  // access to a verified `.last-good` payload promoted for these exact bytes.
+  const preferLastGoodSource =
+    handAuthoredBaseline &&
+    (!backupRaw || !backupParse || hashConfigRaw(backupRaw) !== baseline?.hash);
+  let restoreSourceRaw: string;
+  let restoreSourcePath: string;
+  let restoreSourceContext: string;
+  let restoredSourceLabel: string;
+  let restoreSourceStat: fs.Stats | null;
+  let backup: ConfigHealthFingerprint;
+  let preparedCandidate: ConfigRecoveryCandidate;
+  if (preferLastGoodSource && baseline?.hash) {
+    const lastGoodSource = yield* prepareLastGoodRecoverySource({
+      deps,
+      prepareBackup: params.prepareBackup,
+      prepareBackupAsync: params.prepareBackupAsync,
+      lastGoodPath,
+      baselineHash: baseline.hash,
+    });
+    if (!lastGoodSource) {
+      deps.logger.warn(
+        `Config auto-restore from backup skipped: ${configPath} (${suspicious.join(", ")}); accepted baseline is hand-authored and no verified last-good copy exists`,
+      );
+      return null;
+    }
+    restoreSourceRaw = lastGoodSource.raw;
+    restoreSourcePath = lastGoodPath;
+    restoreSourceContext = "last-good restore";
+    restoredSourceLabel = "last-good";
+    backup = lastGoodSource.fingerprint;
+    preparedCandidate = lastGoodSource.candidate;
+    restoreSourceStat = lastGoodSource.stat;
+  } else {
+    // Reject ineligible backup bytes before migration and validation; a stale healthy
+    // fingerprint cannot make them recoverable.
+    if (!backupRaw || !backupParse || !resolveGatewayMode(backupParse.parsed)) {
+      return null;
+    }
+    const backupCandidate = { raw: backupRaw, parsed: backupParse.parsed };
+    const prepared = (yield {
+      sync: () => params.prepareBackup(backupCandidate),
+      async: () =>
+        params.prepareBackupAsync?.(backupCandidate) ?? params.prepareBackup(backupCandidate),
+    }) as ConfigRecoveryCandidatePreparation;
+    if (!prepared.ok) {
+      return null;
+    }
+    preparedCandidate = prepared.candidate;
+    restoreSourceStat = (yield createConfigRecoveryStatEffect(deps, backupPath)) as fs.Stats | null;
+    backup = createConfigHealthFingerprint({
+      raw: backupRaw,
+      parsed: backupParse.parsed,
+      stat: restoreSourceStat,
+    });
+    restoreSourceRaw = backupRaw;
+    restoreSourcePath = backupPath;
+    restoreSourceContext = "backup restore";
+    restoredSourceLabel = "backup";
   }
-  const backupParse = parseBackupConfigRaw(deps, backupRaw);
-  // Reject ineligible backup bytes before migration and validation; a stale healthy
-  // fingerprint cannot make them recoverable.
-  if (!backupParse || !resolveGatewayMode(backupParse.parsed)) {
-    return null;
-  }
-  const backupCandidate = { raw: backupRaw, parsed: backupParse.parsed };
-  const prepared = (yield {
-    sync: () => params.prepareBackup(backupCandidate),
-    async: () =>
-      params.prepareBackupAsync?.(backupCandidate) ?? params.prepareBackup(backupCandidate),
-  }) as ConfigRecoveryCandidatePreparation;
-  if (!prepared.ok) {
-    return null;
-  }
-  const preparedCandidate = prepared.candidate;
-  const backupStat = (yield createConfigRecoveryStatEffect(deps, backupPath)) as fs.Stats | null;
-  const backup = createConfigHealthFingerprint({
-    raw: backupRaw,
-    parsed: backupParse.parsed,
-    stat: backupStat,
-  });
   const currentObservation: ConfigRecoveryEffect<boolean> = {
     sync: () => true,
     async: (health) => health.isCurrent(),
@@ -380,7 +367,7 @@ function* planSuspiciousConfigRead(
     assertUnchanged: () => {
       for (const [pathname, expectedRaw, expectedStat] of [
         [configPath, raw, stat],
-        [backupPath, backupRaw, backupStat],
+        [restoreSourcePath, restoreSourceRaw, restoreSourceStat],
       ] as const) {
         const actualRaw = createConfigBackupReadEffect(deps, pathname).sync();
         const actualStat = createConfigRecoveryStatEffect(deps, pathname).sync();
@@ -422,9 +409,9 @@ function* planSuspiciousConfigRead(
       let restoredFromBackup = false;
       let restoreError: unknown;
       try {
-        if (preparedCandidate.raw !== backupRaw) {
+        if (preparedCandidate.raw !== restoreSourceRaw) {
           warnIfJSON5CommentsWillBeStripped({
-            raw: backupRaw,
+            raw: restoreSourceRaw,
             filePath: configPath,
             warn: (message) => deps.logger.warn(message),
           });
@@ -438,7 +425,7 @@ function* planSuspiciousConfigRead(
         if (!committed) {
           return { restored: false, error: undefined, superseded: true };
         }
-        const chmodParams = { deps, configPath, context: "backup restore" };
+        const chmodParams = { deps, configPath, context: restoreSourceContext };
         yield {
           sync: () => chmodConfigBestEffortSync(chmodParams),
           async: () => chmodConfigBestEffort(chmodParams),
@@ -451,7 +438,7 @@ function* planSuspiciousConfigRead(
         ? { code: null, message: null }
         : extractRestoreErrorDetails(restoreError);
       const result = restoredFromBackup
-        ? "auto-restored from backup"
+        ? `auto-restored from ${restoredSourceLabel}`
         : "auto-restore from backup failed";
       const detail =
         !restoredFromBackup && restoreErrorDetails.message
@@ -467,7 +454,7 @@ function* planSuspiciousConfigRead(
         backup,
         clobberedPath,
         restoredFromBackup,
-        restoredBackupPath: backupPath,
+        restoredBackupPath: restoreSourcePath,
         restoreErrorCode: restoreErrorDetails.code,
         restoreErrorMessage: restoreErrorDetails.message,
       });
