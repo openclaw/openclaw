@@ -11,6 +11,7 @@ import type {
   SkillsLibraryMutateParams,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
@@ -50,6 +51,7 @@ export class SkillLibraryController {
   newFilePath = "";
   query = "";
   private readSequence = 0;
+  private confirmAbort: AbortController | null = null;
 
   constructor(
     private readonly host: ReactiveControllerHost,
@@ -79,6 +81,7 @@ export class SkillLibraryController {
   }
   reset() {
     this.readSequence++;
+    this.abortPendingConfirm();
     this.list = null;
     this.view = null;
     this.loading = false;
@@ -87,6 +90,24 @@ export class SkillLibraryController {
     this.importOpen = false;
     this.newFilePath = "";
     this.query = "";
+  }
+
+  // The shared confirmation dialog mounts in document.body and holds a global
+  // reentrancy lock until settled. When the Skills owner resets (agent switch,
+  // gateway invalidation, page teardown), abort any pending confirmation so the
+  // orphaned dialog releases that lock instead of blocking later confirmations.
+  private abortPendingConfirm() {
+    if (this.confirmAbort) {
+      this.confirmAbort.abort();
+      this.confirmAbort = null;
+    }
+  }
+
+  captureConfirmSignal(): AbortSignal {
+    this.abortPendingConfirm();
+    const controller = new AbortController();
+    this.confirmAbort = controller;
+    return controller.signal;
   }
   get showWorkspace() {
     return this.view === null || this.view === "workspace";
@@ -180,9 +201,22 @@ export class SkillLibraryController {
     this.changed();
   }
 
-  close() {
-    if (this.busy || (this.draft?.dirty && !window.confirm(t("skillLibrary.discard")))) {
+  async close() {
+    if (this.busy) {
       return;
+    }
+    const draft = this.draft;
+    if (draft?.dirty) {
+      const confirmed = await showConfirmDialog({
+        message: t("skillLibrary.discard"),
+        danger: true,
+        signal: this.captureConfirmSignal(),
+      });
+      // The native confirm blocked reentrancy; the async dialog does not, so
+      // re-check that the same draft is still active before discarding it.
+      if (!confirmed || this.draft !== draft) {
+        return;
+      }
     }
     this.readSequence++;
     this.draft = null;
@@ -192,8 +226,16 @@ export class SkillLibraryController {
   }
 
   async open(skillId: string) {
-    if (this.draft?.dirty && !window.confirm(t("skillLibrary.discard"))) {
-      return;
+    const draft = this.draft;
+    if (draft?.dirty) {
+      const confirmed = await showConfirmDialog({
+        message: t("skillLibrary.discard"),
+        danger: true,
+        signal: this.captureConfirmSignal(),
+      });
+      if (!confirmed || this.draft !== draft) {
+        return;
+      }
     }
     const connection = this.gateway.capture();
     if (!connection || this.busy) {
@@ -367,11 +409,15 @@ export class SkillLibraryController {
     if (!draft || !entry || !this.canEdit || draft.dirty) {
       return;
     }
-    if (
-      (action === "remove" || action === "transfer") &&
-      !window.confirm(t(`skillLibrary.confirm.${action}`, { slug: draft.slug }))
-    ) {
-      return;
+    if (action === "remove" || action === "transfer") {
+      const confirmed = await showConfirmDialog({
+        message: t(`skillLibrary.confirm.${action}`, { slug: draft.slug }),
+        danger: true,
+        signal: this.captureConfirmSignal(),
+      });
+      if (!confirmed) {
+        return;
+      }
     }
     await this.perform(async () => {
       if (!this.gateway.isCurrent(draft.connection)) {
