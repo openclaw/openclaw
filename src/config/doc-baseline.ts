@@ -10,25 +10,13 @@ import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveRepoBundledPluginEnv } from "./repo-bundled-plugin-env.js";
 import type { ConfigSchemaResponse } from "./schema.js";
-import { schemaHasChildren } from "./schema.shared.js";
+import {
+  asSchemaObject,
+  type ConfigJsonSchemaObject as JsonSchemaObject,
+  schemaHasChildren,
+} from "./schema.shared.js";
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
-
-type JsonSchemaNode = Record<string, unknown>;
-
-type JsonSchemaObject = JsonSchemaNode & {
-  type?: string | string[];
-  properties?: Record<string, JsonSchemaObject>;
-  required?: string[];
-  additionalProperties?: JsonSchemaObject | boolean;
-  items?: JsonSchemaObject | JsonSchemaObject[];
-  enum?: unknown[];
-  default?: unknown;
-  deprecated?: boolean;
-  anyOf?: JsonSchemaObject[];
-  allOf?: JsonSchemaObject[];
-  oneOf?: JsonSchemaObject[];
-};
 
 type ConfigDocBaselineKind = "core" | "channel" | "plugin";
 
@@ -81,18 +69,11 @@ type ConfigDocBaselineArtifactsRender = {
   json: ConfigDocBaselineArtifacts;
 };
 
-type ConfigDocBaselineArtifactPaths = {
-  combined: string;
-  core: string;
-  channel: string;
-  plugin: string;
-};
-
 type ConfigDocBaselineArtifactsWriteResult = {
   changed: boolean;
   hashChanged: boolean;
   wrote: boolean;
-  jsonPaths: ConfigDocBaselineArtifactPaths;
+  jsonPaths: ConfigDocBaselineArtifacts;
   hashPath: string;
   countsPath: string;
   countViolations: ConfigDocBaselineCountViolation[];
@@ -110,10 +91,7 @@ const DEFAULT_COUNTS_OUTPUT = "docs/.generated/config-baseline.counts.json";
 let cachedConfigDocBaselinePromise: Promise<ConfigDocBaseline> | null = null;
 const uiHintIndexCache = new WeakMap<
   ConfigSchemaResponse["uiHints"],
-  Map<
-    number,
-    Array<{ path: string; parts: string[]; hint: ConfigSchemaResponse["uiHints"][string] }>
-  >
+  Map<number, Array<{ parts: string[]; hint: ConfigSchemaResponse["uiHints"][string] }>>
 >();
 const schemaHasChildrenCache = new WeakMap<JsonSchemaObject, boolean>();
 
@@ -184,10 +162,6 @@ function normalizeEnumValues(values: unknown[] | undefined): JsonValue[] | undef
   return normalized.length > 0 ? normalized : undefined;
 }
 
-function asSchemaObject(value: unknown): JsonSchemaObject | null {
-  return asNullableRecord(value) as JsonSchemaObject | null;
-}
-
 function splitHintLookupPath(pathResult: string): string[] {
   const normalized = normalizeBaselinePath(pathResult);
   return normalized ? normalized.split(".").filter(Boolean) : [];
@@ -208,7 +182,7 @@ function resolveUiHintMatch(
     for (const [hintPath, hint] of Object.entries(uiHints)) {
       const parts = splitHintLookupPath(hintPath);
       const bucket = index.get(parts.length);
-      const entry = { path: hintPath, parts, hint };
+      const entry = { parts, hint };
       if (bucket) {
         bucket.push(entry);
       } else {
@@ -285,24 +259,7 @@ function mergeTypeValues(
   left: string | string[] | undefined,
   right: string | string[] | undefined,
 ): string | string[] | undefined {
-  const merged = new Set<string>();
-  for (const value of [left, right]) {
-    if (!value) {
-      continue;
-    }
-    if (Array.isArray(value)) {
-      for (const entry of value) {
-        merged.add(entry);
-      }
-      continue;
-    }
-    merged.add(value);
-  }
-  return normalizeTypeValue([...merged]);
-}
-
-function areJsonValuesEqual(left: JsonValue | undefined, right: JsonValue | undefined): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return normalizeTypeValue([left, right].flatMap((value) => value || []));
 }
 
 function mergeJsonValueArrays(
@@ -329,11 +286,10 @@ function mergeConfigDocBaselineEntry(
   current: ConfigDocBaselineEntry,
   next: ConfigDocBaselineEntry,
 ): ConfigDocBaselineEntry {
-  const label = current.label === next.label ? current.label : (current.label ?? next.label);
-  const help = current.help === next.help ? current.help : (current.help ?? next.help);
-  const defaultValue = areJsonValuesEqual(current.defaultValue, next.defaultValue)
-    ? (current.defaultValue ?? next.defaultValue)
-    : undefined;
+  const defaultValue =
+    JSON.stringify(current.defaultValue) === JSON.stringify(next.defaultValue)
+      ? current.defaultValue
+      : undefined;
 
   return {
     path: current.path,
@@ -345,8 +301,8 @@ function mergeConfigDocBaselineEntry(
     deprecated: current.deprecated || next.deprecated,
     sensitive: current.sensitive || next.sensitive,
     tags: sortUniqueStrings([...current.tags, ...next.tags]),
-    label,
-    help,
+    label: current.label ?? next.label,
+    help: current.help ?? next.help,
     hasChildren: current.hasChildren || next.hasChildren,
   };
 }
@@ -489,23 +445,19 @@ function splitConfigDocBaselineEntries(entries: ConfigDocBaselineEntry[]): {
   channelEntries: ConfigDocBaselineEntry[];
   pluginEntries: ConfigDocBaselineEntry[];
 } {
-  const coreEntries: ConfigDocBaselineEntry[] = [];
-  const channelEntries: ConfigDocBaselineEntry[] = [];
-  const pluginEntries: ConfigDocBaselineEntry[] = [];
-
+  const byKind: Record<ConfigDocBaselineKind, ConfigDocBaselineEntry[]> = {
+    core: [],
+    channel: [],
+    plugin: [],
+  };
   for (const entry of entries) {
-    if (entry.kind === "channel") {
-      channelEntries.push(entry);
-      continue;
-    }
-    if (entry.kind === "plugin") {
-      pluginEntries.push(entry);
-      continue;
-    }
-    coreEntries.push(entry);
+    byKind[entry.kind].push(entry);
   }
-
-  return { coreEntries, channelEntries, pluginEntries };
+  return {
+    coreEntries: byKind.core,
+    channelEntries: byKind.channel,
+    pluginEntries: byKind.plugin,
+  };
 }
 
 async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
@@ -614,11 +566,10 @@ function parseConfigBaselineCounts(content: string | null): ConfigDocBaselineCou
   if (content === null) {
     throw new Error("count budget file is missing");
   }
-  const parsed = JSON.parse(content) as unknown;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  const record = asNullableRecord(JSON.parse(content));
+  if (!record) {
     throw new Error("count budget must be a JSON object");
   }
-  const record = parsed as Record<string, unknown>;
   for (const kind of ["core", "channel", "plugin"] as const) {
     if (!Number.isInteger(record[kind]) || (record[kind] as number) < 0) {
       throw new Error(`${kind} budget must be a non-negative integer`);
@@ -662,7 +613,7 @@ function resolveBaselineArtifactPaths(
     channelPath?: string;
     pluginPath?: string;
   },
-): ConfigDocBaselineArtifactPaths {
+): ConfigDocBaselineArtifacts {
   return {
     combined: path.resolve(repoRoot, params?.combinedPath ?? DEFAULT_COMBINED_OUTPUT),
     core: path.resolve(repoRoot, params?.corePath ?? DEFAULT_CORE_OUTPUT),

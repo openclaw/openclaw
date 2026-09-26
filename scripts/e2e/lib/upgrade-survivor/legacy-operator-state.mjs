@@ -149,6 +149,7 @@ export function seedLegacyOperatorState() {
   });
   unsetSystemAgent();
   writeJson(artifact("legacy-operator-baseline.json"), {});
+  seedLegacyOperatorWebhooks(set);
   const skillPath = path.join(workspace, "skills", "survivor-workspace", "SKILL.md");
   fs.mkdirSync(path.dirname(skillPath), { recursive: true });
   fs.writeFileSync(skillPath, SKILL);
@@ -156,6 +157,64 @@ export function seedLegacyOperatorState() {
     path.join(workspace, "IDENTITY.md"),
     "# Upgrade Survivor\n\nSynthetic operator workspace.\n",
   );
+}
+
+function seedLegacyOperatorWebhooks(set) {
+  const inventory = cli(["plugins", "list", "--json"], "legacy-operator-webhooks-inventory", {
+    json: true,
+  });
+  const supported = inventory.plugins?.some((plugin) => plugin.id === "webhooks") === true;
+  const baselineVersion = requiredEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION");
+  if (baselineVersion === "2026.9.2") {
+    assert(supported, "the 2026.9.2 Webhooks retirement cell must seed the published plugin");
+  }
+  if (!supported) {
+    writeJson(artifact("legacy-operator-webhooks.json"), { baselineVersion, seeded: false });
+    return;
+  }
+  const entry = {
+    enabled: true,
+    config: {
+      routes: {
+        survivor: {
+          enabled: true,
+          path: "/survivor-taskflow",
+          sessionKey: "agent:main:main",
+          secret: { source: "env", provider: "default", id: "GATEWAY_AUTH_TOKEN_REF" },
+        },
+      },
+    },
+  };
+  const hooks = {
+    enabled: true,
+    path: "/survivor-hooks",
+    token: "synthetic-survivor-hook-token",
+  };
+  const prior = readJson(requiredEnv("OPENCLAW_CONFIG_PATH")).plugins ?? {};
+  // An explicit allowlist retains the baseline's enabled plugins. The deny entry
+  // keeps this migration specimen idle while exercising both retired-id lists.
+  const allow =
+    prior.allow ?? inventory.plugins.filter((plugin) => plugin.enabled).map((p) => p.id);
+  set("plugins", {
+    ...prior,
+    allow: [...new Set([...allow, "webhooks"])],
+    deny: [...new Set([...(prior.deny ?? []), "webhooks"])],
+    entries: { ...prior.entries, webhooks: entry },
+  });
+  set("hooks", hooks);
+  const config = readJson(requiredEnv("OPENCLAW_CONFIG_PATH"));
+  assert.deepEqual(config.plugins?.entries?.webhooks, entry, "baseline Webhooks entry changed");
+  assert(config.plugins.allow.includes("webhooks"), "baseline Webhooks allow reference missing");
+  assert(config.plugins.deny.includes("webhooks"), "baseline Webhooks deny reference missing");
+  assert.deepEqual(config.hooks, hooks, "baseline ordinary hooks changed");
+  writeJson(artifact("legacy-operator-webhooks.json"), {
+    baselineVersion,
+    seeded: true,
+    entry,
+    hooks,
+    model: config.agents.defaults.model.primary,
+    provider: config.models.providers.survivor,
+  });
 }
 
 export function seedLegacyOperatorExternalPlugin() {
@@ -221,6 +280,12 @@ export function assertLegacyOperatorExternalPlugin(expectedVersion) {
   const inventory = cli(["plugins", "list", "--json"], "legacy-operator-candidate-plugins", {
     json: true,
   });
+  if (readJson(artifact("legacy-operator-webhooks.json")).seeded) {
+    assert(
+      !inventory.plugins?.some((entry) => entry.id === "webhooks"),
+      "candidate still discovers retired Webhooks",
+    );
+  }
   const plugin = inventory.plugins?.find((entry) => entry.id === "duckduckgo");
   assert(plugin, "plugins list omitted configured DuckDuckGo");
   assert.notEqual(plugin.origin, "bundled", "DuckDuckGo must converge to an external package");
@@ -386,6 +451,30 @@ export function seedLegacyOperatorGatewayState() {
 
 export function assertLegacyOperatorConfig(stage) {
   const config = readJson(requiredEnv("OPENCLAW_CONFIG_PATH"));
+  const webhooks = readJson(artifact("legacy-operator-webhooks.json"));
+  assert.equal(webhooks.baselineVersion, requiredEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION"));
+  if (webhooks.baselineVersion === "2026.9.2") {
+    assert.equal(webhooks.seeded, true, "the 2026.9.2 Webhooks specimen was not seeded");
+  }
+  if (webhooks.seeded) {
+    assert.deepEqual(config.hooks, webhooks.hooks, "ordinary hooks changed during retirement");
+    if (stage === "baseline") {
+      assert.deepEqual(config.plugins?.entries?.webhooks, webhooks.entry);
+      assert(config.plugins?.allow?.includes("webhooks"), "Webhooks allow reference missing");
+      assert(config.plugins?.deny?.includes("webhooks"), "Webhooks deny reference missing");
+    } else {
+      assert.equal(config.plugins?.entries?.webhooks, undefined, "retired Webhooks entry remains");
+      assert(!config.plugins?.allow?.includes("webhooks"), "retired Webhooks allow id remains");
+      assert(!config.plugins?.deny?.includes("webhooks"), "retired Webhooks deny id remains");
+      writeJson(artifact("legacy-operator-webhooks-retired.json"), {
+        baselineVersion: webhooks.baselineVersion,
+        seeded: true,
+        retired: true,
+        ordinaryHooksPreserved: true,
+        stage,
+      });
+    }
+  }
   const agents =
     config.agents?.entries ??
     Object.fromEntries((config.agents?.list ?? []).map((entry) => [entry.id, entry]));

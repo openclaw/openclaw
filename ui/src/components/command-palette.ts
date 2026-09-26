@@ -44,8 +44,6 @@ import {
 import { renderCommandPalette, type PaletteFilter } from "./command-palette-view.ts";
 import type { OpenClawModalDialog } from "./modal-dialog.ts";
 
-type PaletteItem = CommandPaletteItem;
-
 const SEARCH_DEBOUNCE_MS = 200;
 const SESSION_SEARCH_MIN_CHARS = 2;
 const PROMPT_ENTER_CHARS = 60;
@@ -129,8 +127,8 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   @state() private searchQuery = "";
   @state() private promptMode = false;
   @state() private activeId: string | null = null;
-  @state() private sessionItems: readonly PaletteItem[] = [];
-  @state() private catalogItems: readonly PaletteItem[] = [];
+  @state() private sessionItems: readonly CommandPaletteItem[] = [];
+  @state() private catalogItems: readonly CommandPaletteItem[] = [];
   @state() private sessionSearchPending = false;
   @state() private sessionSearchFailed = false;
   @state() private sessionSearchPartial = false;

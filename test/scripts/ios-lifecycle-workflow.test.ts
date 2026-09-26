@@ -1,5 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -8,22 +15,22 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 type Command = { tool: string; args: string[]; destination?: string; settings?: string };
 
 type Step = { name?: string; run?: string; if?: string };
-const workflow: { jobs: Record<string, { env?: Record<string, string>; steps: Step[] }> } = parse(
+const workflow: { jobs: Record<string, { env?: Record<string, string>; steps?: Step[] }> } = parse(
   readFileSync(".github/workflows/ci.yml", "utf8"),
 );
-const watchStep = workflow.jobs["ios-build"]?.steps.find(
+const watchStep = workflow.jobs["ios-build"]?.steps?.find(
   (step) => step.name === "Run focused Apple Watch operation simulator tests",
 );
-const voiceStep = workflow.jobs["ios-build"]?.steps.find(
+const voiceStep = workflow.jobs["ios-build"]?.steps?.find(
   (step) => step.name === "Run focused iOS voice cleanup simulator tests",
 );
-const iosStep = workflow.jobs["ios-build"]?.steps.find(
+const iosStep = workflow.jobs["ios-build"]?.steps?.find(
   (step) => step.name === "Run focused iOS lifecycle simulator tests",
 );
-const prepareStep = workflow.jobs["ios-build"]?.steps.find(
+const prepareStep = workflow.jobs["ios-build"]?.steps?.find(
   (step) => step.name === "Prepare iOS simulator",
 );
-const buildStep = workflow.jobs["ios-build"]?.steps.find((step) => step.name === "Build iOS app");
+const buildStep = workflow.jobs["ios-build"]?.steps?.find((step) => step.name === "Build iOS app");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runSimulatorStep(mode = "ready", steps = [watchStep], env: Record<string, string> = {}) {
@@ -39,7 +46,7 @@ function runSimulatorStep(mode = "ready", steps = [watchStep], env: Record<strin
   writeFileSync(
     runner,
     String.raw`
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 const [tool, ...args] = process.argv.slice(2);
 const root = process.env.WATCH_FIXTURE_ROOT;
@@ -48,7 +55,13 @@ appendFileSync(path.join(root, "commands.jsonl"), JSON.stringify({
   tool, args, destination: process.env.IOS_DEST,
   settings: process.env.XCODE_XCCONFIG_FILE ? readFileSync(process.env.XCODE_XCCONFIG_FILE, "utf8") : undefined,
 }) + "\n");
-if (tool === "uname") {
+if (tool === "installer") {
+  if (mode.endsWith("install-failed")) process.exit(23);
+  mkdirSync(args[0], { recursive: true });
+  copyFileSync(path.join(root, "bin", "simslim"), path.join(args[0], "simslim"));
+} else if (tool === "simslim") {
+  if (mode.endsWith(args[0] + "-failed")) process.exit(23);
+} else if (tool === "uname") {
   console.log("arm64");
 } else if (tool === "xcrun") {
   if (args[1] === "list" && args[2] === "pairs") {
@@ -58,7 +71,8 @@ if (tool === "uname") {
     } }));
   } else if (args[1] === "list") {
     console.log(JSON.stringify({ devices: { watch: [
-      { name: mode.startsWith("voice") ? "iPhone fixture" : "Apple Watch fixture", isAvailable: true, udid: "watch-fixture" }
+      { name: mode.startsWith("voice") ? "iPhone fixture" : "Apple Watch fixture", isAvailable: true,
+        udid: mode.includes("slim") ? "11111111-2222-3333-4444-555555555555" : "watch-fixture" }
     ] } }));
   } else if (args[1] === "bootstatus" && mode.endsWith("boot-failed")) {
     process.exit(23);
@@ -86,10 +100,23 @@ if (tool === "uname") {
 }
 `,
   );
-  for (const tool of ["xcrun", "xcodebuild", "pnpm", "uname"]) {
+  for (const tool of ["xcrun", "xcodebuild", "pnpm", "uname", "installer", "simslim"]) {
     const executable = path.join(bin, tool);
     writeFileSync(executable, `#!/bin/sh\nexec '${process.execPath}' '${runner}' '${tool}' "$@"\n`);
     chmodSync(executable, 0o755);
+  }
+  if (mode.includes("slim")) {
+    const scripts = path.join(root, "scripts");
+    mkdirSync(scripts);
+    if (!mode.endsWith("missing-installer")) {
+      copyFileSync(path.join(bin, "installer"), path.join(scripts, "install-simslim.sh"));
+    }
+    if (!mode.endsWith("missing-prepare")) {
+      copyFileSync(
+        "scripts/ios-simulator-prepare.sh",
+        path.join(scripts, "ios-simulator-prepare.sh"),
+      );
+    }
   }
   const environmentFile = path.join(root, "github-env");
   writeFileSync(environmentFile, "");
@@ -108,6 +135,9 @@ if (tool === "uname") {
       ...process.env,
       PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
       RUNNER_TEMP: root,
+      CI: "true",
+      GITHUB_OUTPUT: path.join(root, "github-output"),
+      OPENCLAW_CI_SIMSLIM_BINARY: "",
       WATCH_FIXTURE_ROOT: root,
       WATCH_FIXTURE_MODE: mode,
       GITHUB_ENV: environmentFile,
@@ -119,18 +149,80 @@ if (tool === "uname") {
       ...env,
     },
   });
-  const commands: Command[] = readFileSync(path.join(root, "commands.jsonl"), "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
-  return { result, commands, product };
+  const trace = path.join(root, "commands.jsonl");
+  const commands: Command[] = existsSync(trace)
+    ? readFileSync(trace, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line))
+    : [];
+  const output = path.join(root, "github-output");
+  return {
+    result,
+    commands,
+    product,
+    output: existsSync(output) ? readFileSync(output, "utf8") : "",
+  };
 }
+
+describe.skipIf(process.platform === "win32")("SimSlim workflow admission", () => {
+  it("prewarms and slims the exact iPhone before building and testing", () => {
+    const { result, commands } = runSimulatorStep("voice-slim", [
+      prepareStep,
+      buildStep,
+      voiceStep,
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    const slim = commands.filter(({ tool }) => tool === "simslim");
+    expect(slim.map(({ args }) => args[0])).toEqual(["on", "verify"]);
+    for (const { args } of slim) {
+      expect(args[1]).toBe("11111111-2222-3333-4444-555555555555");
+    }
+    expect(commands.indexOf(slim[1]!)).toBeLessThan(
+      commands.findIndex(({ tool }) => tool === "pnpm"),
+    );
+    expect(
+      commands.filter(({ tool, args }) => tool === "xcrun" && args[1] === "bootstatus"),
+    ).toHaveLength(2);
+  });
+
+  it.each(["missing-installer", "missing-prepare"])("keeps %s targets stock", (mode) => {
+    const { result, commands } = runSimulatorStep(`voice-slim-${mode}`, [prepareStep, buildStep]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(commands.some(({ tool }) => tool === "simslim" || tool === "installer")).toBe(false);
+    expect(commands.some(({ tool }) => tool === "pnpm")).toBe(true);
+  });
+
+  it.each(["install", "on", "verify", "boot"])("stops before builds on %s failure", (mode) => {
+    const { result, commands } = runSimulatorStep(`voice-slim-${mode}-failed`, [
+      prepareStep,
+      buildStep,
+      voiceStep,
+    ]);
+    expect(result.status).toBe(23);
+    expect(commands.some(({ tool }) => tool === "pnpm" || tool === "xcodebuild")).toBe(false);
+  });
+
+  it("publishes the screenshot binary only after installation succeeds", () => {
+    const install = workflow.jobs["ios-screenshot-shard"]?.steps?.find(
+      ({ name }) => name === "Install iOS simulator tooling",
+    );
+    const ready = runSimulatorStep("voice-slim", [install]);
+    expect(ready.result.status, ready.result.stderr).toBe(0);
+    expect(ready.output).toMatch(/^binary=.+\/openclaw-simslim\/simslim\n$/);
+    const failed = runSimulatorStep("voice-slim-install-failed", [install]);
+    expect(failed.result.status).toBe(23);
+    expect(failed.output).toBe("");
+  });
+});
 
 describe.skipIf(process.platform === "win32")("Watch simulator workflow", () => {
   it.each(["ready", "unpaired"])(
     "prepares the %s Watch destination before running its tests",
     (mode) => {
-      const { result, commands, product } = runSimulatorStep(mode);
+      const { result, commands, product } = runSimulatorStep(mode, [watchStep], {
+        OPENCLAW_CI_SIMSLIM_BINARY: "/must-not-run-simslim",
+      });
       expect(result.status, result.stderr).toBe(0);
       const xcodeCommands = commands.filter((command) => command.tool === "xcodebuild");
       for (const command of xcodeCommands) {

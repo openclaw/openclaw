@@ -438,7 +438,7 @@ function fileKind(path: string): string {
     py: "Python",
     sh: t("filePreview.kind.shell"),
   };
-  return map[ext] ?? (ext ? ext.toUpperCase() : t("filePreview.kind.file"));
+  return Object.hasOwn(map, ext) ? map[ext]! : ext ? ext.toUpperCase() : t("filePreview.kind.file");
 }
 
 // Same glyph vocabulary chat file links paint through CSS masks

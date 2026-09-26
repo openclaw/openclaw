@@ -58,7 +58,7 @@ beforeAll(async () => {
   fixtureRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-test-"),
   );
-  largeJpegBuffer = await fs.readFile("docs/assets/showcase/roof-camera-sky.jpg");
+  largeJpegBuffer = await fs.readFile("test/fixtures/media/roof-camera-sky.jpg");
   largeJpegFile = await writeTempFile(largeJpegBuffer, ".jpg");
   tinyPngBuffer = createSolidPngBuffer(10, 10, { r: 0, g: 255, b: 0 });
   tinyPngFile = await writeTempFile(tinyPngBuffer, ".png");

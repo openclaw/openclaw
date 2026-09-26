@@ -1,6 +1,7 @@
 // ACPX tests cover service plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createFileSessionStore } from "acpx/runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -15,6 +16,7 @@ import {
   type TempWorkspace,
 } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stateMigrations } from "../doctor-contract-api.js";
 import { AcpxRuntime } from "./runtime.js";
 
 const { runtimeRegistry } = vi.hoisted(() => ({
@@ -290,6 +292,193 @@ function readFirstRuntimeFactoryInput(runtimeFactory: { mock: { calls: Array<Arr
 }
 
 describe("createAcpxRuntimeService", () => {
+  it.each([
+    "absent",
+    "empty",
+    "explicit",
+    "occupied",
+    "cross-device",
+    "copy-failed",
+    "unreadable",
+    "move-failed",
+    "marker-failed",
+    "destination-unreadable",
+  ])("preserves legacy sessions at startup with a %s destination", async (scenario) => {
+    const ctx = createServiceContext(testWorkspace.dir);
+    const legacy = path.join(testWorkspace.dir, "state");
+    const destination = path.join(ctx.stateDir, "acpx");
+    const recordId = "agent:main:acp:retained";
+    const recordPath = path.join(legacy, "sessions", `${encodeURIComponent(recordId)}.json`);
+    await fs.mkdir(path.dirname(recordPath), { recursive: true });
+    await fs.writeFile(
+      recordPath,
+      JSON.stringify({
+        schema: "acpx.session.v1",
+        acpx_record_id: recordId,
+        acp_session_id: "upstream-retained",
+        agent_command: "fixture",
+        cwd: testWorkspace.dir,
+        name: recordId,
+        created_at: "2026-09-01T00:00:00.000Z",
+        last_used_at: "2026-09-01T00:00:00.000Z",
+        last_seq: 0,
+        messages: [],
+        updated_at: "2026-09-01T00:00:00.000Z",
+      }),
+    );
+    await fs.writeFile(path.join(legacy, "retained-history.bin"), "opaque history");
+    const original = await createFileSessionStore({ stateDir: legacy }).load(recordId);
+    expect(original?.acpSessionId).toBe("upstream-retained");
+    if (scenario === "empty" || scenario === "occupied") {
+      await fs.mkdir(destination, { recursive: true });
+      if (scenario === "occupied") {
+        await fs.writeFile(path.join(destination, "existing"), "do not overwrite");
+      }
+    }
+    if (["cross-device", "copy-failed", "move-failed"].includes(scenario)) {
+      const rename = fs.rename.bind(fs);
+      vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+        if (source === legacy) {
+          throw Object.assign(new Error("fixture move failure"), {
+            code: scenario === "move-failed" ? "EACCES" : "EXDEV",
+          });
+        }
+        return rename(source, target);
+      });
+    }
+    if (scenario === "copy-failed") {
+      const open = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        if (
+          String(args[0]).includes(".fs-safe-move-") &&
+          String(args[0]).endsWith("retained-history.bin")
+        ) {
+          throw Object.assign(new Error("fixture copy failure"), { code: "EIO" });
+        }
+        return open(...args);
+      });
+    }
+    if (scenario === "destination-unreadable") {
+      await fs.mkdir(ctx.stateDir, { recursive: true });
+      await fs.rename(legacy, destination);
+    }
+    if (scenario === "unreadable" || scenario === "destination-unreadable") {
+      const readdir = fs.readdir.bind(fs);
+      vi.spyOn(fs, "readdir").mockImplementation((...args) => {
+        if (args[0] === (scenario === "unreadable" ? path.join(legacy, "sessions") : destination)) {
+          return Promise.reject(Object.assign(new Error("fixture unreadable"), { code: "EACCES" }));
+        }
+        return readdir(...args);
+      });
+    }
+    const runtime = createMockRuntime();
+    let selected = "";
+    let markerWrites = 0;
+    const openKeyedStore = createOpenKeyedStore(ctx);
+    const service = createAcpxRuntimeService(ctx, {
+      pluginConfig: scenario === "explicit" ? { stateDir: legacy } : {},
+      openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+        const store = openKeyedStore<T>(options);
+        if (scenario === "marker-failed" && options.namespace === "state-directory-migration") {
+          const register = store.register;
+          store.register = async (...args) => {
+            if (++markerWrites === 2) {
+              throw new Error("fixture marker write failure");
+            }
+            return register(...args);
+          };
+        }
+        return store;
+      },
+      probeAtStartup: false,
+      runtimeFactory: ({ pluginConfig }) => {
+        selected = pluginConfig.stateDir;
+        return runtime as never;
+      },
+    });
+    try {
+      await service.start(ctx);
+      const retained = ["explicit", "unreadable", "move-failed", "copy-failed"].includes(scenario);
+      expect(selected).toBe(retained ? legacy : destination);
+      if (scenario === "occupied") {
+        expect(await fs.readFile(recordPath, "utf8")).toContain("upstream-retained");
+        expect(await fs.readFile(path.join(destination, "existing"), "utf8")).toBe(
+          "do not overwrite",
+        );
+      } else {
+        expect(await createFileSessionStore({ stateDir: selected }).load(recordId)).toEqual(
+          original,
+        );
+        expect(await fs.readFile(path.join(selected, "retained-history.bin"), "utf8")).toBe(
+          "opaque history",
+        );
+      }
+      if (!retained && scenario !== "occupied" && scenario !== "destination-unreadable") {
+        await expect(fs.stat(legacy)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(ctx.logger.info).toHaveBeenCalledWith(
+          expect.stringContaining("Migrated ACPX session state"),
+        );
+      }
+      if (["unreadable", "move-failed", "copy-failed"].includes(scenario)) {
+        expect(ctx.logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining("plugins.entries.acpx.config.stateDir"),
+        );
+      }
+      if (scenario === "move-failed") {
+        await service.stop?.(ctx);
+        await fs.writeFile(path.join(destination, "adapter-wrapper"), "generated wrapper");
+        await service.start(ctx);
+        expect(selected).toBe(legacy);
+      }
+      if (scenario === "marker-failed") {
+        expect(ctx.logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining("fixture marker write failure"),
+        );
+        await service.stop?.(ctx);
+        await service.start(ctx);
+        expect(ctx.logger.info).toHaveBeenCalledWith(
+          expect.stringContaining("Completed ACPX session state adoption"),
+        );
+      }
+      if (scenario === "absent" || scenario === "marker-failed") {
+        await service.stop?.(ctx);
+        await fs.rename(destination, path.join(ctx.stateDir, "saved-adoption"));
+        await fs.mkdir(path.dirname(recordPath), { recursive: true });
+        await fs.writeFile(recordPath, "stale source must not be adopted twice");
+        const readdir = fs.readdir.bind(fs);
+        vi.spyOn(fs, "readdir").mockImplementation((...args) => {
+          if (args[0] === path.join(legacy, "sessions")) {
+            return Promise.reject(
+              Object.assign(new Error("stale legacy directory is unreadable"), { code: "EACCES" }),
+            );
+          }
+          return readdir(...args);
+        });
+        await service.start(ctx);
+        expect(selected).toBe(destination);
+        expect(await fs.readFile(recordPath, "utf8")).toBe(
+          "stale source must not be adopted twice",
+        );
+        expect(await fs.readdir(destination)).toEqual([]);
+        const migration = stateMigrations.find(
+          (item) => item.id === "acpx-session-owner-resources",
+        )!;
+        expect(
+          await migration.detectLegacyState({
+            config: {},
+            env: { ...process.env, OPENCLAW_STATE_DIR: ctx.stateDir },
+            stateDir: ctx.stateDir,
+            serviceWorkspaceDir: ctx.workspaceDir,
+            oauthDir: path.join(ctx.stateDir, "oauth"),
+            context: { openPluginStateKeyedStore: openKeyedStore },
+          }),
+        ).toBeNull();
+      }
+    } finally {
+      await service.stop?.(ctx);
+    }
+  });
+
   it("publishes before probing and retracts the exact runtime through the injected lifecycle", async () => {
     delete process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE;
     const ctx = createServiceContext(testWorkspace.dir);
@@ -538,7 +727,7 @@ describe("createAcpxRuntimeService", () => {
     delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE;
     const ctx = createServiceContext(testWorkspace.dir);
     const service = createAcpxRuntimeService(ctx);
-    const sessionsDir = path.join(testWorkspace.dir, "state", "sessions");
+    const sessionsDir = path.join(ctx.stateDir, "acpx", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     for (const id of ["global", "openclaw-owner-v1-existing", "agent:free:acp:test"]) {
       await fs.writeFile(path.join(sessionsDir, `${encodeURIComponent(id)}.json`), "{}");

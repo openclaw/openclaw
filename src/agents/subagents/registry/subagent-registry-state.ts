@@ -431,6 +431,7 @@ export async function prepareSubagentRunsSnapshotForRunIds(
     inMemoryRuns,
     fullCache: persistedSubagentRunsReadCache,
     compactCache: persistedSubagentSessionListRunsReadCache,
+    requestedRunIds: requested,
     select: (snapshot) => ({
       runIds: [...snapshot.values()].filter(matches).map((entry) => entry.runId),
       sessionKeys: [],

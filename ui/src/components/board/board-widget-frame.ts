@@ -499,16 +499,7 @@ export class BoardWidgetFrameLifecycle {
       this.sandboxHost = null;
       return;
     }
-    const options = this.sandboxHostOptions(frame, widget);
-    if (!options) {
-      return;
-    }
-    if (!this.sandboxHost || this.sandboxHost.frame !== frame) {
-      this.sandboxHost?.dispose();
-      this.sandboxHost = new BoardWidgetSandboxHost(options);
-    } else {
-      this.sandboxHost.update(options);
-    }
+    this.syncSandboxHost(frame, widget);
   }
 
   private readonly handleVisibilityChange = (): void => {
@@ -568,17 +559,11 @@ export class BoardWidgetFrameLifecycle {
     ) {
       return;
     }
-    const options = this.sandboxHostOptions(frame, widget);
-    if (!options) {
+    const sandboxHost = this.syncSandboxHost(frame, widget);
+    if (!sandboxHost) {
       return;
     }
-    if (!this.sandboxHost || this.sandboxHost.frame !== frame) {
-      this.sandboxHost?.dispose();
-      this.sandboxHost = new BoardWidgetSandboxHost(options);
-    } else {
-      this.sandboxHost.update(options);
-    }
-    this.sandboxHost.handleMessage(event);
+    sandboxHost.handleMessage(event);
     if (event.data?.type === "openclaw:widget-bridge-ready") {
       // The sandbox proxy replaces its inner iframe after the outer frame's
       // load event. Reissue per-document host state only after that replacement
@@ -586,4 +571,21 @@ export class BoardWidgetFrameLifecycle {
       this.postBoardHostState(frame);
     }
   };
+
+  private syncSandboxHost(
+    frame: HTMLIFrameElement,
+    widget: BoardWidget,
+  ): BoardWidgetSandboxHost | undefined {
+    const options = this.sandboxHostOptions(frame, widget);
+    if (!options) {
+      return undefined;
+    }
+    if (!this.sandboxHost || this.sandboxHost.frame !== frame) {
+      this.sandboxHost?.dispose();
+      this.sandboxHost = new BoardWidgetSandboxHost(options);
+    } else {
+      this.sandboxHost.update(options);
+    }
+    return this.sandboxHost;
+  }
 }

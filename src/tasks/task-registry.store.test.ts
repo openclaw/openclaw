@@ -23,6 +23,7 @@ import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -37,10 +38,10 @@ import {
   getTaskFlowById,
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import { applyTaskRegistryMaintenanceRetention } from "./task-registry-maintenance-retention.js";
 import { reloadTaskRegistryFromStoreAsync } from "./task-registry-state.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
-  deleteTaskRecordById,
   finalizeTaskRecordByRunId,
   findTaskByRunId,
   getTaskById,
@@ -56,13 +57,12 @@ import {
   runTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
-import { bindTaskRecord } from "./task-registry.store.kernel.js";
+import { bindTaskRecord, deleteTaskRowsWithDeliveryState } from "./task-registry.store.kernel.js";
 import {
   bindTaskRunExecution,
   loadTaskRegistryStateFromSqlite,
   loadTaskRegistryStateFromSqliteReadOnly,
   loadTaskRegistryStateFromSqliteReadOnlyResult,
-  deleteTaskAndDeliveryStateFromSqlite,
   upsertTaskWithDeliveryStateToSqlite,
 } from "./task-registry.store.sqlite.js";
 import type { TaskRegistryObserverEvent } from "./task-registry.store.types.js";
@@ -408,7 +408,6 @@ describe("task-registry store runtime", () => {
           deliveryStates: new Map(),
         }),
         upsertTaskWithDeliveryState: writeStore,
-        deleteTaskWithDeliveryState: writeStore,
         upsertDeliveryState: writeStore,
       },
     });
@@ -465,7 +464,6 @@ describe("task-registry store runtime", () => {
           deliveryStates: new Map(),
         }),
         upsertTaskWithDeliveryState: writeStore,
-        deleteTaskWithDeliveryState: writeStore,
         upsertDeliveryState: writeStore,
       },
     });
@@ -510,7 +508,6 @@ describe("task-registry store runtime", () => {
           deliveryStates: new Map(),
         }),
         upsertTaskWithDeliveryState: writeStore,
-        deleteTaskWithDeliveryState: writeStore,
         upsertDeliveryState: writeStore,
       },
       observers: null,
@@ -880,7 +877,7 @@ describe("task-registry store runtime", () => {
     );
   });
 
-  it("emits detached observer metadata while retaining full task records", () => {
+  it("emits detached observer metadata while retaining full task records", async () => {
     const events: TaskRegistryObserverEvent[] = [];
     const detail = { notes: [["retained task detail"]] };
     const restored = { ...createStoredTask(), detail };
@@ -930,6 +927,7 @@ describe("task-registry store runtime", () => {
       notifyPolicy: "silent",
       status: "succeeded",
       endedAt: Date.now(),
+      cleanupAfter: 0,
     };
     store.upsertTaskWithDeliveryState({ task: completed });
     const deferredObserverEvents: Array<() => void> = [];
@@ -944,7 +942,9 @@ describe("task-registry store runtime", () => {
       detail,
     });
     expect(store.loadSnapshot().tasks.get(created.taskId)?.detail).toEqual(detail);
-    expect(deleteTaskRecordById(created.taskId)).toBe(true);
+    expect(
+      await applyTaskRegistryMaintenanceRetention(completed, Date.now(), new Set(), () => {}),
+    ).toBe("pruned");
     expect(getTaskById(created.taskId)).toBeUndefined();
     expect(store.loadSnapshot().tasks.has(created.taskId)).toBe(false);
 
@@ -975,10 +975,9 @@ describe("task-registry store runtime", () => {
     expect(getTaskById(restored.taskId)?.detail).toEqual(detail);
   });
 
-  it("uses atomic task-plus-delivery store methods", async () => {
+  it("persists task and delivery state together during notification", async () => {
     const store = createInMemoryTaskRegistryStore();
     const upsertTaskWithDeliveryState = vi.spyOn(store, "upsertTaskWithDeliveryState");
-    const deleteTaskWithDeliveryState = vi.spyOn(store, "deleteTaskWithDeliveryState");
     configureTaskRegistryRuntime({ store });
 
     const created = createTaskRecord({
@@ -998,7 +997,6 @@ describe("task-registry store runtime", () => {
       kind: "progress",
       summary: "working",
     });
-    expect(deleteTaskRecordById(created.taskId)).toBe(true);
 
     expect(upsertTaskWithDeliveryState).toHaveBeenCalled();
     expect(requireFirstUpsertParams(upsertTaskWithDeliveryState)).toMatchObject({
@@ -1012,7 +1010,6 @@ describe("task-registry store runtime", () => {
         return params.deliveryState?.lastNotifiedEventAt === 200;
       }),
     ).toBe(true);
-    expect(deleteTaskWithDeliveryState).toHaveBeenCalledWith(created.taskId);
   });
 
   it("restores persisted tasks from the default sqlite store", () => {
@@ -1431,7 +1428,9 @@ describe("task-registry store runtime", () => {
             .all(),
         ).toEqual([{ owner_id: active.taskId }, { owner_id: retained.taskId }]);
 
-        deleteTaskAndDeliveryStateFromSqlite(active.taskId);
+        runOpenClawStateWriteTransaction(() =>
+          deleteTaskRowsWithDeliveryState(openOpenClawStateDatabase().db, active.taskId),
+        );
         const restored = loadTaskRegistryStateFromSqlite();
         expect([...restored.tasks.keys()].toSorted()).toEqual(
           [retained.taskId, terminal.taskId, stale.taskId].toSorted(),
@@ -1510,10 +1509,6 @@ describe("task-registry store runtime", () => {
         }
         sqliteState.set(params.task.taskId, params.task);
       });
-      const deleteTaskWithDeliveryState = vi.fn((taskId: string) => {
-        sqliteState.delete(taskId);
-      });
-
       configureTaskRegistryRuntime({
         store: {
           ...createInMemoryTaskRegistryStore(),
@@ -1528,7 +1523,6 @@ describe("task-registry store runtime", () => {
             return operation();
           },
           upsertTaskWithDeliveryState,
-          deleteTaskWithDeliveryState,
           listTasksForOwnerKey: async (_context, key) =>
             [...sqliteState.values()].filter((task) => task.ownerKey === key),
         },
@@ -1649,80 +1643,6 @@ describe("task-registry store runtime", () => {
     expect(getTaskById(first.taskId)?.task).toBe("Original task");
   });
 
-  it.each(["write", "admission"] as const)(
-    "keeps a failed deletion published when %s fails",
-    (failureStage) => {
-      const sqliteRow = {
-        ...createStoredTask(),
-        taskId: "task-delete-persist-fail",
-        runId: "run-delete-persist-fail",
-      };
-      const sqliteState = new Map<string, TaskRecord>([[sqliteRow.taskId, sqliteRow]]);
-      const deleteTaskWithDeliveryState = vi.fn(() => {
-        throw new Error("SQLITE_IOERR: disk I/O error");
-      });
-      configureTaskRegistryRuntime({
-        store: {
-          ...createInMemoryTaskRegistryStore(),
-          loadSnapshot: () => ({
-            tasks: new Map(sqliteState),
-            deliveryStates: new Map(),
-          }),
-          upsertTaskWithDeliveryState: vi.fn(),
-          withMutation: <T>(operation: () => T): T => {
-            if (failureStage === "admission") {
-              throw new Error("Synthetic coordinator admission failure");
-            }
-            return operation();
-          },
-          deleteTaskWithDeliveryState,
-        },
-      });
-
-      expect(findTaskByRunId(sqliteRow.runId)?.taskId).toBe(sqliteRow.taskId);
-      expect(deleteTaskRecordById(sqliteRow.taskId)).toBe(false);
-
-      if (failureStage === "write") {
-        expect(deleteTaskWithDeliveryState).toHaveBeenCalledWith(sqliteRow.taskId);
-      } else {
-        expect(deleteTaskWithDeliveryState).not.toHaveBeenCalled();
-      }
-      expect(getTaskById(sqliteRow.taskId)?.status).toBe("running");
-    },
-  );
-
-  it("deletes through a single atomic store call", () => {
-    const deleteTaskWithDeliveryState = vi.fn();
-    configureTaskRegistryRuntime({
-      store: {
-        ...createInMemoryTaskRegistryStore(),
-        loadSnapshot: () => ({
-          tasks: new Map(),
-          deliveryStates: new Map(),
-        }),
-        upsertTaskWithDeliveryState: vi.fn(),
-        deleteTaskWithDeliveryState,
-      },
-    });
-
-    const created = createTaskRecord({
-      runtime: "acp",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: "agent:codex:acp:new",
-      runId: "run-atomic-delete",
-      task: "Atomic delete task",
-      status: "running",
-      deliveryStatus: "pending",
-    });
-
-    expect(deleteTaskRecordById(created.taskId)).toBe(true);
-
-    expect(deleteTaskWithDeliveryState).toHaveBeenCalledTimes(1);
-    expect(deleteTaskWithDeliveryState).toHaveBeenCalledWith(created.taskId);
-    expect(getTaskById(created.taskId)).toBeUndefined();
-  });
-
   it.each(["create", "update", "delete"] as const)(
     "keeps SQLite and published task state atomic when %s persistence fails",
     async (operation) => {
@@ -1736,7 +1656,8 @@ describe("task-registry store runtime", () => {
             scopeKind: "session" as const,
             runId: `atomic-${operation}`,
             task: "Preserve task and delivery state together",
-            status: "running" as const,
+            status: operation === "delete" ? ("succeeded" as const) : ("running" as const),
+            ...(operation === "delete" ? { cleanupAfter: 0 } : {}),
             deliveryStatus: "pending" as const,
             notifyPolicy: "silent" as const,
             requesterOrigin: { channel: "test-channel", to: "C1234567890" },
@@ -1760,7 +1681,7 @@ describe("task-registry store runtime", () => {
               },
             },
           });
-          const mutate = () => {
+          const mutate = async () => {
             if (operation === "create") {
               return createTaskRecordOrNull(params);
             }
@@ -1772,18 +1693,18 @@ describe("task-registry store runtime", () => {
                   taskId: existing.taskId,
                   notifyPolicy: "state_changes",
                 })
-              : deleteTaskRecordById(existing.taskId);
+              : applyTaskRegistryMaintenanceRetention(existing, Date.now(), new Set(), () => {});
           };
           const { db } = openOpenClawStateDatabase();
           const failingStatement =
             operation === "delete" ? "DELETE ON task_runs" : "INSERT ON task_delivery_state";
           // Fail the second statement: a missing transaction would leave the first row change behind.
           db.exec(`
-            CREATE TEMP TRIGGER reject_task_write BEFORE ${failingStatement}
+            CREATE ${operation === "delete" ? "" : "TEMP "}TRIGGER reject_task_write BEFORE ${failingStatement}
             BEGIN SELECT RAISE(ABORT, 'synthetic task write failure'); END;
           `);
           try {
-            expect(mutate()).toBe(operation === "delete" ? false : null);
+            expect(await mutate()).toBe(operation === "delete" ? undefined : null);
             expect(loadTaskRegistryStateFromSqlite()).toEqual(storedBefore);
             expect(listTaskRecords()).toEqual(visibleBefore);
             expect(findTaskByRunId(params.runId)).toEqual(existing);
@@ -1792,11 +1713,12 @@ describe("task-registry store runtime", () => {
             db.exec("DROP TRIGGER reject_task_write");
           }
 
-          const result = mutate();
+          const result = await mutate();
           expect(result).not.toBeNull();
           expect(result).not.toBe(false);
           const storedAfter = loadTaskRegistryStateFromSqlite();
           if (operation === "delete") {
+            expect(result).toBe("pruned");
             expect(storedAfter.tasks.size).toBe(0);
             expect(storedAfter.deliveryStates.size).toBe(0);
             expect(findTaskByRunId(params.runId)).toBeUndefined();

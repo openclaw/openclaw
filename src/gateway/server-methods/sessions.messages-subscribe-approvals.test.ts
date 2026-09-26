@@ -60,7 +60,9 @@ function createContext(params: {
     if (params.replayError) {
       throw params.replayError;
     }
-    return params.replay ? { replay: params.replay, isCurrent: (): boolean => true } : undefined;
+    return params.replay
+      ? { replay: params.replay, isCurrent: (): boolean => true, release: vi.fn() }
+      : undefined;
   });
   const logError = vi.fn();
   const context = {
@@ -291,6 +293,7 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     listSessionPendingApprovals.mockResolvedValueOnce({
       replay: staleReplay,
       isCurrent: () => false,
+      release: vi.fn(),
     });
 
     const respond = await subscribe({
@@ -318,8 +321,8 @@ describe("sessions.messages.subscribe approval opt-in", () => {
       replay,
     });
     listSessionPendingApprovals
-      .mockResolvedValueOnce({ replay, isCurrent: () => false })
-      .mockResolvedValueOnce({ replay, isCurrent: () => false });
+      .mockResolvedValueOnce({ replay, isCurrent: () => false, release: vi.fn() })
+      .mockResolvedValueOnce({ replay, isCurrent: () => false, release: vi.fn() });
 
     const respond = await subscribe({
       body: { key: "child", includeApprovals: true },

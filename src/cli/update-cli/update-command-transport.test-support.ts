@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
+import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../../infra/update-npm-prefix.js";
 import type { runCommandWithTimeout, runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 
@@ -28,8 +29,9 @@ export async function createUpdateCommandTransportFixture(transport: {
   const { spawn: spawnChild } =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return async (...[argv, options]: Parameters<typeof transport.run>) => {
+    const npmProbe = argv.at(-2);
     if (
-      argv.at(-2) === "prefix" &&
+      (npmProbe === "prefix" || npmProbe === "root") &&
       argv.at(-1) === "-g" &&
       ((argv.length === 3 && argv[0] === "npm") ||
         (argv.length === 4 &&
@@ -37,9 +39,16 @@ export async function createUpdateCommandTransportFixture(transport: {
           path.basename(argv[1] ?? "") === "npm-cli.js"))
     ) {
       const result = await transport.run(argv, options);
-      // Supply the fixture's inspected empty prefix when an effect double omits read-only metadata.
+      // Both npm probes describe the same empty prefix when an effect double omits metadata.
       return result.code === 0 && result.stdout === ""
-        ? { ...result, stdout: `${transport.npmPrefix}\n` }
+        ? {
+            ...result,
+            stdout: `${
+              npmProbe === "root"
+                ? resolveNpmGlobalPrefixLayoutFromPrefix(transport.npmPrefix).globalRoot
+                : transport.npmPrefix
+            }\n`,
+          }
         : result;
     }
     if (typeof options === "number" || !options.beforeInput) {
@@ -122,6 +131,7 @@ export async function createUpdateUtf8CommandTransportFixture(
   transport: Parameters<typeof createUpdateCommandTransportFixture>[0],
   run: typeof runUtf8CommandWithTimeout,
 ): Promise<typeof runUtf8CommandWithTimeout> {
+  const hostPlatform = process.platform;
   const { spawnSync: spawnMetadata } =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const runDoctorFixture = await createUpdateCommandTransportFixture(transport);
@@ -132,25 +142,38 @@ export async function createUpdateUtf8CommandTransportFixture(
       // The fixture has joined and checked its real child's exit before returning.
       return { ...result, cleanup: result.cleanup ?? "normal" };
     }
-    if (argv.includes("--eval") && typeof options !== "number" && options.input) {
+    const stateWorker = argv.some((arg) =>
+      /[/\\]update-candidate-state\.worker\.[cm]?[jt]s$/u.test(arg),
+    );
+    if ((argv.includes("--eval") || stateWorker) && typeof options !== "number" && options.input) {
       const input: unknown = JSON.parse(String(options.input));
-      if (isRecord(input) && Array.isArray(input.files)) {
-        // Inspect real fixture metadata using the host transport even while
-        // the CLI simulates another service platform or installer environment.
+      const metadataRequest =
+        argv.includes("--eval") && isRecord(input) && Array.isArray(input.files);
+      const foreignPlatformSqlite =
+        process.platform !== hostPlatform &&
+        isRecord(input) &&
+        ((argv.includes("--eval") && typeof input.directory === "string") ||
+          (stateWorker &&
+            typeof input.stateDir === "string" &&
+            ["discover", "versions", "database-backup"].includes(String(input.mode))));
+      if (metadataRequest || foreignPlatformSqlite) {
+        // SQLite workers use the real host executable/VFS even when service tests simulate Windows.
         const metadata = spawnMetadata(
           expectDefined(argv[0], "metadata executable"),
           argv.slice(1),
           {
             input: options.input,
             timeout: options.timeoutMs,
-            cwd: transport.hostCwd,
-            env: transport.hostEnv,
+            cwd: options.cwd ?? transport.hostCwd,
+            env: { ...transport.hostEnv, ...options.baseEnv, ...options.env },
             encoding: "utf8",
           },
         );
         if (metadata.error) {
           throw metadata.error;
         }
+        options.onOutputChunk?.(Buffer.from(metadata.stdout), "stdout");
+        options.onOutputChunk?.(Buffer.from(metadata.stderr), "stderr");
         return commandResult({
           code: metadata.status,
           stdout: metadata.stdout,

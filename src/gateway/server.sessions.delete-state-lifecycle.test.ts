@@ -309,7 +309,7 @@ test("sessions.delete accepts placement retirement by the absent-session reconci
   const sessionId = "postcommit-retirement-session";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
   const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-  const claim = placementStore.claimTurn({
+  const claim = await placementStore.claimTurn({
     sessionId,
     sessionKey,
     agentId: "main",
@@ -317,7 +317,7 @@ test("sessions.delete accepts placement retirement by the absent-session reconci
     claimId: "postcommit-claim",
     runId: "postcommit-run",
   });
-  placementStore.releaseTurn(claim);
+  await placementStore.releaseTurn(claim);
   let retired = false;
   const publish = sessionArchiveStore.publishSessionStateArchives;
   vi.spyOn(sessionArchiveStore, "publishSessionStateArchives").mockImplementation(
