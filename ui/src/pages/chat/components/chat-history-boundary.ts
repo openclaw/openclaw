@@ -20,10 +20,10 @@ export function renderChatHistoryBoundary(props: ChatHistoryBoundaryProps): Temp
       <button
         class="chat-history-boundary__action"
         type="button"
-        ?disabled=${props.loading}
+        aria-disabled=${props.loading ? "true" : "false"}
         aria-busy=${props.loading ? "true" : "false"}
         aria-label=${label}
-        @click=${props.onShowEarlier}
+        @click=${props.loading ? undefined : props.onShowEarlier}
       >
         <span role="status">${label}</span>
       </button>

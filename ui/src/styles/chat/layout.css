@@ -775,7 +775,7 @@ openclaw-pending-session-create {
   text-transform: uppercase;
 }
 
-.chat-history-boundary__action:not(:disabled):hover {
+.chat-history-boundary__action:not([aria-disabled="true"]):hover {
   color: var(--text);
 }
 
