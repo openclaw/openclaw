@@ -571,6 +571,8 @@ extension OpenClawChatViewModel {
             encodedAttachments: encodedAttachments)
         let userMessageTimestamp = Date().timeIntervalSince1970 * 1000
         let userMessageID = UUID()
+        // History requested before this send cannot replace its optimistic row.
+        invalidateHistorySnapshots()
         appendMessage(
             OpenClawChatMessage(
                 id: userMessageID,

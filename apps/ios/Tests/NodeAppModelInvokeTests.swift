@@ -1210,6 +1210,38 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
 @Suite(.serialized) struct NodeAppModelInvokeTests {
     @Test(arguments: [false, true]) @MainActor
+    func `chat preserves a typed draft on initial agent resolution only for the same account`(
+        changesAccount: Bool) throws
+    {
+        let appModel = NodeAppModel()
+        appModel.enterScreenshotFixtureMode()
+        appModel.gatewayDefaultAgentId = nil
+        let url = try #require(URL(string: "wss://draft.example.test"))
+        let (first, second) = try makeGatewayPair(
+            firstURL: url, firstStableID: "draft-fixture", firstToken: "synthetic-first",
+            secondURL: url, secondStableID: "draft-fixture", secondToken: "synthetic-second")
+        appModel.activeGatewayConnectConfig = first
+        let owner = appModel.chatPresentation
+        owner.sync(appModel: appModel)
+        let original = try #require(owner.viewModel)
+        defer { owner.viewModel?.detachTransport() }
+        let gatewayOwner = appModel.chatViewModelOwnerID
+        let sessionKey = appModel.chatSessionKey
+        #expect(appModel.chatDeliveryAgentId == nil)
+        original.input = "Keep this draft while the default agent resolves"
+
+        appModel.gatewayDefaultAgentId = "main"
+        if changesAccount { appModel.activeGatewayConnectConfig = second }
+        #expect(appModel.chatViewModelOwnerID == gatewayOwner)
+        #expect(appModel.chatSessionKey == sessionKey)
+        owner.sync(appModel: appModel)
+
+        let current = try #require(owner.viewModel)
+        #expect(appModel.chatDeliveryAgentId == "main")
+        #expect(current.input == (changesAccount ? "" : "Keep this draft while the default agent resolves"))
+    }
+
+    @Test(arguments: [false, true]) @MainActor
     func `chat account replacement retires pinned questions and preserves attachment cleanup`(
         restoresOriginalAccount: Bool) throws
     {
