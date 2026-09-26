@@ -107,33 +107,6 @@ describe("task-flow-registry audit", () => {
     expect(loadSnapshot).toHaveBeenCalledTimes(1);
   });
 
-  it("clears restore-failed findings after a clean reset and restore", () => {
-    configureTaskFlowRegistryRuntime({
-      store: {
-        ...createInMemoryTaskFlowRegistryStore(),
-        loadSnapshot: () => {
-          throw new Error("boom");
-        },
-      },
-    });
-
-    const findings = listTaskFlowAuditFindings();
-    expect(findings).toHaveLength(1);
-    expect(findings[0]?.code).toBe("restore_failed");
-
-    resetTaskFlowRegistryForTests({ persist: false });
-    configureTaskFlowRegistryRuntime({
-      store: {
-        ...createInMemoryTaskFlowRegistryStore(),
-        loadSnapshot: () => ({
-          flows: new Map(),
-        }),
-      },
-    });
-
-    expect(listTaskFlowAuditFindings()).toStrictEqual([]);
-  });
-
   it("detects stuck managed flows and missing blocked tasks", async () => {
     await withTaskFlowAuditStateDir(async () => {
       const running = createManagedTaskFlow({

@@ -1,85 +1,16 @@
 import {
   embeddedAgentLog,
   type CompactEmbeddedAgentSessionParams,
-  type EmbeddedAgentCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { JsonObject } from "./protocol.js";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
   CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import { isSameCodexAppServerThreadOwner } from "./thread-ownership.js";
-
-export function codexNativeCompactionResult(
-  params: CompactEmbeddedAgentSessionParams,
-  outcome: { compacted: boolean; reason?: string; tokensAfter?: number; details: JsonObject },
-): EmbeddedAgentCompactResult {
-  return {
-    ok: true,
-    compacted: outcome.compacted,
-    ...(outcome.reason ? { reason: outcome.reason } : {}),
-    result: {
-      summary: "",
-      firstKeptEntryId: "",
-      tokensBefore: params.currentTokenCount ?? 0,
-      ...(outcome.tokensAfter !== undefined ? { tokensAfter: outcome.tokensAfter } : {}),
-      details: outcome.details,
-    },
-  };
-}
-
-export function skippedCodexNativeCompactionResult(
-  params: CompactEmbeddedAgentSessionParams,
-  skipped: {
-    reason: string;
-    code: string;
-    request?: "required_preflight" | "after_context_engine";
-    expectedThreadId?: string;
-    currentThreadId?: string;
-  },
-): EmbeddedAgentCompactResult {
-  return codexNativeCompactionResult(params, {
-    compacted: false,
-    reason: skipped.reason,
-    details: {
-      backend: "codex-app-server",
-      skipped: true,
-      reason: skipped.code,
-      request: skipped.request ?? "after_context_engine",
-      trigger: params.trigger ?? "unknown",
-      ...(skipped.expectedThreadId ? { expectedThreadId: skipped.expectedThreadId } : {}),
-      ...(skipped.currentThreadId ? { currentThreadId: skipped.currentThreadId } : {}),
-    },
-  });
-}
-
-export function failedCodexThreadBindingCompactionResult(
-  params: CompactEmbeddedAgentSessionParams,
-  recovery: {
-    reason: string;
-    recovery: "missing_thread_binding" | "stale_thread_binding";
-    threadId?: string;
-  },
-): EmbeddedAgentCompactResult {
-  embeddedAgentLog.warn("codex app-server compaction could not use thread binding", {
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    threadId: recovery.threadId,
-    reason: recovery.reason,
-    recovery: recovery.recovery,
-  });
-  return {
-    ok: false,
-    compacted: false,
-    reason: recovery.reason,
-    failure: {
-      reason: recovery.recovery,
-      rawError: recovery.reason,
-    },
-  };
-}
 
 export async function clearContextEngineProjectionBeforeNativeCompaction(params: {
   sessionId: string;
@@ -140,4 +71,37 @@ export function isCodexThreadNotFoundError(error: unknown): boolean {
   // compaction.rs asserts message.contains("thread not found")). So the message
   // gates recovery, not user-facing classification; the generic code is ambiguous.
   return coerceErrorMessage(error).toLowerCase().includes("thread not found");
+}
+
+// ttlMs: 0 retains keys until the 4,096-entry LRU cap evicts them, after which a
+// previously suppressed warning can intentionally emit again.
+const warnedIgnoredCompactionOverrides = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
+
+export function warnIfIgnoringOpenClawCompactionOverrides(
+  params: CompactEmbeddedAgentSessionParams,
+): void {
+  const ignoredConfig = readIgnoredCompactionOverridePaths(params);
+  if (ignoredConfig.length === 0) {
+    return;
+  }
+  const warningKey = ignoredConfig.join("\0");
+  if (warnedIgnoredCompactionOverrides.check(warningKey)) {
+    return;
+  }
+  embeddedAgentLog.warn(
+    "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
+    {
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      ignoredConfig,
+    },
+  );
+}
+
+function readIgnoredCompactionOverridePaths(params: CompactEmbeddedAgentSessionParams): string[] {
+  const compaction = asOptionalRecord(params.config?.agents?.defaults?.compaction);
+  return ["model", "thinkingLevel", "provider"].flatMap((field) => {
+    const value = compaction?.[field];
+    return typeof value === "string" && value.trim() ? [`agents.defaults.compaction.${field}`] : [];
+  });
 }

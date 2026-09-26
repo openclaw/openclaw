@@ -82,6 +82,7 @@ export async function updateGitCheckout(params: {
   const branch = await readBranchName(runCommand, gitRoot, timeoutMs);
   const devTarget = channel === "dev" ? opts.devTarget : undefined;
   const hasDevTarget = devTarget !== undefined;
+  const activateBranch = channel === "dev" && !hasDevTarget;
   const needsCheckoutMain = channel === "dev" && !hasDevTarget && branch !== DEV_BRANCH;
   const totalSteps = channel === "dev" ? (needsCheckoutMain ? 12 : 11) : 9;
   const steps: UpdateStepResult[] = [];
@@ -259,6 +260,48 @@ export async function updateGitCheckout(params: {
   if (isFailedUpdateStep(statusCheck)) {
     return buildError(dirty ? "dirty" : "clean-check-failed");
   }
+  if (activateBranch && branch !== DEV_BRANCH) {
+    const devBranchRef = `refs/heads/${DEV_BRANCH}`;
+    const branchCheckOptions = step(
+      "git-activation-branch-check",
+      ["git", "-C", gitRoot, "branch", "--force", DEV_BRANCH, devBranchRef],
+      gitRoot,
+    );
+    const branchCheck = await runStep({
+      ...branchCheckOptions,
+      runCommand: async (argv, options) => {
+        const exists = await runCommand(
+          ["git", "-C", gitRoot, "show-ref", "--verify", "--quiet", devBranchRef],
+          options,
+        );
+        if (exists.code === 1) {
+          return { ...exists, code: 0, stdout: "", stderr: "" };
+        }
+        if (exists.code !== 0) {
+          return {
+            ...exists,
+            stdout: "",
+            stderr: `Could not inspect local branch ${DEV_BRANCH} before activation. Resolve the Git branch error, then rerun openclaw update.`,
+          };
+        }
+        // Resetting a branch to its current ref is a ref/reflog no-op, but Git still
+        // enforces every worktree owner state, including paused rebase and bisect.
+        const result = await runCommand(argv, options);
+        const sanitized = { ...result, stdout: "" };
+        return result.code !== 0
+          ? {
+              ...sanitized,
+              stderr:
+                `Cannot activate this dev update because a Git worktree uses or reserves branch ${DEV_BRANCH}. ` +
+                `Finish or abort its rebase or bisect, or move it off ${DEV_BRANCH}, then rerun openclaw update.`,
+            }
+          : sanitized;
+      },
+    });
+    if (isFailedUpdateStep(branchCheck)) {
+      return buildError("checkout-failed");
+    }
+  }
   const checkSourceUnchanged = async (expectedSha = beforeSha, expectedBranch = branch) => {
     const currentHead = await runCommand(["git", "-C", gitRoot, "rev-parse", "HEAD"], {
       cwd: gitRoot,
@@ -354,7 +397,8 @@ export async function updateGitCheckout(params: {
         devTarget,
         refreshedRemotes: fetched.refreshedRemotes,
         beforeSha,
-        beforeBuiltCommit,
+        beforeRuntimeVerified: recovery.serviceRestartSafe,
+        sourceRuntimePrepared: opts.sourceRuntimePrepared,
         beforeGitStaging: opts.beforeGitStaging,
         needsCheckoutMain,
         timeoutMs,
@@ -425,6 +469,12 @@ export async function updateGitCheckout(params: {
       inspectAndPrepare,
     );
     if (preflight.status !== "ok") {
+      if (preflight.status === "skipped" && preflight.reason === "already-current") {
+        return {
+          ...buildError(preflight.reason, preflight.status),
+          sourceRuntimePrepared: opts.sourceRuntimePrepared,
+        };
+      }
       return mutationPrepared
         ? await rollbackError(preflight.reason)
         : buildError(preflight.reason, preflight.status);
@@ -436,7 +486,6 @@ export async function updateGitCheckout(params: {
       return buildError(sourceChanged.reason, sourceChanged.status);
     }
     await prepareMutation(preflight.candidateSha);
-    const activateBranch = channel === "dev" && !hasDevTarget;
     sourceMutationStarted = true;
     const failure = await runRequiredStep(
       "git-checkout",
@@ -614,6 +663,7 @@ export async function updateGitCheckout(params: {
       root: gitRoot,
       before,
       gitRuntime,
+      sourceRuntimePrepared: true,
       after: {
         sha: afterShaStep.stdoutTail?.trim() ?? null,
         version: await readPackageVersion(gitRoot),

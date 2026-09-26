@@ -1,4 +1,3 @@
-// Telegram helper module supports network config behavior.
 import * as dns from "node:dns";
 import process from "node:process";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -17,15 +16,11 @@ type TelegramAutoSelectFamilyDecision = {
 let wsl2SyncCache: boolean | undefined;
 
 function isWSL2SyncCached(): boolean {
-  if (typeof wsl2SyncCache === "boolean") {
-    return wsl2SyncCache;
-  }
-  wsl2SyncCache = isWSL2Sync();
-  return wsl2SyncCache;
+  return (wsl2SyncCache ??= isWSL2Sync());
 }
 
 type TelegramDnsResultOrderDecision = {
-  value: string | null;
+  value: "ipv4first" | "verbatim" | null;
   source?: string;
 };
 
@@ -82,16 +77,12 @@ export function resolveTelegramDnsResultOrderDecision(params?: {
       ? params.nodeMajor
       : Number(process.versions.node.split(".")[0]);
 
-  // Check environment variable
   const envValue = normalizeOptionalLowercaseString(env[TELEGRAM_DNS_RESULT_ORDER_ENV]);
   if (envValue === "ipv4first" || envValue === "verbatim") {
     return { value: envValue, source: `env:${TELEGRAM_DNS_RESULT_ORDER_ENV}` };
   }
 
-  // Check config
-  const configValue = normalizeOptionalLowercaseString(
-    (params?.network as { dnsResultOrder?: string } | undefined)?.dnsResultOrder,
-  );
+  const configValue = normalizeOptionalLowercaseString(params?.network?.dnsResultOrder);
   if (configValue === "ipv4first" || configValue === "verbatim") {
     return { value: configValue, source: "config" };
   }

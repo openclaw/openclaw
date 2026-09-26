@@ -296,7 +296,8 @@ describe("subagent registry seam flow", () => {
       params.completeBatch([params.settledEntry]);
       return false;
     });
-    vi.useFakeTimers();
+    // SQLite worker deadlines share the native monotonic clock across threads.
+    vi.useFakeTimers({ toNotFake: ["hrtime", "performance"] });
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
     mocks.lifecycleGeneration = "test-generation";
     mocks.onAgentEvent.mockReturnValue(noop);
@@ -3747,9 +3748,15 @@ describe("subagent registry seam flow", () => {
       },
     });
 
-    await mod.registerSubagentRun({ runId, task, expectsCompletionMessage: true });
+    const settleRootWork = observeRootWork();
+    try {
+      await mod.registerSubagentRun({ runId, task, expectsCompletionMessage: true });
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      await settleRootWork();
+    }
 
-    await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1));
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
     const announceParams = expectRecordFields(
       getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, label),
       { childRunId: runId },
@@ -3779,13 +3786,19 @@ describe("subagent registry seam flow", () => {
       },
     });
 
-    await mod.registerSubagentRun({
-      runId: "run-hard-timeout-terminal-reply",
-      task: "provider timeout reply evidence",
-      expectsCompletionMessage: true,
-    });
+    const settleRootWork = observeRootWork();
+    try {
+      await mod.registerSubagentRun({
+        runId: "run-hard-timeout-terminal-reply",
+        task: "provider timeout reply evidence",
+        expectsCompletionMessage: true,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      await settleRootWork();
+    }
 
-    await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1));
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
     expect(getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "timeout announce")).toMatchObject({
       childRunId: "run-hard-timeout-terminal-reply",
       outcome: { status: "timeout" },

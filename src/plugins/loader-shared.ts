@@ -138,13 +138,6 @@ export function resolveAuthorizedDreamingSidecar(params: {
   return selectedEnableState.enabled ? { engineId, selectedMemoryPluginId } : null;
 }
 
-function isAuthorizedDreamingSidecarPlugin(params: {
-  sidecar: AuthorizedDreamingSidecar | null;
-  pluginId: string;
-}): boolean {
-  return params.sidecar?.engineId === params.pluginId;
-}
-
 export function matchesScopedPluginOrDreamingSidecar(params: {
   onlyPluginIdSet: ReadonlySet<string> | null;
   pluginId: string;
@@ -315,6 +308,7 @@ function createManifestPluginRecord(params: {
     contracts: manifestRecord.contracts,
     dashboard: manifestRecord.dashboard,
     controlUi: manifestRecord.controlUi,
+    uiCapabilities: manifestRecord.uiCapabilities,
     mcpServers: manifestRecord.mcpServers,
   });
   if (!params.shouldLoadModules) {
@@ -354,10 +348,7 @@ export function preparePluginLoadRecord(params: {
   ) {
     return null;
   }
-  const isDreamingSidecar = isAuthorizedDreamingSidecarPlugin({
-    sidecar: dreamingSidecar,
-    pluginId,
-  });
+  const isDreamingSidecar = dreamingSidecar?.engineId === pluginId;
   const activationState = isDreamingSidecar
     ? {
         enabled: true,

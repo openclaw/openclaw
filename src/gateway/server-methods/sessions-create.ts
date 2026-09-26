@@ -23,8 +23,10 @@ import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js"
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
+import { buildDashboardSessionKey } from "../session-create-key.js";
 import { resolveSessionCreateCatalogSelectionError } from "../session-create-model-selection.js";
-import { buildDashboardSessionKey, createGatewaySession } from "../session-create-service.js";
+import { createGatewaySession } from "../session-create-service.js";
 import type { PreparedGatewaySessionLifecycle } from "../session-create-service.types.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import {
@@ -72,6 +74,7 @@ import { resolveWorkspacePathContainment } from "./workspace-path-containment.js
 
 export const sessionCreateHandlers: GatewayRequestHandlers = {
   "sessions.create": idempotentSessionCreate(async (options) => {
+    using diagnostics = startSessionCreateDiagnostics();
     const {
       params,
       respond,
@@ -484,6 +487,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const createParams: Parameters<typeof createGatewaySession>[0] = {
       cfg,
       getCurrentConfig,
+      onPhase: diagnostics?.mark,
       operatorAuthority: operatorCapture.preparation,
       key: sessionKey,
       agentId: sessionAgentId,
@@ -628,6 +632,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         cached: runMeta?.cached === true,
       });
 
+    diagnostics?.mark("response");
     respond(true, {
       ok: true,
       key: created.key,
@@ -639,6 +644,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       resolved: created.resolved,
       ...(createdWorktree ? { worktree: createdWorktree } : {}),
     });
+    diagnostics?.mark("handlerExit");
     emitSessionsChanged(context, {
       sessionKey: created.key,
       agentId: created.agentId,

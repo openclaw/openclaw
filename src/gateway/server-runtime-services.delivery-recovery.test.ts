@@ -28,6 +28,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import * as lifecycleNotices from "./server-restart-sentinel-notice.js";
 import { activateGatewayScheduledServices } from "./server-runtime-services.js";
@@ -128,6 +129,7 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
   const admittedWork = vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission");
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   services = activateGatewayScheduledServices({
+    scheduler: createTestGatewayScheduler(),
     minimalTestGateway: false,
     cfgAtStart: cfg,
     deps: {},

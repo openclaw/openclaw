@@ -17,6 +17,21 @@ const ACTIVATION_HINT_METADATA = {
 
 export const PLUGIN_COMPAT_RECORDS = [
   {
+    code: "channel-webhook-listener-config-inputs",
+    status: "deprecated",
+    owner: "config",
+    introduced: "2026-09-26",
+    deprecated: "2026-09-26",
+    warningStarts: "2026-09-26",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Use legacyWebhook for canonical listener config. Doctor migrates stored webhookPort/webhookHost inputs; deprecated optional TypeScript properties preserve config producer source compatibility until an approved SDK major removal.",
+    docsPath: "/gateway/doctor/config-migrations#channel-webhook-listeners",
+    surfaces: ["TelegramAccountConfig.webhookPort", "TelegramAccountConfig.webhookHost"],
+    diagnostics: ["TypeScript @deprecated annotations and plugin-owned Doctor migration"],
+    tests: ["extensions/telegram/src/doctor.test.ts"],
+  },
+  {
     code: "conversation-binding-sync-mutations",
     status: "deprecated",
     owner: "channel",
@@ -99,7 +114,6 @@ export const PLUGIN_COMPAT_RECORDS = [
     tests: [
       "src/infra/sqlite-worker-task-runtime.test.ts",
       "src/infra/sqlite-worker-managed-task-link.test.ts",
-      "extensions/webhooks/index.test.ts",
     ],
     releaseNote:
       "Plugins can opt into worker-backed task and flow reads plus managed-flow writes and child linkage through tasks.async while synchronous methods remain available for external compatibility. Cold registry and configuration preparation remains synchronous.",

@@ -524,10 +524,8 @@ export async function buildTelegramInboundContextPayload(params: {
     ? (groupLabel ?? `group:${chatId}`)
     : buildSenderLabel(msg, senderId || chatId);
   const sessionRuntime = await loadTelegramMessageContextSessionRuntime(sessionRuntimeOverride);
-  const storePath = await resolveTelegramMessageContextStorePath({
-    cfg,
+  const storePath = sessionRuntime.resolveStorePath(cfg.session?.store, {
     agentId: route.agentId,
-    sessionRuntime: sessionRuntimeOverride,
   });
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
   const previousTimestamp = sessionRuntime.readSessionUpdatedAt({
@@ -575,7 +573,6 @@ export async function buildTelegramInboundContextPayload(params: {
     previousTimestamp,
     envelope: envelopeOptions,
   });
-  const hasGroupHistoryContext = isGroup;
   const commandBody = normalizeCommandBody(nativeCommandBody ?? rawBody, {
     botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
     // Preserve multiline text-directive arguments for the core boundary (#138545);
@@ -658,7 +655,7 @@ export async function buildTelegramInboundContextPayload(params: {
             : undefined
     : undefined;
   const inboundHistory =
-    hasGroupHistoryContext && historyKey && historyLimit > 0
+    isGroup && historyKey && historyLimit > 0
       ? groupHistoryPromptEntries.length > 0
         ? groupHistoryPromptEntries
         : undefined

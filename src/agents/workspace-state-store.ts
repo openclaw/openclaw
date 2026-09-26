@@ -7,6 +7,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
@@ -14,6 +15,8 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { resolveUserPath } from "../utils.js";
 import { retireWorkspaceFileCache } from "./workspace-file-cache.js";
 import {
@@ -27,17 +30,16 @@ import {
 import {
   assertCanonicalIntegerTimestamp,
   assertCanonicalTimestamp,
-  isSafeWorkspaceAttestationFilename,
   readWorkspaceStateSnapshotFromDatabase,
   registerWorkspaceStateAliasIdentitiesInTransaction,
   resolveWorkspaceIdentityFromDatabase,
-  SHA256_HEX_PATTERN,
   WORKSPACE_ATTESTATION_RECENT_MS,
   WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND,
   WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
   WORKSPACE_SETUP_STATE_VERSION,
   workspacePathEntryExists,
   type WorkspaceAttestation,
+  type WorkspaceAttestationInput,
   type WorkspaceSetupState,
   type WorkspaceStateDatabase,
   type WorkspaceStateDatabaseHandle,
@@ -199,99 +201,34 @@ export async function mergeWorkspaceSetupState(
 }
 
 export async function replaceWorkspaceAttestation(
-  params: {
-    workspaceDir: string;
-    attestedAtMs: number;
-    generatedHashes: ReadonlyMap<string, string>;
-    nowMs?: number;
-  } & WorkspaceStateOperationOptions,
+  params: WorkspaceAttestationInput & WorkspaceStateOperationOptions,
 ): Promise<WorkspaceAttestation> {
-  assertCanonicalIntegerTimestamp(params.attestedAtMs, "attestation");
-  if (params.nowMs !== undefined) {
-    assertCanonicalIntegerTimestamp(params.nowMs, "attestation update");
-  }
-  for (const [filename, sha256] of params.generatedHashes) {
-    if (!isSafeWorkspaceAttestationFilename(filename) || !SHA256_HEX_PATTERN.test(sha256)) {
-      throw new Error("workspace attestation hash is invalid");
-    }
-  }
-  const sortedHashes = [...params.generatedHashes.entries()].toSorted(([left], [right]) =>
-    left.localeCompare(right),
+  const context = captureOpenClawStateWorkerContext();
+  const { assertCurrent } = params;
+  const input: WorkspaceAttestationInput = {
+    workspaceDir: path.resolve(resolveUserPath(params.workspaceDir)),
+    attestedAtMs: params.attestedAtMs,
+    generatedHashes: new Map(params.generatedHashes),
+    nowMs: params.nowMs,
+  };
+  return runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "workspace.replaceAttestation", input }),
+    {
+      assertCurrent,
+      createAdmission: () => ({
+        nativeLocations: [context.admission.databasePath],
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          if (request.stage !== "transaction" && request.stage !== "commit") {
+            throw new Error("Workspace attestation requires transaction admission");
+          }
+          context.admission.assertCurrent();
+          assertCurrent?.();
+          grant();
+        }),
+      }),
+    },
   );
-  return runOpenClawStateWriteTransaction((database) => {
-    params.assertCurrent?.();
-    // Capture the comparison clock only after BEGIN IMMEDIATE acquires the
-    // writer lock, so a newer committed row cannot look future-dated.
-    const updatedAtMs = params.nowMs ?? Date.now();
-    assertCanonicalIntegerTimestamp(updatedAtMs, "attestation update");
-    const resolution = resolveWorkspaceIdentityFromDatabase({
-      workspaceDir: params.workspaceDir,
-      database,
-    });
-    const identity = resolution.identity;
-    const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
-    if (
-      snapshot.attestation &&
-      snapshot.attestation.attestedAtMs > params.attestedAtMs &&
-      snapshot.attestation.attestedAtMs <= updatedAtMs
-    ) {
-      registerWorkspaceStateAliasIdentitiesInTransaction({
-        database,
-        identity,
-        aliases: resolution.aliases,
-        updatedAtMs,
-      });
-      return snapshot.attestation;
-    }
-    const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
-    executeSqliteQuerySync(
-      database.db,
-      kysely
-        .insertInto("workspace_setup_state")
-        .values({
-          workspace_key: identity.workspaceKey,
-          workspace_path: identity.workspacePath,
-          attested_at_ms: params.attestedAtMs,
-          attestation_updated_at_ms: updatedAtMs,
-        })
-        .onConflict((conflict) =>
-          conflict.column("workspace_key").doUpdateSet({
-            // Heals the NULL path on adopted legacy orphan attestation rows.
-            workspace_path: identity.workspacePath,
-            attested_at_ms: params.attestedAtMs,
-            attestation_updated_at_ms: updatedAtMs,
-          }),
-        ),
-    );
-    executeSqliteQuerySync(
-      database.db,
-      kysely
-        .deleteFrom("workspace_generated_bootstrap_hashes")
-        .where("workspace_key", "=", identity.workspaceKey),
-    );
-    if (sortedHashes.length > 0) {
-      executeSqliteQuerySync(
-        database.db,
-        kysely.insertInto("workspace_generated_bootstrap_hashes").values(
-          sortedHashes.map(([filename, sha256]) => ({
-            workspace_key: identity.workspaceKey,
-            filename,
-            sha256,
-          })),
-        ),
-      );
-    }
-    registerWorkspaceStateAliasIdentitiesInTransaction({
-      database,
-      identity,
-      aliases: resolution.aliases,
-      updatedAtMs,
-    });
-    return {
-      attestedAtMs: params.attestedAtMs,
-      generatedHashes: new Map(sortedHashes),
-    };
-  });
 }
 
 function deleteWorkspaceRows(

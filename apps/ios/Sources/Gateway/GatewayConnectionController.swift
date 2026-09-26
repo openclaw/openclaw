@@ -93,7 +93,7 @@ final class GatewayConnectionController {
         appModel: NodeAppModel,
         startDiscovery: Bool = true,
         deferDiscoveryUntilLocalNetworkRequest: Bool = false,
-        tcpReachabilityProbe: @escaping GatewayTCPReachabilityProbe = defaultGatewayTCPReachabilityProbe,
+        tcpReachabilityProbe: @escaping GatewayTCPReachabilityProbe = TCPProbe.probe,
         tlsFingerprintProbe: @escaping GatewayTLSFingerprintProbeFunction = defaultGatewayTLSFingerprintProbe,
         serviceEndpointResolver: GatewayServiceEndpointResolver? = nil,
         forceReconnectReset: @escaping GatewayForceReconnectReset = { appModel in
@@ -274,10 +274,9 @@ final class GatewayConnectionController {
             instanceId: instanceId,
             gatewayStableID: stableID)
         // Discovery is a LAN operation; refuse unauthenticated plaintext connects.
-        let tlsRequired = true
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
 
-        if tlsRequired, stored == nil {
+        if stored == nil {
             guard let url = self.buildGatewayURL(host: target.host, port: target.port, useTLS: true)
             else { return .failed("Failed to build TLS URL for trust verification.") }
             self.appModel?.beginGatewayPreconnectVerification(
@@ -660,10 +659,9 @@ final class GatewayConnectionController {
             let cancellationLease = self.cancelPendingConnectionAttempts()
             self.releaseAutoConnectSuppression(after: cancellationLease)
         }
-        let wasConnected = GatewayStableIdentifier.matches(
+        let shouldDisconnect = GatewayStableIdentifier.matches(
             self.appModel?.activeGatewayConnectConfig?.effectiveStableID,
             stableID) || GatewayStableIdentifier.matches(self.appModel?.connectedGatewayID, stableID)
-        let shouldDisconnect = wasConnected
         if shouldDisconnect {
             let hasDifferentPendingTarget = self.pendingConnectionStableID.map {
                 !GatewayStableIdentifier.matches($0, stableID)
@@ -1066,33 +1064,18 @@ extension GatewayConnectionController {
             defaults.string(forKey: "gateway.lastDiscoveredStableID"))
 
         let candidates = [preferredStableID, lastDiscoveredStableID].compactMap(\.self)
-        if let targetStableID = candidates.first(where: { id in
-            self.gateways.contains(where: { GatewayStableIdentifier.matches($0.stableID, id) })
-        }) {
-            guard let target = self.gateways.first(where: {
-                GatewayStableIdentifier.matches($0.stableID, targetStableID)
-            }) else { return }
-            // Security: autoconnect only to previously trusted gateways (stored TLS pin).
-            guard GatewayTLSStore.loadFingerprint(stableID: target.stableID) != nil else { return }
+        let preferredGateway = candidates.lazy.compactMap { id in
+            self.gateways.first { GatewayStableIdentifier.matches($0.stableID, id) }
+        }.first
+        guard let gateway = preferredGateway ?? (self.gateways.count == 1 ? self.gateways.first : nil)
+        else { return }
+        // Autoconnect only to previously trusted gateways; discovery cannot supply a pin.
+        guard GatewayTLSStore.loadFingerprint(stableID: gateway.stableID) != nil else { return }
 
-            self.didAutoConnect = true
-            Task { [weak self] in
-                guard let self else { return }
-                _ = await self.connectDiscoveredGateway(target)
-            }
-            return
-        }
-
-        if self.gateways.count == 1, let gateway = self.gateways.first {
-            // Security: autoconnect only to previously trusted gateways (stored TLS pin).
-            guard GatewayTLSStore.loadFingerprint(stableID: gateway.stableID) != nil else { return }
-
-            self.didAutoConnect = true
-            Task { [weak self] in
-                guard let self else { return }
-                _ = await self.connectDiscoveredGateway(gateway)
-            }
-            return
+        self.didAutoConnect = true
+        Task { [weak self] in
+            guard let self else { return }
+            _ = await self.connectDiscoveredGateway(gateway)
         }
     }
 
@@ -1638,12 +1621,6 @@ extension GatewayConnectionController {
 
     func _test_hasOperatorFleetReconcileTask() -> Bool {
         self.operatorFleetReconcileTask != nil
-    }
-
-    func _test_resolveDiscoveredTLSParams(
-        gateway: GatewayDiscoveryModel.DiscoveredGateway) -> GatewayTLSParams?
-    {
-        self.resolveDiscoveredTLSParams(gateway: gateway)
     }
 
     func _test_resolveManualPort(host: String, port: Int, useTLS _: Bool) -> Int? {

@@ -33,7 +33,7 @@ pnpm frv prioritize --restore <record> [--dry-run]
 ```
 
 `prioritize --restore` recovers runs deferred by the former release-priority gate
-(see [Release priority](/reference/RELEASING#release-priority)). Active validation
+(see [Release priority](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)). Active validation
 no longer pauses CI or supporting workflows.
 
 `rerun --job` selects an exact executed, terminal job name inside a child key shown by

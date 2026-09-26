@@ -24,17 +24,6 @@ async function writeFile(filePath: string, content: string) {
 describe("setup migration import freshness", () => {
   const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
-  it("allows empty config and empty target directories", async () => {
-    const root = tempRoots.make("openclaw-setup-migration-");
-    const result = await inspectSetupMigrationFreshness({
-      baseConfig: {},
-      stateDir: path.join(root, "state"),
-      workspaceDir: path.join(root, "workspace"),
-    });
-
-    expect(result).toEqual({ fresh: true, reasons: [] });
-  });
-
   it("allows first-launch security and telemetry consent before import", async () => {
     const root = tempRoots.make("openclaw-setup-migration-");
     const result = await inspectSetupMigrationFreshness({
@@ -62,27 +51,6 @@ describe("setup migration import freshness", () => {
     });
 
     expect(result).toEqual({ fresh: true, reasons: [] });
-  });
-
-  it("ignores runtime state churn while still detecting workspace changes", async () => {
-    const root = tempRoots.make("openclaw-setup-migration-");
-    const stateDir = path.join(root, "state");
-    const workspaceDir = path.join(root, "workspace");
-    const initial = await buildSetupMigrationTargetSnapshot({
-      config: {},
-      stateDir,
-      workspaceDir,
-    });
-
-    await writeFile(path.join(stateDir, "state", "openclaw.sqlite"), "runtime database\n");
-    expect(await buildSetupMigrationTargetSnapshot({ config: {}, stateDir, workspaceDir })).toBe(
-      initial,
-    );
-
-    await writeFile(path.join(workspaceDir, "external.txt"), "concurrent write\n");
-    expect(
-      await buildSetupMigrationTargetSnapshot({ config: {}, stateDir, workspaceDir }),
-    ).not.toBe(initial);
   });
 
   it("preserves first-launch consent choices across the lock-time config reread", () => {

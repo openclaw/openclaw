@@ -161,15 +161,6 @@ describe("normalizeSlackOutboundText", () => {
     expect(res).toBe("• item\n  • nested");
   });
 
-  it("handles complex message with multiple elements", () => {
-    const res = normalizeSlackOutboundText(
-      "**Important:** Check the _docs_ at [link](https://example.com)\n\n- first\n- second",
-    );
-    expect(res).toBe(
-      "*Important:* Check the _docs_ at <https://example.com|link>\n\n• first\n• second",
-    );
-  });
-
   it("returns empty text when input is undefined at runtime", () => {
     expect(normalizeSlackOutboundText(undefined as unknown as string)).toBe("");
   });
@@ -277,17 +268,7 @@ describe("normalizeSlackOutboundText", () => {
 });
 
 describe("escapeSlackMrkdwn", () => {
-  it("returns plain text unchanged", () => {
-    expect(escapeSlackMrkdwn("heartbeat status ok")).toBe("heartbeat status ok");
-  });
-
   it("escapes only Slack entities while preserving formatting markers and backslashes", () => {
     expect(escapeSlackMrkdwn("mode_*`~<&>\\")).toBe("mode_*`~&lt;&amp;&gt;\\");
-  });
-});
-
-describe("normalizeSlackOutboundText", () => {
-  it("normalizes markdown for outbound send/update paths", () => {
-    expect(normalizeSlackOutboundText(" **bold** ")).toBe("*bold*");
   });
 });

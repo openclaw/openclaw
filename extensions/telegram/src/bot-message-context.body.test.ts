@@ -27,8 +27,7 @@ import {
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { telegramPlugin } from "./channel.js";
 
-const { transcribe } = vi.hoisted(() => ({ transcribe: vi.fn() }));
-vi.mock("./media-understanding.runtime.js", () => ({ transcribeFirstAudio: transcribe }));
+const transcribe = harness.transcribeFirstAudio;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let updateId = 7000;
@@ -36,7 +35,6 @@ let storePath: string;
 
 beforeEach(() => {
   storePath = path.join(tempDirs.make("telegram-body-admission-"), "sessions.json");
-  transcribe.mockReset();
   conversationRuntime.testing.resetSessionBindingAdaptersForTests();
 });
 afterEach(() => {

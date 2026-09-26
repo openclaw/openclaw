@@ -1,4 +1,5 @@
 import { InputFile } from "grammy";
+import type { Message } from "grammy/types";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { extensionForMime, type MediaKind } from "openclaw/plugin-sdk/media-mime";
 import { isGifMedia, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
@@ -7,7 +8,6 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveTelegramPlainCaption, splitTelegramCaption } from "./caption.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
-import type { TelegramOutboundPromptContextMessage } from "./outbound-message-context.js";
 import { isTelegramEmptyContentError, isTelegramHtmlParseError } from "./rich-plain-fallback.js";
 import type { TelegramApi } from "./send-context.js";
 import { isTelegramPhotoLimitError } from "./send-error-predicates.js";
@@ -15,14 +15,17 @@ import { resolveTelegramVoiceSend } from "./voice.js";
 
 type TelegramLoadedMedia = Awaited<ReturnType<typeof loadWebMedia>>;
 
-type TelegramOutboundMediaKind =
-  | "animation"
-  | "photo"
-  | "video"
-  | "video_note"
-  | "voice"
-  | "audio"
-  | "document";
+const MEDIA_SEND_METHODS = {
+  animation: "sendAnimation",
+  photo: "sendPhoto",
+  video: "sendVideo",
+  video_note: "sendVideoNote",
+  voice: "sendVoice",
+  audio: "sendAudio",
+  document: "sendDocument",
+} as const;
+
+type TelegramOutboundMediaKind = keyof typeof MEDIA_SEND_METHODS;
 
 type TelegramOutboundMediaPlan = {
   kind: MediaKind | undefined;
@@ -37,10 +40,10 @@ type TelegramOutboundMediaPlan = {
   followUpText?: string;
 };
 
-export type TelegramOutboundMediaSender<T = TelegramOutboundPromptContextMessage> = {
+export type TelegramOutboundMediaSender = {
   label: TelegramOutboundMediaKind;
   operation: string;
-  send: (effectiveParams: Record<string, unknown>) => Promise<T>;
+  send: (effectiveParams: Record<string, unknown>) => Promise<Message>;
 };
 
 function resolveTelegramOutboundMediaFilename(params: {
@@ -132,9 +135,7 @@ export function prepareTelegramOutboundMedia(params: {
   };
 }
 
-export function resolveTelegramOutboundMediaSenders<
-  T = TelegramOutboundPromptContextMessage,
->(params: {
+export function resolveTelegramOutboundMediaSenders(params: {
   api: TelegramApi;
   chatId: string;
   media: TelegramLoadedMedia;
@@ -142,17 +143,14 @@ export function resolveTelegramOutboundMediaSenders<
   forceDocument?: boolean;
   asVoice?: boolean;
   sendImageAsPhoto?: boolean;
-}): { sender: TelegramOutboundMediaSender<T>; documentSender: TelegramOutboundMediaSender<T> } {
-  const createSender = (label: TelegramOutboundMediaKind): TelegramOutboundMediaSender<T> => {
-    const operation = `send${label
-      .split("_")
-      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-      .join("")}`;
-    const method = params.api[operation as keyof TelegramApi] as unknown as (
+}): { sender: TelegramOutboundMediaSender; documentSender: TelegramOutboundMediaSender } {
+  const createSender = (label: TelegramOutboundMediaKind): TelegramOutboundMediaSender => {
+    const operation = MEDIA_SEND_METHODS[label];
+    const method: (
       chatId: string,
       file: InputFile,
       options: Record<string, unknown>,
-    ) => Promise<T>;
+    ) => Promise<Message> = params.api[operation];
     return {
       label,
       operation,
@@ -262,11 +260,11 @@ export async function sendTelegramCaptionedMediaWithFallback<T>(params: {
   }
 }
 
-export async function sendTelegramOutboundMediaWithPhotoFallback<T, TMessage>(params: {
-  sender: TelegramOutboundMediaSender<TMessage>;
-  documentSender: TelegramOutboundMediaSender<TMessage>;
-  send: (sender: TelegramOutboundMediaSender<TMessage>) => Promise<T>;
-}): Promise<{ result: T; sender: TelegramOutboundMediaSender<TMessage> }> {
+export async function sendTelegramOutboundMediaWithPhotoFallback<T>(params: {
+  sender: TelegramOutboundMediaSender;
+  documentSender: TelegramOutboundMediaSender;
+  send: (sender: TelegramOutboundMediaSender) => Promise<T>;
+}): Promise<{ result: T; sender: TelegramOutboundMediaSender }> {
   try {
     return { result: await params.send(params.sender), sender: params.sender };
   } catch (error) {

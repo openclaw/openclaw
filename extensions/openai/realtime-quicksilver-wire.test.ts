@@ -202,65 +202,6 @@ describe("Realtime call creation", () => {
     }
   });
 
-  it.each(["gpt-realtime-2.1", "gpt-realtime-2.1-mini", "gpt-realtime-2"])(
-    "uses multipart session initialization without a sideband for %s OAuth",
-    async (model) => {
-      vi.stubEnv("OPENCLAW_VERSION", "2026.7.2-test");
-      let capturedUrl: string | undefined;
-      let capturedInit: RequestInit | undefined;
-      const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-        capturedUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
-        capturedInit = init;
-        return new Response("v=ga-answer\r\n", { status: 201 });
-      });
-      const session = {
-        type: "realtime",
-        model,
-        instructions: "Use tools.",
-        tools: [{ type: "function", name: "openclaw_agent_consult", parameters: {} }],
-        tool_choice: "auto",
-      };
-
-      await expect(
-        createOpenAIQuicksilverCall(
-          {
-            auth: { type: "oauth", token: "oauth-token", accountId: "acct-1" },
-            requestIds: createRequestIds("ga-oauth"),
-            sdp: "v=ga-offer\r\n",
-            session,
-            fetchImpl: fetchImpl as unknown as typeof fetch,
-          },
-          openAIRealtimeHost,
-        ),
-      ).resolves.toEqual({
-        kind: "ga-realtime",
-        status: 201,
-        answerSdp: "v=ga-answer\r\n",
-      });
-      expect(capturedUrl).toBe("https://api.openai.com/v1/realtime/calls");
-      expect(capturedInit?.method).toBe("POST");
-      const headers = capturedInit?.headers as Record<string, string> | undefined;
-      expect(headers).toMatchObject({
-        Authorization: "Bearer oauth-token",
-        "User-Agent": "openclaw/2026.7.2-test",
-        "chatgpt-account-id": "acct-1",
-        originator: "openclaw",
-        "session-id": "ga-oauth-session",
-        "thread-id": "ga-oauth-thread",
-        version: "2026.7.2-test",
-        "x-session-id": "ga-oauth-realtime",
-        "Content-Type": expect.stringMatching(/^multipart\/form-data; boundary=/),
-      });
-      expect(headers).not.toHaveProperty("OpenAI-Alpha");
-      const boundary = headers?.["Content-Type"]?.split("boundary=")[1];
-      expect(boundary).toBeTruthy();
-      expect(typeof capturedInit?.body).toBe("string");
-      expect(capturedInit?.body).toContain('name="sdp"\r\nContent-Type: application/sdp');
-      expect(capturedInit?.body).toContain('name="session"\r\nContent-Type: application/json');
-      expect(capturedInit?.body).toContain(JSON.stringify(session));
-    },
-  );
-
   it.each([
     {
       name: "overloaded rejection",

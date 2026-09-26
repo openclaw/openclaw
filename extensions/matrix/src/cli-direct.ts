@@ -2,6 +2,11 @@ import type { Command } from "commander";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import * as cli from "./cli-shared.js";
 import { resolveMatrixAccountConfig } from "./matrix/account-config.js";
+import type {
+  inspectMatrixDirectRooms,
+  MatrixDirectRoomCandidate,
+  repairMatrixDirectRooms,
+} from "./matrix/direct-management.js";
 import { getMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -13,30 +18,18 @@ const loadMatrixDirectManagementModule = createLazyRuntimeModule(
   () => import("./matrix/direct-management.js"),
 );
 
-type MatrixCliDirectRoomCandidate = {
-  roomId: string;
-  source: "account-data" | "joined";
-  strict: boolean;
-  joinedMembers: string[] | null;
-};
-
-type MatrixCliDirectRoomInspection = {
+type MatrixCliDirectRoomCandidate = Omit<MatrixDirectRoomCandidate, "explicit">;
+type MatrixCliDirectRoomInspection = Omit<
+  Awaited<ReturnType<typeof inspectMatrixDirectRooms>>,
+  "mappedRooms"
+> & {
   accountId: string;
-  remoteUserId: string;
-  selfUserId: string | null;
-  mappedRoomIds: string[];
   mappedRooms: MatrixCliDirectRoomCandidate[];
-  discoveredStrictRoomIds: string[];
-  activeRoomId: string | null;
 };
-
-type MatrixCliDirectRoomRepair = MatrixCliDirectRoomInspection & {
-  encrypted: boolean;
-  createdRoomId: string | null;
-  changed: boolean;
-  directContentBefore: Record<string, string[]>;
-  directContentAfter: Record<string, string[]>;
-};
+type MatrixCliDirectRoomRepair = MatrixCliDirectRoomInspection &
+  Omit<Awaited<ReturnType<typeof repairMatrixDirectRooms>>, keyof MatrixCliDirectRoomInspection> & {
+    encrypted: boolean;
+  };
 
 function printDirectRoomCandidate(room: MatrixCliDirectRoomCandidate): void {
   const members =
@@ -135,20 +128,14 @@ function toCliDirectRoomInspection(
     remoteUserId: inspection.remoteUserId,
     selfUserId: inspection.selfUserId,
     mappedRoomIds: inspection.mappedRoomIds,
-    mappedRooms: inspection.mappedRooms.map(toCliDirectRoomCandidate),
+    mappedRooms: inspection.mappedRooms.map(({ roomId, source, strict, joinedMembers }) => ({
+      roomId,
+      source,
+      strict,
+      joinedMembers,
+    })),
     discoveredStrictRoomIds: inspection.discoveredStrictRoomIds,
     activeRoomId: inspection.activeRoomId,
-  };
-}
-
-function toCliDirectRoomCandidate(
-  room: MatrixCliDirectRoomCandidate,
-): MatrixCliDirectRoomCandidate {
-  return {
-    roomId: room.roomId,
-    source: room.source,
-    strict: room.strict,
-    joinedMembers: room.joinedMembers,
   };
 }
 

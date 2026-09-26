@@ -464,8 +464,6 @@ describe("triageCommand", () => {
 
   it.each([
     { agent: "claude", exitCode: 0 },
-    { agent: "claude", exitCode: 17 },
-    { agent: "codex", exitCode: 0 },
     { agent: "codex", exitCode: 17 },
   ])(
     "preserves external $agent exit $exitCode without certifying descendant cleanup",

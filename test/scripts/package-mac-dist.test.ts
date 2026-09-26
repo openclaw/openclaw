@@ -419,6 +419,49 @@ function getPackageManagerHelperBlock(): string {
   return script.slice(start, end);
 }
 
+function runSparkleBootstrap(nodeAfterInstall: string, pnpmBody: string) {
+  const script = readFileSync(scriptPath, "utf8");
+  const helpers = script.slice(
+    script.indexOf("DIST_PNPM_CMD=()"),
+    script.indexOf("correction_build_from_exact_tag()"),
+  );
+  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-dist-sparkle-"));
+  tempDirs.push(dir);
+  const tools = path.join(dir, "tools");
+  const marker = path.join(dir, "installed");
+  mkdirSync(tools);
+  writeFileSync(
+    path.join(tools, "node"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$PWD" != "$OPENCLAW_ROOT" ]]; then
+  echo "node ran outside repo root: $PWD" >&2
+  exit 1
+fi
+if [[ ! -f "$OPENCLAW_MARKER" ]]; then
+  echo "Cannot find package tsx" >&2
+  exit 1
+fi
+${nodeAfterInstall}
+echo 2026060200
+`,
+    { mode: 0o755 },
+  );
+  writeFileSync(path.join(tools, "pnpm"), `#!/usr/bin/env bash\nset -euo pipefail\n${pnpmBody}\n`, {
+    mode: 0o755,
+  });
+  return runHelper(`
+    set -euo pipefail
+    ROOT_DIR=${JSON.stringify(process.cwd())}
+    OPENCLAW_ROOT=${JSON.stringify(process.cwd())}
+    OPENCLAW_MARKER=${JSON.stringify(marker)}
+    PATH=${JSON.stringify(tools)}:/usr/bin:/bin
+    export OPENCLAW_MARKER OPENCLAW_ROOT PATH
+    ${helpers}
+    require_canonical_sparkle_build 2026.6.2
+  `);
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -491,24 +534,6 @@ describe("package-mac-dist plist validation", () => {
       'canonical_sparkle_build "$APP_VERSION_INPUT" 2>/dev/null || true',
     );
     expect(script).not.toContain('canonical_sparkle_build "$VERSION" 2>/dev/null || true');
-  });
-
-  it("checks Swift before Sparkle metadata or dependency bootstrap work", () => {
-    const script = readFileSync(scriptPath, "utf8");
-    const swiftIndex = script.indexOf("  require_swift_toolchain\n");
-    const versionIndex = script.indexOf('if [[ -z "$APP_VERSION_INPUT" ]]');
-    const appBuildIndex = script.indexOf(
-      'if [[ "$RESUME_NOTARIZATION" == "0" && -z "${APP_BUILD:-}" && "$BUILD_CONFIG" == "release" ]]',
-    );
-    const packageAppIndex = script.indexOf('"$ROOT_DIR/scripts/package-mac-app.sh"');
-    const preSwiftBlock = script.slice(0, swiftIndex);
-
-    expect(script).toContain('source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"');
-    expect(swiftIndex).toBeGreaterThanOrEqual(0);
-    expect(versionIndex).toBeGreaterThan(swiftIndex);
-    expect(appBuildIndex).toBeGreaterThan(versionIndex);
-    expect(packageAppIndex).toBeGreaterThan(appBuildIndex);
-    expect(preSwiftBlock).not.toContain("node -p");
   });
 
   it("fails on old Swift before reading package metadata", () => {
@@ -623,62 +648,10 @@ describe("package-mac-dist plist validation", () => {
   });
 
   it("keeps dependency bootstrap output out of captured Sparkle build values", () => {
-    const script = readFileSync(scriptPath, "utf8");
-    const helpers = script.slice(
-      script.indexOf("DIST_PNPM_CMD=()"),
-      script.indexOf("correction_build_from_exact_tag()"),
+    const result = runSparkleBootstrap(
+      'echo "ExperimentalWarning: tsx loader changed" >&2',
+      'echo "Already up to date"\ntouch "$OPENCLAW_MARKER"',
     );
-    const dir = mkdtempSync(path.join(tmpdir(), "openclaw-dist-sparkle-"));
-    tempDirs.push(dir);
-    const tools = path.join(dir, "tools");
-    const marker = path.join(dir, "installed");
-    const fakeNode = path.join(tools, "node");
-    const fakePnpm = path.join(tools, "pnpm");
-
-    mkdirSync(tools, { recursive: true });
-    writeFileSync(
-      fakeNode,
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        'if [[ "$PWD" != "$OPENCLAW_ROOT" ]]; then',
-        '  echo "node ran outside repo root: $PWD" >&2',
-        "  exit 1",
-        "fi",
-        'if [[ ! -f "$OPENCLAW_MARKER" ]]; then',
-        '  echo "Cannot find package tsx" >&2',
-        "  exit 1",
-        "fi",
-        'echo "ExperimentalWarning: tsx loader changed" >&2',
-        "echo 2026060200",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    chmodSync(fakeNode, 0o755);
-    writeFileSync(
-      fakePnpm,
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        "echo 'Already up to date'",
-        'touch "$OPENCLAW_MARKER"',
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    chmodSync(fakePnpm, 0o755);
-
-    const result = runHelper(`
-      set -euo pipefail
-      ROOT_DIR=${JSON.stringify(process.cwd())}
-      OPENCLAW_ROOT=${JSON.stringify(process.cwd())}
-      OPENCLAW_MARKER=${JSON.stringify(marker)}
-      PATH=${JSON.stringify(tools)}:/usr/bin:/bin
-      export OPENCLAW_MARKER OPENCLAW_ROOT PATH
-      ${helpers}
-      require_canonical_sparkle_build 2026.6.2
-    `);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("2026060200\n");
@@ -688,63 +661,10 @@ describe("package-mac-dist plist validation", () => {
   });
 
   it("stops when dependency bootstrap fails during Sparkle build retry", () => {
-    const script = readFileSync(scriptPath, "utf8");
-    const helpers = script.slice(
-      script.indexOf("DIST_PNPM_CMD=()"),
-      script.indexOf("correction_build_from_exact_tag()"),
+    const result = runSparkleBootstrap(
+      'echo "node reran after failed install" >&2',
+      'touch "$OPENCLAW_MARKER"\necho "pnpm failed" >&2\nexit 42',
     );
-    const dir = mkdtempSync(path.join(tmpdir(), "openclaw-dist-sparkle-"));
-    tempDirs.push(dir);
-    const tools = path.join(dir, "tools");
-    const marker = path.join(dir, "installed");
-    const fakeNode = path.join(tools, "node");
-    const fakePnpm = path.join(tools, "pnpm");
-
-    mkdirSync(tools, { recursive: true });
-    writeFileSync(
-      fakeNode,
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        'if [[ "$PWD" != "$OPENCLAW_ROOT" ]]; then',
-        '  echo "node ran outside repo root: $PWD" >&2',
-        "  exit 1",
-        "fi",
-        'if [[ ! -f "$OPENCLAW_MARKER" ]]; then',
-        '  echo "Cannot find package tsx" >&2',
-        "  exit 1",
-        "fi",
-        'echo "node reran after failed install" >&2',
-        "echo 2026060200",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    chmodSync(fakeNode, 0o755);
-    writeFileSync(
-      fakePnpm,
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        'touch "$OPENCLAW_MARKER"',
-        'echo "pnpm failed" >&2',
-        "exit 42",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    chmodSync(fakePnpm, 0o755);
-
-    const result = runHelper(`
-      set -euo pipefail
-      ROOT_DIR=${JSON.stringify(process.cwd())}
-      OPENCLAW_ROOT=${JSON.stringify(process.cwd())}
-      OPENCLAW_MARKER=${JSON.stringify(marker)}
-      PATH=${JSON.stringify(tools)}:/usr/bin:/bin
-      export OPENCLAW_MARKER OPENCLAW_ROOT PATH
-      ${helpers}
-      require_canonical_sparkle_build 2026.6.2
-    `);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");

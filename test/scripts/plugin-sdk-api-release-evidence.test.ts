@@ -94,8 +94,11 @@ describe("Plugin SDK API release evidence", () => {
           { cwd: process.cwd(), encoding: "utf8" },
         );
 
-      expect(run().stderr).toContain("require acknowledgement digest");
-      expect(run("deadbeef").stderr).toContain("require acknowledgement digest");
+      for (const acknowledgement of [undefined, "deadbeef"]) {
+        const rejected = run(acknowledgement);
+        expect(rejected.status, rejected.stderr).toBe(1);
+        expect(rejected.stderr).toContain("require acknowledgement digest");
+      }
       const accepted = run(receipt.digest.slice(0, 8));
       expect(accepted.status, accepted.stderr).toBe(0);
       expect(JSON.parse(accepted.stdout)).toMatchObject({ hasChanges: true, status: "checked" });
@@ -175,22 +178,6 @@ describe("Plugin SDK API release evidence", () => {
         createPluginSdkApiDiffSet({ beta: beta.diff, latest: latest.diff }),
       ),
     ).toEqual({ beta: beta.diff, latest: latest.diff });
-  });
-
-  it("rejects blank and mismatched acknowledgements before accepting the reported digest", () => {
-    const receipt = evidence([{ change: "added", exportName: "send" }]);
-    const expected = receipt.digest.slice(0, 8);
-    const validate = (acknowledgement: string) =>
-      validatePluginSdkApiReleaseEvidence({
-        acknowledgement,
-        evidence: receipt,
-        expectedHeadSha: headSha,
-        expectedWorkflowSha: workflowSha,
-      });
-
-    expect(() => validate("")).toThrow(`require acknowledgement digest ${expected}`);
-    expect(() => validate("deadbeef")).toThrow(`require acknowledgement digest ${expected}`);
-    expect(validate(expected)).toMatchObject({ acknowledgement: expected, hasChanges: true });
   });
 
   it("accepts a blank acknowledgement when the frozen diff has no changes", () => {

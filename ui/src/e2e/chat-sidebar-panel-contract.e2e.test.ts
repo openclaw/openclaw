@@ -619,7 +619,7 @@ suite.define(() => {
       const inventoryCount = (await gateway.getRequests("environments.status")).length;
       const observeCount = (await gateway.getRequests("desktop.observe")).length;
 
-      await clickSidebarTab(page, "Chat");
+      await clickSidebarTab(page, "OpenClaw");
       await canvas.waitFor({ state: "hidden" });
       await page.clock.fastForward(20_000);
       expect(await rfb.events()).toEqual(["authenticated:1"]);
@@ -636,7 +636,7 @@ suite.define(() => {
       await page.clock.fastForward(30_001);
       expect(await rfb.events()).toEqual(["authenticated:1"]);
       expect(await canvas.isVisible()).toBe(true);
-      await clickSidebarTab(page, "Chat");
+      await clickSidebarTab(page, "OpenClaw");
       await canvas.waitFor({ state: "hidden" });
       await page.clock.fastForward(30_001);
       await expect.poll(rfb.events).toEqual(["authenticated:1", "closed:1"]);
@@ -652,7 +652,7 @@ suite.define(() => {
       await desktop.getByRole("button", { name: "Disconnect", exact: true }).click();
       await expect.poll(rfb.events).toContain("closed:2");
       await desktop.getByRole("button", { name: "Reconnect", exact: true }).waitFor();
-      await clickSidebarTab(page, "Chat");
+      await clickSidebarTab(page, "OpenClaw");
       await clickSidebarTab(page, "Desktop");
       await desktop.getByRole("button", { name: "Reconnect", exact: true }).waitFor();
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(observeCount + 1);
@@ -696,7 +696,7 @@ suite.define(() => {
         { down: true, keysym: 0xff51 },
       ];
       await expect.poll(rfb.keyEvents).toEqual([...capsLock, ...pressed]);
-      await clickSidebarTab(page, "Chat");
+      await clickSidebarTab(page, "OpenClaw");
       await canvas.waitFor({ state: "hidden" });
       const released = [
         ...capsLock,
@@ -718,7 +718,7 @@ suite.define(() => {
       await page.mouse.down();
       await page
         .locator(".side-panel__header .tabstrip-tab")
-        .filter({ hasText: "Chat" })
+        .filter({ hasText: "OpenClaw" })
         .press("Enter");
       await expect.poll(rfb.events).toContain("closed:2");
       expect(await canvas.count()).toBe(0);

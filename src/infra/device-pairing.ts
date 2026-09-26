@@ -185,7 +185,7 @@ export async function updatePairedDeviceMetadata(
 ): Promise<boolean> {
   return await withDevicePairingLock(() =>
     executeDevicePairingMutation(
-      { type: "devicePairing.updateMetadata", input: { deviceId, patch, nowMs: Date.now() } },
+      { type: "devicePairing.updateMetadata", input: { deviceId, patch } },
       { baseDir },
     ),
   );

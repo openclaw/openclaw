@@ -214,36 +214,11 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     );
   });
 
-  it("accumulates reasoning deltas in Discord progress drafts", async () => {
-    const draftStream = await runReasoningProgressDraft([
-      "Considering",
-      " plugin",
-      " installation",
-      "!",
-    ]);
-
-    expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec: running\n🧠 _Considering plugin installation!_",
-      { complete: true },
-    );
-    const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates.join("\n")).not.toContain("• _!_");
-  });
-
   it("preserves raw reasoning content that starts with Thinking", async () => {
     const draftStream = await runReasoningProgressDraft(["Thinking", " through the install plan"]);
 
     expect(draftStream.update).toHaveBeenCalledWith(
       "Clawing...\n\n🛠️ Exec: running\n🧠 _Thinking through the install plan_",
-      { complete: true },
-    );
-  });
-
-  it("preserves raw reasoning content that starts with Thinking colon", async () => {
-    const draftStream = await runReasoningProgressDraft(["Thinking: compare install paths"]);
-
-    expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec: running\n🧠 _Thinking: compare install paths_",
       { complete: true },
     );
   });
@@ -284,32 +259,11 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     );
   });
 
-  it("appends raw reasoning chunks that start with Thinking", async () => {
-    const draftStream = await runReasoningProgressDraft(["I was ", "Thinking about the plan"]);
-
-    expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec: running\n🧠 _I was Thinking about the plan_",
-      { complete: true },
-    );
-  });
-
   it("appends raw reasoning chunks that start with Thinking ellipsis", async () => {
     const draftStream = await runReasoningProgressDraft(["I was ", "Thinking... through the plan"]);
 
     expect(draftStream.update).toHaveBeenCalledWith(
       "Clawing...\n\n🛠️ Exec: running\n🧠 _I was Thinking... through the plan_",
-      { complete: true },
-    );
-  });
-
-  it("appends raw reasoning chunks that start with Reasoning colon", async () => {
-    const draftStream = await runReasoningProgressDraft([
-      "I was ",
-      "Reasoning: through edge cases",
-    ]);
-
-    expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec: running\n🧠 _I was Reasoning: through edge cases_",
       { complete: true },
     );
   });

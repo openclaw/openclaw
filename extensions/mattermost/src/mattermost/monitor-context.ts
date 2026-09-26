@@ -1,11 +1,10 @@
-// Mattermost plugin module owns monitor routing and delivery context helpers.
 import { resolveChannelStreamingPreviewToolProgress } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedMattermostAccount } from "./accounts.js";
-import { resolveThreadSessionKeys } from "./monitor-helpers.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
 import {
   evaluateMattermostNoVisibleReply,
@@ -169,6 +168,7 @@ export function resolveMattermostThreadSessionContext(params: {
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: params.baseSessionKey,
     threadId: effectiveReplyToId,
+    normalizeThreadId: (threadId) => threadId,
     // DM threads start fresh; room threads inherit their base session.
     parentSessionKey:
       effectiveReplyToId && params.kind !== "direct" ? params.baseSessionKey : undefined,

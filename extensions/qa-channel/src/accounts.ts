@@ -1,4 +1,3 @@
-// Qa Channel plugin module implements accounts behavior.
 import {
   createAccountListHelpers,
   resolveChannelMediaMaxBytes,

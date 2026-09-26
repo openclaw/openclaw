@@ -163,7 +163,7 @@ export function setAbortedAgentDedupeEntries(params: {
 export function replayAgentTurnIfCached(params: {
   acceptedOnly?: boolean;
   preflight: { agentDedupeKeys: readonly string[]; runId: string };
-  context: GatewayRequestContext;
+  context: Pick<GatewayRequestContext, "dedupe" | "chatAbortControllers">;
   io: AgentTurnIo;
 }): boolean {
   const { agentDedupeKeys, runId } = params.preflight;
@@ -208,7 +208,10 @@ export function replayAgentTurnIfCached(params: {
       { cached: true, runId: cachedRunId },
     );
   } else {
-    params.io.emitAcceptance([cached.ok, cached.payload, cached.error], { cached: true });
+    params.io.emitAcceptance([cached.ok, cached.payload, cached.error], {
+      cached: true,
+      ...(cached.incognito && cached.error ? { errorMessage: "Incognito agent error." } : {}),
+    });
   }
   return true;
 }

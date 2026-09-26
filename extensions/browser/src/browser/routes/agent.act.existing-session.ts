@@ -116,11 +116,7 @@ export async function assertExistingSessionPostInteractionNavigationAllowed(
       signal: params.signal,
       ...navigationPolicy,
     });
-    if (currentUrl === lastObservedUrl) {
-      sawStableAllowedUrl = true;
-    } else {
-      sawStableAllowedUrl = false;
-    }
+    sawStableAllowedUrl = currentUrl === lastObservedUrl;
     lastObservedUrl = currentUrl;
   }
 
@@ -151,7 +147,6 @@ export async function assertExistingSessionPostInteractionNavigationAllowed(
       }
     } catch {
       params.signal?.throwIfAborted();
-      // Probe failed — fall through to throw
     }
   }
 

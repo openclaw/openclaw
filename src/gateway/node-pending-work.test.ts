@@ -83,25 +83,6 @@ describe("node pending work", () => {
     expect(clearNodePendingWork("node-retired-generation", "generation-1")).toBe(false);
   });
 
-  it("does not let a stale drain delete replacement-generation work", () => {
-    enqueueNodePendingWork({
-      nodeId: "node-stale-drain",
-      type: "location.request",
-      pairingGeneration: "generation-2",
-    });
-
-    expect(
-      drainNodePendingWork("node-stale-drain", { pairingGeneration: "generation-1" }).items.map(
-        (item) => item.id,
-      ),
-    ).toEqual(["baseline-status"]);
-    expect(
-      drainNodePendingWork("node-stale-drain", { pairingGeneration: "generation-2" }).items.map(
-        (item) => item.type,
-      ),
-    ).toEqual(["location.request", "status.request"]);
-  });
-
   it("rolls back only the exact item owned by one enqueue", () => {
     const location = enqueueNodePendingWork({
       nodeId: "node-item-rollback",

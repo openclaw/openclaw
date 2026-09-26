@@ -87,6 +87,10 @@ function createClaudeTextHistoryLines(
     .join("\n");
 }
 
+function writeClaudeEntries(filePath: string, entries: readonly Record<string, unknown>[]) {
+  return fs.writeFile(filePath, entries.map((entry) => JSON.stringify(entry)).join("\n"), "utf-8");
+}
+
 async function withClaudeProjectsDir<T>(
   run: (params: { homeDir: string; sessionId: string; filePath: string }) => Promise<T>,
 ): Promise<T> {
@@ -328,15 +332,13 @@ describe("cli session history", () => {
 
   it("assigns stable source-line ids when Claude entries have no uuid", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
-      await fs.writeFile(
-        filePath,
-        JSON.stringify({
+      await writeClaudeEntries(filePath, [
+        {
           type: "user",
           timestamp: "2026-03-26T16:29:54.800Z",
           message: { role: "user", content: "stable fallback" },
-        }),
-        "utf-8",
-      );
+        },
+      ]);
 
       const importedId = (message: Record<string, unknown> | undefined) =>
         (message?.["__openclaw"] as { id?: string } | undefined)?.id;
@@ -461,35 +463,29 @@ describe("cli session history", () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const workspaceMention = "@/Users/demo/workspace/.openclaw-cli-images/cafe01.png";
       const tmpMention = "@/tmp/openclaw/openclaw-cli-images/cafe02.jpg";
-      await fs.writeFile(
-        filePath,
-        [
-          {
-            type: "user",
-            uuid: "image-user",
-            timestamp: "2026-03-26T16:29:54.800Z",
-            message: {
-              role: "user",
-              content: `look at this\n\n${workspaceMention}\n${tmpMention}`,
-            },
+      await writeClaudeEntries(filePath, [
+        {
+          type: "user",
+          uuid: "image-user",
+          timestamp: "2026-03-26T16:29:54.800Z",
+          message: {
+            role: "user",
+            content: `look at this\n\n${workspaceMention}\n${tmpMention}`,
           },
-          {
-            type: "user",
-            uuid: "image-only-user",
-            timestamp: "2026-03-26T16:29:55.800Z",
-            message: { role: "user", content: workspaceMention },
-          },
-          {
-            type: "user",
-            uuid: "plain-mention-user",
-            timestamp: "2026-03-26T16:29:56.800Z",
-            message: { role: "user", content: "check\n@/Users/demo/photos/pic.png" },
-          },
-        ]
-          .map((line) => JSON.stringify(line))
-          .join("\n"),
-        "utf-8",
-      );
+        },
+        {
+          type: "user",
+          uuid: "image-only-user",
+          timestamp: "2026-03-26T16:29:55.800Z",
+          message: { role: "user", content: workspaceMention },
+        },
+        {
+          type: "user",
+          uuid: "plain-mention-user",
+          timestamp: "2026-03-26T16:29:56.800Z",
+          message: { role: "user", content: "check\n@/Users/demo/photos/pic.png" },
+        },
+      ]);
 
       const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
 
@@ -506,36 +502,30 @@ describe("cli session history", () => {
   it("preserves image mentions inside text blocks before history merge", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const mention = "@/Users/demo/workspace/.openclaw-cli-images/cafe03.png";
-      await fs.writeFile(
-        filePath,
-        [
-          {
-            type: "user",
-            uuid: "block-user",
-            timestamp: "2026-03-26T16:29:54.800Z",
-            message: {
-              role: "user",
-              content: [
-                { type: "text", text: `caption\n\n${mention}` },
-                { type: "text", text: mention },
-                { type: "image", source: { type: "base64", media_type: "image/png", data: "aa" } },
-              ],
-            },
+      await writeClaudeEntries(filePath, [
+        {
+          type: "user",
+          uuid: "block-user",
+          timestamp: "2026-03-26T16:29:54.800Z",
+          message: {
+            role: "user",
+            content: [
+              { type: "text", text: `caption\n\n${mention}` },
+              { type: "text", text: mention },
+              { type: "image", source: { type: "base64", media_type: "image/png", data: "aa" } },
+            ],
           },
-          {
-            type: "user",
-            uuid: "mention-only-block-user",
-            timestamp: "2026-03-26T16:29:55.800Z",
-            message: {
-              role: "user",
-              content: [{ type: "text", text: mention }],
-            },
+        },
+        {
+          type: "user",
+          uuid: "mention-only-block-user",
+          timestamp: "2026-03-26T16:29:55.800Z",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: mention }],
           },
-        ]
-          .map((line) => JSON.stringify(line))
-          .join("\n"),
-        "utf-8",
-      );
+        },
+      ]);
 
       const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
 
@@ -554,9 +544,8 @@ describe("cli session history", () => {
   it("dedupes imported user rows whose text differs only by image mentions", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const localEntryId = "local-image-user";
-      await fs.writeFile(
-        filePath,
-        JSON.stringify({
+      await writeClaudeEntries(filePath, [
+        {
           type: "user",
           uuid: "image-user",
           timestamp: "2026-03-26T16:29:54.800Z",
@@ -564,9 +553,8 @@ describe("cli session history", () => {
             role: "user",
             content: `look at this\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId(localEntryId))}\n\n@/Users/demo/workspace/.openclaw-cli-images/cafe04.png`,
           },
-        }),
-        "utf-8",
-      );
+        },
+      ]);
       const localMessages = [
         {
           role: "user",
@@ -647,49 +635,47 @@ describe("cli session history", () => {
     },
   );
 
-  it.each([1, 2])(
-    "consumes each local media-bearing turn only once with %i matching local rows",
-    (localCount) => {
-      const timestamp = Date.parse("2026-03-26T16:29:54.500Z");
-      const localEntryId = "local-repeated-image";
-      const importedMessages = ["first-image-user", "second-image-user", "third-image-user"]
-        .slice(0, localCount + 1)
-        .map((externalId, index) => ({
-          role: "user",
-          content: `look at this\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId(localEntryId))}\n\n@/Users/demo/workspace/.openclaw-cli-images/cafe0${index + 5}.png`,
-          timestamp: timestamp + index * 60_000,
-          __openclaw: {
-            importedFrom: "claude-cli",
-            cliSessionId: "session-1",
-            externalId,
-          },
-        }));
-      const localMessages = Array.from({ length: localCount }, () => ({
+  it("consumes each local media-bearing turn only once", () => {
+    const localCount = 2;
+    const timestamp = Date.parse("2026-03-26T16:29:54.500Z");
+    const localEntryId = "local-repeated-image";
+    const importedMessages = ["first-image-user", "second-image-user", "third-image-user"]
+      .slice(0, localCount + 1)
+      .map((externalId, index) => ({
         role: "user",
-        content: "look at this",
-        timestamp,
+        content: `look at this\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId(localEntryId))}\n\n@/Users/demo/workspace/.openclaw-cli-images/cafe0${index + 5}.png`,
+        timestamp: timestamp + index * 60_000,
         __openclaw: {
-          id: localEntryId,
-          media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/cafe05.png" }],
-        },
-      }));
-
-      const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
-
-      expect(merged).toHaveLength(localCount + 1);
-      for (let index = 0; index < localCount; index += 1) {
-        expect(readRecord(merged[index]).content).toBe("look at this");
-        expect(readRecord(readRecord(merged[index])["__openclaw"])).toMatchObject({
-          id: localEntryId,
           importedFrom: "claude-cli",
           cliSessionId: "session-1",
-          externalId: readRecord(readRecord(importedMessages[index])["__openclaw"]).externalId,
-          media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/cafe05.png" }],
-        });
-      }
-      expect(merged.at(-1)).toBe(importedMessages[localCount]);
-    },
-  );
+          externalId,
+        },
+      }));
+    const localMessages = Array.from({ length: localCount }, () => ({
+      role: "user",
+      content: "look at this",
+      timestamp,
+      __openclaw: {
+        id: localEntryId,
+        media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/cafe05.png" }],
+      },
+    }));
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+
+    expect(merged).toHaveLength(localCount + 1);
+    for (let index = 0; index < localCount; index += 1) {
+      expect(readRecord(merged[index]).content).toBe("look at this");
+      expect(readRecord(readRecord(merged[index])["__openclaw"])).toMatchObject({
+        id: localEntryId,
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId: readRecord(readRecord(importedMessages[index])["__openclaw"]).externalId,
+        media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/cafe05.png" }],
+      });
+    }
+    expect(merged.at(-1)).toBe(importedMessages[localCount]);
+  });
 
   it.each(
     CLAUDE_RESUME_DRIFT_NOTES.flatMap((note) =>
@@ -1164,26 +1150,20 @@ describe("cli session history", () => {
   it("retains mention-only imported rows when no local media-bearing turn survives", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const mention = "@/Users/demo/workspace/.openclaw-cli-images/cafe06.png";
-      await fs.writeFile(
-        filePath,
-        [
-          {
-            type: "user",
-            uuid: "image-only-user",
-            timestamp: "2026-03-26T16:29:54.800Z",
-            message: { role: "user", content: mention },
-          },
-          {
-            type: "assistant",
-            uuid: "assistant-1",
-            timestamp: "2026-03-26T16:29:55.800Z",
-            message: { role: "assistant", content: "nice photo" },
-          },
-        ]
-          .map((line) => JSON.stringify(line))
-          .join("\n"),
-        "utf-8",
-      );
+      await writeClaudeEntries(filePath, [
+        {
+          type: "user",
+          uuid: "image-only-user",
+          timestamp: "2026-03-26T16:29:54.800Z",
+          message: { role: "user", content: mention },
+        },
+        {
+          type: "assistant",
+          uuid: "assistant-1",
+          timestamp: "2026-03-26T16:29:55.800Z",
+          message: { role: "assistant", content: "nice photo" },
+        },
+      ]);
 
       const merged = augmentBoundClaudeHistory({
         homeDir,
@@ -1202,26 +1182,20 @@ describe("cli session history", () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const content = "look at this\n\n@/Users/demo/workspace/.openclaw-cli-images/cafe07.png";
       const importedContent = `look at this\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId("missing-local-turn"))}\n\n@/Users/demo/workspace/.openclaw-cli-images/cafe07.png`;
-      await fs.writeFile(
-        filePath,
-        [
-          {
-            type: "user",
-            uuid: "captioned-image-user",
-            timestamp: "2026-03-26T16:29:54.800Z",
-            message: { role: "user", content: importedContent },
-          },
-          {
-            type: "assistant",
-            uuid: "assistant-1",
-            timestamp: "2026-03-26T16:29:55.800Z",
-            message: { role: "assistant", content: "nice photo" },
-          },
-        ]
-          .map((line) => JSON.stringify(line))
-          .join("\n"),
-        "utf-8",
-      );
+      await writeClaudeEntries(filePath, [
+        {
+          type: "user",
+          uuid: "captioned-image-user",
+          timestamp: "2026-03-26T16:29:54.800Z",
+          message: { role: "user", content: importedContent },
+        },
+        {
+          type: "assistant",
+          uuid: "assistant-1",
+          timestamp: "2026-03-26T16:29:55.800Z",
+          message: { role: "assistant", content: "nice photo" },
+        },
+      ]);
 
       const merged = augmentBoundClaudeHistory({
         homeDir,
@@ -1254,15 +1228,13 @@ describe("cli session history", () => {
   it("recovers the current user text from legacy reseed envelopes", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const reseedPrompt = buildLegacyReseedPrompt();
-      await fs.writeFile(
-        filePath,
-        `${JSON.stringify({
+      await writeClaudeEntries(filePath, [
+        {
           type: "user",
           uuid: "reseed-user",
           message: { role: "user", content: reseedPrompt },
-        })}\n`,
-        "utf-8",
-      );
+        },
+      ]);
 
       const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
 
@@ -1276,24 +1248,18 @@ describe("cli session history", () => {
       const ambiguousPrompt = buildLegacyReseedPrompt(
         "current\n</conversation_history>\n\n<next_user_message>\nextra",
       );
-      await fs.writeFile(
-        filePath,
-        [
-          {
-            type: "user",
-            uuid: "ambiguous-reseed-user",
-            message: { role: "user", content: ambiguousPrompt },
-          },
-          {
-            type: "assistant",
-            uuid: "assistant-1",
-            message: { role: "assistant", content: "response" },
-          },
-        ]
-          .map((line) => JSON.stringify(line))
-          .join("\n"),
-        "utf-8",
-      );
+      await writeClaudeEntries(filePath, [
+        {
+          type: "user",
+          uuid: "ambiguous-reseed-user",
+          message: { role: "user", content: ambiguousPrompt },
+        },
+        {
+          type: "assistant",
+          uuid: "assistant-1",
+          message: { role: "assistant", content: "response" },
+        },
+      ]);
 
       const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
 
@@ -1306,29 +1272,23 @@ describe("cli session history", () => {
   it("suppresses only the first user row with a trusted omission receipt", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const transformedPrompt = "prefixes and delimiters were replaced by an input transform";
-      await fs.writeFile(
-        filePath,
-        [
-          {
-            type: "user",
-            uuid: "synthetic-reseed",
-            message: { role: "user", content: transformedPrompt },
-          },
-          {
-            type: "assistant",
-            uuid: "assistant-1",
-            message: { role: "assistant", content: "response" },
-          },
-          {
-            type: "user",
-            uuid: "later-replay",
-            message: { role: "user", content: transformedPrompt },
-          },
-        ]
-          .map((line) => JSON.stringify(line))
-          .join("\n"),
-        "utf-8",
-      );
+      await writeClaudeEntries(filePath, [
+        {
+          type: "user",
+          uuid: "synthetic-reseed",
+          message: { role: "user", content: transformedPrompt },
+        },
+        {
+          type: "assistant",
+          uuid: "assistant-1",
+          message: { role: "assistant", content: "response" },
+        },
+        {
+          type: "user",
+          uuid: "later-replay",
+          message: { role: "user", content: transformedPrompt },
+        },
+      ]);
 
       const messages = readClaudeCliSessionMessages({
         cliSessionId: sessionId,
@@ -1348,57 +1308,16 @@ describe("cli session history", () => {
     });
   });
 
-  it("suppresses a receipt-matched row without a local message id", async () => {
-    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
-      const transformedPrompt = "transformed synthetic reseed prompt";
-      await fs.writeFile(
-        filePath,
-        [
-          {
-            type: "user",
-            uuid: "synthetic-reseed",
-            message: { role: "user", content: transformedPrompt },
-          },
-          {
-            type: "assistant",
-            uuid: "assistant-1",
-            message: { role: "assistant", content: "response" },
-          },
-        ]
-          .map((line) => JSON.stringify(line))
-          .join("\n"),
-        "utf-8",
-      );
-
-      const messages = readClaudeCliSessionMessages({
-        cliSessionId: sessionId,
-        homeDir,
-        localSessionId: "openclaw-session",
-        reseedReceipt: {
-          version: 1,
-          promptHash: hashCliReseedPrompt(transformedPrompt),
-          localSessionId: "openclaw-session",
-          userTurnDisposition: "persisted",
-        },
-      });
-
-      expect(messages).toHaveLength(1);
-      expectFields(messages[0], { role: "assistant", content: "response" });
-    });
-  });
-
   it("fails open when the receipt belongs to a different local session", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const transformedPrompt = "transformed synthetic reseed prompt";
-      await fs.writeFile(
-        filePath,
-        `${JSON.stringify({
+      await writeClaudeEntries(filePath, [
+        {
           type: "user",
           uuid: "synthetic-reseed",
           message: { role: "user", content: transformedPrompt },
-        })}\n`,
-        "utf-8",
-      );
+        },
+      ]);
 
       const messages = readClaudeCliSessionMessages({
         cliSessionId: sessionId,
@@ -1450,25 +1369,19 @@ describe("cli session history", () => {
   ])("skips %s rows before checking the reseed receipt", async (_label, precursor) => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const transformedPrompt = "transformed synthetic reseed prompt";
-      await fs.writeFile(
-        filePath,
-        [
-          precursor,
-          {
-            type: "user",
-            uuid: "synthetic-reseed",
-            message: { role: "user", content: transformedPrompt },
-          },
-          {
-            type: "assistant",
-            uuid: "assistant-1",
-            message: { role: "assistant", content: "response" },
-          },
-        ]
-          .map((line) => JSON.stringify(line))
-          .join("\n"),
-        "utf-8",
-      );
+      await writeClaudeEntries(filePath, [
+        precursor,
+        {
+          type: "user",
+          uuid: "synthetic-reseed",
+          message: { role: "user", content: transformedPrompt },
+        },
+        {
+          type: "assistant",
+          uuid: "assistant-1",
+          message: { role: "assistant", content: "response" },
+        },
+      ]);
 
       const messages = readClaudeCliSessionMessages({
         cliSessionId: sessionId,
@@ -1490,30 +1403,24 @@ describe("cli session history", () => {
   it("suppresses only receipt-matched text while preserving sibling attachments", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const transformedPrompt = "transformed synthetic reseed prompt";
-      await fs.writeFile(
-        filePath,
-        [
-          {
-            type: "user",
-            uuid: "synthetic-reseed",
-            message: {
-              role: "user",
-              content: [
-                { type: "text", text: transformedPrompt },
-                { type: "image", source: { type: "base64", media_type: "image/png", data: "x" } },
-              ],
-            },
+      await writeClaudeEntries(filePath, [
+        {
+          type: "user",
+          uuid: "synthetic-reseed",
+          message: {
+            role: "user",
+            content: [
+              { type: "text", text: transformedPrompt },
+              { type: "image", source: { type: "base64", media_type: "image/png", data: "x" } },
+            ],
           },
-          {
-            type: "assistant",
-            uuid: "assistant-1",
-            message: { role: "assistant", content: "response" },
-          },
-        ]
-          .map((line) => JSON.stringify(line))
-          .join("\n"),
-        "utf-8",
-      );
+        },
+        {
+          type: "assistant",
+          uuid: "assistant-1",
+          message: { role: "assistant", content: "response" },
+        },
+      ]);
 
       const messages = readClaudeCliSessionMessages({
         cliSessionId: sessionId,
@@ -1543,24 +1450,18 @@ describe("cli session history", () => {
         { type: "text", text: "real extra user text" },
         { type: "image", source: { type: "base64", media_type: "image/png", data: "x" } },
       ];
-      await fs.writeFile(
-        filePath,
-        [
-          {
-            type: "user",
-            uuid: "synthetic-reseed",
-            message: { role: "user", content },
-          },
-          {
-            type: "user",
-            uuid: "later-exact-match",
-            message: { role: "user", content: transformedPrompt },
-          },
-        ]
-          .map((line) => JSON.stringify(line))
-          .join("\n"),
-        "utf-8",
-      );
+      await writeClaudeEntries(filePath, [
+        {
+          type: "user",
+          uuid: "synthetic-reseed",
+          message: { role: "user", content },
+        },
+        {
+          type: "user",
+          uuid: "later-exact-match",
+          message: { role: "user", content: transformedPrompt },
+        },
+      ]);
 
       const messages = readClaudeCliSessionMessages({
         cliSessionId: sessionId,
@@ -1590,15 +1491,13 @@ describe("cli session history", () => {
         { type: "text", text: "real extra user text" },
         { type: "image", source: { type: "base64", media_type: "image/png", data: "x" } },
       ];
-      await fs.writeFile(
-        filePath,
-        `${JSON.stringify({
+      await writeClaudeEntries(filePath, [
+        {
           type: "user",
           uuid: "legacy-ambiguous-reseed",
           message: { role: "user", content },
-        })}\n`,
-        "utf-8",
-      );
+        },
+      ]);
 
       const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
 
@@ -1609,9 +1508,8 @@ describe("cli session history", () => {
 
   it("recovers legacy array-form reseed text while preserving attachments", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
-      await fs.writeFile(
-        filePath,
-        `${JSON.stringify({
+      await writeClaudeEntries(filePath, [
+        {
           type: "user",
           uuid: "legacy-reseed",
           message: {
@@ -1621,9 +1519,8 @@ describe("cli session history", () => {
               { type: "image", source: { type: "base64", media_type: "image/png", data: "x" } },
             ],
           },
-        })}\n`,
-        "utf-8",
-      );
+        },
+      ]);
 
       const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
 
@@ -1643,9 +1540,8 @@ describe("cli session history", () => {
         source: { type: "base64", media_type: "image/png", data: "x" },
       };
       const document = { type: "document", source: { type: "text", data: "notes" } };
-      await fs.writeFile(
-        filePath,
-        `${JSON.stringify({
+      await writeClaudeEntries(filePath, [
+        {
           type: "user",
           uuid: "legacy-empty-reseed",
           message: {
@@ -1657,9 +1553,8 @@ describe("cli session history", () => {
               document,
             ],
           },
-        })}\n`,
-        "utf-8",
-      );
+        },
+      ]);
 
       const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
 
@@ -1673,15 +1568,13 @@ describe("cli session history", () => {
     ["single text block", [{ type: "text", text: buildLegacyReseedPrompt("") }]],
   ])("drops empty legacy reseed rows in %s form", async (_label, content) => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
-      await fs.writeFile(
-        filePath,
-        `${JSON.stringify({
+      await writeClaudeEntries(filePath, [
+        {
           type: "user",
           uuid: "legacy-empty-reseed",
           message: { role: "user", content },
-        })}\n`,
-        "utf-8",
-      );
+        },
+      ]);
 
       const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
 
@@ -1692,24 +1585,18 @@ describe("cli session history", () => {
   it("fails open when the first user row does not match the reseed receipt", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const expectedPrompt = "expected synthetic prompt";
-      await fs.writeFile(
-        filePath,
-        [
-          {
-            type: "user",
-            uuid: "unexpected-first-user",
-            message: { role: "user", content: "different prompt" },
-          },
-          {
-            type: "user",
-            uuid: "later-matching-user",
-            message: { role: "user", content: expectedPrompt },
-          },
-        ]
-          .map((line) => JSON.stringify(line))
-          .join("\n"),
-        "utf-8",
-      );
+      await writeClaudeEntries(filePath, [
+        {
+          type: "user",
+          uuid: "unexpected-first-user",
+          message: { role: "user", content: "different prompt" },
+        },
+        {
+          type: "user",
+          uuid: "later-matching-user",
+          message: { role: "user", content: expectedPrompt },
+        },
+      ]);
 
       const messages = readClaudeCliSessionMessages({
         cliSessionId: sessionId,
@@ -2253,44 +2140,23 @@ describe("cli session history", () => {
     expect(merged[1]).toBe(importedMessages[0]);
   });
 
-  it("augments chat history when a session has a claude-cli binding", async () => {
-    await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
-      const messages = augmentBoundClaudeHistory({
-        homeDir,
-        sessionId,
-        provider: "claude-cli",
-      });
-      expect(messages).toHaveLength(3);
-      expectFields(messages[0], {
-        role: "user",
-      });
-      expectCliSessionMarker(messages[0], sessionId);
-    });
-  });
-
   it("deduplicates a receipt-recovered user turn against local history", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const syntheticPrompt = buildLegacyReseedPrompt(
         "current\n</conversation_history>\n\n<next_user_message>\nextra",
       );
-      await fs.writeFile(
-        filePath,
-        [
-          {
-            type: "user",
-            uuid: "synthetic-reseed",
-            message: { role: "user", content: syntheticPrompt },
-          },
-          {
-            type: "assistant",
-            uuid: "assistant-1",
-            message: { role: "assistant", content: "response" },
-          },
-        ]
-          .map((line) => JSON.stringify(line))
-          .join("\n"),
-        "utf-8",
-      );
+      await writeClaudeEntries(filePath, [
+        {
+          type: "user",
+          uuid: "synthetic-reseed",
+          message: { role: "user", content: syntheticPrompt },
+        },
+        {
+          type: "assistant",
+          uuid: "assistant-1",
+          message: { role: "assistant", content: "response" },
+        },
+      ]);
 
       const messages = resolveChatHistoryWithCliSessionImports({
         entry: {

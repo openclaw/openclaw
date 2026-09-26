@@ -170,7 +170,11 @@ export async function finalizePreparedProjection(
   if (publication) {
     const result = await publication.execute({ type: "finalize", input: active });
     if (result.sessionKey !== undefined) {
-      sessionChanges.emit({ storePath: databaseOptions.path, sessionKey: result.sessionKey });
+      sessionChanges.emit({
+        storePath: databaseOptions.path,
+        sessionKey: result.sessionKey,
+        facts: { kind: "unchanged" },
+      });
     }
     return result.finalized;
   }
@@ -196,7 +200,11 @@ export async function finalizePreparedProjection(
         );
       if (session) {
         sessionChanges.emit(
-          { storePath: database.path, sessionKey: session.session_key },
+          {
+            storePath: database.path,
+            sessionKey: session.session_key,
+            facts: { kind: "unchanged" },
+          },
           database.db,
         );
       }

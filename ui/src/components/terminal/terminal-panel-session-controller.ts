@@ -1,5 +1,6 @@
 import { t } from "../../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { takePreparedCatalogTerminal } from "../../lib/sessions/catalog-terminal-start.ts";
 import {
   TerminalConnection,
@@ -17,7 +18,6 @@ import {
   resolveTerminalPanelOwnerSessionKey,
   shellBasename,
   type TerminalOperation,
-  type TerminalPanelCatalogReference,
   type TerminalPanelError,
   type TerminalPanelOpenAction,
   type TerminalPanelSessionControllerHost,
@@ -440,7 +440,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
   }
 
   private async openSessionNow(
-    catalog: TerminalPanelCatalogReference | undefined,
+    catalog: CatalogSessionKey | undefined,
     agentId: string | null,
     cancelIntent: () => void,
   ): Promise<boolean> {

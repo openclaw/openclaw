@@ -573,7 +573,10 @@ export function detectToolCallLoop(
     };
   }
 
-  if (knownPollTool && noProgressStreak >= CRITICAL_THRESHOLD) {
+  // A wait only resumes existing work; ten unchanged outcomes already prove a stuck poll.
+  const pollCriticalThreshold =
+    toolName === "wait" ? TOOL_LOOP_WARNING_THRESHOLD : CRITICAL_THRESHOLD;
+  if (knownPollTool && noProgressStreak >= pollCriticalThreshold) {
     log.error(`Critical polling loop detected: ${toolName} repeated ${noProgressStreak} times`);
     return {
       stuck: true,

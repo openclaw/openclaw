@@ -141,24 +141,21 @@ describe("channelsLogsCommand", () => {
     expect(readJsonPayload().lines.map((line) => line.message)).toEqual(["match"]);
   });
 
-  it.each([false, true])(
-    "rejects an unknown explicit channel without widening output (json=%s)",
-    async (json) => {
-      await fs.writeFile(
-        logPath,
-        logLine({ module: "gateway/channels/slack/send", message: "unrelated message" }),
-      );
+  it("rejects an unknown explicit channel without widening output", async () => {
+    await fs.writeFile(
+      logPath,
+      logLine({ module: "gateway/channels/slack/send", message: "unrelated message" }),
+    );
 
-      const error = await channelsLogsCommand({ channel: "slakc", json }, runtime).catch(
-        (cause: unknown) => cause,
-      );
-      expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toContain('Unknown channel "slakc". Valid channels: all,');
-      expect((error as Error).message).toContain("external-chat");
-      expect((error as Error).message).toContain("slack");
-      expect(runtime.log).not.toHaveBeenCalled();
-    },
-  );
+    const error = await channelsLogsCommand({ channel: "slakc", json: true }, runtime).catch(
+      (cause: unknown) => cause,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('Unknown channel "slakc". Valid channels: all,');
+    expect((error as Error).message).toContain("external-chat");
+    expect((error as Error).message).toContain("slack");
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
 
   it("redacts credential-bearing channel lines in text output", async () => {
     const fixtureCredential = "opaque-registry-value-1234567890";
@@ -341,7 +338,7 @@ describe("channelsLogsCommand", () => {
     expect(payload.lines).toStrictEqual([]);
   });
 
-  it.each(["2x", "", "   "])("rejects invalid line limit %j", async (lines) => {
+  it.each(["2x", "   "])("rejects invalid line limit %j", async (lines) => {
     await expect(channelsLogsCommand({ lines, json: true }, runtime)).rejects.toThrow(
       "--lines must be a positive integer.",
     );

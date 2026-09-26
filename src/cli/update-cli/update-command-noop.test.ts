@@ -31,7 +31,7 @@ vi.mock("./update-command-service.js", async () => {
   const { UpdateCommandAbort } = await import("./update-command-windows-task.js");
   return {
     maybeStopManagedServiceBeforeMutableUpdate: boundary.maintenance,
-    shouldBlockMutableUpdateFromGatewayServiceEnv: () => false,
+    mutableUpdateGatewayServiceBlock: () => false,
     UpdateCommandAbort,
   };
 });

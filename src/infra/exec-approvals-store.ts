@@ -192,10 +192,6 @@ export async function readExecApprovalsPolicyReadOnlyAsync(
   }
 }
 
-export async function loadExecApprovalsAsync(): Promise<ExecApprovalsFile> {
-  return loadExecApprovals();
-}
-
 type ExecApprovalsUpdate = {
   baseHash?: string;
   update: (file: ExecApprovalsFile) => ExecApprovalsFile | null;

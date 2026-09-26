@@ -12,7 +12,6 @@ import {
 import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
-import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -23,8 +22,6 @@ import {
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { resolveExactSubagentCompletionEvent } from "../../agents/subagents/announce/subagent-announce-handoff.js";
-import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
-import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { claimAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
@@ -38,7 +35,6 @@ import { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
 import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import { resolveGatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
 import { assertParentSubagentResumeSuccessorCurrent } from "../session-subagent-resume.js";
-import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
 import { consumeSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -46,6 +42,7 @@ import {
   readGatewayDedupeEntry,
   setGatewayDedupeEntries,
 } from "./agent-dedupe.js";
+import { resolveAgentRunAdmissionModel } from "./agent-run-admission-model.js";
 import { createAgentRunAdmissionRevalidator } from "./agent-run-admission-revalidation.js";
 import type {
   PrepareAgentRunDispatchParams,
@@ -111,55 +108,17 @@ export async function prepareAgentRunDispatch(
     return undefined;
   }
 
-  const timeoutMs = resolveAgentTimeoutMs({
-    cfg: params.cfgForAgent ?? params.cfg,
-    overrideSeconds:
-      typeof params.request.timeout === "number" ? params.request.timeout : undefined,
-  });
-  const effectiveProviderOverride =
-    params.restoredCronContinuation?.provider ?? params.providerOverride;
-  const effectiveModelOverride = params.restoredCronContinuation?.model ?? params.modelOverride;
-  const effectiveThinking = params.restoredCronContinuation
-    ? params.restoredCronContinuation.thinking
-    : params.request.thinking;
-  const effectiveAllowModelOverride =
-    params.allowModelOverride || params.restoredCronContinuation !== undefined;
-  const runtimeConfig = params.cfgForAgent ?? params.cfg;
-  const sessionModel = resolveSessionModelRef(
-    runtimeConfig,
-    params.sessionEntry,
-    params.activeSessionAgentId,
-  );
-  const activeModel = effectiveModelOverride
-    ? (resolvePersistedOverrideModelRef({
-        defaultProvider: effectiveProviderOverride ?? sessionModel.provider,
-        overrideProvider: effectiveProviderOverride,
-        overrideModel: effectiveModelOverride,
-      }) ?? sessionModel)
-    : {
-        provider: effectiveProviderOverride ?? sessionModel.provider,
-        model: sessionModel.model,
-      };
-  const resolvedRuntime = {
-    harness: resolveEffectiveAgentRuntime({
-      cfg: runtimeConfig,
-      provider: activeModel.provider,
-      modelId: activeModel.model,
-      agentId: params.activeSessionAgentId,
-      sessionKey: params.resolvedSessionKey,
-      sessionEntry: params.sessionEntry,
-    }),
-    provider: activeModel.provider,
-    model: activeModel.model,
-  };
-  const activeModelProvider = activeModel.provider;
-  const lifecycleStorePath = params.resolvedSessionKey
-    ? loadSessionEntry(params.resolvedSessionKey, {
-        ...(params.activeSessionAgentId ? { agentId: params.activeSessionAgentId } : {}),
-        clone: false,
-        projection: "list",
-      }).storePath
-    : `agent:${params.activeSessionAgentId}`;
+  const {
+    timeoutMs,
+    effectiveProviderOverride,
+    effectiveModelOverride,
+    effectiveThinking,
+    effectiveAllowModelOverride,
+    activeModel,
+    resolvedRuntime,
+    activeModelProvider,
+    lifecycleStorePath,
+  } = resolveAgentRunAdmissionModel(params);
   let operationalRunInstance: OperationalRunInstanceRef | undefined;
   try {
     await params.acquireGatewayWorkAdmission(lifecycleStorePath);
@@ -429,7 +388,14 @@ export async function prepareAgentRunDispatch(
   } catch (err) {
     return rejectPreaccept(errorShapeFromError(ErrorCodes.UNAVAILABLE, err));
   }
-  const { taskTrackingMode, adoptParentResume } = taskTracking;
+  const { taskTrackingMode, adoptParentResume, followupSuccessor } = taskTracking;
+  if (followupSuccessor) {
+    registeredFollowupTask = {
+      kind: "receipt",
+      ...followupSuccessor.owner.receipt,
+      completion: followupSuccessor.owner,
+    };
+  }
   if (params.isRestartRecoveryResumeRun) {
     const recoverySessionKey = params.resolvedSessionKey;
     if (!recoverySessionKey) {
@@ -458,6 +424,14 @@ export async function prepareAgentRunDispatch(
   let userTurn: PreparedAgentRunUserTurn;
   const assertInputOwnerCurrent = (terminal = false) => {
     assertInputAdmissionCurrent?.();
+    if (followupSuccessor) {
+      followupSuccessor.owner.assertCurrent();
+      if (!resumedTaskAdopted) {
+        followupSuccessor.assertCurrent();
+      } else if (!followupSuccessor.owner.ownsExecution(params.runId)) {
+        throw new Error("Follow-up input no longer owns its admitted execution.");
+      }
+    }
     if (parentResume && resumedTaskAdopted && !terminal) {
       assertParentSubagentResumeSuccessorCurrent(parentResume, params.runId);
     }
@@ -543,7 +517,7 @@ export async function prepareAgentRunDispatch(
     return undefined;
   }
   let dispatchTaskTrackingMode: GatewayAgentDispatchTaskTracking =
-    taskTrackingMode === "cli" ? "cli" : "none";
+    registeredFollowupTask ?? (taskTrackingMode === "cli" ? "cli" : "none");
   if (typeof taskTrackingMode === "object") {
     try {
       const sessionKey = params.resolvedSessionKey;
@@ -601,6 +575,25 @@ export async function prepareAgentRunDispatch(
     return rejectPreaccept(errorShapeFromError(ErrorCodes.INVALID_REQUEST, failure));
   }
   try {
+    try {
+      const completion =
+        registeredFollowupTask?.kind === "receipt" ? registeredFollowupTask.completion : undefined;
+      if (completion) {
+        assertInputOwnerCurrent();
+        params.assertGatewayWorkAdmissionAllowed();
+        activeRunAbort.controller.signal.throwIfAborted();
+        completion.assertCurrent();
+      }
+      if (followupSuccessor) {
+        // No await may separate this exact-cohort transfer from acceptance. The
+        // original receipt and audit binding remain owned by the logical followup.
+        followupSuccessor.owner.adopt(followupSuccessor);
+        resumedTaskAdopted = true;
+      }
+    } catch (error) {
+      const failure = releasePreparedAgentRunUserTurnAfterFailure(userTurn, error);
+      return rejectPreaccept(errorShapeFromError(ErrorCodes.UNAVAILABLE, failure));
+    }
     if (adoptParentResume) {
       try {
         // All awaited preparation has succeeded. Transfer task ownership before
@@ -611,6 +604,9 @@ export async function prepareAgentRunDispatch(
         const failure = releasePreparedAgentRunUserTurnAfterFailure(userTurn, err);
         return rejectPreaccept(errorShapeFromError(ErrorCodes.UNAVAILABLE, failure));
       }
+    }
+    if (registeredFollowupTask?.kind === "receipt") {
+      registeredFollowupTask.completion?.markAccepted(params.runId);
     }
     params.markAgentRunAccepted(true);
     setGatewayDedupeEntries({

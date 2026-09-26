@@ -550,6 +550,7 @@ export function createFakeCodexCompactionClient(
   );
   const client = {
     request,
+    getInstanceId: vi.fn(() => "fake-compaction-client"),
     getTransportPid: () => undefined,
     close,
     closeAndWait,

@@ -61,7 +61,7 @@ export {
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
   revalidateManagedGatewayServiceAfterUpdate,
-  shouldBlockMutableUpdateFromGatewayServiceEnv,
+  mutableUpdateGatewayServiceBlock,
   UpdateCommandAbort,
   type PreManagedServiceStop,
   type UpdateCommandRecoveryState,
@@ -186,6 +186,7 @@ export async function maybeRestartService(params: {
   onVerificationFailure?: (reason: string) => void;
   onPluginWarnings?: (warnings: readonly PluginUpdateWarning[]) => void;
   onVerified?: (verifiedAtMs: number) => void;
+  onGatewayStartAttempted?: () => void;
   definitionRecovery?: UpdateServiceDefinitionRecovery;
   expectedGatewayIdentity?: { version: string; buildId?: string };
 }): Promise<
@@ -334,6 +335,7 @@ export async function maybeRestartService(params: {
           health = await reinspect();
         }
         const recovery = await recoverLaunchAgentAndRecheckGatewayHealth({
+          onGatewayStartAttempted: params.onGatewayStartAttempted,
           updateRun: params.opts.run,
           assertCurrent,
           preserveDefinition,
@@ -620,19 +622,15 @@ export async function maybeRestartService(params: {
   } else if (!activation.opts.json) {
     defaultRuntime.log("");
     defaultRuntime.log(theme.muted("Gateway: restart skipped (--no-restart)."));
-    if (activation.result.mode === "npm" || activation.result.mode === "pnpm") {
-      defaultRuntime.log(
-        theme.muted(
-          `Tip: Run \`${formatCliCommand("openclaw doctor", activation.serviceEnv)}\`, then \`${formatCliCommand("openclaw gateway restart", activation.serviceEnv)}\` to apply updates to a running gateway.`,
-        ),
-      );
-    } else {
-      defaultRuntime.log(
-        theme.muted(
-          `Tip: Run \`${formatCliCommand("openclaw gateway restart", activation.serviceEnv)}\` to apply updates to a running gateway.`,
-        ),
-      );
-    }
+    const doctor =
+      activation.result.mode === "npm" || activation.result.mode === "pnpm"
+        ? `\`${formatCliCommand("openclaw doctor", activation.serviceEnv)}\`, then `
+        : "";
+    defaultRuntime.log(
+      theme.muted(
+        `Tip: Run ${doctor}\`${formatCliCommand("openclaw gateway restart", activation.serviceEnv)}\` to apply updates to a running gateway.`,
+      ),
+    );
   }
   return "ok";
 }

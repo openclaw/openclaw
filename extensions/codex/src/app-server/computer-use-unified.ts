@@ -66,7 +66,7 @@ export async function resolveCodexUnifiedComputerUseRuntime(
   if (!template || !isRecord(servers) || !isRecord(server)) {
     throw new Error("The selected desktop's unified Computer Use MCP template is invalid.");
   }
-  const runtimeRoot = path.join(path.dirname(candidate.appServerCommandPath), "cua_node");
+  const runtimeRoot = path.join(candidate.appBundlePath, "Contents", "Resources", "cua_node");
   const modules = path.join(runtimeRoot, "lib", "node_modules");
   const node = path.join(runtimeRoot, "bin", "node");
   const nodeRepl = path.join(runtimeRoot, "bin", "node_repl");
@@ -130,7 +130,12 @@ export async function publishCodexUnifiedComputerUsePlugin(
   target: string,
   runtime: CodexUnifiedComputerUseRuntime,
 ): Promise<void> {
-  await fs.cp(runtime.pluginRoot, target, { recursive: true });
+  // The signed desktop template can be read-only; the managed home owns its generated copy.
+  const templatePath = path.join(runtime.pluginRoot, ".mcp.json");
+  await fs.cp(runtime.pluginRoot, target, {
+    recursive: true,
+    filter: (source) => source !== templatePath,
+  });
   await fs.writeFile(path.join(target, ".mcp.json"), `${JSON.stringify(runtime.mcp, null, 2)}\n`, {
     mode: 0o600,
   });
@@ -233,7 +238,7 @@ export async function reconcileManagedCodexComputerUseCache(params: {
     bundledMarketplacePath ?? "default",
     config.pluginName,
   ].join("\0");
-  const cache = await ensureCodexComputerUseSharedPluginCache({
+  const shared = await ensureCodexComputerUseSharedPluginCache({
     codexHome: params.codexHome,
     config,
     ...(params.ownershipRoot ? { ownershipRoot: params.ownershipRoot } : {}),
@@ -242,5 +247,5 @@ export async function reconcileManagedCodexComputerUseCache(params: {
     forceRefresh: params.forceRefresh === true || params.previousCacheBinding !== cacheBinding,
   });
   params.assertCurrent();
-  return cache.status === "shared" ? cacheBinding : undefined;
+  return shared ? cacheBinding : undefined;
 }

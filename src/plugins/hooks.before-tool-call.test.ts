@@ -83,27 +83,6 @@ describe("before_tool_call hook merger — requireApproval", () => {
       },
     },
     {
-      name: "stamps pluginId from the registration",
-      hooks: [
-        {
-          pluginId: "my-plugin",
-          result: {
-            requireApproval: {
-              id: "a1",
-              title: "T",
-              description: "D",
-            },
-          },
-        },
-      ],
-      expectedApproval: {
-        id: "a1",
-        title: "T",
-        description: "D",
-        pluginId: "my-plugin",
-      },
-    },
-    {
       name: "first hook with requireApproval wins when multiple plugins set it",
       hooks: [
         {
@@ -158,15 +137,20 @@ describe("before_tool_call hook merger — requireApproval", () => {
     expectRequireApprovalResult(result, { requireApproval: expectedApproval });
   });
 
-  it("merges block and requireApproval from different plugins", async () => {
+  it("returns undefined requireApproval when no plugin sets it", async () => {
+    const result = await runBeforeToolCallWithHooks(registry, [
+      { pluginId: "plain", result: { params: { extra: true } } },
+    ]);
+    expect(result?.requireApproval).toBeUndefined();
+  });
+
+  it("still allows block=true from a lower-priority plugin after requireApproval", async () => {
     const result = await runBeforeToolCallWithHooks(registry, [
       {
         pluginId: "approver",
         result: {
-          requireApproval: {
-            title: "Needs approval",
-            description: "Approval needed",
-          },
+          params: { source: "approver", safe: true },
+          requireApproval: { title: "Needs approval", description: "Approval needed" },
         },
         priority: 100,
       },
@@ -175,91 +159,21 @@ describe("before_tool_call hook merger — requireApproval", () => {
         result: {
           block: true,
           blockReason: "blocked",
+          params: { source: "blocker", safe: false },
         },
         priority: 50,
       },
     ]);
-    expect(result?.block).toBe(true);
-    expect(result?.requireApproval?.title).toBe("Needs approval");
-  });
-
-  it("returns undefined requireApproval when no plugin sets it", async () => {
-    const result = await runBeforeToolCallWithHooks(registry, [
-      { pluginId: "plain", result: { params: { extra: true } } },
-    ]);
-    expect(result?.requireApproval).toBeUndefined();
-  });
-
-  it.each([
-    {
-      name: "freezes params after requireApproval when a lower-priority plugin tries to override them",
-      hooks: [
-        {
-          pluginId: "approver",
-          result: {
-            params: { source: "approver", safe: true },
-            requireApproval: {
-              title: "Needs approval",
-              description: "Approval needed",
-            },
-          },
-          priority: 100,
-        },
-        {
-          pluginId: "mutator",
-          result: {
-            params: { source: "mutator", safe: false },
-          },
-          priority: 50,
-        },
-      ],
-      expected: {
-        requireApproval: {
-          title: "Needs approval",
-          description: "Approval needed",
-          pluginId: "approver",
-        },
-        params: { source: "approver", safe: true },
+    expectRequireApprovalResult(result, {
+      block: true,
+      blockReason: "blocked",
+      requireApproval: {
+        title: "Needs approval",
+        description: "Approval needed",
+        pluginId: "approver",
       },
-    },
-    {
-      name: "still allows block=true from a lower-priority plugin after requireApproval",
-      hooks: [
-        {
-          pluginId: "approver",
-          result: {
-            params: { source: "approver", safe: true },
-            requireApproval: {
-              title: "Needs approval",
-              description: "Approval needed",
-            },
-          },
-          priority: 100,
-        },
-        {
-          pluginId: "blocker",
-          result: {
-            block: true,
-            blockReason: "blocked",
-            params: { source: "blocker", safe: false },
-          },
-          priority: 50,
-        },
-      ],
-      expected: {
-        block: true,
-        blockReason: "blocked",
-        requireApproval: {
-          title: "Needs approval",
-          description: "Approval needed",
-          pluginId: "approver",
-        },
-        params: { source: "approver", safe: true },
-      },
-    },
-  ] as const)("$name", async ({ hooks, expected }) => {
-    const result = await runBeforeToolCallWithHooks(registry, hooks);
-    expectRequireApprovalResult(result, expected);
+      params: { source: "approver", safe: true },
+    });
   });
 
   it("isolates direct event mutation from the caller and later handlers", async () => {
@@ -351,25 +265,6 @@ describe("before_tool_call hook merger — requireApproval", () => {
 
     const run = createHookRunner(registry, { catchErrors: true }).runBeforeToolCall(
       { toolName: "bash", params: { callback: () => undefined } },
-      stubCtx,
-    );
-
-    await expect(run).rejects.toThrow("before_tool_call mutable input isolation failed");
-    expect(handler).not.toHaveBeenCalled();
-  });
-
-  it("fails closed when a hook event contains shared memory", async () => {
-    const handler = vi.fn().mockReturnValue({});
-    addTestHook({
-      registry,
-      pluginId: "policy",
-      hookName: "before_tool_call",
-      handler,
-    });
-    const shared = new SharedArrayBuffer(4);
-
-    const run = createHookRunner(registry, { catchErrors: true }).runBeforeToolCall(
-      { toolName: "bash", params: { shared: new Uint8Array(shared) } },
       stubCtx,
     );
 

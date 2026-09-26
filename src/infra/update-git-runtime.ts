@@ -88,3 +88,15 @@ export async function verifyGitUpdateRecovery(params: GitRuntimeIdentity): Promi
     ? { serviceRestartSafe: true, version, buildId }
     : { serviceRestartSafe: false, reason: "runtime-verification-failed" };
 }
+
+export async function readGitRuntimeArtifactStatus(
+  params: GitRuntimeIdentity,
+): Promise<{ ready: true; version: string; buildId: string } | { ready: false }> {
+  const recovery = await verifyGitUpdateRecovery(params);
+  if (!recovery.serviceRestartSafe || !recovery.buildId) {
+    return { ready: false };
+  }
+  const buildInfo = await tryReadJson(path.join(params.root, "dist", "build-info.json"));
+  const version = normalizeNullableString(asNullableRecord(buildInfo)?.version) ?? recovery.version;
+  return { ready: true, version, buildId: recovery.buildId };
+}

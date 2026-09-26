@@ -3,6 +3,7 @@ import fs from "node:fs";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readImageMetadataFromHeader } from "../media/image-ops.js";
@@ -22,9 +23,9 @@ it.each(["https://example.test/avatar.png", "data:text/html,<html>avatar</html>"
   "rejects %s before invoking the native data decoder",
   async (dataUrl) => {
     const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected fetch"));
-    await expect(readGatewayAvatarThumbnail({ dataUrl })).rejects.toThrow(
-      "Unsupported avatar data URL",
-    );
+    await expect(
+      readGatewayAvatarThumbnail({ dataUrl, revision: `invalid:${dataUrl}` }),
+    ).rejects.toThrow("Unsupported avatar data URL");
     expect(fetch).not.toHaveBeenCalled();
   },
 );
@@ -33,8 +34,29 @@ it("bounds decoded data bytes independently of the encoded URL limit", async () 
   await expect(
     readGatewayAvatarThumbnail({
       dataUrl: `data:image/svg+xml,${"x".repeat(AVATAR_MAX_BYTES + 1)}`,
+      revision: "oversized-svg",
     }),
   ).rejects.toThrow("Avatar data URL exceeds size limit");
+});
+
+it("keeps pending thumbnails coalesced beyond the completed-cache capacity", async () => {
+  const gate = createDeferred();
+  const decode = globalThis.fetch;
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
+    await gate.promise;
+    return decode(...args);
+  });
+  const sources = Array.from({ length: 5 }, (_, index) => ({
+    dataUrl: `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"><text>${index}</text></svg>`,
+    revision: `pending-svg-${index}`,
+  }));
+  const pending = sources.map((source) => readGatewayAvatarThumbnail(source));
+  pending.push(readGatewayAvatarThumbnail(sources[0]!));
+  gate.resolve();
+  const images = await Promise.all(pending);
+
+  expect(fetch).toHaveBeenCalledTimes(5);
+  expect(images[5]).toBe(images[0]);
 });
 
 // Two 2×2 red/blue frames encoded with img2webp; VP8X animation flag and timing are retained.
@@ -51,62 +73,51 @@ const AVIF_BYTES = Buffer.from(
   "base64",
 );
 
-it.each(
+it.each([
+  ["local", "image/apng", "avatar.png", APNG_BYTES],
+  ["escaped-base64", "image/apng", undefined, APNG_BYTES],
+  ["local", "image/webp", "avatar.webp", ANIMATED_WEBP],
+  ["data", "image/webp", undefined, ANIMATED_WEBP],
+  ["data", "image/bmp", undefined, BMP_BYTES],
+  ["percent-data", "image/avif", undefined, AVIF_BYTES],
   [
-    { format: "APNG", filename: "avatar.png", mime: "image/apng", body: APNG_BYTES },
-    { format: "animated WebP", filename: "avatar.webp", mime: "image/webp", body: ANIMATED_WEBP },
-    { format: "BMP", filename: undefined, mime: "image/bmp", body: BMP_BYTES },
-    { format: "AVIF", filename: undefined, mime: "image/avif", body: AVIF_BYTES },
-    {
-      format: "Latin-1 SVG",
-      filename: undefined,
-      mime: "image/svg+xml;charset=iso-8859-1",
-      body: Buffer.from(
-        '<svg xmlns="http://www.w3.org/2000/svg"><text>café</text></svg>',
-        "latin1",
-      ),
-    },
-  ].flatMap((fixture) =>
-    (fixture.filename
-      ? ["local", "data", "percent-data", "escaped-base64"]
-      : ["data", "percent-data"]
-    ).map((sourceKind) => Object.assign({}, fixture, { sourceKind })),
-  ),
-)(
-  "preserves the bytes of a $sourceKind $format avatar",
-  async ({ filename, mime, body, sourceKind }) => {
-    const workspace = tempRoots.make("openclaw-avatar-animation-");
-    if (filename) {
-      fs.writeFileSync(path.join(workspace, filename), body);
-    }
-    const base64 = body.toString("base64");
-    const avatar =
-      sourceKind === "local"
-        ? filename
-        : sourceKind === "percent-data"
-          ? `data:${mime},${Array.from(body, (byte) => `%${byte.toString(16).padStart(2, "0")}`).join("")}`
-          : `data:${mime};base64,${sourceKind === "escaped-base64" ? encodeURIComponent(base64) : base64}`;
-    const config: OpenClawConfig = {
-      agents: { list: [{ id: "main", workspace, identity: { avatar } }] },
-    };
-    const url = resolveGatewayAssistantAvatar({
-      cfg: config,
-      identity: resolveAssistantIdentity({ cfg: config, agentId: "main" }),
-      httpBasePath: "",
-    }).avatar;
-    const response = makeMockHttpResponse();
-    await handleControlUiAvatarRequest(
-      { url, method: "GET", headers: {} } as IncomingMessage,
-      response.res,
-      { config },
-    );
-    expect(response.res.statusCode).toBe(200);
-    expect(response.end).toHaveBeenCalledWith(body);
-    if (sourceKind !== "local") {
-      expect(response.setHeader).toHaveBeenCalledWith("content-type", mime);
-    }
-  },
-);
+    "percent-data",
+    "image/svg+xml;charset=iso-8859-1",
+    undefined,
+    Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><text>café</text></svg>', "latin1"),
+  ],
+] as const)("preserves the bytes of a %s %s avatar", async (sourceKind, mime, filename, body) => {
+  const workspace = tempRoots.make("openclaw-avatar-animation-");
+  if (filename) {
+    fs.writeFileSync(path.join(workspace, filename), body);
+  }
+  const base64 = body.toString("base64");
+  const avatar =
+    sourceKind === "local"
+      ? filename
+      : sourceKind === "percent-data"
+        ? `data:${mime},${Array.from(body, (byte) => `%${byte.toString(16).padStart(2, "0")}`).join("")}`
+        : `data:${mime};base64,${sourceKind === "escaped-base64" ? encodeURIComponent(base64) : base64}`;
+  const config: OpenClawConfig = {
+    agents: { list: [{ id: "main", workspace, identity: { avatar } }] },
+  };
+  const { avatar: url } = await resolveGatewayAssistantAvatar({
+    cfg: config,
+    identity: await resolveAssistantIdentity({ cfg: config, agentId: "main" }),
+    httpBasePath: "",
+  });
+  const response = makeMockHttpResponse();
+  await handleControlUiAvatarRequest(
+    { url, method: "GET", headers: {} } as IncomingMessage,
+    response.res,
+    { config },
+  );
+  expect(response.res.statusCode).toBe(200);
+  expect(response.end).toHaveBeenCalledWith(body);
+  if (sourceKind !== "local") {
+    expect(response.setHeader).toHaveBeenCalledWith("content-type", mime);
+  }
+});
 
 it.each(["local", "data"])(
   "serves a cached authenticated thumbnail for a versioned %s avatar",
@@ -133,13 +144,15 @@ it.each(["local", "data"])(
         ],
       },
     };
-    const project = () =>
-      resolveGatewayAssistantAvatar({
-        cfg: config,
-        identity: resolveAssistantIdentity({ cfg: config, agentId: "main" }),
-        httpBasePath: "/control",
-      }).avatar;
-    const url = project();
+    const project = async () =>
+      (
+        await resolveGatewayAssistantAvatar({
+          cfg: config,
+          identity: await resolveAssistantIdentity({ cfg: config, agentId: "main" }),
+          httpBasePath: "/control",
+        })
+      ).avatar;
+    const url = await project();
     expect(url).toMatch(/^\/control\/avatar\/main\?v=[a-f0-9]+$/);
     const request = async (
       options: { method?: string; etag?: string; authorized?: boolean; url?: string } = {},
@@ -178,10 +191,14 @@ it.each(["local", "data"])(
     const etag = first.setHeader.mock.calls.find(([name]) => name === "etag")?.[1] as string;
     expect(etag).toBeTruthy();
 
-    const read = vi.spyOn(fs, "read");
+    const fileReads = [
+      vi.spyOn(fs, "read"),
+      vi.spyOn(fs, "openSync"),
+      vi.spyOn(fs, "realpathSync"),
+      vi.spyOn(fs, "readFileSync"),
+    ];
     const cached = await request();
     expect(cached.end).toHaveBeenCalledWith(thumbnail);
-    expect(read).not.toHaveBeenCalled();
     const head = await request({ method: "HEAD" });
     expect(head.setHeader).toHaveBeenCalledWith(
       "content-length",
@@ -190,6 +207,10 @@ it.each(["local", "data"])(
     expect(head.end.mock.calls[0]?.[0]).toBeUndefined();
     expect((await request({ etag })).res.statusCode).toBe(304);
     expect((await request({ etag, authorized: false })).res.statusCode).toBe(401);
+    for (const read of fileReads) {
+      expect(read).not.toHaveBeenCalled();
+      read.mockRestore();
+    }
 
     const replacement = encodePngRgba(Buffer.alloc(640 * 640 * 4, 120), 640, 640);
     if (sourceKind === "local") {
@@ -198,7 +219,7 @@ it.each(["local", "data"])(
     } else {
       config.agents!.list![0]!.identity!.avatar = `data:image/png;base64,${replacement.toString("base64")}`;
     }
-    const replacedUrl = project();
+    const replacedUrl = await project();
     expect(replacedUrl).not.toBe(url);
     const replaced = await request({ url: replacedUrl, etag });
     expect(replaced.res.statusCode).toBe(200);

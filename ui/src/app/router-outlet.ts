@@ -356,6 +356,13 @@ class OpenClawRouterOutlet<
       // Returning from another page must not revive the previously selected
       // session while the requested destination is still unresolved.
       if (module?.retainOnNavigate && waiting) {
+        // Chat's module can arrive before its submitted-prompt preview loader.
+        // Keep the launcher visible until that first Chat presentation is ready.
+        if (renderedMatch?.routeId === "chat" && snapshot.settled?.routeId === "new-session") {
+          return renderRouterOutlet(router, snapshot, snapshot.settled, {
+            retryContext: this.retryContext,
+          });
+        }
         return renderLoadingState();
       }
       return renderRouterOutlet(router, snapshot, renderedMatch, {

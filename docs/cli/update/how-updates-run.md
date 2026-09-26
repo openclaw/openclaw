@@ -31,17 +31,15 @@ replacement. Choose an empty `OPENCLAW_GIT_DIR` and retry.
 
 ### Validation and activation
 
-If the resolved registry package version equals the installed version without changing
-the selected channel or installation method, or the Git target SHA equals
-`HEAD` and the recorded build commit matches it, plugin convergence still runs; if plugins and runtime artifacts remain unchanged, the run finishes `skipped` with reason `already-current`. Runtime maintenance can therefore succeed without changing the Git revision. A same-version
-explicit `--channel` or installation-method change finishes successfully.
+If the resolved registry package version equals the installed version without changing the selected channel or installation method, or the Git target SHA equals `HEAD` and the installed runtime passes artifact verification, plugin convergence still runs; if plugins and runtime artifacts remain unchanged, the run finishes `skipped` with reason `already-current`.
+Runtime maintenance can therefore succeed without changing the Git revision.
+A same-version explicit `--channel` or installation-method change finishes successfully.
 Changed plugins restart a running managed Gateway unless `--no-restart` is set; retained exact pins produce the same advisories as a core update without requiring a restart.
 
-If a Git checkout advanced without rebuilding or its runtime has no recorded
-build commit, the matching source revision still needs an update. OpenClaw builds
-and validates a separate candidate, then stops the managed Gateway before
-replacing the runtime and restarting it. The new build records its commit, so
-the next update can finish as already current.
+If a Git checkout advanced without rebuilding or its runtime has missing or unverified artifacts, the matching source revision still needs an update.
+Verification checks the build commit, both build stamps, runtime entry, Control UI assets, version, and build identity.
+OpenClaw builds and validates a separate candidate, then stops the managed Gateway before replacing the runtime and restarting it.
+The new build records its commit, so the next update can finish as already current.
 `--no-restart` cannot replace runtime files used by a running Gateway in the same
 installation; the update leaves those files intact and reports the process and
 the stop/retry action.
@@ -158,6 +156,18 @@ host links target the staged installation. Literal imports, `require()` calls, a
 literal dynamic imports to shared source modules include those modules and their
 package metadata in the private copy. Unrelated repository files remain outside
 the snapshot.
+
+Plugin dependency inventory skips incidental Git runtime transaction directories
+named `<destination>.openclaw-update-<UUID>.tmp`. Their candidate and rollback
+contents stay untouched; explicitly referenced dependencies still undergo normal
+validation. Other temporary directories remain plugin inputs. This prevents an
+abandoned transaction's relocated links from blocking an unrelated update.
+
+This inventory runs in the installed updater. An older updater that fails with
+`Cannot privately copy plugin dependency` inside one of these transaction
+directories needs the installation's [manual update method](/install/updating/update-methods)
+before it can use the fix. Preserve transaction contents until any active update
+or rollback has been reconciled.
 
 When a published updater omitted shared modules from an external plugin copy,
 the new version’s Doctor can complete the private copy before loading plugin repair
@@ -480,11 +490,56 @@ history.
 
 ### Recovery limits
 
-Automatic rollback restores a retained package only when the current schema and
-configuration are compatible with the previous release. This update path does
-not capture or replay a full-state checkpoint and cannot reverse database
-migrations. Private snapshots used for validation are disposable and are not a
-recovery backup. Before a significant update, create an
+Package updates capture verified SQLite backups before live Doctor migrations.
+The shared database and every discovered agent database are saved beside the
+retained package in `<package-backup>.databases`. Snapshot names use the backup
+archive's source-path layout so their original destinations remain identifiable
+after detailed run history is compacted. The report retains the directory location;
+per-file paths, schema versions, and digests appear in bounded diagnostics. Committed WAL data is included in each
+standalone snapshot. The snapshot volume needs `2 × total SQLite family bytes +
+3 × largest family + 64 MiB` for retained files and working space. Unknown free
+space produces a warning; a measured shortage refuses before migration.
+Each separate source volume also reserves its database-family total plus its
+largest family and 64 MiB for restoration while migrated originals remain.
+Hard-linked database or journal files refuse before migration because restoring
+one pathname cannot safely restore every alias.
+
+If the Gateway was confirmed stopped during capture and the update fails before
+the candidate is allowed to start, restoration also requires matching database
+write evidence. Doctor checks the captured file generations before migrations
+and records their final generations before releasing maintenance ownership.
+Rollback checks those facts again while holding database file exclusions. The
+fingerprints cover database, WAL, and rollback-journal identity, timestamps,
+sizes, and content digests; they reuse the snapshot inventory.
+
+When that evidence matches, the updater restores the databases before restoring
+the package. It holds the
+Gateway lifecycle and database file exclusions, moves migrated files to
+`<database>.migrated-<runId>` (with matching WAL/SHM/journal suffixes), and publishes
+the verified snapshots to the vacant paths. Both snapshots and displaced files
+remain available for manual recovery; their locations appear in the report.
+If package or config restoration is then refused, the Gateway stays stopped and
+both database generations remain available for manual recovery.
+An attempted candidate start, uncertain child termination, unavailable file
+exclusion, or delegated Windows autostart custody prevents silent restoration.
+Those cases retain the existing recovery refusal and its next action.
+Unaccounted changes report `state-migrated-no-rollback`, preserve
+the current databases, and name the retained snapshot directory and `openclaw doctor`
+recovery step. A change before Doctor starts also prevents restoration. The
+comparison cannot identify the writer: later update-history writes can also
+invalidate the evidence. Continuous custody across Doctor subprocesses is not
+provided by this check.
+If Doctor cannot provide write evidence, rollback requires the last verified
+database generations to remain unchanged.
+Snapshots taken while a Gateway may still be writing, including with
+`--no-restart`, remain available for manual recovery with a warning. They never
+become eligible for automatic restoration just because that Gateway later exits.
+
+This protection belongs to the updater already running. Installing it does not
+retrofit the 2026.9.1 or 2026.9.5 driver; it protects subsequent package updates
+run by the repaired driver. It does not replay older full-state checkpoint
+records or replace independent backups. Private snapshots used for validation
+are disposable rehearsal copies. Before a significant update, create an
 [independent verified backup](/install/updating#before-updating-create-a-verified-backup).
 
 Unknown or changed schema/configuration does not authorize a restore. When
@@ -508,8 +563,8 @@ is verified. If activation fails before a working package is confirmed and rollb
 cannot be verified, finalization retains the backup and reports its location. Keep
 that backup and repair the installation before restarting, including for older
 targets without migration continuation. Automatic rollback requires that retained package, its pre-update verification, unchanged
-config content since the activation Doctor pass, and unchanged pre-existing shared and affected per-agent
-SQLite `user_version` values. A database first created during activation or
+config content since the activation Doctor pass, and compatible pre-existing shared and affected per-agent
+SQLite `user_version` values, including databases restored by the pre-start recovery above. A database first created during activation or
 verification is schema-neutral only at the schema version supported by the new installation
 for that database kind; a missing pre-existing database or a new database at a foreign
 version blocks rollback. Newly created databases must also be readable by the
@@ -529,8 +584,8 @@ Operator edits made after activation block
 restoration, including edits before Doctor reads the config or after its last write; the next action names the changed config file. A failure alone does not
 authorize restarting the new version.
 
-If the config file changed after the activation Doctor pass or the databases are
-not schema-neutral, automatic rollback is refused with
+If the config file changed after the activation Doctor pass or migrated databases
+cannot be safely restored before candidate startup, automatic rollback is refused with
 `state-migrated-no-rollback`. The updater preserves the failed outcome and migrated state. If rollback
 itself fails, it retains the package and service recovery diagnostics. Optional
 post-failure [Triage](/cli/triage) starts only after update ownership and service
@@ -810,7 +865,8 @@ the sentinel.
     Requires no uncommitted changes. Local edits fail the clean check before installation or service shutdown; the checkout is preserved. Commit your changes and retry, or run `openclaw triage` for help.
   </Step>
   <Step title="Resolve the target">
-    Selects the channel's tag or branch and fetches upstream as needed. If the resolved target SHA equals `HEAD`, finishes `skipped` with reason `already-current` before staging or stopping the service.
+    Selects the channel's tag or branch and fetches upstream as needed.
+    If the resolved target SHA equals `HEAD` and the installed runtime passes artifact verification, finishes `skipped` with reason `already-current` before staging or stopping the service.
 
     Dev updates fetch only the configured tracking remote for `main`, or the remote identified by an explicit tracked target. Unrelated remotes remain untouched, with a scope warning in update history; their availability cannot fail the update. When no local `main` exists, or an explicit commit or tag needs discovery, candidate remotes may be tried. Failed optional attempts are warnings, and stale refs from failed fetches cannot select a branch. A failed fetch from the configured authority still reports `fetch-failed` before activation. Fetching does not rewrite Git configuration.
 

@@ -521,7 +521,7 @@ export async function runReleasePublishPreflight(
       warn(
         "plugin-npm.token-liveness",
         `${registry.bootstrapCandidates.length} package(s) are not visible in npm and may need the repository NPM_TOKEN bootstrap path; token liveness is unverified locally.`,
-        "Run the isolated npm whoami --registry=https://registry.npmjs.org probe documented in docs/reference/RELEASING.md using the exact repository secret. A local login or secret updated_at is not proof. Do not publish or rotate credentials during preflight.",
+        "Run the isolated npm whoami --registry=https://registry.npmjs.org probe documented in .agents/skills/release-openclaw-maintainer/references/publication-recovery.md#check-the-bootstrap-token using the exact repository secret. A local login or secret updated_at is not proof. Do not publish or rotate credentials during preflight.",
       );
     }
   }

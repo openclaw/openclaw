@@ -15,6 +15,41 @@ import {
 } from "./tunnel.test-support.js";
 
 describe("worker tunnel manager", () => {
+  it("does not materialize a legacy resolver's late identity after the initializing tunnel stops", async () => {
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const fake = fakeRunner();
+    const manager = createWorkerTunnelManager({ runner: fake.runner });
+    const writeFile = vi.spyOn(fs, "writeFile");
+    const starting = manager.start({
+      environmentId: "worker:late-identity",
+      ownerEpoch: 1,
+      bundleHash: "a".repeat(64),
+      ssh: SSH,
+      resolveIdentity: async () => {
+        entered.resolve();
+        await release.promise;
+        return { kind: "material", contents: "synthetic-worker-key" };
+      },
+    });
+    const rejected = expect(starting).rejects.toThrow("no longer connected");
+    try {
+      await entered.promise;
+      const stopping = manager.stop("worker:late-identity", 1);
+      release.resolve();
+      await Promise.all([rejected, stopping]);
+      expect(writeFile).not.toHaveBeenCalled();
+      expect(fake.runs).toEqual([]);
+      expect(fake.starts).toEqual([]);
+      expect(manager.status("worker:late-identity")).toBe("stopped");
+    } finally {
+      release.resolve();
+      await starting.catch(() => undefined);
+      await manager.stopAll();
+      writeFile.mockRestore();
+    }
+  });
+
   it("joins workspace cleanup before reporting a desktop stopAll failure", async () => {
     const identity = deferred<Awaited<ReturnType<typeof resolveIdentity>>>();
     const entered = deferred<void>();

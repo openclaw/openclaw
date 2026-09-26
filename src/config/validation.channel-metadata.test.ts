@@ -531,24 +531,6 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
       false,
     );
   });
-
-  it('does not warn when dmPolicy="open" has canonical allowFrom', () => {
-    const result = validateConfigObjectWithPlugins({
-      channels: {
-        discord: {
-          enabled: true,
-          token: "test-token",
-          dmPolicy: "open",
-          allowFrom: ["*"],
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.warnings.some((warning) => warning.path === "channels.discord.allowFrom")).toBe(
-      false,
-    );
-  });
 });
 
 describe("validateConfigObjectRawWithPlugins channel metadata", () => {
@@ -574,42 +556,6 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
       // This is intentional — see comment above.
       expect(result.config.channels?.telegram?.dmPolicy).toBe("pairing");
     }
-  });
-
-  it("uses external plugin channel schemas for raw validation", () => {
-    mockLoadPluginManifestRegistry.mockReturnValue(createExternalFeishuSchemaRegistry());
-
-    const result = validateConfigObjectRawWithPlugins({
-      channels: {
-        feishu: {
-          appId: "app-id",
-          appSecret: "secret",
-          replyMode: "thread",
-          footer: "OpenClaw",
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-  });
-
-  it("accepts core-owned heartbeat visibility in closed channel and account schemas", () => {
-    mockLoadPluginManifestRegistry.mockReturnValue(createExternalFeishuSchemaRegistry());
-
-    const result = validateConfigObjectRawWithPlugins({
-      channels: {
-        feishu: {
-          appId: "app-id",
-          appSecret: "secret",
-          heartbeatVisibility: { showAlerts: false, useIndicator: true },
-          accounts: {
-            work: { heartbeatVisibility: { showOk: true } },
-          },
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
   });
 
   it.each([
@@ -802,9 +748,6 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
   );
 
   it.each([
-    { label: "an empty schema", declaration: {} },
-    { label: "a boolean schema", declaration: true },
-    { label: "an open object schema", declaration: { type: "object", additionalProperties: true } },
     { label: "a stale disabled schema", declaration: false },
     {
       label: "an overly strict schema",

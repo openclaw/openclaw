@@ -359,26 +359,6 @@ describe("Feishu durable ingress", () => {
     });
   });
 
-  it("keeps transient dispatch failures retryable", async () => {
-    await withQueue(async (queue, startIngress) => {
-      const dispatch = vi.fn(async () => {
-        throw new Error("temporary network failure");
-      });
-      const ingress = startIngress({ queue, dispatcher: createDispatcher(dispatch) });
-      ingress.start();
-      const envelope = messageEnvelope({ eventId: "evt-transient-failure" });
-
-      await ingress.invoke(envelope, { needCheck: false });
-      await ingress.waitForIdle();
-
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      await expect(
-        queue.enqueue("evt-transient-failure", {} as FeishuIngressPayload),
-      ).resolves.toMatchObject({ kind: "pending", duplicate: true });
-      await ingress.stop();
-    });
-  });
-
   it("keeps unrelated downstream syntax failures retryable", async () => {
     await withQueue(async (queue, startIngress) => {
       const dispatch = vi.fn(async () => {

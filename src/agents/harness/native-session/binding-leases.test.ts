@@ -219,4 +219,164 @@ describe("native session binding leases", () => {
     await expect(ownerRun).rejects.toThrow("Lost binding lease");
     expect(values.get(key)?.lease?.token).toBe("peer-owner");
   });
+
+  it("rechecks a replacement row after comparison refusal", async () => {
+    const { state, values } = createBindingTestState();
+    values.set("binding", { value: "original" });
+    const withCurrent = state.withCurrent.bind(state);
+    let replaced = false;
+    state.withCurrent = (authority) => {
+      const store = withCurrent(authority);
+      return {
+        ...store,
+        async compareAndApply(...args) {
+          if (!replaced) {
+            replaced = true;
+            values.set("binding", { value: "successor" });
+          }
+          return await store.compareAndApply(...args);
+        },
+      };
+    };
+    const owner = createNativeSessionBindingLeases(state, bindingTestOptions);
+    await expect(
+      owner.transact("binding", (current) =>
+        current?.value === "original"
+          ? { next: { value: "updated" }, result: true }
+          : { result: false },
+      ),
+    ).resolves.toBe(false);
+    expect(values.get("binding")).toEqual({ value: "successor" });
+  });
+
+  it("does not replay a mutation after storage reports an uncertain outcome", async () => {
+    const { state, values } = createBindingTestState();
+    values.set("binding", { value: "original" });
+    const withCurrent = state.withCurrent.bind(state);
+    state.withCurrent = (authority) => {
+      const store = withCurrent(authority);
+      return {
+        ...store,
+        async compareAndApply(...args) {
+          await store.compareAndApply(...args);
+          throw new Error("storage outcome unknown");
+        },
+      };
+    };
+    const owner = createNativeSessionBindingLeases(state, bindingTestOptions);
+    await expect(
+      owner.transact("binding", (current) => ({
+        next: { value: `${current?.value}:once` },
+        result: true,
+      })),
+    ).rejects.toThrow("storage outcome unknown");
+    expect(values.get("binding")).toEqual({ value: "original:once" });
+  });
+
+  it("reports lease loss even when the callback catches a commit refusal", async () => {
+    vi.useFakeTimers();
+    const { state, values } = createBindingTestState();
+    values.set("binding", { value: "original" });
+    const withCurrent = state.withCurrent.bind(state);
+    let expireBeforeAdmission = false;
+    state.withCurrent = (authority) => {
+      const store = withCurrent(authority);
+      return {
+        ...store,
+        async compareAndApply(...args) {
+          if (expireBeforeAdmission) {
+            expireBeforeAdmission = false;
+            vi.setSystemTime(Date.now() + bindingTestOptions.lease.staleMs + 1);
+          }
+          return await store.compareAndApply(...args);
+        },
+      };
+    };
+    const owner = createNativeSessionBindingLeases(state, bindingTestOptions);
+    await expect(
+      owner.withLease(
+        "binding",
+        async () => {
+          expireBeforeAdmission = true;
+          await expect(
+            owner.transact("binding", (current) => ({
+              next: { ...current, value: "unauthorized" },
+              result: true,
+            })),
+          ).rejects.toThrow("Lost binding lease");
+          return "callback completed";
+        },
+        { prepareLease: prepareBindingTestLease },
+      ),
+    ).rejects.toThrow("Lost binding lease");
+    expect(values.get("binding")).toEqual({ value: "original" });
+  });
+
+  it("joins queued renewal before releasing a failed owner", async () => {
+    vi.useFakeTimers();
+    const { state, values } = createBindingTestState();
+    values.set("binding", { value: "original" });
+    const withCurrent = state.withCurrent.bind(state);
+    let holdRenewal = false;
+    let releaseObservation!: () => void;
+    const observationReleased = new Promise<void>((resolve) => {
+      releaseObservation = resolve;
+    });
+    state.withCurrent = (authority) => {
+      const store = withCurrent(authority);
+      return {
+        ...store,
+        async observe(key) {
+          if (holdRenewal) {
+            holdRenewal = false;
+            await observationReleased;
+          }
+          return await store.observe(key);
+        },
+      };
+    };
+    const owner = createNativeSessionBindingLeases(state, bindingTestOptions);
+    let started!: () => void;
+    const ownerStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let finish!: () => void;
+    const finishRun = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let settled = false;
+    const run = owner
+      .withLease(
+        "binding",
+        async () => {
+          holdRenewal = true;
+          started();
+          await finishRun;
+          throw new Error("native request failed");
+        },
+        { prepareLease: prepareBindingTestLease },
+      )
+      .then(
+        () => {
+          settled = true;
+          return undefined;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+    await ownerStarted;
+    await vi.advanceTimersByTimeAsync(bindingTestOptions.lease.renewIntervalMs);
+    try {
+      finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+    } finally {
+      releaseObservation();
+      await run;
+    }
+    expect(await run).toEqual(new Error("native request failed"));
+    expect(values.get("binding")).toEqual({ value: "original" });
+  });
 });

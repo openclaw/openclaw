@@ -22,6 +22,7 @@ import {
 import { clearAgentRunContext, getAgentRunContext } from "../infra/agent-run-registry.js";
 import { captureAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -95,6 +96,7 @@ function dispatchEventHandler<TEvent>(params: {
 
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
 export function startGatewayEventSubscriptions(params: {
+  scheduler: GatewayScheduler;
   signal: AbortSignal;
   log: SubsystemLogger;
   broadcast: GatewayBroadcastFn;
@@ -146,6 +148,7 @@ export function startGatewayEventSubscriptions(params: {
   reconcileAuditPolicy(getRuntimeConfig());
   const sessionActivitySummaries = createSessionActivitySummaries({
     getConfig: getRuntimeConfig,
+    getSessionRowProjection: params.getSessionRowProjection,
     onChanged: (target) => {
       const publication = broadcastSessionActivitySummary(target, params).catch((error: unknown) =>
         params.log.warn("Activity summary publication failed", { error }),
@@ -161,6 +164,7 @@ export function startGatewayEventSubscriptions(params: {
     broadcastToConnIds: params.broadcastToConnIds,
   });
   const sessionCompanion = createSessionCompanion({
+    scheduler: params.scheduler,
     contextReader: defaultSessionCompanionContextReader,
     getConfig: getRuntimeConfig,
     sessionObserver,

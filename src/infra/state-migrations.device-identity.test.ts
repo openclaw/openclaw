@@ -3,6 +3,7 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { configureFsSafeNative } from "@openclaw/fs-safe/config";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -857,4 +858,35 @@ describe("legacy device identity Doctor migration", () => {
       source_sha256: createHash("sha256").update(bytes).digest("hex"),
     });
   });
+
+  it.each(["source", "interrupted link pair"])(
+    "migrates legacy device identity from %s when native fs-safe mode is off",
+    async (initialState) => {
+      configureFsSafeNative({ mode: "off" });
+      try {
+        const { env, stateDir } = useStateDir();
+        const sourcePath = await writeLegacy({ stateDir });
+
+        if (initialState === "interrupted link pair") {
+          await fsp.link(sourcePath, `${sourcePath}.doctor-importing`);
+        }
+
+        const result = await migrate(stateDir, env);
+
+        expect(result.warnings).toEqual([]);
+        expect(result.changes).toEqual(["Migrated primary device identity to SQLite."]);
+        expect(fs.existsSync(sourcePath)).toBe(false);
+        expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
+        expect(identityRow(env)).toMatchObject({
+          identity_key: "primary",
+          device_id: normalizedSwift().deviceId,
+          public_key_pem: normalizedSwift().publicKeyPem,
+          private_key_pem: normalizedSwift().privateKeyPem,
+        });
+        expect(receipt(env)).toMatchObject({ removed_source: 1 });
+      } finally {
+        configureFsSafeNative({ mode: "auto" });
+      }
+    },
+  );
 });

@@ -39,6 +39,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
     ((input.command.type === "deliveryQueue.outbound" &&
       (input.command.id === undefined || typeof input.command.id === "string") &&
       (input.command.mode === "pending" || input.command.mode === "unfinished")) ||
+      input.command.type === "acpSessions.list" ||
       (input.command.type === "acpSessions.metadata" &&
         Array.isArray(input.command.entries) &&
         input.command.entries.length <= 64 &&
@@ -112,6 +113,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           (Array.isArray(input.command.input)
             ? Array.from(input.command.input).every(isTaskSnapshotScope)
             : isTaskSnapshotScope(input.command.input)))) ||
+      (input.command.type === "tasks.retentionSource" &&
+        typeof input.command.taskId === "string") ||
       (input.command.type === "subagents.runs" &&
         isRecord(input.command.scope) &&
         ((input.command.scope.kind === "session" &&
@@ -149,6 +152,10 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
             typeof input.command.input.cursor.changedAtMs === "number" &&
             typeof input.command.input.cursor.environmentId === "string"))) ||
       input.command.type === "userProfiles.catalog" ||
+      (input.command.type === "userPreferences.values" &&
+        typeof input.command.key === "string" &&
+        Array.isArray(input.command.profileIds) &&
+        input.command.profileIds.every((id) => typeof id === "string")) ||
       input.command.type === "config.snapshot.read" ||
       (input.command.type === "githubPublication.lifecycle" &&
         (input.command.publicationKind === "shared" ||
@@ -160,8 +167,15 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       ((input.command.type === "githubPublication.knownPullRequestUrls" ||
         input.command.type === "githubRepository.knownPullRequestUrls") &&
         isRecord(input.command.input)) ||
-      (input.command.type === "userProfiles.reconcile" &&
+      ((input.command.type === "userProfiles.reconcile" ||
+        input.command.type === "userProfiles.avatar.inspect") &&
         typeof input.command.profileId === "string") ||
+      (input.command.type === "userProfiles.avatar.read" &&
+        typeof input.command.profileId === "string" &&
+        isRecord(input.command.expected) &&
+        typeof input.command.expected.canonicalProfileId === "string" &&
+        typeof input.command.expected.sha256 === "string" &&
+        typeof input.command.expected.mime === "string") ||
       (input.command.type === "userProfiles.channelIdentity.list" &&
         typeof input.command.profileId === "string") ||
       (input.command.type === "userProfiles.authority.resolve" &&

@@ -1,12 +1,10 @@
 // Projects detached exec processes into the durable task ledger used by clients.
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  backgroundCommandTaskContent,
-  backgroundCommandTaskSummary,
-} from "../tasks/background-command-task-content.js";
+import { backgroundCommandTaskContent } from "../tasks/background-command-task-content.js";
 import { BACKGROUND_EXEC_TASK_KIND } from "../tasks/background-exec-task-contract.js";
 import type { DetachedTaskTerminalState } from "../tasks/detached-task-runtime-contract.js";
 import { prepareRunningTaskRun } from "../tasks/detached-task-runtime.js";
+import { backgroundCommandTaskSummary } from "../tasks/task-content.js";
 import { getTaskRunOwner } from "../tasks/task-run-owner.js";
 import type { ExecProcessOutcome } from "./bash-tools.exec-types.js";
 

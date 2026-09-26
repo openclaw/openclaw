@@ -12,7 +12,6 @@ import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.defaul
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { AgentRouteBinding } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { shouldResumeParentSubagent } from "../../gateway/session-subagent-resume.js";
@@ -27,7 +26,6 @@ import {
   lookupFailedOperationMessage,
   sessionOwnershipLookupFailure,
 } from "../../plugin-sdk/session-visibility-internal.js";
-import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
@@ -52,7 +50,6 @@ import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
-import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
 import {
   type AgentWaitResult,
   isTerminalAgentWaitTimeout,
@@ -70,7 +67,6 @@ import {
   callAgentToolGatewayRequest,
   callInProcessGatewayToolWithCreation,
   hasInProcessGatewayToolContext,
-  runWithGatewayToolContinuationContext,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
@@ -85,11 +81,14 @@ import {
   resolveSessionToolContext,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
+import {
+  prepareSessionsSendFollowup,
+  startSessionsSendFollowup,
+} from "./sessions-send-followup.js";
 import { buildAgentToAgentMessageContext } from "./sessions-send-helpers.js";
+import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
 import { captureSessionsSendResumeCaller, resumeSessionsSendTask } from "./sessions-send-resume.js";
-import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 import { normalizeSessionsSendArguments } from "./sessions-send-tool.arguments.js";
-import { startSessionsSendAgentRun } from "./sessions-send-tool.delivery.js";
 import { SessionsSendToolSchema, SessionsSendOutputSchema } from "./sessions-send-tool.schema.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
@@ -836,27 +835,62 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 ? "one-way"
                 : "peer";
 
-          const start = await startSessionsSendAgentRun({
-            cfg,
+          const followup =
+            replyMode === "one-way" &&
+            mode !== "steer" &&
+            targetSessionEntry?.spawnedBy === effectiveRequesterKey &&
+            // Key-only DM rerouting keeps its run-scoped contract, not new authority for another key.
+            replyRequesterSessionKey === effectiveRequesterKey &&
+            replyRequesterSessionKey
+              ? await prepareSessionsSendFollowup({
+                  runId,
+                  requesterAgentId,
+                  requesterSessionKey: replyRequesterSessionKey,
+                  targetAgentId,
+                  targetSessionKey: resolvedKey,
+                })
+              : undefined;
+          const replyContext: Parameters<typeof startSessionsSendFollowup>[2] = {
             callGateway: gatewayCall,
-            runId,
-            mode,
-            sendParams,
-            sourceOrigin: sameSession ? requesterOrigin : undefined,
-            sessionKey: mode ? resolvedKey : displayKey,
-            sessionStoreTarget: targetSession,
-            deliveryTimeoutMs: announceTimeoutMs,
-            ...(timeoutSeconds === 0
-              ? {
-                  allowActiveRunQueueDelivery: true,
-                  // An exact-incarnation grant authorizes only this target. Never
-                  // reroute a worker-owned send to a durable Cron parent outside
-                  // the scoped lifecycle admission or replace its stable key.
-                  allowActiveRunQueueFallback: !expectedSessionId,
-                  expectedSessionId,
-                }
-              : {}),
-          });
+            targetSessionKey: resolvedKey,
+            targetAgentId,
+            displayKey,
+            message,
+            announceTimeoutMs,
+            maxPingPongTurns: isIsolatedCronRequester ? 0 : 5,
+            replyMode,
+            requesterSessionKey: replyRequesterSessionKey,
+            requesterAgentId,
+            requesterSession: requesterContinuationSession,
+            requesterDeliveryGeneration,
+            requesterOrigin,
+            requesterChannel,
+          };
+          const { start, completion } = await startSessionsSendFollowup(
+            followup,
+            {
+              cfg,
+              callGateway: gatewayCall,
+              runId,
+              mode,
+              sendParams,
+              sourceOrigin: sameSession ? requesterOrigin : undefined,
+              sessionKey: mode ? resolvedKey : displayKey,
+              sessionStoreTarget: targetSession,
+              deliveryTimeoutMs: announceTimeoutMs,
+              ...(timeoutSeconds === 0
+                ? {
+                    allowActiveRunQueueDelivery: true,
+                    // An exact-incarnation grant authorizes only this target. Never
+                    // reroute a worker-owned send to a durable Cron parent outside
+                    // the scoped lifecycle admission or replace its stable key.
+                    allowActiveRunQueueFallback: !expectedSessionId,
+                    expectedSessionId,
+                  }
+                : {}),
+            },
+            replyContext,
+          );
           if (!start.ok) {
             return start.result;
           }
@@ -913,50 +947,18 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           }: {
             reply?: Awaited<ReturnType<typeof waitForAgentRunReply>>;
             notifyRequesterOnWaitFailure?: boolean;
-          }) => {
-            if ((reply ? delivery : delayedDelivery).status === "skipped") {
-              return;
-            }
-            // Detached turns must not retain the caller's resource or runtime generation scope.
-            void runWithGatewayToolContinuationContext(() =>
-              runWithGatewayDetachedWorkContinuation(
-                () =>
-                  runOutsidePreparedModelRuntimePluginGenerationScope(() =>
-                    runWithoutOwnedSessionTranscriptWrites(() =>
-                      runSessionsSendA2AFlow({
-                        callGateway: gatewayCall,
-                        targetSessionKey: acceptedTargetSessionKey,
-                        targetAgentId,
-                        displayKey: start.a2aSessionKey ?? displayKey,
-                        message,
-                        announceTimeoutMs,
-                        // Isolated Cron jobs retain target announcements without requester turns.
-                        maxPingPongTurns: isIsolatedCronRequester ? 0 : 5,
-                        replyMode,
-                        requesterSessionKey: replyRequesterSessionKey,
-                        requesterAgentId,
-                        requesterSession: requesterContinuationSession,
-                        requesterDeliveryGeneration,
-                        requesterOrigin,
-                        requesterChannel,
-                        roundOneReply: reply?.replyText,
-                        sourceReplyDelivered: reply?.sourceReplyDelivered,
-                        waitRunId: reply ? undefined : runId,
-                        replyRunId: runId,
-                        notifyRequesterOnWaitFailure:
-                          notifyRequesterOnWaitFailure && !isIsolatedCronRequester,
-                      }),
-                    ),
-                  ),
-                "session:a2a-send",
-              ),
-            ).catch((err: unknown) => {
-              log.warn("sessions_send announce flow admission failed", {
-                runId,
-                error: formatErrorMessage(err),
-              });
+          }) =>
+            startSessionsSendReplyFlow({
+              ...replyContext,
+              runId,
+              completion,
+              reply,
+              skip: (reply ? delivery : delayedDelivery).status === "skipped",
+              targetSessionKey: acceptedTargetSessionKey,
+              displayKey: start.a2aSessionKey ?? displayKey,
+              notifyRequesterOnWaitFailure:
+                notifyRequesterOnWaitFailure && !isIsolatedCronRequester,
             });
-          };
           if (timeoutSeconds === 0) {
             startReplyFlow({ notifyRequesterOnWaitFailure: true });
             return jsonResult({
@@ -969,11 +971,21 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             });
           }
 
-          const result = await waitForAgentRunReply({
-            runId,
-            timeoutMs,
-            callGateway: gatewayCall,
-          });
+          const result = completion
+            ? await completion.take(timeoutMs)
+            : await waitForAgentRunReply({ runId, timeoutMs, callGateway: gatewayCall });
+          if (!result) {
+            startReplyFlow({ notifyRequesterOnWaitFailure: true });
+            return jsonResult({
+              runId,
+              status: "accepted",
+              sessionKey: displayKey,
+              targetDisposition: start.targetDisposition,
+              delivery: delayedDelivery,
+              ...watchField,
+            });
+          }
+          completion?.close();
 
           if (result.status === "timeout") {
             if (isPendingErrorAgentWaitTimeout(result)) {

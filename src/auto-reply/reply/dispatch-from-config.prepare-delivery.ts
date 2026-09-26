@@ -214,12 +214,6 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
   const isRoutedReplyDelivered = (result: { delivered: boolean; ambiguous?: boolean }) =>
     result.delivered && result.ambiguous !== true;
 
-  /**
-   * Helper to send a payload via route-reply (async).
-   * Only used when actually routing to a different provider.
-   * Note: Only called when shouldRouteToOriginating is true, so
-   * routeReplyChannel and routeReplyTo are guaranteed to be defined.
-   */
   const sendReplyOperationAsync = async (
     operation: ReplyDispatchOperation,
     abortSignal?: AbortSignal,
@@ -228,8 +222,6 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     deliveryIntentId?: string,
   ) => {
     const payload = operation.kind === "prepared" ? operation.plan.payload : operation.payload;
-    // Keep the runtime guard explicit because this helper is called from nested
-    // reply callbacks where TypeScript cannot narrow shouldRouteToOriginating.
     if (!routeReplyRuntime && !deliveryIntentId) {
       return null;
     }
@@ -299,9 +291,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       return result.delivered || result.suppressed === true;
     }
     markInboundDedupeReplayUnsafe();
-    return mode === "additive"
-      ? turnLedger.sendQueued("tool", bindingPayload).queued
-      : turnLedger.sendQueued("final", bindingPayload).queued;
+    return turnLedger.sendQueued(mode === "additive" ? "tool" : "final", bindingPayload).queued;
   };
   const nextState = Object.assign(state, {
     suppressAcpChildUserDelivery,
@@ -324,8 +314,6 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
   return { status: "ready" as const, state: nextState };
 }
 
-type PrepareDispatchDeliveryResult = Awaited<ReturnType<typeof prepareDispatchDelivery>>;
-export type PrepareDispatchDeliveryReadyState = Extract<
-  PrepareDispatchDeliveryResult,
-  { status: "ready" }
+export type PrepareDispatchDeliveryReadyState = Awaited<
+  ReturnType<typeof prepareDispatchDelivery>
 >["state"];

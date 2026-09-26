@@ -6,6 +6,7 @@
  */
 import path from "node:path";
 import { Type } from "typebox";
+import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   isSystemAgentNavigationOperation,
@@ -16,6 +17,7 @@ import {
   isPersistentSystemAgentOperation,
   SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF,
   SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF,
+  secretStoreNameForConfigPath,
   type SystemAgentOperation,
 } from "../../system-agent/operations.js";
 import {
@@ -166,6 +168,7 @@ const SYSTEM_AGENT_TOOL_ACTIONS = [
   "setup",
   "set_default_model",
   "config_set",
+  "config_unset",
   "config_set_ref",
   "create_agent",
   "create_team",
@@ -192,7 +195,15 @@ const SystemAgentToolSchema = Type.Object({
     }),
   ),
   value: Type.Optional(Type.String({ description: "Value for config_set (JSON5 or string)" })),
-  envVar: Type.Optional(Type.String({ description: "Env var name for config_set_ref" })),
+  envVar: Type.Optional(
+    Type.String({ description: "Env var name for config_set_ref (instead of secret)" }),
+  ),
+  secret: Type.Optional(
+    Type.String({
+      description:
+        "For config_set_ref: an API key or token the user gave you. OpenClaw stores it in its secret store and points the config key at it.",
+    }),
+  ),
   model: Type.Optional(Type.String({ description: "provider/model ref" })),
   workspace: Type.Optional(Type.String({ description: "Workspace directory" })),
   agentId: Type.Optional(
@@ -417,19 +428,40 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
         ...(workspaceRoot ? { workspaceRoot } : {}),
       };
     }
+    case "config_unset":
+      return { kind: "config-unset", path: requireParam(params, "path") };
     case "config_set":
       return {
         kind: "config-set",
         path: requireParam(params, "path"),
         value: requireParam(params, "value"),
       };
-    case "config_set_ref":
+    case "config_set_ref": {
+      const configPath = requireParam(params, "path");
+      const secret = readToolStringParam(params, "secret", { trim: false });
+      if (!secret?.trim()) {
+        return {
+          kind: "config-set-ref",
+          path: configPath,
+          source: "env",
+          id: requireParam(params, "envVar"),
+        };
+      }
+      // Before the proposal exists anywhere, so plans, logs, and transcripts mask it.
+      registerSecretValueForRedaction(secret);
+      if (readToolStringParam(params, "envVar")) {
+        throw new ToolInputError(
+          "openclaw: config_set_ref accepts either secret or envVar, not both",
+        );
+      }
       return {
         kind: "config-set-ref",
-        path: requireParam(params, "path"),
-        source: "env",
-        id: requireParam(params, "envVar"),
+        path: configPath,
+        source: "store",
+        id: secretStoreNameForConfigPath(configPath),
+        secret,
       };
+    }
     default:
       throw new ToolInputError(`openclaw: unknown action "${action}"`);
   }
@@ -445,12 +477,12 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
     description: [
       "System agent. Setup, config, channels, plugins, agents, repair.",
       "Read now: status, models, agents, channels, channel_info, config_get, config_schema, gateway_status, plugin_list, plugin_search, validate_config, doctor, audit.",
-      "Handoff: connect_channel, configure_skills, configure_search, configure_gateway, import_memory; open_setup target=channels|search|gateway; open_agent. connect_channel/open_setup collect credentials (channel tokens, API keys, passwords) through masked flows; never request them in chat.",
-      "Model providers: configure_model_provider returns protected Settings → Models sign-in guidance without changing credentials or selecting a model. Personal accounts: manage_model_accounts opens the human-owned account controls. Never request credentials in chat.",
-      "Write: setup, set_default_model (agentId optional; live-tested), config_set, config_set_ref, create_agent (optional role), create_team, gateway_*, plugin_install, plugin_activate_artifact, plugin_uninstall. Submit the exact proposal first. Direct chat: exact user approval, then approved=true. Delegated requests: host applies session permission policy and returns the final outcome. Host applies after turn; rechecks inference owner.",
+      "Handoff: connect_channel, configure_skills, configure_search (web search), configure_gateway, import_memory; open_setup target=channels|search|gateway; open_agent. These open interactive setup flows.",
+      "Model providers: configure_model_provider returns Settings → Models sign-in guidance for provider accounts and OAuth. Personal accounts: manage_model_accounts opens the account controls.",
+      "Write: setup, set_default_model (agentId optional; live-tested), config_set, config_unset, config_set_ref, create_agent (optional role), create_team, gateway_*, plugin_install, plugin_activate_artifact, plugin_uninstall. Submit the exact proposal first. Direct chat: exact user approval, then approved=true. Delegated requests: host applies session permission policy and returns the final outcome. Host applies after turn; rechecks inference owner.",
       "plugin_install: ClawHub/bundled/official only. Arbitrary source: exit, trusted shell.",
       "plugin_activate_artifact: for a task-authored plugin built with openclaw plugins pack, pass its absolute archive path and sha256. Copies and reviews exact bytes before proposing; approval includes trusted backend code, declared capabilities, and native UI. No dependency fetching. Backend activation requires Gateway restart. Native UI separately requires enabling Settings > Labs > Custom plugin UI, then Gateway restart and browser reload; artifact approval does not enable Labs.",
-      "Unknown config: config_schema first. Config writes are proposed, approved, then checked by the canonical config validator and writer. Validation or write errors return to you; propose one correction for fresh approval. Config writes do not test whether a model route or API key works. For secrets, follow the user's storage preference; use config_set_ref for env storage. Never echo secret values. set_default_model is the shortcut for switching the primary model.",
+      "Unknown config: config_schema first. Remove a setting with config_unset and path; setting null is not deletion. Config writes are proposed, approved, then checked by the canonical config validator and writer. Validation or write errors return to you; propose one correction for fresh approval. Config writes do not test whether a model route or API key works. API keys and tokens the user gives you: config_set_ref with path and secret saves the value in the secret store and points that key at it (for example models.providers.<id>.apiKey, memory.search.remote.apiKey, or a web search provider's apiKey); config_set_ref with envVar points it at an environment variable instead. Never echo secret values. Memory embeddings are memory.search.* (config_set), not web search. set_default_model is the shortcut for switching the primary model.",
       "No doctor repair. Writes validated, audited. Invalid config: fix now.",
     ].join(" "),
     parameters: SystemAgentToolSchema,
@@ -469,7 +501,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
         }
         if (directive.kind === "model-accounts") {
           return textResult(
-            `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host hands the user to personal model account controls. Nothing has changed yet. The user completes sign-in or selects a default there; never request, repeat, or put credentials in chat.`,
+            `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host hands the user to personal model account controls. Nothing has changed yet. The user completes sign-in or selects a default there.`,
             {},
           );
         }

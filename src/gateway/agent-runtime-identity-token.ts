@@ -15,7 +15,10 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
-import { ensureExecApprovalsSnapshot, loadExecApprovalsAsync } from "../infra/exec-approvals.js";
+import {
+  ensureExecApprovalsSnapshot,
+  loadExecApprovalsReadOnlyAsync,
+} from "../infra/exec-approvals-store.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
@@ -270,7 +273,7 @@ function decodeDelegatedAuthority(
 }
 
 async function readSharedAgentRuntimeIdentitySecret(): Promise<string | null> {
-  return (await loadExecApprovalsAsync()).socket?.token?.trim() || null;
+  return (await loadExecApprovalsReadOnlyAsync()).socket?.token?.trim() || null;
 }
 
 async function requireSharedAgentRuntimeIdentitySecret(): Promise<string> {

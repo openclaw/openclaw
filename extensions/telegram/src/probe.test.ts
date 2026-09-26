@@ -12,7 +12,8 @@ vi.mock("./fetch.js", () => ({
     apiRoot?.trim()?.replace(/\/+$/, "") || "https://api.telegram.org",
 }));
 
-vi.mock("./proxy.js", () => ({
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>()),
   makeProxyFetch,
 }));
 

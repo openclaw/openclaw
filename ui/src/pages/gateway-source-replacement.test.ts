@@ -27,7 +27,6 @@ import "./logs/logs-page.ts";
 import "./model-providers/model-providers-page.ts";
 import "./sessions/sessions-page.ts";
 import "./skills/skills-page.ts";
-import "./tasks/tasks-page.ts";
 import "./usage/usage-page.ts";
 
 // Mirrors the module-private default usage TTL asserted below.
@@ -1025,25 +1024,5 @@ describe("gateway source replacement across reconnect with a reused client", () 
 
     expect(page.cron.cronStatus).toBeNull();
     expect(page.cron.cronJobs).toEqual([]);
-  });
-
-  it("clears tasks loaded by the previous provider", async () => {
-    const client = {} as GatewayBrowserClient;
-    const page = createPage("openclaw-tasks-page", contextWithClient(client)) as TestPage & {
-      tasks: unknown[];
-      error: string | null;
-      cancellingTaskIds: Set<string>;
-    };
-    document.body.append(page);
-    await page.updateComplete;
-    page.tasks = [{ taskId: "old" }];
-    page.error = "old error";
-    page.cancellingTaskIds = new Set(["old"]);
-
-    await replaceContext(page, client);
-
-    expect(page.tasks).toEqual([]);
-    expect(page.error).toBeNull();
-    expect(page.cancellingTaskIds.size).toBe(0);
   });
 });

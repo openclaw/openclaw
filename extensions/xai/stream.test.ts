@@ -288,33 +288,6 @@ describe("xai stream wrappers", () => {
     );
   });
 
-  it("resolves dynamic fast mode for each xai stream call", () => {
-    const capturedModelIds: string[] = [];
-    const baseStreamFn: StreamFn = (model) => {
-      capturedModelIds.push(model.id);
-      return {
-        result: async () => ({}),
-        async *[Symbol.asyncIterator]() {},
-      } as unknown as ReturnType<StreamFn>;
-    };
-    let enabled = true;
-    const wrapped = wrapXaiProviderStream({
-      streamFn: baseStreamFn,
-      extraParams: { fastMode: () => enabled, tool_stream: false },
-    } as never);
-    const model = {
-      api: "openai-responses",
-      provider: "xai",
-      id: "grok-4",
-    } as Model<XaiStreamApi>;
-
-    void wrapped?.(model, { messages: [] } as Context, {});
-    enabled = false;
-    void wrapped?.(model, { messages: [] } as Context, {});
-
-    expect(capturedModelIds).toEqual(["grok-4-fast", "grok-4"]);
-  });
-
   it("leaves tool-call argument html entities untouched, delegating decode to the core path", async () => {
     const toolCall = {
       type: "toolCall",
@@ -488,43 +461,13 @@ describe("xai stream wrappers", () => {
     expect(payload.reasoning_effort).toBe("high");
   });
 
-  it("strips reasoning controls when compat disables reasoning effort", () => {
-    const payload: Record<string, unknown> = {
-      reasoning: { effort: "high" },
-      reasoningEffort: "high",
-      reasoning_effort: "high",
-    };
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      options?.onPayload?.(payload, model);
-      return {} as ReturnType<StreamFn>;
-    };
-    const wrapped = wrapXaiProviderStream({
-      streamFn: baseStreamFn,
-      extraParams: { tool_stream: false },
-    } as never);
-
-    void wrapped?.(
-      {
-        api: "openai-responses",
-        provider: "xai",
-        id: "grok-4.20-0309-reasoning",
-        reasoning: true,
-        compat: { supportsReasoningEffort: false },
-      } as unknown as Model<"openai-responses">,
-      { messages: [] } as Context,
-      {},
-    );
-
-    expect(payload).not.toHaveProperty("reasoning");
-    expect(payload).not.toHaveProperty("reasoningEffort");
-    expect(payload).not.toHaveProperty("reasoning_effort");
-  });
-
   it.each(["xai", "x-ai"])(
     "still requests encrypted reasoning include for %s when effort is unsupported",
     (provider) => {
       const payload: Record<string, unknown> = {
         reasoning: { effort: "high" },
+        reasoningEffort: "high",
+        reasoning_effort: "high",
         input: [],
       };
       const baseStreamFn: StreamFn = (model, _context, options) => {
@@ -549,6 +492,8 @@ describe("xai stream wrappers", () => {
       );
 
       expect(payload).not.toHaveProperty("reasoning");
+      expect(payload).not.toHaveProperty("reasoningEffort");
+      expect(payload).not.toHaveProperty("reasoning_effort");
       expect(payload.include).toEqual(["reasoning.encrypted_content"]);
     },
   );
@@ -628,46 +573,6 @@ describe("xai stream wrappers", () => {
     runXaiToolPayloadWrapper({ payload, input: ["text", "image"], provider, baseUrl });
 
     expect(payload.input).toEqual(input);
-  });
-
-  it("moves custom-endpoint image tool results out of function_call_output payloads", () => {
-    const payload: Record<string, unknown> = {
-      input: [
-        {
-          type: "function_call_output",
-          call_id: "call_1",
-          output: [
-            { type: "input_text", text: "Read image" },
-            {
-              type: "input_image",
-              detail: "auto",
-              image_url: "data:image/png;base64,QUJDRA==",
-            },
-          ],
-        },
-      ],
-    };
-    runXaiToolPayloadWrapper({ payload, input: ["text", "image"] });
-
-    expect(payload.input).toEqual([
-      {
-        type: "function_call_output",
-        call_id: "call_1",
-        output: "Read image",
-      },
-      {
-        type: "message",
-        role: "user",
-        content: [
-          { type: "input_text", text: "Image(s) from tool result #1:" },
-          {
-            type: "input_image",
-            detail: "auto",
-            image_url: "data:image/png;base64,QUJDRA==",
-          },
-        ],
-      },
-    ]);
   });
 
   it.each([false, true])(

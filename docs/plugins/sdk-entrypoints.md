@@ -219,6 +219,37 @@ This adapter does not implement remote Skill source install/update/remove or
 ClawHub lifecycle operations; those remain tracked in
 [Enterprise #242](https://github.com/openclaw/openclaw-enterprise/issues/242).
 
+## Agent workspace context
+
+Native harnesses use `prepareAgentWorkspaceContext` from
+`openclaw/plugin-sdk/agent-harness-runtime` to prepare bounded workspace context.
+The shared owner runs the existing bootstrap hooks, privacy filters, and character
+budgets. `scope: "full"` separates the agent instruction snapshot, persona,
+remaining project context, and tool-routed memory references. It prepares recall
+guidance through the active memory plugin without inventing fallback policy.
+`scope: "instructions-only"` selects the configured workspace's root `AGENTS.md`
+before budgeting and does not prepare persona or memory guidance.
+
+Provider adapters own native project-document discovery, available memory tools,
+path projection, context order, instruction carriers, and session/turn lifetimes.
+Optional `projectPath` projects file paths after budgeting without changing their
+contents or personal-user provenance. It describes existing execution placement;
+it does not transfer or mount files.
+Full-context preparation preserves Codex's existing selection timing: projecting
+the root instruction path away from `workspaceDir` produces an empty root snapshot.
+Callers preparing source-workspace instructions should omit `projectPath`.
+
+`buildAgentWorkspaceInstructionSnapshot(contextFiles, workspaceDir)` selects and
+renders that root instruction document from already-bounded context, including
+hook-free child preparation. An empty instruction string is a successful capture;
+preparation failures must remain distinguishable and retryable.
+
+Agents API can consume the instruction-only snapshot at session creation. Its
+current client does not implement per-turn developer instructions, persona and
+personal-overlay refresh, turn-scoped project or memory guidance, native forks,
+or Gateway-to-hosted-workspace path projection. Those remain MVP integration gaps;
+shared preparation does not enable those operations.
+
 ## Tool failure diagnostics
 
 Agent harnesses can import `readToolOperatorHint(error)` from

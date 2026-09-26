@@ -165,11 +165,7 @@ function partitionTelegramPresentationBlocks(params: {
   const fallbackBlocks: MessagePresentation["blocks"] = [];
   const nativeControlBlocks: MessagePresentationInteractiveBlock[] = [];
   for (const block of params.presentation.blocks) {
-    if (!isMessagePresentationInteractiveBlock(block)) {
-      fallbackBlocks.push(block);
-      continue;
-    }
-    if (!params.presentationControlsSelected) {
+    if (!params.presentationControlsSelected || !isMessagePresentationInteractiveBlock(block)) {
       fallbackBlocks.push(block);
       continue;
     }

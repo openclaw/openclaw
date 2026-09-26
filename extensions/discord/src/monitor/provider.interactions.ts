@@ -122,21 +122,22 @@ export function createDiscordProviderInteractionSurface(params: {
     });
   }
 
+  const componentContext = {
+    readPolicy: params.readPolicy,
+    cfg: params.cfg,
+    accountId: params.accountId,
+    discordConfig: params.discordConfig,
+    runtime: params.runtime,
+    token: params.token,
+    guildEntries: params.guildEntries,
+    allowFrom: params.allowFrom,
+    dmPolicy: params.dmPolicy,
+  };
   const components: BaseMessageInteractiveComponent[] = [
     createDiscordQuestionButton({
       cfg: params.cfg,
       accountId: params.accountId,
-      authContext: {
-        readPolicy: params.readPolicy,
-        cfg: params.cfg,
-        accountId: params.accountId,
-        discordConfig: params.discordConfig,
-        runtime: params.runtime,
-        token: params.token,
-        guildEntries: params.guildEntries,
-        allowFrom: params.allowFrom,
-        dmPolicy: params.dmPolicy,
-      },
+      authContext: componentContext,
     }),
     ...[
       createDiscordCommandArgFallbackButton,
@@ -157,16 +158,8 @@ export function createDiscordProviderInteractionSurface(params: {
   ];
   const activityButton = createDiscordActivityButton(
     {
-      readPolicy: params.readPolicy,
-      cfg: params.cfg,
-      discordConfig: params.discordConfig,
-      accountId: params.accountId,
-      guildEntries: params.guildEntries,
-      allowFrom: params.allowFrom,
-      dmPolicy: params.dmPolicy,
-      runtime: params.runtime,
+      ...componentContext,
       channelRuntime: params.channelRuntime,
-      token: params.token,
     },
     params.applicationId,
   );
@@ -189,17 +182,6 @@ export function createDiscordProviderInteractionSurface(params: {
 
   const agentComponentsConfig = params.discordConfig.agentComponents ?? {};
   if (agentComponentsConfig.enabled ?? true) {
-    const componentContext = {
-      readPolicy: params.readPolicy,
-      cfg: params.cfg,
-      discordConfig: params.discordConfig,
-      accountId: params.accountId,
-      guildEntries: params.guildEntries,
-      allowFrom: params.allowFrom,
-      dmPolicy: params.dmPolicy,
-      runtime: params.runtime,
-      token: params.token,
-    };
     components.push(...createAgentComponentControls.map((create) => create(componentContext)));
     components.push(...createDiscordComponentControls.map((create) => create(componentContext)));
     modals.push(createDiscordComponentModal(componentContext));

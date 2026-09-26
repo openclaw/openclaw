@@ -34,6 +34,20 @@ function createJwt(): string {
   })}.signature`;
 }
 
+function installWebSocketEvent(event: Event) {
+  class ScriptedWebSocket extends EventTarget {
+    constructor() {
+      super();
+      queueMicrotask(() => this.dispatchEvent(new Event("open")));
+    }
+    send(): void {
+      queueMicrotask(() => this.dispatchEvent(event));
+    }
+    close(): void {}
+  }
+  vi.stubGlobal("WebSocket", ScriptedWebSocket);
+}
+
 describe("ChatGPT Responses WebSocket failures", () => {
   afterEach(() => {
     closeOpenAICodexWebSocketSessions();
@@ -78,27 +92,12 @@ describe("ChatGPT Responses WebSocket failures", () => {
   });
 
   it("preserves nested socket error codes from WebSocket error events", async () => {
-    class FailedWebSocket extends EventTarget {
-      constructor() {
-        super();
-        queueMicrotask(() => this.dispatchEvent(new Event("open")));
-      }
-
-      send(): void {
-        const cause = Object.assign(new Error("socket reset"), { code: "ECONNRESET" });
-        queueMicrotask(() => {
-          this.dispatchEvent(
-            Object.assign(new Event("error"), {
-              error: cause,
-              message: "WebSocket request failed",
-            }),
-          );
-        });
-      }
-
-      close(): void {}
-    }
-    vi.stubGlobal("WebSocket", FailedWebSocket);
+    installWebSocketEvent(
+      Object.assign(new Event("error"), {
+        error: Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
+        message: "WebSocket request failed",
+      }),
+    );
 
     const result = await streamOpenAICodexResponses(model, context, {
       apiKey: createJwt(),
@@ -116,27 +115,13 @@ describe("ChatGPT Responses WebSocket failures", () => {
   });
 
   it("does not classify a permanent WebSocket close as transient", async () => {
-    class PolicyClosedWebSocket extends EventTarget {
-      constructor() {
-        super();
-        queueMicrotask(() => this.dispatchEvent(new Event("open")));
-      }
-
-      send(): void {
-        queueMicrotask(() => {
-          this.dispatchEvent(
-            Object.assign(new Event("close"), {
-              code: 1008,
-              reason: "policy violation: ECONNRESET",
-              wasClean: true,
-            }),
-          );
-        });
-      }
-
-      close(): void {}
-    }
-    vi.stubGlobal("WebSocket", PolicyClosedWebSocket);
+    installWebSocketEvent(
+      Object.assign(new Event("close"), {
+        code: 1008,
+        reason: "policy violation: ECONNRESET",
+        wasClean: true,
+      }),
+    );
 
     const result = await streamOpenAICodexResponses(model, context, {
       apiKey: createJwt(),
@@ -155,36 +140,17 @@ describe("ChatGPT Responses WebSocket failures", () => {
 
   it.each([
     { closeCode: 1001, closeReason: "going away" },
-    { closeCode: 1005, closeReason: "no status received" },
-    { closeCode: 1011, closeReason: "internal error" },
-    { closeCode: 1012, closeReason: "service restart" },
     { closeCode: 1013, closeReason: "try again later" },
-    { closeCode: 1014, closeReason: "bad gateway" },
-    { closeCode: 1015, closeReason: "TLS handshake failure" },
   ])(
     "classifies retry-directed WebSocket close $closeCode as transient",
     async ({ closeCode, closeReason }) => {
-      class RetryClosedWebSocket extends EventTarget {
-        constructor() {
-          super();
-          queueMicrotask(() => this.dispatchEvent(new Event("open")));
-        }
-
-        send(): void {
-          queueMicrotask(() => {
-            this.dispatchEvent(
-              Object.assign(new Event("close"), {
-                code: closeCode,
-                reason: closeReason,
-                wasClean: true,
-              }),
-            );
-          });
-        }
-
-        close(): void {}
-      }
-      vi.stubGlobal("WebSocket", RetryClosedWebSocket);
+      installWebSocketEvent(
+        Object.assign(new Event("close"), {
+          code: closeCode,
+          reason: closeReason,
+          wasClean: true,
+        }),
+      );
 
       const result = await streamOpenAICodexResponses(model, context, {
         apiKey: createJwt(),

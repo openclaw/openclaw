@@ -21,7 +21,10 @@ import {
   patchSessionEntryCore,
 } from "./session-accessor.entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
-import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
+import {
+  assertSessionCreationLabelAvailable,
+  readSessionCreationSnapshotInDatabase,
+} from "./session-accessor.sqlite-creation-read.js";
 import { createSessionEntryWithTranscriptInWorker } from "./session-accessor.sqlite-creation-worker.js";
 import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
 import {
@@ -41,6 +44,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   SessionAccessScope,
   SessionEntryUpdateOptions,
@@ -414,14 +418,16 @@ export async function createSessionEntryWithTranscript<TError = string>(
   // The resolved path is a physical locator, not the original logical store selector.
   // Re-resolving a missing custom-agent suffix as a shared store would assign it to main.
   const creationDatabase = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const { normalizedKey, legacyKeys, labels, ...context } = readSessionCreationSnapshotInDatabase(
+  const { normalizedKey, legacyKeys, ...context } = readSessionCreationSnapshotInDatabase(
     creationDatabase,
     captured.sessionKey,
+    options.label,
   );
   return await withSessionEntryCreationPublication<SessionEntryCreateWithTranscriptResult<TError>>(
     { database: creationDatabase, agentId, sessionKey: normalizedKey, bind: options.bindCreation },
     async (operation) => {
-      const created = await createEntry({ ...context, isLabelInUse: (label) => labels.has(label) });
+      options.onPhase?.("entry");
+      const created = await createEntry(context);
       if (!created.ok) {
         return { ok: false, error: created.error, phase: "entry" };
       }
@@ -461,9 +467,12 @@ export async function createSessionEntryWithTranscript<TError = string>(
           return formatErrorMessage(err);
         }
       };
-      const transcriptError = withCommit
-        ? await withCommit(initializeTranscript)
-        : await initializeTranscript();
+      options.onPhase?.("transcript");
+      const transcriptError = created.transcriptEvents
+        ? undefined
+        : withCommit
+          ? await withCommit(initializeTranscript)
+          : await initializeTranscript();
       if (transcriptError !== undefined) {
         return {
           ok: false,
@@ -473,22 +482,32 @@ export async function createSessionEntryWithTranscript<TError = string>(
       }
 
       const entry = created.entry;
+      options.onPhase?.("commit");
       await applySessionEntryLifecycleMutation({
         ...storeScope,
         removals: legacyKeys.map((sessionKey) => ({ sessionKey })),
         upserts: [{ sessionKey: normalizedKey, entry }],
         skipMaintenance: true,
-        ...(commitGuard ? { beforeCommitInTransaction: commitGuard } : {}),
+        beforeCommitInTransaction: () => {
+          commitGuard?.();
+          assertSessionCreationLabelAvailable(creationDatabase, normalizedKey, options.label);
+        },
         ...(withCommit ? { withCommit } : {}),
-        ...(ownerAssignment
-          ? {
-              afterFreshUpsertsInTransaction: (database) => {
-                if (!replaceSessionOwnerInTransaction(database, normalizedKey, ownerAssignment)) {
-                  throw new Error(`Session owner assignment lost its target: ${normalizedKey}`);
-                }
-              },
-            }
-          : {}),
+        afterFreshUpsertsInTransaction: (database) => {
+          if (created.transcriptEvents) {
+            appendTranscriptEventsInTransaction(
+              database,
+              { ...resolved, sessionKey: normalizedKey, sessionId: entry.sessionId },
+              created.transcriptEvents,
+            );
+          }
+          if (
+            ownerAssignment &&
+            !replaceSessionOwnerInTransaction(database, normalizedKey, ownerAssignment)
+          ) {
+            throw new Error(`Session owner assignment lost its target: ${normalizedKey}`);
+          }
+        },
         ...(onLifecycleCommitted
           ? { onLifecycleCommitted: () => onLifecycleCommitted(entry) }
           : {}),

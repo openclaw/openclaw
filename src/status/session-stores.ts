@@ -13,7 +13,9 @@ const SESSION_STORE_READ_SLICE_MS = 8;
 type SessionStoreSummary = ReturnType<typeof readSessionStoreSummaryReadOnly>;
 export type StatusSessionStores = Awaited<
   ReturnType<
-    typeof readStatusSessionStores<ReturnType<typeof listGatewayAgentsBasic>["agents"][number]>
+    typeof readStatusSessionStores<
+      Awaited<ReturnType<typeof listGatewayAgentsBasic>>["agents"][number]
+    >
   >
 >;
 

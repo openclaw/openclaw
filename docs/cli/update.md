@@ -63,12 +63,18 @@ openclaw --update
 `openclaw --update` rewrites to `openclaw update` (useful for shells and
 launcher scripts).
 
-Invalid or unreadable configuration reports `invalid-config` before database
-schema inspection. For supported package targets, the candidate makes that
+Invalid configuration reports `invalid-config` before database schema inspection.
+An unreadable configuration file or failed configuration loading step instead
+reports `config-read-failed`, with a recognized filesystem error code when available.
+For supported package targets, the candidate makes that
 decision after private staging; see [Candidate-owned admission](#candidate-owned-admission).
-The diagnostic identifies invalid fields and recommends
+The local diagnostic identifies invalid fields and recommends
 `openclaw doctor --fix`, followed by correcting any remaining errors. A dry run
 keeps this guidance in its JSON `notes` without changing the configuration.
+Public failure reports retain the rejected schema area, such as `gateway.*`,
+while hiding operator-defined keys and rejected values. Admission still runs
+when the selected package version matches the installed version; the no-op
+decision follows validation of the selected artifact and live installation.
 Guided recovery recognizes the saved config failure after a later successful
 update and still verifies the installed runtime and Gateway readiness.
 

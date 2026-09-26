@@ -33,6 +33,8 @@ export type GatewayReloadPlan = {
     pluginIds: readonly string[];
     reason: PluginLifecycleReason;
     operationId: string;
+    waitForDrain?: boolean;
+    drainSignal?: AbortSignal;
     expectedSourceDigests?: Readonly<Record<string, string>>;
     expectedInstallHashes?: Readonly<Record<string, string>>;
   };
@@ -80,6 +82,7 @@ type ReloadPolicy = {
 type ReloadRule = Omit<ReloadPolicy, "prefixes"> & { prefix: string };
 
 type GatewayReloadPlanOptions = {
+  pluginLifecycle?: GatewayReloadPlan["pluginLifecycle"];
   noopPaths?: Iterable<string>;
   forceChangedPaths?: Iterable<string>;
   /** Candidate config used to reject removed, unknown, or unresolvable account targets. */
@@ -605,6 +608,22 @@ export function buildGatewayReloadPlan(
   // A wholesale restart covers its account targets and must run only once.
   for (const channel of plan.restartChannels) {
     restartChannelAccounts.delete(channel);
+  }
+
+  const { pluginLifecycle } = options;
+  if (pluginLifecycle) {
+    plan.pluginLifecycle = pluginLifecycle;
+    plan.reloadPlugins = true;
+    const unrelatedRestart = plan.restartReasons.find(
+      (path) => path !== "plugins" && !path.startsWith("plugins."),
+    );
+    if (unrelatedRestart) {
+      throw new Error(
+        `Cannot apply plugin change while ${unrelatedRestart} requires a Gateway restart.`,
+      );
+    }
+    plan.restartGateway = false;
+    plan.restartReasons = [];
   }
 
   return plan;

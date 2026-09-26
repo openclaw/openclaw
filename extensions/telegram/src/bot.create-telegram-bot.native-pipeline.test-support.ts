@@ -37,13 +37,22 @@ import {
 } from "./runtime.test-support.js";
 import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
-import { resolveTelegramIngressSpoolDir } from "./telegram-ingress-spool.js";
 import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
 const saveRemoteMedia = vi.fn();
-vi.mock("./telegram-media.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./telegram-media.runtime.js")>()),
+const transcribeFirstAudio = vi.fn<
+  typeof import("openclaw/plugin-sdk/media-runtime").transcribeFirstAudio
+>(async (...args) => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
+  );
+  return await actual.transcribeFirstAudio(...args);
+});
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   saveRemoteMedia: (...args: unknown[]) => saveRemoteMedia(...args),
+  transcribeFirstAudio: (...args: Parameters<typeof transcribeFirstAudio>) =>
+    transcribeFirstAudio(...args),
 }));
 const http = useTelegramHttpFixture();
 
@@ -64,6 +73,7 @@ export const harness = {
     return state;
   },
   replySpy,
+  transcribeFirstAudio,
   settleUpdates,
   listSkillCommandsForAgents,
   telegramBotDepsForTest: {
@@ -192,7 +202,6 @@ export async function admitSpooledUpdate(
   });
   try {
     const monitor = createTelegramTransportIngressMonitor({
-      spoolDir: resolveTelegramIngressSpoolDir({ accountId: "default" }),
       bot,
       accountId: "default",
       botInfo: bot.botInfo,
@@ -267,6 +276,7 @@ beforeEach(async () => {
     return undefined;
   };
   replySpy.mockReset().mockResolvedValue({ text: "Test response" });
+  transcribeFirstAudio.mockReset();
   listSkillCommandsForAgents
     .mockReset()
     .mockImplementation(defaultTelegramBotDeps.listSkillCommandsForAgents);

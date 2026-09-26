@@ -254,43 +254,36 @@ async function* parseAnthropicSseBody(
   const decoder = new TextDecoder();
   let buffer = "";
   let completed = false;
+  // CRLF must remain one line ending even when the delimiter expression backtracks.
+  const delimiter = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/g;
+  let scanOffset = 0;
   try {
-    while (true) {
+    while (!completed) {
       const { done, value } = await readAnthropicSseChunk(reader, signal);
-      if (done) {
-        completed = true;
-        break;
-      }
-      buffer = `${buffer}${decoder.decode(value, { stream: true })}`.replaceAll("\r\n", "\n");
-      let frameEnd = buffer.indexOf("\n\n");
-      while (frameEnd >= 0) {
+      completed = done;
+      buffer += decoder.decode(value, { stream: !done });
+      delimiter.lastIndex = scanOffset;
+      for (;;) {
+        const boundary = delimiter.exec(buffer);
+        if (!boundary && (!completed || !buffer)) {
+          break;
+        }
+        const frameEnd = boundary?.index ?? buffer.length;
         assertAnthropicSsePendingBufferWithinLimit(frameEnd);
-        const frame = buffer.slice(0, frameEnd);
-        buffer = buffer.slice(frameEnd + 2);
+        const frame = boundary ? buffer.slice(0, frameEnd) : buffer.trim();
+        buffer = boundary ? buffer.slice(frameEnd + boundary[0].length) : "";
+        delimiter.lastIndex = 0;
         const data = frame
-          .split("\n")
+          .split(/\r\n|\n|\r/)
           .filter((line) => line.startsWith("data:"))
           .map((line) => line.slice(5).trimStart())
           .join("\n");
         if (data && data !== "[DONE]") {
           yield parseAnthropicSseEventData(data);
         }
-        frameEnd = buffer.indexOf("\n\n");
       }
       assertAnthropicSsePendingBufferWithinLimit(buffer.length);
-    }
-    const tailBuffer = `${buffer}${decoder.decode()}`.replaceAll("\r\n", "\n");
-    assertAnthropicSsePendingBufferWithinLimit(tailBuffer.length);
-    const tail = tailBuffer.trim();
-    if (tail) {
-      const data = tail
-        .split("\n")
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trimStart())
-        .join("\n");
-      if (data && data !== "[DONE]") {
-        yield parseAnthropicSseEventData(data);
-      }
+      scanOffset = Math.max(0, buffer.length - 3);
     }
   } finally {
     if (!completed) {
@@ -397,7 +390,8 @@ function createAnthropicTransportClient(params: {
     isKimiAnthropicProvider(model.provider) && options?.thinkingEnabled === true
       ? buildGuardedModelFetch(model, undefined, { sanitizeSse: false })
       : buildGuardedModelFetch(model);
-  if (model.provider === "github-copilot") {
+  const copilot = model.provider === "github-copilot";
+  if (copilot || usesFoundryBearerAuth(resolveModelHeaderSentinels(model))) {
     const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
     return {
       client: createAnthropicMessagesClient({
@@ -410,29 +404,8 @@ function createAnthropicTransportClient(params: {
             "anthropic-dangerous-direct-browser-access": "true",
             ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
           },
-          model.headers,
-          getAiTransportHost().buildCopilotDynamicHeaders(context.messages),
-          optionHeaders,
-        ),
-        fetch,
-      }),
-      isOAuthToken: false,
-    };
-  }
-  if (usesFoundryBearerAuth(resolveModelHeaderSentinels(model))) {
-    const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
-    return {
-      client: createAnthropicMessagesClient({
-        apiKey: null,
-        authToken: apiKey,
-        baseURL: model.baseUrl,
-        defaultHeaders: mergeTransportHeaders(
-          {
-            accept: "application/json",
-            "anthropic-dangerous-direct-browser-access": "true",
-            ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
-          },
-          omitFoundryBearerCredentialHeaders(model.headers),
+          copilot ? model.headers : omitFoundryBearerCredentialHeaders(model.headers),
+          copilot ? getAiTransportHost().buildCopilotDynamicHeaders(context.messages) : undefined,
           optionHeaders,
         ),
         fetch,

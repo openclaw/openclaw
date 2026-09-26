@@ -245,7 +245,7 @@ it("keeps UI fallback with its complete canonical owners beside precise core cha
   for (const unrelated of [
     "test/scripts/pr-worktree-provision.test.ts",
     "test/scripts/pr-merge-recovery.test.ts",
-    "test/scripts/mobile-release-authority.test.ts",
+    "test/scripts/mobile-release-ci.test.ts",
   ]) {
     expect(toolingFiles, unrelated).not.toContain(unrelated);
   }

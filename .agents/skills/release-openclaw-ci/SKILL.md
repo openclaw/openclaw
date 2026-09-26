@@ -26,7 +26,7 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   the initial Tooling SHA selection; it does not authorize replacing that
   tooling after `main` advances.
 - Apply a release firebreak after the Code SHA is frozen. Admit only confirmed
-  product defects, package/provenance defects in the bytes to publish, security
+  product defects, wrong or unverifiable package bytes, security
   defects, or failures that make publication impossible. Queue other findings
   for postpublish confidence or the next beta.
 - Frozen CI children use the pinned Tooling SHA's Node shard planner and measured
@@ -50,7 +50,7 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   main failures, report that blocker and keep independent release work moving
   instead of healing broader main.
 - Land tooling-only fixes on `main` with the `release-fast-lane` label added
-  before the push (RELEASING.md "Release tooling fast lane"): `openclaw/ci-gate`
+  before the push (see [Release tooling fast lane](#release-tooling-fast-lane)): `openclaw/ci-gate`
   then runs lint, types, guards, dependencies, docs, and the changed Node rows
   only. Land through the native `scripts/pr` path with its completed ClawSweeper
   review; findings are advisory for that label, so record any P1 the release
@@ -72,12 +72,6 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   npm/ClawHub, GitHub finalization, and main closeout. Each platform retains
   its own signing, qualification, artifact, and updater requirements; report
   pending platforms accurately and repair native-only failures in parallel.
-- Release validation does not pause CI or supporting workflows. The legacy
-  `OPENCLAW_RELEASE_PRIORITY_RUN` variable is ignored by current workflow
-  admission. Do not use `pnpm frv prioritize --run` for routine validation;
-  it still cancels queued runs. Use `pnpm frv prioritize --restore <record>`
-  to recover runs deferred by older workflow revisions and clear their variable.
-  Keep the required publication proofs and soak gates intact.
 - Do not set GitHub secrets from unvalidated 1Password candidates. If a candidate returns 401/403, leave the existing secret alone and report the exact missing provider.
 - Use `$one-password` for secret reads/writes: one persistent tmux session, targeted items only, no secret output.
 - Watch one parent run plus compact child summaries. Avoid broad `gh run view` polling loops; REST quota is easy to burn.
@@ -172,7 +166,7 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   task-owned box and warm a fresh one before testing. Testbox source sync is
   relative to the warmed source tree; continuing can mix an old base file with
   a new candidate diff and produce false lockfile or Docker failures.
-- Reused Testboxes are provenance-gated after their first successful run.
+- Reused Testboxes are checked against their recorded source after their first successful run.
   Source-only edits may reuse the lease; base, dependency, wrapper, or Testbox
   workflow drift requires a fresh lease. Do not set
   `OPENCLAW_TESTBOX_ALLOW_STALE=1` for release evidence.
@@ -181,13 +175,63 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   on source sync to overlay committed branch changes onto the workflow's
   default ref.
 
+## Deferred CI recovery
+
+Release validation does not pause CI or supporting workflows. The legacy
+`OPENCLAW_RELEASE_PRIORITY_RUN` variable is ignored by current workflow
+admission. Do not use `pnpm frv prioritize --run` for routine validation;
+it still cancels queued runs. Use `pnpm frv prioritize --restore <record>`
+to recover runs deferred by older workflow revisions and clear their variable.
+Keep the required publication proofs and soak gates intact.
+
+## Continuous release readiness
+
+The 04:00 UTC nightly seals a direct-root manifest and per-child receipts for the exact main SHA.
+For a same-day cut, start the release train on `main` (version and changelog) before 04:00 UTC,
+then cut `release/YYYY.M.PATCH` at the nightly SHA so the Code SHA equals the validated SHA.
+Per-child adoption matches exact target SHA, role, and dispatch inputs minus `dispatch_id`:
+`productPerformance` is adopted because its inputs are context-free and match.
+A stable candidate dispatched with `--target-ref release/YYYY.M.PATCH` resolves
+`coveragePolicy=npm-stable-v1` and `ci_release_scope=npm-stable`, versus `full` scope on `main`.
+`normalCi`, plugin prerelease, and release checks are re-dispatched because their inputs add
+`target_context_ref`, plugin prerelease and release checks add `allow_frozen_target_scenario_omissions=true`, and scope differs.
+Whole-parent adoption requires byte-identical manifest `validationInputs`, including `validationPurpose`,
+`publicationSelectionJson`, `targetContextRef`, `targetVersion`, `allowUnreleasedChangelog`, and `coveragePolicy`;
+a `main-qualification` nightly is never adopted wholesale by a `publish`-purpose stable candidate.
+Purpose/context-crossing adoption is a verifier policy follow-up.
+
+## Release tooling fast lane
+
+Add the `release-fast-lane` label to a pull request before the push that should
+use it; PR CI reads labels from the triggering event, and label events do not
+start CI. For an already-pushed head, `gh pr ready --undo` then `gh pr ready`
+re-triggers PR CI with the current labels. The label narrows `openclaw/ci-gate`
+only on a canonical pull request whose changed paths are all release tooling:
+`.github/workflows/**`, `scripts/**`, `test/scripts/**`,
+`.agents/skills/release-*/**`, `docs/reference/RELEASING.md`, or independently
+checked documentation. Admitted runs keep `security-fast`, `check-shard` (lint,
+prod/test types, guards, dependencies, npm lock), `check-docs` when docs
+changed, and the changed Node rows; the compact packing-policy full-plan proof
+for planner edits is relaxed to those rows. Contracts, baseline ratchets,
+bundled protocol, Bun launcher, additional checks, build artifacts (unless a
+changed row needs `dist`), Control UI, Windows, macOS, iOS, Android, i18n, and
+skills lanes are skipped and listed under "Release fast lane" in the preflight
+step summary. A declined label (out-of-scope path, global Node input, fork,
+push, dispatch, docs-only) logs a warning and leaves ordinary selection
+untouched. The gate stays complete: every selected lane must pass, and hourly
+full main CI covers the merged result. The label narrows only the CI gate: fork
+heads are declined, and the native `scripts/pr` landing path with its completed
+ClawSweeper review is unchanged. ClawSweeper findings are advisory for labelled
+PRs: a P1 that the release owner decides not to fix in the PR is recorded there
+with its follow-up before landing.
+
 ## Run identity and retry budget
 
 Record Validation SHA, Tooling SHA/ref, target context ref, parent run id,
 attempt, and phase before watching or recovering Full Release Validation. Keep
 Code SHA and Release SHA as lifecycle roles in the ledger; they may name the
 same commit. Record the
-immutable Release Publish parent receipt separately from tag provenance.
+immutable Release Publish parent receipt separately from the tag's recorded source.
 
 For the core and plugin npm mutations enforced by this foundation, re-read the
 exact protected lightweight tag and revalidate the exact parent run tuple
@@ -342,7 +386,7 @@ before cancellation. Preflight is read-only and does not authorize publication,
 cancel children, or prove a repository secret from local credentials. Bootstrap
 candidates need a read-only `npm whoami` probe using the repository's actual
 `NPM_TOKEN`; follow the secret-isolated step in
-[Release policy](https://docs.openclaw.ai/reference/RELEASING#probe-the-bootstrap-token)
+[bootstrap token probe](../release-openclaw-maintainer/references/publication-recovery.md#check-the-bootstrap-token)
 and retain its run URL. Do not rotate credentials as part of a diagnostic check.
 
 ## Dispatch
@@ -502,6 +546,8 @@ receipt and resolves per-package npm plans against the registry. The manifest's
 need the operator's acknowledgement; sealed evidence does not grant authority.
 Mutation owners recheck live publication authority, selectors, and immutable bytes.
 
+### Publication requirements
+
 Publish with `release_profile=from-validation` to consume the sealed profile.
 Stable publication requires stable/full evidence, soak, and blocking performance.
 Every selected validation lane must succeed, including first-hop compatibility,
@@ -509,10 +555,14 @@ Telegram, and Linux/Windows/macOS Gateway checks. No lane or soak waiver applies
 
 ### Publish children
 
-- `pnpm release:stable <version>` (RELEASING.md "Orchestrated stable release")
+Use the maintainer [publication recovery guide](../release-openclaw-maintainer/references/publication-recovery.md)
+for publication ordering and prepared/direct recovery.
+
+- `pnpm release:stable <version>` ([orchestrated stable release](../release-openclaw-maintainer/references/regular-release.md#orchestrated-stable-release))
   dispatches the parent once, approves the parent's `npm-release` gate, prints
-  the child-approval and stale-child sweep commands below instead of running
-  them (it never mutates a child run), and on any refusal prints `Next:` with
+  child-approval commands only for older tooling without `npm-publish` and
+  stale-child sweep commands when needed (it never mutates a child run).
+  On any refusal it prints `Next:` with
   the exact recovery command.
 - The parent's `npm-release` approval mints the attested
   `openclaw-release-approval-v1-<parent run>-<attempt>` receipt; bot-dispatched
@@ -520,16 +570,16 @@ Telegram, and Linux/Windows/macOS Gateway checks. No lane or soak waiver applies
   their gates. The ClawHub OIDC child skips its `clawhub-plugin-release` gate
   on a verified receipt and instead waits for the parent's
   `openclaw-clawhub-parent-authorization-v2-*` receipt before publishing. npm
-  children (`Plugin NPM Release`, `openclaw-npm-release.yml`) keep
-  `npm-release` (npm trusted publishers are bound to it, `npm trust list
-openclaw`) and the workflow token cannot approve it (`canApprove=false`), so
-  an unapproved npm child sits `waiting` silently. Watch every child and
-  approve npm children only (environment id `13010111854`):
-  ```bash
-  gh api repos/openclaw/openclaw/actions/runs/<child>/pending_deployments
-  gh api -X POST repos/openclaw/openclaw/actions/runs/<child>/pending_deployments \
-    -f state=approved -f comment="<reason>" -F 'environment_ids[]=13010111854'
-  ```
+  children (`Plugin NPM Release`, `openclaw-npm-release.yml`) skip their
+  `npm-release` approval job on the verified-receipt route and publish in
+  `npm-publish`, with trusted publishers bound to that environment. Immediately
+  before publication they wait for the parent attempt's receipt and require
+  that attempt to remain `in_progress`. This is one human approval per release.
+  `npm-publish` has no reviewers and admits only protected
+  `release-publish/<sha12>-<n>` tags. Real manual/recovery npm dispatches must
+  use such a tooling tag and still need their own `npm-release` approval job;
+  the read-only OIDC preflight also uses `npm-publish` and requires that tag.
+  Artifact-only preflights keep their existing refs and have no environment.
 - Never approve ClawHub children (`plugin-clawhub-release.yml`,
   `plugin-clawhub-new.yml`) by hand. `plugin-clawhub-release.yml` needs no
   approval on the bot route (receipt-verified); the `Artifact not found` line
@@ -714,7 +764,7 @@ Interpret state precisely:
 - `blocked_complete`: publication is blocked and all selected diagnostics are
   terminal.
 - `orchestration_error`: GitHub API or collector failure prevented a verdict.
-  This is not a provenance mismatch. Recover the collector against the same
+  This does not mean the wrong source was used. Recover the collector against the same
   exact children; never redispatch tests to repair collection.
 - `cancelled_with_children`: the collector was cancelled while exact children
   remained active.
@@ -746,7 +796,7 @@ run-ID-cached bytes first.
 6. Classify before editing:
    - confirmed product/code failure: fix the release branch, freeze a new Code
      SHA, and invalidate product evidence
-   - harness/tooling/provenance failure: keep the Code SHA, fix the smallest
+   - harness, tooling, or source mismatch: keep the Code SHA, fix the smallest
      owning surface, and retry only the failed surface with the required Tooling
      SHA
    - infrastructure/credential failure: keep both SHAs, repair the external
@@ -759,13 +809,14 @@ run-ID-cached bytes first.
    - publish child/registry selector failure: keep Release SHA and resume the
      failed child; never rebuild an immutable version that already published
    - parent failed after core npm published (for example a stale `beta`
-     dist-tag failing the completion verify): flip the GitHub release public
-     immediately with
-     `gh release edit v<version> --repo openclaw/openclaw --draft=false --latest`;
-     never leave it drafted waiting for Docker, ClawHub, apps, or the resume.
-     Then run the beta-to-stable dist-tag sync, sweep stale children, and
-     dispatch a new parent with the same inputs: it recognizes published bytes
-     and only runs ClawHub, GitHub release evidence, and Docker
+     dist-tag failing the completion verify): retain the successful original
+     npm run and qualified bytes, repair the selector, and reconcile the exact
+     failed parent's children before resuming the selected publication route.
+     Direct finalization normally waits for npm and Docker verification; the
+     prepared button also verifies ClawHub downloads. Do not manually un-draft
+     a release to bypass those gates. Follow
+     [publication recovery](../release-openclaw-maintainer/references/publication-recovery.md#published-version-failed-parent)
+     for direct resume or a new prepared button run.
    - child stuck `waiting`, ClawHub `Artifact not found`, or parent failing
      `ClawHub dispatch blocked by waiting run`: see [Publish children](#publish-children)
      Only the first class changes the Code SHA. After one diagnosis/fix/narrow

@@ -16,6 +16,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
+import { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
 import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
 import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import {
@@ -77,6 +78,8 @@ describe("native follow-up custody through the registered attempt", () => {
       path.join(tempDir, `${childThreadId}-workspace`),
       { runId: `${childThreadId}-parent-run` },
     );
+    const lifetime = new AbortController();
+    params.abortSignal = lifetime.signal;
     await attachSqliteSessionTarget(
       params,
       path.join(tempDir, `${childThreadId}-sessions.json`),
@@ -107,6 +110,33 @@ describe("native follow-up custody through the registered attempt", () => {
     const delivery = vi
       .spyOn(defaultNativeSubagentMonitorRuntime, "deliverAgentHarnessTaskCompletion")
       .mockResolvedValue({ delivered: true, path: "direct" });
+    const attempts = new Set<Promise<void>>();
+    // Invoked below with .call(this, ...) so the observed instance remains the receiver.
+    // oxlint-disable-next-line typescript/unbound-method
+    const originalDelivery = CodexNativeSubagentCompletionDelivery.prototype.deliverPending;
+    const observeAttempt = vi.spyOn(
+      CodexNativeSubagentCompletionDelivery.prototype,
+      "deliverPending",
+    );
+    observeAttempt.mockImplementation(function (
+      this: CodexNativeSubagentCompletionDelivery,
+      state,
+      child,
+      trigger,
+    ) {
+      const attempt = originalDelivery.call(this, state, child, trigger);
+      attempts.add(attempt);
+      return attempt;
+    });
+    const settleCompletionAttempts = async () => {
+      // Native receipts start worker persistence independently of notification dispatch.
+      // Observe its real completion before reading rows or retiring the fixture host.
+      while (attempts.size > 0) {
+        const pending = [...attempts];
+        attempts.clear();
+        await Promise.all(pending);
+      }
+    };
     const notify = async (method: string, notificationParams: JsonObject) => {
       await harness.notify({ method, params: notificationParams } as CodexServerNotification);
     };
@@ -124,9 +154,7 @@ describe("native follow-up custody through the registered attempt", () => {
     try {
       await turnStarted.promise;
       allowTurnStart.resolve();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await run.waitForTurnAccepted();
       relayId = extractRelayIdFromThreadRequest(
         harness.requests.find((request) => request.method === "thread/start")?.params,
       );
@@ -169,9 +197,7 @@ describe("native follow-up custody through the registered attempt", () => {
         receiverThreadIds: [childThreadId],
         agentsStates: { [childThreadId]: { status: "completed", message: "A result" } },
       });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await settleCompletionAttempts();
       const previous = taskRuntime.listTaskRecords().find((task) => task.runId === runA);
       expect(previous).toMatchObject({
         status: "succeeded",
@@ -270,9 +296,6 @@ describe("native follow-up custody through the registered attempt", () => {
         },
       });
       expect(yieldResponse).toMatchObject({ success: true });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       const result = await run;
       expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, promptError: null });
@@ -334,9 +357,7 @@ describe("native follow-up custody through the registered attempt", () => {
         },
       });
       await nativeHookRelayUnregisterQueue.flush();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await settleCompletionAttempts();
       const finalRows = taskRuntime.listTaskRecords();
       const claimedAfterCompletion = isCodexAppServerLiveThreadClaimed(
         harness.client,
@@ -377,10 +398,17 @@ describe("native follow-up custody through the registered attempt", () => {
     } finally {
       unsubscribe();
       allowTurnStart.resolve();
+      lifetime.abort("test_cleanup");
       harness.close();
-      await nativeHookRelayUnregisterQueue.flush();
-      host.closeHost();
-      host.closeAdmission();
+      try {
+        await run.catch(() => undefined);
+        await settleCompletionAttempts();
+        await nativeHookRelayUnregisterQueue.flush();
+      } finally {
+        observeAttempt.mockRestore();
+        host.closeHost();
+        host.closeAdmission();
+      }
     }
   });
 });

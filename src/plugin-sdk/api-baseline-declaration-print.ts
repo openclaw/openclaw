@@ -186,6 +186,7 @@ function renameStructuredDeclarationForExport(
       declaration,
       declarationModifiers(declaration),
       name,
+      declaration.attributes,
       declaration.body,
     );
   }

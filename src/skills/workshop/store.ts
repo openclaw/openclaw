@@ -387,38 +387,32 @@ export async function updateSkillProposalRecord(params: {
   );
 }
 
-function listStoredProposals(options: SkillWorkshopStoreOptions, scope: SkillProposalLookupScope) {
-  return executeSkillWorkshopOperation(
-    "workshop.proposals.list",
-    { agentId: scope.agentId },
-    options,
-  );
-}
-
 export async function readSkillProposalManifest(
   sourceOptions: SkillWorkshopDirectoryStoreOptions,
-  lookupScope: SkillProposalLookupScope = {},
+  lookupScope: SkillProposalLookupScope & { status?: SkillProposalRecord["status"] } = {},
 ): Promise<SkillProposalManifest> {
   const options = captureSkillWorkshopStoreOptions(sourceOptions);
-  const scope = { agentId: lookupScope.agentId };
-  const before = await listStoredProposals(options, scope);
+  const scope = { agentId: lookupScope.agentId, status: lookupScope.status };
+  const before = await executeSkillWorkshopOperation(
+    "workshop.proposals.list",
+    { agentId: scope.agentId, status: "pending" },
+    options,
+  );
   await Promise.all(
-    before
-      .filter(({ record }) => record.status === "pending")
-      .map(({ record, row }) =>
-        reconcileInterruptedApply(record.id, {
-          ...options,
-          ...(scope.agentId
-            ? { agentId: scope.agentId }
-            : row.owner_agent_id
-              ? { agentId: row.owner_agent_id }
-              : {}),
-        }),
-      ),
+    before.map(({ record, row }) =>
+      reconcileInterruptedApply(record.id, {
+        ...options,
+        ...(scope.agentId
+          ? { agentId: scope.agentId }
+          : row.owner_agent_id
+            ? { agentId: row.owner_agent_id }
+            : {}),
+      }),
+    ),
   );
-  const proposals = (await listStoredProposals(options, scope)).map(({ record }) =>
-    manifestEntryFromRecord(record),
-  );
+  const proposals = (
+    await executeSkillWorkshopOperation("workshop.proposals.list", scope, options)
+  ).map(({ record }) => manifestEntryFromRecord(record));
   return {
     schema: SKILL_WORKSHOP_MANIFEST_SCHEMA,
     updatedAt: proposals[0]?.updatedAt ?? new Date(0).toISOString(),

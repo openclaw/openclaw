@@ -29,7 +29,6 @@ final class VoiceWakeOverlayController {
         var forwardEnabled: Bool = false
         var isSending: Bool = false
         var attributed: NSAttributedString = .init(string: "")
-        var isOverflowing: Bool = false
         var isEditing: Bool = false
         var level: Double = 0 // normalized 0...1 speech level for UI
     }
@@ -37,7 +36,6 @@ final class VoiceWakeOverlayController {
     var window: NSPanel?
     var hostingView: NSHostingView<VoiceWakeOverlayView>?
     var autoSendTask: Task<Void, Never>?
-    var autoSendToken: UUID?
     var activeToken: UUID?
     var activeSource: Source?
     var lastLevelUpdate: TimeInterval = 0

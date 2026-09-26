@@ -16,15 +16,7 @@ const VOID_TAGS = new Set(["br", "hr", "img", "input", "tg-map"]);
 
 const INLINE_STYLE_TAGS: Record<
   string,
-  | "bold"
-  | "italic"
-  | "underline"
-  | "strikethrough"
-  | "code"
-  | "spoiler"
-  | "marked"
-  | "subscript"
-  | "superscript"
+  Exclude<Extract<RichText, { text: RichText }>["type"], "url" | "anchor_link">
 > = {
   b: "bold",
   strong: "bold",

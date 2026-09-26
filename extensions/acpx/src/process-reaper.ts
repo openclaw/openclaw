@@ -4,6 +4,7 @@
  */
 import { createRequire } from "node:module";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { isPidAlive, runExec } from "openclaw/plugin-sdk/process-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { CODEX_ACP_PACKAGE, LEGACY_CODEX_ACP_PACKAGE } from "./codex-adapter.js";
@@ -49,7 +50,6 @@ const ACP_PACKAGE_MARKERS = [
   "/acpx/dist/",
 ];
 
-/** Minimal process-table row used by ACPX cleanup. */
 type AcpxProcessInfo = {
   pid: number;
   ppid: number;
@@ -66,7 +66,6 @@ export type AcpxProcessCleanupDeps = {
   assertCurrent?: () => void;
 };
 
-/** Result from cleaning up a single ACPX process tree. */
 type AcpxProcessCleanupResult = {
   inspectedPids: number[];
   terminatedPids: number[];
@@ -79,7 +78,6 @@ type AcpxProcessCleanupResult = {
     | "unverified-root";
 };
 
-/** Result from startup orphan reaping. */
 type AcpxStartupReapResult = {
   inspectedPids: number[];
   terminatedPids: number[];
@@ -223,7 +221,6 @@ function parseProcessList(stdout: string): AcpxProcessInfo[] {
   return processes;
 }
 
-/** List host processes in the compact shape needed by ACPX cleanup. */
 async function listPlatformProcesses(): Promise<AcpxProcessInfo[]> {
   if (process.platform === "win32") {
     return [];
@@ -279,12 +276,7 @@ async function terminatePids(
   deps: AcpxProcessCleanupDeps | undefined,
 ): Promise<number[]> {
   const killProcess = deps?.killProcess ?? ((pid, signal) => process.kill(pid, signal));
-  const sleep =
-    deps?.sleep ??
-    ((ms) =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      }));
+  const sleep = deps?.sleep ?? delay;
   const terminated: number[] = [];
 
   for (const pid of pids) {

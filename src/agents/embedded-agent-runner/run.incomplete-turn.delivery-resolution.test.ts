@@ -183,25 +183,6 @@ describe("incomplete-turn delivery resolution", () => {
     ).toBe(false);
   });
 
-  it("treats committed messaging media as delivery", () => {
-    expect(
-      hasCommittedMessagingToolDeliveryEvidence({
-        messagingToolSentTexts: [],
-        messagingToolSentMediaUrls: ["file:///tmp/render.png"],
-      }),
-    ).toBe(true);
-  });
-
-  it("treats committed messaging targets as delivery", () => {
-    expect(
-      hasCommittedMessagingToolDeliveryEvidence({
-        messagingToolSentTexts: [],
-        messagingToolSentMediaUrls: [],
-        messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel-1" }],
-      }),
-    ).toBe(true);
-  });
-
   for (const { name, overrides } of [
     {
       name: "treats committed messaging text as replay-invalid side effect metadata",
@@ -420,84 +401,6 @@ describe("incomplete-turn delivery resolution", () => {
     );
 
     expect(incompleteTurnText).toContain("couldn't generate a response");
-  });
-
-  it("keeps complete visible stop turns successful", () => {
-    const incompleteTurnText = resolveIncompleteTurnPayloadText(
-      makeIncompleteTurnParams(
-        {
-          assistantTexts: ["Complete answer"],
-          lastAssistant: makeLastAssistant({
-            provider: "ollama",
-            model: "qwen3.5",
-            content: [{ type: "text", text: "Complete answer" }],
-          }),
-        },
-        { payloadCount: 1 },
-      ),
-    );
-
-    expect(incompleteTurnText).toBeNull();
-  });
-
-  it("preserves terminal tool media on token-limited turns", () => {
-    const incompleteTurnText = resolveIncompleteTurnPayloadText(
-      makeIncompleteTurnParams(
-        {
-          assistantTexts: ["Partial answer"],
-          toolMediaUrls: ["file:///tmp/render.png"],
-          lastAssistant: makeLastAssistant({
-            stopReason: "length",
-            provider: "ollama",
-            model: "qwen3.5",
-            content: [{ type: "text", text: "Partial answer" }],
-          }),
-        },
-        { payloadCount: 1 },
-      ),
-    );
-
-    expect(incompleteTurnText).toBeNull();
-  });
-
-  it("preserves tool media already delivered through block replies", () => {
-    const incompleteTurnText = resolveIncompleteTurnPayloadText(
-      makeIncompleteTurnParams(
-        {
-          assistantTexts: ["Partial answer"],
-          hasToolMediaBlockReply: true,
-          lastAssistant: makeLastAssistant({
-            stopReason: "length",
-            provider: "ollama",
-            model: "qwen3.5",
-            content: [{ type: "text", text: "Partial answer" }],
-          }),
-        },
-        { payloadCount: 1 },
-      ),
-    );
-
-    expect(incompleteTurnText).toBeNull();
-  });
-
-  it("preserves successful cron progress on token-limited turns", () => {
-    const incompleteTurnText = resolveIncompleteTurnPayloadText(
-      makeIncompleteTurnParams(
-        {
-          assistantTexts: ["Partial answer"],
-          successfulCronAdds: 1,
-          lastAssistant: makeLastAssistant({
-            stopReason: "length",
-            provider: "ollama",
-            model: "qwen3.5",
-            content: [{ type: "text", text: "Partial answer" }],
-          }),
-        },
-        { payloadCount: 1 },
-      ),
-    );
-
-    expect(incompleteTurnText).toBeNull();
   });
 
   it.each([

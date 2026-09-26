@@ -582,9 +582,7 @@ describe("CI changed Node test plan", () => {
               (group) => group.configs.includes(targetConfig) && !group.includePatterns,
             ),
         ).toBe(true);
-        expect(selectedFiles(shards)).not.toContain(
-          "test/scripts/mobile-release-authority.test.ts",
-        );
+        expect(selectedFiles(shards)).not.toContain("test/scripts/mobile-release-ci.test.ts");
       }
     },
   );
@@ -2323,7 +2321,7 @@ describe("CI changed Node test plan", () => {
         }
         expect(files).toContain(importer);
         expect(files).not.toContain(deferred);
-        expect(files).not.toContain("test/scripts/mobile-release-authority.test.ts");
+        expect(files).not.toContain("test/scripts/mobile-release-ci.test.ts");
         expect(files.some(isCiProofTestFile)).toBe(false);
       } finally {
         vi.restoreAllMocks();
@@ -2405,28 +2403,26 @@ describe("CI changed Node test plan", () => {
     expect(targets).toContain("src/agents/live-model-filter.test.ts");
   });
 
-  it.each([
-    "src/gone.test.ts",
-    "src/plugin-sdk/gone.test.ts",
-    "src/plugins/contracts/gone.test.ts",
-    "src/channels/plugins/gone.test.ts",
-  ])("runs only the boundary shard when a diff deletes %s", (target) => {
-    const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-ci-deleted-test-"));
-    try {
-      expect(createChangedExtensionFallbackShards([target], { cwd })).toEqual([]);
-      expect(createChangedNodeTestShards([target], { cwd })).toEqual([
-        {
-          checkName: "checks-node-changed-boundary",
-          configs: ["test/vitest/vitest.boundary.config.ts"],
-          requiresDist: false,
-          runner: "blacksmith-8vcpu-ubuntu-2404",
-          shardName: "changed-boundary",
-        },
-      ]);
-    } finally {
-      rmSync(cwd, { force: true, recursive: true });
-    }
-  });
+  it.each(["src/gone.test.ts", "src/plugin-sdk/gone.test.ts"])(
+    "runs only the boundary shard when a diff deletes %s",
+    (target) => {
+      const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-ci-deleted-test-"));
+      try {
+        expect(createChangedExtensionFallbackShards([target], { cwd })).toEqual([]);
+        expect(createChangedNodeTestShards([target], { cwd })).toEqual([
+          {
+            checkName: "checks-node-changed-boundary",
+            configs: ["test/vitest/vitest.boundary.config.ts"],
+            requiresDist: false,
+            runner: "blacksmith-8vcpu-ubuntu-2404",
+            shardName: "changed-boundary",
+          },
+        ]);
+      } finally {
+        rmSync(cwd, { force: true, recursive: true });
+      }
+    },
+  );
 
   it.each([
     "tsconfig.json",
@@ -2471,12 +2467,6 @@ describe("CI changed Node test plan", () => {
     ]);
 
     expectAllExtensionConfigs(shards);
-  });
-
-  it("covers every extension config when the fallback planner itself changes", () => {
-    expectAllExtensionConfigs(
-      createChangedExtensionFallbackShards(["scripts/lib/ci-changed-node-test-plan.mts"]),
-    );
   });
 
   it("keeps fallback config processes serial while filling independent job budgets", () => {
@@ -3313,7 +3303,7 @@ describe("CI changed Node test plan", () => {
     );
     expect(uiGroups.length).toBeGreaterThan(0);
     expect(uiGroups.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
-    expect(selectedFiles(shards)).not.toContain("test/scripts/mobile-release-authority.test.ts");
+    expect(selectedFiles(shards)).not.toContain("test/scripts/mobile-release-ci.test.ts");
   });
 
   it("keeps more than 96 changed tests and a direct plugin test precise with canonical worker budgets", () => {

@@ -25,11 +25,7 @@ async function withSyntheticReader(
     readerId: string;
     ownerEmail: string;
     dispatch: (method: ReadMethod) => ReturnType<typeof dispatchGatewayMethodInProcessRaw>;
-    blockCatalog: () => {
-      entered: Promise<void>;
-      readEntered: Promise<void>;
-      release: () => void;
-    };
+    blockCatalog: () => { entered: Promise<void>; readEntered: Promise<void>; release: () => void };
   }) => Promise<void>,
   visibility: "shared" | "draft" = "shared",
 ) {
@@ -64,8 +60,10 @@ async function withSyntheticReader(
       getRuntimeConfig: () => config,
       trackExecution: trackAsyncWork,
     });
+    const executions: Promise<void>[] = [];
     let catalogGate: ReturnType<typeof createDeferred<void>> | undefined;
     let catalogEntered: ReturnType<typeof createDeferred<void>> | undefined;
+    let restoreReadiness: (() => void) | undefined;
     const projection = await createSessionRowProjection({
       cfg: config,
       context,
@@ -75,7 +73,6 @@ async function withSyntheticReader(
         return undefined;
       },
     });
-    let restoreReadiness: (() => void) | undefined;
     bindSessionRowProjection(context, () => projection);
     try {
       await projection.ensureMaterialized();
@@ -102,6 +99,7 @@ async function withSyntheticReader(
                   forceSyntheticClient: true,
                   syntheticScopes: ["operator.read"],
                   resolveGatewayContext: () => context,
+                  onExecution: (execution) => executions.push(execution),
                 },
               ),
           ),
@@ -109,12 +107,13 @@ async function withSyntheticReader(
           catalogGate = createDeferred();
           catalogEntered = createDeferred();
           const readEntered = createDeferred();
-          const ensureMaterialized = projection.ensureMaterialized.bind(projection);
+          const ensure = projection.ensureMaterialized.bind(projection);
+          // Background catalog work uses a private closure; this observes the actual reader.
           const readiness = vi
             .spyOn(projection, "ensureMaterialized")
             .mockImplementationOnce(() => {
               readEntered.resolve();
-              return ensureMaterialized();
+              return ensure();
             });
           restoreReadiness = () => readiness.mockRestore();
           sessionChanges.emit({ all: true, scope: "catalog" });
@@ -127,9 +126,14 @@ async function withSyntheticReader(
       });
     } finally {
       catalogGate?.resolve();
-      restoreReadiness?.();
-      await projection.ensureMaterialized();
-      projection.dispose();
+      try {
+        // Dispatch reports handler errors through its response; join the owned work before disposal.
+        await Promise.allSettled(executions);
+        await projection.ensureMaterialized();
+      } finally {
+        restoreReadiness?.();
+        projection.dispose();
+      }
     }
   });
 }
@@ -186,7 +190,8 @@ describe("synthetic plugin session reads", () => {
   it.each(methods)("honors role revocation during projection readiness on %s", async (method) => {
     await withSyntheticReader(async ({ readerId, dispatch, blockCatalog }) => {
       const gate = blockCatalog();
-      const pending = method === "sessions.list" ? dispatch(method) : undefined;
+      const pending =
+        method === "sessions.list" ? Promise.allSettled([dispatch(method)]) : undefined;
       try {
         await gate.entered;
         if (pending) {
@@ -195,21 +200,24 @@ describe("synthetic plugin session reads", () => {
         setUserProfileRole(readerId, "blocked");
         if (pending) {
           gate.release();
-          await expect(pending).rejects.toThrow(
-            "Your operator role changed; reconnect before continuing.",
-          );
-        }
-        const result = await dispatch(method);
-        if (method === "sessions.list") {
-          expect(result).toMatchObject({ ok: true, payload: { sessions: [] } });
+          expect(await pending).toEqual([
+            {
+              status: "rejected",
+              reason: expect.objectContaining({
+                message: "Your operator role changed; reconnect before continuing.",
+              }),
+            },
+          ]);
+          expect(await dispatch(method)).toMatchObject({ ok: true, payload: { sessions: [] } });
         } else {
-          expect(result).toMatchObject({
+          expect(await dispatch(method)).toMatchObject({
             ok: false,
             error: { message: `Session "${sessionKey}" was not found.` },
           });
         }
       } finally {
         gate.release();
+        await pending;
       }
     });
   });

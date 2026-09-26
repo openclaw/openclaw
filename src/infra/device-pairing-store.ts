@@ -27,6 +27,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.kernel.js";
 import { bindCloudWorkerSetupCompletion } from "./device-pairing-cloud-worker.js";
+import type { PairedDeviceMetadataPatch } from "./device-pairing-core.types.js";
 import type { CloudWorkerSetupCompletionPublication } from "./device-pairing-read.types.js";
 import {
   invalidateDevicePairingStoreCache,
@@ -72,18 +73,10 @@ type DevicePairingStoreMutation<T> = {
   value: T;
 };
 
-type PairedDeviceNodeSurfaceUpdate<T> =
-  | { value: T; persist: false }
-  | { value: T; persist: true; nodeSurface: PairedDeviceNodeSurface };
-
-type PairedDevicePresenceUpdate<T> =
-  | { value: T; persist: false }
-  | {
-      value: T;
-      persist: true;
-      lastSeenAtMs: number;
-      lastSeenReason: string;
-    };
+type PairedDeviceUpdate<T> = {
+  value: T;
+  patch?: Partial<PairedDeviceMetadataPatch & Pick<PairedDevice, "tokens" | "nodeSurface">>;
+};
 
 const boundDatabase = new AsyncLocalStorage<OpenClawStateDatabase>();
 
@@ -358,12 +351,18 @@ export function readDevicePairingStoreStateFromDatabase(db: DatabaseSync): Devic
   ).rows) {
     pendingById[row.request_id] = fromPendingRow(row);
   }
-  const pairedByDeviceId = Object.fromEntries(
+  return { pendingById, pairedByDeviceId: readPairedDevicePairingRecordsFromDatabase(db) };
+}
+
+export function readPairedDevicePairingRecordsFromDatabase(
+  db: DatabaseSync,
+): Record<string, PairedDevice> {
+  const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+  return Object.fromEntries(
     executeSqliteQuerySync(db, kysely.selectFrom("device_pairing_paired").selectAll()).rows.map(
       (row) => [row.device_id, fromPairedRow(row)],
     ),
   );
-  return { pendingById, pairedByDeviceId };
 }
 
 /** Load the full pending + paired device snapshot from the shared state DB. */
@@ -396,53 +395,22 @@ export function loadPairedDevicePairingStoreRecordFromDatabase(
   return row ? fromPairedRow(row) : null;
 }
 
-/** Read, validate, and update one paired node surface in a single cross-process transaction. */
-export function updatePairedDeviceNodeSurfaceInTransaction<T>(
+/** Read and patch one device under the worker's transaction and commit admission. */
+export function updatePairedDeviceInTransaction<T>(
   deviceId: string,
   baseDir: string | undefined,
-  update: (device: PairedDevice | null) => PairedDeviceNodeSurfaceUpdate<T>,
+  update: (device: PairedDevice | null) => PairedDeviceUpdate<T>,
 ): T {
   return runDevicePairingStoreMutation(baseDir, ({ db }) => {
     const normalizedDeviceId = deviceId.trim();
-    const device = normalizedDeviceId
-      ? loadPairedDevicePairingStoreRecordFromDatabase(db, normalizedDeviceId)
-      : null;
+    const device = loadPairedDevicePairingStoreRecordFromDatabase(db, normalizedDeviceId);
     const result = update(device);
-    if (!result.persist) {
+    const patch = result.patch;
+    if (!patch || Object.keys(patch).length === 0) {
       return { mutated: false, value: result.value };
     }
     if (!device) {
-      throw new Error("cannot update a missing paired-device node surface");
-    }
-    const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .updateTable("device_pairing_paired")
-        .set({ node_surface_json: toJsonColumn(result.nodeSurface) })
-        .where("device_id", "=", normalizedDeviceId),
-    );
-    return { mutated: true, value: result.value };
-  });
-}
-
-/** Read, validate, and update one paired-device presence row in one transaction. */
-export function updatePairedDevicePresenceInTransaction<T>(
-  deviceId: string,
-  baseDir: string | undefined,
-  update: (device: PairedDevice | null) => PairedDevicePresenceUpdate<T>,
-): T {
-  return runDevicePairingStoreMutation(baseDir, ({ db }) => {
-    const normalizedDeviceId = deviceId.trim();
-    const device = normalizedDeviceId
-      ? loadPairedDevicePairingStoreRecordFromDatabase(db, normalizedDeviceId)
-      : null;
-    const result = update(device);
-    if (!result.persist) {
-      return { mutated: false, value: result.value };
-    }
-    if (!device) {
-      throw new Error("cannot update presence for a missing paired device");
+      throw new Error("cannot update a missing paired device");
     }
     const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
     executeSqliteQuerySync(
@@ -450,8 +418,16 @@ export function updatePairedDevicePresenceInTransaction<T>(
       kysely
         .updateTable("device_pairing_paired")
         .set({
-          last_seen_at_ms: result.lastSeenAtMs,
-          last_seen_reason: result.lastSeenReason,
+          ...("displayName" in patch ? { display_name: patch.displayName ?? null } : {}),
+          ...("operatorLabel" in patch ? { operator_label: patch.operatorLabel ?? null } : {}),
+          ...("platform" in patch ? { platform: patch.platform ?? null } : {}),
+          ...("clientId" in patch ? { client_id: patch.clientId ?? null } : {}),
+          ...("clientMode" in patch ? { client_mode: patch.clientMode ?? null } : {}),
+          ...("remoteIp" in patch ? { remote_ip: patch.remoteIp ?? null } : {}),
+          ...("lastSeenAtMs" in patch ? { last_seen_at_ms: patch.lastSeenAtMs ?? null } : {}),
+          ...("lastSeenReason" in patch ? { last_seen_reason: patch.lastSeenReason ?? null } : {}),
+          ...("tokens" in patch ? { tokens_json: toJsonColumn(patch.tokens) } : {}),
+          ...("nodeSurface" in patch ? { node_surface_json: toJsonColumn(patch.nodeSurface) } : {}),
         })
         .where("device_id", "=", normalizedDeviceId),
     );

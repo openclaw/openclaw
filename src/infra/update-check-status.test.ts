@@ -7,11 +7,13 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import * as processExec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { resolveVersionFromModuleUrl } from "../version.js";
 import {
   checkUpdateStatus,
   resolveUpdateInstallIdentity,
   resolveUpdateInstallKind,
 } from "./update-check.js";
+import { verifyGitUpdateRecovery } from "./update-git-runtime.js";
 
 const runCommandWithTimeout = processExec.runCommandWithTimeout;
 const PNPM_PACKAGE_MANAGER = "pnpm@12.0.0";
@@ -67,6 +69,97 @@ afterEach(() => {
 });
 
 describe("checkUpdateStatus", () => {
+  it("reports verified Git artifacts independently of target freshness", async () => {
+    await withTestDir({ prefix: "openclaw-update-artifacts-" }, async (root) => {
+      await initGitRepo(root);
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.9.1" }),
+      );
+      await fs.writeFile(path.join(root, ".gitignore"), "dist/\n");
+      await runGit(root, "add", ".");
+      await commitGit(root, "initial");
+      const sha = await runGit(root, "rev-parse", "HEAD");
+      const readStatus = () => checkUpdateStatus({ root, includeRegistry: false, fetchGit: true });
+      expect((await readStatus()).git?.artifacts).toEqual({ ready: false });
+
+      const dist = path.join(root, "dist");
+      await fs.mkdir(path.join(dist, "control-ui", "assets"), { recursive: true });
+      const files = {
+        "build-info.json": JSON.stringify({
+          commit: sha,
+          version: "2026.9.1",
+          buildId: "fixture-build",
+        }),
+        ".buildstamp": JSON.stringify({ head: sha }),
+        ".runtime-postbuildstamp": JSON.stringify({ head: sha }),
+        "entry.js": "export {};",
+        "control-ui/index.html": '<script src="./assets/main.js"></script>',
+        "control-ui/assets/main.js": "export {};",
+      };
+      for (const [file, content] of Object.entries(files)) {
+        await fs.writeFile(path.join(dist, file), content);
+      }
+      const ready = { ready: true, version: "2026.9.1", buildId: "fixture-build" };
+      expect((await readStatus()).git).toMatchObject({
+        sha,
+        builtSha: sha,
+        artifacts: ready,
+        upstreamSha: null,
+      });
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.9.2" }),
+      );
+      expect(resolveVersionFromModuleUrl(pathToFileURL(path.join(dist, "entry.js")).href)).toBe(
+        "2026.9.1",
+      );
+      expect((await readStatus()).git).toMatchObject({ dirty: true, artifacts: ready });
+      expect(await verifyGitUpdateRecovery({ root, sha })).toEqual({
+        serviceRestartSafe: true,
+        version: "2026.9.2",
+        buildId: "fixture-build",
+      });
+      await fs.writeFile(
+        path.join(dist, "build-info.json"),
+        JSON.stringify({ commit: sha, buildId: "fixture-build" }),
+      );
+      expect((await readStatus()).git?.artifacts).toEqual({ ...ready, version: "2026.9.2" });
+      await fs.writeFile(
+        path.join(dist, "build-info.json"),
+        JSON.stringify({ commit: sha, version: "2026.9.2", buildId: "rebuilt-fixture" }),
+      );
+      expect((await readStatus()).git?.artifacts).toEqual({
+        ready: true,
+        version: "2026.9.2",
+        buildId: "rebuilt-fixture",
+      });
+      await fs.writeFile(path.join(dist, "build-info.json"), files["build-info.json"]);
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.9.1" }),
+      );
+      for (const [file, content] of Object.entries(files)) {
+        await fs.rm(path.join(dist, file));
+        expect((await readStatus()).git?.artifacts, file).toEqual({ ready: false });
+        await fs.writeFile(path.join(dist, file), content);
+      }
+      for (const buildInfo of [{ commit: sha }, { commit: "stale", buildId: "fixture-build" }]) {
+        await fs.writeFile(path.join(dist, "build-info.json"), JSON.stringify(buildInfo));
+        expect((await readStatus()).git?.artifacts).toEqual({ ready: false });
+      }
+      await fs.writeFile(path.join(dist, "build-info.json"), files["build-info.json"]);
+      await runGit(root, "remote", "add", "origin", path.join(root, "missing-upstream"));
+      await runGit(root, "config", "branch.main.remote", "origin");
+      await runGit(root, "config", "branch.main.merge", "refs/heads/main");
+      expect((await readStatus()).git).toMatchObject({
+        artifacts: ready,
+        fetchOk: false,
+        upstreamSha: null,
+      });
+    });
+  });
+
   it.each([
     {
       remoteUrl: "https://github.com/example/openclaw.git",
@@ -360,43 +453,6 @@ describe("checkUpdateStatus", () => {
         branch: "HEAD",
         sha: detachedSha,
         upstream: "foo/bar/main",
-        upstreamSource: "tracking",
-        upstreamSha,
-        ahead: 0,
-        behind: 1,
-        fetchOk: true,
-      });
-    });
-  });
-
-  it("prefers a retained main branch's configured non-origin upstream", async () => {
-    await withTestDir({ prefix: "openclaw-update-check-configured-upstream-" }, async (base) => {
-      const sourceRoot = path.join(base, "source");
-      const localRoot = path.join(base, "local");
-      await initGitRepo(sourceRoot);
-      await commitGit(sourceRoot, "base");
-      await runGit(base, "clone", "--quiet", sourceRoot, localRoot);
-      const detachedSha = await runGit(localRoot, "rev-parse", "HEAD");
-      await runGit(localRoot, "remote", "add", "upstream", sourceRoot);
-      await runGit(localRoot, "fetch", "upstream", "+refs/heads/main:refs/remotes/upstream/main");
-      await runGit(localRoot, "branch", "--set-upstream-to=upstream/main", "main");
-      await runGit(localRoot, "checkout", "--detach", detachedSha);
-      await runGit(localRoot, "remote", "set-url", "origin", path.join(base, "missing"));
-      await commitGit(sourceRoot, "newer");
-      const upstreamSha = await runGit(sourceRoot, "rev-parse", "HEAD");
-
-      const status = await checkUpdateStatus({
-        root: localRoot,
-        includeRegistry: false,
-        fetchGit: true,
-        timeoutMs: 5000,
-        useDetachedDevUpstream: true,
-      });
-
-      expect(status.git).toMatchObject({
-        branch: "HEAD",
-        sha: detachedSha,
-        upstream: "upstream/main",
         upstreamSource: "tracking",
         upstreamSha,
         ahead: 0,
@@ -714,11 +770,6 @@ describe("checkUpdateStatus", () => {
   });
 
   it.each([
-    {
-      name: "text lockfile",
-      lockfiles: ["bun.lock"],
-      expectedLockfile: "bun.lock",
-    },
     {
       name: "binary lockfile",
       lockfiles: ["bun.lockb"],

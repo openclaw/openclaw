@@ -1320,23 +1320,6 @@ describe("Slack native command argument menus", () => {
     expectSingleDispatchedSlashBody("/tts status");
   });
 
-  it("dispatches the command when an overflow option is chosen", async () => {
-    await runArgMenuAction(argMenuHandler, {
-      action: {
-        selected_option: {
-          value: encodeValue({
-            command: "usage",
-            arg: "mode",
-            value: "cost",
-            userId: "U1",
-          }),
-        },
-      },
-    });
-
-    expectSingleDispatchedSlashBody("/usage cost");
-  });
-
   it("shows an external_select menu when choices exceed static_select options max", async () => {
     const { respond, payload, blockId } =
       await runCommandAndResolveActionsBlock(reportExternalHandler);

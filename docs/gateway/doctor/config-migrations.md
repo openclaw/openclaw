@@ -26,6 +26,42 @@ the account's bindings unchanged. An unresolved account stays blocked
 with that reason while the Gateway and other accounts continue running; it does
 not enter a restart loop. Add the reported binding and restart the Gateway.
 
+## Channel webhook listeners
+
+Telegram now receives webhooks on Gateway HTTP routes. Its plugin-owned Doctor
+migration moves an explicitly configured `webhookPort` and effective bind host
+into `legacyWebhook: { port, host? }`. An explicit host without a port keeps that
+host with port `8787`. Doctor validates and backs up the config through the normal
+write flow. The compatibility listener forwards only its registered webhook
+routes through the same Gateway request pipeline, preserving signatures and retry
+responses during channel restarts.
+
+The exported Telegram config types retain deprecated `webhookPort` and
+`webhookHost` input properties until the next Plugin SDK major. TypeScript config
+producers remain source-compatible, but parsed runtime config uses only
+`legacyWebhook`; run Doctor before using legacy inputs. This type compatibility
+window does not schedule removal of the default listener.
+
+Update the external callback or reverse-proxy upstream to the Gateway port and
+the channel's webhook path, verify delivery, then set `legacyWebhook: false` to
+close the old port. Omitting `legacyWebhook` preserves Telegram's previous
+`127.0.0.1:8787` listener whenever the account uses webhook mode. An explicit
+object selects its configured endpoint; an account-level value overrides the
+channel-level setting. Doctor explains the canonical Gateway route and opt-out
+without changing implicit settings. A shared compatibility port closes when no
+account retains that endpoint.
+
+This behavior is the same for existing and new installations. It needs no upgrade
+eligibility check or migration receipt. Removing `legacyWebhook: false` restores
+the default listener; removing an explicit object also returns to the default.
+Retiring these listeners is a separate future change, with no removal deadline
+or automatic expiry introduced here.
+
+Telegram re-registers its configured public `webhookUrl` at startup. It preserves
+that URL because its reverse-proxy upstream cannot be inferred safely. Accounts
+that shared a path and secret on different explicit ports keep their old-port
+routing; assign distinct secrets or paths before moving them to one Gateway port.
+
 ## ACP agents' model precedence
 
 For an agent with `runtime.type: "acp"`, `agents.entries.*.model` (string form) or
@@ -65,6 +101,37 @@ the plugin migration resumes.
 While a migration is pending, explicit config edits that would change or remove
 its retained inputs are refused with the recovery command. Unrelated settings
 remain writable. Complete the plugin migration before editing those inputs.
+
+## Retired TaskFlow Webhooks plugin
+
+The bundled TaskFlow Webhooks plugin has been removed. Existing
+`plugins.entries.webhooks` settings are ignored with a `plugin removed: webhooks`
+warning so the Gateway can start after an update. Run `openclaw doctor --fix` to
+remove its stale entry and `plugins.allow` or `plugins.deny` references through
+the normal config backup and repair flow. This retirement does not change the
+database schema or delete stored Tasks or TaskFlows.
+
+If Webhooks was the only plugin in `plugins.allow`, Doctor retains other
+already enabled plugins as explicit allowlist entries, including configured
+bundled channels and selected memory or context-engine plugins. Existing deny
+and disable settings still apply. Doctor reports the retained IDs; review this
+list when changing channels or plugin slots because these entries remain explicit
+plugin permissions.
+
+If no enabled plugins remain, Doctor sets `plugins.enabled: false`. An empty
+allowlist would otherwise allow unrelated installed plugins to load. Review the
+remaining plugin choices, set `plugins.allow` to the plugins you want, and then
+re-enable plugins.
+
+If an active plugin's legacy ID aliases to a different owner, Doctor leaves the
+stale plugin settings unchanged and warns instead of granting that other owner
+access. Choose noncolliding allowed plugin IDs, then rerun `openclaw doctor --fix`
+to finish cleanup. Other Doctor repairs continue.
+
+Use [Gateway HTTP hooks](/automation/cron-jobs/webhooks) to wake an agent or submit
+an agent turn from an external service. Their `hooks.*` settings, internal event
+hooks, and the `openclaw webhooks gmail` commands remain available. TaskFlow
+record actions from the retired plugin have no equivalent HTTP endpoint.
 
 ## Schema publication during a 2026.9.2 update
 

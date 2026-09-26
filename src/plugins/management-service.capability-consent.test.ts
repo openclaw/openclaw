@@ -15,6 +15,7 @@ import { loadInstalledPluginIndexWithDiscovery } from "./installed-plugin-index.
 import {
   configSnapshot,
   emptyMetadataSnapshot,
+  hostedDiffsEntry,
   metadataSnapshot,
 } from "./management-service.test-helpers.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -175,6 +176,45 @@ describe("managed plugin capability consent", () => {
       };
     });
   });
+
+  it.each([false, true])(
+    "inspects UI capabilities without activation when enabled is %s",
+    async (enabled) => {
+      const record = installRecord();
+      const snapshot = configureExternalPlugin(record, enabled);
+      snapshot.byPluginId.get("community-plugin")!.uiCapabilities = ["page", "widget"];
+      const inspection = await inspectManagedPlugin({
+        config: { plugins: { entries: { "community-plugin": { enabled } } } },
+        env: {},
+        pluginId: "community-plugin",
+      });
+      expect(inspection.overview?.capabilities?.ui).toEqual(["page", "widget"]);
+      expect(inspection.plugin.enabled).toBe(enabled);
+      expect(fs.existsSync(path.join(record.installPath!, "runtime-loaded.txt"))).toBe(false);
+      expect(inspection.declared).not.toHaveProperty("uiCapabilities");
+    },
+  );
+
+  it.each([undefined, [], ["widget", "page", "widget"]])(
+    "inspects optional UI metadata before installation: %j",
+    async (uiCapabilities) => {
+      mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
+      mocks.officialCatalog.mockResolvedValue({
+        source: "hosted",
+        entries: [
+          {
+            ...hostedDiffsEntry,
+            openclaw: { ...hostedDiffsEntry.openclaw, uiCapabilities },
+          },
+        ],
+      });
+      const inspection = await inspectManagedPlugin({ config: {}, env: {}, pluginId: "diffs" });
+      expect(inspection.plugin.installed).toBe(false);
+      expect(inspection.overview?.capabilities?.ui).toEqual(
+        uiCapabilities?.length ? ["page", "widget"] : uiCapabilities,
+      );
+    },
+  );
 
   it.each([
     { name: "global disable", plugins: { enabled: false }, reason: "plugins disabled" },
@@ -529,6 +569,10 @@ describe("managed plugin capability consent", () => {
     expect(declared.providers).toEqual(["configured-provider", "package-provider"]);
     const reviewToken = computeDeclaredSurfaceHash(declared);
 
+    expect(inspections.map((inspection) => inspection.overview?.capabilities?.providers)).toEqual([
+      ["configured-provider"],
+      ["package-provider"],
+    ]);
     for (const inspection of inspections) {
       expect(inspection.declared).toEqual(declared);
       expect(inspection.reviewToken).toBe(reviewToken);
