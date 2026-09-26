@@ -125,6 +125,7 @@ export TEST_RUNNER_OPENCLAW_MAC_PROOF_STATE="$state"
 export TEST_RUNNER_OPENCLAW_MAC_PROOF_CONFIG="$state/openclaw.json"
 export TEST_RUNNER_OPENCLAW_MAC_PROOF_STAGE="$stage"
 export TEST_RUNNER_OPENCLAW_MAC_PROOF_PRODUCTS="$products"
+export TEST_RUNNER_OPENCLAW_MAC_PROOF_TOOL_IMAGE="$output/live-tool.png"
 args=(-project "$test_project/NativeNarrationProof.xcodeproj" -scheme NativeNarrationProof
   -destination 'platform=macOS' -derivedDataPath "$scratch/derived" -parallel-testing-enabled NO)
 if ! xcodebuild "${args[@]}" build-for-testing > "$output/ui-build.log" 2>&1; then
@@ -145,5 +146,9 @@ git -C "$checkout" diff --exit-code -- apps/macos/Sources apps/shared/OpenClawKi
 test "$(git -C "$checkout" write-tree)" = "$expected_tree"
 test -z "$(git -C "$checkout" ls-files --others --exclude-standard -- apps/macos/Sources apps/shared/OpenClawKit/Sources apps/shared/OpenClawKit/Tests)"
 [[ "$status" -eq 0 ]]
+# Check the exact live row, not fixture payloads; both arguments and active status must render.
+tesseract "$output/live-tool.png" "$output/live-tool" -l eng --psm 6
+grep -Fq 'Layout.swift' "$output/live-tool.txt"
+grep -Fq 'Working' "$output/live-tool.txt"
 node -e 'const r=require(process.argv[1]);if(r.result!=="Passed"||r.failedTests!==0||r.passedTests!==1)process.exit(1)' "$output/summary.json"
 node -e 'const r=require(process.argv[1]);if(r.requests.filter(x=>x.method==="chat.send").length!==1)throw new Error("Expected exactly one UI chat.send")' "$output/requests.json"

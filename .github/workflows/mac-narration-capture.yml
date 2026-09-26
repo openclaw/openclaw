@@ -54,6 +54,8 @@ jobs:
         run: |
           scripts/install-xcodegen.sh "$RUNNER_TEMP/mac-tools/bin"
           echo "$RUNNER_TEMP/mac-tools/bin" >> "$GITHUB_PATH"
+      - name: Install CPU text recognition for native screenshot assertions
+        run: brew install tesseract
       - name: Restore SwiftPM download cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:

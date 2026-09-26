@@ -1,5 +1,4 @@
 import Foundation
-import Vision
 import XCTest
 
 /// Opt-in desktop proof: exact baseline/grouped app bytes with the same loopback Gateway scenario.
@@ -73,16 +72,10 @@ final class NativeNarrationUITests: XCTestCase {
         XCTAssertTrue(activeVisible, "Both narration segments must remain visible while working")
         let liveRead = app.otherElements["Read"]
         XCTAssertTrue(liveRead.waitForExistence(timeout: 5), "Pending tool must be visible")
-        // SwiftUI exposes this noninteractive row's label, but not AXValue, on macOS.
-        // Recognize its actual pixels so missing arguments or status still fail proof.
-        let toolText = VNRecognizeTextRequest()
-        toolText.recognitionLevel = .accurate
-        toolText.usesLanguageCorrection = false
-        try VNImageRequestHandler(data: liveRead.screenshot().pngRepresentation, options: [:]).perform([toolText])
-        let visibleToolText = (toolText.results ?? []).compactMap { $0.topCandidates(1).first?.string }
-            .joined(separator: " ")
-        XCTAssertTrue(visibleToolText.contains("Layout.swift"), "Missing tool arguments: \(visibleToolText)")
-        XCTAssertTrue(visibleToolText.contains("Working"), "Missing live tool state: \(visibleToolText)")
+        // macOS omits AXValue for this row. The driver checks its actual pixels
+        // with CPU-based OCR after XCTest, avoiding unavailable VM Vision engines.
+        let toolImagePath = try XCTUnwrap(environment["OPENCLAW_MAC_PROOF_TOOL_IMAGE"])
+        try liveRead.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: toolImagePath))
         if stage == "after" {
             XCTAssertLessThan(first.frame.minY, liveRead.frame.minY)
             XCTAssertLessThan(liveRead.frame.minY, second.frame.minY)
