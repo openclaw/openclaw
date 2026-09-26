@@ -138,7 +138,7 @@ describe("sessionsTailCommand", () => {
       .mocked(runtime.log)
       .mock.calls.map((call) => String(call[0]))
       .join("\n");
-    expect(output).toContain("12:04:18");
+    expect(output).toContain("12:04:18Z");
     expect(output).toContain("tool.call");
     expect(output).toContain("bash {...redacted...}");
     expect(output).toContain("tool.result");
@@ -192,36 +192,46 @@ describe("sessionsTailCommand", () => {
   });
 
   it.each([
-    ["ASCII", "incident", "incident"],
-    ["CJK", "中文", "中文"],
-    ["combining accent", "e\u0301", "e\u0301"],
-    ["joined emoji", "👩🏽‍💻", "👩🏽‍💻"],
-    ["truncated emoji", `${"a".repeat(17)}👩🏽‍💻-incident`, `${"a".repeat(17)}…`],
-  ])("keeps progress columns aligned with %s session keys", async (_name, suffix, displayed) => {
-    const runtime = createTestRuntime();
-    const key = `agent:main:${suffix}`;
-    await writeSessionEntry(key);
-    await appendEvents(
-      [
-        makeEvent({
-          type: "tool.result",
-          ts: "2026-05-18T12:04:21.000Z",
-          data: { name: "proof", success: true },
-        }),
-      ],
-      { key },
-    );
+    ["ASCII", "2026-05-18T12:04:21.000Z", "12:04:21Z", "incident", "incident"],
+    ["CJK", "invalid", "--:--:--", "中文", "中文"],
+    ["combining accent", "2026-05-18T12:04:21.000Z", "12:04:21Z", "e\u0301", "e\u0301"],
+    ["joined emoji", "2026-05-18T12:04:21.000Z", "12:04:21Z", "👩🏽‍💻", "👩🏽‍💻"],
+    [
+      "truncated emoji",
+      "2026-05-18T12:04:21.000Z",
+      "12:04:21Z",
+      `${"a".repeat(17)}👩🏽‍💻-incident`,
+      `${"a".repeat(17)}…`,
+    ],
+  ])(
+    "keeps progress columns aligned with %s session keys",
+    async (_name, ts, timestamp, suffix, displayed) => {
+      const runtime = createTestRuntime();
+      const key = `agent:main:${suffix}`;
+      await writeSessionEntry(key);
+      await appendEvents(
+        [
+          makeEvent({
+            type: "tool.result",
+            ts,
+            data: { name: "proof", success: true },
+          }),
+        ],
+        { key },
+      );
 
-    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey: key }, runtime);
+      await sessionsTailCommand({ agent: "main", store: storePath, sessionKey: key }, runtime);
 
-    const line = runtimeOutput(runtime);
-    expect(line.split("\n")).toHaveLength(1);
-    expect(line).toContain(` agent:main:${displayed} `);
-    expect(line).toContain("tool.result");
-    expect(line.endsWith("proof ok")).toBe(true);
-    const previewOffset = line.indexOf("proof ok");
-    expect(visibleWidth(line.slice(0, previewOffset))).toBe(57);
-  });
+      const line = runtimeOutput(runtime);
+      expect(line.split("\n")).toHaveLength(1);
+      expect(line.startsWith(`${timestamp} `)).toBe(true);
+      expect(line).toContain(` agent:main:${displayed} `);
+      expect(line).toContain("tool.result");
+      expect(line.endsWith("proof ok")).toBe(true);
+      const previewOffset = line.indexOf("proof ok");
+      expect(visibleWidth(line.slice(0, previewOffset))).toBe(58);
+    },
+  );
 
   it.each([
     ["CSI inside", "a\u001b[31mb", "custom\u001b[31m", "ab", "custom"],
@@ -266,7 +276,7 @@ describe("sessionsTailCommand", () => {
       expect(line).toContain(` ${displayedType} `);
       expect(line).toContain(` agent:main:${displayed} `);
       expect(line.endsWith(" proof")).toBe(true);
-      expect(visibleWidth(line.slice(0, line.lastIndexOf(" proof") + 1))).toBe(57);
+      expect(visibleWidth(line.slice(0, line.lastIndexOf(" proof") + 1))).toBe(58);
     },
   );
 
