@@ -22,7 +22,7 @@ import { resolveControlUiWebPushUrl } from "./control-ui-shared.js";
 import { QUESTIONS_SCOPE } from "./method-scopes.js";
 import { ADMIN_SCOPE, READ_SCOPE } from "./operator-scopes.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
-import { canReceiveSessionEvent } from "./session-sharing.js";
+import { canReceiveSessionEvent, resolveSessionSharingTarget } from "./session-sharing.js";
 import {
   listCurrentWebPushTargets,
   withCurrentWebPushAuthority,
@@ -191,6 +191,7 @@ export function createEventWebPushDelivery(params: {
             ...(mention ? { visibilityScopes: [ADMIN_SCOPE] } : {}),
           });
           const agentLabel = normalizeWebPushDisplayLabel(agentId);
+          let completionLabel: string | null | undefined;
           const groups = new Map<
             string,
             { title: string; body: string; subscriptions: BoundWebPushSubscription[] }
@@ -226,12 +227,34 @@ export function createEventWebPushDelivery(params: {
               // Multi-user events without an authoritative session owner are not broadcast offline.
               continue;
             }
+            let identifiedBody = notification.identifiedBody;
+            if (
+              notification.category === "agent-finished" &&
+              preferences.detailLevel !== "private" &&
+              sessionKeys.length === 1 &&
+              sessionKey
+            ) {
+              // Only explicit metadata from the authorized target is displayable.
+              // Never derive a lock-screen label from route keys or message content.
+              if (completionLabel === undefined) {
+                try {
+                  const session = resolveSessionSharingTarget({ cfg, sessionKey, agentId });
+                  completionLabel = normalizeWebPushDisplayLabel(session?.entry.label) ?? null;
+                } catch {
+                  // Optional metadata must not turn an otherwise valid alert into a failure.
+                  completionLabel = null;
+                }
+              }
+              if (completionLabel) {
+                identifiedBody = `${completionLabel}: ${notification.body}`;
+              }
+            }
             const prefix = preferences.label ? `${preferences.label} · ` : "";
             const title = `${prefix}${notification.title}`;
             const body =
               preferences.detailLevel === "private"
                 ? notification.body
-                : (notification.identifiedBody ??
+                : (identifiedBody ??
                   (agentLabel ? `${agentLabel}: ${notification.body}` : notification.body));
             const key = JSON.stringify({ title, body });
             const group = groups.get(key) ?? { title, body, subscriptions: [] };
