@@ -830,7 +830,7 @@ describe("release candidate checklist", () => {
       if (expected === "warning") {
         expect(message).toContain("2026.7.4");
         expect(message).toContain(
-          "scripts/mobile-release-version.ts --prepare --version 2026.9.1 --write before tagging",
+          "scripts/android-pin-version.ts --version 2026.9.1 before tagging",
         );
         expect(message).toContain("or accept that Android will not ship for this release");
       }

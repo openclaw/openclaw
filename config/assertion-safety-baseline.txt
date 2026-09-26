@@ -696,7 +696,6 @@ extensions/memory-wiki/src/mutation-coordinator.ts	1
 extensions/memory-wiki/src/okf.ts	1
 extensions/memory-wiki/src/source-sync-state.ts	1
 extensions/memory-wiki/src/tool.ts	2
-extensions/memory-wiki/src/vault-page-write.ts	2
 extensions/microsoft-foundry/cli.ts	7
 extensions/microsoft-foundry/onboard.ts	2
 extensions/microsoft-foundry/provider.ts	1
