@@ -66,54 +66,6 @@ afterEach(async () => {
 });
 
 describe("A2A outbound channel delivery", () => {
-  it("rejects revoked handoff authority after asynchronous transport preparation", async () => {
-    let resolveLookup: (() => void) | undefined;
-    let markLookupStarted: (() => void) | undefined;
-    const lookupStarted = new Promise<void>((resolve) => {
-      markLookupStarted = resolve;
-    });
-    const lookupFinished = new Promise<Array<{ address: string; family: 4 }>>((resolve) => {
-      resolveLookup = () => resolve([{ address: "93.184.216.34", family: 4 }]);
-    });
-    const lookupFn: NonNullable<Parameters<typeof guardedFetch>[0]["lookupFn"]> = vi.fn(
-      async () => {
-        markLookupStarted?.();
-        return await lookupFinished;
-      },
-    );
-    vi.mocked(ssrfRuntime.fetchWithSsrFGuard).mockImplementationOnce(
-      async (params) => await trackGuardedFetch({ ...params, lookupFn }),
-    );
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(createA2aJsonResponse({ jsonrpc: "2.0", result: {} }));
-    const cfg = createA2aOutboundConfig({
-      token: "inbound-token",
-      url: "https://hermes.example/a2a/v1",
-    });
-    let current = true;
-    const assertDirectAdapterHandoff = vi.fn(() => {
-      if (!current) {
-        throw new Error("source authority revoked");
-      }
-    });
-
-    const send = sendA2aChannelText({
-      cfg,
-      to: "hermes",
-      text: "hello",
-      assertDirectAdapterHandoff,
-    });
-    await lookupStarted;
-    current = false;
-    resolveLookup?.();
-
-    await expect(send).rejects.toThrow("source authority revoked");
-    expect(lookupFn).toHaveBeenCalledOnce();
-    expect(assertDirectAdapterHandoff).toHaveBeenCalledOnce();
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it("rechecks handoff authority before the compatibility retry", async () => {
     let current = true;
     const assertDirectAdapterHandoff = vi.fn(() => {

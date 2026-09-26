@@ -56,11 +56,12 @@ async function startHttpHarness(options?: {
     },
     ...options?.a2aConfig,
   };
-  const dispatchInbound =
+  const dispatchInbound = vi.fn<Parameters<typeof createA2aHttpHandler>[0]["dispatchInbound"]>(
     options?.onDispatch ??
-    (async (message) => {
-      taskStore.completeNext(message.contextId, `echo: ${message.text}`, message.peerName);
-    });
+      (async (message) => {
+        taskStore.completeNext(message.contextId, `echo: ${message.text}`, message.peerName);
+      }),
+  );
   const handler = createA2aHttpHandler({
     config,
     a2aConfig,
@@ -119,6 +120,7 @@ async function startHttpHarness(options?: {
     baseUrl,
     taskStore,
     handler,
+    dispatchInbound,
     async get(endpoint: string) {
       return await dispatchRequest({ method: "GET", endpoint });
     },
@@ -540,7 +542,12 @@ describe("A2A JSON-RPC protocol boundary", () => {
 
   it("executes batch notifications without returning notification response entries", async () => {
     const harness = await startHttpHarness();
-    const notification = sendRequest({ text: "notify", returnImmediately: true });
+    const notification = sendRequest({
+      contextId: "notify-batch-context",
+      messageId: "notify-batch-message",
+      text: "notify",
+      returnImmediately: true,
+    });
     const { id: _notificationId, ...withoutId } = notification;
     const response = await harness.post([
       withoutId,
@@ -556,15 +563,70 @@ describe("A2A JSON-RPC protocol boundary", () => {
       result: { task: { artifacts: [{ parts: [{ text: "echo: visible" }] }] } },
     });
     expect(results[1]).toMatchObject({ id: null, error: { code: -32600 } });
+    expect(harness.dispatchInbound).toHaveBeenCalledTimes(2);
+    const notificationCalls = harness.dispatchInbound.mock.calls.filter(
+      ([message]) => message.messageId === "notify-batch-message",
+    );
+    expect(notificationCalls).toEqual([
+      [
+        {
+          taskId: expect.any(String),
+          contextId: "notify-batch-context",
+          messageId: "notify-batch-message",
+          peerName: "alpha",
+          text: "notify",
+        },
+      ],
+    ]);
+    const notificationCall = notificationCalls[0];
+    if (!notificationCall) {
+      throw new Error("expected notification dispatch");
+    }
+    const dispatchResult =
+      harness.dispatchInbound.mock.results[
+        harness.dispatchInbound.mock.calls.indexOf(notificationCall)
+      ];
+    expect(dispatchResult?.type).toBe("return");
+    await expect(dispatchResult?.value).resolves.toBeUndefined();
+    expect(harness.taskStore.get(notificationCall[0].taskId, "alpha")).toMatchObject({
+      status: { state: "TASK_STATE_COMPLETED" },
+      artifacts: [{ parts: [{ text: "echo: notify" }] }],
+    });
   });
 
   it("responds to notification-only requests with HTTP 200 and an empty body", async () => {
     const harness = await startHttpHarness();
-    const { id: _notificationId, ...notification } = sendRequest({ returnImmediately: true });
+    const { id: _notificationId, ...notification } = sendRequest({
+      contextId: "notify-only-context",
+      messageId: "notify-only-message",
+      text: "notify only",
+      returnImmediately: true,
+    });
     const response = await harness.post(notification);
 
     expect(response.status).toBe(200);
     await expect(response.text()).resolves.toBe("");
+    expect(harness.dispatchInbound).toHaveBeenCalledOnce();
+    const [notificationCall] = harness.dispatchInbound.mock.calls;
+    expect(notificationCall).toEqual([
+      {
+        taskId: expect.any(String),
+        contextId: "notify-only-context",
+        messageId: "notify-only-message",
+        peerName: "alpha",
+        text: "notify only",
+      },
+    ]);
+    if (!notificationCall) {
+      throw new Error("expected notification dispatch");
+    }
+    const [dispatchResult] = harness.dispatchInbound.mock.results;
+    expect(dispatchResult?.type).toBe("return");
+    await expect(dispatchResult?.value).resolves.toBeUndefined();
+    expect(harness.taskStore.get(notificationCall[0].taskId, "alpha")).toMatchObject({
+      status: { state: "TASK_STATE_COMPLETED" },
+      artifacts: [{ parts: [{ text: "echo: notify only" }] }],
+    });
   });
 
   it.each(["SendMessage", "message/send"])(
