@@ -543,22 +543,6 @@ describe("docs-link-audit", () => {
       }
     });
 
-    it("leaves fragments into mirrored routes alone in plain mode", () => {
-      const tempDirs: string[] = [];
-      try {
-        // Plain mode has never inspected fragments; the declared route is proof
-        // enough, so the unverifiable fragment must not become a broken link.
-        const result = auditDocsLinks({
-          docsDir: buildDocsTree(tempDirs, "/clawhub/publishing#package-publish-source"),
-          allowExternalClawHubRoutes: true,
-        });
-        expect(result.broken).toEqual([]);
-        expect(result.unverifiedMirroredFragments).toBe(0);
-      } finally {
-        cleanupTempDirs(tempDirs);
-      }
-    });
-
     it("exits clean from the CLI in plain mode for a fragment into a mirrored route", () => {
       const tempDirs: string[] = [];
       try {

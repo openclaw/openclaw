@@ -1,6 +1,5 @@
-import { aggregateDay, aggregateDays, boundReportDocument } from "./aggregate.js";
+import { boundReportDocument } from "./aggregate.js";
 import type { TeamReportsConfig, resolveTeamReportsConfig } from "./config.js";
-import { describePeriod } from "./periods.js";
 import { renderMarkdown } from "./render/markdown.js";
 import { buildRoster } from "./roster.js";
 import { createDiscordSource } from "./sources/discord/index.js";
@@ -29,23 +28,6 @@ export function createReportSources(runtime: SourceRuntime, discordEnabled: bool
   };
 }
 
-export function runPeriods(
-  config: TeamReportsConfig,
-  days: PeriodDescriptor[],
-): PeriodDescriptor[] {
-  const periods = new Map(days.map((day) => [`day/${day.key}`, day]));
-  // Also close the week/month containing yesterday when the calendar rolls over.
-  for (const day of days) {
-    for (const period of ["week", "month"] as const) {
-      if (period === "week" ? config.schedule.weekly : config.schedule.monthly) {
-        const descriptor = describePeriod(period, day.sinceMs);
-        periods.set(`${period}/${descriptor.key}`, descriptor);
-      }
-    }
-  }
-  return [...periods.values()];
-}
-
 function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
     const abort = () => {
@@ -70,6 +52,7 @@ export async function generateReportPeriods(params: {
   store: TeamReportsStore;
   llm: SummaryLlm;
   periods: PeriodDescriptor[];
+  reuseCollectedDays?: boolean;
   runtime: SourceRuntime & { signal: AbortSignal };
   sources: ReportSourceFactory;
   onRoster: (people: Person[]) => void;
@@ -97,46 +80,68 @@ export async function generateReportPeriods(params: {
     }
     const previous = await store.getPeriodDocument(period.period, period.key);
     runtime.signal.throwIfAborted();
+    const accepted = previous?.report;
+    if (
+      params.reuseCollectedDays &&
+      period.period === "day" &&
+      accepted &&
+      accepted.status === "closed" &&
+      Object.values(accepted.sources).every((source) => source.ok) &&
+      accepted.orgs.join("\0") === [...new Set(resolved.github.orgs)].toSorted().join("\0")
+    ) {
+      statuses[`day/${period.key}/github`] = accepted.sources.github;
+      if (accepted.sources.discord) {
+        statuses[`day/${period.key}/discord`] = accepted.sources.discord;
+      }
+      continue;
+    }
     let report;
     if (period.period === "day") {
       const cutoffMs = Date.now();
       const window = { sinceMs: period.sinceMs, untilMs: Math.min(cutoffMs, period.untilMs) };
+      await store.resetActivity();
+      runtime.signal.throwIfAborted();
       const github = await untilAborted(
-        sources.github.collect(resolved.github, window, roster),
+        sources.github.collect(resolved.github, window, roster, async (entries) => {
+          runtime.signal.throwIfAborted();
+          await store.appendActivity({ source: "github", entries });
+        }),
         runtime.signal,
       );
       runtime.signal.throwIfAborted();
       const discord =
         resolved.discord && sources.discord
           ? await untilAborted(
-              sources.discord.collect(resolved.discord, window, roster),
+              sources.discord.collect(resolved.discord, window, roster, async (entries) => {
+                runtime.signal.throwIfAborted();
+                await store.appendActivity({ source: "discord", entries });
+              }),
               runtime.signal,
             )
           : undefined;
       runtime.signal.throwIfAborted();
       const githubStatus: SourceStatus = {
-        ...github.status,
-        warnings: [...new Set([...loaded.status.warnings, ...github.status.warnings])],
-        stale: loaded.status.stale || github.status.stale,
+        ...github,
+        warnings: [...new Set([...loaded.status.warnings, ...github.warnings])],
+        stale: loaded.status.stale || github.stale,
       };
-      report = aggregateDay({
+      report = await store.aggregateActivity({
         period,
         nowMs: cutoffMs,
         orgs: resolved.github.orgs,
         roster,
-        items: github.items,
-        messages: discord?.messages ?? [],
         githubStatus,
-        discordStatus: discord?.status,
+        discordStatus: discord,
         ignoreCommentPatterns: resolved.github.ignoreCommentPatterns,
         discordConfig: resolved.discord,
       });
+      await store.resetActivity();
+      runtime.signal.throwIfAborted();
       report.generatedAtMs = Date.now();
     } else {
-      report = aggregateDays({
+      report = await store.aggregatePeriod({
         period,
         nowMs: Date.now(),
-        days: await store.getDayReports(period.sinceMs, period.untilMs),
         roster,
         orgs: resolved.github.orgs,
       });
