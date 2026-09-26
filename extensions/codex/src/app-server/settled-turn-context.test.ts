@@ -154,7 +154,9 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
         await expect(pending).resolves.toBeUndefined();
         expect(warn).toHaveBeenCalledWith(
           "codex settled-turn finalization context capture failed",
-          { reason: ending === "abort" ? "cancelled" : "history_read_failed" },
+          ending === "abort"
+            ? { reason: "cancelled" }
+            : { reason: "history_read_failed", stage: "after_read" },
         );
       } finally {
         warn.mockRestore();
@@ -252,6 +254,41 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
     ]);
     expect(historyMessages).toEqual(before);
   });
+
+  it.each(["before_read", "read"] as const)(
+    "reports only the stage of an unknown failure during %s",
+    async (stage) => {
+      const messages = settledTurn();
+      const privateError = new Error("private transcript and path must not be logged");
+      mocks.readHistory.mockImplementation(() => {
+        throw privateError;
+      });
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+      try {
+        await expect(
+          captureCodexSettledTurnFinalizationContext({
+            sessionFile: "/private/session.jsonl",
+            sessionId: "session-1",
+            model: "synthetic-model",
+            turnId: "turn-2",
+            mirroredMessages: messages,
+            settledMessages: messages,
+            assertActive: () => {
+              if (stage === "before_read") {
+                throw privateError;
+              }
+            },
+          }),
+        ).resolves.toBeUndefined();
+        expect(warn).toHaveBeenCalledExactlyOnceWith(
+          "codex settled-turn finalization context capture failed",
+          { reason: "history_read_failed", stage },
+        );
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
 
   it.each([
     { budget: "items", overflow: -1, notice: true },

@@ -23,6 +23,7 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+import * as settledTurnContext from "./settled-turn-context.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
@@ -160,7 +161,8 @@ it.each(["started", "resumed"] as const)(
   },
 );
 
-it("does not replay covered history on the same thread after local message-tool completion", async () => {
+it.each([true, false])("keeps native history coverage after message (final=%s)", async (final) => {
+  const capture = vi.spyOn(settledTurnContext, "captureCodexSettledTurnFinalizationContext");
   const sessionFile = path.join(tempDir, "local-source-reply-session.jsonl");
   const workspaceDir = path.join(tempDir, "local-source-reply-workspace");
   const startedAt = Date.now();
@@ -263,7 +265,7 @@ it("does not replay covered history on the same thread after local message-tool 
         callId: "local-source-reply",
         namespace: null,
         tool: "message",
-        arguments: { action: "send", message: "visible reply" },
+        arguments: { action: "send", message: "visible reply", final },
       },
     });
     expect(response).toMatchObject({
@@ -271,12 +273,26 @@ it("does not replay covered history on the same thread after local message-tool 
       contentItems: [{ type: "inputText", text: "Sent." }],
     });
     expect(messageTool.execute).toHaveBeenCalledOnce();
-    await harness.waitForMethod("turn/interrupt");
+    if (final) {
+      await harness.waitForMethod("turn/interrupt");
+    }
     await harness.notify({
       method: "turn/completed",
-      params: { threadId, turn: { id: "turn-2", status: "interrupted", items: [] } },
+      params: {
+        threadId,
+        turn: { id: "turn-2", status: final ? "interrupted" : "completed", items: [] },
+      },
     });
-    await terminal;
+    const terminalResult = await terminal;
+    if (final) {
+      expect(terminalResult.settledTurnFinalizationContext).toBeUndefined();
+      expect(capture).not.toHaveBeenCalled();
+    } else {
+      expect(terminalResult.settledTurnFinalizationContext).toBeInstanceOf(
+        settledTurnContext.CodexSettledTurnContext,
+      );
+      expect(capture).toHaveBeenCalledOnce();
+    }
     const binding = await readCodexAppServerBinding(sessionFile);
     const coveredThrough = Date.parse(binding?.historyCoveredThrough ?? "");
     expect(binding).toMatchObject({ threadId });

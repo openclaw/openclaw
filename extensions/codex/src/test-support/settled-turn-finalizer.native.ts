@@ -4,8 +4,18 @@ import path from "node:path";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, vi } from "vitest";
+import { CodexAppServerClient } from "../app-server/client.js";
+import { setCodexTestToolFactory } from "../app-server/host-capability.test-support.js";
 import { createCodexNativeTestState } from "../app-server/native-app-server.test-support.js";
 import { isJsonObject, type JsonObject } from "../app-server/protocol.js";
+import {
+  createNativeRunParams,
+  createCodexRuntimePlanFixture,
+} from "../app-server/run-attempt-test-harness.js";
+import { registerCodexTestSessionIdentity } from "../app-server/session-binding.test-helpers.js";
+import * as sharedClients from "../app-server/shared-client.js";
+import type { CodexAppServerClientFactory } from "../app-server/shared-client.js";
+import { attachSqliteSessionTarget } from "../app-server/sqlite-session.test-helpers.js";
 
 export const NATIVE_MODEL = "gpt-5.6-sol";
 export const HOST_MODEL = "gpt-5.6-terra";
@@ -26,7 +36,7 @@ const liveProvider = LIVE
 
 export type NativeFixture = Awaited<ReturnType<typeof createNativeFixture>>;
 export type Cleanup = () => Promise<void>;
-type NativePhase = "probe" | "action" | "side" | "hold" | "summary" | "health";
+type NativePhase = "probe" | "action" | "side" | "hold" | "summary" | "health" | "message";
 
 async function createNativeFixture(
   requestedRoot: string,
@@ -48,6 +58,7 @@ async function createNativeFixture(
   let requestReceived = createDeferred<void>();
   let phase: NativePhase = "probe";
   let actionRequests = 0;
+  let messageFinal = true;
   const livePhases: NativePhase[] = [];
   let emptyTerminalInjections = 0;
   const upstreamAbort = new AbortController();
@@ -91,7 +102,7 @@ async function createNativeFixture(
           );
           return;
         }
-        if (phase === "action" || phase === "side") {
+        if (phase === "action" || phase === "side" || phase === "message") {
           actionRequests += 1;
         }
         if (live && liveProvider) {
@@ -140,31 +151,44 @@ async function createNativeFixture(
         }
         const item = live
           ? undefined
-          : phase === "action" || (phase === "side" && actionRequests === 1)
+          : phase === "message"
             ? actionRequests === 1
               ? {
                   type: "function_call",
-                  call_id: "completed-action",
-                  name: "exec_command",
+                  call_id: "native-source-reply",
+                  name: "message",
                   arguments: JSON.stringify({
-                    cmd: "printf 'completed-once\\n' >> completed-actions.txt; cat completed-actions.txt",
-                    shell: "/bin/sh",
-                    login: false,
-                    max_output_tokens: 1000,
+                    action: "send",
+                    message: "Visible inventory reply.",
+                    final: messageFinal,
                   }),
                 }
               : undefined
-            : {
-                type: "message",
-                role: "assistant",
-                id: `answer-${requests.length}`,
-                content: [
-                  {
-                    type: "output_text",
-                    text: phase === "summary" || phase === "side" ? SUMMARY : "Ready.",
-                  },
-                ],
-              };
+            : phase === "action" || (phase === "side" && actionRequests === 1)
+              ? actionRequests === 1
+                ? {
+                    type: "function_call",
+                    call_id: "completed-action",
+                    name: "exec_command",
+                    arguments: JSON.stringify({
+                      cmd: "printf 'completed-once\\n' >> completed-actions.txt; cat completed-actions.txt",
+                      shell: "/bin/sh",
+                      login: false,
+                      max_output_tokens: 1000,
+                    }),
+                  }
+                : undefined
+              : {
+                  type: "message",
+                  role: "assistant",
+                  id: `answer-${requests.length}`,
+                  content: [
+                    {
+                      type: "output_text",
+                      text: phase === "summary" || phase === "side" ? SUMMARY : "Ready.",
+                    },
+                  ],
+                };
         const events = [
           { type: "response.created", response: { id: `response-${requests.length}` } },
           ...(item ? [{ type: "response.output_item.done", item }] : []),
@@ -238,6 +262,10 @@ async function createNativeFixture(
     injectedEmptyTerminals: () => emptyTerminalInjections,
     marker: path.join(native.cwd, "completed-actions.txt"),
     waitForRequest: () => requestReceived.promise,
+    setMessageDelivery(final: boolean) {
+      messageFinal = final;
+      this.setPhase("message");
+    },
     setPhase(next: NativePhase) {
       phase = next;
       requests.length = 0;
@@ -271,4 +299,137 @@ export async function withNativeFixture(
   if (failures.length) {
     throw new AggregateError(failures, "Native finalization proof or cleanup failed");
   }
+}
+
+type NativeRunParams = ReturnType<typeof createNativeRunParams>;
+
+export async function closeNativeClient(client: CodexAppServerClient): Promise<void> {
+  expect(await client.closeAndWait()).toMatchObject({ exited: true });
+}
+
+export async function writeNativeConfig(
+  fixture: NativeFixture,
+  codexHome: string,
+  provider: "openai" | "settled-fixture",
+  nativeFileAuth = false,
+) {
+  await fs.mkdir(codexHome, { recursive: true });
+  await fs.writeFile(
+    path.join(codexHome, "config.toml"),
+    [
+      `model=${JSON.stringify(NATIVE_MODEL)}`,
+      `model_provider=${JSON.stringify(provider)}`,
+      `cli_auth_credentials_store=${JSON.stringify(nativeFileAuth ? "file" : "ephemeral")}`,
+      'web_search="disabled"',
+      'approval_policy="never"',
+      'sandbox_mode="workspace-write"',
+      "allow_login_shell=false",
+      "[features]",
+      "shell_snapshot=false",
+      "[analytics]",
+      "enabled=false",
+      "[feedback]",
+      "enabled=false",
+      ...(provider === "settled-fixture"
+        ? [
+            "[model_providers.settled-fixture]",
+            'name="Synthetic settled-turn provider"',
+            `base_url=${JSON.stringify(fixture.baseUrl)}`,
+            'wire_api="responses"',
+            "requires_openai_auth=false",
+            `experimental_bearer_token=${JSON.stringify(NATIVE_KEY)}`,
+            "supports_websockets=false",
+            "request_max_retries=0",
+            "stream_max_retries=0",
+          ]
+        : []),
+    ].join("\n"),
+  );
+  if (nativeFileAuth) {
+    await fs.writeFile(
+      path.join(codexHome, "auth.json"),
+      JSON.stringify({ OPENAI_API_KEY: NATIVE_KEY }),
+    );
+  }
+}
+
+export async function createRunParams(fixture: NativeFixture) {
+  const params = createNativeRunParams(
+    path.join(fixture.root, "session.jsonl"),
+    fixture.native.cwd,
+  );
+  await attachSqliteSessionTarget(
+    params,
+    path.join(fixture.root, "transcript.sqlite"),
+    "settled-native",
+  );
+  params.agentDir = fixture.agentDir;
+  params.prompt = "Record the completed action once.";
+  params.provider = "openai";
+  params.modelId = NATIVE_MODEL;
+  params.model = { ...params.model, id: NATIVE_MODEL, provider: "openai", api: "openai-responses" };
+  params.authProfileId = HOST_PROFILE;
+  params.authProfileStore = fixture.authProfileStore;
+  params.resolvedApiKey = HOST_KEY;
+  params.disableTools = false;
+  params.permissionMode = "full";
+  params.timeoutMs = 20_000;
+  params.config = { tools: { web: { search: { enabled: false } } } };
+  setCodexTestToolFactory(params, () => []);
+  registerCodexTestSessionIdentity(params.sessionFile, params.sessionId, params.sessionKey);
+  return params;
+}
+
+export function usePreparedApiKey(params: NativeRunParams, baseUrl: string) {
+  const runtimePlan = createCodexRuntimePlanFixture();
+  params.runtimePlan = {
+    ...runtimePlan,
+    auth: {
+      ...runtimePlan.auth,
+      providerForAuth: "openai",
+      authProfileProviderForAuth: "openai",
+      selectedAuthMode: "api-key",
+      modelRoute: {
+        provider: "openai",
+        modelId: params.modelId,
+        api: "openai-responses",
+        baseUrl,
+        authRequirement: "api-key",
+        requestTransportOverrides: "none",
+      },
+    },
+  };
+}
+
+export function transcriptTarget(params: NativeRunParams) {
+  return {
+    agentId: "main",
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey!,
+    storePath: params.sessionTarget!.storePath,
+  };
+}
+
+export function trackSharedClient(cleanups: Cleanup[]) {
+  let current: CodexAppServerClient | undefined;
+  const factory: CodexAppServerClientFactory = async (options) => {
+    const client = await sharedClients.getLeasedSharedCodexAppServerClient(options);
+    if (client !== current) {
+      cleanups.push(async () => {
+        await sharedClients.clearSharedCodexAppServerClientIfCurrentAndWait(client);
+        await closeNativeClient(client);
+      });
+      current = client;
+    }
+    return client;
+  };
+  return {
+    factory,
+    client() {
+      if (!current) {
+        throw new Error("The native attempt did not acquire its shared client");
+      }
+      return current;
+    },
+  };
 }
