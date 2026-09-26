@@ -33,18 +33,37 @@ export function buildPersistedUserTurnMediaInputsFromFields(
     if (!mediaPath && !url) {
       return {};
     }
-    return {
+    const media: PersistedUserTurnMediaInput = {
       contentType: fact.contentType ?? mimeTypeFromFilePath(mediaPath ?? url),
-      ...(mediaPath ? { path: mediaPath } : {}),
-      ...(url ? { url } : {}),
-      ...(fact.kind ? { kind: fact.kind } : {}),
-      ...(fact.fileName ? { fileName: fact.fileName } : {}),
-      ...(fact.origin ? { origin: fact.origin } : {}),
-      ...(fact.sizeBytes !== undefined ? { sizeBytes: fact.sizeBytes } : {}),
-      ...(fact.durationMs !== undefined ? { durationMs: fact.durationMs } : {}),
-      ...(fact.width !== undefined ? { width: fact.width } : {}),
-      ...(fact.height !== undefined ? { height: fact.height } : {}),
     };
+    if (mediaPath) {
+      media.path = mediaPath;
+    }
+    if (url) {
+      media.url = url;
+    }
+    if (fact.kind) {
+      media.kind = fact.kind;
+    }
+    if (fact.fileName) {
+      media.fileName = fact.fileName;
+    }
+    if (fact.origin) {
+      media.origin = fact.origin;
+    }
+    if (fact.sizeBytes !== undefined) {
+      media.sizeBytes = fact.sizeBytes;
+    }
+    if (fact.durationMs !== undefined) {
+      media.durationMs = fact.durationMs;
+    }
+    if (fact.width !== undefined) {
+      media.width = fact.width;
+    }
+    if (fact.height !== undefined) {
+      media.height = fact.height;
+    }
+    return media;
   });
   return normalizedMedia.some((entry) => entry.path || entry.url) ? normalizedMedia : [];
 }
