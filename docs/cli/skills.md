@@ -111,10 +111,23 @@ and separator-normalized matches must identify one skill; ambiguous selectors
 fail instead of choosing discovery order. Workshop reads and update targeting
 use the same lookup.
 
+`check` separates **inventory**, **readiness**, and **visibility**:
+
+- **Inventory** means OpenClaw found the skill in a configured root or bundled
+  source and can report its status.
+- **Readiness** means the skill's declared prerequisites are satisfied for the
+  selected Gateway or node, so it is eligible to run.
+- **Visibility** means an eligible skill is exposed to the selected agent's
+  prompt, picker, or command surface after agent filters and invocation flags
+  are applied.
+
 `check` reports missing prerequisites independently of agent exclusion: a skill
 excluded by the agent allowlist can also appear under **Missing requirements**.
 Disabled skills and skills blocked by the bundled allowlist keep their separate
-readiness categories.
+readiness categories. Treat a listed skill with missing requirements as present
+in inventory but not currently eligible or visible to the agent; install or
+configure the reported prerequisite before expecting the model to use it
+successfully.
 
 Curator `status`, `pin`, `unpin`, and `restore`, plus Workshop `apply`, preserve
 the same target boundary. They never read or mutate client-local state after an
