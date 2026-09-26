@@ -51,6 +51,7 @@ import {
   resolveOrphanRepairPlan,
 } from "./attempt-orphan-repair.js";
 import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
+import { installAttemptNextTurnPreparation } from "./attempt-session-next-turn.js";
 import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";
 import type { EmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
@@ -309,28 +310,13 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
       prepared.admitReplay?.();
     };
   });
-  const previousPrepareNextTurn = activeSession.agent.prepareNextTurn;
-  const prepareNextTurn: typeof activeSession.agent.prepareNextTurn = async (signal) => {
-    if (attempt.pluginRuntimeRefreshPending?.()) {
-      return { stop: true };
-    }
-    const snapshot = await previousPrepareNextTurn?.call(activeSession.agent, signal);
-    const { systemPrompt: refreshedPrompt } = await refreshPermissionPrompt(
-      snapshot?.context?.systemPrompt,
-      signal,
-    );
-    return snapshot?.context && refreshedPrompt !== undefined
-      ? {
-          ...snapshot,
-          context: {
-            ...snapshot.context,
-            systemPrompt: refreshedPrompt,
-            tools: activeSession.agent.state.tools.slice(),
-          },
-        }
-      : snapshot;
-  };
-  activeSession.agent.prepareNextTurn = prepareNextTurn;
+  const prepareNextTurn = installAttemptNextTurnPreparation({
+    agent: activeSession.agent,
+    pluginRuntimeRefreshPending: attempt.pluginRuntimeRefreshPending,
+    refreshPermissionPrompt: async (prompt, signal) =>
+      (await refreshPermissionPrompt(prompt, signal)).systemPrompt,
+    semanticStallReplanState: attempt.semanticStallReplanState,
+  });
   attempt.registerPluginRuntimeRefreshConsumer?.(
     () =>
       activeSession.agent.prepareNextTurn === prepareNextTurn &&

@@ -6,7 +6,12 @@ type AgentHarnessHostTestAttempt = Omit<
   Parameters<
     typeof import("../agents/harness/host-capability.js").createAgentHarnessHostCapabilities
   >[0]["attempt"],
-  "admittedRunContext" | "hostCapabilities" | "disableToolSearch" | "sessionReadScopeKey"
+  | "admittedRunContext"
+  | "hostCapabilities"
+  | "disableToolSearch"
+  | "sessionReadScopeKey"
+  | "semanticNoProgressObserver"
+  | "semanticStallReplanState"
 >;
 
 /** Builds the production admitted-run host boundary for plugin integration tests. */

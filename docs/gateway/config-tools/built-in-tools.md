@@ -44,10 +44,23 @@ Tool-loop safety checks are **disabled by default**. Set `enabled: true` to acti
   tools: {
     loopDetection: {
       enabled: true,
+      semanticNoProgress: "shadow", // optional: "shadow" observes; "replan" permits one strong-stall instruction
     },
   },
 }
 ```
+
+`semanticNoProgress` is opt-in and requires `enabled: true`, the Decision
+assistance Labs opt-in (`agents.defaults.experimental.decisionAssistance: true`),
+and an effective owning-agent Decision model. Both `"shadow"` and `"replan"`
+keep a small bounded action/result trajectory and ask the configured Decision
+model only after the existing deterministic detector reports a loop suspicion.
+`"shadow"` is observation-only: it never changes tool execution or termination.
+`"replan"` permits one fixed internal instruction when a current Decision
+judgment is strongly stalled (at least 0.95 probability); it does not choose
+tools, cancel the run, retry a turn, or change goal state. Provider failures
+and uncertain answers do not inject the instruction; caller cancellation and
+run replacement still win.
 
 ## `tools.web`
 

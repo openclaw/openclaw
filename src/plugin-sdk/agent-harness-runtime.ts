@@ -9,6 +9,15 @@ import {
   projectAgentRunAttemptTerminal,
   setAgentRunAttemptTerminalFailure,
 } from "../agents/agent-run-terminal-outcome.js";
+import {
+  requestDeferredPluginToolApprovalCore as requestDeferredPluginToolApprovalInternal,
+  runBeforeToolCallHookCore as runBeforeToolCallHookInternal,
+  wrapToolWithBeforeToolCallHookCore as wrapToolWithBeforeToolCallHookInternal,
+} from "../agents/agent-tools.before-tool-call.js";
+import type {
+  DeferredPluginToolApproval as InternalDeferredPluginToolApproval,
+  HookContext as InternalHookContext,
+} from "../agents/agent-tools.before-tool-call.js";
 import type {
   CodexBundleMcpThreadConfig,
   LoadCodexBundleMcpThreadConfigParams,
@@ -35,6 +44,7 @@ import {
   snapshotStructuredInput,
 } from "../agents/harness/structured-input.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
+import { omitSemanticNoProgressObserver } from "../agents/tool-outcome-hooks.js";
 import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
 import { expandToolGroups } from "../agents/tool-policy-shared.js";
 import {
@@ -144,6 +154,8 @@ type EmbeddedRunAttemptParamsBase = Omit<
   | "admittedRunContext"
   | "disableToolSearch"
   | "sessionReadScopeKey"
+  | "semanticNoProgressObserver"
+  | "semanticStallReplanState"
   | "authoredContextTokenCap"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
@@ -523,6 +535,68 @@ export {
   resolveSessionWriteLockOptions,
   type SessionWriteLockAcquireTimeoutConfig,
 } from "./session-write-lock-runtime.js";
+
+type PublicBeforeToolCallContext = Omit<InternalHookContext, "semanticNoProgressObserver">;
+type PublicDeferredPluginToolApproval = Omit<InternalDeferredPluginToolApproval, "ctx"> & {
+  ctx?: PublicBeforeToolCallContext;
+};
+
+function sanitizePublicBeforeToolCallContext(
+  ctx: InternalHookContext | undefined,
+): PublicBeforeToolCallContext | undefined {
+  return omitSemanticNoProgressObserver(ctx);
+}
+
+type PublicRunBeforeToolCallHookParams = Omit<
+  Parameters<typeof runBeforeToolCallHookInternal>[0],
+  "ctx"
+> & {
+  ctx?: PublicBeforeToolCallContext;
+};
+
+export function runBeforeToolCallHook(
+  params: PublicRunBeforeToolCallHookParams,
+): ReturnType<typeof runBeforeToolCallHookInternal> {
+  return runBeforeToolCallHookInternal({
+    ...params,
+    ...(params.ctx ? { ctx: sanitizePublicBeforeToolCallContext(params.ctx) } : {}),
+  });
+}
+
+type PublicRequestDeferredPluginToolApprovalParams = Omit<
+  Parameters<typeof requestDeferredPluginToolApprovalInternal>[0],
+  "deferredApproval"
+> & {
+  deferredApproval: PublicDeferredPluginToolApproval;
+};
+
+export function requestDeferredPluginToolApproval(
+  params: PublicRequestDeferredPluginToolApprovalParams,
+): ReturnType<typeof requestDeferredPluginToolApprovalInternal> {
+  const deferredApproval = params.deferredApproval;
+  return requestDeferredPluginToolApprovalInternal({
+    ...params,
+    deferredApproval: {
+      ...deferredApproval,
+      ...(deferredApproval.ctx
+        ? { ctx: sanitizePublicBeforeToolCallContext(deferredApproval.ctx) }
+        : {}),
+    },
+  });
+}
+
+export function wrapToolWithBeforeToolCallHook(
+  tool: Parameters<typeof wrapToolWithBeforeToolCallHookInternal>[0],
+  ctx?: PublicBeforeToolCallContext,
+  options?: Parameters<typeof wrapToolWithBeforeToolCallHookInternal>[2],
+): ReturnType<typeof wrapToolWithBeforeToolCallHookInternal> {
+  return wrapToolWithBeforeToolCallHookInternal(
+    tool,
+    sanitizePublicBeforeToolCallContext(ctx),
+    options,
+  );
+}
+
 export {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
@@ -531,14 +605,11 @@ export {
   getBeforeToolCallPolicyDiagnosticState,
   hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
-  requestDeferredPluginToolApproval,
-  runBeforeToolCallHook,
   setBeforeToolCallDiagnosticsEnabled,
-  wrapToolWithBeforeToolCallHook,
   type BeforeToolCallPolicyDiagnosticState,
   type BeforeToolCallFailureDisposition,
-  type DeferredPluginToolApproval,
 } from "../agents/agent-tools.before-tool-call.js";
+export type DeferredPluginToolApproval = PublicDeferredPluginToolApproval;
 export { isReplaySafeToolCall } from "../agents/tool-mutation.js";
 export {
   resolveAgentHarnessBeforePromptBuildResult,

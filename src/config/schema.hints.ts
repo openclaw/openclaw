@@ -104,6 +104,7 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.cliAgents.enabled": "Default (enabled)",
   "nodeHost.autoUpdate.enabled": "Default (enabled)",
   "tools.loopDetection.enabled": "Default (post-compaction protection only)",
+  "tools.loopDetection.semanticNoProgress": "Default (off)",
   "gateway.publicOrigin": "https://gateway.example.com",
   "gateway.remote.url": "ws://host:18789",
   "gateway.remote.tlsFingerprint": "sha256:ab12cd34…",

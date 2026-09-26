@@ -442,7 +442,7 @@ async function requestPluginToolApproval(params: {
 }
 
 /** Resolve a deferred plugin approval request at the later execution boundary. */
-export async function requestDeferredPluginToolApproval(params: {
+export async function requestDeferredPluginToolApprovalCore(params: {
   deferredApproval: DeferredPluginToolApproval;
   signal?: AbortSignal;
 }): Promise<HookOutcome> {

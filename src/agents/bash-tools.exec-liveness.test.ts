@@ -15,7 +15,7 @@ import {
 } from "../logging/diagnostic-run-activity.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { SpawnProcessAdapter } from "../process/supervisor/types.js";
-import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
+import { wrapToolWithBeforeToolCallHookCore as wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
 import { waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
