@@ -71,7 +71,7 @@ export class SessionManagerCompaction extends SessionManagerEntries {
         try {
           publication?.onCommitted?.();
         } catch (cause) {
-          this.failCommittedCompaction(cause);
+          return this.failCommittedCompaction(cause);
         }
         return appended.entry.id;
       }
@@ -100,7 +100,7 @@ export class SessionManagerCompaction extends SessionManagerEntries {
         }
         return this.adoptWorkerCommittedEntry(canonical, committed, admittedUserId).entry.id;
       } catch (cause) {
-        this.failCommittedCompaction(cause);
+        return this.failCommittedCompaction(cause);
       }
     });
   }

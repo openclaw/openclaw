@@ -1,6 +1,6 @@
 import { resolveMaxActiveTranscriptBytes } from "../../auto-reply/reply/memory-flush.js";
 import { incrementCompactionCount } from "../../auto-reply/reply/session-updates.js";
-import { type SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptActiveStatsAsync } from "../../config/sessions/session-transcript-hydration.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { QueuedCompactionHostOptions } from "./compact.queued-execution.js";
