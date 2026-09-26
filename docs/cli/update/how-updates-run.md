@@ -121,8 +121,8 @@ validation, installation, and Doctor finalization continue in the invoking
 installation. Doctor leaves unverified service records unchanged and reports an
 advisory; state coordinators and database leases still protect active writers.
 
-The baseline package fingerprint is best effort. If its bounded scan times out,
-the update records a warning and continues with the retained package copy.
+The current updater's baseline package fingerprint is best effort. If its bounded
+scan times out, the update records a warning and continues with the retained package copy.
 Rollback then verifies the restored directory identity, package version, and
 affected launchers, and records that full fingerprint verification was unavailable.
 A baseline scan timeout alone does not fail the update or rollback; detected
@@ -133,6 +133,27 @@ If a retained or restored package changes, the failure names the exact package
 path to inspect before retrying recovery. Sibling `.openclaw.update-stage-*`
 directories are outside that package fingerprint; do not remove stages that
 another updater may still be using.
+
+<Note>
+The published **2026.9.4 updater** does not have this best-effort behavior. During
+an npm update, it allows at most **30 seconds** to fingerprint the entire
+**old installed package tree**, including its nested dependencies, and back up
+the affected launchers. The staged candidate is outside that tree. This check
+runs before the package swap and before stopping the serving Gateway.
+
+If this scan times out, the update fails with `Package rollback verification timed out`
+and leaves the installed package unchanged. The report can also say
+`retained package tree changed` when the timeout prevented it from capturing
+a fingerprint; that accompanying message alone does not establish corruption.
+
+Increasing `--timeout` cannot raise this published limit. Selecting a smaller
+candidate does not reduce the old files being scanned, and changing the candidate's
+updater code cannot replace the updater already running. Wait for the failed updater to exit,
+then use the [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+with the same owning package manager, prefix, and state/configuration. Back up
+first, stop the Gateway through its actual supervisor or foreground process
+owner, replace the package, run Doctor, and restart through that same owner.
+</Note>
 
 Interrupting a fresh local update before activation records a failed,
 `interrupted` history entry while its installation owner is still held.
