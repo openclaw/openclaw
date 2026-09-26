@@ -414,11 +414,10 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
       }
     }
 
-    const advertisedCatalog =
-      getAdvertisedScopedMcpCatalog(params.sessionId) ??
-      (liveCatalog
-        ? mergeMcpConnectCatalog(liveCatalog, scopedRuntime?.requesterConnect)
-        : undefined);
+    const baseAdvertisedCatalog = getAdvertisedScopedMcpCatalog(params.sessionId) ?? liveCatalog;
+    const advertisedCatalog = baseAdvertisedCatalog
+      ? mergeMcpConnectCatalog(baseAdvertisedCatalog, scopedRuntime?.requesterConnect)
+      : undefined;
     if (!advertisedCatalog || advertisedCatalog.tools.length === 0) {
       await liveRuntime?.dispose();
       return undefined;
