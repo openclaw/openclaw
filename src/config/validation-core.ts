@@ -481,18 +481,21 @@ export function validateConfigObjectRaw(
   if (sandboxContainerEnvIssues.length > 0) {
     return { ok: false, issues: sandboxContainerEnvIssues };
   }
+  // Field-level blank-agentDir rejection must run before duplicate probing so
+  // a blank that falls back to a shared default directory is reported as the
+  // authored blank, not masked by a duplicate-agentDir conflict; and before
+  // avatar resolution so the resolver's loud runtime throw cannot escape
+  // validation.
+  const blankAgentDirIssues = collectBlankAgentDirIssues(validatedConfig);
+  if (blankAgentDirIssues.length > 0) {
+    return { ok: false, issues: blankAgentDirIssues };
+  }
   const duplicates = findDuplicateAgentDirs(validatedConfig, opts);
   if (duplicates.length > 0) {
     return {
       ok: false,
       issues: [{ path: "agents.entries", message: formatDuplicateAgentDirError(duplicates) }],
     };
-  }
-  // Field-level blank-agentDir rejection must run before avatar resolution so
-  // the resolver's loud runtime throw cannot escape validation.
-  const blankAgentDirIssues = collectBlankAgentDirIssues(validatedConfig);
-  if (blankAgentDirIssues.length > 0) {
-    return { ok: false, issues: blankAgentDirIssues };
   }
   const avatarIssues = validateIdentityAvatar(validatedConfig, opts?.env);
   if (avatarIssues.length > 0) {
