@@ -15,7 +15,9 @@ import {
 import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import type { SessionTranscriptHistoryWorkerInput } from "../config/sessions/session-transcript-worker.types.js";
 import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
+import { AgentDatabaseRegistryChangedError } from "../state/openclaw-agent-db-registry-listing.js";
 import * as stateContext from "../state/openclaw-state-worker-context.js";
+import * as storeSources from "./session-utils-store-sources.js";
 
 const { runWorker, readerAdmitted } = vi.hoisted(() => ({
   runWorker: vi.fn(),
@@ -127,6 +129,83 @@ function page(text: string): SessionHistoryWorkerResult {
     page: { messages: [{ role: "assistant", content: [{ type: "text", text }] }] },
   };
 }
+
+it.each([
+  { kind: "message-by-id", revoke: false },
+  { kind: "message-count", revoke: false },
+  { kind: "message-by-id", revoke: true },
+  { kind: "message-count", revoke: true },
+] as const)(
+  "keeps $kind independent of auxiliary registry churn but retains primary authority (revoke: $revoke)",
+  async ({ kind, revoke }) => {
+    vi.spyOn(storeSources, "prepareGatewaySessionStoreReadSourcesAsync").mockRejectedValue(
+      new AgentDatabaseRegistryChangedError(),
+    );
+    const capture = stateContext.captureOpenClawStateWorkerContext;
+    const revoked = new Error("primary history owner revoked");
+    let workerReturned = false;
+    vi.spyOn(stateContext, "captureOpenClawStateWorkerContext").mockImplementation((...args) => {
+      const captured = capture(...args);
+      return {
+        ...captured,
+        admission: {
+          ...captured.admission,
+          assertCurrent() {
+            captured.admission.assertCurrent();
+            if (revoke && workerReturned) {
+              throw revoked;
+            }
+          },
+        },
+      };
+    });
+    const message = { role: "assistant", content: [{ type: "text", text: "primary answer" }] };
+    const found = { found: true, oversized: false, message, seq: 2 };
+    runWorker.mockImplementationOnce(async () => {
+      workerReturned = true;
+      return kind === "message-by-id" ? { kind, result: found } : { kind, count: 2 };
+    });
+    const rpc = request().params;
+    const target = {
+      agentId: rpc.sessionAgentId,
+      sessionId: rpc.sessionId,
+      sessionKey: rpc.canonicalKey,
+      storePath: rpc.storePath,
+    };
+    const pending =
+      kind === "message-by-id"
+        ? readSessionHistoryPageInWorker({ kind, params: { target, messageId: "answer" } })
+        : readSessionHistoryPageInWorker({ kind, params: { target } });
+    if (revoke) {
+      await expect(pending).rejects.toBe(revoked);
+    } else {
+      await expect(pending).resolves.toEqual(kind === "message-by-id" ? found : 2);
+    }
+  },
+);
+
+it.each(["rpc", "http", "delta"] as const)(
+  "retains auxiliary registry refusal for %s lineage projection",
+  async (kind) => {
+    const failure = new AgentDatabaseRegistryChangedError();
+    vi.spyOn(storeSources, "prepareGatewaySessionStoreReadSourcesAsync").mockRejectedValue(failure);
+    const rpc = request();
+    const target = {
+      agentId: rpc.params.sessionAgentId,
+      sessionId: rpc.params.sessionId,
+      sessionKey: rpc.params.canonicalKey,
+      storePath: rpc.params.storePath,
+    };
+    const pending =
+      kind === "rpc"
+        ? readSessionHistoryPageInWorker(rpc)
+        : kind === "http"
+          ? readSessionHistoryPageInWorker({ kind, params: { target, maxChars: 8000, limit: 10 } })
+          : readSessionHistoryPageInWorker({ kind, params: { target, limits: {} } });
+    await expect(pending).rejects.toBe(failure);
+    expect(runWorker).not.toHaveBeenCalled();
+  },
+);
 
 it.each(["rpc", "http"] as const)(
   "captures %s request identity and selectors before target preparation and queue dispatch",
