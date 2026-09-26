@@ -4,6 +4,14 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-typ
 import { describe, expect, it } from "vitest";
 import { normalizeConfig, resolveThinkingProfile } from "./provider-policy-api.js";
 
+function createProviderConfig(models: ModelProviderConfig["models"]): ModelProviderConfig {
+  return {
+    baseUrl: "https://api.deepseek.com",
+    api: "openai-completions",
+    models,
+  };
+}
+
 function requireModel(config: ModelProviderConfig, index: number) {
   return expectDefined(config.models[index], `DeepSeek provider model ${index}`);
 }
@@ -39,18 +47,14 @@ describe("deepseek provider-policy-api", () => {
   });
 
   it("hydrates contextWindow and cost from catalog for known models", () => {
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.deepseek.com",
-      api: "openai-completions",
-      models: [
-        {
-          id: "deepseek-v4-flash",
-          name: "DeepSeek V4 Flash",
-          reasoning: true,
-          input: ["text"],
-        } as never,
-      ],
-    };
+    const providerConfig = createProviderConfig([
+      {
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        reasoning: true,
+        input: ["text"],
+      } as never,
+    ]);
 
     const result = normalizeConfig({ provider: "deepseek", providerConfig });
 
@@ -67,18 +71,14 @@ describe("deepseek provider-policy-api", () => {
   });
 
   it("hydrates deepseek-v4-pro with correct metadata", () => {
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.deepseek.com",
-      api: "openai-completions",
-      models: [
-        {
-          id: "deepseek-v4-pro",
-          name: "DeepSeek V4 Pro",
-          reasoning: true,
-          input: ["text"],
-        } as never,
-      ],
-    };
+    const providerConfig = createProviderConfig([
+      {
+        id: "deepseek-v4-pro",
+        name: "DeepSeek V4 Pro",
+        reasoning: true,
+        input: ["text"],
+      } as never,
+    ]);
 
     const result = normalizeConfig({ provider: "deepseek", providerConfig });
     const model = requireModel(result, 0);
@@ -93,48 +93,40 @@ describe("deepseek provider-policy-api", () => {
   });
 
   it("leaves an uncataloged retired alias unchanged", () => {
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.deepseek.com",
-      api: "openai-completions",
-      models: [
-        {
-          id: "deepseek-chat",
-          name: "DeepSeek Chat",
-          reasoning: false,
-          input: ["text"],
-        } as never,
-      ],
-    };
+    const providerConfig = createProviderConfig([
+      {
+        id: "deepseek-chat",
+        name: "DeepSeek Chat",
+        reasoning: false,
+        input: ["text"],
+      } as never,
+    ]);
 
     const result = normalizeConfig({ provider: "deepseek", providerConfig });
     expect(result).toBe(providerConfig);
   });
 
   it("refreshes exact current-model catalog metadata snapshots written by prior releases", () => {
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.deepseek.com",
-      api: "openai-completions",
-      models: [
-        {
-          id: "deepseek-v4-flash",
-          name: "DeepSeek V4 Flash",
-          reasoning: true,
-          input: ["text"],
-          contextWindow: 1_000_000,
-          maxTokens: 384_000,
-          cost: { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
-        },
-        {
-          id: "deepseek-v4-pro",
-          name: "DeepSeek V4 Pro",
-          reasoning: true,
-          input: ["text"],
-          contextWindow: 1_000_000,
-          maxTokens: 384_000,
-          cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
-        },
-      ],
-    };
+    const providerConfig = createProviderConfig([
+      {
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 1_000_000,
+        maxTokens: 384_000,
+        cost: { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
+      },
+      {
+        id: "deepseek-v4-pro",
+        name: "DeepSeek V4 Pro",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 1_000_000,
+        maxTokens: 384_000,
+        cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+      },
+    ]);
 
     const result = normalizeConfig({ provider: "deepseek", providerConfig });
 
@@ -162,30 +154,26 @@ describe("deepseek provider-policy-api", () => {
   });
 
   it("leaves zero-cost retired alias snapshots unchanged when uncataloged", () => {
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.deepseek.com",
-      api: "openai-completions",
-      models: [
-        {
-          id: "deepseek-chat",
-          name: "DeepSeek Chat",
-          reasoning: false,
-          input: ["text"],
-          contextWindow: 131_072,
-          maxTokens: 8_192,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        },
-        {
-          id: "deepseek-reasoner",
-          name: "DeepSeek Reasoner",
-          reasoning: true,
-          input: ["text"],
-          contextWindow: 131_072,
-          maxTokens: 65_536,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        },
-      ],
-    };
+    const providerConfig = createProviderConfig([
+      {
+        id: "deepseek-chat",
+        name: "DeepSeek Chat",
+        reasoning: false,
+        input: ["text"],
+        contextWindow: 131_072,
+        maxTokens: 8_192,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+      {
+        id: "deepseek-reasoner",
+        name: "DeepSeek Reasoner",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 131_072,
+        maxTokens: 65_536,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    ]);
 
     const result = normalizeConfig({ provider: "deepseek", providerConfig });
     expect(result).toBe(providerConfig);
@@ -193,21 +181,17 @@ describe("deepseek provider-policy-api", () => {
 
   it("preserves legacy alias metadata when any catalog-owned field is customized", () => {
     const userCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.deepseek.com",
-      api: "openai-completions",
-      models: [
-        {
-          id: "deepseek-chat",
-          name: "DeepSeek Chat",
-          reasoning: false,
-          input: ["text"],
-          contextWindow: 500_000,
-          maxTokens: 8_192,
-          cost: userCost,
-        } as never,
-      ],
-    };
+    const providerConfig = createProviderConfig([
+      {
+        id: "deepseek-chat",
+        name: "DeepSeek Chat",
+        reasoning: false,
+        input: ["text"],
+        contextWindow: 500_000,
+        maxTokens: 8_192,
+        cost: userCost,
+      } as never,
+    ]);
 
     const result = normalizeConfig({ provider: "deepseek", providerConfig });
 
@@ -218,21 +202,17 @@ describe("deepseek provider-policy-api", () => {
 
   it("preserves an old maxTokens value when another field makes the row user-owned", () => {
     const userCost = { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 };
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.deepseek.com",
-      api: "openai-completions",
-      models: [
-        {
-          id: "deepseek-chat",
-          name: "DeepSeek Chat",
-          reasoning: false,
-          input: ["text"],
-          contextWindow: 500_000,
-          maxTokens: 8_192,
-          cost: userCost,
-        } as never,
-      ],
-    };
+    const providerConfig = createProviderConfig([
+      {
+        id: "deepseek-chat",
+        name: "DeepSeek Chat",
+        reasoning: false,
+        input: ["text"],
+        contextWindow: 500_000,
+        maxTokens: 8_192,
+        cost: userCost,
+      } as never,
+    ]);
 
     const result = normalizeConfig({ provider: "deepseek", providerConfig });
 
@@ -242,19 +222,15 @@ describe("deepseek provider-policy-api", () => {
   });
 
   it("preserves explicit user contextWindow override", () => {
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.deepseek.com",
-      api: "openai-completions",
-      models: [
-        {
-          id: "deepseek-v4-flash",
-          name: "DeepSeek V4 Flash",
-          reasoning: true,
-          input: ["text"],
-          contextWindow: 500_000,
-        } as never,
-      ],
-    };
+    const providerConfig = createProviderConfig([
+      {
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 500_000,
+      } as never,
+    ]);
 
     const result = normalizeConfig({ provider: "deepseek", providerConfig });
     const model = requireModel(result, 0);
@@ -270,19 +246,15 @@ describe("deepseek provider-policy-api", () => {
 
   it("preserves explicit user cost override", () => {
     const userCost = { input: 99, output: 99, cacheRead: 99, cacheWrite: 99 };
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.deepseek.com",
-      api: "openai-completions",
-      models: [
-        {
-          id: "deepseek-v4-flash",
-          name: "DeepSeek V4 Flash",
-          reasoning: true,
-          input: ["text"],
-          cost: userCost,
-        } as never,
-      ],
-    };
+    const providerConfig = createProviderConfig([
+      {
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        reasoning: true,
+        input: ["text"],
+        cost: userCost,
+      } as never,
+    ]);
 
     const result = normalizeConfig({ provider: "deepseek", providerConfig });
     const model = requireModel(result, 0);
@@ -307,19 +279,15 @@ describe("deepseek provider-policy-api", () => {
         },
       ],
     };
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.deepseek.com",
-      api: "openai-completions",
-      models: [
-        {
-          id: "deepseek-v4-pro",
-          name: "DeepSeek V4 Pro",
-          reasoning: true,
-          input: ["text"],
-          cost: userCost,
-        } as never,
-      ],
-    };
+    const providerConfig = createProviderConfig([
+      {
+        id: "deepseek-v4-pro",
+        name: "DeepSeek V4 Pro",
+        reasoning: true,
+        input: ["text"],
+        cost: userCost,
+      } as never,
+    ]);
 
     const result = normalizeConfig({ provider: "deepseek", providerConfig });
 
@@ -327,19 +295,15 @@ describe("deepseek provider-policy-api", () => {
   });
 
   it("preserves explicit user maxTokens override", () => {
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.deepseek.com",
-      api: "openai-completions",
-      models: [
-        {
-          id: "deepseek-v4-flash",
-          name: "DeepSeek V4 Flash",
-          reasoning: true,
-          input: ["text"],
-          maxTokens: 100_000,
-        } as never,
-      ],
-    };
+    const providerConfig = createProviderConfig([
+      {
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        reasoning: true,
+        input: ["text"],
+        maxTokens: 100_000,
+      } as never,
+    ]);
 
     const result = normalizeConfig({ provider: "deepseek", providerConfig });
     const model = requireModel(result, 0);
@@ -347,77 +311,61 @@ describe("deepseek provider-policy-api", () => {
   });
 
   it("returns providerConfig unchanged when all models already have metadata", () => {
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.deepseek.com",
-      api: "openai-completions",
-      models: [
-        {
-          id: "deepseek-v4-flash",
-          name: "DeepSeek V4 Flash",
-          reasoning: true,
-          input: ["text"],
-          contextWindow: 1_000_000,
-          maxTokens: 384_000,
-          cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
-        } as never,
-      ],
-    };
+    const providerConfig = createProviderConfig([
+      {
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 1_000_000,
+        maxTokens: 384_000,
+        cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+      } as never,
+    ]);
 
     const result = normalizeConfig({ provider: "deepseek", providerConfig });
     expect(result).toBe(providerConfig);
   });
 
   it("passes through unknown model ids unchanged", () => {
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.deepseek.com",
-      api: "openai-completions",
-      models: [
-        {
-          id: "deepseek-custom-finetune",
-          name: "Custom Fine-tune",
-          reasoning: false,
-          input: ["text"],
-        } as never,
-      ],
-    };
+    const providerConfig = createProviderConfig([
+      {
+        id: "deepseek-custom-finetune",
+        name: "Custom Fine-tune",
+        reasoning: false,
+        input: ["text"],
+      } as never,
+    ]);
 
     const result = normalizeConfig({ provider: "deepseek", providerConfig });
     expect(result).toBe(providerConfig);
   });
 
   it("returns providerConfig unchanged when models array is empty", () => {
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.deepseek.com",
-      api: "openai-completions",
-      models: [],
-    };
+    const providerConfig = createProviderConfig([]);
 
     const result = normalizeConfig({ provider: "deepseek", providerConfig });
     expect(result).toBe(providerConfig);
   });
 
   it("hydrates only the models that need it in a mixed list", () => {
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.deepseek.com",
-      api: "openai-completions",
-      models: [
-        {
-          id: "deepseek-v4-flash",
-          name: "DeepSeek V4 Flash",
-          reasoning: true,
-          input: ["text"],
-          contextWindow: 1_000_000,
-          maxTokens: 384_000,
-          cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
-        } as never,
-        {
-          id: "deepseek-v4-pro",
-          name: "DeepSeek V4 Pro",
-          reasoning: true,
-          input: ["text"],
-        } as never,
-      ],
-    };
+    const providerConfig = createProviderConfig([
+      {
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 1_000_000,
+        maxTokens: 384_000,
+        cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+      } as never,
+      {
+        id: "deepseek-v4-pro",
+        name: "DeepSeek V4 Pro",
+        reasoning: true,
+        input: ["text"],
+      } as never,
+    ]);
 
     const result = normalizeConfig({ provider: "deepseek", providerConfig });
     expect(result).not.toBe(providerConfig);

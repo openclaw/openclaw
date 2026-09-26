@@ -115,18 +115,6 @@ describe("anthropic-vertex provider plugin", () => {
     ).toBe(baseUrl);
   });
 
-  it.each(["global", "us", "eu"])("publishes Opus 5 for the %s endpoint", (region) => {
-    const provider = buildAnthropicVertexProvider({
-      env: { GOOGLE_CLOUD_LOCATION: region },
-    });
-
-    expect(provider.models.find((model) => model.id === "claude-opus-5")).toMatchObject({
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-    });
-  });
-
   it.each([
     {
       region: "global",

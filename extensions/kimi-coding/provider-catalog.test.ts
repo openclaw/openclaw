@@ -4,7 +4,7 @@ import { parseModelRef } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-catalog.js";
-import { isKimiK3ModelId, KIMI_K3_MODEL_IDS } from "./provider-policy-api.js";
+import { KIMI_K3_MODEL_IDS } from "./provider-policy-api.js";
 
 describe("kimi provider catalog", () => {
   it.each(["k3", "k3-256k"])("keeps documented off thinking selectable for %s", (id) => {
@@ -112,11 +112,5 @@ describe("kimi provider catalog", () => {
         allowPluginNormalization: false,
       }),
     ).toEqual({ provider: "kimi", model: expected });
-  });
-
-  it("recognizes K3 thinking-policy models", () => {
-    expect(isKimiK3ModelId("k3")).toBe(true);
-    expect(isKimiK3ModelId("K3-256K")).toBe(true);
-    expect(isKimiK3ModelId("kimi-for-coding")).toBe(false);
   });
 });

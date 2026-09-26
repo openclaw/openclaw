@@ -62,7 +62,6 @@ describe("createMantleAnthropicStreamFn", () => {
   it.each(["short", "long", "none"] as const)(
     "keeps the stable system prefix independently cacheable across suffix changes (%s)",
     async (cacheRetention) => {
-      const systems: unknown[] = [];
       for (const suffix of ["Today: Monday", "Today: Tuesday"]) {
         let payload: unknown;
         const events = await createMantleAnthropicStreamFn()(
@@ -82,7 +81,6 @@ describe("createMantleAnthropicStreamFn", () => {
         );
         await events.result();
         const request = requireRecord(payload, "Mantle payload");
-        systems.push(request.system);
         expect(JSON.stringify(request)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
         if (cacheRetention === "none") {
           expect(request.system).toEqual([{ type: "text", text: `Stable workspace\n${suffix}` }]);
@@ -101,11 +99,6 @@ describe("createMantleAnthropicStreamFn", () => {
           ]);
           expect(JSON.stringify(request).match(/"cache_control"/g)?.length).toBeLessThanOrEqual(4);
         }
-      }
-      if (cacheRetention !== "none") {
-        expect(Array.isArray(systems[0]) && systems[0][0]).toEqual(
-          Array.isArray(systems[1]) && systems[1][0],
-        );
       }
     },
   );

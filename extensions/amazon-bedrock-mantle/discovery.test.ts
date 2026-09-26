@@ -163,7 +163,7 @@ describe("bedrock mantle discovery", () => {
       tokenProviderFactory,
     });
 
-    expect(t1).toEqual(t2);
+    expect([t1, t2]).toEqual(["bedrock-api-key-cached", "bedrock-api-key-cached"]);
     expect(tokenProvider).toHaveBeenCalledTimes(1);
   });
 
