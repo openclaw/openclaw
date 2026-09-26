@@ -903,6 +903,7 @@
     "native.android.8363c18ba7fdf0fd": "レート制限",
     "native.android.837744e8aa3c8155": "接続済み",
     "native.android.83e4fdeca6722756": "インストール済みスキルの状態を確認・管理します。",
+    "native.android.83e7a975bb7a5ea0": "リンクプレビューを折りたたむ",
     "native.android.83e80579dc21643d": "エージェントに話しかける",
     "native.android.841570a28a49db67": "Cron の変更には operator.admin が必要です。 セットアップコードでは、意図的にこの権限を付与しません。 管理者アクセス権をリクエストするには、Gateway の共有トークンまたはパスワードを使用して再接続してください。 このデバイスにまだ権限がない場合は、既存の管理者クライアントから保留中のスコープ拡張を承認してください。",
     "native.android.84244f73da2b8e3b": "OpenClaw",
