@@ -128,6 +128,48 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
+    it("carries inferred-channel namespace provenance through scheduled Gateway delegation", async () => {
+      const handleActionEntry = vi.fn(async () => jsonResult({ ok: true, local: true }));
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat scheduled action test plugin.",
+        actions: ["edit"],
+        handleAction: handleActionEntry,
+      });
+      setTestPlugin(gatewayPlugin, "gatewaychat");
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
+
+      await runMessageAction({
+        cfg: createEnabledMessageActionConfig("gatewaychat"),
+        action: "edit",
+        params: {
+          to: "gatewaychat",
+          messageId: "message-1",
+          message: "updated",
+        },
+        messageActionAuthorization: {
+          scheduled: { policy: { version: 1, mode: "trusted" }, assertCurrent: () => {} },
+        },
+        gateway: {
+          resolveAgentRuntimeIdentityToken: async () => "agent-runtime-token",
+          clientName: "cli",
+          mode: "cli",
+        },
+      });
+
+      const gatewayCall = readMockCallArg(
+        mocks.callGatewayLeastPrivilege,
+        "scheduled Gateway action",
+      );
+      expect(readRecordField(gatewayCall, "params", "scheduled Gateway params")).toMatchObject({
+        channel: "gatewaychat",
+        action: "edit",
+        allowNativeChannelNamespace: false,
+      });
+      expect(handleActionEntry).not.toHaveBeenCalled();
+    });
+
     it("keeps blank backend requester provenance least-privileged", async () => {
       const handleActionEntry = vi.fn(async () => jsonResult({ ok: true, local: true }));
       const gatewayPlugin = createGatewayActionPlugin({

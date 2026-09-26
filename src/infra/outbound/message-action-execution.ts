@@ -358,6 +358,10 @@ export async function executeGatewayAction(
         inboundTurnKind: ctx.input.inboundEventKind,
         agentId: ctx.agentId,
         ...(conversationReadOrigin === "direct-operator" ? { conversationReadOrigin } : {}),
+        ...(ctx.input.messageActionAuthorization?.scheduled &&
+        ctx.input.allowNativeChannelNamespace !== undefined
+          ? { allowNativeChannelNamespace: ctx.input.allowNativeChannelNamespace }
+          : {}),
         idempotencyKey,
       },
     });

@@ -12,7 +12,6 @@ import { normalizeLegacySessionEntryDelivery } from "../state-migrations.legacy-
 import {
   hasResolvableHeartbeatOwnerRoute,
   resolveHeartbeatDeliveryTarget as resolveCanonicalHeartbeatDeliveryTarget,
-  resolveHeartbeatDeliveryTargetWithSessionRoute as resolveCanonicalHeartbeatDeliveryTargetWithSessionRoute,
   resolveOutboundTarget,
   resolveSessionDeliveryTarget as resolveCanonicalSessionDeliveryTarget,
 } from "./targets.js";
@@ -67,12 +66,11 @@ function resolveHeartbeatDeliveryTarget(
 }
 
 async function resolveHeartbeatDeliveryTargetWithSessionRoute(
-  params: Omit<
-    Parameters<typeof resolveCanonicalHeartbeatDeliveryTargetWithSessionRoute>[0],
-    "entry"
-  > & { entry?: LegacyDeliveryFixture },
+  params: Omit<Parameters<typeof resolveCanonicalHeartbeatDeliveryTarget>[0], "entry"> & {
+    entry?: LegacyDeliveryFixture;
+  },
 ) {
-  return await resolveCanonicalHeartbeatDeliveryTargetWithSessionRoute({
+  return await resolveCanonicalHeartbeatDeliveryTarget({
     ...params,
     entry: params.entry ? normalizeLegacySessionEntryDelivery(params.entry) : undefined,
   });
@@ -1102,7 +1100,7 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.threadId).toBe(42);
   });
 
-  it("keeps explicit heartbeat plugin targets raw for modern route resolution", async () => {
+  it("resolves explicit heartbeat plugin targets through the canonical route", async () => {
     const cfg: OpenClawConfig = {};
     const resolved = await resolveHeartbeatDeliveryTarget({
       cfg,
@@ -1113,8 +1111,8 @@ describe("resolveSessionDeliveryTarget", () => {
     });
 
     expect(resolved.channel).toBe("forum");
-    expect(resolved.to).toBe("room:ops:topic:1008013");
-    expect(resolved.threadId).toBeUndefined();
+    expect(resolved.to).toBe("room:ops");
+    expect(resolved.threadId).toBe(1008013);
   });
 
   it("bootstraps plugin-channel heartbeat routes when the plugin registry is unavailable", async () => {

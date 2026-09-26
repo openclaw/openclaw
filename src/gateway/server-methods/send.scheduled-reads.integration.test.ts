@@ -139,6 +139,9 @@ async function createFixture(state: OpenClawTestState) {
         otherCredentials: headers.get("authorization") === "Bot synthetic-other-provider-fixture",
       });
       if (url.origin === "https://discord.com" && method === "GET") {
+        if (url.pathname === "/api/v10/users/@me/guilds") {
+          return Response.json([]);
+        }
         if (url.pathname === `/api/v10/channels/${channelId}`) {
           return Response.json({ id: channelId, guild_id: guildId, type: 0, name: "fixture" });
         }
@@ -220,6 +223,8 @@ async function createFixture(state: OpenClawTestState) {
       accountId?: string;
       paramsAccountId?: string;
       client?: GatewayClient;
+      channelId?: string;
+      allowNativeChannelNamespace?: boolean;
     },
   ): Promise<Parameters<RespondFn>> => {
     const respond = vi.fn<RespondFn>();
@@ -229,12 +234,15 @@ async function createFixture(state: OpenClawTestState) {
         channel: "discord",
         action,
         params: {
-          channelId,
+          channelId: options.channelId ?? channelId,
           ...(action === "read" ? { limit: 1 } : { messageId }),
           ...(action === "edit" ? { message: "Updated scheduled message" } : {}),
           ...(options.paramsAccountId ? { accountId: options.paramsAccountId } : {}),
         },
         ...(options.accountId ? { accountId: options.accountId } : {}),
+        ...(options.allowNativeChannelNamespace !== undefined
+          ? { allowNativeChannelNamespace: options.allowNativeChannelNamespace }
+          : {}),
         sessionKey,
         sessionId,
         idempotencyKey: options.idempotencyKey,
@@ -406,6 +414,19 @@ describe("Gateway scheduled reads through an installed Discord plugin", () => {
 });
 
 describe("Gateway scheduled write accounts through an installed Discord plugin", () => {
+  it("rejects an inferred channel name before a scheduled provider mutation", async () => {
+    await withFixture(async (fixture) => {
+      const response = await fixture.invokeAction("delete", {
+        idempotencyKey: "scheduled-delete-inferred-channel-name",
+        channelId: "discord",
+        allowNativeChannelNamespace: false,
+      });
+
+      expectDenied(response, "does not specify a destination");
+      expect(fixture.httpRequests.every((request) => request.method === "GET")).toBe(true);
+    });
+  });
+
   it.each([
     { action: "edit", method: "PATCH", path: messageWritePath },
     { action: "delete", method: "DELETE", path: messageWritePath },

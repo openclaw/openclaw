@@ -11,10 +11,7 @@ import { getStatusSummary } from "../../status/summary.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  hasResolvableHeartbeatOwnerRoute,
-  resolveHeartbeatDeliveryTargetWithSessionRoute,
-} from "./targets.js";
+import { hasResolvableHeartbeatOwnerRoute, resolveHeartbeatDeliveryTarget } from "./targets.js";
 
 const registrySnapshot = captureActivePluginRegistrySnapshot();
 const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
@@ -43,9 +40,11 @@ describe.each(["active", "scoped"] as const)("heartbeat owner in %s registry", (
       scope === "scoped" ? telegramRegistry : undefined,
       async () => {
         expect(await hasResolvableHeartbeatOwnerRoute({ cfg })).toBe(true);
-        expect(
-          await resolveHeartbeatDeliveryTargetWithSessionRoute({ cfg, agentId: "main" }),
-        ).toMatchObject({ channel: "telegram", to: "telegram:1234567890", chatType: "direct" });
+        expect(await resolveHeartbeatDeliveryTarget({ cfg, agentId: "main" })).toMatchObject({
+          channel: "telegram",
+          to: "telegram:1234567890",
+          chatType: "direct",
+        });
       },
     );
   });

@@ -105,6 +105,7 @@ export function resolveTrustedMessageActionToolContext(params: {
     agentId?: string;
     sessionKey?: string;
     sessionId?: string;
+    allowNativeChannelNamespace?: boolean;
   };
 }):
   | ({
@@ -172,7 +173,15 @@ export function resolveTrustedMessageActionToolContext(params: {
       ),
     };
   }
-  const messageActionAuthorization = resolveAgentRuntimeMessageActionAuthorization(params.client);
+  const redeemedAuthorization = resolveAgentRuntimeMessageActionAuthorization(params.client);
+  const messageActionAuthorization = redeemedAuthorization
+    ? {
+        ...redeemedAuthorization,
+        allowNativeChannelNamespace: redeemedAuthorization.scheduled
+          ? (params.request.allowNativeChannelNamespace ?? true)
+          : undefined,
+      }
+    : undefined;
   return {
     ok: true,
     toolContext: messageActionContext.toolContext,

@@ -179,6 +179,21 @@ describe("MessageActionParamsSchema", () => {
     ).toBe(false);
   });
 
+  it("accepts only boolean channel namespace provenance", () => {
+    expect(
+      Value.Check(MessageActionParamsSchema, {
+        ...baseParams,
+        allowNativeChannelNamespace: false,
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(MessageActionParamsSchema, {
+        ...baseParams,
+        allowNativeChannelNamespace: "false",
+      }),
+    ).toBe(false);
+  });
+
   it("rejects caller-supplied current chat classification", () => {
     expect(
       Value.Check(MessageActionParamsSchema, {

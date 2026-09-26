@@ -68,7 +68,7 @@ import {
 } from "./heartbeat-wake.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
 import {
-  resolveHeartbeatDeliveryTargetWithSessionRoute,
+  resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
 import { deferSessionEventWakePoll } from "./session-event-wake.js";
@@ -387,7 +387,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
   // a new session ID (empty transcript) each run, avoiding the cost of
   // sending the full conversation history (~100K tokens) to the LLM.
   // Delivery routing uses the selected conversation, not the fresh execution row.
-  const delivery = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+  const delivery = await resolveHeartbeatDeliveryTarget({
     cfg,
     agentId,
     entry: conversationEntry,

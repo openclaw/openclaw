@@ -166,6 +166,7 @@ async function resolveActionTarget(params: {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
   accountId?: string | null;
+  allowNativeChannelNamespace?: boolean;
   plugin?: ChannelPlugin;
 }): Promise<ResolvedMessagingTarget | undefined> {
   let resolvedTarget: ResolvedMessagingTarget | undefined;
@@ -176,6 +177,7 @@ async function resolveActionTarget(params: {
       channel: params.channel,
       input: toRaw,
       accountId: params.accountId ?? undefined,
+      allowNativeChannelNamespace: params.allowNativeChannelNamespace,
       plugin: params.plugin,
     });
     params.args.to = resolved.to;
@@ -188,6 +190,7 @@ async function resolveActionTarget(params: {
       channel: params.channel,
       input: channelIdRaw,
       accountId: params.accountId ?? undefined,
+      allowNativeChannelNamespace: params.allowNativeChannelNamespace,
       plugin: params.plugin,
       preferredKind: "group",
       validateResolvedTarget: (target) =>
@@ -209,6 +212,7 @@ async function resolveResolvedTargetOrThrow(params: {
   channel: ChannelId;
   input: string;
   accountId?: string;
+  allowNativeChannelNamespace?: boolean;
   plugin?: ChannelPlugin;
   preferredKind?: "group" | "user" | "channel";
   validateResolvedTarget?: (target: ResolvedMessagingTarget) => string | undefined;
@@ -218,6 +222,7 @@ async function resolveResolvedTargetOrThrow(params: {
     channel: params.channel,
     input: params.input,
     accountId: params.accountId,
+    allowNativeChannelNamespace: params.allowNativeChannelNamespace,
     preferredKind: params.preferredKind,
     plugin: params.plugin,
   });
@@ -342,6 +347,7 @@ type PreparedMessageRoute = {
   accountId?: string | null;
   dryRun: boolean;
   defersExternalTargetResolution: boolean;
+  allowNativeChannelNamespace: boolean;
   assertReadAuthorityCurrent?: () => void;
   assertTargetAuthorityCurrent?: () => void;
 };
@@ -480,6 +486,12 @@ export async function prepareMessageRoute(params: {
     accountId,
     dryRun,
     defersExternalTargetResolution,
+    // A sole configured channel was inferred without destination intent. Keep its
+    // own namespace ambiguous unless an exact directory destination proves otherwise.
+    allowNativeChannelNamespace:
+      input.allowNativeChannelNamespace ??
+      input.messageActionAuthorization?.allowNativeChannelNamespace ??
+      selection.source !== "single-configured",
     assertReadAuthorityCurrent,
     assertTargetAuthorityCurrent,
   };
@@ -494,6 +506,7 @@ export async function resolveMessageTarget(params: {
   toolContext?: ChannelThreadingToolContext;
   agentId?: string | null;
   deferExternalTargetResolution?: boolean;
+  allowNativeChannelNamespace?: boolean;
   plugin?: ChannelPlugin;
 }): Promise<ResolvedMessagingTarget | undefined> {
   const resolvedTarget = params.deferExternalTargetResolution
@@ -504,6 +517,7 @@ export async function resolveMessageTarget(params: {
         action: params.action,
         args: params.args,
         accountId: params.accountId,
+        allowNativeChannelNamespace: params.allowNativeChannelNamespace,
         plugin: params.plugin,
       });
 

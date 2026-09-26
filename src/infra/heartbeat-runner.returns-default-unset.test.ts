@@ -38,7 +38,6 @@ import {
 } from "./heartbeat-runner.test-utils.js";
 import {
   resolveHeartbeatDeliveryTarget,
-  resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
 import { telegramMessagingForTest } from "./outbound/targets.test-helpers.js";
@@ -553,7 +552,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
           },
         },
       };
-      const result = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      const result = await resolveHeartbeatDeliveryTarget({
         cfg,
         agentId: "heartbeat-agent",
         entry: baseEntry,

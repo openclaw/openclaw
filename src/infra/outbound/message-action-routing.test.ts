@@ -111,6 +111,24 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
+    it("rejects an inferred channel name after scheduled Gateway delegation", async () => {
+      setTestPlugin(actionHubPlugin, "actionhub", "bundled");
+
+      await expect(
+        runMessageAction({
+          cfg: createEnabledMessageActionConfig("actionhub"),
+          action: "pin",
+          params: {
+            channel: "actionhub",
+            target: "actionhub",
+            messageId: "om_123",
+          },
+          allowNativeChannelNamespace: false,
+        }),
+      ).rejects.toThrow("does not specify a destination");
+      expect(handleAction).not.toHaveBeenCalled();
+    });
+
     it("uses capability authorization instead of ambient routing for local plugin actions", async () => {
       const cfg = createEnabledMessageActionConfig("actionhub");
 

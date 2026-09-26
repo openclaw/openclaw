@@ -247,6 +247,39 @@ describe("runMessageAction send validation", () => {
     ).rejects.toThrow(/requires a target/i);
   });
 
+  it("rejects the sole configured channel id as a missing send destination", async () => {
+    await expect(
+      runMessageAction({
+        cfg: workspaceConfig,
+        action: "send",
+        params: {
+          target: "workspace",
+          message: "hello from codex",
+        },
+        dryRun: true,
+      }),
+    ).rejects.toMatchObject({
+      reasonCode: "message_target_missing",
+      policyRef: "message-target:destination-required",
+      message: expect.stringContaining("workspace:<destination>"),
+    });
+  });
+
+  it("preserves an explicit plugin-native destination matching the selected channel id", async () => {
+    await expect(
+      runMessageAction({
+        cfg: workspaceConfig,
+        action: "send",
+        params: {
+          channel: "workspace",
+          target: "workspace",
+          message: "hello from codex",
+        },
+        dryRun: true,
+      }),
+    ).resolves.toMatchObject({ channel: "workspace", to: "workspace", dryRun: true });
+  });
+
   it.each([undefined, false, true])(
     "applies provider policy to explicit message-tool-only routes (allowed=%s)",
     async (allowAcrossProviders) => {
