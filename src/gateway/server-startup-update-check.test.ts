@@ -274,6 +274,31 @@ describe("deferred Gateway update-check lifecycle", () => {
     }
   });
 
+  it("skips eager install discovery when startup update checks are disabled", async () => {
+    const result = await startUpdateCheck({
+      getConfig: () => ({ update: { checkOnStart: false } }),
+    });
+    await waitForGatewayTestState(() => {
+      expect(defaultUpdateCheck.start).toHaveBeenCalled();
+    });
+    expect(defaultUpdateCheck.initialize).not.toHaveBeenCalled();
+    await result.stop();
+  });
+
+  it("skips eager install discovery when auto-update is disabled by environment", async () => {
+    process.env.OPENCLAW_NO_AUTO_UPDATE = "1";
+    try {
+      const result = await startUpdateCheck();
+      await waitForGatewayTestState(() => {
+        expect(defaultUpdateCheck.start).toHaveBeenCalled();
+      });
+      expect(defaultUpdateCheck.initialize).not.toHaveBeenCalled();
+      await result.stop();
+    } finally {
+      delete process.env.OPENCLAW_NO_AUTO_UPDATE;
+    }
+  });
+
   it("fences update discovery immediately and joins its pending initialization", async () => {
     const initialization = createDeferred<Awaited<ReturnType<UpdateCheck["initialize"]>>>();
     const cleanup = createDeferred();
