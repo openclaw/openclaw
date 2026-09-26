@@ -89,7 +89,7 @@ describe("sendGatewayHello setup completion ordering", () => {
               throw new Error("test presence publication failure");
             }
           });
-          vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
           const presence = createPresencePublisher({
             broadcast,
             incrementPresenceVersion: () => 2,
@@ -164,7 +164,7 @@ describe("sendGatewayHello setup completion ordering", () => {
           releaseHandoff.resolve();
           await hello;
           expect(broadcast.mock.calls.some(([event]) => event === "presence")).toBe(false);
-          expect(() => vi.runOnlyPendingTimers()).not.toThrow();
+          expect(() => vi.advanceTimersByTime(50)).not.toThrow();
           const completionAfterHandoff = await readDevicePairSetupCompletion({
             setupId: issued.setupId,
           });
