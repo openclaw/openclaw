@@ -17,11 +17,9 @@ import {
   registerCaptureStoreFinalizer,
   registerAsyncCaptureStoreFinalizer,
 } from "./store-lifecycle.js";
-import {
-  createDebugProxyCaptureStoreForContext,
-  type AsyncDebugProxyCaptureStore,
-} from "./store.async.js";
+import { createDebugProxyCaptureStoreForContext } from "./store.async.js";
 import { getDebugProxyCaptureStore, persistEventPayload, safeJsonString } from "./store.sqlite.js";
+import type { AsyncDebugProxyCaptureStore } from "./store.types.js";
 import type { CapturePayloadInput } from "./store.worker-contract.js";
 import type { CaptureEventRecord } from "./types.js";
 

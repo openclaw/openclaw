@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AsyncDebugProxyCaptureStore } from "../proxy-capture/store.async.js";
+import type { AsyncDebugProxyCaptureStore } from "../proxy-capture/store.types.js";
 
 const {
   acquireStore,

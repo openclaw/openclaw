@@ -1,5 +1,5 @@
 import { createDeferredCore } from "../shared/deferred.js";
-import type { AsyncDebugProxyCaptureStore } from "./store.async.js";
+import type { AsyncDebugProxyCaptureStore } from "./store.types.js";
 
 // Capture sessions must settle while their exact store is still writable.
 // This registry avoids a runtime/store import cycle and never acquires a store.

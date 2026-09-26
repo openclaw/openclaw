@@ -31,8 +31,8 @@ import {
   type HttpCaptureErrorParams,
   type HttpCaptureParams,
 } from "./runtime-response-body.js";
-import type { AsyncDebugProxyCaptureStore } from "./store.async.js";
 import { safeJsonString } from "./store.sqlite.js";
+import type { AsyncDebugProxyCaptureStore } from "./store.types.js";
 import type {
   CaptureDirection,
   CaptureEventKind,

@@ -17,7 +17,7 @@ export type { DebugProxyCaptureReader } from "../proxy-capture/store-readonly.js
 export { createDebugProxyCaptureReaderAsync } from "../proxy-capture/store-readonly.async.js";
 export type { AsyncDebugProxyCaptureReader } from "../proxy-capture/store-readonly.async.js";
 export { acquireDebugProxyCaptureStoreAsync } from "../proxy-capture/store.async.js";
-export type { AsyncDebugProxyCaptureStore } from "../proxy-capture/store.async.js";
+export type { AsyncDebugProxyCaptureStore } from "../proxy-capture/store.types.js";
 export {
   captureHttpExchange,
   captureHttpExchangeAsync,
