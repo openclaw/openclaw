@@ -565,6 +565,8 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     for (const modelId of [
       "gemini-3.1-flash-image",
       "gemini-3.1-flash-tts-preview",
+      "gemini-3.8-flash-tts",
+      "gemini-3.8-flash-lite-tts",
       "gemini-3.1-flash-live-preview",
       "gemini-2.5-flash-preview-native-audio-dialog",
     ]) {
