@@ -37,6 +37,7 @@ async function resolveWorkspaceSkillPromptState(
   eligible: SkillEntry[];
   prompt: string;
   resolvedSkills: Skill[];
+  discoverySkills: Skill[];
   skillFilter?: string[];
 }> {
   const { eligible, skillFilter } = await resolveWorkspaceSkillPromptEntries(workspaceDir, opts);
@@ -60,6 +61,7 @@ async function resolveWorkspaceSkillPromptState(
     eligible,
     prompt: prepared.prompt,
     resolvedSkills: prepared.skills.map((skill) => byName.get(skill.name)!),
+    discoverySkills: resolvedSkills,
     skillFilter,
   };
 }
@@ -68,10 +70,8 @@ export async function buildSkillSnapshot(
   workspaceDir: string,
   opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
 ): Promise<SkillSnapshot> {
-  const { eligible, prompt, resolvedSkills, skillFilter } = await resolveWorkspaceSkillPromptState(
-    workspaceDir,
-    opts,
-  );
+  const { eligible, prompt, resolvedSkills, discoverySkills, skillFilter } =
+    await resolveWorkspaceSkillPromptState(workspaceDir, opts);
   return {
     prompt,
     skills: eligible.map((entry) => ({
@@ -87,6 +87,7 @@ export async function buildSkillSnapshot(
       ? { nodeSkillsEligibility: opts.eligibility.nodeSkills }
       : {}),
     resolvedSkills,
+    discoverySkills,
     version: opts?.snapshotVersion,
     promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
   };

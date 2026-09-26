@@ -314,16 +314,21 @@ describe("asynchronous runtime skill preparation", () => {
   it("hydrates runtime paths without rewriting saved fields and reuses the complete snapshot", async () => {
     const params = await fixture();
     const { snapshot } = await resolveReusableWorkspaceSkillSnapshot(params);
-    const { resolvedSkills, ...saved } = snapshot;
+    const { resolvedSkills, discoverySkills, ...saved } = snapshot;
     saved.prompt = "Saved prompt bytes";
     const before = JSON.stringify(saved);
     Object.freeze(saved);
     const hydrated = (
       await resolveReusableWorkspaceSkillSnapshot({ ...params, existingSnapshot: saved })
     ).snapshot;
-    const { resolvedSkills: hydratedSkills, ...persisted } = hydrated;
+    const {
+      resolvedSkills: hydratedSkills,
+      discoverySkills: hydratedDiscovery,
+      ...persisted
+    } = hydrated;
     expect(JSON.stringify(persisted)).toBe(before);
     expect(hydratedSkills).toBe(resolvedSkills);
+    expect(hydratedDiscovery).toBe(discoverySkills);
     expect(hydrated.skills).toBe(saved.skills);
     expect(
       (await resolveReusableWorkspaceSkillSnapshot({ ...params, existingSnapshot: hydrated }))

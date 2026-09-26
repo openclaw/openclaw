@@ -147,7 +147,10 @@ export type SkillSnapshot = {
   skillOverrides?: Record<string, boolean>;
   /** Effective node-exec eligibility used to select connected node-hosted skills. */
   nodeSkillsEligibility?: SkillEligibilityContext["nodeSkills"];
+  /** Runtime-only skills selected for the bounded prompt projection. */
   resolvedSkills?: Skill[];
+  /** Runtime-only model-discoverable skills before prompt budgeting; excludes hidden skills. */
+  discoverySkills?: Skill[];
   /** Present only when a session merges skills from distinct agent and execution roots. */
   skillRoots?: {
     agentWorkspaceDir: string;
