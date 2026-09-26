@@ -8,13 +8,13 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { isIndexedSessionEntry } from "./session-manager-codec.js";
-import { SessionManagerEntries } from "./session-manager-entries.js";
+import { SessionManagerCompaction } from "./session-manager-compaction.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import { canonicalizeSessionEntry } from "./session-manager-persistence.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
-export class SessionManagerMetadata extends SessionManagerEntries {
+export class SessionManagerMetadata extends SessionManagerCompaction {
   private async appendMetadataEntry(change: SessionMetadataChange): Promise<string> {
     const publication = captureSessionMetadataPublication(this, change);
     return await withSessionManagerWrite(this, async (admission) => {

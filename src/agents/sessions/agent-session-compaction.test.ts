@@ -70,36 +70,6 @@ function createStaleThinkingContent(): AssistantMessage["content"] {
   ] as unknown as AssistantMessage["content"];
 }
 
-function createResultHandlers(
-  summary: string,
-  firstKeptEntryId?: string,
-  onPreparation?: (preparation: { latestUnresolvedUserRequest?: string }) => void,
-) {
-  const handlers = createCompactionHandlers();
-  handlers.set("session_before_compact", [
-    async (event: unknown) => {
-      const preparation = (
-        event as {
-          preparation: {
-            firstKeptEntryId: string;
-            latestUnresolvedUserRequest?: string;
-            tokensBefore: number;
-          };
-        }
-      ).preparation;
-      onPreparation?.(preparation);
-      return {
-        compaction: {
-          summary,
-          firstKeptEntryId: firstKeptEntryId ?? preparation.firstKeptEntryId,
-          tokensBefore: preparation.tokensBefore,
-        },
-      };
-    },
-  ]);
-  return handlers;
-}
-
 function collectCompactionEnds(session: Awaited<ReturnType<typeof createTestSession>>["session"]) {
   const events: Array<Extract<AgentSessionEvent, { type: "compaction_end" }>> = [];
   session.subscribe((event) => {
@@ -445,7 +415,7 @@ describe("AgentSession compaction", () => {
     const { session } = await createTestSession({
       sessionManager,
       settingsManager: createAutoCompactionSettings(),
-      resourceLoader: createResourceLoader(createResultHandlers("condensed history")),
+      resourceLoader: createResourceLoader(createCompactionHandlers("condensed history")),
     });
     const compactionEvents = collectCompactionEnds(session);
     // Embedded attempt preparation removes the ingress-persisted user from model state.
@@ -670,7 +640,7 @@ describe("AgentSession compaction", () => {
     const { session } = await createTestSession({
       sessionManager,
       resourceLoader: createResourceLoader(
-        createResultHandlers(oversizedSummary, undefined, (preparation) => {
+        createCompactionHandlers(oversizedSummary, undefined, (preparation) => {
           manualRequestState = preparation.latestUnresolvedUserRequest;
         }),
       ),
@@ -782,7 +752,7 @@ describe("AgentSession compaction", () => {
       const eventBus = createEventBus();
       let reportedCompactionId: string | undefined;
       const replacementTokens: Array<number | undefined> = [];
-      const resourceLoader = createResourceLoader(createResultHandlers(summary, recentUserId));
+      const resourceLoader = createResourceLoader(createCompactionHandlers(summary, recentUserId));
       const extensions = resourceLoader.getExtensions();
       extensions.extensions.push(
         await loadExtensionFromFactory(
