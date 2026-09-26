@@ -118,6 +118,12 @@ export function classifyHeartbeatAgentOutcome(params: {
     replyPayload?: ReplyPayload;
   };
   hasRelayableExecCompletion: boolean;
+  /**
+   * Whether this turn is the agent's own heartbeat check. An event wake borrows
+   * the heartbeat runner, so its generic failure text must not be relabeled as a
+   * heartbeat failure (#153543). Defaults to the historical relabeling.
+   */
+  useHeartbeatFailureCopy?: boolean;
   suppressUnmarkedSourceReplies: boolean;
   responsePrefix: string | undefined;
   ackMaxChars: number;
@@ -164,7 +170,7 @@ export function classifyHeartbeatAgentOutcome(params: {
           params.ackMaxChars,
           mode,
         );
-  if (agentRunFailed) {
+  if (agentRunFailed && params.useHeartbeatFailureCopy !== false) {
     const replacement = replaceGenericExternalRunFailureText(normalized.text);
     if (replacement.replaced) {
       normalized.text = replacement.text;

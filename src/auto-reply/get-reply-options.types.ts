@@ -187,6 +187,8 @@ export type GetReplyOptions = {
   /** If false, send only the initial typing signal without periodic keepalive refreshes. */
   typingKeepalive?: boolean;
   isHeartbeat?: boolean;
+  /** Wording only; heartbeat visibility/suppression semantics stay on isHeartbeat. */
+  useHeartbeatFailureCopy?: boolean;
   /** Policy-level typing control for run classes (user/system/internal/heartbeat). */
   typingPolicy?: TypingPolicy;
   /** Force-disable typing indicators for this run (system/internal/cross-channel routes). */

@@ -93,3 +93,22 @@ export function isConfiguredHeartbeatAgent(cfg: OpenClawConfig, agentId: string)
   const normalized = normalizeAgentId(agentId);
   return listAgentIds(cfg).some((candidate) => normalizeAgentId(candidate) === normalized);
 }
+
+/**
+ * True only for the agent's own heartbeat check: a scheduled tick, an ambient
+ * poll, or an operator-run trigger. Event-driven wakes (exec completions, cron,
+ * background tasks, hooks, notifications, restart sentinels) run on the same
+ * runner but are not heartbeats, so they must not borrow heartbeat-specific
+ * user copy — see #153543.
+ */
+export function isPeriodicHeartbeatWake(params: {
+  source?: HeartbeatWakeSource;
+  intent?: HeartbeatWakeIntent;
+}): boolean {
+  return (
+    params.intent === "scheduled" ||
+    !params.source ||
+    params.source === "interval" ||
+    params.source === "manual"
+  );
+}

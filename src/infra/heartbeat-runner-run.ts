@@ -24,6 +24,7 @@ import {
   type HeartbeatRunOptions,
 } from "./heartbeat-runner-execution.js";
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
+import { isPeriodicHeartbeatWake } from "./heartbeat-wake-policy.js";
 import { getHeartbeatWakeAbortSignal, type HeartbeatRunResult } from "./heartbeat-wake.js";
 import { markSessionEventWakeWorkStarted } from "./session-event-wake.js";
 
@@ -39,6 +40,11 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     return { status: "skipped", reason: prepared.reason };
   }
   const { cfg, agentId, heartbeat, startedAt } = wake;
+  // Event wakes borrow this runner as transport; only a real check is a heartbeat.
+  const periodicHeartbeatWake = isPeriodicHeartbeatWake({
+    source: wake.wakeSource,
+    intent: opts.intent,
+  });
   const { delivery, visibility, sender, runSessionKey, suppressOriginatingContext } = prepared;
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({
@@ -83,6 +89,8 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       AccountId: delivery.accountId,
       ChatType: delivery.chatType,
       MessageThreadId: delivery.threadId,
+      // Transport-level classification only; its union is closed. The wake's own
+      // producer travels in InputProvenance.sourceTool just below.
       InternalTurnSource: prepared.hasExecCompletion
         ? "exec"
         : prepared.hasCronEvents
@@ -94,10 +102,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
           ? "exec"
           : prepared.hasCronEvents
             ? "cron"
-            : opts.intent === "scheduled" ||
-                !wake.wakeSource ||
-                wake.wakeSource === "interval" ||
-                wake.wakeSource === "manual"
+            : periodicHeartbeatWake
               ? "heartbeat"
               : wake.wakeSource,
       },
@@ -112,6 +117,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       replyOptions: withReplySystemEventContext<InternalGetReplyOptions>(
         {
           isHeartbeat: true,
+          useHeartbeatFailureCopy: periodicHeartbeatWake,
           // Isolated heartbeats mint a fresh session ID per run, so nothing later
           // reuses this run's bundle MCP runtime; retire it at settlement.
           ...(prepared.run.kind === "isolated" ? { cleanupBundleMcpOnRunEnd: true } : {}),

@@ -51,6 +51,7 @@ import type {
 import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
 import { restoreHeartbeatUpdatedAt } from "./heartbeat-runner-session.js";
 import { publishHeartbeatSessionReply } from "./heartbeat-session-publication.js";
+import { isPeriodicHeartbeatWake } from "./heartbeat-wake-policy.js";
 import {
   HEARTBEAT_IDLE_RETRY_GRACE_MS,
   HEARTBEAT_SKIP_CHANNEL_NOT_READY,
@@ -215,6 +216,7 @@ async function prepareHeartbeatDispatchReply(
       replyPayload: selected,
     },
     hasRelayableExecCompletion: prepared.hasRelayableExecCompletion,
+    useHeartbeatFailureCopy: isPeriodicHeartbeatWake({ source: wakeSource, intent: opts.intent }),
     suppressUnmarkedSourceReplies:
       resolveSourceReplyDeliveryMode({
         cfg,
