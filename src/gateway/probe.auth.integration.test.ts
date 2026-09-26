@@ -3,6 +3,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createStatusGatewayProbeBudget } from "../commands/status.gateway-probe-budget.js";
+import { resolveGatewayProbeSnapshot } from "../commands/status.scan.shared.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
 import { createGatewaySuiteHarness, installGatewayTestHooks, testState } from "./test-helpers.js";
 
@@ -118,7 +120,7 @@ describe("probeGateway auth integration", () => {
     expect(fs.existsSync(statePath("identity", "device-auth.json"))).toBe(false);
   });
 
-  it("keeps detail RPCs available for local probes with cached origin-scoped device auth", async () => {
+  it("keeps paired local reads and restores remote loopback reads with explicit credentials", async () => {
     const token = requireGatewayToken();
     await seedCachedOperatorToken(["operator.read"]);
     const result = await probeGateway({
@@ -133,5 +135,30 @@ describe("probeGateway auth integration", () => {
     expectRecord(result.health, "probe health");
     expectRecord(result.status, "probe status");
     expectRecord(result.configSnapshot, "probe config snapshot");
+
+    const url = `ws://127.0.0.1:${gatewayHarness.port}`;
+    const paired = await probeGateway({ url, timeoutMs: 10_000 });
+    expect(paired.ok).toBe(true);
+    expect(paired.auth.capability).toBe("read_only");
+    const remote = await resolveGatewayProbeSnapshot({
+      cfg: { gateway: { mode: "remote", remote: { url } } },
+      configPath: statePath("openclaw.json"),
+      env: { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR },
+      opts: { ...createStatusGatewayProbeBudget(10_000), detailLevel: "full" },
+    });
+    expect(remote.gatewayProbe?.ok).toBe(false);
+
+    const recovered = await resolveGatewayProbeSnapshot({
+      cfg: { gateway: { mode: "remote", remote: { url, token } } },
+      configPath: statePath("openclaw.json"),
+      env: { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR },
+      opts: { ...createStatusGatewayProbeBudget(10_000), detailLevel: "full" },
+    });
+    expect(recovered.gatewayProbe?.error).toBeNull();
+    expect(recovered.gatewayProbe?.ok).toBe(true);
+    expect(recovered.gatewayProbe?.auth.capability).toBe("read_only");
+    expectRecord(recovered.gatewayProbe?.health, "remote probe health");
+    expectRecord(recovered.gatewayProbe?.status, "remote probe status");
+    expectRecord(recovered.gatewayProbe?.configSnapshot, "remote probe config snapshot");
   });
 });

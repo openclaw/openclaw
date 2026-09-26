@@ -298,8 +298,9 @@ export async function probeGateway(opts: {
         return null;
       }
       const loopback = isLoopbackHost(new URL(opts.url).hostname);
-      // A remote loopback URL can be a reused SSH port, not the cached token's Gateway.
-      if (opts.originScopedDeviceAuth && loopback) {
+      // Forwarded ports do not bind cached tokens to a Gateway. Explicit auth
+      // can retain a paired identity; the scoped client suppresses cached tokens.
+      if (opts.originScopedDeviceAuth && loopback && !hasProbeAuth(opts.auth)) {
         return null;
       }
       const { loadDeviceIdentityIfPresent } = await import("../infra/device-identity.js");
@@ -315,7 +316,7 @@ export async function probeGateway(opts: {
         ...lookup,
         gatewayScope: deviceAuthScope,
       });
-      if (!cachedOperatorToken && loopback) {
+      if (!cachedOperatorToken && !opts.originScopedDeviceAuth && loopback) {
         // Default local clients still cache unscoped tokens. Keep this fallback
         // local-only and select the same store for the subsequent client handshake.
         cachedOperatorToken = await loadDeviceAuthTokenReadOnly(lookup);
