@@ -107,10 +107,11 @@ const MIN_USEFUL_OUTPUT_TOKENS = 16;
 // Used only to bound `max_completion_tokens` below the effective context cap
 // for strict OpenAI-compatible servers (e.g. vLLM, StepFun). The CJK-aware
 // helper avoids undercounting non-Latin prompts enough to trigger server-side
-// context rejections; exhausted estimates enter the existing overflow recovery.
+// context rejections. A budget that context pressure cuts below
+// MIN_USEFUL_OUTPUT_TOKENS enters the existing overflow recovery instead of being sent.
 // Estimate the final shaped payload, not the raw context, so compat transforms and dropped
 // replay turns are reflected in the output cap.
-function estimateOpenAICompletionsInputTokens(payload: {
+function estimateOpenAICompletionsInputChars(payload: {
   messages?: unknown;
   tools?: unknown;
   response_format?: unknown;
@@ -131,9 +132,7 @@ function estimateOpenAICompletionsInputTokens(payload: {
       adjustedChars += 256;
     }
   }
-  return Math.ceil(
-    (adjustedChars / CHARS_PER_TOKEN_ESTIMATE) * OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN,
-  );
+  return adjustedChars;
 }
 
 function estimateOpenAICompletionsMessagesChars(messages: unknown): number {
@@ -520,32 +519,59 @@ export function buildOpenAICompletionsRequest(
       clampedMaxTokens !== undefined &&
       effectiveContextTokens !== undefined
     ) {
-      const estimatedInputTokens = estimateOpenAICompletionsInputTokens(params);
-      const remainingBudget = Math.max(1, effectiveContextTokens - estimatedInputTokens - 1);
+      const inputChars = estimateOpenAICompletionsInputChars(params);
+      const thinkingRequest = model.reasoning && thinkingEnabled !== false;
+      const marginedInputTokens = Math.ceil(
+        (inputChars / CHARS_PER_TOKEN_ESTIMATE) * OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN,
+      );
+      let estimatedInputTokens = marginedInputTokens;
+      let availableOutputTokens = effectiveContextTokens - estimatedInputTokens - 1;
+      // The margin keeps ordinary caps inside strict servers' limits. Without thinking, once it
+      // leaves less than a useful reply, budget from the unmargined estimate instead; if that
+      // undercounts, the provider's own context-length rejection enters the same recovery.
+      // Thinking-enabled requests keep the margin.
+      const unmargined = !thinkingRequest && availableOutputTokens < MIN_USEFUL_OUTPUT_TOKENS;
+      if (unmargined) {
+        estimatedInputTokens = Math.ceil(inputChars / CHARS_PER_TOKEN_ESTIMATE);
+        availableOutputTokens = effectiveContextTokens - estimatedInputTokens - 1;
+      }
+      // A budget taken from the unmargined estimate is logged at warn level: it is the
+      // operator-visible sign that a prompt has reached the context cap and that the provider
+      // may still reject it. Ordinary clamping stays at debug level.
+      const logBudget = (event: string, output: number) => {
+        const line =
+          `[completions] ${event} provider=${model.provider} api=${model.api} ` +
+          `model=${model.id} requested=${effectiveMaxTokens} output=${output} ` +
+          `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}` +
+          (unmargined ? ` estimate=unmargined marginedInput=${marginedInputTokens}` : "");
+        if (unmargined) {
+          log.warn(line);
+        } else {
+          emitModelTransportDebug(log, line);
+        }
+      };
+      // The room never counts below one token, so a requested cap of 1 is always sent, even
+      // when the estimate already exceeds the context; a prompt that really does is rejected by
+      // the provider and enters overflow recovery. Any other requested cap within the room is
+      // sent as is, and a cap that context pressure cuts below the floor is refused.
+      const remainingBudget = Math.max(1, availableOutputTokens);
       if (clampedMaxTokens > remainingBudget) {
-        clampedMaxTokens = remainingBudget;
-        emitModelTransportDebug(
-          log,
-          `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
-            `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
-            `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
-        );
         if (remainingBudget < MIN_USEFUL_OUTPUT_TOKENS) {
-          if (model.reasoning && thinkingEnabled !== false) {
-            throw Object.assign(
-              new Error(
-                `Context window exceeded: estimated input ${estimatedInputTokens} leaves only ` +
-                  `${remainingBudget} output tokens within the ${effectiveContextTokens}-token context.`,
-              ),
-              { code: "context_length_exceeded" },
-            );
-          }
-          log.warn(
-            `[completions] insufficient_output_budget provider=${model.provider} api=${model.api} ` +
-              `model=${model.id} output=${clampedMaxTokens} ` +
-              `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
+          throw Object.assign(
+            new Error(
+              `Context window exceeded: estimated input ${estimatedInputTokens} tokens ` +
+                `(${unmargined ? "without" : "with"} the ${OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN}x ` +
+                `estimate margin) leaves ${Math.max(0, availableOutputTokens)} of the ` +
+                `${MIN_USEFUL_OUTPUT_TOKENS} output tokens a reply needs within the ` +
+                `${effectiveContextTokens}-token context.`,
+            ),
+            { code: "context_length_exceeded" },
           );
         }
+        clampedMaxTokens = remainingBudget;
+        logBudget("clamp_max_tokens", clampedMaxTokens);
+      } else if (unmargined) {
+        logBudget("keep_max_tokens", clampedMaxTokens);
       }
     }
     if (policy.mode === "direct" ? options?.maxTokens : clampedMaxTokens) {

@@ -319,17 +319,19 @@ describe("openai completions params", () => {
 
     const nearCapModel = { ...baseModel, contextWindow: 1016 };
     const nearCapContext = { systemPrompt: "x".repeat(3200), messages: [], tools: [] };
+    // With thinking off, the 15 tokens the margin leaves move to the unmargined estimate's 215.
     expect(
       buildOpenAICompletionsParams(nearCapModel, nearCapContext, { reasoning: "off" }),
-    ).toMatchObject({ enable_thinking: false, max_completion_tokens: 15 });
+    ).toMatchObject({ enable_thinking: false, max_completion_tokens: 215 });
     expect(() =>
       buildOpenAICompletionsParams(nearCapModel, nearCapContext, { reasoning: "medium" }),
     ).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
-    expect(
-      buildOpenAICompletionsParams({ ...baseModel, contextWindow: 1000 }, nearCapContext, {
+    // 3,200 characters estimate to 800 input tokens without the margin, which fills 800.
+    expect(() =>
+      buildOpenAICompletionsParams({ ...baseModel, contextWindow: 800 }, nearCapContext, {
         reasoning: "off",
       }),
-    ).toMatchObject({ enable_thinking: false, max_completion_tokens: 1 });
+    ).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
   });
 
   it("maps qwen-chat-template thinking format to chat_template_kwargs", () => {
