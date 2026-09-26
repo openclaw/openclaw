@@ -2081,37 +2081,34 @@ describe("OpenResponses HTTP API (e2e)", () => {
             "Alice trusted-proxy response",
           );
 
-          const aliceContinuation = await postResponses(
-            port,
-            {
-              model: "openclaw",
-              user: "alice",
-              previous_response_id: aliceResponseId,
-              input: "continue alice history",
-            },
-            {
-              ...forwardedHeaders,
-              authorization: "Bearer different-forwarded-untrusted",
-              "x-forwarded-user": "Alice@example.com",
-            },
-          );
-          expect(aliceContinuation.status).toBe(200);
-          await ensureResponseConsumed(aliceContinuation);
-
-          const bobContinuation = await postResponses(
-            port,
-            {
-              model: "openclaw",
-              user: "bob",
-              previous_response_id: aliceResponseId,
-              input: "attempt alice history",
-            },
-            { ...forwardedHeaders, "x-forwarded-user": "bob@example.com" },
-          );
-          expect(bobContinuation.status).toBe(200);
-          await ensureResponseConsumed(bobContinuation);
-          expect(firstAgentOpts(2).sessionKey).not.toBe(aliceSessionKey);
-          expect(firstAgentOpts(1).sessionKey).toBe(aliceSessionKey);
+          for (const [user, previousId, expectedSession] of [
+            ["Alice@example.com", aliceResponseId, aliceSessionKey],
+            ["bob@example.com", aliceResponseId, undefined],
+            ["bob@example.com", "missing", undefined],
+          ] as const) {
+            agentCommandMock.mockClear();
+            const continuation = await postResponses(
+              port,
+              { model: "openclaw", previous_response_id: previousId, input: "continue history" },
+              {
+                ...forwardedHeaders,
+                authorization: "Bearer different-forwarded-untrusted",
+                "x-forwarded-user": user,
+              },
+            );
+            if (expectedSession) {
+              expect(continuation.status).toBe(200);
+              await ensureResponseConsumed(continuation);
+              expect(firstAgentOpts().sessionKey).toBe(expectedSession);
+            } else {
+              expect(await expectInvalidRequest(continuation, /previous_response_id/)).toEqual({
+                type: "invalid_request_error",
+                message:
+                  "Cannot resolve previous_response_id. Retry with full input context and omit previous_response_id.",
+              });
+              expect(agentCommandMock).not.toHaveBeenCalled();
+            }
+          }
 
           agentCommandMock.mockClear();
           const unauthorized = await postResponses(
@@ -3018,37 +3015,37 @@ describe("OpenResponses HTTP API (e2e)", () => {
     },
   );
 
-  it("reuses prior sessions across different user values when auth scope matches", async () => {
-    const port = enabledPort;
-    mockAgentOnce([{ text: "First turn." }]);
+  it.each([false, true])(
+    "continues across user values but rejects unknown response IDs (stream=%s)",
+    async (stream) => {
+      const request = { model: "openclaw", input: "hi" };
+      mockAgentOnce([{ text: "First turn." }]);
+      const first = await postResponses(enabledPort, { ...request, user: "alice" });
+      expect(first.status).toBe(200);
+      const { id } = (await first.json()) as { id: string };
+      const sessionKey = firstAgentOpts().sessionKey;
+      expect(sessionKey).toContain("openresponses-user:alice");
+      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "Second turn." }] } as never);
+      const continued = await postResponses(enabledPort, {
+        ...request,
+        stream,
+        user: "bob",
+        previous_response_id: id,
+      });
+      expect(continued.status).toBe(200);
+      await ensureResponseConsumed(continued);
+      expect(firstAgentOpts(1).sessionKey).toBe(sessionKey);
 
-    const firstResponse = await postResponses(port, {
-      stream: false,
-      model: "openclaw",
-      user: "alice",
-      input: "hello",
-    });
-    expect(firstResponse.status).toBe(200);
-    const firstJson = (await firstResponse.json()) as { id?: string };
-    const firstOpts = firstAgentOpts() as { sessionKey?: string } | undefined;
-    expect(firstOpts?.sessionKey ?? "").toContain("openresponses-user:alice");
-
-    agentCommandMock.mockResolvedValueOnce({
-      payloads: [{ text: "Second turn." }],
-    } as never);
-
-    const secondResponse = await postResponses(port, {
-      stream: false,
-      model: "openclaw",
-      user: "bob",
-      previous_response_id: firstJson.id,
-      input: "hello again",
-    });
-    expect(secondResponse.status).toBe(200);
-    const secondOpts = firstAgentOpts(1) as { sessionKey?: string } | undefined;
-    expect(secondOpts?.sessionKey).toBe(firstOpts?.sessionKey);
-    await ensureResponseConsumed(secondResponse);
-  });
+      agentCommandMock.mockClear();
+      for (const previousId of ["missing", ""]) {
+        const payload = { ...request, stream, previous_response_id: previousId };
+        const response = await postResponses(enabledPort, payload);
+        await expectInvalidRequest(response, /previous_response_id.*full input context/);
+        expect(response.headers.get("content-type")).toContain("application/json");
+        expect(agentCommandMock).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("stores response session mappings when the response is emitted", async () => {
     const port = enabledPort;

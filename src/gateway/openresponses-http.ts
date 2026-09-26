@@ -124,10 +124,9 @@ type ResponseSessionEntry = ResponseSessionScope & {
 const responseSessionMap = new Map<string, ResponseSessionEntry>();
 
 function normalizeResponseSessionScope(scope: ResponseSessionScope): ResponseSessionScope {
-  const authSubject = scope.authSubject.trim();
   const requestedSessionKey = scope.requestedSessionKey?.trim();
   return {
-    authSubject,
+    authSubject: scope.authSubject.trim(),
     agentId: scope.agentId,
     requestedSessionKey: requestedSessionKey || undefined,
   };
@@ -160,17 +159,6 @@ function createResponseSessionScope(params: {
     agentId: params.agentId,
     requestedSessionKey: getHeader(params.req, "x-openclaw-session-key"),
   });
-}
-
-function matchesResponseSessionScope(
-  entry: ResponseSessionEntry,
-  scope: ResponseSessionScope,
-): boolean {
-  return (
-    entry.authSubject === scope.authSubject &&
-    entry.agentId === scope.agentId &&
-    entry.requestedSessionKey === scope.requestedSessionKey
-  );
 }
 
 function pruneExpiredResponseSessions(now: number) {
@@ -211,7 +199,11 @@ function lookupResponseSession(
     responseSessionMap.delete(responseId);
     return undefined;
   }
-  if (!matchesResponseSessionScope(entry, scope)) {
+  if (
+    entry.authSubject !== scope.authSubject ||
+    entry.agentId !== scope.agentId ||
+    entry.requestedSessionKey !== scope.requestedSessionKey
+  ) {
     return undefined;
   }
   return entry.sessionKey;
@@ -537,6 +529,13 @@ export async function handleOpenResponsesHttpRequest(
     payload.previous_response_id,
     responseSessionScope,
   );
+  if (payload.previous_response_id !== undefined && !previousSessionKey) {
+    sendInvalidRequest(
+      res,
+      "Cannot resolve previous_response_id. Retry with full input context and omit previous_response_id.",
+    );
+    return true;
+  }
   const sessionKey = previousSessionKey ?? resolved.sessionKey;
   const messageChannel = resolved.messageChannel;
   const sessionAuth = authorizeOpenAiCompatibleHttpSession({
