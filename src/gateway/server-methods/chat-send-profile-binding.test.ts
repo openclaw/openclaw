@@ -67,7 +67,7 @@ describe("native profile-bound input admission", () => {
           if (!normalized.ok) {
             throw new Error(normalized.error);
           }
-          const prepared = prepareChatSendSession({
+          const prepared = await prepareChatSendSession({
             request: normalized.value,
             client: fixture.client,
             context: fixture.context,
