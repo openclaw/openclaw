@@ -94,4 +94,16 @@ describe("catalog fingerprint reuse", () => {
     expect(ownKeys).toHaveBeenCalledTimes(2);
     expect(sha256StableValue).toHaveBeenCalledTimes(6);
   });
+
+  it("does not reuse a fingerprint after a schema array loses its iterator", () => {
+    const required = ["value"];
+    const capability: AnyAgentTool = {
+      ...tool("fingerprint-noniterable-array"),
+      parameters: { type: "object", required },
+    };
+    const catalogRef = createToolSearchCatalogRef();
+    apply(capability, catalogRef);
+    Object.setPrototypeOf(required, null);
+    expect(() => apply(capability, catalogRef)).toThrow(TypeError);
+  });
 });

@@ -16,7 +16,10 @@ function fingerprintDataKeys(value: object): string[] | undefined {
   }
   const array = Array.isArray(value);
   const prototype = Object.getPrototypeOf(value);
-  if (prototype !== (array ? Array.prototype : Object.prototype) && prototype !== null) {
+  const plainPrototype = array
+    ? prototype === Array.prototype
+    : prototype === Object.prototype || prototype === null;
+  if (!plainPrototype) {
     return undefined;
   }
   const keys = Object.keys(value);
