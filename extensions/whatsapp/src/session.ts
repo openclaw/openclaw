@@ -8,11 +8,7 @@ import type {
 } from "baileys";
 import { formatCliCommand, VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import {
-  createHttp1EnvHttpProxyAgent,
-  createHttp1ProxyAgent,
-  createNodeProxyAgent,
-} from "openclaw/plugin-sdk/fetch-runtime";
+import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import { danger, success, getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
 import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -62,6 +58,7 @@ export type { CredsQueueWaitResult } from "./creds-persistence.js";
 
 const LOGGED_OUT_STATUS = 401;
 const WHATSAPP_WEBSOCKET_PROXY_TARGET = "https://mmg.whatsapp.net/";
+const WHATSAPP_MEDIA_PROXY_TARGET = "https://media.whatsapp.net/";
 const CREDS_FLUSH_TIMEOUT_MESSAGE =
   "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
 const OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV = "OPENCLAW_WHATSAPP_WEB_SOCKET_URL";
@@ -249,7 +246,7 @@ async function createWaSocketInternal(
   const { version } = await fetchLatestBaileysVersion();
   const waWebSocketUrl = resolveWaWebSocketUrl(opts.waWebSocketUrl) ?? resolveEnvWaWebSocketUrl();
   const agent = await resolveEnvProxyAgent(sessionLogger);
-  const fetchAgent = await resolveEnvFetchDispatcher(sessionLogger, agent);
+  const fetchAgent = resolveEnvFetchDispatcher(sessionLogger);
   const socketTiming = {
     keepAliveIntervalMs:
       opts.keepAliveIntervalMs ?? DEFAULT_WHATSAPP_SOCKET_TIMING.keepAliveIntervalMs,
@@ -335,9 +332,11 @@ async function createWaSocketInternal(
     markOnlineOnConnect: false,
     ...socketTiming,
     agent,
-    // Baileys types still model `fetchAgent` as a Node agent even though the
-    // runtime path accepts an undici dispatcher for upload fetches.
-    fetchAgent: fetchAgent as Agent | undefined,
+    // Baileys passes `fetchAgent` straight into Node's native `https.request`
+    // (`uploadWithNodeHttp`) for media uploads, which only accepts a Node
+    // `http.Agent`. Use a Node-compatible proxy agent rather than an undici
+    // dispatcher so uploads work while a proxy is enabled.
+    fetchAgent,
     ...(makeSignalRepository ? { makeSignalRepository } : {}),
     ...(waWebSocketUrl ? { waWebSocketUrl } : {}),
     ...(opts.getMessage ? { getMessage: opts.getMessage } : {}),
@@ -442,62 +441,25 @@ async function resolveEnvProxyAgent(
   }
 }
 
-async function resolveEnvFetchDispatcher(
-  logger: ReturnType<typeof getChildLogger>,
-  agent?: unknown,
-): Promise<unknown> {
-  const proxyUrl = resolveProxyUrlFromAgent(agent);
-  const envProxyUrl = resolveEnvHttpsProxyUrl();
-  if (!proxyUrl && !envProxyUrl) {
-    return undefined;
-  }
+function resolveEnvFetchDispatcher(logger: ReturnType<typeof getChildLogger>): Agent | undefined {
   try {
-    return proxyUrl ? createHttp1ProxyAgent({ uri: proxyUrl }) : createHttp1EnvHttpProxyAgent();
+    const agent = createNodeProxyAgent({
+      mode: "env",
+      targetUrl: WHATSAPP_MEDIA_PROXY_TARGET,
+      protocol: "https",
+    }) as Agent | undefined;
+    if (!agent) {
+      return undefined;
+    }
+    logger.info("Using ambient env proxy for WhatsApp media uploads");
+    return agent;
   } catch (error) {
     logger.warn(
       { error: String(error) },
-      "Failed to initialize env proxy dispatcher for WhatsApp media uploads",
+      "Failed to initialize env proxy agent for WhatsApp media uploads",
     );
     return undefined;
   }
-}
-
-function resolveProxyUrlFromAgent(agent: unknown): string | undefined {
-  if (
-    typeof agent === "object" &&
-    agent !== null &&
-    "getProxyForUrl" in agent &&
-    typeof agent.getProxyForUrl === "function"
-  ) {
-    const proxyUrl = agent.getProxyForUrl(WHATSAPP_WEBSOCKET_PROXY_TARGET);
-    return typeof proxyUrl === "string" && proxyUrl.length > 0 ? proxyUrl : undefined;
-  }
-  if (typeof agent !== "object" || agent === null || !("proxy" in agent)) {
-    return undefined;
-  }
-  const proxy = (agent as { proxy?: unknown }).proxy;
-  if (proxy instanceof URL) {
-    return proxy.toString();
-  }
-  return typeof proxy === "string" && proxy.length > 0 ? proxy : undefined;
-}
-
-function resolveEnvHttpsProxyUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const lowerHttpsProxy = normalizeEnvProxyValue(env.https_proxy);
-  const lowerHttpProxy = normalizeEnvProxyValue(env.http_proxy);
-  const httpsProxy =
-    lowerHttpsProxy !== undefined ? lowerHttpsProxy : normalizeEnvProxyValue(env.HTTPS_PROXY);
-  const httpProxy =
-    lowerHttpProxy !== undefined ? lowerHttpProxy : normalizeEnvProxyValue(env.HTTP_PROXY);
-  return httpsProxy ?? httpProxy ?? undefined;
-}
-
-function normalizeEnvProxyValue(value: string | undefined): string | null | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
 }
 
 type WhatsAppConnectionWaitOptions =

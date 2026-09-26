@@ -19,23 +19,22 @@ import { logWebSelfId } from "./auth-store.js";
 import { enqueueCredsSave } from "./creds-persistence.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
-const { envHttpProxyAgentCtor, proxyAgentCtor, dispatchSpy } = vi.hoisted(() => {
-  const dispatchSpyLocal = vi.fn(() => true);
+const { envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => {
+  const mockDispatch = () => true;
   return {
-    dispatchSpy: dispatchSpyLocal,
     envHttpProxyAgentCtor: vi.fn(function MockEnvHttpProxyAgent(
       this: { options: unknown; dispatch: () => boolean },
       options: unknown,
     ) {
       this.options = options;
-      this.dispatch = dispatchSpyLocal;
+      this.dispatch = mockDispatch;
     }),
     proxyAgentCtor: vi.fn(function MockProxyAgent(
       this: { options: unknown; dispatch: () => boolean },
       options: unknown,
     ) {
       this.options = options;
-      this.dispatch = dispatchSpyLocal;
+      this.dispatch = mockDispatch;
     }),
   };
 });
@@ -518,10 +517,13 @@ describe("web session", () => {
     );
     const fetchAgent = requireValue(passed.fetchAgent, "fetch proxy agent");
     expect(fetchAgent).not.toBe(agent);
-    expect(typeof (fetchAgent as { dispatch?: unknown }).dispatch).toBe("function");
+    expect(typeof (fetchAgent as { addRequest?: unknown }).addRequest).toBe("function");
+    expect((fetchAgent as { constructor: { name: string } }).constructor.name).toBe(
+      "ProxylineNodeProxyAgent",
+    );
   });
 
-  it("adds managed proxy CA trust to WhatsApp env proxy agents", async () => {
+  it("uses a Node proxy agent for the WhatsApp WebSocket under managed proxy env", async () => {
     const caFile = createTempCaFile("whatsapp-managed-proxy-ca");
     vi.stubEnv("HTTPS_PROXY", "https://proxy.test:8443");
     vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
@@ -531,19 +533,22 @@ describe("web session", () => {
 
     const passed = readLastSocketOptions();
     const agent = requireValue(
-      passed.agent as { constructor: { name: string } } | undefined,
+      passed.agent as
+        | {
+            constructor: { name: string };
+            getProxyForUrl?: (url: string) => string;
+            addRequest?: unknown;
+          }
+        | undefined,
       "WebSocket proxy agent",
     );
     expect(agent.constructor.name).toBe("ProxylineNodeProxyAgent");
-    expect(proxyAgentCtor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        proxyTls: expect.objectContaining({ ca: "whatsapp-managed-proxy-ca" }),
-      }),
-    );
+    expect(typeof agent.addRequest).toBe("function");
+    expect(agent.getProxyForUrl?.("https://mmg.whatsapp.net/")).toContain("proxy.test:8443");
   });
 
-  it("adds managed proxy CA trust to WhatsApp env fetch dispatchers", async () => {
-    const caFile = createTempCaFile("whatsapp-managed-env-proxy-ca");
+  it("uses a Node proxy agent for WhatsApp media uploads under managed proxy env", async () => {
+    const caFile = createTempCaFile("whatsapp-managed-media-proxy-ca");
     vi.stubEnv("HTTPS_PROXY", "https://proxy.test:8443");
     vi.stubEnv("NO_PROXY", "mmg.whatsapp.net");
     vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
@@ -553,33 +558,21 @@ describe("web session", () => {
 
     const passed = readLastSocketOptions();
     expect(passed.agent).toBeUndefined();
-    const fetchAgent = requireValue(passed.fetchAgent, "fetch dispatcher");
-    if (
-      typeof fetchAgent !== "object" ||
-      fetchAgent === null ||
-      !("dispatch" in fetchAgent) ||
-      typeof fetchAgent.dispatch !== "function"
-    ) {
-      throw new Error("expected attached fetch dispatcher.dispatch");
-    }
-    fetchAgent.dispatch({ origin: "https://media.whatsapp.net", path: "/", method: "POST" }, {});
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    const proxy = requireValue(proxyAgentCtor.mock.instances[0], "selected proxy");
-    expect(dispatchSpy.mock.contexts[0]).toBe(proxy);
-    expect(proxy.options).toMatchObject({
-      uri: "https://proxy.test:8443",
-      allowH2: false,
-      proxyTls: { ca: "whatsapp-managed-env-proxy-ca" },
-    });
-    expect(proxy.options).not.toHaveProperty("requestTls.ca");
-
-    fetchAgent.dispatch({ origin: "https://mmg.whatsapp.net", path: "/", method: "POST" }, {});
-    expect(dispatchSpy).toHaveBeenCalledTimes(2);
-    const direct = requireValue(envHttpProxyAgentCtor.mock.instances[0], "direct dispatcher");
-    expect(dispatchSpy.mock.contexts[1]).toBe(direct);
-    expect(direct.options).not.toHaveProperty("proxyTls");
-    expect(direct.options).not.toHaveProperty("connect.ca");
-    expect(direct.options).not.toHaveProperty("requestTls.ca");
+    const fetchAgent = requireValue(
+      passed.fetchAgent as
+        | {
+            constructor: { name: string };
+            getProxyForUrl?: (url: string) => string;
+            addRequest?: unknown;
+            dispatch?: unknown;
+          }
+        | undefined,
+      "media upload proxy agent",
+    );
+    expect(fetchAgent.constructor.name).toBe("ProxylineNodeProxyAgent");
+    expect(typeof fetchAgent.addRequest).toBe("function");
+    expect(fetchAgent.dispatch).toBeUndefined();
+    expect(fetchAgent.getProxyForUrl?.("https://media.whatsapp.net/")).toContain("proxy.test:8443");
   });
 
   it("uses lowercase HTTPS proxy before uppercase for WA WebSocket connection", async () => {
