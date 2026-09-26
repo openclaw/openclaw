@@ -124,7 +124,8 @@ it("retains mapped addons once through disposal and exit, then reclaims them at 
         return exports;
       };
       const { createPluginSourceCapture } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.metadataCapture).href)});
-      const { createPluginNativeCaptureRoot, sweepPluginSourceCaptureDirectories } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.captureDirectory).href)});
+      const { createPluginNativeCaptureRoot, retainPluginSourceCaptureInstance } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.captureDirectory).href)});
+      const { GatewayScheduler } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.scheduler).href)});
       const captures = [createPluginSourceCapture(), createPluginSourceCapture(), createPluginNativeCaptureRoot(), createPluginNativeCaptureRoot()];
       const files = captures.map((capture, index) => path.join(capture.directory, "synthetic-addon-" + index + ".node"));
       for (const file of files) fs.writeFileSync(file, "synthetic mapped image");
@@ -151,7 +152,19 @@ it("retains mapped addons once through disposal and exit, then reclaims them at 
         if (index % 2) await capture.disposeAsync();
         else capture.dispose();
       }
-      await sweepPluginSourceCaptureDirectories();
+      const maintenance = retainPluginSourceCaptureInstance();
+      const scheduler = new GatewayScheduler();
+      try {
+        await maintenance.startMaintenance(scheduler);
+        assert.notEqual(scheduler.nextWakeAtMs, null);
+      } finally {
+        try {
+          await maintenance.releaseAsync();
+          assert.equal(scheduler.nextWakeAtMs, null);
+        } finally {
+          await scheduler.stop();
+        }
+      }
       assert(files.every(file => fs.existsSync(file)));
       // Registered after the capture owner, so this includes its terminal cleanup.
       process.on("exit", () => process.stdout.write(JSON.stringify({
