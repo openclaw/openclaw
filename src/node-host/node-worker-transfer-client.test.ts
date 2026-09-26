@@ -1,3 +1,4 @@
+import { deepStrictEqual } from "node:assert/strict";
 import { createHash, X509Certificate } from "node:crypto";
 import type { EventEmitter } from "node:events";
 import fsSync from "node:fs";
@@ -960,7 +961,7 @@ describe("node worker transfer client", () => {
           transfer: { direction: "download", token: "download-token", manifestRef },
         }),
       ).resolves.toBe(manifestRef);
-      await expect(fs.readFile(path.join(workspaceDir, "large.bin"))).resolves.toEqual(body);
+      deepStrictEqual(await fs.readFile(path.join(workspaceDir, "large.bin")), body);
 
       await fs.writeFile(path.join(workspaceDir, "large.bin"), Buffer.alloc(body.byteLength, "b"));
       uploadManifestRef = (
