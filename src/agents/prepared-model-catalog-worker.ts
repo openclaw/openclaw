@@ -17,6 +17,7 @@ import {
   getPluginMetadataSnapshotCache,
 } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { overlayPluginNativeAdmissions } from "../plugins/plugin-native-admission-state.js";
 import { createPluginSourceCaptureRoot } from "../plugins/plugin-source-capture-directory.js";
 import { captureProviderSyntheticAuthFacts } from "../plugins/provider-runtime.js";
 import type { PreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
@@ -379,6 +380,8 @@ export function createPreparedModelCatalogWorkerInput(params: {
   const providerIds = [...params.agentFacts.providerIds];
   const { normalizePluginId: _normalizePluginId, ...pluginMetadataSnapshot } =
     params.pluginMetadataSnapshot;
+  const cache = getPluginMetadataSnapshotCache(params.pluginMetadataSnapshot);
+  const index = overlayPluginNativeAdmissions(pluginMetadataSnapshot.index, cache);
   return {
     kind: "catalog",
     generationFingerprint: fingerprintPreparedModelCatalogGeneration({
@@ -398,7 +401,14 @@ export function createPreparedModelCatalogWorkerInput(params: {
     authStore,
     providerIds,
     preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts === true,
-    pluginMetadataSnapshot,
+    pluginMetadataSnapshot: {
+      ...pluginMetadataSnapshot,
+      index,
+      registryIndex:
+        pluginMetadataSnapshot.registryIndex === pluginMetadataSnapshot.index
+          ? index
+          : overlayPluginNativeAdmissions(pluginMetadataSnapshot.registryIndex, cache),
+    },
   };
 }
 

@@ -109,6 +109,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       const entry = sourceForOutput(filename);
       return entry.generated ? filename : entry.source;
     },
+    params.nativeRecovery,
   );
   if (
     params.expectedSourceDigest !== undefined &&

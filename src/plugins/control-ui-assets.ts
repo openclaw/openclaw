@@ -9,6 +9,10 @@ const MAX_CONTROL_UI_ASSETS = 128;
 
 export type PluginControlUiAsset = { body: Buffer; contentType: string };
 
+export function isPluginControlUiAssetPath(relativePath: string): boolean {
+  return /^(?:[\w-][\w.-]*\/)*[\w-][\w.-]*\.(?:m?js|css)$/u.test(relativePath);
+}
+
 // Serving and packing must capture the same bounded browser directory, including
 // dependent chunks, without exposing package sources or unrelated files.
 export async function readPluginControlUiAssets(
@@ -30,10 +34,7 @@ export async function readPluginControlUiAssets(
     limitBehavior: "throw",
   })) {
     const relativePath = path.posix.relative(directory, entry.relativePath);
-    if (
-      entry.kind !== "file" ||
-      !/^(?:[\w-][\w.-]*\/)*[\w-][\w.-]*\.(?:m?js|css)$/u.test(relativePath)
-    ) {
+    if (entry.kind !== "file" || !isPluginControlUiAssetPath(relativePath)) {
       continue;
     }
     const body = await pluginRoot.readBytes(entry.relativePath);

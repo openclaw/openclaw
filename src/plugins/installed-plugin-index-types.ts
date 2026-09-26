@@ -8,6 +8,7 @@ import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash
 import type { PluginManifestRecord } from "./manifest-registry.types.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { OpenClawPackageBuild, PluginPackageChannel } from "./package-manifest.types.js";
+import type { PluginSourceAdmissionReceipt } from "./plugin-source-admission.types.js";
 
 /** Schema version for installed plugin index files. */
 export const INSTALLED_PLUGIN_INDEX_VERSION = 1;
@@ -110,6 +111,8 @@ export type InstalledPluginIndexRecord = {
   installRecord?: InstalledPluginInstallRecordInfo;
   /** Hash of the top-level installRecords entry; used to detect source-changed invalidation. */
   installRecordHash?: string;
+  /** Native source admissions survive process restarts while the install owner is unchanged. */
+  sourceAdmissions?: Record<string, PluginSourceAdmissionReceipt>;
   /**
    * Package-authored openclaw.install metadata. This describes catalog/package
    * install intent and must not be treated as the durable install record.

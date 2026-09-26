@@ -2,6 +2,7 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWebSearchTestProvider } from "../test-utils/web-provider-runtime.test-helpers.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import * as publicArtifacts from "./web-provider-public-artifacts.explicit.js";
 
 type RegistryModule = typeof import("./registry.js");
@@ -288,15 +289,9 @@ vi.mock("./plugin-registry-snapshot.js", async () => {
     ...actual,
     loadPluginRegistrySnapshotWithMetadata: () => ({
       source: "derived",
-      snapshot: {
-        plugins: [
-          {
-            pluginId: "__test_manifest_registry_fixture__",
-            origin: "bundled",
-            enabled: true,
-          },
-        ],
-      },
+      snapshot: createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "__test_manifest_registry_fixture__" }],
+      }).index,
       diagnostics: [],
     }),
   };
