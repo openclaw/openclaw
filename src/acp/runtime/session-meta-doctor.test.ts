@@ -106,19 +106,21 @@ it("inspects without creating state and conditionally updates only the proven cu
 });
 
 it.each(["global", "shared-project"])(
-  "migrates %s with real Doctor inventory beside an unrelated free ACP session",
+  "migrates %s from explicit ACPX state beside an unrelated free ACP session",
   async (sessionKey) => {
     await withOpenClawTestState({ label: "acp-doctor-composition" }, async (state) => {
+      const acpxStateDir = path.join(state.workspaceDir, "state");
       const cfg = {
         agents: { ownership: "explicit" as const, entries: { main: {}, work: {} } },
         session: { scope: "global" as const },
+        plugins: { entries: { acpx: { config: { stateDir: acpxStateDir } } } },
       };
       await state.writeConfig(cfg);
       const peer = state.path("peer");
       await fs.mkdir(peer);
       const runtime = new AcpxRuntime({
         cwd: state.workspaceDir,
-        sessionStore: createFileSessionStore({ stateDir: path.join(state.workspaceDir, "state") }),
+        sessionStore: createFileSessionStore({ stateDir: acpxStateDir }),
         agentRegistry: createAgentRegistry({
           overrides: {
             fixture: [
@@ -216,9 +218,7 @@ it.each(["global", "shared-project"])(
           (claim) => claim.agentId === "free-harness",
         ),
       ).toEqual(before.claims.find((claim) => claim.agentId === "free-harness"));
-      await fs.access(
-        path.join(state.workspaceDir, "state", "sessions", `${sessionKey}.json.migrated`),
-      );
+      await fs.access(path.join(acpxStateDir, "sessions", `${sessionKey}.json.migrated`));
     });
   },
 );
