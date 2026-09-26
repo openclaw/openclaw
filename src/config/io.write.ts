@@ -97,7 +97,10 @@ import {
 import { prepareConfigWriteTopology } from "./io.write-topology.js";
 import { formatConfigIssueLines } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
-import { migrateBlankAgentWorkspaceForWrite } from "./legacy.blank-agent-workspace.js";
+import {
+  migrateBlankAgentWorkspaceForWrite,
+  remapLegacyListExplicitPaths,
+} from "./legacy.blank-agent-workspace.js";
 import { applyMergePatch, createMergePatch } from "./merge-patch.js";
 import { resolveIncludeRoots } from "./paths.js";
 import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
@@ -254,7 +257,13 @@ export async function writeConfigFileFromContext(
 
   const envForRestore = options.envSnapshotForRestore ?? deps.env;
   const resolveExplicitSet = () =>
-    new Set((options.explicitSetPaths ?? []).map((p) => p.filter((s) => s.length > 0).join(".")));
+    new Set([
+      ...(options.explicitSetPaths ?? []).map((p) => p.filter((s) => s.length > 0).join(".")),
+      // Canonical roster prep converts an explicit agents.list.N.<field> edit
+      // into agents.entries.<id>.<field>; keep the converted path so a
+      // converted blank the current write explicitly set stays preserved.
+      ...remapLegacyListExplicitPaths(options.explicitSetPaths, nextConfig),
+    ]);
   const resolveValidationCandidate = (candidate: unknown) => {
     // Validate removals now; apply them once to the final authored output after materialization.
     const config = applyUnsetPathsForWrite(candidate as OpenClawConfig, unsetPaths);
