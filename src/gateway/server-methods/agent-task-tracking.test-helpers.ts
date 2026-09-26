@@ -1,10 +1,12 @@
 import path from "node:path";
 import { it, vi } from "vitest";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import {
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -104,6 +106,37 @@ export function registerPluginSubagentRequesterLineageTest() {
         label: "plugin:memory-core",
       });
       expectRecordFields(run.completion, { required: true });
+    });
+  });
+}
+
+export function registerPluginSubagentWorkspaceTest() {
+  it("registers plugin subagent runs with their agent's workspace", async () => {
+    await withPluginSubagentTestState("openclaw-gateway-plugin-subagent-workspace-", async () => {
+      const childSessionKey = "agent:work:subagent:plugin-workspace";
+      const cfg: OpenClawConfig = {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: {
+          list: [{ id: "main", default: true }, { id: "work" }],
+        },
+      };
+
+      await registerPluginSubagentRunFromGateway({
+        assertAdmissionCurrent: () => {},
+        cfg,
+        runId: "plugin-subagent-workspace",
+        childSessionKey,
+        task: "background plugin subagent task",
+        pluginId: "memory-core",
+      });
+
+      const run = requireValue(
+        getSubagentRunByChildSessionKey(childSessionKey),
+        "expected plugin subagent run",
+      );
+      // Lifecycle hooks load the plugin runtime with this workspace; an unset one
+      // misses the run's cached registry and forces an unscoped rebuild.
+      expectRecordFields(run, { workspaceDir: resolveAgentWorkspaceDir(cfg, "work") });
     });
   });
 }

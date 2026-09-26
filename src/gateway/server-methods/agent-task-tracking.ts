@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry-read.js";
 import { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey } from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -235,10 +236,8 @@ export async function registerPluginSubagentRunFromGateway(params: {
   if (!childSessionKey) {
     return;
   }
-  const ownerSessionKey = resolveAgentMainSessionKey({
-    cfg: params.cfg,
-    agentId: resolveAgentIdFromSessionKey(childSessionKey),
-  });
+  const agentId = resolveAgentIdFromSessionKey(childSessionKey);
+  const ownerSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
   const requesterSessionKey = params.requester?.sessionKey ?? ownerSessionKey;
   const { adoptPausedSubagentRunForFollowUp, registerSubagentRun } =
     await import("../../agents/subagents/registry/subagent-registry.js");
@@ -272,6 +271,10 @@ export async function registerPluginSubagentRunFromGateway(params: {
       requesterDisplayKey: params.requester ? requesterSessionKey : "main",
       task: params.task,
       cleanup: "keep",
+      // The run executes in its agent's workspace. Without it, lifecycle hooks
+      // that load the plugin runtime for this run ask for an unscoped registry
+      // and rebuild every plugin synchronously on the gateway thread.
+      workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId),
       ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
       expectsCompletionMessage: params.requester !== undefined,
       spawnMode: "run",

@@ -26,6 +26,7 @@ import { registerPluginSubagentRunFromGateway } from "./agent-task-tracking.js";
 import {
   mockSpawnedChildSessionEntry,
   registerPluginSubagentRequesterLineageTest,
+  registerPluginSubagentWorkspaceTest,
   spyDetachedCreateRunningTaskRun,
   withPluginSubagentTestState,
 } from "./agent-task-tracking.test-helpers.js";
@@ -336,6 +337,7 @@ describe("gateway agent handler", () => {
   });
 
   registerPluginSubagentRequesterLineageTest();
+  registerPluginSubagentWorkspaceTest();
 
   it.each(
     [
