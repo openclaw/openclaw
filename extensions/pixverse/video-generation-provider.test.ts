@@ -1,4 +1,3 @@
-// Pixverse tests cover video generation provider plugin behavior.
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
@@ -6,6 +5,7 @@ import {
   streamedJsonResponse,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const {
@@ -24,6 +24,20 @@ beforeAll(async () => {
 });
 
 installProviderHttpMockCleanup();
+
+function generateVideo(overrides: Partial<VideoGenerationRequest> = {}) {
+  return buildPixVerseVideoGenerationProvider().generateVideo({
+    provider: "pixverse",
+    model: "pixverse/v6",
+    prompt: "a tiny lobster DJ under neon lights",
+    cfg: {},
+    ...overrides,
+  });
+}
+
+function successfulResponse(Resp: unknown) {
+  return streamedJsonResponse({ ErrCode: 0, ErrMsg: "success", Resp });
+}
 
 function firstPostJsonRequest() {
   const [call] = postJsonRequestMock.mock.calls;
@@ -60,13 +74,13 @@ function pollFetchHeaders(callIndex: number): Headers | undefined {
 
 function mockPixVerseVideoSubmit(videoId = 123) {
   postJsonRequestMock.mockImplementation(async () => ({
-    response: streamedJsonResponse({
-      ErrCode: 0,
-      ErrMsg: "success",
-      Resp: { video_id: videoId },
-    }),
+    response: successfulResponse({ video_id: videoId }),
     release: vi.fn(async () => {}),
   }));
+}
+
+function mockPixVersePoll(result: Record<string, unknown>) {
+  fetchWithTimeoutMock.mockResolvedValueOnce(successfulResponse(result));
 }
 
 function mockPixVerseVideoTask(
@@ -80,23 +94,14 @@ function mockPixVerseVideoTask(
 ) {
   const videoId = params.videoId ?? 123;
   mockPixVerseVideoSubmit(videoId);
-  fetchWithTimeoutMock.mockResolvedValueOnce(
-    Response.json(
-      {
-        ErrCode: 0,
-        ErrMsg: "success",
-        Resp: {
-          id: videoId,
-          status: 1,
-          url: params.videoUrl ?? "https://media.pixverse.ai/out.mp4",
-          ...(params.seed === undefined ? {} : { seed: params.seed }),
-          ...(params.outputWidth === undefined ? {} : { outputWidth: params.outputWidth }),
-          ...(params.outputHeight === undefined ? {} : { outputHeight: params.outputHeight }),
-        },
-      },
-      { headers: new Headers() },
-    ),
-  );
+  mockPixVersePoll({
+    id: videoId,
+    status: 1,
+    url: params.videoUrl ?? "https://media.pixverse.ai/out.mp4",
+    seed: params.seed,
+    outputWidth: params.outputWidth,
+    outputHeight: params.outputHeight,
+  });
 }
 
 describe("pixverse video generation provider", () => {
@@ -107,12 +112,7 @@ describe("pixverse video generation provider", () => {
   it("submits text-to-video, polls status, and returns the output URL", async () => {
     mockPixVerseVideoTask({ seed: 42, outputWidth: 960, outputHeight: 540 });
 
-    const provider = buildPixVerseVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "pixverse",
-      model: "pixverse/v6",
-      prompt: "a tiny lobster DJ under neon lights",
-      cfg: {},
+    const result = await generateVideo({
       durationSeconds: 4,
       aspectRatio: "21:9",
       resolution: "720P",
@@ -127,9 +127,6 @@ describe("pixverse video generation provider", () => {
     expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
     const createRequest = firstPostJsonRequest();
     expect(createRequest.url).toBe("https://app-api.pixverse.ai/openapi/v2/video/text/generate");
-    expect(JSON.stringify(createRequest.body)).toBe(
-      '{"duration":4,"model":"v6","prompt":"a tiny lobster DJ under neon lights","quality":"720p","aspect_ratio":"21:9","negative_prompt":"blur","camera_movement":"zoom_in","seed":42,"generate_audio_switch":true}',
-    );
     expect(createRequest.body).toEqual({
       duration: 4,
       model: "v6",
@@ -174,16 +171,7 @@ describe("pixverse video generation provider", () => {
   it("drops malformed seed values before creating videos", async () => {
     mockPixVerseVideoTask();
 
-    const provider = buildPixVerseVideoGenerationProvider();
-    await provider.generateVideo({
-      provider: "pixverse",
-      model: "pixverse/v6",
-      prompt: "a quiet city street at sunrise",
-      cfg: {},
-      providerOptions: {
-        seed: 1.5,
-      },
-    });
+    await generateVideo({ providerOptions: { seed: 1.5 } });
 
     expect(firstPostJsonRequest().body).not.toHaveProperty("seed");
   });
@@ -191,13 +179,7 @@ describe("pixverse video generation provider", () => {
   it("drops malformed response seed metadata", async () => {
     mockPixVerseVideoTask({ seed: 1.5 });
 
-    const provider = buildPixVerseVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "pixverse",
-      model: "pixverse/v6",
-      prompt: "a quiet city street at sunrise",
-      cfg: {},
-    });
+    const result = await generateVideo();
 
     expect(result.metadata).toEqual({
       endpoint: "/video/text/generate",
@@ -211,15 +193,9 @@ describe("pixverse video generation provider", () => {
   it("rejects fractional video ids before polling", async () => {
     mockPixVerseVideoSubmit(123.5);
 
-    const provider = buildPixVerseVideoGenerationProvider();
-    await expect(
-      provider.generateVideo({
-        provider: "pixverse",
-        model: "pixverse/v6",
-        prompt: "a quiet city street at sunrise",
-        cfg: {},
-      }),
-    ).rejects.toThrow("PixVerse video generation response missing video_id");
+    await expect(generateVideo()).rejects.toThrow(
+      "PixVerse video generation response missing video_id",
+    );
     expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
   });
 
@@ -230,17 +206,9 @@ describe("pixverse video generation provider", () => {
       release: vi.fn(async () => {}),
     });
 
-    const provider = buildPixVerseVideoGenerationProvider();
-    await expect(
-      provider.generateVideo({
-        provider: "pixverse",
-        model: "pixverse/v6",
-        prompt: "oversized create body",
-        cfg: {},
-      }),
-    ).rejects.toThrow("PixVerse video generation failed: JSON response exceeds 16777216 bytes");
-    // The bounded reader cancelled the stream rather than buffering the whole
-    // body, and stopped reading well before the 64 MiB ceiling.
+    await expect(generateVideo()).rejects.toThrow(
+      "PixVerse video generation failed: JSON response exceeds 16777216 bytes",
+    );
     expect(oversized.state.canceled).toBe(true);
     expect(oversized.state.enqueuedBytes).toBeLessThan(64 * 1024 * 1024);
     expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
@@ -253,13 +221,9 @@ describe("pixverse video generation provider", () => {
       release: vi.fn(async () => {}),
     });
 
-    const provider = buildPixVerseVideoGenerationProvider();
     await expect(
-      provider.generateVideo({
-        provider: "pixverse",
+      generateVideo({
         model: "c1",
-        prompt: "oversized upload body",
-        cfg: {},
         inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
       }),
     ).rejects.toThrow("PixVerse image upload failed: JSON response exceeds 16777216 bytes");
@@ -270,21 +234,14 @@ describe("pixverse video generation provider", () => {
 
   it("uploads local image input before submitting image-to-video", async () => {
     postMultipartRequestMock.mockImplementation(async () => ({
-      response: streamedJsonResponse({
-        ErrCode: 0,
-        ErrMsg: "success",
-        Resp: { img_id: 456, img_url: "https://media.pixverse.ai/image.png" },
-      }),
+      response: successfulResponse({ img_id: 456, img_url: "https://media.pixverse.ai/image.png" }),
       release: vi.fn(async () => {}),
     }));
     mockPixVerseVideoTask({ videoId: 789, videoUrl: "https://media.pixverse.ai/i2v.mp4" });
 
-    const provider = buildPixVerseVideoGenerationProvider();
-    await provider.generateVideo({
-      provider: "pixverse",
+    await generateVideo({
       model: "c1",
       prompt: "animate the product",
-      cfg: {},
       inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
       durationSeconds: 99,
       providerOptions: {
@@ -315,21 +272,13 @@ describe("pixverse video generation provider", () => {
 
   it("uploads remote image URLs through PixVerse image upload", async () => {
     postMultipartRequestMock.mockImplementation(async () => ({
-      response: streamedJsonResponse({
-        ErrCode: 0,
-        ErrMsg: "success",
-        Resp: { img_id: 111 },
-      }),
+      response: successfulResponse({ img_id: 111 }),
       release: vi.fn(async () => {}),
     }));
     mockPixVerseVideoTask({ videoId: 222, videoUrl: "https://media.pixverse.ai/remote.mp4" });
 
-    const provider = buildPixVerseVideoGenerationProvider();
-    await provider.generateVideo({
-      provider: "pixverse",
+    await generateVideo({
       model: "v6",
-      prompt: "animate the remote image",
-      cfg: {},
       inputImages: [{ url: "https://example.com/input.png" }],
     });
 
@@ -348,69 +297,37 @@ describe("pixverse video generation provider", () => {
       release: vi.fn(async () => {}),
     }));
 
-    const provider = buildPixVerseVideoGenerationProvider();
-    await expect(
-      provider.generateVideo({
-        provider: "pixverse",
-        model: "v6",
-        prompt: "bad request",
-        cfg: {},
-      }),
-    ).rejects.toThrow("PixVerse video generation failed: Invalid parameter");
+    await expect(generateVideo()).rejects.toThrow(
+      "PixVerse video generation failed: Invalid parameter",
+    );
     expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
   });
 
   it("reports PixVerse moderation failures from status polling", async () => {
     mockPixVerseVideoSubmit(333);
-    fetchWithTimeoutMock.mockResolvedValueOnce(
-      Response.json(
-        {
-          ErrCode: 0,
-          ErrMsg: "success",
-          Resp: { id: 333, status: 7 },
-        },
-        { headers: new Headers() },
-      ),
-    );
+    mockPixVersePoll({ id: 333, status: 7 });
 
-    const provider = buildPixVerseVideoGenerationProvider();
-    await expect(
-      provider.generateVideo({
-        provider: "pixverse",
-        model: "v6",
-        prompt: "moderated request",
-        cfg: {},
-      }),
-    ).rejects.toThrow("PixVerse video generation failed content moderation");
+    await expect(generateVideo()).rejects.toThrow(
+      "PixVerse video generation failed content moderation",
+    );
   });
 
   it.each([
     {
-      name: "uses configured baseUrl",
-      providerConfig: { baseUrl: "https://proxy.example/openapi/v2" },
-      expectedBaseUrl: "https://proxy.example/openapi/v2",
-      prompt: "custom base",
-    },
-    {
       name: "uses the configured CN API region",
       providerConfig: { region: "cn" },
       expectedBaseUrl: "https://app-api.pixverseai.cn/openapi/v2",
-      prompt: "cn endpoint",
     },
     {
       name: "prefers configured baseUrl over API region",
       providerConfig: { baseUrl: "https://proxy.example/openapi/v2", region: "cn" },
       expectedBaseUrl: "https://proxy.example/openapi/v2",
-      prompt: "custom base",
     },
-  ])("$name", async ({ providerConfig, expectedBaseUrl, prompt }) => {
+  ])("$name", async ({ providerConfig, expectedBaseUrl }) => {
     mockPixVerseVideoTask();
 
-    const provider = buildPixVerseVideoGenerationProvider();
-    await provider.generateVideo({
-      provider: "pixverse",
+    await generateVideo({
       model: "v6",
-      prompt,
       cfg: {
         models: {
           providers: {
@@ -434,13 +351,7 @@ describe("pixverse video generation provider", () => {
     } as never);
     mockPixVerseVideoTask();
 
-    const provider = buildPixVerseVideoGenerationProvider();
-    await provider.generateVideo({
-      provider: "pixverse",
-      model: "v6",
-      prompt: "custom base",
-      cfg: {},
-    });
+    await generateVideo();
 
     expect(firstPostJsonRequest().url).toBe("https://proxy.example/openapi/v2/video/text/generate");
     expect(firstPostJsonRequest().headers?.get("X-Proxy")).toBe("enabled");
@@ -460,11 +371,8 @@ describe("pixverse video generation provider", () => {
     };
     mockPixVerseVideoTask();
 
-    const provider = buildPixVerseVideoGenerationProvider();
-    await provider.generateVideo({
-      provider: "pixverse",
+    await generateVideo({
       model: "v6",
-      prompt: "custom request config",
       cfg: {
         models: {
           providers: {
@@ -486,35 +394,10 @@ describe("pixverse video generation provider", () => {
     vi.useFakeTimers();
     try {
       mockPixVerseVideoSubmit();
-      fetchWithTimeoutMock
-        .mockResolvedValueOnce(
-          Response.json(
-            {
-              ErrCode: 0,
-              ErrMsg: "success",
-              Resp: { id: 123, status: 5 },
-            },
-            { headers: new Headers() },
-          ),
-        )
-        .mockResolvedValueOnce(
-          Response.json(
-            {
-              ErrCode: 0,
-              ErrMsg: "success",
-              Resp: { id: 123, status: 1, url: "https://media.pixverse.ai/out.mp4" },
-            },
-            { headers: new Headers() },
-          ),
-        );
+      mockPixVersePoll({ id: 123, status: 5 });
+      mockPixVersePoll({ id: 123, status: 1, url: "https://media.pixverse.ai/out.mp4" });
 
-      const provider = buildPixVerseVideoGenerationProvider();
-      const pending = provider.generateVideo({
-        provider: "pixverse",
-        model: "v6",
-        prompt: "fresh trace ids",
-        cfg: {},
-      });
+      const pending = generateVideo();
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(4_999);
       expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(1);

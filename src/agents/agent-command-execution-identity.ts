@@ -226,6 +226,10 @@ export function sanitizePublicAgentCommandIngressOpts(
 ): AgentCommandGatewayIngressOpts {
   return withoutAgentCommandExecutionIdentitySpawnFacts({
     ...opts,
+    clientCaps: undefined,
+    gatewayUiCommandTarget: undefined,
+    toolBindings: undefined,
+    taskSuggestionDeliveryMode: undefined,
     runtimeContextFragments: undefined,
     senderIsOwner: false,
     mainRestartRecoveryOwnerLease: undefined,

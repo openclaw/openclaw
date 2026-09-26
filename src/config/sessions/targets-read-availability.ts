@@ -240,13 +240,8 @@ export function resolveExistingAgentSessionStoreTargetsReadOnlyResult(
       readCandidates: params.readCandidates,
     });
     if (!snapshot.available) {
-      // The configured template may point at a store that has not been
-      // created yet (fresh config, store migration window) while the agent's
-      // real sessions live in a discovered store. A missing candidate must
-      // not poison the readable siblings — treating it as whole-agent
-      // unavailability made session-evidence consumers report "absent" and
-      // destroy live worker placements. Broken-but-present stores still fail
-      // the whole agent: partial visibility must never prove absence.
+      // A missing configured store can have readable siblings during migration.
+      // Present but unreadable stores must not let partial visibility prove absence.
       if (snapshot.reason === "database-missing") {
         continue;
       }

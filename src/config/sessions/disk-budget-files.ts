@@ -70,6 +70,19 @@ export async function removeFileForBudget(params: {
   return removal;
 }
 
+async function readSessionFileStat(filePath: string): Promise<SessionsDirFileStat | null> {
+  const stat = await fs.promises.stat(filePath).catch(() => null);
+  return stat?.isFile()
+    ? {
+        path: filePath,
+        canonicalPath: canonicalizePathForComparison(filePath),
+        name: path.basename(filePath),
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+      }
+    : null;
+}
+
 export async function readSessionsDirFiles(sessionsDir: string): Promise<SessionsDirFileStat[]> {
   const dirEntries = await fs.promises
     .readdir(sessionsDir, { withFileTypes: true })
@@ -77,20 +90,7 @@ export async function readSessionsDirFiles(sessionsDir: string): Promise<Session
   // Skip rollback archives before concurrent stats so retained bytes cannot evict live sessions.
   const tasks = dirEntries
     .filter((dirent) => dirent.isFile() && !isMigrationArchiveArtifactName(dirent.name))
-    .map((dirent) => async (): Promise<SessionsDirFileStat | null> => {
-      const filePath = path.join(sessionsDir, dirent.name);
-      const stat = await fs.promises.stat(filePath).catch(() => null);
-      if (!stat?.isFile()) {
-        return null;
-      }
-      return {
-        path: filePath,
-        canonicalPath: canonicalizePathForComparison(filePath),
-        name: dirent.name,
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-      };
-    });
+    .map((dirent) => () => readSessionFileStat(path.join(sessionsDir, dirent.name)));
   const { results } = await runTasksWithConcurrency({
     tasks,
     limit: SESSIONS_DIR_STAT_CONCURRENCY,
@@ -104,17 +104,10 @@ async function readSqliteDatabaseFiles(
   const files: SessionsDirFileStat[] = [];
   for (const databasePath of databasePaths) {
     for (const filePath of [databasePath, `${databasePath}-wal`]) {
-      const stat = await fs.promises.stat(filePath).catch(() => null);
-      if (!stat?.isFile()) {
-        continue;
+      const file = await readSessionFileStat(filePath);
+      if (file) {
+        files.push(file);
       }
-      files.push({
-        path: filePath,
-        canonicalPath: canonicalizePathForComparison(filePath),
-        name: path.basename(filePath),
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-      });
     }
   }
   return files;
@@ -189,18 +182,10 @@ export async function readSessionPromptBlobFiles(
       ) {
         continue;
       }
-      const filePath = path.join(prefixDir, blobEntry.name);
-      const stat = await fs.promises.stat(filePath).catch(() => null);
-      if (!stat?.isFile()) {
-        continue;
+      const file = await readSessionFileStat(path.join(prefixDir, blobEntry.name));
+      if (file) {
+        files.push(file);
       }
-      files.push({
-        path: filePath,
-        canonicalPath: canonicalizePathForComparison(filePath),
-        name: blobEntry.name,
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-      });
     }
   }
   return files;

@@ -83,8 +83,8 @@ import {
   type EmbeddedAgentQueueFailureReason,
 } from "./run-state.js";
 import {
+  canSteerEmbeddedRunDuringCompaction,
   isEmbeddedRunHandleAbortable,
-  isEmbeddedRunHandleCompacting,
   isEmbeddedRunHandleSupersedable,
 } from "./runs.probes.js";
 
@@ -754,8 +754,7 @@ function prepareEmbeddedAgentQueueMessage(
     diag.debug(`queue message failed: sessionId=${sessionId} reason=stale_run`);
     return reject("stale_run");
   }
-  // An indeterminate compaction probe fails closed: steering is refused, not delivered.
-  if (isEmbeddedRunHandleCompacting(sessionId, handle) !== false) {
+  if (!canSteerEmbeddedRunDuringCompaction(sessionId, handle)) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
     return reject("compacting");
   }
@@ -882,14 +881,7 @@ export function abortEmbeddedAgentRun(
   });
   let aborted = false;
   for (const [id, handle] of ACTIVE_EMBEDDED_RUNS) {
-    // An indeterminate compaction probe skips the handle rather than aborting an unknown state.
-    if (
-      replyOwnedSessionIds.has(id) ||
-      (mode === "compacting" && isEmbeddedRunHandleCompacting(id, handle) !== true)
-    ) {
-      continue;
-    }
-    if (!isEmbeddedRunHandleAbortable(id, handle)) {
+    if (replyOwnedSessionIds.has(id) || !isEmbeddedRunHandleAbortable(id, handle, mode)) {
       continue;
     }
     diag.debug(`aborting ${mode === "compacting" ? "compacting " : ""}run: sessionId=${id}`);

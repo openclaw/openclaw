@@ -11,6 +11,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import okio.ByteString.Companion.toByteString
 import java.io.EOFException
 import java.net.ConnectException
 import java.net.InetSocketAddress
@@ -18,7 +19,6 @@ import java.net.Socket
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
-import java.security.MessageDigest
 import java.security.SecureRandom
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
@@ -245,7 +245,12 @@ internal fun buildGatewayTlsConfig(
 
   fun recordAcceptedFingerprint(chain: Array<X509Certificate>) {
     val certificate = chain.firstOrNull() ?: return
-    effectiveFingerprint.set(sha256Hex(certificate.encoded))
+    effectiveFingerprint.set(
+      certificate.encoded
+        .toByteString()
+        .sha256()
+        .hex(),
+    )
   }
 
   @SuppressLint("CustomX509TrustManager")
@@ -287,7 +292,12 @@ internal fun buildGatewayTlsConfig(
         authType: String,
       ) {
         if (chain.isEmpty()) throw CertificateException("empty certificate chain")
-        val fingerprint = sha256Hex(chain[0].encoded)
+        val fingerprint =
+          chain[0]
+            .encoded
+            .toByteString()
+            .sha256()
+            .hex()
         if (expectedInput != null) {
           if (expected == null) {
             throw CertificateException("invalid gateway TLS fingerprint")
@@ -435,7 +445,13 @@ internal suspend fun probeGatewayTlsFingerprint(
           authType: String,
         ) {
           if (chain.isEmpty()) throw CertificateException("empty certificate chain")
-          fingerprintRef.set(sha256Hex(chain[0].encoded))
+          fingerprintRef.set(
+            chain[0]
+              .encoded
+              .toByteString()
+              .sha256()
+              .hex(),
+          )
           // Abort validation after capture; the probe is not deciding trust.
           throw CertificateException("gateway TLS probe captured fingerprint")
         }
@@ -488,7 +504,13 @@ internal suspend fun probeGatewayTlsFingerprint(
       val cert =
         socket.session.peerCertificates.firstOrNull() as? X509Certificate
           ?: return@withContext GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_UNAVAILABLE)
-      GatewayTlsProbeResult(fingerprintSha256 = sha256Hex(cert.encoded))
+      GatewayTlsProbeResult(
+        fingerprintSha256 =
+          cert.encoded
+            .toByteString()
+            .sha256()
+            .hex(),
+      )
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {
@@ -561,7 +583,10 @@ private fun probeGatewayTlsSystemTrust(
     checkActive()
     socket.startHandshake()
     val certificate = socket.session.peerCertificates.firstOrNull() as? X509Certificate ?: return null
-    sha256Hex(certificate.encoded)
+    certificate.encoded
+      .toByteString()
+      .sha256()
+      .hex()
   } catch (err: CancellationException) {
     throw err
   } catch (_: Exception) {
@@ -577,15 +602,6 @@ private fun defaultTrustManager(): X509TrustManager {
   val trust =
     factory.trustManagers.firstOrNull { it is X509TrustManager } as? X509TrustManager
   return trust ?: throw IllegalStateException("No default X509TrustManager found")
-}
-
-private fun sha256Hex(data: ByteArray): String {
-  val digest = MessageDigest.getInstance("SHA-256").digest(data)
-  val out = StringBuilder(digest.size * 2)
-  for (byte in digest) {
-    out.append(String.format(Locale.US, "%02x", byte))
-  }
-  return out.toString()
 }
 
 /** Normalizes accepted fingerprint text to lowercase bare SHA-256 hex. */
@@ -613,12 +629,7 @@ private fun normalizedGatewayTlsDnsHost(rawHost: String): String? {
   if (host.isEmpty() || host.length > 253 || host.endsWith(".local")) return null
   if (host.contains(':')) return null
   val labels = host.split('.')
-  if (labels.size < 2 || labels.any { !isGatewayTlsDnsLabel(it) }) return null
+  if (labels.size < 2 || labels.any { !isDnsHostnameLabel(it) }) return null
   if (labels.all { label -> label.all { it in '0'..'9' } }) return null
   return host
-}
-
-private fun isGatewayTlsDnsLabel(label: String): Boolean {
-  if (label.isEmpty() || label.length > 63 || label.first() == '-' || label.last() == '-') return false
-  return label.all { it in 'a'..'z' || it in '0'..'9' || it == '-' }
 }

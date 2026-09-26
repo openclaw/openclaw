@@ -1,8 +1,3 @@
-/**
- * Bundled channel message-tool public artifact loader.
- *
- * Resolves lightweight discovery hooks without loading full channel plugins.
- */
 import { loadOptionalBundledChannelPublicArtifact } from "./optional-public-artifact.js";
 import type { ChannelMessageActionAdapter } from "./types.public.js";
 
