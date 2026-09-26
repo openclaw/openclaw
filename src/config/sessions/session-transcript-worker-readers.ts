@@ -113,6 +113,11 @@ export function createSessionHistoryWorkerReaders(
           typeof value === "boolean" ||
           Array.isArray(value) ||
           (value.kind !== "transcript-binding" &&
+            value.kind !== "artifacts" &&
+            value.kind !== "message-page" &&
+            value.kind !== "around-id" &&
+            value.kind !== "source-messages" &&
+            value.kind !== "recent-page" &&
             value.kind !== "rpc" &&
             value.kind !== "http" &&
             value.kind !== "delta" &&

@@ -1,24 +1,13 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
   type ArtifactsGetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
-import { readSessionMessagesPageWithStatsAsync } from "../session-transcript-readers.js";
+import { readSessionArtifacts } from "../session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
-import {
-  parseTranscriptImageArtifactId,
-  resolveTranscriptImageArtifactBlock,
-} from "../transcript-image-artifacts.js";
-import {
-  type ArtifactLookup,
-  resolveBlockDownload,
-  resolveMessageRunId,
-  resolveMessageTaskId,
-} from "./artifacts-content.js";
+import { parseTranscriptImageArtifactId } from "../transcript-image-artifacts.js";
+import type { ArtifactLookup } from "./artifacts-content.js";
 import {
   ArtifactSessionResolutionError,
   prepareArtifactSessionResolution,
@@ -44,28 +33,19 @@ export async function findTranscriptImageArtifact(
   if (!entry?.sessionId || !storePath) {
     return { sessionKey };
   }
-  const page = await readSessionMessagesPageWithStatsAsync(
+  const { artifact } = await readSessionArtifacts(
     { agentId, sessionKey, sessionId: entry.sessionId, sessionEntry: entry, storePath },
     {
-      offset: 0,
-      beforeSeq: reference.messageSeq + 1,
-      maxMessages: 1,
-      maxBytes: MAX_PAYLOAD_BYTES - 4096,
+      kind: "image",
+      sessionKey,
+      artifactId: params.artifactId,
+      includeData,
+      runId: params.runId,
+      taskId: params.taskId,
+      messageRole: params.messageRole,
     },
   );
-  const message = asOptionalRecord(page.messages[0]);
-  const block = resolveTranscriptImageArtifactBlock(message, params.artifactId);
-  if (
-    !message ||
-    !block ||
-    (params.messageRole && message.role !== params.messageRole) ||
-    (params.runId && resolveMessageRunId(message) !== params.runId) ||
-    (params.taskId && resolveMessageTaskId(message) !== params.taskId)
-  ) {
-    return { sessionKey };
-  }
-  const download = resolveBlockDownload(block, { includeData });
-  if (download.mode !== "bytes") {
+  if (!artifact) {
     return { sessionKey };
   }
   return {
@@ -90,21 +70,6 @@ export async function findTranscriptImageArtifact(
         );
       }
     },
-    artifact: {
-      id: params.artifactId,
-      type: "image",
-      title:
-        asNonEmptyString(block.title) ??
-        asNonEmptyString(block.fileName) ??
-        asNonEmptyString(block.alt) ??
-        "Image",
-      mimeType: download.mimeType ?? "image/png",
-      sizeBytes: download.sizeBytes,
-      sessionKey,
-      messageSeq: reference.messageSeq,
-      source: "session-transcript",
-      download: { mode: "bytes" },
-      ...(download.data !== undefined ? { data: download.data } : {}),
-    },
+    artifact,
   };
 }
