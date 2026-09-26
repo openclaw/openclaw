@@ -12,7 +12,7 @@ export type PreparedArtifactDownload = {
 export type ArtifactDownloadResponseRequest = {
   expectedDigest: string;
   method: "GET" | "HEAD";
-  headers: Pick<IncomingHttpHeaders, "range" | "if-range" | "if-none-match">;
+  headers: Partial<Pick<IncomingHttpHeaders, "range" | "if-range" | "if-none-match">>;
 };
 
 export type ArtifactDownloadResponse = {
