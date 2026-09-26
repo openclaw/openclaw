@@ -70,7 +70,7 @@ export function createWorkerEnvironmentSessionAttachments(
       retry &&
       (retry.ownerEpoch !== record.ownerEpoch ||
         retry.leaseId !== record.leaseId ||
-        ["destroyed", "failed", "orphaned"].includes(record.state))
+        ["destroyed", "failed"].includes(record.state))
     ) {
       cleanupRetries.delete(record.environmentId);
       return undefined;

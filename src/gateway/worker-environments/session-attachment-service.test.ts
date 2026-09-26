@@ -792,6 +792,27 @@ describe("conversation-owned temporary environments", () => {
     },
   );
 
+  it("keeps an unconfirmed orphaned lease parked across status reads and sweeps", async () => {
+    const warn = vi.fn<(message: string) => void>();
+    const service = support.createService(support.createProvider(), { logger: { warn } });
+    const created = await service.createSessionAttachment(request, authorize);
+    const environmentId = created.attachment.environmentId;
+    await support.testState.store.transition({ environmentId, from: "ready", to: "orphaned" });
+    await expect(
+      service.destroySessionAttachment({ sessionId: identity.sessionId }, authorize),
+    ).rejects.toThrow("cleanup is not confirmed (orphaned)");
+    support.testState.nowMs += 3_600_000;
+    for (let sweep = 0; sweep < 3; sweep += 1) {
+      await service.reconcileSessionAttachments();
+      expect(service.get(environmentId)).toMatchObject({
+        state: "orphaned",
+        leaseId: "lease-1",
+        error: expect.stringContaining("cleanup parked"),
+      });
+    }
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
   it("retains a failed cleanup owner and forbids replacement until provider destruction is confirmed", async () => {
     const destroy = vi.fn().mockRejectedValue(new Error("provider unavailable"));
     const service = support.createService(support.createProvider({ destroy }));
