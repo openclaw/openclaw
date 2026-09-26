@@ -16,6 +16,7 @@ import ai.openclaw.app.chat.ChatPermissionMode
 import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatSessionCreation
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSwarmGroup
@@ -5992,9 +5993,12 @@ class NodeRuntime private constructor(
     chat.abort()
   }
 
-  fun startNewChat(worktree: Boolean = false) {
+  fun startNewChat(
+    worktree: Boolean = false,
+    creation: ChatSessionCreation = ChatSessionCreation.Default,
+  ) {
     retirePendingChatSelection()
-    chat.startNewChat(worktree = worktree)
+    chat.startNewChat(worktree = worktree, creation = creation)
   }
 
   fun toggleMessageSpeech(

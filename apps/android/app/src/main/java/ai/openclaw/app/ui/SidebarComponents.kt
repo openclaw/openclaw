@@ -45,6 +45,7 @@ import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -416,6 +417,8 @@ internal fun SidebarSessionRow(
   onDragCommit: ((Int) -> Unit)? = null,
   onDragActiveChange: (Boolean) -> Unit = {},
   attention: SidebarAttention? = null,
+  onNewChild: (() -> Unit)? = null,
+  childCreationEnabled: Boolean = true,
 ) {
   val activity =
     sidebarSessionActivity(
@@ -463,6 +466,11 @@ internal fun SidebarSessionRow(
       SidebarAttentionIndicator(attention, palette)
     } else {
       activity?.let { SidebarSessionActivityIndicator(activity = it, palette = palette) }
+    }
+    if (onNewChild != null) {
+      TextButton(onClick = onNewChild, enabled = childCreationEnabled) {
+        Text(nativeString("New child"))
+      }
     }
     if (session.pinned == true) {
       Icon(

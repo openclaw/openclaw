@@ -471,6 +471,16 @@ internal data class ChatActiveRunPresentation(
   val outputTokens: Long? = null,
 )
 
+sealed interface ChatSessionCreation {
+  data object Default : ChatSessionCreation
+
+  data object Independent : ChatSessionCreation
+
+  data class Child(
+    val parentKey: String,
+  ) : ChatSessionCreation
+}
+
 /**
  * Stable session selector row; [key] is the gateway session key used in chat requests.
  */

@@ -11,6 +11,7 @@ import ai.openclaw.app.chat.ChatPermissionMode
 import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatSessionCreation
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSwarmGroup
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
@@ -2077,8 +2078,11 @@ class MainViewModel private constructor(
     ensureRuntime().abortChat()
   }
 
-  fun startNewChat(worktree: Boolean = false) {
-    ensureRuntime().startNewChat(worktree = worktree)
+  fun startNewChat(
+    worktree: Boolean = false,
+    creation: ChatSessionCreation = ChatSessionCreation.Default,
+  ) {
+    ensureRuntime().startNewChat(worktree = worktree, creation = creation)
   }
 
   fun refreshChatCommands() {

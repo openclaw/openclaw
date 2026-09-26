@@ -14,6 +14,7 @@ import ai.openclaw.app.GatewaySummaryState
 import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
+import ai.openclaw.app.chat.ChatSessionCreation
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.firstGraphemeOrNull
@@ -266,7 +267,12 @@ fun ShellScreen(
               onClose = closeSidebar,
               onDragActiveChange = { sidebarRowDragging = it },
               onNewSession = {
-                viewModel.startNewChat(worktree = false)
+                viewModel.startNewChat(creation = ChatSessionCreation.Independent)
+                nav.selectTab(Tab.Chat)
+                closeSidebar()
+              },
+              onNewChildSession = { parentKey ->
+                viewModel.startNewChat(creation = ChatSessionCreation.Child(parentKey))
                 nav.selectTab(Tab.Chat)
                 closeSidebar()
               },

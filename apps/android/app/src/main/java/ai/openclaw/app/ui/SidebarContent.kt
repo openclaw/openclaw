@@ -55,6 +55,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -420,6 +421,7 @@ internal fun OpenClawSidebar(
   onCreateCatalogSession: (String) -> Unit,
   onSelectDestination: (SidebarDestination) -> Unit,
   rowHostBand: IntRect? = null,
+  onNewChildSession: ((String) -> Unit)? = null,
 ) {
   val palette = sidebarPalette(ClawTheme.colors)
   val scope = rememberCoroutineScope()
@@ -440,6 +442,7 @@ internal fun OpenClawSidebar(
   }
   val catalogState by viewModel.sessionCatalogState.collectAsState()
   val sessionCreating by viewModel.chatSessionCreating.collectAsState()
+  val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val catalogAvailable by viewModel.sessionCatalogAvailable.collectAsState()
   val operatorScopes by viewModel.operatorScopes.collectAsState()
   val canMutateSessions = operatorScopesAllowWrite(operatorScopes)
@@ -521,6 +524,12 @@ internal fun OpenClawSidebar(
           selected = session.key == activeSessionKey,
           palette = palette,
           onClick = { onSelectSession(session) },
+          onNewChild =
+            onNewChildSession
+              ?.takeIf {
+                session.key == activeSessionKey && session.modelSelectionLocked != true && !session.sessionId.isNullOrBlank()
+              }?.let { createChild -> { createChild(session.key) } },
+          childCreationEnabled = connection.isConnected && canMutateSessions && !sessionCreating && pendingRunCount == 0,
           onDragCommit =
             if (canMutateSessions && dragSource != null) {
               { direction ->
@@ -623,26 +632,6 @@ internal fun OpenClawSidebar(
           modifier = Modifier.size(20.dp),
         )
       }
-      IconButton(
-        onClick = onNewSession,
-        enabled = !sessionCreating,
-        modifier =
-          Modifier.size(48.dp).semantics {
-            contentDescription = nativeString("New session")
-            if (sessionCreating) stateDescription = nativeString("Loading")
-          },
-      ) {
-        if (sessionCreating) {
-          CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp, color = palette.text)
-        } else {
-          Icon(
-            imageVector = Icons.Default.Add,
-            contentDescription = null,
-            tint = palette.text,
-            modifier = Modifier.size(22.dp),
-          )
-        }
-      }
       if (showCloseButton) {
         IconButton(onClick = onClose, modifier = Modifier.size(48.dp).testTag("sidebar-close")) {
           Icon(
@@ -653,6 +642,18 @@ internal fun OpenClawSidebar(
           )
         }
       }
+    }
+    OutlinedButton(
+      onClick = onNewSession,
+      enabled = connection.isConnected && canMutateSessions && !sessionCreating && pendingRunCount == 0,
+      modifier = Modifier.fillMaxWidth().testTag("sidebar-new-session"),
+    ) {
+      if (sessionCreating) {
+        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = palette.text)
+      } else {
+        Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+      }
+      Text(nativeString("New independent session"), modifier = Modifier.padding(start = 8.dp))
     }
     if (searchVisible) {
       SidebarSearchField(
