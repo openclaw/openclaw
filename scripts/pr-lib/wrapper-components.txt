@@ -1122,6 +1122,7 @@ src/plugins/web-search-install-catalog.ts
 src/process/child-process-tree.ts
 src/process/child-process.ts
 src/process/command-error.ts
+src/process/command-execution-authority.ts
 src/process/exec-output.ts
 src/process/exec-result.ts
 src/process/exec-runner.ts

@@ -7,6 +7,7 @@ import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
+import { assertCommandExecutionAuthority } from "./command-execution-authority.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
@@ -313,6 +314,7 @@ export function spawnCommandWithInvocation<
   child: CommandSubprocess<OptionsType>;
   invocation: ReturnType<typeof resolveSafeChildProcessInvocation>;
 } {
+  assertCommandExecutionAuthority();
   const scope = commandProcessScope.getStore();
   if (scope?.signal.aborted) {
     throw new Error("Command process scope is closed");

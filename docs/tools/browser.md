@@ -1,14 +1,34 @@
 ---
-summary: "Index of the OpenClaw browser documentation, one page per reader job"
+summary: "Browser Harness default and OpenClaw native browser documentation index"
 read_when:
   - Adding agent-controlled browser automation
   - Debugging why openclaw is interfering with your own Chrome
   - Implementing browser settings + lifecycle in the macOS app
   - You are looking for the Browser page that matches your task
-title: "Browser (OpenClaw-managed)"
+title: "Browser"
 ---
 
-OpenClaw can run a **dedicated Chrome/Brave/Edge/Chromium profile** that the agent controls. It runs through a small local control service inside the Gateway (loopback only) and is isolated from your personal browser.
+The model-facing `browser` tool uses **Browser Use CLI 3.0 through Browser
+Harness by default** for eligible local, unrestricted sessions. On first use,
+OpenClaw downloads a pinned, verified `uv` binary and installs Browser Harness
+plus a managed Python 3.12 under the OpenClaw state directory. It does not
+modify system Python. Later calls reuse the same install and Browser Harness
+daemon. OpenClaw disables Browser Harness telemetry and recordings for this
+managed integration.
+
+Browser Harness controls a running Chrome-family browser. It can launch Chrome,
+but Chrome may require the user to enable remote debugging once and approve its
+"Allow remote debugging?" prompt. OpenClaw selects this backend only for a
+trusted, unrestricted local Gateway run where host `exec` is effectively
+`full` / `off`, the final tool policy still allows `exec`, and the agent is not
+sandboxed. Guarded, approval-gated, sandboxed, or remote-exec runs keep the
+native browser tool. No Browser Use Cloud key is required.
+
+The OpenClaw native browser backend remains available for sandboxed, remote,
+bound, or explicitly configured native sessions and for the `openclaw browser`
+CLI. It runs a **dedicated Chrome/Brave/Edge/Chromium profile** through a small
+local control service inside the Gateway (loopback only) and is isolated from
+your personal browser.
 
 - Think of it as a **separate, agent-only browser**. The `openclaw` profile never touches your personal browser profile.
 - The agent opens tabs, reads pages, clicks, and types in this isolated lane.

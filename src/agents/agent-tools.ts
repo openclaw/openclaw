@@ -17,10 +17,7 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
-import {
-  bindAssembledAgentToolActionDescriptor,
-  copyAgentToolMetadata,
-} from "./agent-tool-metadata.js";
+import { bindAssembledAgentToolActionDescriptor } from "./agent-tool-metadata.js";
 import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { projectMemoryFlushTools } from "./agent-tools.memory-flush.js";
@@ -36,6 +33,7 @@ import {
 } from "./agent-tools.ring-zero-context.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { resolveConfiguredApplyPatchPolicy } from "./apply-patch-policy.js";
+import * as hostExecTools from "./approval-free-host-exec-tools.js";
 import { waitForExecScope } from "./bash-process-registry.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
@@ -48,7 +46,6 @@ import {
   bindCronManagementGrant,
 } from "./cron-creator-authority-context.js";
 import { applyDelegationCapability } from "./delegation-capability.js";
-import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
@@ -314,6 +311,12 @@ export function createOpenClawCodingToolsInternal(
     permissionPolicy: sessionPermissionPolicy,
     scheduledExecTarget,
   });
+  const canUseHostExec = hostExecTools.createHostExecAuthority({
+    agentId,
+    includeShellTools,
+    sandboxed: Boolean(sandbox),
+    policy: effectiveExecPolicy,
+  });
   const processToolAvailabilityRef: NonNullable<ExecToolDefaults["processToolAvailabilityRef"]> =
     {};
   const coreTools = createCoreCodingTools({
@@ -494,13 +497,7 @@ export function createOpenClawCodingToolsInternal(
           executeTool: options?.toolSearchCatalogExecutor,
         })
       : [];
-  const scheduledCoreTools = scheduledExecTarget
-    ? coreTools.map((tool) =>
-        tool.name === "exec"
-          ? copyAgentToolMetadata(tool, pinExecToolTarget(tool, scheduledExecTarget))
-          : tool,
-      )
-    : coreTools;
+  const scheduledCoreTools = hostExecTools.pinScheduledExecTool(coreTools, scheduledExecTarget);
   const messageInvocationPolicy = createEmbeddedMessageInvocationPolicy({
     config: options?.config,
     capabilityProfile,
@@ -701,7 +698,7 @@ export function createOpenClawCodingToolsInternal(
   const subagentFiltered = messageInvocationPolicy.filter(capabilityProfile, onPolicyFilter);
   // Host-bound ring-zero tools carry their own authority checks. Agent policy
   // must not deadlock setup, but the tools still receive schema/hook wrappers.
-  const authorizedTools = applySwarmCollectorToolContract(
+  let authorizedTools = applySwarmCollectorToolContract(
     applyDelegationCapability(
       mergeAgentRingZeroTools(ringZeroTools, subagentFiltered),
       options?.delegationCapability,
@@ -711,6 +708,7 @@ export function createOpenClawCodingToolsInternal(
       structuredOutputTool: swarmStructuredOutputTool,
     },
   );
+  authorizedTools = hostExecTools.projectHostExecTools(authorizedTools, canUseHostExec);
   authorizedTools.forEach(bindAssembledAgentToolActionDescriptor);
   processToolAvailabilityRef.value = authorizedTools.some((tool) => tool.name === "process");
   if (shouldInheritEffectiveToolAllowlist) {
