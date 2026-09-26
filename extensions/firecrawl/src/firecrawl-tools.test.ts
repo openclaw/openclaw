@@ -399,6 +399,31 @@ describe("firecrawl tools", () => {
     expect(JSON.stringify(result).length).toBeLessThan(23_000);
   });
 
+  it.each(["news", "images"] as const)(
+    "returns Firecrawl %s source results from the matching response array",
+    async (source) => {
+      global.fetch = vi.fn(async () =>
+        Response.json({
+          success: true,
+          data: {
+            [source]: [{ url: `https://example.com/firecrawl/${source}`, title: source }],
+          },
+        }),
+      ) as typeof fetch;
+
+      const result = await runActualFirecrawlSearch({
+        query: `source-specific Firecrawl ${source}`,
+        sources: [source],
+        access: "keyless",
+      });
+
+      expect(result).toMatchObject({
+        count: 1,
+        results: [{ url: `https://example.com/firecrawl/${source}` }],
+      });
+    },
+  );
+
   it("bounds final Firecrawl search text after short special-token replacement expands", async () => {
     global.fetch = vi.fn(async () =>
       Response.json({

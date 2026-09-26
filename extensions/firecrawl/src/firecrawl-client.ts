@@ -335,15 +335,18 @@ function resolveSearchItems(
   count: number,
 ): FirecrawlSearchItem[] {
   const nestedData = asOptionalRecord(payload.data);
-  const candidates = [
-    payload.data,
-    payload.results,
-    nestedData?.results,
-    nestedData?.data,
-    nestedData?.web,
-    asOptionalRecord(payload.web)?.results,
-  ];
-  const rawItems = candidates.find((candidate): candidate is unknown[] => Array.isArray(candidate));
+  const envelopeCandidates = [payload.data, payload.results, nestedData?.results, nestedData?.data];
+  const sourceCandidates = [nestedData?.web, nestedData?.news, nestedData?.images];
+  const legacyWebResults = asOptionalRecord(payload.web)?.results;
+  const isArray = (candidate: unknown): candidate is unknown[] => Array.isArray(candidate);
+  const sourceItems = sourceCandidates.flatMap((candidate) =>
+    isArray(candidate) ? candidate : [],
+  );
+  const rawItems =
+    envelopeCandidates.find(isArray) ??
+    (sourceItems.length > 0 ? sourceItems : undefined) ??
+    sourceCandidates.find(isArray) ??
+    (isArray(legacyWebResults) ? legacyWebResults : undefined);
   if (!rawItems) {
     return [];
   }
