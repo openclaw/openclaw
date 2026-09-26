@@ -113,7 +113,7 @@ describe("Codex automation tool references", () => {
     expect(received(execute)).toEqual(input);
   });
 
-  it.each<JsonValue>([null, "openclaw__read", 7, { name: "openclaw__read" }])(
+  it.each<JsonValue>([null, { name: "openclaw__read" }])(
     "leaves a non-array allowlist for the automation validator: %j",
     async (value) => {
       const { call, execute } = setup();

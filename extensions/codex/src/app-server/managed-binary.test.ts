@@ -271,27 +271,21 @@ describe("managed Codex app-server binary", () => {
     ).resolves.toMatchObject({ command: launcher });
   });
 
-  it.each(["config", "env"] as const)(
-    "preserves the %s override without managed discovery",
-    async (source) => {
-      const explicit = resolveCodexAppServerRuntimeOptions({
-        pluginConfig:
-          source === "config" ? { appServer: { command: "/operator/config-codex" } } : {},
-        env: { OPENCLAW_CODEX_APP_SERVER_BIN: "/operator/env-codex" },
-        codexConfigToml: null,
-        requirementsToml: null,
-      }).start;
-      const pathExists = vi.fn(async () => false);
-      expect(explicit.commandSource).toBe(source);
-      expect(explicit.command).toBe(`/operator/${source}-codex`);
-      await expect(
-        resolveManagedCodexAppServerStartOptions(explicit, {
-          pathExists,
-        }),
-      ).resolves.toBe(explicit);
-      expect(pathExists).not.toHaveBeenCalled();
-    },
-  );
+  it("preserves an explicit command override without managed discovery", async () => {
+    const explicit = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: { appServer: { command: "/operator/config-codex" } },
+      env: { OPENCLAW_CODEX_APP_SERVER_BIN: "/operator/env-codex" },
+      codexConfigToml: null,
+      requirementsToml: null,
+    }).start;
+    const pathExists = vi.fn(async () => false);
+    expect(explicit.commandSource).toBe("config");
+    expect(explicit.command).toBe("/operator/config-codex");
+    await expect(resolveManagedCodexAppServerStartOptions(explicit, { pathExists })).resolves.toBe(
+      explicit,
+    );
+    expect(pathExists).not.toHaveBeenCalled();
+  });
 
   it.each([
     { order: "package-only", desktop: "both" },

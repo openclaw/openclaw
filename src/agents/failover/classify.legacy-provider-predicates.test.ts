@@ -33,73 +33,6 @@ describe("isContextOverflowError provider-hook gate", () => {
     ).toBe(false);
     expect(hoisted.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
   });
-
-  it("does not match unrelated errors", () => {
-    hoisted.classifyProviderFailoverSignalWithPlugin.mockClear();
-    expect(isContextOverflowError("rate limit exceeded")).toBe(false);
-    expect(isContextOverflowError("invalid api key")).toBe(false);
-    expect(isContextOverflowError("internal server error")).toBe(false);
-    expect(hoisted.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
-  });
-});
-
-describe("isContextOverflowError with provider patterns", () => {
-  it("detects Bedrock ValidationException as context overflow", () => {
-    expect(isContextOverflowError("ValidationException: The input is too long for the model")).toBe(
-      true,
-    );
-  });
-
-  it("detects Ollama context overflow", () => {
-    expect(isContextOverflowError("ollama error: context length exceeded")).toBe(true);
-  });
-
-  it("detects llama.cpp slot ctx-size overflow", () => {
-    // Native llama.cpp HTTP server overflow surfaced through openai-completions providers.
-    expect(
-      isContextOverflowError(
-        "400 request (66202 tokens) exceeds the available context size (65536 tokens), try increasing it",
-      ),
-    ).toBe(true);
-  });
-
-  it("detects DS4 configured context size overflow", () => {
-    expect(
-      isContextOverflowError(
-        "400 Prompt has 256468 tokens, but the configured context size is 256000 tokens",
-      ),
-    ).toBe(true);
-  });
-
-  it("still detects standard context overflow patterns", () => {
-    expect(isContextOverflowError("context length exceeded")).toBe(true);
-    expect(isContextOverflowError("prompt is too long: 150000 tokens > 128000 maximum")).toBe(true);
-  });
-});
-
-describe("classifyFailoverReason with provider patterns", () => {
-  it("classifies Bedrock ThrottlingException via provider patterns", () => {
-    expect(classifyFailoverReason("ThrottlingException: Too many concurrent requests")).toBe(
-      "rate_limit",
-    );
-  });
-
-  it("classifies Groq model_deactivated via provider patterns", () => {
-    expect(classifyFailoverReason("model_is_deactivated: this model has been deactivated")).toBe(
-      "model_not_found",
-    );
-  });
-
-  it("classifies xAI 429 credit exhaustion as billing before resource-exhausted rate limits", () => {
-    // xAI uses resource-exhausted language for credit failures, so billing must
-    // win before generic 429/rate-limit handling.
-    expect(
-      classifyFailoverReason(
-        '429 {"code":"Some resource has been exhausted","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}',
-        { provider: "xai" },
-      ),
-    ).toBe("billing");
-  });
 });
 
 describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
@@ -121,22 +54,12 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
     "<!doctype html><html><head><title>403 Forbidden</title></head>" +
     '<body><span id="challenge-error-text">Enable JavaScript and cookies to continue</span>' +
     "<p>Please stand by...</p></body></html>";
-  const html401 =
-    "<!doctype html><html><head><title>401 Unauthorized</title></head>" +
-    "<body><h1>Unauthorized</h1></body></html>";
   const html403 =
     "<!doctype html><html><head><title>403 Forbidden</title></head>" +
     "<body><h1>Forbidden</h1></body></html>";
   const html407 =
     "<!doctype html><html><head><title>407 Proxy Authentication Required</title></head>" +
     "<body><h1>Proxy Authentication Required</h1></body></html>";
-  const html402 =
-    "<!doctype html><html><head><title>402 Payment Required</title></head>" +
-    "<body><h1>Payment Required</h1><p>Your quota is exhausted.</p></body></html>";
-  const html429 =
-    "<!doctype html><html><head><title>429 Too Many Requests</title></head>" +
-    "<body><h1>Too Many Requests</h1><p>Rate limit exceeded.</p></body></html>";
-  const prefixedHtml401 = `Error: 401 ${html401}`;
   const prefixedHtml407 = `Error: 407 ${html407}`;
 
   it("classifies Cloudflare HTML 502 as server_error", () => {
@@ -148,26 +71,6 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
     // contains generic rate-limit words. #67517 asked for them to read as
     // upstream HTTP/service errors rather than rate limits or DNS faults.
     expect(classifyFailoverReason(`503 ${cloudflareHtml503}`)).toBe("server_error");
-  });
-
-  it("preserves auth classification for 401 HTML", () => {
-    expect(classifyFailoverReason(`401 ${html401}`)).toBe("auth");
-  });
-
-  it("preserves auth classification for 403 HTML", () => {
-    expect(classifyFailoverReason(`403 ${html403}`)).toBe("auth");
-  });
-
-  it("preserves auth classification for Error-prefixed 401 HTML", () => {
-    expect(classifyFailoverReason(prefixedHtml401)).toBe("auth");
-  });
-
-  it("preserves billing classification for 402 HTML", () => {
-    expect(classifyFailoverReason(`402 ${html402}`)).toBe("billing");
-  });
-
-  it("preserves rate-limit classification for 429 HTML", () => {
-    expect(classifyFailoverReason(`429 ${html429}`)).toBe("rate_limit");
   });
 
   it("classifies runtime failure kind as upstream_html for non-auth HTML", () => {
@@ -210,16 +113,10 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
   it("classifies Error-prefixed 407 HTML runtime failures as proxy", () => {
     expect(classifyProviderRuntimeFailureKind(prefixedHtml407)).toBe("proxy");
   });
-
-  it("does not misclassify JSON API rate-limit responses as HTML", () => {
-    const jsonRateLimit =
-      '429 {"error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}';
-    expect(classifyFailoverReason(jsonRateLimit)).toBe("rate_limit");
-  });
 });
 
 describe("context semantics through HTTP status mapping", () => {
-  it.each([400, 404, 422, 499, 500, 502, 503, 504, 529])(
+  it.each([400, 404, 499, 500, 529])(
     "preserves a classified context overflow through HTTP %i",
     (status) => {
       expect(

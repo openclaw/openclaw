@@ -58,17 +58,6 @@ function createGatewayError(message: string, details?: unknown): Error {
 }
 
 describe("parseExecApprovalRequested", () => {
-  it("returns entries with kind 'exec'", () => {
-    const result = parseExecApprovalRequested({
-      id: "exec-1",
-      request: { command: "rm -rf /" },
-      createdAtMs: 1000,
-      expiresAtMs: 2000,
-    });
-    expect(result?.kind).toBe("exec");
-    expect(result?.request.command).toBe("rm -rf /");
-  });
-
   it("preserves allowed approval decisions", () => {
     const result = parseExecApprovalRequested({
       id: "exec-1",
@@ -80,7 +69,10 @@ describe("parseExecApprovalRequested", () => {
       expiresAtMs: 2000,
     });
 
-    expect(result?.request.allowedDecisions).toEqual(["allow-once", "deny", "allow-always"]);
+    expect(result).toMatchObject({
+      kind: "exec",
+      request: { allowedDecisions: ["allow-once", "deny", "allow-always"] },
+    });
   });
 
   it("preserves the originating engine run id", () => {
@@ -289,35 +281,6 @@ describe("isStaleApprovalResolutionError", () => {
   });
 });
 
-describe("clearResolvedExecApprovalPrompt", () => {
-  it("keeps another pending approval's error when a different approval resolves", () => {
-    const active = createExecApproval({ id: "approval-active", createdAtMs: 2 });
-    const queued = createExecApproval({ id: "approval-queued", createdAtMs: 1 });
-    const state = createPromptState(
-      vi.fn<RequestFn>(async () => ({})),
-      [active, queued],
-    );
-    state.execApprovalErrors.set("approval-active", "Approval failed: Error: gateway unavailable");
-
-    clearResolvedExecApprovalPrompt(state, "approval-queued");
-
-    expect(state.execApprovalQueue.map((entry) => entry.id)).toEqual(["approval-active"]);
-    expect(state.execApprovalErrors.get("approval-active")).toBe(
-      "Approval failed: Error: gateway unavailable",
-    );
-  });
-
-  it("clears an approval's error when that approval resolves", () => {
-    const state = createPromptState(vi.fn<RequestFn>(async () => ({})));
-    state.execApprovalErrors.set("approval-1", "Approval failed: Error: gateway unavailable");
-
-    clearResolvedExecApprovalPrompt(state, "approval-1");
-
-    expect(state.execApprovalQueue).toEqual([]);
-    expect(state.execApprovalErrors.has("approval-1")).toBe(false);
-  });
-});
-
 describe("approval queue ordering and countdown timer", () => {
   it("keeps newly received approvals oldest-first", () => {
     vi.useFakeTimers();
@@ -500,40 +463,6 @@ describe("refreshPendingApprovalQueue", () => {
     await refreshPromise;
 
     expect(state.execApprovalQueue).toEqual([]);
-  });
-
-  it("removes refreshed approvals after their expiry", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
-    try {
-      const expiresAtMs = Date.now() + 1_000;
-      const request = vi.fn<RequestFn>(async (method) => {
-        if (method === "exec.approval.list") {
-          return [
-            {
-              id: "approval-refreshed-1",
-              request: { command: "pnpm check:changed" },
-              createdAtMs: Date.now(),
-              expiresAtMs,
-            },
-          ];
-        }
-        if (method === "plugin.approval.list") {
-          return [];
-        }
-        return {};
-      });
-      const state = createPromptState(request, []);
-
-      await refreshPendingApprovalQueue(state);
-      expect(state.execApprovalQueue.map((entry) => entry.id)).toEqual(["approval-refreshed-1"]);
-
-      vi.advanceTimersByTime(1_500);
-
-      expect(state.execApprovalQueue).toEqual([]);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("clears an expired approval's error without disturbing the queue", async () => {

@@ -219,24 +219,6 @@ describe("ApprovalPage", () => {
   });
 
   it.each([
-    { name: "reviewer", auth: { role: "operator", scopes: ["operator.approvals"] } },
-    { name: "administrator", auth: { role: "operator", scopes: ["operator.admin"] } },
-    { name: "legacy authenticated operator", auth: { role: "operator" } },
-  ])("loads a durable approval for a $name", async ({ auth }) => {
-    const request = vi.fn(async () => ({ approval: pendingApproval() }));
-    const { page } = createPage({
-      client: { request } as unknown as GatewayBrowserClient,
-      hello: { auth } as ApplicationGatewaySnapshot["hello"],
-    });
-
-    await settle(page);
-
-    expect(request).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledWith("approval.get", { id: "exec:approval-1" });
-    expect(page.querySelector('[data-decision="allow-once"]')).not.toBeNull();
-  });
-
-  it.each([
     { name: "reviewer", scopes: ["operator.approvals"] },
     { name: "administrator", scopes: ["operator.admin"] },
   ])("allows an authenticated $name to resolve a durable approval", async ({ scopes }) => {

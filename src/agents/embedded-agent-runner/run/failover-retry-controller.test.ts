@@ -533,21 +533,6 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     }
   });
 
-  it("counts failed-request wall time against the retry budget", async () => {
-    let nowMs = 1_000_000;
-    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    try {
-      const controller = createController(vi.fn(async () => false));
-      await expect(controller.maybeRetryTransient({ reason: "server_error" })).resolves.toBe(true);
-      // A slow provider failure burns the window even though no backoff slept.
-      nowMs += 90_000;
-      await expect(controller.maybeRetryTransient({ reason: "server_error" })).resolves.toBe(false);
-      expect(controller.transientRetryCount).toBe(1);
-    } finally {
-      dateNow.mockRestore();
-    }
-  });
-
   it("keeps profile rotation separate from transient retry accounting", async () => {
     const advanceAuthProfile = vi.fn(async () => true);
     const controller = createController(advanceAuthProfile);

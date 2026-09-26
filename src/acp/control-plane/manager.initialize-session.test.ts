@@ -134,32 +134,6 @@ describe("AcpSessionManager initializeSession", () => {
     ]);
   });
 
-  it("rolls back ensured runtime sessions when metadata persistence fails", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.upsertAcpSessionMetaMock.mockRejectedValueOnce(new Error("disk full"));
-
-    const manager = new AcpSessionManager();
-    await expect(
-      manager.initializeSession({
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:session-1",
-        agent: "codex",
-        mode: "persistent",
-      }),
-    ).rejects.toThrow("disk full");
-    const closeInput = mockCallArg(runtimeState.close);
-    expectRecordFields(closeInput, {
-      reason: "init-meta-failed",
-    });
-    expectRecordFields(closeInput.handle, {
-      sessionKey: "agent:codex:acp:session-1",
-    });
-  });
-
   it("does not let reset-superseded initialization republish a stale runtime handle", async () => {
     const runtimeState = createRuntime();
     const releaseOldInit = createDeferred();

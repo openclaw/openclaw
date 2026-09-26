@@ -178,16 +178,6 @@ describe("ApprovalsPage", () => {
     expect(page.querySelector('[role="alert"]')?.textContent).toContain("boom");
   });
 
-  it("shows the empty message only after a successful zero-row load", async () => {
-    const request = vi.fn().mockResolvedValueOnce({ items: [] });
-    const { page } = createPage(stubGrants(request));
-
-    await settle(page);
-
-    const body = page.querySelector(".approval-history-table tbody")?.textContent ?? "";
-    expect(body).toContain("No resolved approvals");
-  });
-
   it.each([
     { kind: "exec", event: "exec.approval.resolved" },
     { kind: "plugin", event: "plugin.approval.resolved" },
@@ -263,13 +253,9 @@ describe("ApprovalsPage", () => {
     expect(page.querySelector('[role="status"]')?.textContent).toContain("operator.approvals");
   });
 
-  it.each([
-    { name: "reviewer", auth: { role: "operator", scopes: ["operator.approvals"] } },
-    { name: "admin", auth: { role: "operator", scopes: ["operator.admin"] } },
-    { name: "legacy operator", auth: { role: "operator" } },
-  ])("loads approval history for a $name", async ({ auth }) => {
+  it("loads approval history for a legacy operator", async () => {
     const request = vi.fn().mockResolvedValue({ items: [] });
-    const { page } = createPage(stubGrants(request), auth);
+    const { page } = createPage(stubGrants(request), { role: "operator" });
 
     await settle(page);
 

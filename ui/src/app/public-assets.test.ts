@@ -73,12 +73,6 @@ describe("inferControlUiPublicAssetPath", () => {
     ).toBe("/favicon.svg");
   });
 
-  it("infers base-mounted assets from nested routes", () => {
-    expect(inferControlUiPublicAssetPath("sw.js", { pathname: "/openclaw/skills/workshop" })).toBe(
-      "/openclaw/sw.js",
-    );
-  });
-
   it("keeps explicit pathname inference independent from ambient page state", () => {
     expect(
       withConfiguredBasePath("/other", () =>

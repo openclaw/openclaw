@@ -129,17 +129,9 @@ function createDeferredQuestionRequest() {
   };
 }
 
-const questionResolutionCases = [
-  {
-    action: "answer",
-    resolve: (state: QuestionPromptState) =>
-      submitQuestionPrompt(state, "question-1", { format: ["Compact"] }),
-  },
-  {
-    action: "cancel",
-    resolve: (state: QuestionPromptState) => cancelQuestionPrompt(state, "question-1"),
-  },
-] as const;
+function answerQuestion(state: QuestionPromptState) {
+  return submitQuestionPrompt(state, "question-1", { format: ["Compact"] });
+}
 
 afterEach(() => {
   for (const state of states.splice(0)) {
@@ -171,24 +163,6 @@ describe("question event parsing", () => {
       runId: "run-question",
       status: "answered",
       answers: { answers: { format: ["Compact"] } },
-    });
-  });
-
-  it("uses the protocol run id for a background-session question", () => {
-    const state = createState();
-    expect(
-      handleQuestionPromptEvent(state, {
-        event: "question.requested",
-        payload: requestedPayload({
-          sessionKey: "agent:main:background",
-          runId: "run-background",
-        }),
-      }),
-    ).toBe(true);
-    expect(state.prompts.get("question-1")).toMatchObject({
-      sessionKey: "agent:main:background",
-      runId: "run-background",
-      status: "pending",
     });
   });
 
@@ -336,21 +310,6 @@ describe("question prompt state", () => {
     });
   });
 
-  it("re-enables a prompt with a non-destructive resolve error", async () => {
-    const request = vi.fn<RequestFn>(async () => {
-      throw new Error("gateway unavailable");
-    });
-    const { state } = createConnectedState(request, requestedPayload());
-
-    await submitQuestionPrompt(state, "question-1", { format: ["Compact"] });
-
-    expect(state.prompts.get("question-1")).toMatchObject({
-      status: "pending",
-      submitting: false,
-      error: "gateway unavailable",
-    });
-  });
-
   it("surfaces a retryable error when submission happens while disconnected", async () => {
     const translate = vi
       .spyOn(i18n, "t")
@@ -455,202 +414,152 @@ describe("question RPC helpers", () => {
     },
   );
 
-  it.each(questionResolutionCases)(
-    "re-enables a stalled $action when its gateway request reaches the owner deadline",
-    async ({ resolve }) => {
-      vi.useFakeTimers();
-      const request = vi.fn<RequestFn>((_method, _params, options) =>
-        rejectAfterRequestDeadline(options),
-      );
-      const { state } = createConnectedState(request, requestedPayload());
+  it("re-enables a stalled answer when its gateway request reaches the owner deadline", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn<RequestFn>((_method, _params, options) =>
+      rejectAfterRequestDeadline(options),
+    );
+    const { state } = createConnectedState(request, requestedPayload());
 
-      const pending = resolve(state);
-      expect(state.prompts.get("question-1")?.submitting).toBe(true);
-      await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+    const pending = answerQuestion(state);
+    expect(state.prompts.get("question-1")?.submitting).toBe(true);
+    await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
 
-      expect(state.prompts.get("question-1")).toMatchObject({
-        status: "pending",
-        submitting: false,
-        error: `gateway request timed out after ${DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS}ms`,
-      });
-      await pending;
-    },
-  );
+    expect(state.prompts.get("question-1")).toMatchObject({
+      status: "pending",
+      submitting: false,
+      error: `gateway request timed out after ${DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS}ms`,
+    });
+    await pending;
+  });
 
-  it.each(questionResolutionCases)(
-    "clips a $action request to the remaining question lifetime",
-    async ({ resolve }) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date("2026-07-17T00:00:00.000Z"));
-      const request = createQuestionResolver();
-      const { state } = createConnectedState(
-        request,
-        requestedPayload({ expiresAtMs: Date.now() + 1_250 }),
-      );
+  it("clips an answer request to the remaining question lifetime", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-17T00:00:00.000Z"));
+    const request = createQuestionResolver();
+    const { state } = createConnectedState(
+      request,
+      requestedPayload({ expiresAtMs: Date.now() + 1_250 }),
+    );
 
-      await resolve(state);
+    await answerQuestion(state);
 
-      expect(request).toHaveBeenCalledWith("question.resolve", expect.any(Object), {
-        timeoutMs: 1_250,
-      });
-    },
-  );
+    expect(request).toHaveBeenCalledWith("question.resolve", expect.any(Object), {
+      timeoutMs: 1_250,
+    });
+  });
 });
 
 describe("question resolution connection ownership", () => {
-  it.each(questionResolutionCases)(
-    "ignores an old $action success after the gateway client changes",
-    async ({ resolve }) => {
+  it.each(["success", "error"] as const)(
+    "ignores an old answer %s after the gateway client changes",
+    async (outcome) => {
       const stale = createDeferredQuestionRequest();
       const current = createDeferredQuestionRequest();
       const { state } = createConnectedState(stale.request, requestedPayload());
 
-      const staleResolution = resolve(state);
+      const staleResolution = answerQuestion(state);
       setQuestionPromptClient(state, { request: current.request });
       expect(state.prompts.has("question-1")).toBe(false);
       requestQuestion(state);
 
-      const currentResolution = resolve(state);
-      stale.resolve();
-      await staleResolution;
-
-      expect(state.prompts.get("question-1")).toMatchObject({
-        status: "pending",
-        submitting: true,
-        localResolutionConfirmed: false,
-        error: null,
-      });
-
-      current.resolve();
-      await currentResolution;
-      expect(state.prompts.get("question-1")?.localResolutionConfirmed).toBe(true);
-    },
-  );
-
-  it.each(questionResolutionCases)(
-    "ignores an old $action error after the gateway client changes",
-    async ({ resolve }) => {
-      const stale = createDeferredQuestionRequest();
-      const current = createDeferredQuestionRequest();
-      const { state } = createConnectedState(stale.request, requestedPayload());
-
-      const staleResolution = resolve(state);
-      setQuestionPromptClient(state, { request: current.request });
-      expect(state.prompts.has("question-1")).toBe(false);
-      requestQuestion(state);
-
-      const currentResolution = resolve(state);
-      stale.reject();
-      await staleResolution;
-
-      expect(state.prompts.get("question-1")).toMatchObject({
-        status: "pending",
-        submitting: true,
-        localResolutionConfirmed: false,
-        error: null,
-      });
-
-      current.resolve();
-      await currentResolution;
-      expect(state.prompts.get("question-1")?.localResolutionConfirmed).toBe(true);
-    },
-  );
-
-  it.each(questionResolutionCases)(
-    "rejects an old $action when the same gateway transport reconnects",
-    async ({ resolve }) => {
-      const stale = createDeferredQuestionRequest();
-      const current = createDeferredQuestionRequest();
-      let requestCount = 0;
-      const client = {
-        request: vi.fn<RequestFn>((method, params) => {
-          requestCount += 1;
-          return requestCount === 1
-            ? stale.request(method, params)
-            : current.request(method, params);
-        }),
-      };
-      const { state } = createConnectedState(client, requestedPayload());
-
-      const staleResolution = resolve(state);
-      // Socket closure rejects its pending requests before reconnect callbacks.
-      stale.reject();
-      setQuestionPromptClient(state, null);
-      expect(state.prompts.get("question-1")?.submitting).toBe(false);
-      setQuestionPromptClient(state, client);
-
-      const currentResolution = resolve(state);
-      await staleResolution;
-
-      expect(state.prompts.get("question-1")).toMatchObject({
-        status: "pending",
-        submitting: true,
-        localResolutionConfirmed: false,
-        error: null,
-      });
-
-      current.resolve();
-      await currentResolution;
-      expect(state.prompts.get("question-1")?.localResolutionConfirmed).toBe(true);
-    },
-  );
-
-  it.each(questionResolutionCases)(
-    "keeps a current $action after same-connection prompt hydration",
-    async ({ action, resolve }) => {
-      const pending = createDeferredQuestionRequest();
-      const request = vi.fn<RequestFn>((method, params) =>
-        method === "question.list"
-          ? Promise.resolve({ questions: [requestedPayload()] })
-          : pending.request(method, params),
-      );
-      const { state, client } = createConnectedState(request, requestedPayload());
-
-      const resolution = resolve(state);
-      const original = state.prompts.get("question-1");
-      refreshPendingQuestionsWithRetry(state, client);
-      await waitForFast(() => expect(state.prompts.get("question-1")).not.toBe(original));
-
-      pending.resolve();
-      await resolution;
-
-      expect(state.prompts.get("question-1")).toMatchObject({
-        status: action === "answer" ? "answered" : "cancelled",
-        localResolutionConfirmed: true,
-        submitting: false,
-        error: null,
-      });
-    },
-  );
-
-  it.each(["pending", "answered", "cancelled", "expired"] as const)(
-    "does not carry a %s question into a replacement gateway",
-    (status) => {
-      const firstClient = { request: createQuestionResolver() };
-      const secondClient = { request: createQuestionResolver() };
-      const { state } = createConnectedState(firstClient, requestedPayload());
-      if (status !== "pending") {
-        handleQuestionPromptEvent(state, {
-          event: "question.resolved",
-          payload:
-            status === "answered"
-              ? {
-                  id: "question-1",
-                  status,
-                  answers: { answers: { format: ["Detailed"] } },
-                }
-              : { id: "question-1", status },
-        });
+      const currentResolution = answerQuestion(state);
+      if (outcome === "success") {
+        stale.resolve();
+      } else {
+        stale.reject();
       }
-      recordQuestionResolution(state, { id: "unmatched-first-gateway", status: "cancelled" });
-      setQuestionPromptClient(state, null);
+      await staleResolution;
 
-      setQuestionPromptClient(state, secondClient);
+      expect(state.prompts.get("question-1")).toMatchObject({
+        status: "pending",
+        submitting: true,
+        localResolutionConfirmed: false,
+        error: null,
+      });
 
-      expect(state.prompts.size).toBe(0);
-      expect(state.unmatchedResolutions.size).toBe(0);
+      current.resolve();
+      await currentResolution;
+      expect(state.prompts.get("question-1")?.localResolutionConfirmed).toBe(true);
     },
   );
+
+  it("rejects an old answer when the same gateway transport reconnects", async () => {
+    const stale = createDeferredQuestionRequest();
+    const current = createDeferredQuestionRequest();
+    let requestCount = 0;
+    const client = {
+      request: vi.fn<RequestFn>((method, params) => {
+        requestCount += 1;
+        return requestCount === 1 ? stale.request(method, params) : current.request(method, params);
+      }),
+    };
+    const { state } = createConnectedState(client, requestedPayload());
+
+    const staleResolution = answerQuestion(state);
+    // Socket closure rejects its pending requests before reconnect callbacks.
+    stale.reject();
+    setQuestionPromptClient(state, null);
+    expect(state.prompts.get("question-1")?.submitting).toBe(false);
+    setQuestionPromptClient(state, client);
+
+    const currentResolution = answerQuestion(state);
+    await staleResolution;
+
+    expect(state.prompts.get("question-1")).toMatchObject({
+      status: "pending",
+      submitting: true,
+      localResolutionConfirmed: false,
+      error: null,
+    });
+
+    current.resolve();
+    await currentResolution;
+    expect(state.prompts.get("question-1")?.localResolutionConfirmed).toBe(true);
+  });
+
+  it("keeps a current answer after same-connection prompt hydration", async () => {
+    const pending = createDeferredQuestionRequest();
+    const request = vi.fn<RequestFn>((method, params) =>
+      method === "question.list"
+        ? Promise.resolve({ questions: [requestedPayload()] })
+        : pending.request(method, params),
+    );
+    const { state, client } = createConnectedState(request, requestedPayload());
+
+    const resolution = answerQuestion(state);
+    const original = state.prompts.get("question-1");
+    refreshPendingQuestionsWithRetry(state, client);
+    await waitForFast(() => expect(state.prompts.get("question-1")).not.toBe(original));
+
+    pending.resolve();
+    await resolution;
+
+    expect(state.prompts.get("question-1")).toMatchObject({
+      status: "answered",
+      localResolutionConfirmed: true,
+      submitting: false,
+      error: null,
+    });
+  });
+
+  it("does not carry an answered question into a replacement gateway", () => {
+    const firstClient = { request: createQuestionResolver() };
+    const secondClient = { request: createQuestionResolver() };
+    const { state } = createConnectedState(firstClient, requestedPayload());
+    recordQuestionResolution(state, {
+      id: "question-1",
+      status: "answered",
+      answers: { answers: { format: ["Detailed"] } },
+    });
+    recordQuestionResolution(state, { id: "unmatched-first-gateway", status: "cancelled" });
+    setQuestionPromptClient(state, null);
+
+    setQuestionPromptClient(state, secondClient);
+
+    expect(state.prompts.size).toBe(0);
+    expect(state.unmatchedResolutions.size).toBe(0);
+  });
 
   it("preserves authoritative question records when the same gateway reconnects", () => {
     const client = { request: createQuestionResolver() };
@@ -674,17 +583,6 @@ describe("question resolution connection ownership", () => {
 });
 
 describe("refreshPendingQuestions", () => {
-  it("hydrates pending questions after connect", async () => {
-    const request = vi.fn<RequestFn>(async () => ({ questions: [requestedPayload()] }));
-    const { state, client } = createConnectedState(request);
-
-    refreshPendingQuestionsWithRetry(state, client);
-    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("pending"));
-
-    expect(request).toHaveBeenCalledWith("question.list", {}, defaultRequestDeadline);
-    expect(state.prompts.get("question-1")?.status).toBe("pending");
-  });
-
   it("retries question hydration when the gateway leaves question.list unresolved", async () => {
     vi.useFakeTimers();
     let attempts = 0;

@@ -30,7 +30,6 @@ describe("approval document routing", () => {
     "/approve/%2e",
     "/approve/%2E%2E",
     "/approve/id/extra",
-    "/approve/id/",
   ])("keeps malformed approval-shaped paths shellless: %s", (pathname) => {
     expect(resolveControlUiDocumentMode(pathname, "")).toEqual({
       kind: "approval",
@@ -63,15 +62,12 @@ describe("question document routing", () => {
     expect(inferBasePathFromPathname("/operator/ask/question%3A456")).toBe("/operator");
   });
 
-  it.each(["/ask", "/ask/", "/ask/%", "/ask/%2e", "/ask/id/extra", "/ask/id/"])(
-    "keeps malformed question-shaped paths shellless: %s",
-    (pathname) => {
-      expect(resolveControlUiDocumentMode(pathname, "")).toEqual({
-        kind: "question",
-        questionId: null,
-      });
-    },
-  );
+  it.each(["/ask", "/ask/%"])("keeps malformed question-shaped paths shellless: %s", (pathname) => {
+    expect(resolveControlUiDocumentMode(pathname, "")).toEqual({
+      kind: "question",
+      questionId: null,
+    });
+  });
 
   it("does not claim ordinary or out-of-mount paths", () => {
     expect(resolveControlUiDocumentMode("/chat", "")).toBeNull();

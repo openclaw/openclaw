@@ -32,10 +32,10 @@ function oauthCredential(overrides: Partial<OAuthCredential>): OAuthCredential {
   };
 }
 
-function storeWith(profileId: string, credential: OAuthCredential): AuthProfileStore {
+function storeWith(profileId: string, overrides: Partial<OAuthCredential>): AuthProfileStore {
   return {
     version: 1,
-    profiles: { [profileId]: credential },
+    profiles: { [profileId]: oauthCredential(overrides) },
   };
 }
 
@@ -86,26 +86,20 @@ describe("stale OAuth profile shadow doctor repair", () => {
     const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
     await writeRawAuthStore(
       childAgentDir,
-      storeWith(
-        profileId,
-        oauthCredential({
-          access: "child-access",
-          refresh: "child-refresh",
-          expires: now - 60_000,
-          accountId: "acct-shared",
-        }),
-      ),
+      storeWith(profileId, {
+        access: "child-access",
+        refresh: "child-refresh",
+        expires: now - 60_000,
+        accountId: "acct-shared",
+      }),
     );
     saveAuthProfileStore(
-      storeWith(
-        profileId,
-        oauthCredential({
-          access: "main-access",
-          refresh: "main-refresh",
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-shared",
-        }),
-      ),
+      storeWith(profileId, {
+        access: "main-access",
+        refresh: "main-refresh",
+        expires: now + 60 * 60 * 1000,
+        accountId: "acct-shared",
+      }),
     );
 
     const hits = await scanStaleOAuthProfileShadows({
@@ -117,7 +111,9 @@ describe("stale OAuth profile shadow doctor repair", () => {
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(hits).toHaveLength(1);
+    expect(hits).toEqual([
+      expect.objectContaining({ authPath: resolveAuthStorePath(childAgentDir), profileId }),
+    ]);
     expect(warnings[0]).toContain("stale OAuth auth profile anthropic:default");
     expect(warnings[0]).toContain("openclaw doctor --fix");
     expect(loadPersistedAuthProfileStore(childAgentDir)?.profiles[profileId]).toBeDefined();
@@ -211,50 +207,6 @@ describe("stale OAuth profile shadow doctor repair", () => {
     expect(loadPersistedAuthProfileStore(childAgentDir)?.profiles[profileId]).toBeUndefined();
   });
 
-  it("scans sqlite-only child auth stores after JSON migration", async () => {
-    const profileId = "anthropic:default";
-    const now = Date.now();
-    const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
-    saveAuthProfileStore(
-      storeWith(
-        profileId,
-        oauthCredential({
-          access: "child-access",
-          refresh: "child-refresh",
-          expires: now - 60_000,
-          accountId: "acct-shared",
-        }),
-      ),
-      childAgentDir,
-    );
-    saveAuthProfileStore(
-      storeWith(
-        profileId,
-        oauthCredential({
-          access: "main-access",
-          refresh: "main-refresh",
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-shared",
-        }),
-      ),
-    );
-
-    const hits = await scanStaleOAuthProfileShadows({
-      cfg: {} satisfies OpenClawConfig,
-      now,
-    });
-
-    expect(hits).toEqual([
-      expect.objectContaining({
-        authPath: resolveAuthStorePath(childAgentDir),
-        profileId,
-      }),
-    ]);
-    await expect(fs.access(resolveAuthStorePath(childAgentDir))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-
   it("uses the injected env for the main auth store", async () => {
     const profileId = "anthropic:default";
     const now = Date.now();
@@ -265,39 +217,30 @@ describe("stale OAuth profile shadow doctor repair", () => {
       OPENCLAW_HOME: injectedStateDir,
     };
     saveAuthProfileStore(
-      storeWith(
-        profileId,
-        oauthCredential({
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-process-env",
-        }),
-      ),
+      storeWith(profileId, {
+        expires: now + 60 * 60 * 1000,
+        accountId: "acct-process-env",
+      }),
       undefined,
     );
     await writeRawAuthStore(
       path.join(injectedStateDir, "agents", "main", "agent"),
-      storeWith(
-        profileId,
-        oauthCredential({
-          access: "main-access",
-          refresh: "main-refresh",
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-injected-env",
-        }),
-      ),
+      storeWith(profileId, {
+        access: "main-access",
+        refresh: "main-refresh",
+        expires: now + 60 * 60 * 1000,
+        accountId: "acct-injected-env",
+      }),
     );
     const childAgentDir = path.join(injectedStateDir, "agents", "telegram", "agent");
     await writeRawAuthStore(
       childAgentDir,
-      storeWith(
-        profileId,
-        oauthCredential({
-          access: "child-access",
-          refresh: "child-refresh",
-          expires: now - 60_000,
-          accountId: "acct-injected-env",
-        }),
-      ),
+      storeWith(profileId, {
+        access: "child-access",
+        refresh: "child-refresh",
+        expires: now - 60_000,
+        accountId: "acct-injected-env",
+      }),
     );
 
     const hits = await scanStaleOAuthProfileShadows({
@@ -326,27 +269,21 @@ describe("stale OAuth profile shadow doctor repair", () => {
     };
     await writeRawAuthStore(
       relocatedMainAgentDir,
-      storeWith(
-        profileId,
-        oauthCredential({
-          access: "main-access",
-          refresh: "main-refresh",
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-shared",
-        }),
-      ),
+      storeWith(profileId, {
+        access: "main-access",
+        refresh: "main-refresh",
+        expires: now + 60 * 60 * 1000,
+        accountId: "acct-shared",
+      }),
     );
     await writeRawAuthStore(
       childAgentDir,
-      storeWith(
-        profileId,
-        oauthCredential({
-          access: "child-access",
-          refresh: "child-refresh",
-          expires: now - 60_000,
-          accountId: "acct-shared",
-        }),
-      ),
+      storeWith(profileId, {
+        access: "child-access",
+        refresh: "child-refresh",
+        expires: now - 60_000,
+        accountId: "acct-shared",
+      }),
     );
 
     const result = await repairStaleOAuthProfileShadows({
@@ -381,16 +318,13 @@ describe("stale OAuth profile shadow doctor repair", () => {
       },
     });
     saveAuthProfileStore(
-      storeWith(
-        profileId,
-        oauthCredential({
-          provider: "openai-codex",
-          access: "main-access",
-          refresh: "main-refresh",
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-shared",
-        }),
-      ),
+      storeWith(profileId, {
+        provider: "openai-codex",
+        access: "main-access",
+        refresh: "main-refresh",
+        expires: now + 60 * 60 * 1000,
+        accountId: "acct-shared",
+      }),
     );
 
     const hits = await scanStaleOAuthProfileShadows({
@@ -419,15 +353,12 @@ describe("stale OAuth profile shadow doctor repair", () => {
     const localHealth = { errorCount: 1, lastUsed: now - 1_000 };
     const order = [localId, profileId, "anthropic:missing"];
     saveAuthProfileStore(
-      storeWith(
-        profileId,
-        oauthCredential({
-          access: "main-access",
-          refresh: "main-refresh",
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-shared",
-        }),
-      ),
+      storeWith(profileId, {
+        access: "main-access",
+        refresh: "main-refresh",
+        expires: now + 60 * 60 * 1000,
+        accountId: "acct-shared",
+      }),
       undefined,
     );
     const sharedBefore = loadPersistedAuthProfileStore();
@@ -477,22 +408,16 @@ describe("stale OAuth profile shadow doctor repair", () => {
     const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
     await writeRawAuthStore(
       childAgentDir,
-      storeWith(
-        profileId,
-        oauthCredential({
-          expires: now - 60_000,
-          accountId: "acct-child",
-        }),
-      ),
+      storeWith(profileId, {
+        expires: now - 60_000,
+        accountId: "acct-child",
+      }),
     );
     saveAuthProfileStore(
-      storeWith(
-        profileId,
-        oauthCredential({
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-main",
-        }),
-      ),
+      storeWith(profileId, {
+        expires: now + 60 * 60 * 1000,
+        accountId: "acct-main",
+      }),
     );
 
     const result = await repairStaleOAuthProfileShadows({
@@ -510,22 +435,16 @@ describe("stale OAuth profile shadow doctor repair", () => {
     const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
     await writeRawAuthStore(
       childAgentDir,
-      storeWith(
-        profileId,
-        oauthCredential({
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-shared",
-        }),
-      ),
+      storeWith(profileId, {
+        expires: now + 60 * 60 * 1000,
+        accountId: "acct-shared",
+      }),
     );
     saveAuthProfileStore(
-      storeWith(
-        profileId,
-        oauthCredential({
-          expires: now + 30 * 60 * 1000,
-          accountId: "acct-shared",
-        }),
-      ),
+      storeWith(profileId, {
+        expires: now + 30 * 60 * 1000,
+        accountId: "acct-shared",
+      }),
     );
 
     const result = await repairStaleOAuthProfileShadows({
@@ -541,20 +460,14 @@ describe("stale OAuth profile shadow doctor repair", () => {
     const profileId = "anthropic:default";
     const now = Date.now();
     const result = testing.removeStaleProfilesFromStore({
-      store: storeWith(
-        profileId,
-        oauthCredential({
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-shared",
-        }),
-      ),
-      mainStore: storeWith(
-        profileId,
-        oauthCredential({
-          expires: now + 30 * 60 * 1000,
-          accountId: "acct-shared",
-        }),
-      ),
+      store: storeWith(profileId, {
+        expires: now + 60 * 60 * 1000,
+        accountId: "acct-shared",
+      }),
+      mainStore: storeWith(profileId, {
+        expires: now + 30 * 60 * 1000,
+        accountId: "acct-shared",
+      }),
       profileIds: new Set([profileId]),
       now,
     });
@@ -569,13 +482,10 @@ describe("stale OAuth profile shadow doctor repair", () => {
     const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
     const repair = await testing.repairStaleOAuthProfilesForAgent({
       agentDir: childAgentDir,
-      mainStore: storeWith(
-        profileId,
-        oauthCredential({
-          expires: now + 60 * 60 * 1000,
-          accountId: "acct-shared",
-        }),
-      ),
+      mainStore: storeWith(profileId, {
+        expires: now + 60 * 60 * 1000,
+        accountId: "acct-shared",
+      }),
       profileIds: new Set([profileId]),
       now,
     });

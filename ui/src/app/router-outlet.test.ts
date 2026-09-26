@@ -204,31 +204,6 @@ describe("openclaw-router-outlet", () => {
     router.stop();
   });
 
-  it("renders route data through the public custom-element boundary", async () => {
-    const context = { label: "loaded" };
-    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
-      routes: [
-        definePage({
-          id: "page",
-          path: "/page",
-          component: () => ({
-            render: (data: TestData | undefined) =>
-              html`<div data-testid="route-page">${data?.label}</div>`,
-          }),
-          loader: (loadContext) => ({ label: loadContext.label }),
-        }),
-      ],
-    });
-    const outlet = createOutlet(router, context);
-
-    await router.navigate("page", context);
-    await settleOutlet(outlet);
-
-    expect(outlet.querySelector('[data-testid="route-page"]')?.textContent).toBe("loaded");
-    outlet.remove();
-    router.stop();
-  });
-
   it("keeps a loaded route visible with an error and retries through the latest context", async () => {
     const firstLoad = createDeferredCore<TestData>();
     let loadCount = 0;

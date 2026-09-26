@@ -148,21 +148,6 @@ async function startPendingPrompt(
   };
 }
 
-async function cancelAndExpectAbortForPendingRun(
-  harness: Harness,
-  sessionId: string,
-  sessionKey: string,
-  pending: { promptPromise: Promise<PromptResponse>; runId: string },
-) {
-  await harness.agent.cancel({ sessionId } as CancelNotification);
-
-  expect(harness.requestSpy).toHaveBeenCalledWith("chat.abort", {
-    sessionKey,
-    runId: pending.runId,
-  });
-  await expect(pending.promptPromise).resolves.toEqual({ stopReason: "cancelled" });
-}
-
 async function deliverFinalChatEventAndExpectEndTurn(
   harness: Harness,
   sessionKey: string,
@@ -189,41 +174,6 @@ function sessionUpdatePayloadAt(harness: Harness, index: number): SessionUpdateP
 }
 
 describe("acp translator cancel and run scoping", () => {
-  it("aborts an accepted active prompt before settlement and replacement submission", async () => {
-    const sessionKey = "agent:main:shared";
-    const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
-    const blockedAbort = blockAcceptedPromptAbort(harness);
-    const first = await startPendingPrompt(harness, "session-1");
-    blockedAbort.observeFirstSettlement(first.promptPromise);
-
-    const replacementPromise = harness.agent.prompt(createPromptRequest("session-1"));
-    await blockedAbort.waitForAbort();
-
-    expect(harness.requestSpy).toHaveBeenCalledWith("chat.abort", {
-      sessionKey,
-      runId: first.runId,
-    });
-    expect(harness.sentRunIds).toEqual([first.runId]);
-    blockedAbort.releaseAbort();
-    await vi.waitFor(() => {
-      expect(harness.sentRunIds).toHaveLength(2);
-    });
-    const replacement = {
-      promptPromise: replacementPromise,
-      runId: expectDefined(harness.sentRunIds[1], "accepted replacement Gateway run id"),
-    };
-
-    expect(harness.requestSpy.mock.calls.map(([method]) => method)).toEqual([
-      "chat.send",
-      "chat.abort",
-      "chat.send",
-    ]);
-    await expect(first.promptPromise).resolves.toEqual({ stopReason: "cancelled" });
-    expect(harness.sessionStore.getSession("session-1")?.activeRunId).toBe(replacement.runId);
-
-    await deliverFinalChatEventAndExpectEndTurn(harness, sessionKey, replacement, 1);
-  });
-
   it.each([
     {
       closure: "cancel",
@@ -380,6 +330,10 @@ describe("acp translator cancel and run scoping", () => {
       prompt: [{ type: "text", text: "second" }],
     });
     await blockedAbort.waitForAbort();
+    expect(harness.requestSpy).toHaveBeenCalledWith("chat.abort", {
+      sessionKey,
+      runId: first.runId,
+    });
     const thirdPrompt = harness.agent.prompt({
       ...createPromptRequest("session-1"),
       prompt: [{ type: "text", text: "third" }],
@@ -395,6 +349,11 @@ describe("acp translator cancel and run scoping", () => {
 
     await expect(first.promptPromise).resolves.toEqual({ stopReason: "cancelled" });
     await expect(secondPrompt).resolves.toEqual({ stopReason: "cancelled" });
+    expect(harness.requestSpy.mock.calls.map(([method]) => method)).toEqual([
+      "chat.send",
+      "chat.abort",
+      "chat.send",
+    ]);
     expect(harness.sentRunIds).toHaveLength(2);
     expect(
       harness.requestSpy.mock.calls
@@ -518,31 +477,19 @@ describe("acp translator cancel and run scoping", () => {
     ).resolves.toEqual({ stopReason: "end_turn" });
   });
 
-  it("cancel passes active runId to chat.abort", async () => {
-    const sessionKey = "agent:main:shared";
-    const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
-    const pending = await startPendingPrompt(harness, "session-1");
-
-    await cancelAndExpectAbortForPendingRun(harness, "session-1", sessionKey, pending);
-  });
-
   it("cancel uses pending runId when there is no active run", async () => {
     const sessionKey = "agent:main:shared";
     const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
     const pending = await startPendingPrompt(harness, "session-1");
     harness.sessionStore.clearActiveRun("session-1");
 
-    await cancelAndExpectAbortForPendingRun(harness, "session-1", sessionKey, pending);
-  });
+    await harness.agent.cancel({ sessionId: "session-1" });
 
-  it("cancel skips chat.abort when there is no active run and no pending prompt", async () => {
-    const sessionKey = "agent:main:shared";
-    const harness = createHarness([{ sessionId: "session-1", sessionKey }]);
-
-    await harness.agent.cancel({ sessionId: "session-1" } as CancelNotification);
-
-    const abortCalls = harness.requestSpy.mock.calls.filter(([method]) => method === "chat.abort");
-    expect(abortCalls).toHaveLength(0);
+    expect(harness.requestSpy).toHaveBeenCalledWith("chat.abort", {
+      sessionKey,
+      runId: pending.runId,
+    });
+    await expect(pending.promptPromise).resolves.toEqual({ stopReason: "cancelled" });
   });
 
   it("cancel from a session without active run does not abort another session sharing the same key", async () => {

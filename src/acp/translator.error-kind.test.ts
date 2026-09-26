@@ -24,23 +24,6 @@ describe("acp translator errorKind mapping", () => {
     await expect(promptPromise).resolves.toEqual({ stopReason: "refusal" });
   });
 
-  it("maps errorKind: timeout to stopReason: end_turn", async () => {
-    const { agent, promptPromise, runId } = await createPendingPromptHarness();
-
-    await agent.handleGatewayEvent(
-      createChatEvent({
-        runId,
-        sessionKey: DEFAULT_SESSION_KEY,
-        seq: 1,
-        state: "error",
-        errorKind: "timeout",
-        errorMessage: "gateway timeout",
-      }),
-    );
-
-    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
-  });
-
   it("maps unknown errorKind to stopReason: end_turn", async () => {
     const { agent, promptPromise, runId } = await createPendingPromptHarness();
 

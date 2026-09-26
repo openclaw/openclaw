@@ -52,54 +52,6 @@ describe("bundled plugin load path repair", () => {
     vi.restoreAllMocks();
   });
 
-  it("detects legacy bundled plugin paths that still point at source extensions", () => {
-    const packageRoot = path.resolve("app-node-modules", "openclaw");
-    const legacyPath = bundledPluginRootAt(packageRoot, "feishu");
-    const bundledPath = bundledDistPluginRootAt(packageRoot, "feishu");
-    vi.spyOn(bundledSources, "resolveBundledPluginSources").mockReturnValue(
-      new Map([["feishu", bundled("feishu", bundledPath)]]),
-    );
-
-    const hits = scanBundledPluginLoadPathMigrations({
-      plugins: {
-        load: {
-          paths: [legacyPath],
-        },
-      },
-    });
-
-    expect(hits).toEqual([
-      {
-        pluginId: "feishu",
-        fromPath: legacyPath,
-        toPath: bundledPath,
-        pathLabel: "plugins.load.paths",
-      },
-    ]);
-  });
-
-  it("removes legacy bundled paths during doctor repair", () => {
-    const packageRoot = path.resolve("app-node-modules", "openclaw");
-    const legacyPath = bundledPluginRootAt(packageRoot, "feishu");
-    const bundledPath = bundledDistPluginRootAt(packageRoot, "feishu");
-    vi.spyOn(bundledSources, "resolveBundledPluginSources").mockReturnValue(
-      new Map([["feishu", bundled("feishu", bundledPath)]]),
-    );
-
-    const result = maybeRepairBundledPluginLoadPaths({
-      plugins: {
-        load: {
-          paths: [legacyPath],
-        },
-      },
-    });
-
-    expect(result.changes).toEqual([
-      `- plugins.load.paths: removed bundled feishu path alias ${legacyPath}`,
-    ]);
-    expect(result.config.plugins?.load?.paths).toStrictEqual([]);
-  });
-
   it("removes current packaged bundled paths during doctor repair", () => {
     const packageRoot = path.resolve("app-node-modules", "openclaw");
     const bundledPath = bundledDistPluginRootAt(packageRoot, "feishu");

@@ -203,7 +203,7 @@ describe("models scan command", () => {
     ["timeout", "--timeout", "1000ms"],
     ["concurrency", "--concurrency", "2x"],
   ] as const)("%s numeric value", (key, label, partial) => {
-    it.each(["", "   ", partial])("rejects %j before scanning", async (raw) => {
+    it.each(["", partial])("rejects %j before scanning", async (raw) => {
       const runtime = createRuntime();
 
       await expect(

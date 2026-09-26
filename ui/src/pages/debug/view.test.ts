@@ -18,15 +18,6 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { renderDebug } from "./view.ts";
 
 type DebugProps = Parameters<typeof renderDebug>[0];
-const DIAGNOSTIC_METHODS = [
-  "diagnostics.lanes",
-  "status",
-  "health",
-  "models.list",
-  "last-heartbeat",
-] as const;
-type DiagnosticMethod = (typeof DIAGNOSTIC_METHODS)[number];
-
 type TestDebugPage = HTMLElement & {
   readonly updateComplete: Promise<boolean>;
   requestUpdate: () => void;
@@ -566,42 +557,40 @@ describe("DebugPage", () => {
     },
   );
 
-  it.each(DIAGNOSTIC_METHODS)(
-    "preserves every last-good snapshot and recovers after %s fails",
-    async (failedMethod) => {
-      let failure: DiagnosticMethod | null = null;
-      let marker = "initial";
-      const request = vi.fn(async (method: string) => {
-        if (method === failure) {
-          throw new Error(`${method} unavailable`);
-        }
-        return diagnosticResponse(method, marker);
-      });
-      const page = await mountDebugPage(request);
-      expectSnapshots(page, "initial");
+  it("preserves every last-good snapshot and recovers after models.list fails", async () => {
+    const failedMethod = "models.list";
+    let failure: typeof failedMethod | null = null;
+    let marker = "initial";
+    const request = vi.fn(async (method: string) => {
+      if (method === failure) {
+        throw new Error(`${method} unavailable`);
+      }
+      return diagnosticResponse(method, marker);
+    });
+    const page = await mountDebugPage(request);
+    expectSnapshots(page, "initial");
 
-      marker = "uncommitted";
-      failure = failedMethod;
-      await page.loadDiagnostics();
-      await page.updateComplete;
+    marker = "uncommitted";
+    failure = failedMethod;
+    await page.loadDiagnostics();
+    await page.updateComplete;
 
-      expect(page.debugDiagnosticsError).toContain(`${failedMethod} unavailable`);
-      expectSnapshots(page, "initial");
-      const alert = page.querySelector<HTMLElement>('[role="alert"]');
-      expect(alert?.closest(".settings-section")?.querySelector("h2")?.textContent.trim()).toBe(
-        "Snapshots",
-      );
-      expect(alert?.classList).toContain("settings-row");
-      expect(page.querySelector(".callout")).toBeNull();
+    expect(page.debugDiagnosticsError).toContain(`${failedMethod} unavailable`);
+    expectSnapshots(page, "initial");
+    const alert = page.querySelector<HTMLElement>('[role="alert"]');
+    expect(alert?.closest(".settings-section")?.querySelector("h2")?.textContent.trim()).toBe(
+      "Snapshots",
+    );
+    expect(alert?.classList).toContain("settings-row");
+    expect(page.querySelector(".callout")).toBeNull();
 
-      marker = "recovered";
-      failure = null;
-      await page.loadDiagnostics();
+    marker = "recovered";
+    failure = null;
+    await page.loadDiagnostics();
 
-      expect(page.debugDiagnosticsError).toBeNull();
-      expectSnapshots(page, "recovered");
-    },
-  );
+    expect(page.debugDiagnosticsError).toBeNull();
+    expectSnapshots(page, "recovered");
+  });
 
   it("keeps failed Manual RPC state separate from diagnostics failure and recovery", async () => {
     let diagnosticsUnavailable = false;

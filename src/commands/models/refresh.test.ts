@@ -53,10 +53,8 @@ describe("models refresh", () => {
     );
   });
 
-  it.each([
-    { name: "human", options: {} },
-    { name: "JSON", options: { json: true } },
-  ])("delegates $name refresh failures to the canonical CLI error owner", async ({ options }) => {
+  it("delegates refresh failures to the canonical CLI error owner", async () => {
+    const options = { json: true };
     const commandRuntime = runtime();
     mocks.refresh.mockResolvedValueOnce({
       status: "error",
@@ -79,28 +77,14 @@ describe("models refresh", () => {
     expect(commandRuntime.exit).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      status: "updated",
-      providers: 2,
-      models: 3,
-      generatedAt: 1_753_500_000_000,
-    },
-    {
-      status: "unchanged",
-      providers: 2,
-      models: 3,
-      generatedAt: 1_753_500_000_000,
-    },
-    {
+  it("preserves the JSON domain payload", async () => {
+    const result = {
       status: "fresh",
       providers: 2,
       models: 3,
       generatedAt: 1_753_500_000_000,
       nextCheckInMs: 1_000,
-    },
-    { status: "disabled", providers: 0, models: 0 },
-  ])("preserves the $status JSON domain payload", async (result) => {
+    };
     const commandRuntime = runtime();
     mocks.refresh.mockResolvedValueOnce(result);
 

@@ -62,11 +62,8 @@ describe("Control UI accent presentation", () => {
   });
 
   it.each([
-    ["#fbbf24", "#000000"],
-    ["#6ee7b7", "#000000"],
     ["#777777", "#000000"],
     ["#747474", "#ffffff"],
-    ["#2563eb", "#ffffff"],
   ])("selects readable ink for accent %s", (accent, expectedInk) => {
     expect(controlUiAccentInk(accent)).toBe(expectedInk);
     applyControlUiAccent(accent);

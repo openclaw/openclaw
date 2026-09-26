@@ -46,6 +46,24 @@ function createLegacyStepResult(
   });
 }
 
+function repairAfterAuthKeyCleanup(candidate: OpenClawConfig, profileId: string) {
+  const config = structuredClone(candidate);
+  const profile = config.auth?.profiles?.[profileId];
+  if (!profile) {
+    throw new Error(`Missing auth profile fixture: ${profileId}`);
+  }
+  Reflect.deleteProperty(profile, "key");
+  stripUnknownConfigKeysMock.mockReturnValueOnce({
+    config,
+    removed: [`auth.profiles.${profileId}.key`],
+  });
+  return applyUnknownConfigKeyStep({
+    state: { cfg: {}, candidate, pendingChanges: false, fixHints: [] },
+    shouldRepair: true,
+    doctorFixCommand: "openclaw doctor --fix",
+  });
+}
+
 describe("doctor config flow steps", () => {
   beforeEach(() => {
     migrateLegacyConfigMock.mockReset();
@@ -250,11 +268,11 @@ describe("doctor config flow steps", () => {
   });
 
   it("repairs active malformed auth profile metadata after unknown-key cleanup", () => {
-    stripUnknownConfigKeysMock.mockReturnValueOnce({
-      config: {
+    const result = repairAfterAuthKeyCleanup(
+      {
         auth: {
           profiles: {
-            "openai:default": {},
+            "openai:default": { key: "sk-test" },
           },
         },
         models: {
@@ -270,39 +288,9 @@ describe("doctor config flow steps", () => {
             },
           },
         },
-      },
-      removed: ["auth.profiles.openai:default.key"],
-    });
-
-    const result = applyUnknownConfigKeyStep({
-      state: {
-        cfg: {},
-        candidate: {
-          auth: {
-            profiles: {
-              "openai:default": { key: "sk-test" },
-            },
-          },
-          models: {
-            providers: {
-              openai: { apiKey: "${OPENAI_API_KEY}" },
-            },
-          },
-          agents: {
-            defaults: {
-              model: {
-                primary: "anthropic/claude-opus-4-6",
-                fallbacks: ["openai/gpt-5.5"],
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        pendingChanges: false,
-        fixHints: [],
-      },
-      shouldRepair: true,
-      doctorFixCommand: "openclaw doctor --fix",
-    });
+      } as unknown as OpenClawConfig,
+      "openai:default",
+    );
 
     expect(result.repairs).toEqual([
       "Repaired auth.profiles.openai:default metadata for active openai auth.",
@@ -314,11 +302,15 @@ describe("doctor config flow steps", () => {
   });
 
   it("keeps valid active auth profile metadata while stripping stale secret fields", () => {
-    stripUnknownConfigKeysMock.mockReturnValueOnce({
-      config: {
+    const result = repairAfterAuthKeyCleanup(
+      {
         auth: {
           profiles: {
-            "openai:default": { provider: "openai", mode: "api_key" },
+            "openai:default": {
+              provider: "openai",
+              mode: "api_key",
+              key: "sk-test",
+            },
           },
         },
         models: {
@@ -333,42 +325,9 @@ describe("doctor config flow steps", () => {
             },
           },
         },
-      },
-      removed: ["auth.profiles.openai:default.key"],
-    });
-
-    const result = applyUnknownConfigKeyStep({
-      state: {
-        cfg: {},
-        candidate: {
-          auth: {
-            profiles: {
-              "openai:default": {
-                provider: "openai",
-                mode: "api_key",
-                key: "sk-test",
-              },
-            },
-          },
-          models: {
-            providers: {
-              openai: { apiKey: "${OPENAI_API_KEY}" },
-            },
-          },
-          agents: {
-            defaults: {
-              model: {
-                fallbacks: ["openai/gpt-5.5"],
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        pendingChanges: false,
-        fixHints: [],
-      },
-      shouldRepair: true,
-      doctorFixCommand: "openclaw doctor --fix",
-    });
+      } as unknown as OpenClawConfig,
+      "openai:default",
+    );
 
     expect(result.repairs).toStrictEqual([]);
     expect(result.state.cfg.auth?.profiles?.["openai:default"]).toEqual({
@@ -378,11 +337,11 @@ describe("doctor config flow steps", () => {
   });
 
   it("repairs non-default auth profiles for active providers", () => {
-    stripUnknownConfigKeysMock.mockReturnValueOnce({
-      config: {
+    const result = repairAfterAuthKeyCleanup(
+      {
         auth: {
           profiles: {
-            "openai:work": {},
+            "openai:work": { key: "sk-test" },
           },
         },
         agents: {
@@ -392,33 +351,9 @@ describe("doctor config flow steps", () => {
             },
           },
         },
-      },
-      removed: ["auth.profiles.openai:work.key"],
-    });
-
-    const result = applyUnknownConfigKeyStep({
-      state: {
-        cfg: {},
-        candidate: {
-          auth: {
-            profiles: {
-              "openai:work": { key: "sk-test" },
-            },
-          },
-          agents: {
-            defaults: {
-              model: {
-                fallbacks: ["openai/gpt-5.5"],
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        pendingChanges: false,
-        fixHints: [],
-      },
-      shouldRepair: true,
-      doctorFixCommand: "openclaw doctor --fix",
-    });
+      } as unknown as OpenClawConfig,
+      "openai:work",
+    );
 
     expect(result.repairs).toEqual([
       "Repaired auth.profiles.openai:work metadata for active openai auth.",
@@ -430,11 +365,11 @@ describe("doctor config flow steps", () => {
   });
 
   it("preserves explicit model auth profile refs during unknown-key cleanup", () => {
-    stripUnknownConfigKeysMock.mockReturnValueOnce({
-      config: {
+    const result = repairAfterAuthKeyCleanup(
+      {
         auth: {
           profiles: {
-            "openai:default": {},
+            "openai:default": { key: "sk-test" },
           },
         },
         agents: {
@@ -444,33 +379,9 @@ describe("doctor config flow steps", () => {
             },
           },
         },
-      },
-      removed: ["auth.profiles.openai:default.key"],
-    });
-
-    const result = applyUnknownConfigKeyStep({
-      state: {
-        cfg: {},
-        candidate: {
-          auth: {
-            profiles: {
-              "openai:default": { key: "sk-test" },
-            },
-          },
-          agents: {
-            defaults: {
-              model: {
-                primary: "openai/gpt-5.5@openai:default",
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        pendingChanges: false,
-        fixHints: [],
-      },
-      shouldRepair: true,
-      doctorFixCommand: "openclaw doctor --fix",
-    });
+      } as unknown as OpenClawConfig,
+      "openai:default",
+    );
 
     expect(result.state.cfg.auth?.profiles?.["openai:default"]).toEqual({
       provider: "openai",
@@ -479,11 +390,11 @@ describe("doctor config flow steps", () => {
   });
 
   it("infers providers for bare auth profile suffixes", () => {
-    stripUnknownConfigKeysMock.mockReturnValueOnce({
-      config: {
+    const result = repairAfterAuthKeyCleanup(
+      {
         auth: {
           profiles: {
-            work: {},
+            work: { key: "sk-test" },
           },
         },
         agents: {
@@ -493,33 +404,9 @@ describe("doctor config flow steps", () => {
             },
           },
         },
-      },
-      removed: ["auth.profiles.work.key"],
-    });
-
-    const result = applyUnknownConfigKeyStep({
-      state: {
-        cfg: {},
-        candidate: {
-          auth: {
-            profiles: {
-              work: { key: "sk-test" },
-            },
-          },
-          agents: {
-            defaults: {
-              model: {
-                primary: "openai/gpt-5.5@work",
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        pendingChanges: false,
-        fixHints: [],
-      },
-      shouldRepair: true,
-      doctorFixCommand: "openclaw doctor --fix",
-    });
+      } as unknown as OpenClawConfig,
+      "work",
+    );
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.state.cfg.auth?.profiles?.work).toEqual({
@@ -529,11 +416,11 @@ describe("doctor config flow steps", () => {
   });
 
   it("protects auth profiles referenced only by channel model overrides", () => {
-    stripUnknownConfigKeysMock.mockReturnValueOnce({
-      config: {
+    const result = repairAfterAuthKeyCleanup(
+      {
         auth: {
           profiles: {
-            "openai:default": {},
+            "openai:default": { key: "sk-test" },
           },
         },
         channels: {
@@ -543,33 +430,9 @@ describe("doctor config flow steps", () => {
             },
           },
         },
-      },
-      removed: ["auth.profiles.openai:default.key"],
-    });
-
-    const result = applyUnknownConfigKeyStep({
-      state: {
-        cfg: {},
-        candidate: {
-          auth: {
-            profiles: {
-              "openai:default": { key: "sk-test" },
-            },
-          },
-          channels: {
-            modelByChannel: {
-              slack: {
-                C123: "openai/gpt-5.5@openai:default",
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        pendingChanges: false,
-        fixHints: [],
-      },
-      shouldRepair: true,
-      doctorFixCommand: "openclaw doctor --fix",
-    });
+      } as unknown as OpenClawConfig,
+      "openai:default",
+    );
 
     expect(result.state.cfg.auth?.profiles?.["openai:default"]).toEqual({
       provider: "openai",

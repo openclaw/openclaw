@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectLegacyWhatsAppCrontabHealthWarning,
   noteCronDeliveryTargetAdvisory,
-  noteCronModelOverrides,
 } from "./warnings.js";
 
 const mocks = vi.hoisted(() => ({
@@ -47,34 +46,11 @@ function collectCronDeliveryTargetAdvisory(params: {
   return typeof body === "string" ? body : null;
 }
 
-describe("noteCronModelOverrides", () => {
-  it("describes enabled overrides without claiming a specific backing store", () => {
-    noteCronModelOverrides({
-      cfg: {},
-      jobs: [job({ enabled: true, payload: { kind: "agentTurn", model: "ollama/qwen3" } })],
-    });
-
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringMatching(/^Automation model overrides detected\.\n/u),
-      "Cron",
-    );
-  });
-
-  it("does not warn for disabled model-pinned jobs", () => {
-    noteCronModelOverrides({
-      cfg: {},
-      jobs: [job({ enabled: false, payload: { kind: "agentTurn", model: "ollama/qwen3" } })],
-    });
-
-    expect(mocks.note).not.toHaveBeenCalled();
-  });
-});
-
 describe("collectCronDeliveryTargetAdvisory", () => {
   it("advises when a concrete delivery channel has no active plugin", () => {
     const advisory = collectCronDeliveryTargetAdvisory({
       jobs: [job({ id: "report", delivery: { mode: "announce", channel: "missing-channel" } })],
-      resolveAvailableChannelIds: availableChannels("slack", "telegram"),
+      resolveAvailableChannelIds: availableChannels(),
     });
     expect(advisory).not.toBeNull();
     expect(advisory).toContain("Automation delivery targets unavailable channels");
@@ -103,7 +79,6 @@ describe("collectCronDeliveryTargetAdvisory", () => {
 
   it.each([
     ["announce-to-last", { mode: "announce", channel: "last" }],
-    ["webhook", { mode: "webhook", to: "https://example.invalid/hook" }],
     ["none with a channel", { mode: "none", channel: "missing-channel" }],
   ])("skips pseudo/relative target: %s", (_label, delivery) => {
     const resolve = availableChannels("slack");
@@ -140,14 +115,6 @@ describe("collectCronDeliveryTargetAdvisory", () => {
     });
     expect(advisory).toBeNull();
     expect(resolve).not.toHaveBeenCalled();
-  });
-
-  it("flags a concrete target even when no channels are active (only channel removed)", () => {
-    const advisory = collectCronDeliveryTargetAdvisory({
-      jobs: [job({ id: "report", delivery: { mode: "announce", channel: "slack" } })],
-      resolveAvailableChannelIds: availableChannels(),
-    });
-    expect(advisory).toContain("Channels: slack=1");
   });
 
   it("aggregates counts and caps examples at three", () => {

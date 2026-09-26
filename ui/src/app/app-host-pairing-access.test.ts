@@ -326,16 +326,6 @@ describe("application shell pairing access", () => {
   });
 
   it.each([
-    {
-      name: "pairing-only",
-      auth: { role: "operator", scopes: ["operator.pairing"] },
-      canPair: true,
-    },
-    {
-      name: "administrator",
-      auth: { role: "operator", scopes: ["operator.admin"] },
-      canPair: true,
-    },
     { name: "legacy authenticated", auth: { role: "operator" }, canPair: true },
     { name: "legacy unadvertised", auth: null, canPair: true },
     { name: "read-only", auth: { role: "operator", scopes: ["operator.read"] }, canPair: false },

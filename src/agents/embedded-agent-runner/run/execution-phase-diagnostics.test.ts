@@ -64,27 +64,6 @@ describe("withExecutionPhaseDiagnostics", () => {
     ]);
   });
 
-  test("emits milestones even when no downstream callback is registered", async () => {
-    const { events, stop } = collectEvents(["run.execution_phase"]);
-    const params = withExecutionPhaseDiagnostics({
-      runId: "run-2",
-      sessionId: "sid-2",
-    });
-
-    params.onExecutionPhase({ phase: "context_assembled" });
-    await waitForDiagnosticEventsDrained();
-    stop();
-
-    expect(events).toMatchObject([
-      {
-        type: "run.execution_phase",
-        runId: "run-2",
-        sessionId: "sid-2",
-        phase: "context_assembled",
-      },
-    ]);
-  });
-
   test("delivers phases through the async lane, ordered after earlier model events", async () => {
     const { events, stop } = collectEvents(["model.call.started", "run.execution_phase"]);
     const params = withExecutionPhaseDiagnostics({

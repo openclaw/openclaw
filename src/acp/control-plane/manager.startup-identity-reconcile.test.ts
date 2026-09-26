@@ -14,6 +14,19 @@ import {
 describe("AcpSessionManager startup identity reconcile", () => {
   installAcpSessionManagerTestLifecycle();
 
+  function listSession(acp: SessionAcpMeta, sessionKey: string) {
+    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
+      {
+        cfg: baseCfg,
+        storePath: "/tmp/sessions-acp.json",
+        sessionKey,
+        storeSessionKey: sessionKey,
+        entry: { sessionId: "session-1", updatedAt: Date.now(), acp },
+        acp,
+      },
+    ]);
+  }
+
   it("reconciles pending ACP identities during startup scan", async () => {
     const runtimeState = createRuntime();
     runtimeState.getStatus.mockResolvedValue({
@@ -40,20 +53,7 @@ describe("AcpSessionManager startup identity reconcile", () => {
       },
     };
     const sessionKey = "agent:codex:acp:session-1";
-    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
-      {
-        cfg: baseCfg,
-        storePath: "/tmp/sessions-acp.json",
-        sessionKey,
-        storeSessionKey: sessionKey,
-        entry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-          acp: metaState.currentMeta,
-        },
-        acp: metaState.currentMeta,
-      },
-    ]);
+    listSession(metaState.currentMeta, sessionKey);
     hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
       const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
       return {
@@ -93,20 +93,7 @@ describe("AcpSessionManager startup identity reconcile", () => {
         lastUpdatedAt: Date.now(),
       },
     };
-    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
-      {
-        cfg: baseCfg,
-        storePath: "/tmp/sessions-acp.json",
-        sessionKey,
-        storeSessionKey: sessionKey,
-        entry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-          acp,
-        },
-        acp,
-      },
-    ]);
+    listSession(acp, sessionKey);
 
     const manager = new AcpSessionManager();
     const result = await manager.reconcilePendingSessionIdentities({ cfg: baseCfg });
@@ -133,20 +120,7 @@ describe("AcpSessionManager startup identity reconcile", () => {
         lastUpdatedAt: Date.now(),
       },
     };
-    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
-      {
-        cfg: baseCfg,
-        storePath: "/tmp/sessions-acp.json",
-        sessionKey,
-        storeSessionKey: sessionKey,
-        entry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-          acp: resolvedMeta,
-        },
-        acp: resolvedMeta,
-      },
-    ]);
+    listSession(resolvedMeta, sessionKey);
 
     const manager = new AcpSessionManager();
     const result = await manager.reconcilePendingSessionIdentities({ cfg: baseCfg });
@@ -173,16 +147,7 @@ describe("AcpSessionManager startup identity reconcile", () => {
         lastUpdatedAt: Date.now(),
       },
     };
-    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
-      {
-        cfg: baseCfg,
-        storePath: "/tmp/sessions-acp.json",
-        sessionKey,
-        storeSessionKey: sessionKey,
-        entry: { sessionId: "session-1", updatedAt: Date.now(), acp },
-        acp,
-      },
-    ]);
+    listSession(acp, sessionKey);
 
     const result = await new AcpSessionManager().reconcilePendingSessionIdentities({
       cfg: baseCfg,

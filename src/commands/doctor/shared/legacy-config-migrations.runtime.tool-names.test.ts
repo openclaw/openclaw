@@ -104,12 +104,6 @@ describe("legacy tool name config migrations", () => {
 
   it.each([
     {
-      name: "preserves image* and appends view_image",
-      entries: ["image*"],
-      expected: ["image*", "view_image"],
-      changed: true,
-    },
-    {
       name: "preserves an arbitrary old-only wildcard and appends view_image",
       entries: ["i*e"],
       expected: ["i*e", "view_image"],

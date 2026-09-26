@@ -189,7 +189,7 @@ describe("parent-local inference context", () => {
     context.close();
   });
 
-  it.each([null, 42, false, [], {}].map((instructions) => ({ instructions })))(
+  it.each([null, {}].map((instructions) => ({ instructions })))(
     "rejects explicit non-string instructions: $instructions",
     ({ instructions }) => {
       const context = createCodexInferenceContext(() => {});

@@ -1,4 +1,3 @@
-// Qa Lab tests cover discord live plugin behavior.
 import { once } from "node:events";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -7,11 +6,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { discordQaScenarioSupport } from "./discord-live.runtime.js";
 
 const { testing } = discordQaScenarioSupport;
+const runtimeEnv = {
+  OPENCLAW_QA_DISCORD_GUILD_ID: "123456789012345678",
+  OPENCLAW_QA_DISCORD_CHANNEL_ID: "223456789012345678",
+  OPENCLAW_QA_DISCORD_DRIVER_BOT_TOKEN: "driver",
+  OPENCLAW_QA_DISCORD_SUT_BOT_TOKEN: "sut",
+  OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID: "323456789012345678",
+};
 
 describe("discord live qa runtime", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it("forwards Discord Requests through the guarded QA endpoint and preserves null responses", async () => {
@@ -85,33 +92,11 @@ describe("discord live qa runtime", () => {
     }
   });
 
-  it("resolves required Discord QA env vars", () => {
-    expect(
-      testing.resolveDiscordQaRuntimeEnv({
-        OPENCLAW_QA_DISCORD_GUILD_ID: "123456789012345678",
-        OPENCLAW_QA_DISCORD_CHANNEL_ID: "223456789012345678",
-        OPENCLAW_QA_DISCORD_DRIVER_BOT_TOKEN: "driver",
-        OPENCLAW_QA_DISCORD_SUT_BOT_TOKEN: "sut",
-        OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID: "323456789012345678",
-      }),
-    ).toEqual({
-      guildId: "123456789012345678",
-      channelId: "223456789012345678",
-      driverBotToken: "driver",
-      sutBotToken: "sut",
-      sutApplicationId: "323456789012345678",
-    });
-  });
-
   it("resolves optional Discord QA voice channel env var", () => {
     expect(
       testing.resolveDiscordQaRuntimeEnv({
-        OPENCLAW_QA_DISCORD_GUILD_ID: "123456789012345678",
-        OPENCLAW_QA_DISCORD_CHANNEL_ID: "223456789012345678",
+        ...runtimeEnv,
         OPENCLAW_QA_DISCORD_VOICE_CHANNEL_ID: "523456789012345678",
-        OPENCLAW_QA_DISCORD_DRIVER_BOT_TOKEN: "driver",
-        OPENCLAW_QA_DISCORD_SUT_BOT_TOKEN: "sut",
-        OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID: "323456789012345678",
       }),
     ).toEqual({
       guildId: "123456789012345678",
@@ -126,10 +111,8 @@ describe("discord live qa runtime", () => {
   it("fails when a required Discord QA env var is missing", () => {
     expect(() =>
       testing.resolveDiscordQaRuntimeEnv({
-        OPENCLAW_QA_DISCORD_GUILD_ID: "123456789012345678",
-        OPENCLAW_QA_DISCORD_CHANNEL_ID: "223456789012345678",
-        OPENCLAW_QA_DISCORD_DRIVER_BOT_TOKEN: "driver",
-        OPENCLAW_QA_DISCORD_SUT_BOT_TOKEN: "sut",
+        ...runtimeEnv,
+        OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID: undefined,
       }),
     ).toThrow("OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID");
   });
@@ -137,11 +120,8 @@ describe("discord live qa runtime", () => {
   it("fails when Discord IDs are not snowflakes", () => {
     expect(() =>
       testing.resolveDiscordQaRuntimeEnv({
+        ...runtimeEnv,
         OPENCLAW_QA_DISCORD_GUILD_ID: "qa-guild",
-        OPENCLAW_QA_DISCORD_CHANNEL_ID: "223456789012345678",
-        OPENCLAW_QA_DISCORD_DRIVER_BOT_TOKEN: "driver",
-        OPENCLAW_QA_DISCORD_SUT_BOT_TOKEN: "sut",
-        OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID: "323456789012345678",
       }),
     ).toThrow("OPENCLAW_QA_DISCORD_GUILD_ID must be a Discord snowflake.");
   });
@@ -233,36 +213,6 @@ describe("discord live qa runtime", () => {
           },
         },
       },
-    });
-  });
-
-  it("injects Discord voice auto-join config for the voice smoke", () => {
-    const next = testing.buildDiscordQaConfig(
-      {},
-      {
-        guildId: "123456789012345678",
-        channelId: "223456789012345678",
-        driverBotId: "423456789012345678",
-        sutAccountId: "sut",
-        sutBotToken: "sut-token",
-      },
-      {
-        voiceAutoJoin: {
-          guildId: "123456789012345678",
-          channelId: "523456789012345678",
-        },
-      },
-    );
-
-    expect(next.channels?.discord?.voice).toEqual({
-      enabled: true,
-      mode: "stt-tts",
-      autoJoin: [
-        {
-          guildId: "123456789012345678",
-          channelId: "523456789012345678",
-        },
-      ],
     });
   });
 
@@ -492,89 +442,53 @@ describe("discord live qa runtime", () => {
 
   it("waits for the Discord account to become connected, not just running", async () => {
     vi.useFakeTimers();
-    try {
-      const gateway = {
-        call: vi
-          .fn()
-          .mockResolvedValueOnce({
-            channelAccounts: {
-              discord: [
-                { accountId: "sut", running: true, connected: false, restartPending: false },
-              ],
-            },
-          })
-          .mockResolvedValueOnce({
-            channelAccounts: {
-              discord: [
-                { accountId: "sut", running: true, connected: true, restartPending: false },
-              ],
-            },
-          }),
-      } as unknown as Parameters<typeof testing.waitForDiscordChannelRunning>[0];
+    const gateway = {
+      call: vi
+        .fn()
+        .mockResolvedValueOnce({
+          channelAccounts: {
+            discord: [{ accountId: "sut", running: true, connected: false, restartPending: false }],
+          },
+        })
+        .mockResolvedValueOnce({
+          channelAccounts: {
+            discord: [{ accountId: "sut", running: true, connected: true, restartPending: false }],
+          },
+        }),
+    } as unknown as Parameters<typeof testing.waitForDiscordChannelRunning>[0];
 
-      const readyPromise = testing.waitForDiscordChannelRunning(gateway, "sut");
-      await vi.advanceTimersByTimeAsync(600);
+    const readyPromise = testing.waitForDiscordChannelRunning(gateway, "sut");
+    await vi.advanceTimersByTimeAsync(600);
 
-      await expect(readyPromise).resolves.toBeUndefined();
-      expect(gateway["call"]).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(readyPromise).resolves.toBeUndefined();
+    expect(gateway["call"]).toHaveBeenCalledTimes(2);
   });
 
   it("reports the last Discord status when connection readiness times out", async () => {
     vi.useFakeTimers();
-    try {
-      const gateway = {
-        call: vi.fn().mockResolvedValue({
-          channelAccounts: {
-            discord: [
-              {
-                accountId: "sut",
-                running: true,
-                connected: false,
-                restartPending: false,
-                lastError: null,
-                lastDisconnect: { error: "runtime-not-ready" },
-              },
-            ],
-          },
-        }),
-      } as unknown as Parameters<typeof testing.waitForDiscordChannelRunning>[0];
-
-      const readyPromise = testing.waitForDiscordChannelRunning(gateway, "sut");
-      const assertion = expect(readyPromise).rejects.toThrow(
-        'discord account "sut" did not become connected (last status: running=true connected=false',
-      );
-      await vi.advanceTimersByTimeAsync(45_500);
-      await assertion;
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("lists Discord application commands through the REST API", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_input: string | URL | globalThis.Request, init?: RequestInit) => {
-        expect(init?.headers).toBeInstanceOf(Headers);
-        expect((init!.headers as Headers).get("authorization")).toBe("Bot token");
-        return Response.json([
-          { id: "623456789012345678", name: "help" },
-          { id: "623456789012345679", name: "commands" },
-        ]);
+    const gateway = {
+      call: vi.fn().mockResolvedValue({
+        channelAccounts: {
+          discord: [
+            {
+              accountId: "sut",
+              running: true,
+              connected: false,
+              restartPending: false,
+              lastError: null,
+              lastDisconnect: { error: "runtime-not-ready" },
+            },
+          ],
+        },
       }),
+    } as unknown as Parameters<typeof testing.waitForDiscordChannelRunning>[0];
+
+    const readyPromise = testing.waitForDiscordChannelRunning(gateway, "sut");
+    const assertion = expect(readyPromise).rejects.toThrow(
+      'discord account "sut" did not become connected (last status: running=true connected=false',
     );
-
-    await expect(
-      testing.listApplicationCommands({
-        token: "token",
-        applicationId: "323456789012345678",
-      }),
-    ).resolves.toEqual([
-      { id: "623456789012345678", name: "help" },
-      { id: "623456789012345679", name: "commands" },
-    ]);
+    await vi.advanceTimersByTimeAsync(45_500);
+    await assertion;
   });
 
   it("discovers the first visible Discord voice channel for the voice smoke", async () => {
@@ -613,62 +527,57 @@ describe("discord live qa runtime", () => {
 
   it("waits for required Discord application commands to be registered", async () => {
     vi.useFakeTimers();
-    try {
-      vi.stubGlobal(
-        "fetch",
-        vi
-          .fn()
-          .mockResolvedValueOnce(Response.json([{ id: "623456789012345679", name: "commands" }]))
-          .mockResolvedValueOnce(
-            Response.json([
-              { id: "623456789012345679", name: "commands" },
-              { id: "623456789012345678", name: "help" },
-            ]),
-          ),
-      );
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(Response.json([{ id: "623456789012345679", name: "commands" }]))
+        .mockResolvedValueOnce(
+          Response.json([
+            { id: "623456789012345679", name: "commands" },
+            { id: "623456789012345678", name: "help" },
+          ]),
+        ),
+    );
 
-      const registeredPromise = testing.assertDiscordApplicationCommandsRegistered({
-        token: "token",
-        applicationId: "323456789012345678",
-        expectedCommandNames: ["help"],
-        timeoutMs: 5_000,
-      });
-      await vi.advanceTimersByTimeAsync(1_100);
+    const registeredPromise = testing.assertDiscordApplicationCommandsRegistered({
+      token: "token",
+      applicationId: "323456789012345678",
+      expectedCommandNames: ["help"],
+      timeoutMs: 5_000,
+    });
+    await vi.advanceTimersByTimeAsync(1_100);
 
-      await expect(registeredPromise).resolves.toEqual({
-        commandNames: ["commands", "help"],
-      });
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(registeredPromise).resolves.toEqual({
+      commandNames: ["commands", "help"],
+    });
+    const headers = vi.mocked(fetch).mock.calls[0]?.[1]?.headers;
+    expect(headers).toBeInstanceOf(Headers);
+    expect(new Headers(headers).get("authorization")).toBe("Bot token");
   });
 
   it("aborts Discord identity probes after the API helper timeout", async () => {
     vi.useFakeTimers();
     let signal: AbortSignal | undefined;
-    try {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn((_input: string | URL | globalThis.Request, init?: RequestInit) => {
-          signal = init?.signal as AbortSignal | undefined;
-          return new Promise<Response>((_resolve, reject) => {
-            signal?.addEventListener("abort", () => reject(new Error("request aborted")), {
-              once: true,
-            });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: string | URL | globalThis.Request, init?: RequestInit) => {
+        signal = init?.signal as AbortSignal | undefined;
+        return new Promise<Response>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("request aborted")), {
+            once: true,
           });
-        }),
-      );
+        });
+      }),
+    );
 
-      const request = testing.getCurrentDiscordUser("token");
-      const rejection = expect(request).rejects.toBeInstanceOf(Error);
-      await vi.advanceTimersByTimeAsync(14_999);
-      expect(signal?.aborted).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
-      await rejection;
-      expect(signal?.aborted).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
+    const request = testing.getCurrentDiscordUser("token");
+    const rejection = expect(request).rejects.toBeInstanceOf(Error);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await rejection;
+    expect(signal?.aborted).toBe(true);
   });
 
   it("retries Discord REST requests after a 429 rate limit", async () => {

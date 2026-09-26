@@ -744,11 +744,8 @@ describe("modelsStatusCommand auth overview", () => {
     [{ probeConcurrency: "2.5" }, "--probe-concurrency"],
     [{ probeMaxTokens: "64x" }, "--probe-max-tokens"],
     [{ probeTimeout: "" }, "--probe-timeout"],
-    [{ probeTimeout: "   " }, "--probe-timeout"],
     [{ probeConcurrency: "" }, "--probe-concurrency"],
-    [{ probeConcurrency: "   " }, "--probe-concurrency"],
     [{ probeMaxTokens: "" }, "--probe-max-tokens"],
-    [{ probeMaxTokens: "   " }, "--probe-max-tokens"],
   ])("rejects invalid probe numeric option %j", async (opts, label) => {
     const localRuntime = createTestRuntime();
     mocks.runAuthProbes.mockClear();

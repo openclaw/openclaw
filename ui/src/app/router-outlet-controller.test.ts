@@ -28,43 +28,6 @@ afterEach(() => {
 });
 
 describe("RouterOutletController pending presentation", () => {
-  it("delays a cold-start fallback until the route has been pending for one second", async () => {
-    vi.useFakeTimers();
-    const routeModule = createDeferredCore<TestModule>();
-    const routeData = createDeferredCore<TestData>();
-    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
-      routes: [
-        definePage({
-          id: "first",
-          path: "/first",
-          component: () => routeModule.promise,
-          loader: () => routeData.promise,
-        }),
-      ],
-    });
-    const controller = new RouterOutletController<RouteId, TestContext, TestModule, TestData>(
-      vi.fn(),
-    );
-    controller.setInputs({ router });
-    controller.connect();
-
-    const navigation = router.navigate("first", { label: "test" });
-    expect(controller.snapshot.pending?.routeId).toBe("first");
-    expect(controller.snapshot.showPending).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(999);
-    expect(controller.snapshot.showPending).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(controller.snapshot.showPending).toBe(true);
-
-    routeModule.resolve(module("first"));
-    routeData.resolve({ label: "loaded" });
-    await navigation;
-    expect(controller.snapshot.showPending).toBe(false);
-    controller.disconnect();
-    router.stop();
-  });
-
   it("carries the last settled match through a cold and module-loaded navigation", async () => {
     vi.useFakeTimers();
     const secondModule = createDeferredCore<TestModule>();

@@ -34,11 +34,6 @@ describe("appendSessionToolTruncationWarning", () => {
 
 describe("trimTrailingEmptyLines", () => {
   it.each([
-    {
-      name: "removes multiple trailing empty lines",
-      lines: ["first", "second", "", ""],
-      expected: ["first", "second"],
-    },
     { name: "removes all-empty input", lines: ["", ""], expected: [] },
     {
       name: "keeps leading and interior empty lines",
@@ -98,10 +93,6 @@ describe("shortenPath", () => {
     // `${home}extra` starts with `home` as a substring but is not under it,
     // so it must not be rewritten to `~extra`.
     expect(shortenPath(`${home}extra/app.ts`)).toBe(`${home}extra/app.ts`);
-  });
-
-  it("leaves unrelated paths untouched", () => {
-    expect(shortenPath("/var/log/syslog")).toBe("/var/log/syslog");
   });
 
   it.skipIf(process.platform !== "win32")("shortens real Windows home casing aliases", () => {

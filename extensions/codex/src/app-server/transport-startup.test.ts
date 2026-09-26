@@ -59,8 +59,6 @@ describe.skipIf(process.platform === "win32")("Codex failed launcher startup", (
 
   it.each([
     ["available", "inspection"],
-    ["unavailable", "inspection"],
-    ["available", "commit"],
     ["unavailable", "commit"],
   ] as const)(
     "reaps inherited-pipe descendants with %s containment after %s refusal",

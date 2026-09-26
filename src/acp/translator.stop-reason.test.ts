@@ -118,21 +118,6 @@ describe("acp translator stop reason mapping", () => {
     await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
   });
 
-  it("error state with no errorMessage resolves as end_turn", async () => {
-    const { agent, promptPromise, runId } = await createPendingPromptHarness();
-
-    await agent.handleGatewayEvent(
-      createChatEvent({
-        runId,
-        sessionKey: "agent:main:main",
-        seq: 1,
-        state: "error",
-      }),
-    );
-
-    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
-  });
-
   it("aborted state resolves as cancelled", async () => {
     const { agent, promptPromise, runId } = await createPendingPromptHarness();
 

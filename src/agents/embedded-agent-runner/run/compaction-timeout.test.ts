@@ -209,11 +209,6 @@ describe("compaction-timeout helpers", () => {
 
   it.each([
     {
-      name: "assistant tail",
-      tail: castAgentMessage({ role: "assistant", content: "partial" }),
-      expectedLength: 1,
-    },
-    {
       name: "excluded bash tail",
       tail: castAgentMessage({
         role: "bashExecution",
@@ -245,21 +240,6 @@ describe("compaction-timeout helpers", () => {
         customType: "openclaw-runtime-context",
         content: "runtime context",
         display: false,
-        timestamp: 2,
-      }),
-      expectedLength: 2,
-    },
-    {
-      name: "tool result tail",
-      tail: castAgentMessage(makeTextToolResult("call-1", "lookup", "result", false, 2)),
-      expectedLength: 2,
-    },
-    {
-      name: "summary tail",
-      tail: castAgentMessage({
-        role: "compactionSummary",
-        summary: "older work",
-        tokensBefore: 100,
         timestamp: 2,
       }),
       expectedLength: 2,

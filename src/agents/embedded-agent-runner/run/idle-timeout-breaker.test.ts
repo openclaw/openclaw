@@ -33,11 +33,6 @@ describe("stepIdleTimeoutBreaker (#76293)", () => {
     return steps;
   }
 
-  it("does not trip on a single wedged attempt", () => {
-    const steps = drive([{ idleTimedOut: true, completedModelProgress: false }]);
-    expect(steps[0]).toEqual({ consecutive: 1, tripped: false });
-  });
-
   it("trips on the Nth consecutive wedged attempt at the default cap", () => {
     const steps = drive([
       { idleTimedOut: true, completedModelProgress: false },

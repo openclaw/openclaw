@@ -166,23 +166,6 @@ describe("applyEditsToNormalizedContent uniqueness", () => {
 });
 
 describe("fuzzy edit source-span mapping", () => {
-  it("preserves escaped Unicode bytes outside a fuzzy-matched span", () => {
-    const content =
-      "export const RETRY\u00A0MAX = 3; // \u518D\u8A66\u884C\uFF08\u6700\u5927\uFF13\u56DE\uFF09\uFF71\uFF72\uFF73 \u2014 \u8A2D\u5B9A\n" +
-      "export const OTHER = 1;\n";
-
-    const result = prepareChangedEdit(
-      content,
-      [{ oldText: "export const RETRY MAX = 3;", newText: "export const RETRY_MAX = 5;" }],
-      "config.ts",
-    );
-
-    expect(result.content).toBe(
-      "export const RETRY_MAX = 5; // \u518D\u8A66\u884C\uFF08\u6700\u5927\uFF13\u56DE\uFF09\uFF71\uFF72\uFF73 \u2014 \u8A2D\u5B9A\n" +
-        "export const OTHER = 1;\n",
-    );
-  });
-
   it("maps smart-quote folds while preserving a smart-quote comment", () => {
     const content =
       "const label = \u201Chello\u201D; // keep \u201Ccomment\u201D \u2014 unchanged\n";

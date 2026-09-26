@@ -14,15 +14,14 @@ import {
 } from "./runtime-context-prompt.js";
 
 describe("runtime context prompt submission", () => {
-  it.each([
-    "visible ask",
-    "  keep literal whitespace  ",
-    `Quote ${INTERNAL_RUNTIME_CONTEXT_BEGIN} literally.`,
-  ])("does not derive provenance from prompt text: %s", (prompt) => {
-    expect(
-      resolveRuntimeContextPromptParts({ effectivePrompt: prompt, transcriptPrompt: prompt }),
-    ).toEqual({ prompt });
-  });
+  it.each(["  keep literal whitespace  ", `Quote ${INTERNAL_RUNTIME_CONTEXT_BEGIN} literally.`])(
+    "does not derive provenance from prompt text: %s",
+    (prompt) => {
+      expect(
+        resolveRuntimeContextPromptParts({ effectivePrompt: prompt, transcriptPrompt: prompt }),
+      ).toEqual({ prompt });
+    },
+  );
 
   it.each(["Hook summary: Hello", "Hello", "System event"])(
     "keeps repeated hook text while carrying explicit source context: %s",

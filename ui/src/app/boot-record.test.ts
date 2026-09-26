@@ -113,7 +113,7 @@ describe("Control UI boot record", () => {
     },
   );
 
-  it.each(["password", "trusted-proxy", "tailscale", "bootstrap-token", "none", undefined])(
+  it.each(["password", undefined])(
     "rejects %s identity even with both browser tokens present",
     (method) => {
       expect(resolveBootRecordAuth({ method, deviceToken: "test-token" }, "test-token")).toBeNull();

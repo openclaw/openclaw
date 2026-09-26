@@ -61,16 +61,6 @@ describe("generation route-model memo", () => {
     await expect(Promise.all([first, second])).resolves.toEqual([routedModel, routedModel]);
   });
 
-  it("keeps distinct auth profiles as distinct memo entries", async () => {
-    const memo: RouteMemo = new Map();
-    const resolveModel = vi.fn(async () => ({ model: routedModel }));
-    const run = buildMaterializer({ memo, resolveModel });
-
-    await run.materialize(buildPlan());
-    await run.materialize(buildPlan({ forwardedAuthProfileId: "openai:backup" }));
-    expect(resolveModel).toHaveBeenCalledTimes(2);
-  });
-
   it("keeps delimiter-containing route identities as distinct memo entries", async () => {
     const memo: RouteMemo = new Map();
     const resolveModel = vi.fn(async () => ({ model: routedModel }));

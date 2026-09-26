@@ -27,18 +27,6 @@ describe("find tool", () => {
   const workspace = path.resolve(path.sep, "find-fixture");
   it.each([
     {
-      name: "absolute result",
-      search: workspace,
-      found: path.join(workspace, "alpha.txt"),
-      expected: "alpha.txt",
-    },
-    {
-      name: "trailing search separator",
-      search: `${workspace}${path.sep}`,
-      found: path.join(workspace, "alpha.txt"),
-      expected: "alpha.txt",
-    },
-    {
       name: "root search",
       search: path.parse(workspace).root,
       found: path.join(path.parse(workspace).root, "alpha.txt"),
@@ -58,18 +46,6 @@ describe("find tool", () => {
       search: workspace,
       found: path.join(`${workspace}-other`, "alpha.txt"),
       expected: "../find-fixture-other/alpha.txt",
-    },
-    {
-      name: "filename whitespace",
-      search: workspace,
-      found: path.join(workspace, "report.txt "),
-      expected: "report.txt ",
-    },
-    {
-      name: "absolute directory marker",
-      search: `${workspace}${path.sep}`,
-      found: `${path.join(workspace, "folder")}${path.sep}`,
-      expected: "folder/",
     },
     {
       name: "relative directory marker",

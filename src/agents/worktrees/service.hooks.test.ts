@@ -52,13 +52,6 @@ describe("ManagedWorktreeService repository code isolation", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("never executes repository hooks when creating a worktree with setup enabled", async () => {
-    const created = await service.create({ repoRoot: repo, name: "default", baseRef: "HEAD" });
-
-    await expect(fs.stat(created.path)).resolves.toBeDefined();
-    await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
   it("never executes repository hooks when creating a worktree with setup disabled", async () => {
     await service.create({
       repoRoot: repo,

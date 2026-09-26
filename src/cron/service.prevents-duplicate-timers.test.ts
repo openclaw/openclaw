@@ -21,10 +21,7 @@ installCronTestHooks({
 });
 
 describe("CronService", () => {
-  it.each([
-    { name: "the same store path", alias: "none" },
-    { name: "lexically different paths to the same store", alias: "lexical" },
-  ] as const)("avoids duplicate runs when two services share $name", async ({ alias }) => {
+  it("avoids duplicate runs when two services share lexically different paths to the same store", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
@@ -50,10 +47,7 @@ describe("CronService", () => {
       payload: { kind: "systemEvent", text: "hello" },
     });
 
-    let aliasedStorePath = store.storePath;
-    if (alias === "lexical") {
-      aliasedStorePath = `${path.dirname(store.storePath)}/../${path.basename(path.dirname(store.storePath))}/${path.basename(store.storePath)}`;
-    }
+    const aliasedStorePath = `${path.dirname(store.storePath)}/../${path.basename(path.dirname(store.storePath))}/${path.basename(store.storePath)}`;
 
     const cronB = new CronService({
       storePath: aliasedStorePath,

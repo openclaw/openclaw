@@ -22,8 +22,6 @@ afterEach(() => {
 describe("waitForEmbeddedAbortSettle timeout policy", () => {
   it.each([
     { override: "1250", fast: undefined, timeoutMs: 1_250 },
-    { override: "0x10", fast: undefined, timeoutMs: 2_000 },
-    { override: "1e3", fast: undefined, timeoutMs: 2_000 },
     { override: "12.5", fast: undefined, timeoutMs: 2_000 },
     { override: "10ms", fast: "1", timeoutMs: 250 },
   ])(

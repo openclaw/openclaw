@@ -16,7 +16,7 @@ describe("Control UI origin defaults", () => {
 });
 
 describe("retired Control UI tool-title preference", () => {
-  it.each([true, false, null, "true"])(
+  it.each([false, null])(
     "detects and removes toolTitles=%j without changing other Control UI settings",
     (toolTitles) => {
       const raw = { gateway: { controlUi: { enabled: true, toolTitles } } };

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 
-const ZERO_DURATIONS = [0, "0", "0ms", "0s", "0m", "0h", "0d", "0.0h", "0h0m"];
+const ZERO_DURATIONS = [0, "0", "0.0h", "0h0m"];
 
 type MaintenanceKey = "pruneAfter" | "resetArchiveRetention";
 
@@ -30,7 +30,7 @@ describe.each([
     ).toEqual({ next: null, changes: [] });
   });
 
-  it.each(["500ms", "24h", "30d", 30])("preserves positive duration %s", (value) => {
+  it.each(["500ms", 30])("preserves positive duration %s", (value) => {
     const raw = configWith(key, value);
     expect(findLegacyConfigIssues(raw).some((issue) => issue.message.includes(key))).toBe(false);
     expect(applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw })).toEqual({

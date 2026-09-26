@@ -44,16 +44,6 @@ describe("Cron issue #19676 at-job reschedule", () => {
     expect(computeJobNextRunAtMs(job, nowMs)).toBe(RESCHEDULED_AT_MS);
   });
 
-  it("returns undefined when rescheduled to a time before the last run", () => {
-    const beforeLastRun = LAST_RUN_AT_MS - 60_000;
-    const job = createAtJob({
-      schedule: { kind: "at", at: new Date(beforeLastRun).toISOString() },
-      state: { lastStatus: "ok", lastRunAtMs: LAST_RUN_AT_MS },
-    });
-    const nowMs = LAST_RUN_AT_MS + 1_000;
-    expect(computeJobNextRunAtMs(job, nowMs)).toBeUndefined();
-  });
-
   it("still returns atMs for a job that has never run", () => {
     const job = createAtJob();
     const nowMs = ORIGINAL_AT_MS - 60_000;

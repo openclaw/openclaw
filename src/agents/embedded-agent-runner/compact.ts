@@ -46,7 +46,6 @@ import type {
   CompactEmbeddedAgentSessionParams,
   CompactEmbeddedAgentSessionRuntimeParams,
 } from "./compact.types.js";
-import { containsRealConversationMessages } from "./compaction-diagnostics.js";
 import {
   buildBeforeCompactionHookMetrics,
   estimateTokensAfterCompaction,
@@ -600,7 +599,6 @@ export async function compactEmbeddedAgentSessionDirect(
 
 export const testing = {
   compactNativeCliSession,
-  containsRealConversationMessages,
   estimateTokensAfterCompaction,
   buildBeforeCompactionHookMetrics,
   prepareCompactionSessionAgent,

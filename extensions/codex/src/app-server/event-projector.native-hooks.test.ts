@@ -12,6 +12,32 @@ import {
   mockCallArg,
   forCurrentTurn,
 } from "./event-projector.test-harness.js";
+import type { CodexThreadItem } from "./protocol.js";
+
+function commandItem(
+  id: string,
+  overrides: Partial<
+    Pick<
+      CodexThreadItem,
+      "command" | "cwd" | "status" | "aggregatedOutput" | "exitCode" | "durationMs"
+    >
+  > = {},
+) {
+  return {
+    type: "commandExecution",
+    cwd: "/workspace",
+    processId: null,
+    source: "agent",
+    commandActions: [],
+    command: "pnpm test extensions/codex",
+    status: "completed",
+    aggregatedOutput: "ok",
+    exitCode: 0,
+    durationMs: 42,
+    id,
+    ...overrides,
+  };
+}
 
 registerCodexEventProjectorTestLifecycle();
 
@@ -29,36 +55,17 @@ describe("CodexAppServerEventProjector native tool hook projection", () => {
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
-        item: {
-          type: "commandExecution",
-          id: "cmd-observed",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
+        item: commandItem("cmd-observed", {
           status: "inProgress",
-          commandActions: [],
           aggregatedOutput: null,
           exitCode: null,
           durationMs: null,
-        },
+        }),
       }),
     );
     await projector.handleNotification(
       forCurrentTurn("item/completed", {
-        item: {
-          type: "commandExecution",
-          id: "cmd-observed",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput: "ok",
-          exitCode: 0,
-          durationMs: 42,
-        },
+        item: commandItem("cmd-observed"),
       }),
     );
 
@@ -94,19 +101,7 @@ describe("CodexAppServerEventProjector native tool hook projection", () => {
 
     await projector.handleNotification(
       forCurrentTurn("item/completed", {
-        item: {
-          type: "commandExecution",
-          id: "cmd-huge-duration",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput: "ok",
-          exitCode: 0,
-          durationMs: Number.MAX_SAFE_INTEGER,
-        },
+        item: commandItem("cmd-huge-duration", { durationMs: Number.MAX_SAFE_INTEGER }),
       }),
     );
 
@@ -135,19 +130,7 @@ describe("CodexAppServerEventProjector native tool hook projection", () => {
 
     await projector.handleNotification(
       forCurrentTurn("item/completed", {
-        item: {
-          type: "commandExecution",
-          id: "cmd-relayed",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput: "ok",
-          exitCode: 0,
-          durationMs: 42,
-        },
+        item: commandItem("cmd-relayed"),
       }),
     );
     expect(afterToolCall).not.toHaveBeenCalled();

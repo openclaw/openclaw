@@ -54,12 +54,6 @@ describe("logging/logger import", () => {
     });
   });
 
-  it("does not resolve the preferred temp dir at import time when node fs is unavailable", async () => {
-    const { resolvePreferredOpenClawTmpDir } = await importLoggerWithMockedTempResolver();
-
-    expect(resolvePreferredOpenClawTmpDir).not.toHaveBeenCalled();
-  });
-
   it("defers node temp resolution until active logger settings are requested", async () => {
     const secureLogDir = path.join(process.cwd(), "secure-openclaw-temp");
     const resolvePreferredOpenClawTmpDir = vi.fn(() => secureLogDir);

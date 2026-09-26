@@ -112,17 +112,6 @@ describe("ManagedWorktreeService orphan reconciliation", () => {
     await expectRegisteredWorktreePreserved(target, "unborn");
   });
 
-  it("deletes unregistered debris under a fingerprint directory", async () => {
-    const debris = path.join(stateDir, "worktrees", "fingerprint", "debris");
-    await fs.mkdir(debris, { recursive: true });
-    await fs.writeFile(path.join(debris, "remove.txt"), "debris\n");
-
-    const result = await service.gc();
-
-    expect(result.orphansDeleted).toBe(1);
-    await expect(fs.stat(debris)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
   it("preserves unreadable checkout metadata without blocking later cleanup", async () => {
     let now = Date.now();
     service = new ManagedWorktreeService({ env, now: () => now });

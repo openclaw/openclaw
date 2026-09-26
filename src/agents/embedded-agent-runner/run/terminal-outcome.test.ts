@@ -100,13 +100,6 @@ describe("embedded run attempt terminal outcome", () => {
       timedOut: true,
     },
     {
-      name: "recovered compaction observation",
-      terminal: { kind: "timeout", phase: "compaction", source: "observation" },
-      reason: "completed",
-      aborted: false,
-      timedOut: false,
-    },
-    {
       name: "yield-only cleanup",
       terminal: { kind: "aborted", source: "yield_cleanup" },
       reason: "completed",

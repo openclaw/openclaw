@@ -6,6 +6,17 @@ import {
   buildCodexPluginAppCacheKey,
 } from "./plugin-app-cache-key.js";
 
+function remoteStart() {
+  return {
+    transport: "websocket" as const,
+    command: "codex",
+    args: [],
+    url: "wss://codex-app-server.example.internal/ws",
+    authToken: "secret-token",
+    headers: {},
+  };
+}
+
 afterEach(() => {
   vi.unstubAllEnvs();
 });
@@ -14,14 +25,7 @@ describe("resolveCodexPluginAppCacheEndpoint", () => {
   it("keys plugin app inventory by initialized remote runtime identity", () => {
     const base = {
       appServer: {
-        start: {
-          transport: "websocket" as const,
-          command: "codex",
-          args: [],
-          url: "wss://codex-app-server.example.internal/ws",
-          authToken: "secret-token",
-          headers: {},
-        },
+        start: remoteStart(),
       },
       authProfileId: "profile-1",
     };
@@ -82,14 +86,7 @@ describe("resolveCodexPluginAppCacheEndpoint", () => {
   it("fingerprints the remote app-server runtime used by thread bindings", () => {
     const first = buildCodexAppServerRuntimeFingerprint({
       appServer: {
-        start: {
-          transport: "websocket",
-          command: "codex",
-          args: [],
-          url: "wss://codex-app-server.example.internal/ws",
-          authToken: "secret-token",
-          headers: {},
-        },
+        start: remoteStart(),
         connectionClass: "remote",
         remoteWorkspaceRoot: "/home/oai/openclaw-workspaces",
       },
@@ -100,14 +97,7 @@ describe("resolveCodexPluginAppCacheEndpoint", () => {
     });
     const second = buildCodexAppServerRuntimeFingerprint({
       appServer: {
-        start: {
-          transport: "websocket",
-          command: "codex",
-          args: [],
-          url: "wss://codex-app-server.example.internal/ws",
-          authToken: "secret-token",
-          headers: {},
-        },
+        start: remoteStart(),
         connectionClass: "remote",
       },
       runtimeIdentity: {

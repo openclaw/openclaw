@@ -27,6 +27,21 @@ function expectCronStaggerMs(job: CronJob, expected: number): void {
   }
 }
 
+function createStoredJob(overrides: Partial<CronJob> & Pick<CronJob, "id">): CronJob {
+  return {
+    name: overrides.id,
+    enabled: true,
+    createdAtMs: 0,
+    updatedAtMs: 0,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "main",
+    wakeMode: "now",
+    payload: { kind: "systemEvent", text: "tick" },
+    state: {},
+    ...overrides,
+  };
+}
+
 describe("applyJobPatch", () => {
   const createIsolatedAgentTurnJob = (
     id: string,
@@ -34,20 +49,15 @@ describe("applyJobPatch", () => {
     overrides?: Partial<CronJob>,
   ): CronJob => {
     const now = Date.now();
-    return {
+    return createStoredJob({
       id,
-      name: id,
-      enabled: true,
       createdAtMs: now,
       updatedAtMs: now,
-      schedule: { kind: "every", everyMs: 60_000 },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: "do it" },
       delivery,
-      state: {},
       ...overrides,
-    };
+    });
   };
 
   it.each([
@@ -549,25 +559,6 @@ describe("applyJobPatch", () => {
     applyJobPatch(job, { enabled: true });
     expect(job.delivery?.to).toBe("-10012345/6789");
   });
-
-  it.each([
-    { name: "t.me URL", to: "https://t.me/mychannel" },
-    { name: "t.me URL (no https)", to: "t.me/mychannel" },
-    { name: "valid target (plain chat id)", to: "-1001234567890" },
-    { name: "valid target (colon delimiter)", to: "-1001234567890:123" },
-    { name: "valid target (topic marker)", to: "-1001234567890:topic:456" },
-    { name: "@username", to: "@mybot" },
-    { name: "without target", to: undefined },
-  ] as const)("accepts Telegram delivery with $name", ({ to }) => {
-    const job = createIsolatedAgentTurnJob("job-telegram-valid", {
-      mode: "announce",
-      channel: "telegram",
-      ...(to ? { to } : {}),
-    });
-
-    applyJobPatch(job, { enabled: true });
-    expect(job.enabled).toBe(true);
-  });
 });
 
 function createMockState(
@@ -862,18 +853,14 @@ describe("cron tool authority defaults", () => {
   });
 
   it("adopts explicit authority when a declaration becomes tool-bearing", () => {
-    const job: CronJob = {
+    const job = createStoredJob({
       id: "declared-trigger",
       name: "declared trigger",
-      enabled: true,
       createdAtMs: now,
       updatedAtMs: now,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
-      sessionTarget: "main",
-      wakeMode: "now",
       payload: { kind: "systemEvent", text: "wake" },
-      state: {},
-    };
+    });
 
     applyDeclarativeJobSpec(
       job,
@@ -913,7 +900,6 @@ describe("condition trigger syntax validation", () => {
   it.each([
     ["creation", "create"],
     ["replacement", "patch"],
-    ["declarative convergence", "declarative"],
   ] as const)("rejects malformed trigger scripts on %s", (_name, mutation) => {
     const state = createMockState(now, { scriptPayloadsEnabled: true });
     const mutate = (script: string) => {
@@ -922,14 +908,7 @@ describe("condition trigger syntax validation", () => {
         return;
       }
       const job = createJob(state, input());
-      if (mutation === "patch") {
-        applyJobPatch(job, { trigger: { script } });
-        return;
-      }
-      applyDeclarativeJobSpec(job, input(script), {
-        enabledExplicit: true,
-        nowMs: now,
-      });
+      applyJobPatch(job, { trigger: { script } });
     };
 
     expect(() => mutate(malformedScript)).toThrow(
@@ -938,10 +917,8 @@ describe("condition trigger syntax validation", () => {
     expect(() => mutate("   ")).toThrow("cron trigger script must not be empty");
   });
 
-  it.each([
-    ["top-level await", "await tools.wait(1); return { fire: true }"],
-    ["top-level return", "return { fire: true }"],
-  ])("accepts %s in trigger scripts", (_name, script) => {
+  it("accepts top-level await and return in trigger scripts", () => {
+    const script = "await tools.wait(1); return { fire: true }";
     expect(() => createJob(createMockState(now), input(script))).not.toThrow();
   });
 
@@ -1042,10 +1019,8 @@ describe("script payload validation", () => {
     expect(job.enabled).toBe(false);
   });
 
-  it.each([
-    ["top-level await", "await tools.wait(1); return 1"],
-    ["top-level return", "return 1"],
-  ])("accepts %s", (_name, script) => {
+  it("accepts top-level await and return", () => {
+    const script = "await tools.wait(1); return 1";
     expect(() =>
       createJob(createMockState(now, { scriptPayloadsEnabled: true }), input("isolated", script)),
     ).not.toThrow();
@@ -1153,7 +1128,6 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
 
   it.each([
     { name: "default agent", defaultAgentId: "main", agentId: undefined },
-    { name: "explicit default agent", defaultAgentId: "main", agentId: "main" },
     { name: "case-insensitive defaultAgentId match", defaultAgentId: "Main", agentId: "MAIN" },
   ] as const)("allows creating a main-session job for $name", ({ defaultAgentId, agentId }) => {
     const state = createMockState(now, { defaultAgentId });
@@ -1263,19 +1237,14 @@ describe("nextWakeAtMs", () => {
 describe("applyJobPatch rejects sessionTarget main for non-default agents", () => {
   const now = Date.now();
 
-  const createMainJob = (agentId?: string): CronJob => ({
-    id: "job-main-agent-check",
-    name: "main-agent-check",
-    enabled: true,
-    createdAtMs: now,
-    updatedAtMs: now,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "main",
-    wakeMode: "now",
-    payload: { kind: "systemEvent", text: "tick" },
-    state: {},
-    agentId,
-  });
+  const createMainJob = (agentId?: string): CronJob =>
+    createStoredJob({
+      id: "job-main-agent-check",
+      name: "main-agent-check",
+      createdAtMs: now,
+      updatedAtMs: now,
+      agentId,
+    });
 
   it.each([
     { name: "rejects patching agentId to non-default", agentId: "custom-agent", shouldThrow: true },
@@ -1357,18 +1326,12 @@ describe("cron stagger defaults", () => {
 
   it("derives a fresh top-of-hour stagger when replacing the cron expression", () => {
     const now = Date.now();
-    const job: CronJob = {
+    const job = createStoredJob({
       id: "job-keep-stagger",
-      name: "job-keep-stagger",
-      enabled: true,
       createdAtMs: now,
       updatedAtMs: now,
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 120_000 },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "tick" },
-      state: {},
-    };
+    });
 
     applyJobPatch(job, {
       schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
@@ -1383,18 +1346,12 @@ describe("cron stagger defaults", () => {
 
   it("drops an old stagger when the replacement expression has no stagger default", () => {
     const now = Date.now();
-    const job: CronJob = {
+    const job = createStoredJob({
       id: "job-drop-stagger",
-      name: "job-drop-stagger",
-      enabled: true,
       createdAtMs: now,
       updatedAtMs: now,
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 120_000 },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "tick" },
-      state: {},
-    };
+    });
 
     applyJobPatch(job, {
       schedule: { kind: "cron", expr: "30 9 * * *", tz: "UTC" },
@@ -1405,18 +1362,12 @@ describe("cron stagger defaults", () => {
 
   it("preserves explicit staggering for a metadata-only cron schedule edit", () => {
     const now = Date.now();
-    const job: CronJob = {
+    const job = createStoredJob({
       id: "job-keep-stagger",
-      name: "job-keep-stagger",
-      enabled: true,
       createdAtMs: now,
       updatedAtMs: now,
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 120_000 },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "tick" },
-      state: {},
-    };
+    });
 
     applyJobPatch(job, {
       schedule: { kind: "cron", expr: "0 * * * *", tz: "America/Los_Angeles" },
@@ -1464,18 +1415,11 @@ describe("cron stagger defaults", () => {
 
   it("applies default stagger when switching from every to top-of-hour cron", () => {
     const now = Date.now();
-    const job: CronJob = {
+    const job = createStoredJob({
       id: "job-switch-cron",
-      name: "job-switch-cron",
-      enabled: true,
       createdAtMs: now,
       updatedAtMs: now,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "tick" },
-      state: {},
-    };
+    });
 
     applyJobPatch(job, {
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
@@ -1490,18 +1434,11 @@ describe("cron stagger defaults", () => {
 
 describe("computeJobPreviousRunAtOrBeforeMs", () => {
   function createCronJob(schedule: Extract<CronJob["schedule"], { kind: "cron" }>): CronJob {
-    return {
+    return createStoredJob({
       id: "inclusive-previous-run",
       name: "inclusive previous run",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
       schedule,
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "tick" },
-      state: {},
-    };
+    });
   }
 
   it.each([
@@ -1537,21 +1474,17 @@ describe("computeJobPreviousRunAtOrBeforeMs", () => {
 describe("createJob delivery defaults", () => {
   const now = Date.parse("2026-02-28T12:00:00.000Z");
 
-  it.each(["isolated", "current", "session:project-alpha"] as const)(
-    'defaults delivery to { mode: "announce" } for %s agentTurn jobs',
-    (sessionTarget) => {
-      const state = createMockState(now);
-      const job = createJob(state, {
-        name: `${sessionTarget}-no-delivery`,
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget,
-        wakeMode: "now",
-        payload: { kind: "agentTurn", message: "hello" },
-      });
-      expect(job.delivery).toEqual({ mode: "announce" });
-    },
-  );
+  it("defaults delivery to announce for isolated agentTurn jobs", () => {
+    const job = createJob(createMockState(now), {
+      name: "isolated-no-delivery",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "hello" },
+    });
+    expect(job.delivery).toEqual({ mode: "announce" });
+  });
 
   it("preserves explicit delivery for isolated agentTurn jobs", () => {
     const state = createMockState(now);

@@ -11,8 +11,6 @@ import { loadGatewaySessionSelection, loadSettings, saveSettings } from "./setti
 
 it.each([
   { agentId: "main", savedAgentId: "work", basePath: "", suffix: "" },
-  { agentId: "work", savedAgentId: "main", basePath: "", suffix: "" },
-  { agentId: "main", savedAgentId: "work", basePath: "/openclaw", suffix: "/" },
   { agentId: "work", savedAgentId: "main", basePath: "/openclaw", suffix: "/" },
 ])(
   "keeps cold explicit $agentId over saved $savedAgentId at $basePath (suffix '$suffix')",

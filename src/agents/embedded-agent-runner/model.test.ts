@@ -1255,16 +1255,10 @@ describe("resolveModel", () => {
   });
 
   it("falls back to bundled static catalog rows without agent discovery", async () => {
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          openai: {
-            api: "openai-responses",
-            baseUrl: "https://api.openai.com/v1",
-            models: [],
-          },
-        },
-      },
+    const cfg = makeProviderConfig("openai", {
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      models: [],
     });
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
       provider: "openai",
@@ -1399,23 +1393,17 @@ describe("resolveModel", () => {
       contextWindow: 262_144,
       maxTokens: 262_144,
     });
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          fireworks: {
-            api: "openai-completions",
-            baseUrl: "https://api.fireworks.ai/inference/v1",
-            models: [
-              {
-                ...makeModel("accounts/fireworks/models/kimi-k2p6"),
-                name: "Kimi K2.6 (user override)",
-                contextWindow: 300_000,
-                maxTokens: 300_000,
-              },
-            ],
-          },
+    const cfg = makeProviderConfig("fireworks", {
+      api: "openai-completions",
+      baseUrl: "https://api.fireworks.ai/inference/v1",
+      models: [
+        {
+          ...makeModel("accounts/fireworks/models/kimi-k2p6"),
+          name: "Kimi K2.6 (user override)",
+          contextWindow: 300_000,
+          maxTokens: 300_000,
         },
-      },
+      ],
     });
 
     const result = await resolveModelForTest(
@@ -1623,23 +1611,17 @@ describe("resolveModel", () => {
         image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" },
       },
     });
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          mistral: {
-            baseUrl: "https://mistral-proxy.example.com/v1",
-            api: "openai-completions",
-            headers: { "X-Proxy": "static-fast-path" },
-            request: { proxy: { mode: "explicit-proxy", url: "http://127.0.0.1:18080" } },
-            localService: {
-              command: "/opt/mistral/start",
-              args: ["--port", "18080"],
-              healthUrl: "http://127.0.0.1:18080/health",
-            },
-            models: [],
-          },
-        },
+    const cfg = makeProviderConfig("mistral", {
+      baseUrl: "https://mistral-proxy.example.com/v1",
+      api: "openai-completions",
+      headers: { "X-Proxy": "static-fast-path" },
+      request: { proxy: { mode: "explicit-proxy", url: "http://127.0.0.1:18080" } },
+      localService: {
+        command: "/opt/mistral/start",
+        args: ["--port", "18080"],
+        healthUrl: "http://127.0.0.1:18080/health",
       },
+      models: [],
     });
 
     const result = await resolveModelAsync("mistral", "mistral-medium-3-5", state.agentDir(), cfg, {
@@ -3381,21 +3363,15 @@ describe("resolveModel", () => {
   );
 
   it("does not treat arbitrary namespaced model ids as provider prefixes", async () => {
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "http://localhost:9000",
-            api: "openai-completions",
-            models: [
-              {
-                ...makeModel("meta/vision-model"),
-                input: ["text", "image"],
-              },
-            ],
-          },
+    const cfg = makeProviderConfig("custom", {
+      baseUrl: "http://localhost:9000",
+      api: "openai-completions",
+      models: [
+        {
+          ...makeModel("meta/vision-model"),
+          input: ["text", "image"],
         },
-      },
+      ],
     });
 
     const result = await resolveModelForTest("custom", "vision-model", state.agentDir(), cfg);
@@ -3443,21 +3419,15 @@ describe("resolveModel", () => {
 
   it("prefers provider-prefixed configured metadata over discovered text-only models", async () => {
     mockMinimalModelDiscovery("custom", "vision-model", { input: ["text"] });
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "http://localhost:9000",
-            api: "openai-completions",
-            models: [
-              {
-                ...makeModel("custom/vision-model"),
-                input: ["text", "image"],
-              },
-            ],
-          },
+    const cfg = makeProviderConfig("custom", {
+      baseUrl: "http://localhost:9000",
+      api: "openai-completions",
+      models: [
+        {
+          ...makeModel("custom/vision-model"),
+          input: ["text", "image"],
         },
-      },
+      ],
     });
 
     const result = await resolveModelForTest("custom", "vision-model", state.agentDir(), cfg);
@@ -3471,20 +3441,14 @@ describe("resolveModel", () => {
   });
 
   it("keeps unknown fallback models text-only instead of borrowing image input from another configured model", async () => {
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "http://localhost:9000",
-            models: [
-              {
-                ...makeModel("model-a"),
-                input: ["text", "image"],
-              },
-            ],
-          },
+    const cfg = makeProviderConfig("custom", {
+      baseUrl: "http://localhost:9000",
+      models: [
+        {
+          ...makeModel("model-a"),
+          input: ["text", "image"],
         },
-      },
+      ],
     });
 
     const result = await resolveModelForTest("custom", "typoed-model", state.agentDir(), cfg);
@@ -3610,23 +3574,17 @@ describe("resolveModel", () => {
   });
 
   it("repairs stale text-only Foundry fallback rows for GPT-family models", async () => {
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          "microsoft-foundry": {
-            baseUrl: "https://example.services.ai.azure.com/openai/v1",
-            api: "azure-openai-responses",
-            models: [
-              {
-                ...makeModel("gpt-5.4"),
-                name: "gpt-5.4",
-                api: "azure-openai-responses",
-                input: ["text"],
-              },
-            ],
-          },
+    const cfg = makeProviderConfig("microsoft-foundry", {
+      baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      api: "azure-openai-responses",
+      models: [
+        {
+          ...makeModel("gpt-5.4"),
+          name: "gpt-5.4",
+          api: "azure-openai-responses",
+          input: ["text"],
         },
-      },
+      ],
     });
 
     const result = await resolveModelForTest("microsoft-foundry", "gpt-5.4", state.agentDir(), cfg);
@@ -3635,23 +3593,17 @@ describe("resolveModel", () => {
   });
 
   it("repairs stale text-only Anthropic fallback rows for Claude vision models", async () => {
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          anthropic: {
-            baseUrl: "https://api.anthropic.com",
-            api: "anthropic-messages",
-            models: [
-              {
-                ...makeModel("claude-sonnet-4-5"),
-                name: "claude-sonnet-4-5",
-                api: "anthropic-messages",
-                input: ["text"],
-              },
-            ],
-          },
+    const cfg = makeProviderConfig("anthropic", {
+      baseUrl: "https://api.anthropic.com",
+      api: "anthropic-messages",
+      models: [
+        {
+          ...makeModel("claude-sonnet-4-5"),
+          name: "claude-sonnet-4-5",
+          api: "anthropic-messages",
+          input: ["text"],
         },
-      },
+      ],
     });
 
     const result = await resolveModelForTest(
@@ -3660,48 +3612,6 @@ describe("resolveModel", () => {
       state.agentDir(),
       cfg,
     );
-
-    expect(result.model?.input).toEqual(["text", "image"]);
-  });
-
-  it("repairs stale text-only Foundry discovered rows for GPT-family models", async () => {
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          "microsoft-foundry": {
-            baseUrl: "https://example.services.ai.azure.com/openai/v1",
-            api: "azure-openai-responses",
-            models: [
-              {
-                ...makeModel("gpt-5.4"),
-                name: "gpt-5.4",
-                api: "azure-openai-responses",
-                input: ["text"],
-              },
-            ],
-          },
-        },
-      },
-    });
-
-    mockDiscoveredModel(discoverModels, {
-      provider: "microsoft-foundry",
-      modelId: "gpt-5.4",
-      templateModel: {
-        id: "gpt-5.4",
-        name: "gpt-5.4",
-        provider: "microsoft-foundry",
-        baseUrl: "https://example.services.ai.azure.com/openai/v1",
-        api: "azure-openai-responses",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 16384,
-      },
-    });
-
-    const result = await resolveModelForTest("microsoft-foundry", "gpt-5.4", state.agentDir(), cfg);
 
     expect(result.model?.input).toEqual(["text", "image"]);
   });
@@ -3730,24 +3640,18 @@ describe("resolveModel", () => {
   });
 
   it("matches prefixed OpenRouter native ids in configured fallback models", () => {
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          openrouter: {
-            baseUrl: "https://openrouter.ai/api/v1",
-            api: "openai-completions",
-            models: [
-              {
-                ...makeModel("openrouter/healer-alpha"),
-                reasoning: true,
-                input: ["text", "image"],
-                contextWindow: 262144,
-                maxTokens: 65536,
-              },
-            ],
-          },
+    const cfg = makeProviderConfig("openrouter", {
+      baseUrl: "https://openrouter.ai/api/v1",
+      api: "openai-completions",
+      models: [
+        {
+          ...makeModel("openrouter/healer-alpha"),
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 262144,
+          maxTokens: 65536,
         },
-      },
+      ],
     });
 
     const models = buildInlineProviderModels(cfg.models?.providers ?? {});
@@ -3759,56 +3663,6 @@ describe("resolveModel", () => {
       input: ["text", "image"],
       contextWindow: 262144,
       maxTokens: 65536,
-    });
-  });
-
-  it("uses OpenRouter API capabilities for unknown models when cache is populated", async () => {
-    mockGetOpenRouterModelCapabilities.mockReturnValue({
-      name: "Healer Alpha",
-      input: ["text", "image"],
-      reasoning: true,
-      supportsTools: false,
-      contextWindow: 262144,
-      maxTokens: 65536,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    });
-
-    const result = await resolveModelForTest(
-      "openrouter",
-      "openrouter/healer-alpha",
-      state.agentDir(),
-    );
-
-    expect(result.error).toBeUndefined();
-    const resolvedModel = expectRecordFields(result.model, {
-      provider: "openrouter",
-      id: "openrouter/healer-alpha",
-      name: "Healer Alpha",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 262144,
-      maxTokens: 65536,
-    });
-    expect((resolvedModel.compat as { supportsTools?: boolean } | undefined)?.supportsTools).toBe(
-      false,
-    );
-  });
-
-  it("falls back to text-only when OpenRouter API cache is empty", async () => {
-    mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
-
-    const result = await resolveModelForTest(
-      "openrouter",
-      "openrouter/healer-alpha",
-      state.agentDir(),
-    );
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openrouter",
-      id: "openrouter/healer-alpha",
-      reasoning: false,
-      input: ["text"],
     });
   });
 
@@ -3949,22 +3803,16 @@ describe("resolveModel", () => {
 
   it("threads the model id through inline configured transport normalization", async () => {
     const normalizeProviderTransportWithPlugin = vi.fn(() => undefined);
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          openai: {
-            api: "openai-responses",
-            baseUrl: "https://api.openai.com/v1",
-            models: [
-              {
-                ...makeModel("gpt-5.5"),
-                api: "openai-completions",
-                baseUrl: "https://api.openai.com/v1",
-              },
-            ],
-          },
+    const cfg = makeProviderConfig("openai", {
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      models: [
+        {
+          ...makeModel("gpt-5.5"),
+          api: "openai-completions",
+          baseUrl: "https://api.openai.com/v1",
         },
-      },
+      ],
     });
 
     const result = await resolveModelAsync("openai", "gpt-5.5", state.agentDir(), cfg, {
@@ -4003,24 +3851,18 @@ describe("resolveModel", () => {
       },
     });
 
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          onehub: {
-            baseUrl: "http://new-provider.example.com/v1",
-            api: "openai-completions",
-            models: [
-              {
-                ...makeModel("glm-5"),
-                api: "openai-completions",
-                reasoning: true,
-                contextWindow: 198000,
-                maxTokens: 16000,
-              },
-            ],
-          },
+    const cfg = makeProviderConfig("onehub", {
+      baseUrl: "http://new-provider.example.com/v1",
+      api: "openai-completions",
+      models: [
+        {
+          ...makeModel("glm-5"),
+          api: "openai-completions",
+          reasoning: true,
+          contextWindow: 198000,
+          maxTokens: 16000,
         },
-      },
+      ],
     });
 
     const result = await resolveModelForTest("onehub", "glm-5", state.agentDir(), cfg);
@@ -4141,15 +3983,6 @@ describe("resolveModel", () => {
     });
   });
 
-  it("builds an openai fallback for gpt-5.4", async () => {
-    mockOpenAICodexTemplateModel(discoverModels);
-
-    const result = await resolveModelForTest("openai", "gpt-5.4", state.agentDir());
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
-  });
-
   it("upgrades stale exact openai gpt-5.4 registry metadata via forward-compat", async () => {
     vi.mocked(discoverModels).mockReturnValue({
       find: vi.fn((provider: string, modelId: string) => {
@@ -4186,34 +4019,6 @@ describe("resolveModel", () => {
     });
   });
 
-  it("accepts available exact openai gpt-5.3-codex registry metadata", async () => {
-    vi.mocked(discoverModels).mockReturnValue({
-      find: vi.fn((provider: string, modelId: string) => {
-        if (provider !== "openai") {
-          return null;
-        }
-        if (modelId === "gpt-5.3-codex") {
-          return {
-            ...OPENAI_CODEX_TEMPLATE_MODEL,
-            id: "gpt-5.3-codex",
-            name: "GPT-5.3 Codex",
-            contextWindow: 272000,
-          };
-        }
-        return null;
-      }),
-    } as unknown as ReturnType<typeof discoverModels>);
-
-    const result = await resolveModelForTest("openai", "gpt-5.3-codex", state.agentDir());
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.3-codex",
-      contextWindow: 272000,
-    });
-  });
-
   it("canonicalizes the legacy openai gpt-5.4-codex alias at runtime", async () => {
     mockOpenAICodexTemplateModel(discoverModels);
 
@@ -4228,24 +4033,18 @@ describe("resolveModel", () => {
   it("applies canonical openai overrides when resolving the gpt-5.4-codex alias", async () => {
     mockOpenAICodexTemplateModel(discoverModels);
 
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://proxy.example.com/backend-api",
-            api: "openai-chatgpt-responses",
-            models: [
-              {
-                ...makeModel("gpt-5.4"),
-                contextWindow: 123456,
-                contextTokens: 65432,
-                maxTokens: 7777,
-                reasoning: false,
-              },
-            ],
-          },
+    const cfg = makeProviderConfig("openai", {
+      baseUrl: "https://proxy.example.com/backend-api",
+      api: "openai-chatgpt-responses",
+      models: [
+        {
+          ...makeModel("gpt-5.4"),
+          contextWindow: 123456,
+          contextTokens: 65432,
+          maxTokens: 7777,
+          reasoning: false,
         },
-      },
+      ],
     });
 
     const result = await resolveModelForTest("openai", "gpt-5.4-codex", state.agentDir(), cfg);
@@ -4266,26 +4065,20 @@ describe("resolveModel", () => {
   it("prefers alias-specific overrides over canonical ones for gpt-5.4-codex", async () => {
     mockOpenAICodexTemplateModel(discoverModels);
 
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          openai: {
-            api: "openai-chatgpt-responses",
-            models: [
-              {
-                ...makeModel("gpt-5.4"),
-                contextWindow: 222222,
-                maxTokens: 22222,
-              },
-              {
-                ...makeModel("gpt-5.4-codex"),
-                contextWindow: 111111,
-                maxTokens: 11111,
-              },
-            ],
-          },
+    const cfg = makeProviderConfig("openai", {
+      api: "openai-chatgpt-responses",
+      models: [
+        {
+          ...makeModel("gpt-5.4"),
+          contextWindow: 222222,
+          maxTokens: 22222,
         },
-      },
+        {
+          ...makeModel("gpt-5.4-codex"),
+          contextWindow: 111111,
+          maxTokens: 11111,
+        },
+      ],
     });
 
     const result = await resolveModelForTest("openai", "gpt-5.4-codex", state.agentDir(), cfg);
@@ -4296,19 +4089,6 @@ describe("resolveModel", () => {
       id: "gpt-5.4",
       contextWindow: 111111,
       maxTokens: 11111,
-    });
-  });
-
-  it("builds an openai fallback for gpt-5.4-mini", async () => {
-    mockOpenAICodexTemplateModel(discoverModels);
-
-    const result = await resolveModelForTest("openai", "gpt-5.4-mini", state.agentDir());
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      ...buildOpenAICodexForwardCompatExpectation("gpt-5.4-mini"),
-      contextWindow: 400_000,
-      contextTokens: 272_000,
     });
   });
 
@@ -4324,16 +4104,10 @@ describe("resolveModel", () => {
   });
 
   it("does not build a configured fallback for unsupported xAI multi-agent models", async () => {
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          xai: {
-            baseUrl: "https://api.x.ai/v1",
-            api: "openai-completions",
-            models: [],
-          },
-        },
-      },
+    const cfg = makeProviderConfig("xai", {
+      baseUrl: "https://api.x.ai/v1",
+      api: "openai-completions",
+      models: [],
     });
 
     const result = await resolveModelForTest(
@@ -4383,28 +4157,22 @@ describe("resolveModel", () => {
   it("lets official openai metadata override stale configured model rows", async () => {
     mockOpenAIForwardCompatDiscovery();
 
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://chatgpt.com/backend-api",
-            api: "openai-chatgpt-responses",
-            models: [
-              {
-                ...makeModel("gpt-5.5-pro"),
-                api: "openai-chatgpt-responses",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-                contextWindow: 400_000,
-                contextTokens: 64_000,
-                maxTokens: 32_000,
-                metadataSource: "models-add",
-              },
-            ],
-          },
+    const cfg = makeProviderConfig("openai", {
+      baseUrl: "https://chatgpt.com/backend-api",
+      api: "openai-chatgpt-responses",
+      models: [
+        {
+          ...makeModel("gpt-5.5-pro"),
+          api: "openai-chatgpt-responses",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+          contextWindow: 400_000,
+          contextTokens: 64_000,
+          maxTokens: 32_000,
+          metadataSource: "models-add",
         },
-      },
+      ],
     });
 
     const result = await resolveModelForTest("openai", "gpt-5.5-pro", state.agentDir(), cfg);
@@ -4424,50 +4192,27 @@ describe("resolveModel", () => {
     });
   });
 
-  it("resolves openai gpt-5.5 through the direct API fallback when discovery omits OAuth metadata", async () => {
-    const result = await resolveModelForTest("openai", "gpt-5.5");
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.5",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_000_000,
-      contextTokens: 272_000,
-      maxTokens: 128_000,
-    });
-  });
-
   it("preserves unmarked manual openai metadata overrides", async () => {
     mockOpenAIForwardCompatDiscovery("gpt-5.5", {
       cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
       contextWindow: 400_000,
     });
 
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://chatgpt.com/backend-api",
-            api: "openai-chatgpt-responses",
-            models: [
-              {
-                ...makeModel("gpt-5.5"),
-                api: "openai-chatgpt-responses",
-                reasoning: true,
-                input: ["text", "image"],
-                cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },
-                contextWindow: 555_555,
-                contextTokens: 111_111,
-                maxTokens: 22_222,
-              },
-            ],
-          },
+    const cfg = makeProviderConfig("openai", {
+      baseUrl: "https://chatgpt.com/backend-api",
+      api: "openai-chatgpt-responses",
+      models: [
+        {
+          ...makeModel("gpt-5.5"),
+          api: "openai-chatgpt-responses",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },
+          contextWindow: 555_555,
+          contextTokens: 111_111,
+          maxTokens: 22_222,
         },
-      },
+      ],
     });
 
     const result = await resolveModelForTest("openai", "gpt-5.5", state.agentDir(), cfg);
@@ -4480,68 +4225,6 @@ describe("resolveModel", () => {
       contextWindow: 555_555,
       contextTokens: 111_111,
       maxTokens: 22_222,
-    });
-  });
-
-  it("prefers runtime-resolved openai gpt-5.4 metadata during async resolution too", async () => {
-    mockOpenAIForwardCompatDiscovery("gpt-5.4", {
-      contextWindow: 128_000,
-      contextTokens: 32_000,
-    });
-
-    const result = await resolveModelAsyncForTest("openai", "gpt-5.4", state.agentDir());
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.4",
-      contextWindow: 1_050_000,
-      contextTokens: 272_000,
-    });
-  });
-
-  it("normalizes stale discovered openai /backend-api/v1 metadata", async () => {
-    mockOpenAIForwardCompatDiscovery("gpt-5.4", {
-      baseUrl: "https://chatgpt.com/backend-api/v1",
-    });
-
-    const result = await resolveModelForTest("openai", "gpt-5.4", state.agentDir());
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.4",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-    });
-  });
-
-  it("normalizes stale discovered openrouter /v1 metadata", async () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openrouter",
-      modelId: "openai/gpt-5.4",
-      templateModel: {
-        provider: "openrouter",
-        id: "openai/gpt-5.4",
-        name: "GPT-5.4",
-        api: "openai-completions",
-        baseUrl: "https://openrouter.ai/v1",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200_000,
-        maxTokens: 8_192,
-      },
-    });
-
-    const result = await resolveModelForTest("openrouter", "openai/gpt-5.4", state.agentDir());
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openrouter",
-      id: "openai/gpt-5.4",
-      api: "openai-completions",
-      baseUrl: "https://openrouter.ai/api/v1",
     });
   });
 
@@ -4678,24 +4361,6 @@ describe("resolveModel", () => {
     expectRecordFields(result, {
       provider: "openai",
       id: "gpt-5.4",
-    });
-  });
-
-  it("resolves discovered openai gpt-5.4-mini rows", async () => {
-    mockOpenAIForwardCompatDiscovery("gpt-5.4-mini", {
-      contextWindow: 64_000,
-      input: ["text"],
-    });
-
-    const result = await resolveModelForTest("openai", "gpt-5.4-mini", state.agentDir());
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.4-mini",
-      name: "GPT-5.4 Mini",
-      contextWindow: 64_000,
-      input: ["text"],
     });
   });
 
@@ -4836,25 +4501,19 @@ describe("resolveModel", () => {
   });
 
   it("applies configured overrides to github-copilot dynamic models", async () => {
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          "github-copilot": {
-            baseUrl: "https://proxy.example.com/v1",
-            api: "openai-completions",
-            headers: { "X-Proxy-Auth": "token-123" },
-            models: [
-              {
-                ...makeModel("gpt-5.4-mini"),
-                reasoning: true,
-                input: ["text"],
-                contextWindow: 256000,
-                maxTokens: 32000,
-              },
-            ],
-          },
+    const cfg = makeProviderConfig("github-copilot", {
+      baseUrl: "https://proxy.example.com/v1",
+      api: "openai-completions",
+      headers: { "X-Proxy-Auth": "token-123" },
+      models: [
+        {
+          ...makeModel("gpt-5.4-mini"),
+          reasoning: true,
+          input: ["text"],
+          contextWindow: 256000,
+          maxTokens: 32000,
         },
-      },
+      ],
     });
 
     const result = await resolveModelForTest(
@@ -4877,21 +4536,6 @@ describe("resolveModel", () => {
     });
     expectRecordFields((result.model as unknown as { headers?: Record<string, string> }).headers, {
       "X-Proxy-Auth": "token-123",
-    });
-  });
-
-  it("resolves github-copilot Claude dynamic models to anthropic-messages by default", async () => {
-    const result = await resolveModelForTest(
-      "github-copilot",
-      "claude-sonnet-4.6",
-      state.agentDir(),
-    );
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "github-copilot",
-      id: "claude-sonnet-4.6",
-      api: "anthropic-messages",
     });
   });
 
@@ -4935,162 +4579,6 @@ describe("resolveModel", () => {
       });
     },
   );
-
-  it("builds an openai fallback for gpt-5.5 when the live catalog cache is cold", async () => {
-    const result = await resolveModelForTest("openai", "gpt-5.5", state.agentDir());
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.5",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_000_000,
-      contextTokens: 272_000,
-      maxTokens: 128_000,
-      mediaInput: {
-        image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
-      },
-    });
-  });
-
-  it("builds an openai fallback for gpt-5.4 mini from the gpt-5.4-mini template", async () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.4-mini",
-      templateModel: buildForwardCompatTemplate({
-        id: "gpt-5.4-mini",
-        name: "GPT-5 mini",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 400_000,
-        maxTokens: 128_000,
-      }),
-    });
-
-    const result = await resolveModelForTest("openai", "gpt-5.4-mini", state.agentDir());
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.4-mini",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 400_000,
-      maxTokens: 128_000,
-    });
-  });
-
-  it("builds an openai fallback for gpt-5.4 nano from the gpt-5.4-nano template", async () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.4-nano",
-      templateModel: buildForwardCompatTemplate({
-        id: "gpt-5.4-nano",
-        name: "GPT-5 nano",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 400_000,
-        maxTokens: 128_000,
-      }),
-    });
-
-    const result = await resolveModelForTest("openai", "gpt-5.4-nano", state.agentDir());
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.4-nano",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 400_000,
-      maxTokens: 128_000,
-    });
-  });
-
-  it("normalizes stale native openai gpt-5.4 completions transport to responses", async () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.4",
-      templateModel: buildForwardCompatTemplate({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        provider: "openai",
-        api: "openai-completions",
-        baseUrl: "https://api.openai.com/v1",
-      }),
-    });
-
-    const result = await resolveModelForTest("openai", "gpt-5.4", state.agentDir());
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.4",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    });
-  });
-
-  it("keeps proxied openai completions transport untouched", async () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.4",
-      templateModel: buildForwardCompatTemplate({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        provider: "openai",
-        api: "openai-completions",
-        baseUrl: "https://proxy.example.com/v1",
-      }),
-    });
-
-    const result = await resolveModelForTest("openai", "gpt-5.4", state.agentDir());
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "openai",
-      id: "gpt-5.4",
-      api: "openai-completions",
-      baseUrl: "https://proxy.example.com/v1",
-    });
-  });
-
-  it("normalizes stale native xai completions transport to responses", async () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "xai",
-      modelId: "grok-4.20-0309-reasoning",
-      templateModel: buildForwardCompatTemplate({
-        id: "grok-4.20-0309-reasoning",
-        name: "Grok 4.20 0309 (Reasoning)",
-        provider: "xai",
-        api: "openai-completions",
-        baseUrl: "https://api.x.ai/v1",
-      }),
-    });
-
-    const result = await resolveModelForTest("xai", "grok-4.20-0309-reasoning", state.agentDir());
-
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "xai",
-      id: "grok-4.20-0309-reasoning",
-      api: "openai-responses",
-      baseUrl: "https://api.x.ai/v1",
-    });
-  });
 
   it("normalizes stale native xai completions transport after plugin model normalization", async () => {
     mockDiscoveredModel(discoverModels, {

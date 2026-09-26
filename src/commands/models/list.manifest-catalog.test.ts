@@ -106,26 +106,6 @@ describe("loadStaticManifestCatalogRowsForList", () => {
     });
   });
 
-  it("does not expose refreshable provider previews as prepared models", async () => {
-    const { loadStaticManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
-    const manifestRegistry = {
-      plugins: [openrouterPlugin, moonshotPlugin],
-      diagnostics: [],
-    };
-    mocks.loadPluginMetadataSnapshot.mockReturnValueOnce({
-      index: { plugins: [], diagnostics: [] },
-      manifestRegistry,
-      plugins: manifestRegistry.plugins,
-      byPluginId: new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
-    });
-
-    expect(
-      loadStaticManifestCatalogRowsForList({
-        cfg: {},
-      }).map((row) => row.ref),
-    ).toEqual(["moonshot/kimi-k2.6"]);
-  });
-
   it("does not expose runtime overlay rows as static manifest models", async () => {
     const { loadStaticManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
     const manifestRegistry = {

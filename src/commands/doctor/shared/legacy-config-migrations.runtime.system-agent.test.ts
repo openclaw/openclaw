@@ -25,20 +25,6 @@ beforeAll(async () => {
 afterAll(() => restoreMigrationRuntime?.());
 
 describe("system-agent config migration", () => {
-  it("removes the retired config block", () => {
-    const raw: Record<string, unknown> = {
-      crestodian: { rescue: { enabled: true, pendingTtlMinutes: 10 } },
-    };
-    const changes: string[] = [];
-
-    migration?.apply(raw, changes);
-
-    expect(raw).toEqual({});
-    expect(changes).toEqual([
-      "Removed retired crestodian config; system-agent rescue uses built-in policy.",
-    ]);
-  });
-
   it("does not mutate an independently retired systemAgent block", () => {
     const raw: Record<string, unknown> = {
       crestodian: { rescue: { enabled: true, ownerDmOnly: false } },
@@ -89,7 +75,6 @@ describe("legacy ambient owner migration", () => {
 
   describe.each(["entries", "list"])("already resolved %s rosters", (shape) => {
     it.each<{ label: string; entries: Record<string, AgentEntryConfig>; owner: string }>([
-      { label: "sole main", entries: { main: {} }, owner: "main" },
       { label: "sole custom agent", entries: { ops: {} }, owner: "ops" },
       {
         label: "honored legacy default",

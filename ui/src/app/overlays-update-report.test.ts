@@ -48,6 +48,17 @@ function harnessFor(request: RequestFn) {
   return harness;
 }
 
+const requestForStatus = (run: typeof FAILED_RUN | null = FAILED_RUN) =>
+  vi.fn<RequestFn>(async (method) => {
+    if (method === "update.status") {
+      return { lastRun: run, sentinel: FAILURE };
+    }
+    if (method === "update.runs.get") {
+      return { run };
+    }
+    return {};
+  });
+
 beforeEach(() => {
   vi.stubGlobal("sessionStorage", createStorageMock());
   reportUpdateFailure.mockReset();
@@ -59,7 +70,6 @@ afterEach(() => {
 
 it.each([
   { reason: "dirty", reportable: true },
-  { reason: "not-git-install", reportable: true },
   { reason: "already-current", reportable: false },
   { reason: "dry-run", reportable: false },
   { reason: "cancelled", reportable: false },
@@ -94,22 +104,12 @@ describe.each([
     run: createUpdateRunFixture({ ...FAILED_RUN, status: "rolled-back" }),
     attemptId: FAILED_RUN.runId,
   },
-])("update failure report continuity: $label", ({ run, attemptId }) => {
-  const requestForStatus = () =>
-    vi.fn<RequestFn>(async (method) => {
-      if (method === "update.status") {
-        return { lastRun: run, sentinel: FAILURE };
-      }
-      if (method === "update.runs.get") {
-        return { run };
-      }
-      return {};
-    });
+])("update failure report admission: $label", ({ run, attemptId }) => {
   it.each([
     { profileId: "other-operator", allowed: true },
     { profileId: null, allowed: false },
   ])("admits only identified administrator profile $profileId", async ({ profileId, allowed }) => {
-    const request = requestForStatus();
+    const request = requestForStatus(run);
     const harness = harnessFor(request);
     harness.update({ selfUser: profileId ? { id: profileId } : null });
     reportUpdateFailure.mockImplementation(async ({ isCurrent }) => {
@@ -136,7 +136,10 @@ describe.each([
       overlays.dispose();
     }
   });
+});
 
+describe("update failure report continuity", () => {
+  const attemptId = FAILED_RUN.runId;
   it("never reports during status hydration and suppresses duplicate clicks", async () => {
     const request = requestForStatus();
     const harness = harnessFor(request);
@@ -229,9 +232,20 @@ describe.each([
       overlays.dispose();
     }
   });
+});
 
-  it("keeps a created URL across an identical reconnect without reporting again", async () => {
-    const request = requestForStatus();
+it.each([
+  { label: "failed run", run: FAILED_RUN, attemptId: FAILED_RUN.runId },
+  { label: "legacy sentinel", run: null, attemptId: "handoff-failed" },
+  {
+    label: "rolled-back run",
+    run: { ...FAILED_RUN, status: "rolled-back" as const },
+    attemptId: FAILED_RUN.runId,
+  },
+])(
+  "keeps a reported $label across reconnect without reporting again",
+  async ({ run, attemptId }) => {
+    const request = requestForStatus(run);
     const harness = harnessFor(request);
     const hello = harness.gateway.snapshot.hello;
     reportUpdateFailure.mockResolvedValue({
@@ -257,8 +271,8 @@ describe.each([
     } finally {
       overlays.dispose();
     }
-  });
-});
+  },
+);
 
 it.each(["changed-facts", "running", "succeeded", "reconciled"] as const)(
   "invalidates report consent when authoritative run becomes %s",

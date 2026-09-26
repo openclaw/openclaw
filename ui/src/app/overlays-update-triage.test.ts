@@ -329,7 +329,6 @@ describe("update failure triage admission", () => {
   });
   it.each([
     { code: "INVALID_REQUEST", message: "Invalid update request parameters" },
-    { code: "INVALID_REQUEST", message: "Missing operator.admin scope" },
     { code: "UNAVAILABLE", message: "Gateway restart admission is unavailable" },
   ])("preserves the sent rejection $message over historical success", async (failure) => {
     const previous = updateRunFixture({

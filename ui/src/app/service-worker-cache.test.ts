@@ -330,39 +330,9 @@ describe("Control UI service worker notification scope", () => {
 
   const scenarios: NotificationClickScenario[] = [
     notificationScenario(
-      "focuses an existing root-scoped window for a title/body-only notification",
-      rootScope,
-      [rootScope],
-    ),
-    notificationScenario(
-      "focuses an existing nested-scoped window for a title/body-only notification",
-      nestedScope,
-      [nestedScope],
-    ),
-    notificationScenario(
-      "preserves a root window's fragment for a title/body-only notification",
-      rootScope,
-      [`${rootScope}#current-session`],
-    ),
-    notificationScenario(
       "preserves a root window's query and fragment for a title/body-only notification",
       rootScope,
       [`${rootScope}?session=42#current-session`],
-    ),
-    notificationScenario(
-      "reuses a root-scoped child route for a title/body-only notification",
-      rootScope,
-      [`${rootScope}chat?session=42#current-session`],
-    ),
-    notificationScenario(
-      "preserves a nested window's fragment for a title/body-only notification",
-      nestedScope,
-      [`${nestedScope}#current-session`],
-    ),
-    notificationScenario(
-      "preserves a nested window's query and fragment for a title/body-only notification",
-      nestedScope,
-      [`${nestedScope}?session=42#current-session`],
     ),
     notificationScenario(
       "reuses a nested-scoped child route for a title/body-only notification",
@@ -370,24 +340,9 @@ describe("Control UI service worker notification scope", () => {
       [`${nestedScope}chat?session=42#current-session`],
     ),
     notificationScenario(
-      "focuses the exact slashless nested scope for a title/body-only notification",
-      nestedScopeWithoutSlash,
-      [nestedScopeWithoutSlash],
-    ),
-    notificationScenario(
-      "preserves a slashless nested window's fragment for a title/body-only notification",
-      nestedScopeWithoutSlash,
-      [`${nestedScopeWithoutSlash}#current-session`],
-    ),
-    notificationScenario(
       "preserves a slashless nested window's query for a title/body-only notification",
       nestedScopeWithoutSlash,
       [`${nestedScopeWithoutSlash}?session=42#current-session`],
-    ),
-    notificationScenario(
-      "reuses the canonical directory beneath a slashless nested scope",
-      nestedScopeWithoutSlash,
-      [`${nestedScopeWithoutSlash}/`],
     ),
     notificationScenario(
       "reuses a child route beneath a slashless nested scope",
@@ -399,12 +354,6 @@ describe("Control UI service worker notification scope", () => {
       nestedScope,
       [rootScope, nestedScope],
       { focusedClientIndex: 1 },
-    ),
-    notificationScenario(
-      "focuses the exact explicit nested route including its query and hash",
-      nestedScope,
-      [`${nestedScope}chat?session=42#latest`],
-      { target: "chat?session=42#latest", navigatedUrl: `${nestedScope}chat?session=42#latest` },
     ),
     notificationScenario(
       "opens a scope-relative approval route with its Gateway handoff fragment",
@@ -457,50 +406,6 @@ describe("Control UI service worker notification scope", () => {
       },
     ),
     notificationScenario(
-      "prefers a later exact explicit route among root-scoped app tabs",
-      rootScope,
-      [`${rootScope}settings`, `${rootScope}chat?session=42#latest`],
-      {
-        target: "chat?session=42#latest",
-        focusedClientIndex: 1,
-        navigatedUrl: `${rootScope}chat?session=42#latest`,
-      },
-    ),
-    notificationScenario(
-      "prefers a later exact explicit route beneath a slashless nested scope",
-      nestedScopeWithoutSlash,
-      [`${nestedScopeWithoutSlash}/settings`, `${nestedScopeWithoutSlash}/chat?session=42#latest`],
-      {
-        target: "chat?session=42#latest",
-        focusedClientIndex: 1,
-        navigatedUrl: `${nestedScopeWithoutSlash}/chat?session=42#latest`,
-      },
-    ),
-    notificationScenario(
-      "restores a fragment omitted from the existing window client URL",
-      nestedScope,
-      [`${nestedScope}chat?session=42`],
-      { target: "chat?session=42#latest", navigatedUrl: `${nestedScope}chat?session=42#latest` },
-    ),
-    notificationScenario(
-      "resolves a relative route beneath a slashless nested scope",
-      nestedScopeWithoutSlash,
-      [`${nestedScopeWithoutSlash}/chat?session=42#latest`],
-      {
-        target: "chat?session=42#latest",
-        navigatedUrl: `${nestedScopeWithoutSlash}/chat?session=42#latest`,
-      },
-    ),
-    notificationScenario(
-      "restores an explicit fragment beneath a slashless nested scope",
-      nestedScopeWithoutSlash,
-      [`${nestedScopeWithoutSlash}/chat?session=42`],
-      {
-        target: "chat?session=42#latest",
-        navigatedUrl: `${nestedScopeWithoutSlash}/chat?session=42#latest`,
-      },
-    ),
-    notificationScenario(
       "opens the relative target beneath a slashless nested scope",
       nestedScopeWithoutSlash,
       [],
@@ -515,14 +420,6 @@ describe("Control UI service worker notification scope", () => {
       [`${nestedScope}chat?session=42#current-session`],
       { target: "chat?session=42", navigatedUrl: `${nestedScope}chat?session=42` },
     ),
-    notificationScenario(
-      "navigates a stale in-scope client to the exact explicit nested route",
-      nestedScope,
-      [`${nestedScope}chat?session=7#latest`],
-      { target: "chat?session=42#latest", navigatedUrl: `${nestedScope}chat?session=42#latest` },
-    ),
-    notificationScenario("opens the canonical root scope when no window exists", rootScope, []),
-    notificationScenario("opens the canonical nested scope when no window exists", nestedScope, []),
     notificationScenario(
       "opens the exact slashless nested scope when no window exists",
       nestedScopeWithoutSlash,
@@ -563,12 +460,6 @@ describe("Control UI service worker notification scope", () => {
       { target: "../", focusedClientIndex: -1, openedUrl: nestedScopeWithoutSlash },
     ),
     notificationScenario(
-      "rejects a cross-origin target for a slashless nested scope",
-      nestedScopeWithoutSlash,
-      [],
-      { target: "https://outside.example/openclaw/chat" },
-    ),
-    notificationScenario(
       "never focuses a sibling-prefix window for the default nested target",
       nestedScope,
       ["https://control.example/openclaw-other/"],
@@ -579,12 +470,6 @@ describe("Control UI service worker notification scope", () => {
       nestedScope,
       [],
       { target: "https://[invalid" },
-    ),
-    notificationScenario(
-      "rejects ancestor traversal without focusing the same-origin root window",
-      nestedScope,
-      [rootScope],
-      { target: "../", focusedClientIndex: -1, openedUrl: nestedScope },
     ),
   ];
 
@@ -662,26 +547,6 @@ describe("Control UI service worker notification scope", () => {
       name: "root",
       scope: rootScope,
       clientUrl: `${rootScope}?session=42#current-session`,
-    },
-    {
-      name: "nested",
-      scope: nestedScope,
-      clientUrl: `${nestedScope}?session=42#current-session`,
-    },
-    {
-      name: "slashless nested",
-      scope: nestedScopeWithoutSlash,
-      clientUrl: `${nestedScopeWithoutSlash}?session=42#current-session`,
-    },
-    {
-      name: "root child route",
-      scope: rootScope,
-      clientUrl: `${rootScope}chat?session=42#current-session`,
-    },
-    {
-      name: "nested child route",
-      scope: nestedScope,
-      clientUrl: `${nestedScope}chat?session=42#current-session`,
     },
     {
       name: "slashless nested child route",

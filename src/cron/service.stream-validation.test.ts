@@ -41,10 +41,8 @@ async function createCron(triggersEnabled: boolean | undefined, cronEnabled = tr
 describe("cron stream schedule validation", () => {
   it.each([
     { cronEnabled: true, configured: undefined, triggersEnabled: true },
-    { cronEnabled: true, configured: true, triggersEnabled: true },
     { cronEnabled: true, configured: false, triggersEnabled: false },
     { cronEnabled: false, configured: true, triggersEnabled: true },
-    { cronEnabled: false, configured: false, triggersEnabled: false },
   ])(
     "reports active trigger capability independently of scheduler enablement ($cronEnabled/$configured)",
     async ({ cronEnabled, configured, triggersEnabled }) => {

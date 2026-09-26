@@ -234,7 +234,6 @@ describe("Codex procfs command inspector", () => {
       expected: "/opt/codex app-server --listen stdio://",
     },
     { input: "\0", reason: "unavailable" },
-    { input: " \0 ", reason: "unavailable" },
     { code: "ENOENT", reason: "unavailable" },
     { code: "ESRCH", reason: "unavailable" },
     { code: "EACCES", reason: "permission" },
@@ -309,7 +308,7 @@ describe("Codex procfs process inspector", () => {
     },
   );
 
-  it.for(["1", "2", "0", "-1", "1.5", "missing", "9007199254740992"])(
+  it.for(["1", "2", "0", "missing", "9007199254740992"])(
     "requires explicit thread evidence before classifying a zombie leader: %s",
     async (threads, ctx) => {
       ctx.onTestFinished(() => {

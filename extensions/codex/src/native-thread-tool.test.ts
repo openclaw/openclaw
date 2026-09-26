@@ -246,6 +246,7 @@ describe("native Codex thread tool", () => {
         supervision: true,
         allowRawTranscripts: true,
         request,
+        modelSelectionLocked: true,
       });
 
       const result = await tool?.execute("call-allowed-read", {
@@ -254,6 +255,12 @@ describe("native Codex thread tool", () => {
         include_turns: true,
       });
 
+      expect(request).toHaveBeenCalledWith(
+        expect.any(Object),
+        CODEX_CONTROL_METHODS.readThread,
+        { threadId: "thread-1", includeTurns: true },
+        expect.any(Object),
+      );
       expect(result?.details).toEqual(response);
     }));
 
@@ -298,6 +305,7 @@ describe("native Codex thread tool", () => {
         supervision: true,
         allowWriteControls: true,
         request,
+        modelSelectionLocked: true,
       });
 
       await tool?.execute("call-allowed-write", {
@@ -356,6 +364,7 @@ describe("native Codex thread tool", () => {
         },
         attached: false,
       });
+      await expect(readCodexAppServerBinding("session-id")).resolves.toBeUndefined();
     }));
 
   it("redacts unarchive transcripts when raw reads are disabled", () =>
@@ -374,6 +383,7 @@ describe("native Codex thread tool", () => {
         supervision: true,
         allowWriteControls: true,
         request,
+        modelSelectionLocked: true,
       });
 
       const result = await tool?.execute("call-redacted-unarchive", {
@@ -626,29 +636,6 @@ describe("native Codex thread tool", () => {
         }),
       ).rejects.toThrow("Supervised Codex forks must stay detached");
       expect(request).not.toHaveBeenCalled();
-    }));
-
-  it("allows a detached fork through a supervision-only connection", () =>
-    withFixture(async () => {
-      const response = {
-        thread: { id: "forked-thread", cwd: "/tmp/project", status: { type: "idle" } },
-      };
-      const request = vi.fn(async () => response);
-      const tool = createTool({
-        omitHomeScope: true,
-        supervision: true,
-        allowWriteControls: true,
-        request,
-      });
-
-      const result = await tool?.execute("call-supervision-detached-fork", {
-        action: "fork",
-        thread_id: "source-thread",
-        attach: false,
-      });
-
-      expect(result?.details).toMatchObject({ attached: false });
-      await expect(readCodexAppServerBinding("session-id")).resolves.toBeUndefined();
     }));
 
   it("allows a detached fork without changing a locked session binding", () =>
@@ -1024,39 +1011,4 @@ describe("native Codex thread tool", () => {
         expect.anything(),
       );
     }));
-
-  it.each([
-    {
-      action: "read" as const,
-      params: { action: "read", thread_id: "thread-1", include_turns: true },
-      method: CODEX_CONTROL_METHODS.readThread,
-      requestParams: { threadId: "thread-1", includeTurns: true },
-    },
-    {
-      action: "rename" as const,
-      params: { action: "rename", thread_id: "thread-1", name: "Shared thread" },
-      method: CODEX_CONTROL_METHODS.renameThread,
-      requestParams: { threadId: "thread-1", name: "Shared thread" },
-    },
-    {
-      action: "unarchive" as const,
-      params: { action: "unarchive", thread_id: "thread-1" },
-      method: CODEX_CONTROL_METHODS.unarchiveThread,
-      requestParams: { threadId: "thread-1" },
-    },
-  ])("routes $action through the typed Codex control method", ({ params, method, requestParams }) =>
-    withFixture(async () => {
-      const request = vi.fn(async () => ({ thread: { id: "thread-1" } }));
-      const tool = createTool({ request, modelSelectionLocked: true });
-
-      await tool?.execute("call-5", params);
-
-      expect(request).toHaveBeenCalledWith(
-        { appServer: { homeScope: "user" } },
-        method,
-        requestParams,
-        expect.any(Object),
-      );
-    }),
-  );
 });

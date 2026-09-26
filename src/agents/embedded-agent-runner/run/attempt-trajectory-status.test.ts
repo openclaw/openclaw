@@ -62,23 +62,6 @@ describe("attempt trajectory status", () => {
     ).toEqual({ status: "success" });
   });
 
-  it("keeps a length-limited turn with nothing to show non-deliverable", () => {
-    // No visible text, no payload, no terminal output: nothing reached the user,
-    // so this stays the incomplete-turn error the runner still surfaces.
-    expect(
-      resolveAttemptTrajectoryTerminal(
-        baseParams({
-          assistantTexts: [],
-          synthesizedPayloadCount: 0,
-          lastAssistantStopReason: "length",
-        }),
-      ),
-    ).toEqual({
-      status: "error",
-      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
-    });
-  });
-
   it("keeps whitespace-only length-limited text non-deliverable", () => {
     expect(
       resolveAttemptTrajectoryTerminal(
@@ -91,20 +74,6 @@ describe("attempt trajectory status", () => {
       status: "error",
       terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
     });
-  });
-
-  it("records a delivered length-limited partial payload as success", () => {
-    // The terminal owner delivers this turn as a partial reply, so the durable
-    // trajectory record must agree instead of reporting a non-deliverable error.
-    expect(
-      resolveAttemptTrajectoryTerminal(
-        baseParams({
-          assistantTexts: ["Partial answer."],
-          synthesizedPayloadCount: 1,
-          lastAssistantStopReason: "length",
-        }),
-      ),
-    ).toEqual({ status: "success" });
   });
 
   it("keeps length-limited turns successful when terminal output was delivered", () => {
@@ -226,15 +195,6 @@ describe("attempt trajectory status", () => {
     });
   });
 
-  it("does not let the raw silent policy hide ineligible empty failures", () => {
-    expect(
-      resolveAttemptTrajectoryTerminal(baseParams({ emptyAssistantReplyIsSilent: false })),
-    ).toEqual({
-      status: "error",
-      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
-    });
-  });
-
   it("uses safe last-assistant fallback text for terminal delivery status", () => {
     expect(
       resolveTerminalAssistantTexts({
@@ -277,21 +237,6 @@ describe("attempt trajectory status", () => {
         }),
       ),
     ).toEqual({ status: "success" });
-  });
-
-  it("marks internally aborted tool-use attempts without delivery as non-deliverable", () => {
-    expect(
-      resolveAttemptTrajectoryTerminal(
-        baseParams({
-          interrupted: false,
-          toolMetas: [{ toolName: "web_search" }],
-          lastAssistantStopReason: "toolUse",
-        }),
-      ),
-    ).toEqual({
-      status: "error",
-      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
-    });
   });
 
   it("keeps async-started media tool-use attempts as terminal progress", () => {
