@@ -14,10 +14,6 @@ import {
 } from "../../agents/cron-creator-authority-context.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
 import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
-import {
-  isAgentRunDirectAbortReason,
-  isAgentRunRestartAbortReason,
-} from "../../agents/run-termination.js";
 import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import {
   readAgentRunTerminalError,
@@ -30,7 +26,7 @@ import {
   clearAgentRunContext,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { formatErrorMessage, readErrorName, toErrorObject } from "../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { CreatedDetachedTaskRun } from "../../tasks/detached-task-runtime-contract.js";
@@ -40,6 +36,7 @@ import {
 } from "../../tasks/detached-task-runtime.js";
 import { getTaskById } from "../../tasks/runtime-internal.js";
 import { captureTaskCancellationControl } from "../../tasks/task-cancellation-context.js";
+import type { FollowupReply } from "../../tasks/task-followup-completion.types.js";
 import { mapAgentRunTerminalOutcomeToTaskStatus } from "../../tasks/task-registry-common.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { bindTaskRunOwner, getTaskRunOwner } from "../../tasks/task-run-owner.js";
@@ -53,74 +50,18 @@ import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { captureAgentJobSession } from "./agent-job.js";
 import { readAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
+import { readFollowupTerminalReply } from "./agent-run-dispatch-followup.js";
+import {
+  isGatewayAgentAbortRejection,
+  projectRejectedGatewayStatus,
+  RESOLVED_GATEWAY_STATUS_BY_TERMINAL_CLASSIFICATION,
+  resolveGatewayAgentAbortStopReason,
+  resolveResolvedAgentTimeoutStopReason,
+} from "./agent-run-dispatch-outcome.js";
 import { createGatewayTaskExecutionBinding } from "./agent-run-task-binding.js";
 import type { GatewayAgentDispatchTaskTracking } from "./agent-run-task-tracking.js";
 import { bindGatewayAgentTerminalProducer } from "./agent-run-terminal-producer.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
-
-function resolveResolvedAgentTimeoutStopReason(
-  meta: unknown,
-  signal: AbortSignal,
-): "timeout" | undefined {
-  if (!signal.aborted) {
-    return undefined;
-  }
-  const record =
-    meta && typeof meta === "object" && !Array.isArray(meta)
-      ? (meta as Record<string, unknown>)
-      : undefined;
-  if (record?.aborted !== true && record?.stopReason !== "toolUse") {
-    return undefined;
-  }
-  return resolveGatewayAgentAbortStopReason(signal) === "timeout" ? "timeout" : undefined;
-}
-
-function isGatewayAbortSignalReason(reason: unknown): boolean {
-  return reason === undefined || isAbortError(reason) || readErrorName(reason) === "TimeoutError";
-}
-
-function isGatewayAgentAbortRejection(error: unknown, signal: AbortSignal): boolean {
-  if (!signal.aborted) {
-    // The run can cancel its own controller without aborting the Gateway observer.
-    return isAgentRunDirectAbortReason(error);
-  }
-  if (isAgentRunRestartAbortReason(signal.reason)) {
-    return true;
-  }
-  if (readErrorName(signal.reason) === "TimeoutError") {
-    return true;
-  }
-  if (!isGatewayAbortSignalReason(signal.reason)) {
-    return false;
-  }
-  return isAbortError(error) || readErrorName(error) === "TimeoutError";
-}
-
-function resolveGatewayAgentAbortStopReason(signal: AbortSignal): "restart" | "rpc" | "timeout" {
-  if (isAgentRunRestartAbortReason(signal.reason)) {
-    return "restart";
-  }
-  return readErrorName(signal.reason) === "TimeoutError" ? "timeout" : "rpc";
-}
-
-// `agent` clients already consume cancellation as timeout; keep that wire
-// contract while task/session projections use the canonical cancellation class.
-const RESOLVED_GATEWAY_STATUS_BY_TERMINAL_CLASSIFICATION = {
-  success: "ok",
-  timeout: "timeout",
-  cancellation: "timeout",
-  failure: "error",
-} as const;
-
-function projectRejectedGatewayStatus(outcome: AgentRunTerminalOutcome): "error" | "timeout" {
-  // The shipped wire keeps raw provider/AbortError rejections as errors. Only
-  // owner-recorded cancellation/timeout metadata promotes a rejection to timeout.
-  return outcome.reason === "cancelled" ||
-    outcome.reason === "superseded" ||
-    outcome.stopReason === "timeout"
-    ? "timeout"
-    : "error";
-}
 
 export function resolveAbortedAgentStopReason(entry?: ChatAbortControllerEntry): string {
   return entry?.abortStopReason?.trim() || "rpc";
@@ -184,6 +125,8 @@ export function dispatchAgentRunFromGateway(
   };
   const registeredTask =
     typeof params.taskTrackingMode === "object" ? params.taskTrackingMode : undefined;
+  const followupCompletion =
+    registeredTask?.kind === "receipt" ? registeredTask.completion : undefined;
   let trackedTask: TaskRecord | undefined = registeredTask?.task;
   let createdTask: CreatedDetachedTaskRun | undefined =
     registeredTask?.kind === "receipt" ? registeredTask : undefined;
@@ -191,7 +134,8 @@ export function dispatchAgentRunFromGateway(
     | Extract<PreparedDetachedTaskRun, { kind: "legacy" }>["finalizeRun"]
     | undefined = registeredTask?.kind === "legacy" ? registeredTask.finalizeRun : undefined;
   let executionActivated = false;
-  let originalTaskRunOwner: ReturnType<typeof getTaskRunOwner>;
+  let originalTaskRunOwner: ReturnType<typeof getTaskRunOwner> =
+    followupCompletion && trackedTask ? getTaskRunOwner(trackedTask) : undefined;
   const canSettleTrackedTask = (task: TaskRecord) => {
     const currentTaskOwner = getTaskRunOwner(task);
     if (currentTaskOwner && currentTaskOwner !== originalTaskRunOwner) {
@@ -206,10 +150,29 @@ export function dispatchAgentRunFromGateway(
       Parameters<typeof tryFinalizeTrackedAgentTask>[0],
       "status" | "error" | "terminalSummary"
     > & { endedAt: number },
+    reply: FollowupReply,
   ): void | Promise<void> => {
     const task = trackedTask;
     if (!task) {
       return;
+    }
+    if (followupCompletion) {
+      if (!followupCompletion.ownsExecution(params.runId)) {
+        return;
+      }
+      return (async () => {
+        try {
+          await followupCompletion.settle(params.runId, reply, () => {
+            assertSettlementCurrent?.();
+            if (!canSettleTrackedTask(task)) {
+              throw new Error("Follow-up physical execution lost its Gateway registration.");
+            }
+          });
+        } catch (error) {
+          followupCompletion.close(error);
+          throw error;
+        }
+      })();
     }
     if (!executionActivated && createdTask) {
       const settlementFailed = (error: unknown) => {
@@ -354,14 +317,17 @@ export function dispatchAgentRunFromGateway(
   const activateAgent = () => {
     assertCurrent();
     const task = trackedTask;
-    const trackedTaskBinding = task
-      ? createGatewayTaskExecutionBinding({
-          task,
-          runId: params.runId,
-          assertCurrent,
-          log: params.context.logGateway,
-        })
-      : undefined;
+    // The original receipt keeps its immutable audit execution binding. A
+    // successor has a new physical execution, not a replacement task row.
+    const trackedTaskBinding =
+      task && (!followupCompletion || task.runId === params.runId)
+        ? createGatewayTaskExecutionBinding({
+            task,
+            runId: params.runId,
+            assertCurrent,
+            log: params.context.logGateway,
+          })
+        : undefined;
     const ingressOptsWithTaskBinding = task
       ? {
           ...ingressOptsWithSpawnFacts,
@@ -389,16 +355,28 @@ export function dispatchAgentRunFromGateway(
         ),
       );
     const cancel = task && createTrackedTaskCancellation(task);
+    const assertTaskOwnerCurrent = () => {
+      assertCurrent();
+      if (
+        !ownsRunRegistration() ||
+        params.context.chatAbortControllers.get(params.runId) !== registeredRunEntry
+      ) {
+        throw new Error("Task no longer owns its Gateway run registration.");
+      }
+    };
+    if (followupCompletion && task) {
+      followupCompletion.assertCurrent();
+      originalTaskRunOwner = getTaskRunOwner(task);
+      return followupCompletion
+        .activate(params.runId, cancel, assertTaskOwnerCurrent)
+        .then((release) => {
+          releaseTaskOwner = release;
+          assertTaskOwnerCurrent();
+          followupCompletion.assertCurrent();
+          return invoke();
+        });
+    }
     if (createdTask && task && cancel) {
-      const assertTaskOwnerCurrent = () => {
-        assertCurrent();
-        if (
-          !ownsRunRegistration() ||
-          params.context.chatAbortControllers.get(params.runId) !== registeredRunEntry
-        ) {
-          throw new Error("Task no longer owns its Gateway run registration.");
-        }
-      };
       return createdTask.bindRunOwner(cancel, assertTaskOwnerCurrent).then((binding) => {
         releaseTaskOwner = binding.release;
         originalTaskRunOwner = binding.owner;
@@ -485,20 +463,33 @@ export function dispatchAgentRunFromGateway(
           classifyAgentRunTerminalOutcome(terminalOutcome)
         ];
       const taskStatus = mapAgentRunTerminalOutcomeToTaskStatus(terminalOutcome);
-      const taskSettlement = settleTrackedTask({
-        status: taskStatus,
-        error:
-          taskStatus === "cancelled"
-            ? (cancellationReason ?? terminalOutcome.error)
-            : terminalOutcome.error,
-        terminalSummary:
-          responseStatus === "timeout"
-            ? "aborted"
-            : responseStatus === "error"
-              ? "failed"
-              : "completed",
-        endedAt: Date.now(),
-      });
+      const endedAt = terminalOutcome.endedAt ?? Date.now();
+      const taskSettlement = settleTrackedTask(
+        {
+          status: taskStatus,
+          error:
+            taskStatus === "cancelled"
+              ? (cancellationReason ?? terminalOutcome.error)
+              : terminalOutcome.error,
+          terminalSummary:
+            responseStatus === "timeout"
+              ? "aborted"
+              : responseStatus === "error"
+                ? "failed"
+                : "completed",
+          endedAt,
+        },
+        {
+          ...terminalOutcome,
+          error:
+            taskStatus === "cancelled"
+              ? (cancellationReason ?? terminalOutcome.error)
+              : terminalOutcome.error,
+          endedAt,
+          yielded: result?.meta?.yielded === true,
+          ...readFollowupTerminalReply(params.runId, result?.meta),
+        },
+      );
       if (taskSettlement) {
         await taskSettlement;
       }
@@ -603,12 +594,19 @@ export function dispatchAgentRunFromGateway(
       }
       const responseStatus = projectRejectedGatewayStatus(terminalOutcome);
       const taskStatus = mapAgentRunTerminalOutcomeToTaskStatus(terminalOutcome);
-      const taskSettlement = settleTrackedTask({
-        status: taskStatus,
-        error: taskStatus === "cancelled" ? (cancellationReason ?? renderedErr) : renderedErr,
-        terminalSummary: renderedErr,
-        endedAt: Date.now(),
-      });
+      const taskSettlement = settleTrackedTask(
+        {
+          status: taskStatus,
+          error: taskStatus === "cancelled" ? (cancellationReason ?? renderedErr) : renderedErr,
+          terminalSummary: renderedErr,
+          endedAt: Date.now(),
+        },
+        {
+          ...terminalOutcome,
+          error: taskStatus === "cancelled" ? (cancellationReason ?? renderedErr) : renderedErr,
+          endedAt: Date.now(),
+        },
+      );
       if (taskSettlement) {
         await taskSettlement;
       }
@@ -654,6 +652,7 @@ export function dispatchAgentRunFromGateway(
     .finally(() => {
       cleanupRunOwner();
       releaseTaskOwner?.();
+      followupCompletion?.finishExecution(params.runId);
     });
 
   if (finalizeLegacyRun && trackedTask) {

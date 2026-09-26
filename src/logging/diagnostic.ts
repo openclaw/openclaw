@@ -48,6 +48,7 @@ import {
 } from "./diagnostic-runtime.js";
 import {
   classifySessionAttention,
+  isRepeatedModelRequestStalled,
   isTerminalDiagnosticProgressReason,
   type SessionAttentionClassification,
 } from "./diagnostic-session-attention.js";
@@ -352,19 +353,14 @@ function isActiveAbortRecoveryEligible(params: {
   if (classification.classification !== "stalled_agent_run") {
     return false;
   }
+  // Repeated requests can be stalled while a tool owns the current phase.
+  // Transport liveness must not replace that independent semantic evidence.
+  if (isRepeatedModelRequestStalled(activity, stuckSessionAbortMs)) {
+    return true;
+  }
   const modelAllowanceExpired =
     activity.activeModelCallRequestTimeoutMs === undefined ||
     lastProgressAgeMs >= activity.activeModelCallRequestTimeoutMs;
-  // Repeated requests can be stalled while a tool owns the current phase.
-  // Transport liveness must not replace that independent semantic evidence.
-  if (
-    activity.hasActiveEmbeddedRun &&
-    (activity.repeatedRequestNoProgressAgeMs ?? 0) >=
-      Math.max(stuckSessionAbortMs, activity.activeModelCallRequestTimeoutMs ?? 0) &&
-    modelAllowanceExpired
-  ) {
-    return true;
-  }
   return (
     (classification.activeWorkKind === "model_call" ||
       classification.activeWorkKind === "embedded_run") &&
@@ -1013,6 +1009,9 @@ export function startDiagnosticHeartbeat(
             ...(recovery.allowActiveAbort
               ? { allowActiveAbort: true }
               : { staleActiveProgressAbortMs: stuckSessionAbortMs }),
+            ...(recovery.classification.reason === "repeated_model_requests_without_progress"
+              ? { repeatedRequestNoProgressAbortMs: stuckSessionAbortMs }
+              : {}),
             compactionSafetyTimeoutMs,
           },
         });

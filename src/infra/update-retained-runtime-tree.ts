@@ -192,6 +192,7 @@ export async function linkUpdateCandidatePluginTrees(
   }
   await targets.assertBindings();
   await fs.mkdir(privateRoot, { recursive: true, mode: 0o700 });
+  const preparedDirectories = new Set([privateRoot]);
   let destinationRoot: Awaited<ReturnType<typeof openRoot>> | undefined;
   const copyEntry = async (
     entry: Extract<UpdateCandidatePluginTreeEntry, { kind: "file" }>,
@@ -235,12 +236,19 @@ export async function linkUpdateCandidatePluginTrees(
   for (const entry of plan.entries) {
     await assertEntry(entry);
     const destination = destinationFor(entry.path);
+    const directory = entry.kind === "directory" ? destination : path.dirname(destination);
+    // A file may precede its parent's inventory entry; reuse only completed creation.
+    if (!preparedDirectories.has(directory)) {
+      await fs.mkdir(directory, {
+        recursive: true,
+        mode: entry.kind === "directory" ? entry.mode | 0o700 : 0o700,
+      });
+      preparedDirectories.add(directory);
+    }
     if (entry.kind === "directory") {
-      await fs.mkdir(destination, { recursive: true, mode: entry.mode | 0o700 });
       directories.push(entry);
       continue;
     }
-    await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
     if (entry.kind === "symlink") {
       await fs.symlink(entry.link, destination, entry.linkType);
       await relocateRuntimeEntry(destination, entry.path, destination, "symlink", relocations);

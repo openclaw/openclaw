@@ -22,10 +22,9 @@ maintenance risk.
 
 Use this path only for a `.33+` Gateway distribution from either of the two
 trailing completed months: the `openclaw` npm package, official npm plugins,
-and matching Docker Gateway images. Treat
-`docs/reference/RELEASING.md`,
-`scripts/openclaw-npm-extended-stable-release.mjs`, and the release workflows
-on pinned current `main` as the exact command and validation contract.
+and matching Docker Gateway images. Use
+`scripts/openclaw-npm-extended-stable-release.mjs` and the release workflows
+on pinned current `main` for command and validation requirements.
 
 1. On `extended-stable/YYYY.M.33`, verify the root and every publishable official
    plugin have the intended version. Generate and commit the complete
@@ -53,7 +52,9 @@ on pinned current `main` as the exact command and validation contract.
    direct canonical-branch/main producers and narrow reruns.
 6. With publication/tag-push authority, create and push a protected lightweight
    `release-publish/<tooling-sha12>-<epoch>` tag at the frozen trusted-main
-   Tooling SHA, using the commands in `docs/reference/RELEASING.md`. Dispatch
+   Tooling SHA: `git tag "$PUBLISH_REF" "$TOOLING_SHA"`, then
+   `git push origin "refs/tags/$PUBLISH_REF"`. Set `PUBLISH_REF` to the chosen
+   protected tag name before running these commands. Dispatch
    `OpenClaw Release Publish` with `--ref` set to that tooling tag, the product
    release tag as `tag`, `npm_dist_tag=extended-stable`,
    `publish_openclaw_npm=true`, the saved
@@ -70,10 +71,10 @@ on pinned current `main` as the exact command and validation contract.
    not attach evidence or finalize the release.
 8. From a clean current-`main` checkout, run
    `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.P`.
-   Verify signatures, provenance, inventories, exact versions, and selectors.
+   Verify package signatures, source commits, inventories, exact versions, and selectors.
    To promote an already-published core version to `extended-stable`, use
    `promote_extended_stable` in the `openclaw/releases` dist-tag workflow
-   from that repository's `main`, after openclaw/releases#27 is merged. Follow
+   from that repository's `main`. Follow
    [registry selector recovery](publication-recovery.md#registry-selectors),
    not the publication/resume path. The target must be a final extended-stable
    version with patch `33` or higher and no suffix; fixes increment the patch.

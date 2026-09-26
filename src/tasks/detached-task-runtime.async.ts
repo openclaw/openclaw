@@ -1,10 +1,12 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import type {
+  DetachedTaskAssignmentTransition,
   DetachedTaskCompleteParams,
   DetachedTaskFailParams,
   DetachedTaskFinalizeParams,
   DetachedTaskLifecycleRuntime,
 } from "./detached-task-runtime-contract.js";
+import { DetachedTaskAssignmentUnsupportedError } from "./detached-task-runtime-contract.js";
 import { DetachedTaskLegacyRuntimeError } from "./detached-task-runtime-errors.js";
 import { captureDetachedTaskRuntimeOwner } from "./detached-task-runtime-state.js";
 import { transitionTaskRecordsByRunAsync } from "./task-registry-transition.async.js";
@@ -95,4 +97,31 @@ export function setDetachedTaskDeliveryStatusByRunIdAsync(
     (runtime) => runtime.setDetachedTaskDeliveryStatusByRunId(params),
     assertCurrent,
   );
+}
+
+/** Exact settlement retains the original assignment while worker admission yields. */
+export async function transitionTaskAssignmentAsync(
+  params: DetachedTaskAssignmentTransition,
+): Promise<TaskRecord[]> {
+  const owner = captureDetachedTaskRuntimeOwner({ settlement: true });
+  const assertCurrent = () => {
+    owner.assertCurrent();
+    params.assertCurrent();
+  };
+  assertCurrent();
+  if (owner.runtime) {
+    if (!owner.runtime.transitionTaskAssignment) {
+      throw new DetachedTaskAssignmentUnsupportedError();
+    }
+    const result = owner.runtime.transitionTaskAssignment({ ...params, assertCurrent });
+    assertCurrent();
+    return result;
+  }
+  const result = await transitionTaskRecordsByRunAsync(
+    params.transition,
+    assertCurrent,
+    params.expectedTask,
+  );
+  assertCurrent();
+  return result;
 }

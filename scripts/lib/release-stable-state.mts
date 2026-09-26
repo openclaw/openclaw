@@ -48,7 +48,6 @@ const releaseStateSchema = z.strictObject({
       parentSyncsBetaDistTag: z.boolean(),
       parentSweepsStaleChildren: z.boolean().optional(),
       childNpmPublishEnvironment: z.boolean().optional(),
-      closeoutResolvesWaivers: z.boolean(),
       probedAt: timestamp,
       toolingSha: sha,
     })
@@ -69,9 +68,6 @@ const releaseStateSchema = z.strictObject({
     requestFile: z.string().optional(),
     runId: id.optional(),
     runAttempt: z.number().int().positive().optional(),
-    continues: z.number().int().min(0),
-    stableSoakWaiver: z.string().optional(),
-    laneWaiver: z.string().optional(),
   }),
   publish: z.strictObject({
     candidateDir: z.string().optional(),
@@ -102,6 +98,27 @@ const releaseStateSchema = z.strictObject({
     z.strictObject({ at: timestamp, phase: phaseSchema, event: z.string(), detail: z.string() }),
   ),
 });
+// Older writers recorded retry and tooling-capability metadata even for waiver-free
+// releases. Discard only that bookkeeping; actual waiver fields still fail parsing.
+const releaseStateReadSchema = releaseStateSchema.extend({
+  capabilities: releaseStateSchema.shape.capabilities
+    .unwrap()
+    .extend({
+      closeoutResolvesWaivers: z.boolean().optional(),
+      parentApprovalReceipt: z.boolean().optional(),
+    })
+    .transform(
+      ({
+        closeoutResolvesWaivers: _closeoutResolvesWaivers,
+        parentApprovalReceipt: _parentApprovalReceipt,
+        ...capabilities
+      }) => capabilities,
+    )
+    .optional(),
+  validate: releaseStateSchema.shape.validate
+    .extend({ continues: z.number().int().min(0).optional() })
+    .transform(({ continues: _continues, ...validation }) => validation),
+});
 export type ReleaseState = z.infer<typeof releaseStateSchema>;
 export type ReleaseOptions = {
   release: string;
@@ -116,8 +133,6 @@ export type ReleaseOptions = {
   cutSha?: string;
   confirmCutSha?: string;
   toolingSha?: string;
-  stableSoakWaiver?: string;
-  laneWaiver?: string;
   pluginSdkApiAcknowledgement?: string;
   macosPreflightRunId?: string;
   macosValidateRunId?: string;
@@ -243,8 +258,6 @@ export function resumeCommand(
     ["cut-sha", options.cutSha],
     ["confirm-cut-sha", options.confirmCutSha],
     ["tooling-sha", options.toolingSha],
-    ["stable-soak-waiver", options.stableSoakWaiver],
-    ["lane-waiver", options.laneWaiver],
     ["plugin-sdk-api-acknowledgement", options.pluginSdkApiAcknowledgement],
     ["macos-preflight-run-id", phase === "macos" ? options.macosPreflightRunId : undefined],
     ["macos-validate-run-id", phase === "macos" ? options.macosValidateRunId : undefined],
@@ -286,7 +299,7 @@ function createReleaseState(options: ReleaseOptions): ReleaseState {
       closeout: pending(),
     },
     cut: {},
-    validate: { continues: 0 },
+    validate: {},
     publish: { approvedGates: [] },
     syncBeta: {},
     flipGithub: {},
@@ -301,12 +314,7 @@ export function loadReleaseState(options: ReleaseOptions): ReleaseState {
     return createReleaseState(options);
   }
   try {
-    const saved = JSON.parse(readFileSync(path, "utf8"));
-    // Persisted v1 state may still carry the retired receipt capability.
-    if (isRecord(saved) && isRecord(saved.capabilities)) {
-      delete saved.capabilities.parentApprovalReceipt;
-    }
-    const state = releaseStateSchema.parse(saved);
+    const state = releaseStateReadSchema.parse(JSON.parse(readFileSync(path, "utf8")));
     if (
       state.release !== options.release ||
       state.tag !== `v${options.release}` ||
@@ -493,11 +501,6 @@ export async function probeCapabilities(ctx: ReleaseContext, toolingSha: string)
     ["show", `${toolingSha}:.github/workflows/openclaw-release-publish.yml`],
     { allowFailure: true },
   );
-  const closeout = await ctx.run(
-    "git",
-    ["show", "origin/main:.github/workflows/openclaw-stable-main-closeout.yml"],
-    { allowFailure: true },
-  );
   const children = await ctx.run(
     "git",
     ["show", `${toolingSha}:scripts/lib/release-publish-children.sh`],
@@ -521,10 +524,6 @@ export async function probeCapabilities(ctx: ReleaseContext, toolingSha: string)
       !ctx.options.dryRun &&
       npmPublisher.exitCode === 0 &&
       npmPublisher.stdout.includes("environment: npm-publish"),
-    closeoutResolvesWaivers:
-      !ctx.options.dryRun &&
-      closeout.exitCode === 0 &&
-      closeout.stdout.includes("published_stable_soak_waiver"),
     probedAt: new Date().toISOString(),
     toolingSha,
   };

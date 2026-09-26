@@ -49,6 +49,11 @@ suite.define(() => {
 
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        // Exercise the authored classic scrollbar regardless of macOS overlay preferences.
+        // Either non-auto standard property would override the existing WebKit styles.
+        await page.addStyleTag({
+          content: ".sidebar-shell__body { scrollbar-width: auto; scrollbar-color: auto; }",
+        });
         if (width === 390) {
           await page
             .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
