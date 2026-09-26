@@ -351,3 +351,5 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "Shift+Enter or Ctrl+J: insert a newline",
   ].join("\n");
 }
+
+export { matchSlashKeywords, type KeywordMatch } from "./commands-intent.js";

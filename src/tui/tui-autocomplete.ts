@@ -4,6 +4,7 @@ import {
   type AutocompleteProvider,
   type SlashCommand,
 } from "@earendil-works/pi-tui";
+import { matchSlashKeywords } from "./commands-intent.js";
 import { isTerminalSafeAutocompleteValue, sanitizeRenderableLine } from "./tui-formatters.js";
 
 const originalSafeItem = Symbol("originalSafeItem");
@@ -60,14 +61,53 @@ export function createTuiAutocompleteProvider(
   fdPath?: string,
 ): AutocompleteProvider {
   const inner = new CombinedAutocompleteProvider(commands, basePath, fdPath);
+  const commandNames = new Set(commands.map((cmd) => cmd.name));
+
   return sanitizeAutocompleteProvider({
-    getSuggestions(lines, cursorLine, cursorCol, options) {
+    async getSuggestions(lines, cursorLine, cursorCol, options) {
       const textBeforeCursor = (lines[cursorLine] ?? "").slice(0, cursorCol);
       const isAttachment = /(?:^|[\s='"])@(?:"[^"]*|[^\s='"]*)$/u.test(textBeforeCursor);
       const isNaturalCompletion = isAttachment || textBeforeCursor.startsWith("/");
       if (!options.force && !isNaturalCompletion) {
-        return Promise.resolve(null);
+        return null;
       }
+
+      if (textBeforeCursor.startsWith("/")) {
+        const standardSuggestions = await inner.getSuggestions(
+          lines,
+          cursorLine,
+          cursorCol,
+          options,
+        );
+        const slashWordMatch = /^\/([^\s]+)$/u.exec(textBeforeCursor);
+        if (slashWordMatch) {
+          const typedWord = slashWordMatch[1]!;
+          const keywordMatches = matchSlashKeywords(typedWord, commandNames);
+          if (keywordMatches.length > 0) {
+            const existingValues = new Set(standardSuggestions?.items.map((it) => it.value) ?? []);
+            const newItems = keywordMatches
+              .filter((m) => !existingValues.has(m.command))
+              .map((m) => {
+                const existingCmd = commands.find((c) => c.name === m.command);
+                return {
+                  value: m.command,
+                  label: `/${m.command}`,
+                  description: existingCmd?.description
+                    ? `${existingCmd.description} (matched '${m.matchedKeyword}')`
+                    : `Matched keyword '${m.matchedKeyword}'`,
+                };
+              });
+            if (newItems.length > 0) {
+              return {
+                prefix: textBeforeCursor,
+                items: [...(standardSuggestions?.items ?? []), ...newItems],
+              };
+            }
+          }
+        }
+        return standardSuggestions;
+      }
+
       return inner.getSuggestions(lines, cursorLine, cursorCol, options);
     },
     applyCompletion: (...args) => inner.applyCompletion(...args),
