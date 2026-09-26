@@ -381,6 +381,9 @@ Remove unnecessary `memory.search.extraPaths` entries or narrow their directory
 roots. Global entries and `agents.entries.<id>.memory.search.extraPaths` entries
 are combined: an empty per-agent list does not remove global roots. Changing only
 an entry's `pattern` filters indexed files, not the directory tree being watched.
+Events outside every applicable pattern are ignored when they cannot affect an
+indexed file or directory. Events with no path or an unknown entry type remain
+conservative when indexed content could have changed.
 
 Removing extra-path entries does not exclude files that still belong to the
 default `MEMORY.md`, `USER.md`, or `memory/` roots. If reducing extra paths is
@@ -454,7 +457,9 @@ auto-injected.
 
 Paths can be absolute or workspace-relative. Directories are scanned recursively for supported
 files. Object entries narrow a directory with a root-relative glob using `/` separators; direct
-file entries are indexed exactly. The builtin engine skips symlinks. When a configured root is a
+file entries are indexed exactly. Entries with the same resolved directory share one scan, and
+scans skip subdirectories that their patterns can prove irrelevant. Complex patterns retain
+conservative traversal. The builtin engine skips symlinks. When a configured root is a
 symlink, `openclaw memory status` names the skipped root in text and JSON output and recommends
 configuring its canonical absolute directory instead.
 
