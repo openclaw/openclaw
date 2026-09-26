@@ -204,6 +204,41 @@ async function fixture(
   return root;
 }
 
+it.each([".git", "extensions/retired", "extensions/linked-residue"])(
+  "refuses unrelated host files reached through a hoist link to %s",
+  async (directory) => {
+    const root = await fixture(tempDirs.make("openclaw-retained-host-link-"), "git");
+    const target = path.join(root, directory);
+    const linkedModules = directory === "extensions/linked-residue";
+    if (linkedModules) {
+      await mkdir(target);
+      await symlink(
+        path.join(root, ".git"),
+        path.join(target, "node_modules"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
+    const marker = linkedModules
+      ? path.join(root, ".git/private")
+      : path.join(target, "private.txt");
+    await writeFile(marker, "unrelated checkout data");
+    const link = path.join(
+      root,
+      "node_modules/.pnpm/node_modules",
+      directory === "extensions/retired" ? "@fixture/retired" : "unrelated",
+    );
+    if (directory !== "extensions/retired") {
+      await symlink(target, link, process.platform === "win32" ? "junction" : "dir");
+    }
+    await expect(
+      withRetainedUpdateRuntime(pathToFileURL(path.join(root, "dist/updater.mjs")).href, (retain) =>
+        retain({ mutationRoots: [root], timeoutMs: 30_000, assertCurrent() {} }),
+      ),
+    ).rejects.toThrow(`Cannot privately copy host-owned plugin link ${link} -> ${target}`);
+    expect(await readFile(marker, "utf8")).toBe("unrelated checkout data");
+  },
+);
+
 it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked"] as const)(
   "retains %s worker chunks and dependencies through replacement and drains only its borrowers",
   async (layout) => {

@@ -76,13 +76,19 @@ async function dependencyOwner(target: string, retainedHostRoot?: string): Promi
   if (modules >= 0 && !retainedHostRoot) {
     return parts.slice(0, modules + 1).join(path.sep);
   }
-  let directory = (await fs.stat(target)).isDirectory() ? target : path.dirname(target);
+  const stat = await fs.stat(target);
+  let directory = stat.isDirectory() ? target : path.dirname(target);
   const fallback = target;
   for (;;) {
-    // Retired workspaces can retain ignored modules after their manifest disappears.
-    // Keep the reached subtree without promoting it to the complete retained host.
     if (directory === retainedHostRoot) {
-      return fallback;
+      // A retired workspace can leave only ignored modules behind. Other host
+      // contents still belong to the host and must reach the inferred-root refusal.
+      const entries = stat.isDirectory() ? await fs.readdir(target) : [];
+      return entries.length === 1 &&
+        entries[0] === "node_modules" &&
+        (await fs.lstat(path.join(target, "node_modules"))).isDirectory()
+        ? target
+        : directory;
     }
     if (
       await fs.stat(path.join(directory, "package.json")).then(
