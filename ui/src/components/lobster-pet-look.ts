@@ -13,12 +13,7 @@ import type {
 } from "./lobster-pet-contract.ts";
 import { lobsterPaletteName, lobsterRandomName } from "./lobster-pet-lore.ts";
 import { moonPhaseFraction } from "./lobster-pet-moon.ts";
-import {
-  CANONICAL_CHIMERA_PARTS,
-  LOBSTER_PALETTE_WEIGHTS,
-  chimeraBodyClaw,
-  rollChimeraParts,
-} from "./lobster-pet-palettes.ts";
+import { LOBSTER_PALETTE_WEIGHTS, LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 import {
   ACTUAL_LOBSTER,
   ASCII_LOBSTER,
@@ -65,6 +60,34 @@ const PALETTE_GEOMETRY: Partial<Record<LobsterPetPaletteId, typeof PIXEL_LOBSTER
   portal: PORTAL_LOBSTER,
   pixel: PIXEL_LOBSTER,
 };
+
+const CHIMERA_DONOR_IDS = ["crimson", "blue", "gold", "banana", "watermelon"] as const;
+
+const CANONICAL_CHIMERA_PARTS: NonNullable<LobsterPetLook["chimeraParts"]> = {
+  body: "#ff4f40",
+  clawLeft: "#4a7dfc",
+  clawRight: "#f4b840",
+  antennae: "#3f9d63",
+};
+
+function rollChimeraParts(rng: () => number): NonNullable<LobsterPetLook["chimeraParts"]> {
+  const remaining = CHIMERA_DONOR_IDS.map((id) =>
+    expectDefined(
+      LOBSTER_PET_PALETTES.find((palette) => palette.id === id),
+      `chimera donor palette ${id}`,
+    ),
+  );
+  const pick = (): LobsterPetPalette => {
+    const index = Math.floor(rng() * remaining.length);
+    return expectDefined(remaining.splice(index, 1)[0], "distinct chimera donor");
+  };
+  return {
+    body: pick().shell,
+    clawLeft: pick().shell,
+    clawRight: pick().shell,
+    antennae: pick().shell,
+  };
+}
 
 // A neutral look used to render catalog minis outside the pet lifecycle.
 export function canonicalLobsterLook(palette: LobsterPetPalette): LobsterPetLook {
@@ -406,7 +429,10 @@ export function lobsterLookStyle(look: LobsterPetLook): string {
   const crusher = look.crusherSide;
   const paletteHash = fnv1aUtf16(look.palette.id);
   const breatheDelayS = ((paletteHash >>> 8) % 34) / 10;
-  const bodyDonorClaw = look.chimeraParts ? chimeraBodyClaw(look.chimeraParts.body) : undefined;
+  const chimeraParts = look.chimeraParts;
+  const bodyDonorClaw = chimeraParts
+    ? LOBSTER_PET_PALETTES.find((palette) => palette.shell === chimeraParts.body)?.claw
+    : undefined;
   const clawMul = (side: "left" | "right") =>
     crusher === null
       ? LOBSTER_PET_CLAW_MULS[look.clawSize]
