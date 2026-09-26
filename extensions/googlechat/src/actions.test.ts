@@ -5,6 +5,7 @@ const inspectGoogleChatAccount = vi.hoisted(() => vi.fn());
 const listGoogleChatAccountIds = vi.hoisted(() => vi.fn());
 const resolveGoogleChatAccount = vi.hoisted(() => vi.fn());
 const sendGoogleChatMessage = vi.hoisted(() => vi.fn());
+const updateGoogleChatMessage = vi.hoisted(() => vi.fn());
 const resolveGoogleChatOutboundSpace = vi.hoisted(() => vi.fn());
 
 vi.mock("./accounts.js", () => ({
@@ -15,6 +16,7 @@ vi.mock("./accounts.js", () => ({
 
 vi.mock("./api.js", () => ({
   sendGoogleChatMessage,
+  updateGoogleChatMessage,
 }));
 
 vi.mock("./targets.js", () => ({
@@ -69,7 +71,7 @@ describe("googlechat message actions", () => {
     });
   }
 
-  it("describes only send actions when enabled accounts exist", () => {
+  it("describes send and edit actions when enabled accounts exist", () => {
     listGoogleChatAccountIds.mockReturnValueOnce([]);
     expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toBeNull();
 
@@ -82,7 +84,7 @@ describe("googlechat message actions", () => {
     });
 
     expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toEqual({
-      actions: ["send"],
+      actions: ["send", "edit"],
     });
     expect(googlechatMessageActions.supportsAction?.({ action: "send" })).toBe(true);
     expect(googlechatMessageActions.supportsAction?.({ action: "upload-file" })).toBe(false);
@@ -100,7 +102,7 @@ describe("googlechat message actions", () => {
     expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toBeNull();
   });
 
-  it("keeps account-scoped discovery send-only", () => {
+  it("keeps account-scoped discovery consistent", () => {
     inspectGoogleChatAccount.mockImplementation(
       ({ accountId: _accountId }: { accountId?: string | null }) => ({
         enabled: true,
@@ -114,7 +116,7 @@ describe("googlechat message actions", () => {
       expect(
         googlechatMessageActions.describeMessageTool?.({ cfg: {} as never, accountId }),
       ).toEqual({
-        actions: ["send"],
+        actions: ["send", "edit"],
       });
     }
   });
@@ -158,6 +160,76 @@ describe("googlechat message actions", () => {
       messageName: "spaces/AAA/messages/msg-1",
       threadName: "spaces/AAA/threads/thread-1",
     });
+  });
+
+  it("edits with the selected account and the resolved DM space", async () => {
+    const account = buildAccount({ accountId: "work" });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
+    updateGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/msg.1" });
+
+    const result = await googlechatMessageActions.handleAction!({
+      channel: "googlechat",
+      action: "edit",
+      params: { to: "users/123", messageId: "spaces/AAA/messages/msg.1", message: "  corrected" },
+      cfg: {},
+      accountId: "work",
+    });
+
+    expect(resolveGoogleChatAccount).toHaveBeenCalledWith({ cfg: {}, accountId: "work" });
+    expect(resolveGoogleChatOutboundSpace).toHaveBeenCalledWith({ account, target: "users/123" });
+    expect(updateGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      messageName: "spaces/AAA/messages/msg.1",
+      text: "  corrected",
+    });
+    expectJsonResult(result, {
+      ok: true,
+      to: "spaces/AAA",
+      messageName: "spaces/AAA/messages/msg.1",
+    });
+  });
+
+  it.each([
+    "msg-1",
+    "spaces/AAA/messages/..",
+    "spaces/AAA/messages/msg/extra",
+    "spaces/AAA/messages/msg?updateMask=cardsV2",
+    "spaces/AAA/messages/msg#fragment",
+    "spaces/AAA/messages/%2e%2e",
+  ])("rejects malformed edit resource %s before provider access", async (messageId) => {
+    resolveGoogleChatAccount.mockReturnValue(buildAccount());
+    await expect(
+      googlechatMessageActions.handleAction!({
+        channel: "googlechat",
+        action: "edit",
+        params: { to: "spaces/AAA", messageId, message: "corrected" },
+        cfg: {},
+      }),
+    ).rejects.toThrow("messageId must be a Google Chat resource name");
+    expect(resolveGoogleChatOutboundSpace).not.toHaveBeenCalled();
+    expect(updateGoogleChatMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { overrides: { enabled: false }, error: "Google Chat account is disabled" },
+    { overrides: { credentialSource: "none" }, error: "Google Chat credentials are missing" },
+    {
+      overrides: { tokenStatus: "configured_unavailable" },
+      error: "Google Chat credentials are missing",
+    },
+  ])("rejects edits for unavailable accounts: $error", async ({ overrides, error }) => {
+    resolveGoogleChatAccount.mockReturnValue(buildAccount(overrides));
+    await expect(
+      googlechatMessageActions.handleAction!({
+        channel: "googlechat",
+        action: "edit",
+        params: { to: "spaces/AAA", messageId: "spaces/AAA/messages/msg-1", message: "corrected" },
+        cfg: {},
+      }),
+    ).rejects.toThrow(error);
+    expect(resolveGoogleChatOutboundSpace).not.toHaveBeenCalled();
+    expect(updateGoogleChatMessage).not.toHaveBeenCalled();
   });
 
   it.each([

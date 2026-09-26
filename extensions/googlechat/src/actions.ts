@@ -6,8 +6,11 @@ import {
 import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { resolveGoogleChatAccount } from "./accounts.js";
-import { sendGoogleChatMessage } from "./api.js";
-import { describeGoogleChatMessageTool } from "./message-tool-api.js";
+import { sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
+import {
+  describeGoogleChatMessageTool,
+  supportsGoogleChatMessageAction,
+} from "./message-tool-api.js";
 import { resolveGoogleChatOutboundSpace } from "./targets.js";
 
 const providerId = "googlechat";
@@ -38,7 +41,7 @@ function hasGoogleChatOutboundAttachment(params: Record<string, unknown>): boole
 
 export const googlechatMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeGoogleChatMessageTool,
-  supportsAction: ({ action }) => action === "send",
+  supportsAction: supportsGoogleChatMessageAction,
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },
@@ -89,6 +92,29 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
         onPlatformSendDispatch,
       });
       return jsonResult({ ok: true, to: space, ...sent });
+    }
+
+    if (action === "edit") {
+      if (!account.enabled) {
+        throw new Error("Google Chat account is disabled.");
+      }
+      const to = readStringParam(params, "to", { required: true });
+      const messageName = readStringParam(params, "messageId", { required: true });
+      const text = readStringParam(params, "message", { required: true, trim: false });
+      const match = /^(spaces\/[A-Za-z0-9_-]+)\/messages\/[A-Za-z0-9_-][A-Za-z0-9._-]*$/.exec(
+        messageName,
+      );
+      if (!match) {
+        throw new Error(
+          "messageId must be a Google Chat resource name: spaces/<space>/messages/<message>.",
+        );
+      }
+      const space = await resolveGoogleChatOutboundSpace({ account, target: to });
+      if (match[1] !== space) {
+        throw new Error("messageId must belong to the target Google Chat space");
+      }
+      const updated = await updateGoogleChatMessage({ account, messageName, text });
+      return jsonResult({ ok: true, to: space, ...updated });
     }
 
     throw new Error(`Action ${action} is not supported for provider ${providerId}.`);

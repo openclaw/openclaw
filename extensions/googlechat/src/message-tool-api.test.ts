@@ -31,7 +31,7 @@ describe("Google Chat message-tool SecretRef inspection", () => {
 
   it("keeps healthy account actions when one account credential is unavailable", () => {
     const cfg = buildTwoAccountConfig();
-    expect(describeGoogleChatMessageTool({ cfg })).toEqual({ actions: ["send"] });
+    expect(describeGoogleChatMessageTool({ cfg })).toEqual({ actions: ["send", "edit"] });
     expect(describeGoogleChatMessageTool({ cfg, accountId: "broken" })).toBeNull();
   });
 
