@@ -43,6 +43,30 @@ function normalizeHostPath(value: string): string {
 }
 
 describe("local media roots", () => {
+  function withStateDir<T>(stateDir: string, run: () => T): T {
+    return withEnv({ OPENCLAW_STATE_DIR: stateDir }, run);
+  }
+
+  function expectNormalizedRootsContain(
+    roots: readonly string[],
+    expectedRoots: readonly string[],
+  ) {
+    const normalizedRoots = roots.map(normalizeHostPath);
+    expectedRoots.forEach((expectedRoot) => {
+      expect(normalizedRoots).toContain(normalizeHostPath(expectedRoot));
+    });
+  }
+
+  function expectNormalizedRootsExclude(
+    roots: readonly string[],
+    excludedRoots: readonly string[],
+  ) {
+    const normalizedRoots = roots.map(normalizeHostPath);
+    excludedRoots.forEach((excludedRoot) => {
+      expect(normalizedRoots).not.toContain(normalizeHostPath(excludedRoot));
+    });
+  }
+
   it.each([
     {
       name: "keeps temp, media cache, canvas, and workspace roots by default",

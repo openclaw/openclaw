@@ -14,10 +14,12 @@ import {
 } from "./exec-authorization-render.js";
 import { prepareSystemRunMutableFileBinding } from "./system-run-approval-binding.js";
 
+const POSIX_ENV = { PATH: "/usr/bin:/bin" };
+
 async function render(
   command: string,
   options: Omit<Parameters<typeof buildAuthorizedShellCommandFromPlan>[0], "plan">,
-  env: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin" },
+  env: NodeJS.ProcessEnv = POSIX_ENV,
 ) {
   const plan = await planShellAuthorization({ command, env });
   return buildAuthorizedShellCommandFromPlan({ plan, ...options });
