@@ -257,3 +257,27 @@ export async function createInitialSubagentSession(params: {
     return { status: "error", error: `child session patch failed: ${message}` };
   }
 }
+
+/** Returns the durable child entry published by a successful spawn. */
+export function resolveAcceptedChildSessionEntry(params: {
+  persistedChildEntry?: SessionEntry;
+  forked?: { sessionId: string; sessionFile: string };
+}): SessionEntry | undefined {
+  if (!params.forked) {
+    return params.persistedChildEntry;
+  }
+  return {
+    ...(params.persistedChildEntry ?? {
+      sessionId: params.forked.sessionId,
+      updatedAt: Date.now(),
+    }),
+    sessionId: params.forked.sessionId,
+    ...(params.forked.sessionFile ? { sessionFile: params.forked.sessionFile } : {}),
+  };
+}
+
+export function resolveAcceptedChildSessionId(entry?: SessionEntry): string | undefined {
+  return typeof entry?.sessionId === "string" && entry.sessionId.trim()
+    ? entry.sessionId.trim()
+    : undefined;
+}

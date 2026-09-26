@@ -52,7 +52,11 @@ import { callNativeSubagentGateway, readGatewayRunId } from "./subagent-spawn-ga
 import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
 import { createSubagentSpawnLifecycleEmitter } from "./subagent-spawn-lifecycle.js";
 import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
-import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
+import {
+  createInitialSubagentSession,
+  resolveAcceptedChildSessionEntry,
+  resolveAcceptedChildSessionId,
+} from "./subagent-spawn-session-patch.js";
 import { bindThreadForSubagentSpawn } from "./subagent-spawn-thread-binding.js";
 import { emitSessionLifecycleEvent, mergeDeliveryContext } from "./subagent-spawn.runtime.js";
 import { buildSubagentSpawnEnvelope } from "./subagent-system-prompt.js";
@@ -197,6 +201,9 @@ export async function spawnSubagentDirect(
         childSessionKey,
       };
     }
+    // Frozen before context prep so early failures still delete the provisional
+    // child. Preparation may rewrite sessionId (fork); reassign afterward so
+    // later guarded cleanup still matches the spawn-owned lifecycle row.
     let provisionalSessionIdentity = {
       expectedSessionId: initialSession.entry?.sessionId,
       expectedLifecycleRevision: initialSession.entry?.lifecycleRevision,
@@ -360,11 +367,15 @@ export async function spawnSubagentDirect(
         swarmSchedulerGroupKey,
         swarmMaxConcurrent: swarmConfig.maxConcurrent,
       });
-    if (childEntry) {
+    const acceptedChildEntry = resolveAcceptedChildSessionEntry({
+      persistedChildEntry: childEntry,
+      forked: preparedSpawnContext.mode === "fork" ? preparedSpawnContext.forked : undefined,
+    });
+    if (acceptedChildEntry) {
       recordSessionCreated(cfg, {
         sessionKey: childSessionKey,
         agentId: targetAgentId,
-        entry: childEntry,
+        entry: acceptedChildEntry,
       });
     }
     recordSubagentSpawned({
@@ -683,6 +694,9 @@ export async function spawnSubagentDirect(
     return {
       status: "accepted",
       childSessionKey,
+      ...(!params.collect ? { sessionId: resolveAcceptedChildSessionId(acceptedChildEntry) } : {}),
+      // sessionKey remains collector-launch only; ordinary spawns expose durable
+      // identity via sessionId + childSessionKey without redefining sessionKey.
       ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
       runId: childRunId,
       mode: spawnMode,

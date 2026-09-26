@@ -155,6 +155,9 @@ export function describeSessionsSpawnTool(options?: {
       ? []
       : ['`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.']),
     describeSubagentSpawnContext(options?.subagentThreadAvailable === true),
+    options?.acpAvailable === false
+      ? "Ordinary hidden native accepts include durable `sessionId` (transcript UUID; prefer over parsing `childSessionKey`); collector and `visible=true` accepts omit it."
+      : "Ordinary hidden native accepts include durable `sessionId` (transcript UUID; prefer over parsing `childSessionKey`); collector, ACP, and `visible=true` accepts omit it.",
     "A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session. A request for a subagent does not request a separate session. No spawn for quick lookup/single read.",
     "After spawn, do non-overlap work; follow the receipt's completion mode.",
   ].join(" ");
