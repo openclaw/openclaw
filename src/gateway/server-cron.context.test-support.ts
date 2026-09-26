@@ -7,6 +7,7 @@ import {
 } from "../agents/tools/gateway-caller-context.js";
 import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { CronServiceState } from "../cron/service/state.js";
 import { armTimer } from "../cron/service/timer.js";
 import type { CronJobCreate } from "../cron/types.js";
@@ -18,6 +19,8 @@ import {
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { useSpawnBrokerTestFixture } from "../process/spawn-broker/host.test-support.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import type { buildGatewayCronService } from "./server-cron.js";
 
 type CronFixture = ReturnType<typeof buildGatewayCronService>;
@@ -59,6 +62,57 @@ export function registerGatewayCronContextTests({
   requestHeartbeatAndWaitMock,
 }: GatewayCronContextTestHarness) {
   const createBroker = useSpawnBrokerTestFixture(afterEach);
+  it.each(["main", "agent:ops:cron:job-1:run:one"])(
+    "keeps a targeted global wake on its selected agent's stored route (%s)",
+    async (sessionKey) => {
+      await withOpenClawTestState({ label: "cron-global-delivery-owner" }, async (state) => {
+        const cfg = {
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "main" } },
+            entries: { main: {}, ops: {} },
+          },
+          session: { scope: "global" },
+          cron: { enabled: false, triggers: { enabled: false } },
+        } satisfies OpenClawConfig;
+        const routes = {
+          main: { channel: "telegram", to: "telegram:main", accountId: "main", threadId: "11" },
+          ops: { channel: "telegram", to: "telegram:ops", accountId: "ops", threadId: "22" },
+        };
+        loadConfigMock.mockReturnValue(cfg);
+        for (const [agentId, context] of Object.entries(routes)) {
+          await replaceSessionEntry(
+            { agentId, sessionKey: "global", env: state.env },
+            {
+              sessionId: `${agentId}-global`,
+              updatedAt: 1,
+              delivery: normalizeSessionDeliveryState({ context }),
+            },
+          );
+        }
+        const service = createCronService(cfg);
+        try {
+          const enqueue = vi.spyOn(getCronState(service).deps, "enqueueSystemEvent");
+          expect(
+            service.cron.wake({
+              mode: "next-heartbeat",
+              text: "wake ops",
+              agentId: "ops",
+              sessionKey,
+            }),
+          ).toEqual({ ok: true });
+          expect(enqueue).toHaveBeenCalledWith("wake ops", {
+            agentId: "ops",
+            sessionKey,
+            deliveryContext: routes.ops,
+          });
+        } finally {
+          await service.cron.stopAndDrain?.();
+        }
+      });
+    },
+  );
+
   it("owns timer execution and settlement after its creator context closes", async () => {
     const broker = await createBroker();
     vi.useFakeTimers();

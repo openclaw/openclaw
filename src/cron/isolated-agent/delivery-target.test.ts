@@ -28,10 +28,13 @@ vi.mock("../../config/sessions/main-session.js", () => ({
 
 vi.mock("../../config/sessions/delivery-info.js", () => ({
   extractDeliveryInfo: extractDeliveryInfoMock,
-  extractDeliveryInfoBatch: (keys: Array<string | undefined>, options: unknown) =>
-    keys.map((key) =>
-      key
-        ? extractDeliveryInfoMock(key, options)
+  extractDeliveryInfoBatch: (
+    requests: Array<{ sessionKey?: string; agentId?: string }>,
+    options: { cfg?: OpenClawConfig },
+  ) =>
+    requests.map(({ sessionKey, agentId }) =>
+      sessionKey
+        ? extractDeliveryInfoMock(sessionKey, { ...options, agentId })
         : { deliveryContext: undefined, threadId: undefined },
     ),
 }));
@@ -1373,23 +1376,13 @@ describe("resolveDeliveryTarget", () => {
   });
 
   it("scopes unqualified stored delivery lookups to the job agent", async () => {
-    extractDeliveryInfoMock.mockImplementation((sessionKey: string) =>
-      sessionKey === "agent:agent-b:main"
-        ? {
-            deliveryContext: {
-              channel: "alpha",
-              to: "ops-room",
-            },
-            threadId: undefined,
-          }
-        : {
-            deliveryContext: {
-              channel: "alpha",
-              to: "default-room",
-            },
-            threadId: undefined,
-          },
-    );
+    extractDeliveryInfoMock.mockImplementation((sessionKey: string) => ({
+      deliveryContext: {
+        channel: "alpha",
+        to: sessionKey === "agent:agent-b:main" ? "ops-room" : "default-room",
+      },
+      threadId: undefined,
+    }));
 
     const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
       channel: "last",
@@ -1399,6 +1392,7 @@ describe("resolveDeliveryTarget", () => {
 
     expect(extractDeliveryInfoMock).toHaveBeenCalledWith("agent:agent-b:main", {
       cfg: expect.any(Object),
+      agentId: AGENT_ID,
     });
     expect(result).toMatchObject({
       ok: true,

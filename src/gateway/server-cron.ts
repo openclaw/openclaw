@@ -801,17 +801,15 @@ export function buildGatewayCronService(params: {
       return remove ? { accepted: true, remove } : { accepted: false };
     },
     resolveOriginDeliveryContext: (opts) => {
-      // Resolve the wake target the same way the enqueue/heartbeat deps do,
-      // then read the channel-correct delivery context from that session's
-      // store entry (NOT by string-splitting the composite session key).
-      const { runtimeConfig, sessionKey } = resolveCronTarget({
+      // Global scope removes the key's agent prefix, so retain its selected owner.
+      const { runtimeConfig, agentId, sessionKey } = resolveCronTarget({
         ...opts,
         preserveUntargeted: true,
       });
       if (!sessionKey) {
         return undefined;
       }
-      return resolveCronStoredDeliveryContext({ cfg: runtimeConfig, sessionKey });
+      return resolveCronStoredDeliveryContext({ cfg: runtimeConfig, agentId, sessionKey });
     },
     runSchedulerOwned,
     requestHeartbeat: (opts) => requestHeartbeat(resolveCronHeartbeatWake(opts)),

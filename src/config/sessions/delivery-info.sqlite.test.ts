@@ -6,6 +6,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import { extractDeliveryInfo, extractDeliveryInfoBatch } from "./delivery-info.js";
 import {
   loadExactSessionEntryCandidatesReadOnlyBatch,
@@ -43,7 +44,7 @@ it("recovers a same-agent route past an empty absent primary", async () => {
     expect(readPrimary()).toMatchObject([{ ok: true, value: [] }]);
 
     const scalar = extractDeliveryInfo(sessionKey, { cfg });
-    const batch = extractDeliveryInfoBatch([sessionKey], { cfg });
+    const batch = extractDeliveryInfoBatch([{ sessionKey }], { cfg });
 
     expect(fs.existsSync(primaryPath)).toBe(false);
     expect({ scalar, batch }).toEqual({ scalar: expected, batch: [expected] });
@@ -77,10 +78,68 @@ it.each(["uninitialized", "corrupt"] as const)(
         deliveryContext: undefined,
         threadId: undefined,
       });
-      expect(extractDeliveryInfoBatch([sessionKey], { cfg })).toEqual([
+      expect(extractDeliveryInfoBatch([{ sessionKey }], { cfg })).toEqual([
         { deliveryContext: undefined, threadId: undefined },
       ]);
       expect(fs.readFileSync(primaryPath)).toEqual(before);
     });
   },
 );
+
+it("keeps explicit delivery ownership through alias lookup and rejects conflicting keys", async () => {
+  await withOpenClawTestState({ label: "delivery-explicit-owner" }, async (state) => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, ops: {} },
+      },
+      session: { scope: "global" },
+    } satisfies OpenClawConfig;
+    const routes = {
+      main: { channel: "telegram", to: "telegram:main", accountId: "main" },
+      ops: { channel: "telegram", to: "telegram:ops", accountId: "ops" },
+    };
+    for (const [agentId, context] of Object.entries(routes)) {
+      await replaceSessionEntry(
+        { agentId, env: state.env, sessionKey: "global" },
+        {
+          sessionId: `${agentId}-global`,
+          updatedAt: 1,
+          delivery: normalizeSessionDeliveryState({ context }),
+        },
+      );
+    }
+    const missing = { deliveryContext: undefined, threadId: undefined };
+    const selected = { deliveryContext: routes.ops, threadId: undefined };
+    expect(extractDeliveryInfo("global", { cfg })).toEqual({
+      deliveryContext: routes.main,
+      threadId: undefined,
+    });
+    expect(extractDeliveryInfo("global", { cfg, agentId: "ops" })).toEqual(selected);
+    expect(extractDeliveryInfo("agent:ops:main", { cfg, agentId: "ops" })).toEqual(selected);
+    expect(
+      extractDeliveryInfoBatch(
+        ["global", "agent:main:main", "agent::broken"].map((key) => ({
+          sessionKey: key,
+          agentId: "ops",
+        })),
+        { cfg },
+      ),
+    ).toEqual([selected, missing, missing]);
+    const fixedStoreConfig = {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults: { ...cfg.agents.defaults, sessionStore: { agentId: "main" } },
+      },
+      session: {
+        ...cfg.session,
+        store: state.statePath("agents", "main", "sessions", "sessions.json"),
+      },
+    } satisfies OpenClawConfig;
+    expect(extractDeliveryInfo("global", { cfg: fixedStoreConfig, agentId: "ops" })).toEqual(
+      missing,
+    );
+  });
+});

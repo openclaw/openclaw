@@ -527,6 +527,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               if (shouldInfer) {
                 const inferred = resolveCronCreationDelivery({
                   cfg: runtimeConfig,
+                  agentId: callerAgentId,
                   currentDeliveryContext: opts.currentDeliveryContext,
                   agentSessionKey: opts.agentSessionKey,
                 });

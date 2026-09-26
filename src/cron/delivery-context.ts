@@ -48,13 +48,14 @@ function cronDeliveryFromContext(context?: DeliveryContext): CronDelivery | null
 /** Recovers delivery context from a stored session key captured when the cron job was created. */
 export function resolveCronStoredDeliveryContext(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   sessionKey?: string;
 }): DeliveryContext | undefined {
   const sessionKey = params.sessionKey?.trim();
   if (!sessionKey) {
     return undefined;
   }
-  const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey, { cfg: params.cfg });
+  const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey, params);
   if (deliveryContext && threadId) {
     // Parsed session-key thread ids are canonical; replace any stale thread value in stored context.
     return { ...deliveryContext, threadId };
@@ -65,6 +66,7 @@ export function resolveCronStoredDeliveryContext(params: {
 /** Resolves initial cron delivery, preferring the live context before falling back to session storage. */
 export function resolveCronCreationDelivery(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   currentDeliveryContext?: DeliveryContext;
   agentSessionKey?: string;
 }): CronDelivery | null {
@@ -78,6 +80,7 @@ export function resolveCronCreationDelivery(params: {
     cronDeliveryFromContext(
       resolveCronStoredDeliveryContext({
         cfg: params.cfg,
+        agentId: params.agentId,
         sessionKey: params.agentSessionKey,
       }),
     )

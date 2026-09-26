@@ -715,12 +715,12 @@ describe("extractDeliveryInfoBatch", () => {
 
     expect(
       extractDeliveryInfoBatch([
-        canonicalKey,
-        queriedKey,
-        `${queriedKey}:topic:55`,
-        undefined,
-        "agent:main:missing",
-        queriedKey,
+        { sessionKey: canonicalKey },
+        { sessionKey: queriedKey },
+        { sessionKey: `${queriedKey}:topic:55` },
+        {},
+        { sessionKey: "agent:main:missing" },
+        { sessionKey: queriedKey },
       ]),
     ).toEqual([
       { deliveryContext: canonicalDelivery, threadId: undefined },
@@ -736,18 +736,22 @@ describe("extractDeliveryInfoBatch", () => {
   it("refreshes absent and changed routes between batches even without timestamp changes", () => {
     const queriedKey = "agent:main:telegram:group:MiXeDCase";
     const aliasKey = "agent:main:telegram:group:MixedCase";
-    expect(extractDeliveryInfoBatch([queriedKey])[0]?.deliveryContext).toBeUndefined();
+    expect(
+      extractDeliveryInfoBatch([{ sessionKey: queriedKey }])[0]?.deliveryContext,
+    ).toBeUndefined();
     storeState.store[aliasKey] = {
       ...buildEntry({ channel: "telegram", to: "telegram:first" }),
       updatedAt: 1,
     };
-    const first = extractDeliveryInfoBatch([queriedKey]);
+    const first = extractDeliveryInfoBatch([{ sessionKey: queriedKey }]);
     storeState.store[aliasKey] = {
       ...buildEntry({ channel: "telegram", to: "telegram:second" }),
       updatedAt: 1,
     };
 
-    expect(extractDeliveryInfoBatch([queriedKey])[0]?.deliveryContext?.to).toBe("telegram:second");
+    expect(extractDeliveryInfoBatch([{ sessionKey: queriedKey }])[0]?.deliveryContext?.to).toBe(
+      "telegram:second",
+    );
     expect(first[0]?.deliveryContext?.to).toBe("telegram:first");
   });
 
@@ -763,7 +767,11 @@ describe("extractDeliveryInfoBatch", () => {
     });
 
     expect(
-      extractDeliveryInfoBatch([brokenKey, healthyKey, "agent:main:missing", healthyKey]),
+      extractDeliveryInfoBatch(
+        [brokenKey, healthyKey, "agent:main:missing", healthyKey].map((sessionKey) => ({
+          sessionKey,
+        })),
+      ),
     ).toEqual([
       { deliveryContext: undefined, threadId: undefined },
       { deliveryContext: createTelegramUserDelivery(), threadId: undefined },
@@ -791,12 +799,15 @@ describe("extractDeliveryInfoBatch", () => {
     });
 
     expect(
-      extractDeliveryInfoBatch(["agent:worker:main", shadowKey, "agent:ops:main"], {
-        cfg: {
-          session: { scope: "global" },
-          agents: { ownership: "explicit", entries: { ops: {}, worker: {}, shadow: {} } },
+      extractDeliveryInfoBatch(
+        ["agent:worker:main", shadowKey, "agent:ops:main"].map((sessionKey) => ({ sessionKey })),
+        {
+          cfg: {
+            session: { scope: "global" },
+            agents: { ownership: "explicit", entries: { ops: {}, worker: {}, shadow: {} } },
+          },
         },
-      }),
+      ),
     ).toEqual([
       { deliveryContext: workerDelivery, threadId: undefined },
       { deliveryContext: shadowDelivery, threadId: undefined },

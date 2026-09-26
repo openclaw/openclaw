@@ -58,10 +58,8 @@ export function scopedHeartbeatWakeOptions<T extends object>(
     return wakeOptions;
   }
   if (isCronRunSessionKey(sessionKey)) {
-    // Global-scope agents drain the literal "global" queue, not agent-main;
-    // a targeted wake on agent:<id>:main would be unresolvable. Drop the
-    // sessionKey but carry the agent target so multi-agent global-scope
-    // setups still wake the originating agent's heartbeat.
+    // Let heartbeat select the originating agent's configured global session.
+    // The stored row stays literal; the event queue is qualified with this owner.
     if (scope === "global") {
       return { ...wakeOptions, agentId: parsed.agentId };
     }
@@ -82,8 +80,8 @@ export function resolveEventSessionKey(
   if (!parsed || !isCronRunSessionKey(sessionKey)) {
     return sessionKey;
   }
-  // Global-scope agents enqueue/drain via the literal "global" queue; agent-main
-  // would strand the event in a queue the heartbeat never peeks.
+  // Global scope selects a physical row; callers retain its owner separately
+  // until they qualify the event queue key.
   if (scope === "global") {
     return "global";
   }

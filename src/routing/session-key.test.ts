@@ -416,19 +416,13 @@ describe("scopedHeartbeatWakeOptions", () => {
   });
 
   it("strips sessionKey for global-scope sessions to preserve unscoped wake behavior", () => {
-    // In session.scope = "global" setups, resolveMainSessionKeyFromConfig() returns "global".
-    // Passing "global" as sessionKey into requestHeartbeatNow would create a targeted wake
-    // that can fail to resolve, breaking hook-triggered heartbeats. scopedHeartbeatWakeOptions
-    // must strip it to preserve the old unscoped behavior.
     const result = scopedHeartbeatWakeOptions("global", { reason: "hook:wake" });
     expect(result).toEqual({ reason: "hook:wake" });
     expect("sessionKey" in result).toBe(false);
   });
 
   it("drops sessionKey but preserves agentId for cron-run keys when scope is global", () => {
-    // Global-scope agents drain the "global" queue automatically; a targeted
-    // wake on agent:<id>:main would be unresolvable. Carry the agent target
-    // so multi-agent global-scope setups still wake the originating agent.
+    // Heartbeat resolves the configured session using the retained source agent.
     const result = scopedHeartbeatWakeOptions(
       "agent:ops:cron:job-1:run:xyz",
       { reason: "exec-event" },
@@ -491,9 +485,8 @@ describe("resolveEventSessionKey", () => {
     expect(resolveEventSessionKey("global")).toBe("global");
   });
 
-  it("routes cron-run keys to the global queue when scope is global", () => {
-    // resolveHeartbeatSession drains the literal "global" queue for global-scope
-    // sessions; remapping to agent:<id>:main would strand the event.
+  it("selects the physical global row for cron-run keys when scope is global", () => {
+    // Queue callers qualify this selector with the retained source agent.
     expect(resolveEventSessionKey("agent:ops:cron:job-1:run:xyz", undefined, "global")).toBe(
       "global",
     );

@@ -62,9 +62,9 @@ export function readExactSessionDeliveryContext(params: {
  */
 export function extractDeliveryInfo(
   sessionKey: string | undefined,
-  options?: { cfg?: OpenClawConfig },
+  options?: { cfg?: OpenClawConfig; agentId?: string },
 ): DeliveryInfo {
-  return extractDeliveryInfoBatch([sessionKey], options)[0]!;
+  return extractDeliveryInfoBatch([{ sessionKey, agentId: options?.agentId }], options)[0]!;
 }
 
 type DeliveryInfo = {
@@ -87,11 +87,12 @@ type DeliveryStoreRead = {
 
 /** Resolves one synchronous batch; only detached delivery facts leave the read scope. */
 export function extractDeliveryInfoBatch(
-  sessionKeys: readonly (string | undefined)[],
+  requests: readonly { sessionKey?: string; agentId?: string }[],
   options?: { cfg?: OpenClawConfig },
 ): DeliveryInfo[] {
-  const parsed = sessionKeys.map((sessionKey) => ({
+  const parsed = requests.map(({ sessionKey, agentId }) => ({
     sessionKey,
+    agentId,
     ...parseSessionThreadInfo(sessionKey),
   }));
   const results: DeliveryInfo[] = parsed.map(({ threadId }) => ({
@@ -108,10 +109,15 @@ export function extractDeliveryInfoBatch(
     return results;
   }
   let storeTargets: ReturnType<typeof resolveAllAgentSessionStoreTargetsSync> | undefined;
-  function prepareDeliveryLookup(sessionKey: string, baseSessionKey: string): DeliveryLookup {
+  function prepareDeliveryLookup(
+    sessionKey: string,
+    baseSessionKey: string,
+    requestedAgentId?: string,
+  ): DeliveryLookup {
     const { agentId, canonicalKey: canonicalBaseKey } = resolveSessionStoreIdentity({
       cfg,
       sessionKey: baseSessionKey,
+      agentId: requestedAgentId,
     });
     const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey, storeAgentId: agentId });
     const storePaths = new Set([resolveSessionStorePathCore(cfg.session?.store, { agentId })]);
@@ -133,12 +139,12 @@ export function extractDeliveryInfoBatch(
     sessionKeys: string[];
     source?: SessionEntryReadSource;
   }> = [];
-  const lookups = parsed.flatMap(({ sessionKey, baseSessionKey }, index) => {
+  const lookups = parsed.flatMap(({ sessionKey, baseSessionKey, agentId }, index) => {
     if (!sessionKey || !baseSessionKey) {
       return [];
     }
     try {
-      const lookup = prepareDeliveryLookup(sessionKey, baseSessionKey);
+      const lookup = prepareDeliveryLookup(sessionKey, baseSessionKey, agentId);
       // Incognito keyed reads retain their existing process-owned handle lifetime.
       const readIndexes = isIncognitoSessionKey(sessionKey)
         ? undefined
