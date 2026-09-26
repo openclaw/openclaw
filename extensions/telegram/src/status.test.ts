@@ -36,6 +36,119 @@ function expectIssueMessageContains(issues: StatusIssue[], text: string): void {
 }
 
 describe("collectTelegramStatusIssues", () => {
+  describe("unmentioned-group privacy evidence", () => {
+    const adminAudit = {
+      ok: true,
+      checkedGroups: 2,
+      unresolvedGroups: 0,
+      hasWildcardUnmentionedGroups: false,
+      groups: [
+        { chatId: "-100123", ok: true, status: "administrator" },
+        { chatId: "-100456", ok: true, status: "creator" },
+      ],
+    };
+
+    function collect(evidence: Pick<ChannelAccountSnapshot, "probe" | "audit">) {
+      return collectTelegramStatusIssues([
+        {
+          accountId: "main",
+          enabled: true,
+          configured: true,
+          allowUnmentionedGroups: true,
+          ...evidence,
+        },
+      ]);
+    }
+
+    it("keeps the existing-group caveat when privacy is disabled without admin evidence", () => {
+      const issues = collect({ probe: { ok: true, bot: { canReadAllGroupMessages: true } } });
+      expect(issues).toHaveLength(1);
+      expect(issues[0]?.message).toContain("privacy mode is disabled");
+      expect(issues[0]?.message).toContain("Existing Telegram groups");
+      expect(issues[0]?.fix).toContain("remove and re-add");
+      expect(issues[0]?.fix).not.toContain("/setprivacy");
+    });
+
+    it.each([
+      undefined,
+      { ok: true, bot: { canReadAllGroupMessages: false } },
+      { ok: true, bot: { canReadAllGroupMessages: true } },
+    ])(
+      "does not warn when every configured group has confirmed admin access (probe=%j)",
+      (probe) => {
+        expect(collect({ probe, audit: adminAudit })).toEqual([]);
+      },
+    );
+
+    it.each([
+      ["missing probe", undefined],
+      ["failed probe with bot metadata", { ok: false, bot: { canReadAllGroupMessages: true } }],
+      ["missing probe success", { bot: { canReadAllGroupMessages: true } }],
+      ["missing visibility flag", { ok: true, bot: {} }],
+      ["non-boolean visibility flag", { ok: true, bot: { canReadAllGroupMessages: "true" } }],
+      ["malformed probe", "unavailable"],
+    ])("keeps a conditional warning for %s", (_label, probe) => {
+      const issues = collect({ probe });
+      expect(issues).toHaveLength(1);
+      expect(issues[0]?.message).toContain("may block");
+      expect(issues[0]?.message).toContain("group admin");
+      expect(issues[0]?.fix).toContain("channels status --probe");
+      expect(issues[0]?.fix).toContain("/setprivacy");
+      expect(issues[0]?.fix).toContain("re-add");
+    });
+
+    it.each([
+      ["missing audit", undefined],
+      ["failed audit", { ...adminAudit, ok: false }],
+      ["empty audit", { ...adminAudit, checkedGroups: 0, groups: [] }],
+      ["partial audit", { ...adminAudit, groups: adminAudit.groups.slice(0, 1) }],
+      ["missing checked count", { ...adminAudit, checkedGroups: undefined }],
+      ["unresolved groups", { ...adminAudit, unresolvedGroups: 1 }],
+      ["wildcard groups", { ...adminAudit, hasWildcardUnmentionedGroups: true }],
+      ["missing wildcard coverage", { ...adminAudit, hasWildcardUnmentionedGroups: undefined }],
+      ["missing unresolved count", { ...adminAudit, unresolvedGroups: undefined }],
+      ["malformed row", { ...adminAudit, groups: [...adminAudit.groups, null] }],
+      [
+        "mixed member and admin groups",
+        {
+          ...adminAudit,
+          groups: [adminAudit.groups[0], { chatId: "-100456", ok: true, status: "member" }],
+        },
+      ],
+      [
+        "failed admin row",
+        {
+          ...adminAudit,
+          groups: [adminAudit.groups[0], { chatId: "-100456", ok: false, status: "administrator" }],
+        },
+      ],
+    ])("does not infer full visibility from %s", (_label, audit) => {
+      const issues = collect({
+        probe: { ok: true, bot: { canReadAllGroupMessages: false } },
+        audit,
+      });
+      expectIssueMessageContains(issues, "privacy mode");
+    });
+
+    it("preserves group audit problems even when privacy is disabled", () => {
+      const issues = collect({
+        probe: { ok: true, bot: { canReadAllGroupMessages: true } },
+        audit: {
+          ok: false,
+          checkedGroups: 1,
+          unresolvedGroups: 1,
+          hasWildcardUnmentionedGroups: true,
+          groups: [{ chatId: "-100123", ok: false, status: "left" }],
+        },
+      });
+      expect(issues).toHaveLength(4);
+      expectIssueMessageContains(issues, 'uses "*"');
+      expectIssueMessageContains(issues, "unresolvedGroups=1");
+      expectIssueMessageContains(issues, "Group -100123 not reachable");
+      expectIssueMessageContains(issues, "privacy mode is disabled");
+    });
+  });
+
   it("reports privacy-mode and wildcard unmentioned-group configuration risks", () => {
     const issues = collectTelegramStatusIssues([
       {
