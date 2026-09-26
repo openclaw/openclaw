@@ -3,6 +3,7 @@ import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, type PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
+import type { LogsTailResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
@@ -78,13 +79,7 @@ class LogsPage extends OpenClawLightDomElement {
       }
       try {
         const requestTail = (nextCursor?: number) =>
-          client.request<{
-            file?: string;
-            cursor?: number;
-            lines?: unknown;
-            truncated?: boolean;
-            reset?: boolean;
-          }>(
+          client.request<LogsTailResult>(
             "logs.tail",
             { cursor: nextCursor, limit: this.logsLimit, maxBytes: this.logsMaxBytes },
             { signal },
@@ -104,6 +99,7 @@ class LogsPage extends OpenClawLightDomElement {
       if (!result.ok) {
         if (isMissingOperatorReadScopeError(result.error)) {
           this.logsEntries = [];
+          this.logsTruncated = false;
           this.logsStatus = failPanelRefresh(
             createPanelRefreshStatus(),
             result.error,
@@ -125,13 +121,16 @@ class LogsPage extends OpenClawLightDomElement {
         : [];
       const entries = lines.map(parseLogLine);
       const shouldReset = result.reset || result.payload.reset || result.cursor == null;
-      this.logsEntries = shouldReset
-        ? entries
-        : [...this.logsEntries, ...entries].slice(-LOG_BUFFER_LIMIT);
+      const nextEntries = shouldReset ? entries : [...this.logsEntries, ...entries];
+      // Retain truncation while appending; resets replace the displayed buffer and its history.
+      this.logsTruncated =
+        Boolean(result.payload.truncated) ||
+        (!shouldReset && this.logsTruncated) ||
+        nextEntries.length > LOG_BUFFER_LIMIT;
+      this.logsEntries = nextEntries.slice(-LOG_BUFFER_LIMIT);
       this.logsCursor =
         typeof result.payload.cursor === "number" ? result.payload.cursor : this.logsCursor;
       this.logsFile = typeof result.payload.file === "string" ? result.payload.file : this.logsFile;
-      this.logsTruncated = Boolean(result.payload.truncated);
       this.logsStatus = completePanelRefresh();
     },
   });
