@@ -2,8 +2,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -14,6 +12,8 @@ import {
   runMockRuntimeToolFixture,
   runtimeToolFixtureConfig,
   runtimeToolFixtureDeps,
+  writeQaSessionTranscript,
+  writeRuntimeToolTranscripts,
   type RuntimeToolFixtureConfig,
   type RuntimeToolFixtureDeps,
 } from "../test/runtime-tool-fixture-helpers.js";
@@ -21,33 +21,6 @@ import { QaSuiteInfraError } from "./errors.js";
 import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
-
-async function writeQaSessionTranscript(
-  env: QaSuiteRuntimeEnv,
-  sessionKey: string,
-  messages: Array<Record<string, unknown>>,
-) {
-  const sessionId = sessionKey.replace(/[^a-z0-9]+/giu, "-");
-  const sessionEnv = {
-    ...process.env,
-    OPENCLAW_STATE_DIR: path.join(env.gateway.tempRoot, "state"),
-  };
-  await upsertSessionEntry({
-    agentId: "qa",
-    env: sessionEnv,
-    sessionKey,
-    entry: { sessionId, updatedAt: Date.now() },
-  });
-  for (const message of messages) {
-    await appendSessionTranscriptMessageByIdentity({
-      agentId: "qa",
-      env: sessionEnv,
-      sessionId,
-      sessionKey,
-      message,
-    });
-  }
-}
 
 function transcriptToolCall(
   toolName: string,
@@ -80,16 +53,6 @@ function transcriptToolResult(
     ...(isError === undefined ? {} : { isError }),
     content,
   };
-}
-
-async function writeRuntimeToolTranscripts(
-  env: QaSuiteRuntimeEnv,
-  toolName: string,
-  happyMessages: Array<Record<string, unknown>>,
-  failureMessages: Array<Record<string, unknown>>,
-) {
-  await writeQaSessionTranscript(env, `agent:qa:runtime-tool:${toolName}:happy`, happyMessages);
-  await writeQaSessionTranscript(env, `agent:qa:runtime-tool:${toolName}:failure`, failureMessages);
 }
 
 async function writeLiveRuntimeToolEvidence(env: QaSuiteRuntimeEnv, toolName = "read") {

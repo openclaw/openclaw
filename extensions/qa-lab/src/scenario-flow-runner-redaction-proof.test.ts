@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { nestedToolHistoryFixture } from "../test/nested-tool-activity-fixture.js";
 import { createQaBusState } from "./bus-state.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
@@ -27,7 +28,15 @@ async function runSecretRedactionScenario(
   params: {
     providerMode?: (typeof redactionProviderModes)[number];
     seedPriorInbound?: boolean;
-    transcriptEvidence?: "fixture" | "unrelated-file" | "uncorrelated-result" | "missing-secret";
+    leakSecret?: boolean;
+    transcriptEvidence?:
+      | "fixture"
+      | "unrelated-file"
+      | "uncorrelated-result"
+      | "uncorrelated-nested-call"
+      | "uncorrelated-nested-run"
+      | "missing-secret"
+      | "failed-result";
   } = {},
 ) {
   const scenario = readQaScenarioById(scenarioId);
@@ -117,53 +126,77 @@ async function runSecretRedactionScenario(
           agentToolReads.push({ path: toolReadPath, contents: toolReadContents });
 
           const callId = `qa-redaction-${providerMode}-read`;
-          persistedMessages.push(
-            {
-              role: "assistant",
-              content: [
-                providerMode === "mock-openai"
-                  ? {
-                      type: "toolCall",
-                      id: callId,
-                      name: "read",
-                      arguments: { path: path.basename(toolReadPath) },
-                    }
-                  : {
-                      type: "tool_use",
-                      id: callId,
-                      name: "read",
-                      input: { path: toolReadPath },
-                    },
-              ],
-            },
-            {
-              role: "toolResult",
-              toolCallId:
-                params.transcriptEvidence === "uncorrelated-result"
-                  ? `${callId}-different`
-                  : callId,
+          if (
+            providerMode === "live-frontier" &&
+            params.transcriptEvidence !== "uncorrelated-result"
+          ) {
+            const history = nestedToolHistoryFixture({
               toolName: "read",
-              isError: false,
-              content: [
-                {
-                  type: providerMode === "mock-openai" ? "text" : "output_text",
-                  text:
-                    params.transcriptEvidence === "missing-secret"
-                      ? "Read completed without returning credential material."
-                      : toolReadContents,
-                },
-              ],
-            },
-            {
-              role: "assistant",
-              content: [{ type: "text", text: safeMarker }],
-            },
-          );
+              toolCallId: callId,
+              input: { path: toolReadPath },
+              text:
+                params.transcriptEvidence === "missing-secret"
+                  ? "Read completed."
+                  : toolReadContents,
+              isError: params.transcriptEvidence === "failed-result",
+            });
+            for (const block of history.content) {
+              if (block.type === "toolResult") {
+                Object.assign(block, {
+                  toolCallId:
+                    params.transcriptEvidence === "uncorrelated-nested-call"
+                      ? `${callId}-different`
+                      : callId,
+                  runId:
+                    params.transcriptEvidence === "uncorrelated-nested-run"
+                      ? "run-unrelated"
+                      : block.runId,
+                });
+              }
+            }
+            persistedMessages.push(history);
+          } else {
+            persistedMessages.push(
+              {
+                role: "assistant",
+                content: [
+                  {
+                    type: "toolCall",
+                    id: callId,
+                    name: "read",
+                    arguments: { path: path.basename(toolReadPath) },
+                  },
+                ],
+              },
+              {
+                role: "toolResult",
+                toolCallId:
+                  params.transcriptEvidence === "uncorrelated-result"
+                    ? `${callId}-different`
+                    : callId,
+                toolName: "read",
+                isError: params.transcriptEvidence === "failed-result",
+                content: [
+                  {
+                    type: "text",
+                    text:
+                      params.transcriptEvidence === "missing-secret"
+                        ? "Read completed without returning credential material."
+                        : toolReadContents,
+                  },
+                ],
+              },
+              {
+                role: "assistant",
+                content: [{ type: "text", text: safeMarker }],
+              },
+            );
+          }
         }
         state.addOutboundMessage({
           accountId: "qa-channel",
           to: "dm:qa-operator",
-          text: safeMarker,
+          text: params.leakSecret ? `${safeMarker} ${fakeSecret}` : safeMarker,
         });
       },
       waitForOutboundMessage: async (
@@ -284,6 +317,45 @@ describe("secret redaction scenario proof", () => {
       ).rejects.toThrow("successful persisted read did not target the fake secret fixture");
     },
   );
+
+  it.each(redactionScenarioCases)(
+    "rejects failed fixture reads in $scenarioId under $providerMode",
+    async ({ scenarioId, providerMode }) => {
+      await expect(
+        runSecretRedactionScenario(scenarioId, {
+          providerMode,
+          transcriptEvidence: "failed-result",
+        }),
+      ).rejects.toThrow("successful persisted read did not target the fake secret fixture");
+    },
+  );
+
+  it.each(redactionScenarioIds)(
+    "rejects leaked fixture material in %s after a nested read",
+    async (scenarioId) => {
+      await expect(
+        runSecretRedactionScenario(scenarioId, {
+          providerMode: "live-frontier",
+          leakSecret: true,
+        }),
+      ).rejects.toThrow(/secret leaked into outbound transcript/);
+    },
+  );
+
+  it.each(
+    redactionScenarioIds.flatMap((scenarioId) =>
+      (["uncorrelated-nested-call", "uncorrelated-nested-run"] as const).map(
+        (transcriptEvidence) => ({ scenarioId, transcriptEvidence }),
+      ),
+    ),
+  )("rejects $transcriptEvidence in $scenarioId", async ({ scenarioId, transcriptEvidence }) => {
+    await expect(
+      runSecretRedactionScenario(scenarioId, {
+        providerMode: "live-frontier",
+        transcriptEvidence,
+      }),
+    ).rejects.toThrow("successful persisted read did not target the fake secret fixture");
+  });
 
   it.each(redactionScenarioIds)(
     "%s uses an outbound-only cursor when earlier inbound messages remain on the QA bus",

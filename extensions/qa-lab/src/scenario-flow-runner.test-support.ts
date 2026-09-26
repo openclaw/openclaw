@@ -13,6 +13,7 @@ import { readQaScenarioById, type QaScenarioFlow } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import type { QaSuiteStep } from "./suite-types.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
+import { projectQaToolMessages } from "./tool-activity.js";
 
 function formatTestTranscript(state: ReturnType<typeof createQaBusState>) {
   return state
@@ -100,6 +101,7 @@ export async function runLoadedScenarioFlow(
         }),
   };
   const api = {
+    projectQaToolMessages,
     env: {
       providerMode: "mock-openai",
       gateway: {

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { nestedToolHistoryFixture } from "../test/nested-tool-activity-fixture.js";
 import { createQaBusState } from "./bus-state.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 
@@ -84,7 +85,7 @@ async function runSessionMemoryRankingFlow(params: {
         ]
       : []),
   ];
-  const historyMessages = [
+  const directHistoryMessages = [
     ...(includeToolCall
       ? [
           {
@@ -116,6 +117,20 @@ async function runSessionMemoryRankingFlow(params: {
       content: [{ type: "text", text: "The current Project Nebula codename is ORBIT-10." }],
     },
   ];
+  const historyMessages =
+    providerMode === "live-frontier"
+      ? includeToolCall && includeToolResult && toolResultCallId === searchCallId
+        ? [
+            nestedToolHistoryFixture({
+              toolName: "memory_search",
+              toolCallId: searchCallId,
+              input: plannedToolArgs,
+              text: JSON.stringify({ results: params.results }),
+              isError: params.resultIsError,
+            }),
+          ]
+        : directHistoryMessages
+      : directHistoryMessages;
   const gatewayCall = vi.fn(
     async (method: string, request: { sessionKey?: string; limit?: number }) => {
       expect(method).toBe("chat.history");
