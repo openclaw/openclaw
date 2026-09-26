@@ -2,10 +2,10 @@ import { html, nothing } from "lit";
 import { t } from "../../../i18n/index.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
+import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
 import "./chat-audio-player.ts";
 import "./chat-svg-attachment.ts";
 import "./chat-video-player.ts";
-import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
 import {
   isCrossOriginHttpSource,
   safeAttachmentHref,
@@ -52,6 +52,7 @@ import { renderMessageVideoPreview } from "./chat-message-video-preview.ts";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import type { AttachmentSidebarState, SidebarContent } from "./chat-sidebar-content-types.ts";
+import { videoLightboxItem } from "./chat-video-lightbox-source.ts";
 
 type OmittedMediaItem = Extract<MessageContentItem, { type: "omitted_media" }>;
 
@@ -527,17 +528,31 @@ function renderMessageAttachmentContent(
     attachment.kind === "video" && onOpenImage && safeAttachmentUrl
       ? (src: string) => {
           const requestVersion = onRequestOpenImage?.();
+          const videoItem = (video: AttachmentItem["attachment"]) =>
+            videoLightboxItem(
+              video,
+              (onRequestUpdate) => resolveAttachmentSource(video, { ...options, onRequestUpdate }),
+              options.onRequestUpdate,
+            );
+          const membership = options.galleryVideos?.(item);
           const overlayItem = {
-            kind: "video" as const,
+            ...videoItem(attachment),
             src,
             originalSrc: safeAttachmentUrl,
-            title: attachment.label,
+            ...(membership && membership.index >= 0 && membership.items.length > 1
+              ? {
+                  gallery: {
+                    index: membership.index,
+                    items: membership.items.map(
+                      ({ attachment: video }) =>
+                        async () =>
+                          videoItem(video),
+                    ),
+                  },
+                }
+              : {}),
           };
-          if (requestVersion === undefined) {
-            onOpenImage(overlayItem);
-          } else {
-            onOpenImage(overlayItem, requestVersion);
-          }
+          onOpenImage(overlayItem, requestVersion);
         }
       : undefined;
   const hasLiveSidebarSource =

@@ -4391,7 +4391,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
     player.onExpand(kind === "video" ? source : undefined);
     if (kind === "video") {
-      expect(onOpenImage).toHaveBeenCalledWith({
+      expect(onOpenImage.mock.lastCall?.[0]).toMatchObject({
         kind: "video",
         originalSrc: source,
         src: source,
