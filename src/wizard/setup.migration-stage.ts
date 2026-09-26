@@ -6,6 +6,7 @@ import { findExistingAncestor } from "@openclaw/fs-safe/advanced";
 import { isNotFoundPathError } from "@openclaw/fs-safe/path";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { closeAuthProfileReadPool } from "../agents/auth-profiles/sqlite.js";
 import { clearRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/store.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -347,6 +348,8 @@ export async function createSetupMigrationStage(params: {
     }
     clearRuntimeAuthProfileStoreSnapshot(stagedAgentDir);
     const stagedAgentDatabasePath = path.join(stagedAgentDir, "openclaw-agent.sqlite");
+    // Verification reads auth profiles through a pooled reader that outlives the agent handle.
+    closeAuthProfileReadPool({ kind: "database", databasePath: stagedAgentDatabasePath });
     disposeOpenClawAgentDatabaseByPath(stagedAgentDatabasePath, { env: stageEnv });
     await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(stageEnv));
     databasesDisposed = true;

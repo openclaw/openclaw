@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { acquireAuthProfileReadDatabase } from "../agents/auth-profiles/sqlite-read-pool.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -311,6 +312,40 @@ describe("setup migration stage", () => {
         path: path.join(stage.final.agentDir, "openclaw-agent.sqlite"),
       }),
     ]);
+    await promoted.resume.complete();
+    await promoted.resume.acknowledge();
+    await stage.cleanup();
+  });
+
+  it("closes the pooled auth-profile reader before promoting the staged agent", async () => {
+    const root = tempRoots.make("openclaw-migration-stage-");
+    const stateDir = path.join(root, "state");
+    const workspaceDir = path.join(root, "workspace");
+    const reportDir = path.join(stateDir, "migration", "hermes", "attempt");
+    const stage = await createSetupMigrationStage({
+      providerId: "hermes",
+      stateDir,
+      workspaceDir,
+      reportDir,
+      targetConfig: { agents: { defaults: { workspace: workspaceDir } } },
+    });
+    const reader = acquireAuthProfileReadDatabase(
+      path.join(stage.staged.agentDir, "openclaw-agent.sqlite"),
+    );
+    const db = reader.status === "readable" ? reader.db : undefined;
+    expect(db?.isOpen).toBe(true);
+
+    const promoted = await stage.promote({
+      expectedConfig: {},
+      continuation: continuation(),
+      readConfigFile: async () => ({}),
+      commitConfigFile: async (config) => config,
+    });
+
+    expect(db?.isOpen).toBe(false);
+    await expect(
+      fs.access(path.join(stage.final.agentDir, "openclaw-agent.sqlite")),
+    ).resolves.toBeUndefined();
     await promoted.resume.complete();
     await promoted.resume.acknowledge();
     await stage.cleanup();
