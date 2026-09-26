@@ -836,11 +836,11 @@
     },
     {
       "source": "/showcase",
-      "destination": "/start/getting-started"
+      "destination": "https://openclaw.ai/showcase"
     },
     {
       "source": "/start/showcase",
-      "destination": "/start/getting-started"
+      "destination": "https://openclaw.ai/showcase"
     },
     {
       "source": "/signal",
