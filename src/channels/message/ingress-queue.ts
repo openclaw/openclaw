@@ -27,6 +27,7 @@ import {
   claimedRecord,
   corruptClaimRecord,
   completedRecord,
+  failedRecord,
 } from "./ingress-queue.codec.js";
 import {
   failChannelIngressInDatabase,
@@ -34,194 +35,24 @@ import {
   releaseChannelIngressInDatabase,
 } from "./ingress-queue.kernel.js";
 import type {
+  ChannelIngressQueue,
   ChannelIngressQueueClaim,
   ChannelIngressQueueClaimRef,
-  ChannelIngressQueueCompletedRecord,
-  ChannelIngressQueueCorruptClaim,
-  ChannelIngressQueuePruneOptions,
+  ChannelIngressQueueEnqueueResult,
   ChannelIngressQueueRecord,
   ChannelIngressRow,
+  CreateChannelIngressQueueOptions,
 } from "./ingress-queue.types.js";
 
 export type {
+  ChannelIngressQueue,
   ChannelIngressQueueClaim,
   ChannelIngressQueueClaimRef,
   ChannelIngressQueueCorruptClaim,
   ChannelIngressQueuePruneOptions,
   ChannelIngressQueueRecord,
+  CreateChannelIngressQueueOptions,
 } from "./ingress-queue.types.js";
-
-/** Failed ingress event tombstone retained for duplicate detection. */
-type ChannelIngressQueueFailedRecord = {
-  id: string;
-  channelId: string;
-  accountId: string;
-  queueName: string;
-  failedAt: number;
-  reason: string;
-  message?: string;
-};
-
-/** Rich failed ingress event retained for diagnostics and operator recovery. */
-type ChannelIngressQueueDeadLetterRecord<
-  TPayload = unknown,
-  TMetadata = unknown,
-> = ChannelIngressQueueFailedRecord & {
-  payload?: TPayload;
-  metadata?: TMetadata;
-  receivedAt: number;
-  updatedAt: number;
-  laneKey?: string;
-  attempts: number;
-  lastAttemptAt?: number;
-};
-
-/** Outcome of asking a channel/account queue to re-enqueue one failed event. */
-type ChannelIngressQueueResubmitResult<
-  TPayload,
-  TMetadata = unknown,
-  TCompletedMetadata = unknown,
-> =
-  | {
-      kind: "resubmitted";
-      record: ChannelIngressQueueRecord<TPayload, TMetadata>;
-      previous: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
-    }
-  | { kind: "not-found" }
-  | {
-      kind: "completed";
-      record: ChannelIngressQueueCompletedRecord<TCompletedMetadata>;
-    }
-  | { kind: "active"; status: "pending" | "claimed" }
-  | {
-      kind: "unrecoverable";
-      record: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
-    };
-
-/** Result of enqueueing a possibly duplicate ingress event id. */
-type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> =
-  | {
-      kind: "accepted";
-      duplicate: false;
-      record: ChannelIngressQueueRecord<TPayload, TMetadata>;
-    }
-  | {
-      kind: "pending";
-      duplicate: true;
-      record: ChannelIngressQueueRecord<TPayload, TMetadata>;
-    }
-  | {
-      kind: "claimed";
-      duplicate: true;
-      record: ChannelIngressQueueClaim<TPayload, TMetadata>;
-    }
-  | {
-      kind: "completed";
-      duplicate: true;
-      record: ChannelIngressQueueCompletedRecord<TCompletedMetadata>;
-    }
-  | {
-      kind: "failed";
-      duplicate: true;
-      record: ChannelIngressQueueFailedRecord;
-    };
-
-/** Durable FIFO-ish ingress queue with claims, duplicate detection, and retention pruning. */
-export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadata = unknown> = {
-  enqueue(
-    id: string,
-    payload: TPayload,
-    options?: {
-      metadata?: TMetadata;
-      receivedAt?: number;
-      laneKey?: string;
-    },
-  ): Promise<ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata>>;
-  listPending(options?: {
-    limit?: number | "all";
-    orderBy?: "received" | "id";
-  }): Promise<Array<ChannelIngressQueueRecord<TPayload, TMetadata>>>;
-  listClaims(): Promise<Array<ChannelIngressQueueClaim<TPayload, TMetadata>>>;
-  /** Additive SDK seam; optional so existing external queue test doubles remain compatible. */
-  listFailed?(options?: {
-    limit?: number | "all";
-  }): Promise<Array<ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>>>;
-  claimNext(options?: {
-    ownerId?: string;
-    blockedLaneKeys?: Iterable<string>;
-    staleMs?: number;
-    orderBy?: "received" | "id";
-    scanLimit?: number;
-    candidateIds?: Iterable<string>;
-    deriveLaneKey?: (record: ChannelIngressQueueRecord<TPayload, TMetadata>) => string | undefined;
-    /** Authorize a changed durable lane before the atomic pending-to-claimed transition. */
-    reconcileStoredLaneKey?: (
-      record: ChannelIngressQueueRecord<TPayload, TMetadata>,
-      storedLaneKey: string,
-      derivedLaneKey: string,
-    ) => boolean;
-  }): Promise<ChannelIngressQueueClaim<TPayload, TMetadata> | null>;
-  claim(
-    id: string,
-    options?: { ownerId?: string },
-  ): Promise<ChannelIngressQueueClaim<TPayload, TMetadata> | null>;
-  refreshClaim?(
-    claim: ChannelIngressQueueClaimRef,
-    options?: { refreshedAt?: number },
-  ): Promise<boolean>;
-  complete(
-    idOrClaim: string | ChannelIngressQueueClaimRef,
-    options?: { metadata?: TCompletedMetadata; completedAt?: number },
-  ): Promise<boolean>;
-  release(
-    idOrClaim: string | ChannelIngressQueueClaimRef,
-    options?: { lastError?: string; releasedAt?: number; recordAttempt?: boolean },
-  ): Promise<boolean>;
-  fail(
-    idOrClaim: string | ChannelIngressQueueClaimRef,
-    options: { reason: string; message?: string; failedAt?: number },
-  ): Promise<boolean>;
-  /** Additive SDK seam; actual runtime queues support operator resubmission. */
-  resubmit?(
-    id: string,
-    options?: { resubmittedAt?: number },
-  ): Promise<ChannelIngressQueueResubmitResult<TPayload, TMetadata, TCompletedMetadata>>;
-  delete(
-    idOrClaim:
-      | string
-      | ChannelIngressQueueRecord<TPayload, TMetadata>
-      | ChannelIngressQueueClaimRef,
-  ): Promise<boolean>;
-  recoverStaleClaims(options?: {
-    staleMs?: number;
-    now?: number;
-    shouldRecover?: (
-      claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
-    ) => boolean | Promise<boolean>;
-    shouldRecoverCorrupt?: (claim: ChannelIngressQueueCorruptClaim) => boolean | Promise<boolean>;
-  }): Promise<number>;
-  prune(options?: ChannelIngressQueuePruneOptions): Promise<number>;
-  /**
-   * Delete all rows after callers stop the account's producers and drain.
-   * Optional for existing plugin-supplied queue inputs; core queues implement it.
-   */
-  purge?(): Promise<number>;
-};
-
-/** Construction options for a channel/account-scoped ingress queue. */
-export type CreateChannelIngressQueueOptions = {
-  channelId: string;
-  accountId?: string;
-  stateDir?: string;
-  now?: () => number;
-  /**
-   * `read-only` reads through the existing-database read-only opener, which never
-   * creates, migrates, chmods or configures the shared state file. Callers that must
-   * not touch durable state before they own it - Doctor detection runs before the
-   * exclusive maintenance lock - use it so listing cannot take a write path.
-   */
-  access?: "read-write" | "read-only";
-};
 
 type ChannelIngressDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
 
@@ -281,41 +112,6 @@ function getChannelIngressKysely(db: DatabaseSync) {
 
 function affectedRows(result: { numAffectedRows?: bigint }): number {
   return Number(result.numAffectedRows ?? 0n);
-}
-
-type ParseJsonResult = { ok: true; value: unknown } | { ok: false };
-
-function parseJson(value: string): ParseJsonResult {
-  try {
-    return { ok: true, value: JSON.parse(value) };
-  } catch {
-    return { ok: false };
-  }
-}
-
-function failedRecord<TPayload, TMetadata>(
-  row: ChannelIngressRow,
-): ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata> {
-  const payloadResult = parseFailedPayload(row.payload_json);
-  const metadataResult = row.metadata_json === null ? null : parseJson(row.metadata_json);
-  return {
-    id: row.event_id,
-    channelId: row.channel_id,
-    accountId: row.account_id,
-    queueName: row.queue_name,
-    ...(payloadResult.ok && row.payload_json !== "null"
-      ? { payload: payloadResult.value as TPayload }
-      : {}),
-    ...(metadataResult?.ok ? { metadata: metadataResult.value as TMetadata } : {}),
-    receivedAt: row.received_at,
-    updatedAt: row.updated_at,
-    ...(row.lane_key === null ? {} : { laneKey: row.lane_key }),
-    attempts: row.attempts,
-    ...(row.last_attempt_at === null ? {} : { lastAttemptAt: row.last_attempt_at }),
-    failedAt: row.failed_at ?? row.updated_at,
-    reason: row.failed_reason ?? "failed",
-    ...(row.last_error === null ? {} : { message: row.last_error }),
-  };
 }
 
 function selectRow(db: DatabaseSync, queueName: string, id: string) {
