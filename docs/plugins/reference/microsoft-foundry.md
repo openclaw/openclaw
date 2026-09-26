@@ -52,6 +52,20 @@ chat APIs:
   through `reasoning_effort`. Its context and output token metadata are
   163,840 tokens.
 
+GPT-6 Astra, Sol, and Luna deployments discovered during login use a 1,050,000-token
+context window and a 128,000-token output limit. Discovery uses the Azure model
+name even when the deployment has a custom name. These models support `xhigh`;
+`max` is available with the Responses API. `minimal` maps to `low`. For Astra,
+`off` omits the effort parameter because some deployments reject `none`; this
+uses the provider default rather than disabling reasoning. Sol and Luna use `none`.
+
+When setup has no verified token limits for a chat model, it warns in the provider
+notes before you use the generated 128,000/16,384 defaults. Check the deployment's
+limits and reasoning capabilities and adjust its entry under
+`models.providers.microsoft-foundry.models` as needed. Updating OpenClaw preserves
+existing configured token limits; rerun discovery to generate corrected metadata
+or edit the affected entries, preserving any intentional custom limits.
+
 Anthropic Claude deployments in Microsoft Foundry use the Anthropic Messages
 API shape, not the OpenAI-compatible `/openai/v1` shape. Configure those as a
 custom `anthropic-messages` provider until the Microsoft Foundry plugin grows a

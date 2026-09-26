@@ -109,7 +109,7 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
           api: selectedModelCapabilities.api,
           baseUrl: selectedModelBaseUrl,
           reasoning: selectedModelCapabilities.reasoning || model.reasoning,
-          thinkingLevelMap: selectedModelCapabilities.thinkingLevelMap ?? model.thinkingLevelMap,
+          thinkingLevelMap: model.thinkingLevelMap ?? selectedModelCapabilities.thinkingLevelMap,
           params: mergeFoundryCanonicalModelParams(
             model.params,
             selectedModelCapabilities.modelName,
@@ -140,6 +140,9 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
                 ? { supportsReasoningEffort: true }
                 : undefined),
             ...(explicitMaxTokensField ? { maxTokensField: explicitMaxTokensField } : {}),
+            ...(model.compat?.supportedReasoningEfforts !== undefined
+              ? { supportedReasoningEfforts: model.compat.supportedReasoningEfforts }
+              : {}),
           };
         }
         return nextModel;
@@ -227,6 +230,9 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
                 ? { supportsReasoningEffort: true }
                 : undefined),
             ...(explicitMaxTokensField ? { maxTokensField: explicitMaxTokensField } : {}),
+            ...(model.compat?.supportedReasoningEfforts !== undefined
+              ? { supportedReasoningEfforts: model.compat.supportedReasoningEfforts }
+              : {}),
           }
         : undefined;
       return {
@@ -234,7 +240,7 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
         name: capabilities.modelName,
         api: capabilities.api,
         reasoning: capabilities.reasoning || model.reasoning,
-        thinkingLevelMap: capabilities.thinkingLevelMap ?? model.thinkingLevelMap,
+        thinkingLevelMap: model.thinkingLevelMap ?? capabilities.thinkingLevelMap,
         params: mergeFoundryCanonicalModelParams(model.params, capabilities.modelName),
         input: capabilities.input,
         baseUrl: buildFoundryProviderBaseUrl(
