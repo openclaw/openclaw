@@ -1,4 +1,5 @@
 import { isFallbackSummaryError } from "../../agents/model-fallback-attempt.js";
+import { PreparedModelRuntimeOwnerNotPublishedError } from "../../agents/prepared-model-runtime.errors.js";
 import {
   isAgentRunDirectAbortReason,
   isAgentRunRestartAbortReason,
@@ -82,7 +83,7 @@ export function resolveReplyOperationAbortReason(
   // Operation-owned settlement precedes the caller signal, which precedes thrown markers.
   return isReplyOperationRestartAbort(replyOperation)
     ? "restart"
-    : isReplyOperationSuperseded(replyOperation)
+    : isReplyOperationSuperseded(replyOperation) || isPreparedModelRuntimeSupersessionError(error)
       ? "superseded"
       : (resolveSignalAbortReason(signal) ??
         (isAgentRunRestartAbortReason(error)
@@ -115,4 +116,38 @@ export function resolveRestartLifecycleError(
     }
   }
   return undefined;
+}
+
+/**
+ * True when a thrown reply-operation error is (or wraps) a prepared-model-runtime
+ * generation supersession — the benign TOCTOU race where `main` re-prepares its
+ * runtime and bumps the published owner generation after the heartbeat run passed
+ * its point-in-time idle guards but before the model turn acquired that owner.
+ *
+ * This surfaces as a thrown `PreparedModelRuntimeOwnerNotPublishedError` fast-failing
+ * every model-fallback candidate, not as an abort-signal supersession, so
+ * `isReplyOperationSuperseded` (abort-signal based) does not catch it. Walking the
+ * fallback-summary attempts and error causes lets callers classify it as a
+ * preemption skip instead of a genuine agent-runner failure, while any other thrown
+ * error stays a real, visible failure.
+ */
+export function isPreparedModelRuntimeSupersessionError(error: unknown): boolean {
+  const pending = [error];
+  const seen = new Set<unknown>();
+  for (const candidate of pending) {
+    if (!candidate || seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+    if (candidate instanceof PreparedModelRuntimeOwnerNotPublishedError) {
+      return true;
+    }
+    if (isFallbackSummaryError(candidate)) {
+      pending.push(...candidate.attempts.map((attempt) => attempt.error));
+    }
+    if (candidate instanceof Error && "cause" in candidate) {
+      pending.push(candidate.cause);
+    }
+  }
+  return false;
 }
