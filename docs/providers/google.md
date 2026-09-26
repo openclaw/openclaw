@@ -141,6 +141,68 @@ the Gateway already runs inside a managed Google Cloud environment.
     should use `google/*` model refs plus the explicit runtime selection above.
 
   </Tab>
+
+  <Tab title="Vertex AI (ADC)">
+    **For:** Gateways already running inside a managed Google Cloud
+    environment, or a workstation with `gcloud` configured.
+
+    <Steps>
+      <Step title="Authenticate with Application Default Credentials">
+        ```bash
+        gcloud auth application-default login
+        ```
+      </Step>
+      <Step title="Set the project and location environment variables">
+        The Gateway reads `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`
+        from its own process environment, so put them where the Gateway can
+        see them.
+
+        For a Gateway you launch from the current shell:
+
+        ```bash
+        export GOOGLE_CLOUD_PROJECT="your-project-id"
+        export GOOGLE_CLOUD_LOCATION="us-central1"
+        ```
+
+        For a service-managed Gateway (systemd/launchd), exports from an
+        interactive shell never reach the running process. Persist them to the
+        global env file and restart the Gateway instead:
+
+        ```bash
+        mkdir -p ~/.openclaw
+        cat >> ~/.openclaw/.env <<'EOF'
+        GOOGLE_CLOUD_PROJECT=your-project-id
+        GOOGLE_CLOUD_LOCATION=us-central1
+        EOF
+        openclaw gateway restart
+        ```
+
+        See [Environment variables](/help/environment) for the full env
+        loading precedence (process environment, `~/.openclaw/.env`,
+        systemd/launchd).
+      </Step>
+      <Step title="Verify the model is available">
+        ```bash
+        openclaw models list --provider google-vertex
+        ```
+      </Step>
+    </Steps>
+
+    OpenClaw detects Application Default Credentials from
+    `GOOGLE_APPLICATION_CREDENTIALS` or the `gcloud` default locations, and
+    accepts `authorized_user`, `external_account`, and `service_account`
+    credential files.
+
+    <Tip>
+    Do not paste an AI Studio API key or an access token as the `google-vertex`
+    credential. Vertex authentication uses Application Default Credentials, and
+    OpenClaw detects them automatically from the environment above. If a setup
+    surface asks you to store a credential value for `google-vertex`, store the
+    literal marker `gcp-vertex-credentials`; any other value is treated as an
+    API key, and Vertex rejects requests that use one.
+    </Tip>
+
+  </Tab>
 </Tabs>
 
 <Note>
