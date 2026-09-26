@@ -211,11 +211,16 @@ export function resolveWorkingProgress(
     compatibleCached?.startedAt,
     streamStartedAt,
     // Recovery rows cannot identify work, but matching durable timing survives reconnects.
+    // A live attempt start (streamStartedAt) is authoritative for an in-flight
+    // submitted send; only durable inline states retain their message time.
     ...visibleSends
       .filter((item) =>
-        explicitRunId
-          ? (item.sendRunId ?? item.pendingRunId) === explicitRunId
-          : item === queuedProgress,
+        streamStartedAt !== null &&
+        (item.sendState === "sending" || item.sendState === "submitting")
+          ? false
+          : explicitRunId
+            ? (item.sendRunId ?? item.pendingRunId) === explicitRunId
+            : item === queuedProgress,
       )
       // Send performance fields use performance.now(); the elapsed timer renders against Date.now().
       .map((item) => item.createdAt),

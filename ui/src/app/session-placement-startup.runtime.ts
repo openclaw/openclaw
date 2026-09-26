@@ -69,6 +69,7 @@ type PlacementStartupEntry = {
   readonly attachments: ChatAttachment[];
   readonly persistRecovery: boolean;
   readonly createdAt: number;
+  readonly attemptStartedAt: number;
   readonly scope: GatewayConnectionScope;
   readonly retainsConnection: () => boolean;
 };
@@ -299,8 +300,16 @@ export default function createApplicationPlacementStartupRuntime(
       attachments:
         input.displayAttachments ?? restoreChatApiAttachments(input.recovery.attachments),
       persistRecovery: input.persistRecovery,
+      // The message keeps its original creation time across retries; only the
+      // attempt clock below resets.
       createdAt:
         existing?.owner.messageId === owner.messageId ? existing.createdAt : input.createdAt,
+      attemptStartedAt:
+        input.mode === "retry"
+          ? Date.now()
+          : existing?.owner.messageId === owner.messageId
+            ? existing.attemptStartedAt
+            : input.createdAt,
       scope,
       retainsConnection: capturePlacementStartupConnection(params.gateway, owner),
     };
@@ -391,7 +400,7 @@ export default function createApplicationPlacementStartupRuntime(
         sessionKey: entry.owner.sessionKey,
         targetKind: entry.work.recovery.target.kind,
         phase,
-        startedAt: entry.createdAt,
+        startedAt: entry.attemptStartedAt,
         initialTurn: buildPlacementStartupInitialTurn({
           recovery: entry.work.recovery,
           attachments: entry.attachments,
@@ -471,6 +480,9 @@ export default function createApplicationPlacementStartupRuntime(
         recovery,
         persistRecovery: entry.persistRecovery,
         mode: "retry",
+        // The message keeps its original creation time even when a rejected
+        // send rotates the message id; the attempt clock resets separately in
+        // start() for retry mode.
         createdAt: entry.createdAt,
       });
     },
