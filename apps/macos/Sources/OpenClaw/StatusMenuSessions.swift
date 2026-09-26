@@ -421,9 +421,9 @@ extension StatusMenuSessions {
                 title: String(localized: "Reset session?"),
                 message: String(format: String(localized: "Starts a new session ID for “%@”."), key),
                 action: String(localized: "Reset"))
-        }) {
+        }, action: {
             try await SessionActions.resetSession(key: key)
-        }
+        })
     }
 
     @objc private func compactSession(_ sender: NSMenuItem) {
@@ -433,9 +433,9 @@ extension StatusMenuSessions {
                 title: String(localized: "Compact session log?"),
                 message: String(localized: "Keeps the last 400 lines and archives the old file."),
                 action: String(localized: "Compact"))
-        }) {
+        }, action: {
             try await SessionActions.compactSession(key: key, maxLines: 400)
-        }
+        })
     }
 
     @objc private func deleteSession(_ sender: NSMenuItem) {
@@ -449,9 +449,9 @@ extension StatusMenuSessions {
                 title: String(localized: "Delete session?"),
                 message: String(format: String(localized: "Deletes the “%@” entry and archives its transcript."), key),
                 action: String(localized: "Delete"))
-        }) {
+        }, action: {
             try await SessionActions.deleteSession(key: key)
-        }
+        })
     }
 
     private func performSessionAction(

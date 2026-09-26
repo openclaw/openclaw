@@ -793,18 +793,11 @@ extension TalkModeRuntime {
                         "talk TTS failed: \(error.localizedDescription, privacy: .public); " +
                             "retrying gateway talk.speak")
             }
-            fallthrough
+            await self.playGatewayTalkSpeakOrSystemVoice(input: input)
+            return
         case .gatewayTalkSpeakThenSystemVoice:
-            do {
-                try await self.playGatewayTalkSpeak(input: input)
-                return
-            } catch {
-                self.ttsLogger
-                    .error(
-                        "talk gateway TTS failed: \(error.localizedDescription, privacy: .public); " +
-                            "falling back to system voice")
-            }
-            await self.playSystemVoice(input: input)
+            await self.playGatewayTalkSpeakOrSystemVoice(input: input)
+            return
         case .mlxThenSystemVoice:
             do {
                 try await self.playMLX(input: input)
@@ -823,6 +816,24 @@ extension TalkModeRuntime {
             await self.playSystemVoice(input: input)
         }
 
+        await self.finishSpeakingPhase()
+    }
+
+    private func playGatewayTalkSpeakOrSystemVoice(input: TalkPlaybackInput) async {
+        do {
+            try await self.playGatewayTalkSpeak(input: input)
+            return
+        } catch {
+            self.ttsLogger
+                .error(
+                    "talk gateway TTS failed: \(error.localizedDescription, privacy: .public); " +
+                        "falling back to system voice")
+        }
+        await self.playSystemVoice(input: input)
+        await self.finishSpeakingPhase()
+    }
+
+    private func finishSpeakingPhase() async {
         if self.phase == .speaking {
             self.phase = .thinking
             await MainActor.run { TalkModeController.shared.updatePhase(.thinking) }
