@@ -1,5 +1,5 @@
 import path from "node:path";
-import { StatementSync } from "node:sqlite";
+import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import { describePeriod } from "./periods.js";
@@ -39,7 +39,7 @@ it("aggregates across payload pages without paging metadata already retained for
         },
       });
     }
-    const reads = vi.spyOn(StatementSync.prototype, "all");
+    const reads = vi.spyOn(sqliteRuntime, "executeSqliteQuerySync");
     const report = backend.execute({
       type: "aggregateActivity",
       input: {
@@ -57,8 +57,11 @@ it("aggregates across payload pages without paging metadata already retained for
     // Two source metadata reads plus three bounded payload reads.
     expect(reads.mock.calls.length).toBeLessThanOrEqual(5);
     const payloadSizes = reads.mock.results.flatMap((result) =>
-      result.type === "return" && result.value.some((row) => Object.hasOwn(row, "data_json"))
-        ? [result.value.length]
+      result.type === "return" &&
+      result.value.rows.some(
+        (row) => typeof row === "object" && row !== null && Object.hasOwn(row, "data_json"),
+      )
+        ? [result.value.rows.length]
         : [],
     );
     expect(payloadSizes.length).toBeGreaterThan(0);
