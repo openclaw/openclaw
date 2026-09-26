@@ -87,7 +87,6 @@ async function setup() {
   );
   const cron = new CronService({
     scheduler: createTestGatewayScheduler(),
-    nowMs: () => Date.now(),
     storePath,
     defaultAgentId: "main",
     cronEnabled: false,
