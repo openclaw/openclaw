@@ -22,6 +22,7 @@ import {
   resolveChatSendReplyContext,
   type ChatSendReplyContextFields,
 } from "./chat-send-reply-context.js";
+import { retainChatSendReplySource } from "./chat-send-reply-source.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { gatewayClientSenderFields } from "./gateway-client-identity.js";
@@ -36,6 +37,7 @@ type GatewayChatUserTurnController = {
   persist: GatewayChatUserTurnPersist;
   persistBestEffort: GatewayChatUserTurnPersist;
   recorder: UserTurnTranscriptRecorder;
+  replySource: ReturnType<typeof retainChatSendReplySource>;
   replyContextFieldsPromise?: Promise<ChatSendReplyContextFields>;
   setInputPromise: (input: Promise<UserTurnInput>) => void;
 };
@@ -232,6 +234,17 @@ export function createGatewayChatUserTurnController(params: {
         }
       : {}),
   });
+  const replySource = retainChatSendReplySource({
+    agentId: session.agentId,
+    sessionKey: session.sessionKey,
+    storePaths: [
+      session.storePath,
+      session.sessionTarget.storePath,
+      ...(session.readSource ? [session.readSource.path] : []),
+    ],
+    recorder,
+  });
+  admission.addCleanup(replySource.release);
   const persist: GatewayChatUserTurnController["persist"] = async (options) => {
     if (options?.contextFreeCommand === true && !recorder.hasPersisted()) {
       contextFreeCommand = true;
@@ -253,6 +266,7 @@ export function createGatewayChatUserTurnController(params: {
       return await persist(options).catch(() => undefined);
     },
     recorder,
+    replySource,
     replyContextFieldsPromise,
     setInputPromise: (input) => {
       const previousInputPromise = inputPromise;

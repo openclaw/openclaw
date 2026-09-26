@@ -217,6 +217,7 @@ describe("webchat commentary media", () => {
           transcriptLifecycle.withTranscriptWrite(operation),
       };
       const dispatch = createChatSendReplyDispatch({
+        getSourceSessionId: () => undefined,
         accountId: undefined,
         requesterContext: { SenderId: "cli" },
         isAgentRunStarted: () => true,

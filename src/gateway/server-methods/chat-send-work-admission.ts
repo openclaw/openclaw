@@ -36,7 +36,7 @@ export function createChatSendWorkAdmission(params: {
   logGateway: Pick<GatewayRequestContext["logGateway"], "warn">;
 }) {
   let references = 1;
-  let finishPendingInput: (() => void) | undefined;
+  const cleanups: Array<() => void> = [];
   const release = () => {
     if (references === 0) {
       return;
@@ -46,11 +46,14 @@ export function createChatSendWorkAdmission(params: {
       return;
     }
     try {
-      finishPendingInput?.();
-    } catch (error) {
-      // The durable row remains recoverable; a failed disposition write must
-      // not strand session/root drain ownership during shutdown.
-      params.logGateway.warn(`Failed to finish pending chat input: ${formatForLog(error)}`);
+      for (const cleanup of cleanups.splice(0)) {
+        try {
+          cleanup();
+        } catch (error) {
+          // One failed disposition write must not strand another retained resource.
+          params.logGateway.warn(`Failed to clean up retained chat work: ${formatForLog(error)}`);
+        }
+      }
     } finally {
       try {
         params.admission.release();
@@ -79,8 +82,12 @@ export function createChatSendWorkAdmission(params: {
       references += 1;
       return hold();
     },
-    setPendingInputCleanup: (finish: () => void) => {
-      finishPendingInput = finish;
+    addCleanup: (cleanup: () => void) => {
+      if (references === 0) {
+        cleanup();
+      } else {
+        cleanups.push(cleanup);
+      }
     },
   };
 }

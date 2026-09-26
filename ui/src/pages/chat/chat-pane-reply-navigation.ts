@@ -1,3 +1,5 @@
+import { ErrorCodes } from "@openclaw/gateway-client/browser";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatMessageGetResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
@@ -84,10 +86,16 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
           messageId,
           maxChars: 500,
         });
-      } catch {
-        // Rendering cannot retry in a loop. Only an explicit click or a new
-        // connection retries a transport failure; it is not a missing message.
-        attempt.failed = true;
+      } catch (error) {
+        const code = asNullableRecord(error)?.gatewayCode;
+        if (code === ErrorCodes.INVALID_REQUEST || code === ErrorCodes.FORBIDDEN) {
+          // Sharing denials intentionally use the same response as absent sources.
+          attempt.unavailableReason = "not_visible";
+        } else {
+          // Rendering cannot retry in a loop. Only an explicit click or a new
+          // connection retries a transport failure; it is not a missing message.
+          attempt.failed = true;
+        }
         return;
       }
       if (!this.isConnectionScopeCurrent(scope) || this.replyMessages.get(cacheKey) !== attempt) {

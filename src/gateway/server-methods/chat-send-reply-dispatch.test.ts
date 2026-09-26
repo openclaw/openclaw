@@ -28,7 +28,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import * as sessionTranscriptReaders from "../session-transcript-readers.js";
-import { loadSessionEntry } from "../session-utils.js";
+import * as gatewaySessions from "../session-utils.js";
 import {
   buildAssistantReplyContent,
   buildAssistantReplyContentFromInputs,
@@ -40,6 +40,7 @@ import {
   selectChatSendFinalReplyInputs,
 } from "./chat-send-command-replies.js";
 import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
+import { retainChatSendReplySource } from "./chat-send-reply-source.js";
 
 async function createReplyTranscriptFixture(hidden = false) {
   const runId = "receipt-run";
@@ -47,7 +48,8 @@ async function createReplyTranscriptFixture(hidden = false) {
     agentId: "main",
     sessionId: "receipt-session",
     sessionKey: "agent:main:receipt",
-    storePath: loadSessionEntry("agent:main:receipt", { agentId: "main" }).storePath,
+    storePath: gatewaySessions.loadSessionEntry("agent:main:receipt", { agentId: "main" })
+      .storePath,
   };
   const sessionEntry = {
     sessionId: scope.sessionId,
@@ -80,9 +82,21 @@ async function createReplyTranscriptFixture(hidden = false) {
   if (!persistedInput?.messageId) {
     throw new Error("Expected committed input admission");
   }
+  const sourceLease = retainChatSendReplySource({
+    ...scope,
+    storePaths: [scope.storePath],
+    recorder: userTurnRecorder,
+  });
   let current = true;
+  let sourceSessionId = scope.sessionId;
   const abortController = new AbortController();
+  const getSourceSessionId = vi.fn(() =>
+    current && !abortController.signal.aborted && sourceLease.isCurrent()
+      ? sourceSessionId
+      : undefined,
+  );
   const dispatch = createChatSendReplyDispatch({
+    getSourceSessionId,
     accountId: undefined,
     isAgentRunStarted: () => true,
     isRunCurrent: () => current,
@@ -101,6 +115,11 @@ async function createReplyTranscriptFixture(hidden = false) {
     scope,
     runId,
     inputId: persistedInput.messageId,
+    getSourceSessionId,
+    sourceLease,
+    rebind: (sessionId: string) => {
+      sourceSessionId = sessionId;
+    },
     append,
     dispatch,
     abortController,
@@ -260,6 +279,98 @@ describe("buildAssistantReplyContentFromInputs", () => {
 });
 
 describe("createChatSendReplyDispatch", () => {
+  it.each(["raw", "prepared"] as const)(
+    "uses held source identity without session-store reads during %s delivery",
+    async (kind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const fixture = await createReplyTranscriptFixture();
+        const readSession = vi.spyOn(gatewaySessions, "loadSessionEntry");
+        try {
+          for (const payload of [
+            { text: "Plain reply" },
+            { text: "Explicit reply", replyToId: "earlier-source" },
+            { text: "Quoted reply", replyToId: fixture.runId },
+          ]) {
+            if (kind === "raw") {
+              await fixture.dispatch.dispatcherOptions.deliver(payload, { kind: "final" });
+            } else {
+              const [plan] = createStructuredOutboundPayloadPlan([payload]);
+              if (!plan) {
+                throw new Error("Expected prepared reply");
+              }
+              await fixture.dispatch.dispatcherOptions.deliverPrepared?.(plan, { kind: "final" });
+            }
+          }
+          expect(readSession).not.toHaveBeenCalled();
+          expect(
+            fixture.dispatch.deliveredReplies.map(
+              ({ input }) => readChatSendReplyPayload(input).replyToId,
+            ),
+          ).toEqual([undefined, "earlier-source", fixture.inputId]);
+          expect(fixture.getSourceSessionId).toHaveBeenCalledOnce();
+        } finally {
+          readSession.mockRestore();
+        }
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "retires aliases after a committed SID replacement (restored: %s)",
+    async (restore) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const fixture = await createReplyTranscriptFixture();
+        await replaceSessionEntry(fixture.scope, {
+          sessionId: "replacement",
+          lifecycleRevision: "replacement",
+          updatedAt: 2,
+        });
+        if (restore) {
+          await replaceSessionEntry(fixture.scope, {
+            sessionId: fixture.scope.sessionId,
+            lifecycleRevision: "initial",
+            updatedAt: 3,
+          });
+        }
+        const readSession = vi.spyOn(gatewaySessions, "loadSessionEntry");
+        try {
+          const [late] = fixture.dispatch.resolveReplyInputs(
+            { kind: "raw", payload: { text: "Retained reply", replyToId: fixture.runId } },
+            "adopted-run",
+            true,
+          );
+          expect(late && readChatSendReplyPayload(late).replyToId).toBeUndefined();
+          expect(readSession).not.toHaveBeenCalled();
+        } finally {
+          readSession.mockRestore();
+          fixture.sourceLease.release();
+        }
+      });
+    },
+  );
+
+  it.each(["rebound", "retired", "aborted"] as const)(
+    "drops a retained run alias after its owner is %s",
+    async (state) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const fixture = await createReplyTranscriptFixture();
+        if (state === "rebound") {
+          fixture.rebind("new-session");
+        } else if (state === "retired") {
+          fixture.retire();
+        } else {
+          fixture.abortController.abort();
+        }
+        const [late] = fixture.dispatch.resolveReplyInputs(
+          { kind: "raw", payload: { text: "Late reply", replyToId: fixture.runId } },
+          "adopted-run",
+          true,
+        );
+        expect(late && readChatSendReplyPayload(late).replyToId).toBeUndefined();
+      });
+    },
+  );
+
   it.each([
     { kind: "raw", adopted: false },
     { kind: "prepared", adopted: false },
@@ -375,6 +486,7 @@ describe("createChatSendReplyDispatch", () => {
   it("owns assistant media before transcript publication only during its live dispatch", async () => {
     let current = true;
     const dispatch = createChatSendReplyDispatch({
+      getSourceSessionId: () => undefined,
       accountId: undefined,
       isAgentRunStarted: () => true,
       isRunCurrent: () => current,
@@ -422,6 +534,7 @@ describe("createChatSendReplyDispatch", () => {
     const markBlocked = vi.fn();
     const onCommandBlock = vi.fn();
     const dispatch = createChatSendReplyDispatch({
+      getSourceSessionId: () => undefined,
       accountId: undefined,
       isAgentRunStarted: () => false,
       isRunCurrent: () => true,
@@ -468,6 +581,7 @@ describe("createChatSendReplyDispatch", () => {
 
   it("preserves prepared literal directives through callback modifiers and final projection", async () => {
     const dispatch = createChatSendReplyDispatch({
+      getSourceSessionId: () => undefined,
       accountId: undefined,
       isAgentRunStarted: () => true,
       isRunCurrent: () => true,
@@ -526,6 +640,7 @@ describe("createChatSendReplyDispatch", () => {
       const text = "    const value = 1;\n    use(value);";
       const parts = split ? ["    const value = 1;\n", "    use(value);"] : [text];
       const dispatch = createChatSendReplyDispatch({
+        getSourceSessionId: () => undefined,
         accountId: undefined,
         isAgentRunStarted: () => true,
         isRunCurrent: () => true,
@@ -568,6 +683,7 @@ describe("createChatSendReplyDispatch", () => {
     let agentRunStarted = false;
     const onCommandBlock = vi.fn();
     const dispatch = createChatSendReplyDispatch({
+      getSourceSessionId: () => undefined,
       accountId: undefined,
       isAgentRunStarted: () => agentRunStarted,
       isRunCurrent: () => current,
@@ -609,6 +725,7 @@ describe("createChatSendReplyDispatch", () => {
   it("keeps every capture and media side effect behind beforeDeliver cancellation", async () => {
     const markBlocked = vi.fn();
     const dispatch = createChatSendReplyDispatch({
+      getSourceSessionId: () => undefined,
       accountId: undefined,
       isAgentRunStarted: () => true,
       logGateway: { ...createSubsystemLogger("test/chat-send-reply-dispatch"), warn: vi.fn() },
@@ -649,6 +766,7 @@ describe("createChatSendReplyDispatch", () => {
     let insideAdmission = false;
     let finalizedInsideAdmission = false;
     const dispatch = createChatSendReplyDispatch({
+      getSourceSessionId: () => undefined,
       accountId: undefined,
       isAgentRunStarted: () => {
         finalizedInsideAdmission = insideAdmission;

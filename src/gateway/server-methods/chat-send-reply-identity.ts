@@ -7,7 +7,6 @@ import {
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 import { parseInlineDirectives, sanitizeReplyDirectiveId } from "../../utils/directive-tags.js";
-import { loadSessionEntry } from "../session-utils.js";
 import {
   readChatSendReplyPayload,
   replaceChatSendReplyPayload,
@@ -17,7 +16,7 @@ import type { PreparedChatSendSession } from "./chat-send-session.js";
 /** Webchat run ids are transport correlation, never transcript reply targets. */
 function resolveChatSendReplyInputIdentity(
   input: ReplyDispatchOperation,
-  source: { runId: string; originatingRunId?: string; messageId?: string },
+  source: { runId: string; originatingRunId?: string; resolveMessageId: () => string | undefined },
 ): ReplyDispatchOperation[] {
   const payload = readChatSendReplyPayload(input);
   // Prepared text is literal. Only the raw adapter owns inline directive parsing.
@@ -35,23 +34,20 @@ function resolveChatSendReplyInputIdentity(
   const next = copyReplyPayloadMetadata(payload, {
     ...payload,
     ...(parsed?.hasReplyTag ? { text: parsed.text } : {}),
-    replyToId: source.messageId,
+    replyToId: source.resolveMessageId(),
     replyToCurrent: false,
   });
   return replaceChatSendReplyPayload(input, next);
 }
 
 export function createChatSendReplyIdentityResolver(params: {
-  session: Pick<
-    PreparedChatSendSession,
-    "agentId" | "clientRunId" | "sessionKey" | "sessionLoadOptions"
-  >;
+  session: Pick<PreparedChatSendSession, "agentId" | "clientRunId" | "sessionKey">;
   userTurnRecorder: Pick<UserTurnTranscriptRecorder, "getAdmissionReceipt" | "getPersistedMessage">;
   getAgentRunId: () => string;
+  getSourceSessionId: () => string | undefined;
 }) {
   const { session, userTurnRecorder } = params;
   const { clientRunId } = session;
-  const sessionLoadOptions = { ...session.sessionLoadOptions, clone: false };
   const resolveSourceMessageId = () => {
     const admission = userTurnRecorder.getAdmissionReceipt();
     const source = userTurnRecorder.getPersistedMessage?.();
@@ -64,8 +60,7 @@ export function createChatSendReplyIdentityResolver(params: {
     ) {
       return undefined;
     }
-    const current = loadSessionEntry(session.sessionKey, sessionLoadOptions);
-    return current.entry?.sessionId === admission.sessionId ? admission.entryId : undefined;
+    return params.getSourceSessionId() === admission.sessionId ? admission.entryId : undefined;
   };
   const resolveReplyInputs = (
     input: ReplyDispatchOperation,
@@ -77,7 +72,7 @@ export function createChatSendReplyIdentityResolver(params: {
       : resolveChatSendReplyInputIdentity(input, {
           runId,
           originatingRunId: clientRunId,
-          messageId: resolveSourceMessageId(),
+          resolveMessageId: resolveSourceMessageId,
         });
 
   const prepareTranscriptIdentity = (message: Parameters<PrepareAssistantTranscriptMessage>[0]) => {

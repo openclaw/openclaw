@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createTestChatPane, nativeHistoryMessage } from "./chat-pane-history.test-support.ts";
 
@@ -23,6 +23,26 @@ describe("chat pane reply-source history navigation", () => {
       await pane.loadReplyMessage("source-message");
       await pane.navigateToReplyMessage("source-message");
       expect(state.lastError).toBe(message);
+      expect(request).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["INVALID_REQUEST", "FORBIDDEN"])(
+    "reports a structured %s source rejection as unavailable without retrying",
+    async (code) => {
+      const request = vi
+        .fn()
+        .mockRejectedValue(
+          new GatewayRequestError({ code, message: "Source access is unavailable" }),
+        );
+      const { pane, state } = createTestChatPane({
+        client: { request } as unknown as GatewayBrowserClient,
+        sessions: {} as SessionCapability,
+      });
+      state.chatHistoryPagination = { hasMore: true, nextOffset: 2 };
+      await pane.loadReplyMessage("source-message");
+      await pane.navigateToReplyMessage("source-message");
+      expect(state.lastError).toBe("The original message is unavailable.");
       expect(request).toHaveBeenCalledOnce();
     },
   );

@@ -28,6 +28,7 @@ import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { handleChatSend } from "./chat-send-handler.js";
+import * as replyDispatch from "./chat-send-reply-dispatch.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 type DispatchOptions = Parameters<typeof dispatch.dispatchInboundMessageWithProjectedDispatcher>[0];
@@ -138,6 +139,7 @@ it.each(admissionScenarios)(
       const entered = createDeferred<DispatchOptions>();
       const release = createDeferred();
       const observeDispatch = vi.spyOn(chatDispatch, "startChatDispatch");
+      const observeReplyDispatch = vi.spyOn(replyDispatch, "createChatSendReplyDispatch");
       const holdDispatch = vi
         .spyOn(dispatch, "dispatchInboundMessageWithProjectedDispatcher")
         .mockImplementation(async (options) => {
@@ -247,6 +249,8 @@ it.each(admissionScenarios)(
           storePath: owned.session.storePath,
         };
         prepared(binding);
+        const getSourceSessionId = observeReplyDispatch.mock.calls.at(-1)?.[0].getSourceSessionId;
+        expect(getSourceSessionId?.()).toBe(binding.sessionId);
         prepared(binding);
         prepared({ ...binding, sessionKey: "agent:main:unrelated", sessionId: "foreign" });
         if (dashboardRead) {
@@ -313,6 +317,10 @@ it.each(admissionScenarios)(
         } else {
           rotateAgentEventLifecycleGeneration();
         }
+        // Collected completion retains its source; removed/replaced/aborted admissions do not.
+        if (closure !== "terminal") {
+          expect(getSourceSessionId?.()).toBe(closure === "queued" ? binding.sessionId : undefined);
+        }
         // No await after closure: release must fence even before its promise settles.
         expect(() => prepared({ ...binding, sessionId: "late-session" })).toThrow();
         if (dashboardRead) {
@@ -351,6 +359,7 @@ it.each(admissionScenarios)(
         }
         holdDispatch.mockRestore();
         observeDispatch.mockRestore();
+        observeReplyDispatch.mockRestore();
         clone.mockRestore();
       }
     });

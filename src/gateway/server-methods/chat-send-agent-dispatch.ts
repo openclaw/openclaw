@@ -37,6 +37,7 @@ import { finalizeAcceptedChatSendMessageInjection } from "./chat-send-message-in
 import { applyChatSendReplyContextFields } from "./chat-send-reply-context.js";
 import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 import { finalizeChatSendDispatchedReplies } from "./chat-send-reply-finalization.js";
+import { readChatSendReplySourceSessionId } from "./chat-send-reply-source.js";
 import {
   classifyAcceptedChatSendFailure,
   runAcceptedChatSendDispatch,
@@ -141,6 +142,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     accountId,
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
     isAgentRunStarted: () => agentRunStarted,
+    getSourceSessionId: () => readChatSendReplySourceSessionId(params),
     isRunCurrent: () =>
       isRunCurrent() ||
       (!activeRunAbort.controller.signal.aborted &&
