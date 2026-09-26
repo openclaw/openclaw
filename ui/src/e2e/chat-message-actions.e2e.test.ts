@@ -401,10 +401,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
         const sent = await gateway.waitForRequest("chat.send");
         expect(sent.params).toMatchObject({ message: text, replyToId: sourceId });
         const sentPreview = page.locator(".chat-reply-attribution--inline");
-        await expect
-          .poll(() => sentPreview.locator(".chat-reply-attribution__excerpt-text").textContent())
-          .toBe(fileName);
-        expect(await sentPreview.locator(".chat-reply-attribution__file svg").count()).toBe(1);
+        await expect.poll(() => sentPreview.getByRole("button").count()).toBe(1);
         await sentPreview.getByRole("button").click();
         await expect
           .poll(() =>

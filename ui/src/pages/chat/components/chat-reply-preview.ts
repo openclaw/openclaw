@@ -4,7 +4,6 @@ import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.t
 import { DEFAULT_AGENT_ID } from "../../../lib/sessions/session-key.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import { prepareChatMessageRender, resolveMessageReplyText } from "./chat-message-markdown.ts";
-import { projectMessageMedia } from "./chat-message-media.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
 import type {
   LoadedReplySource,
@@ -75,8 +74,6 @@ function projectResolvedReplyPreview(
         }
       : {}),
     isLoaded: Boolean(loaded),
-    isAttachment: !displayMarkdown,
-    isImage: !displayMarkdown && projectMessageMedia(message, normalized.content).images.length > 0,
     text,
   };
 }

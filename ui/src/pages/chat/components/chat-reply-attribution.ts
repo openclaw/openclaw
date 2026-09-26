@@ -1,7 +1,6 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
 import "./chat-attribution.css";
 import { ref } from "lit/directives/ref.js";
-import { stripMarkdown } from "../../../../../src/shared/text/strip-markdown.js";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
@@ -10,9 +9,7 @@ import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel, type SenderIdentity } from "../../../lib/chat/sender-label.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { prepareChatMessageRender, resolveMessageReplyText } from "./chat-message-markdown.ts";
 import type { ReplyPreview, ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
-import { chatResponsiveLayout } from "./chat-responsive-layout.ts";
 
 export type ReplyAttributionPresentation = "hidden" | "full" | "unavailable";
 
@@ -20,9 +17,6 @@ export type ReplyAttribution = {
   presentation: ReplyAttributionPresentation;
   sender: SenderIdentity;
   name: string;
-  text: string;
-  isAttachment?: boolean;
-  isImage?: boolean;
   agentAvatar?: ReplyPreview["agentAvatar"];
   target?: NormalizedMessage["replyTarget"];
   loadedMessageId?: string;
@@ -32,14 +26,14 @@ export type ReplyAttribution = {
 /**
  * The one place that decides whether a reply reference adds context:
  * unresolved references and a 1:1 turn answering its own prompt stay hidden;
- * a confirmed-missing target keeps only a known name or excerpt.
+ * a confirmed-missing target keeps only a known sender name.
  */
 function resolveReplyAttributionPresentation(reply: {
-  /** The origin is known: loaded, fetched, or carried by a snapshot excerpt. */
+  /** The origin is known: loaded, fetched, or carried by snapshot text. */
   resolved: boolean;
   /** A concrete id whose lookup confirmed the origin is inaccessible. */
   missing: boolean;
-  /** A snapshot name or excerpt survives the missing origin. */
+  /** A snapshot sender name survives the missing origin. */
   known: boolean;
   /** The origin is the prompt that opened this turn. */
   turnSource: boolean;
@@ -67,7 +61,6 @@ const hiddenAttribution = (target?: NormalizedMessage["replyTarget"]): ReplyAttr
   presentation: "hidden",
   sender: {},
   name: "",
-  text: "",
   target,
 });
 
@@ -76,15 +69,6 @@ function lookupReply(resolveReplyPreview: ReplyPreviewLookup | undefined, id: st
   return result && "missing" in result
     ? { missing: true }
     : { missing: false, preview: result as ReplyPreview | undefined };
-}
-
-function replyAttributionExcerpt(text: string): string {
-  return (
-    stripMarkdown(text, { stripHtml: true, linkStyle: "label" })
-      .split(/\r?\n/)
-      .map((candidate) => candidate.replace(/\s+/g, " ").trim())
-      .find(Boolean) ?? ""
-  );
 }
 
 function resolveTargetAttribution(
@@ -100,7 +84,7 @@ function resolveTargetAttribution(
   const presentation = resolveReplyAttributionPresentation({
     resolved: Boolean(resolved || snapshot?.text),
     missing: lookup.missing,
-    known: Boolean(snapshot?.senderLabel || snapshot?.text),
+    known: Boolean(snapshot?.senderLabel),
     turnSource: Boolean(
       context.turnSource && persistedMessageEntryId(context.turnSource.message) === target.id,
     ),
@@ -114,22 +98,13 @@ function resolveTargetAttribution(
   }
   if (presentation === "unavailable") {
     // Known snapshot facts only: no inferred avatar and nothing to navigate to.
-    const known = snapshot?.senderLabel || t("chat.messages.message");
-    return {
-      presentation,
-      sender: { name: known },
-      name: known,
-      text: snapshot?.text ?? "",
-      target,
-    };
+    const known = snapshot?.senderLabel ?? "";
+    return { presentation, sender: { name: known }, name: known, target };
   }
   return {
     presentation,
     sender: { ...resolved?.sender, name },
     name,
-    text: preview?.text ?? "",
-    isAttachment: resolved?.isAttachment,
-    isImage: resolved?.isImage,
     agentAvatar: resolved?.agentAvatar,
     target,
     loadedMessageId: resolved?.isLoaded ? target.id : undefined,
@@ -150,17 +125,10 @@ function resolveSourceAttribution(
   if (!name) {
     return undefined;
   }
-  const prepared = source ? prepareChatMessageRender(source) : undefined;
-  const text = prepared
-    ? resolveMessageReplyText(source, prepared.normalizedMessage, prepared.displayMarkdown)
-    : "";
   return {
     presentation: "full",
     sender: { ...sourceSender, name },
     name,
-    text,
-    isAttachment: resolved?.isAttachment ?? Boolean(prepared && text && !prepared.displayMarkdown),
-    isImage: resolved?.isImage,
     agentAvatar: resolved?.agentAvatar,
     target: sourceId ? { kind: "id", id: sourceId } : { kind: "current" },
     loadedMessageId: sourceId && resolved?.isLoaded ? sourceId : undefined,
@@ -246,62 +214,6 @@ export function resolveReplyAttribution(
   return current ? hiddenAttribution(current.replyTarget) : undefined;
 }
 
-function inlineReplyTargetRef(onResolve: (element?: Element) => void) {
-  let observer: ResizeObserver | undefined;
-  let current: Element | undefined;
-  return (element: Element | undefined) => {
-    observer?.disconnect();
-    current = element;
-    onResolve(element);
-    if (!element) {
-      return;
-    }
-    queueMicrotask(() => {
-      if (current !== element || !element.isConnected) {
-        return;
-      }
-      const target = element.querySelector<HTMLButtonElement>(
-        "button.chat-reply-attribution__target",
-      );
-      if (!target) {
-        return;
-      }
-      const update = () => {
-        // The excerpt does not size short bubbles. Cap the hit area to its
-        // visible contents after the bubble has allocated their available width.
-        target.style.maxWidth = "";
-        target.style.columnGap = "";
-        const content = [
-          ...target.querySelectorAll<HTMLElement>(
-            ".chat-reply-attribution__person, .chat-reply-attribution__file, .chat-reply-attribution__excerpt-text",
-          ),
-        ]
-          .map((item) => item.getBoundingClientRect())
-          .filter((bounds) => bounds.width > 0);
-        if (content.length === 1) {
-          target.style.columnGap = "0px";
-        }
-        if (content.length) {
-          const width =
-            Math.max(...content.map((bounds) => bounds.right)) -
-            Math.min(...content.map((bounds) => bounds.left));
-          const style = getComputedStyle(target);
-          target.style.maxWidth = `${width + Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight)}px`;
-        }
-      };
-      update();
-      if (typeof ResizeObserver === "function") {
-        observer = new ResizeObserver(update);
-        observer.observe(element);
-        const messages = element.closest(".chat-group-messages");
-        if (messages) {
-          observer.observe(messages);
-        }
-      }
-    });
-  };
-}
-
 type ReplyAttributionOptions = {
   variant?: "inline";
   navigationLoading?: boolean;
@@ -324,90 +236,50 @@ export function renderReplyAttribution(
     }
     return nothing;
   }
-  return options.variant === "inline"
-    ? renderReplyAttributionContent(attribution, onOpenReply, onResolveReply, options, false)
-    : chatResponsiveLayout((mobile) =>
-        renderReplyAttributionContent(attribution, onOpenReply, onResolveReply, options, mobile),
-      );
-}
-
-function renderReplyAttributionContent(
-  attribution: ReplyAttribution,
-  onOpenReply: ((id: string) => void) | undefined,
-  onResolveReply: ((id: string) => void) | undefined,
-  options: ReplyAttributionOptions,
-  mobile: boolean,
-) {
   const inline = options.variant === "inline";
   const unavailable = attribution.presentation === "unavailable";
-  const excerpt = replyAttributionExcerpt(attribution.text);
   // Human quotes retain navigation to originals outside the loaded history.
   const sourceId = unavailable
     ? undefined
     : (inline || options.navigateToUnloaded) && attribution.target?.kind === "id"
       ? attribution.target.id
       : attribution.loadedMessageId;
-  const accessibleName = t("chat.messages.replyingTo", { name: attribution.name });
-  const button = (className: string, content: TemplateResult) => html`<button
-    class=${className}
-    type="button"
-    aria-label=${accessibleName}
-    ?disabled=${options.navigationLoading}
-    aria-busy=${options.navigationLoading ? "true" : "false"}
-    @click=${() => sourceId && onOpenReply?.(sourceId)}
-  >
-    ${content}
-  </button>`;
-  const contents = html`${attribution.isAttachment ? html`<span class="chat-reply-attribution__file" aria-hidden="true">${attribution.isImage ? icons.image : icons.file}</span>` : nothing}<span
-      class="chat-reply-attribution__excerpt-text"
-      >${excerpt}</span
-    >`;
   const person = html`
     ${unavailable ? nothing : renderChatAuthorAvatar(attribution.sender, "chat-author-avatar", attribution.agentAvatar)}
     <span class="chat-reply-attribution__name" title=${attribution.name}>${attribution.name}</span>
   `;
-  const reference = html`
-    ${
-      mobile && sourceId && onOpenReply
-        ? button("chat-reply-attribution__person chat-reply-attribution__mobile-target", person)
-        : html`<span class="chat-reply-attribution__person">${person}</span>`
-    }
-    ${
-      mobile
-        ? nothing
-        : html`${
-            excerpt
-              ? !inline && sourceId && onOpenReply
-                ? button("chat-reply-attribution__excerpt", contents)
-                : html`<span class="chat-reply-attribution__excerpt">${contents}</span>`
-              : nothing
-          }${
-            unavailable
-              ? html`<span class="chat-reply-attribution__unavailable"
-                  >${t("chat.messages.replyOriginalUnavailable")}</span
-                >`
-              : nothing
-          }`
-    }
-  `;
-  const className = `chat-reply-attribution ${inline ? "chat-reply-attribution--inline" : "chat-reply-attribution--reply"}`;
   const resolveMissing = (element?: Element) => {
     if (element && attribution.resolveMessageId) {
       onResolveReply?.(attribution.resolveMessageId);
     }
   };
-  const target = inline
-    ? sourceId && onOpenReply && excerpt
-      ? button("chat-reply-attribution__target", reference)
-      : html`<span class="chat-reply-attribution__target">${reference}</span>`
-    : reference;
   return html`<div
-    class=${className}
-    ${ref(inline ? inlineReplyTargetRef(resolveMissing) : resolveMissing)}
+    class="chat-reply-attribution ${inline ? "chat-reply-attribution--inline" : "chat-reply-attribution--reply"}"
+    ${ref(resolveMissing)}
   >
     <span class="chat-reply-attribution__label"
-      >${inline ? nothing : html`<span class="chat-reply-attribution__mobile-icon" aria-hidden="true">${icons.cornerUpLeft}</span>`}</span
+      >${inline ? nothing : html`<span class="chat-reply-attribution__mobile-icon" aria-hidden="true">${icons.cornerUpLeft}</span>`}${t("chat.messages.replyingToLabel")}</span
     >
-    ${target}
+    ${
+      sourceId && onOpenReply
+        ? html`<button
+            class="chat-reply-attribution__person chat-reply-attribution__target"
+            type="button"
+            aria-label=${t("chat.messages.replyingTo", { name: attribution.name })}
+            ?disabled=${options.navigationLoading}
+            aria-busy=${options.navigationLoading ? "true" : "false"}
+            @click=${() => onOpenReply(sourceId)}
+          >
+            ${person}
+          </button>`
+        : html`<span class="chat-reply-attribution__person">${person}</span>`
+    }
+    ${
+      unavailable
+        ? html`<span class="chat-reply-attribution__unavailable"
+            >${t("chat.messages.replyOriginalUnavailable")}</span
+          >`
+        : nothing
+    }
   </div>`;
 }

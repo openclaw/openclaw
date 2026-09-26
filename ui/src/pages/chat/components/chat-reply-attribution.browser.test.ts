@@ -30,7 +30,7 @@ afterEach(async () => {
   await page.viewport(1280, 720);
 });
 
-async function draw(name: string, excerpt: string | null, onOpenReply = vi.fn()) {
+async function draw(name: string, source = true, onOpenReply = vi.fn()) {
   const group: MessageGroup = {
     kind: "group",
     key: "answer",
@@ -41,8 +41,9 @@ async function draw(name: string, excerpt: string | null, onOpenReply = vi.fn())
     replyToSender: { id: "casey", name },
     replyToMessage: {
       key: "prompt",
-      message:
-        excerpt === null ? null : { role: "user", content: excerpt, __openclaw: { id: "prompt" } },
+      message: source
+        ? { role: "user", content: "Original question", __openclaw: { id: "prompt" } }
+        : null,
     },
     messages: [
       {
@@ -63,7 +64,7 @@ async function draw(name: string, excerpt: string | null, onOpenReply = vi.fn())
         sourceMessageId: "prompt",
         senderLabel: name,
         sender: { id: "casey", name },
-        text: excerpt ?? "",
+        text: "Original question",
         isLoaded: true,
       }),
     }),
@@ -74,7 +75,6 @@ async function draw(name: string, excerpt: string | null, onOpenReply = vi.fn())
   return {
     row,
     name: row.querySelector<HTMLElement>(".chat-reply-attribution__name")!,
-    excerpt: row.querySelector<HTMLElement>(".chat-reply-attribution__excerpt-text"),
   };
 }
 
@@ -86,7 +86,7 @@ function expectSingleLine(row: HTMLElement) {
   expect(row.scrollWidth - row.clientWidth).toBeLessThanOrEqual(1);
   expect(box.right).toBeLessThanOrEqual(host.getBoundingClientRect().right + 1);
   for (const text of row.querySelectorAll<HTMLElement>(
-    ".chat-reply-attribution__label, .chat-reply-attribution__name, .chat-reply-attribution__excerpt-text, .chat-reply-attribution__unavailable",
+    ".chat-reply-attribution__label, .chat-reply-attribution__name, .chat-reply-attribution__unavailable",
   )) {
     const textBox = text.getBoundingClientRect();
     // A second flex line must not hide below an otherwise single-line label.
@@ -120,7 +120,7 @@ describe.each([1440, 390, 360])("reply attribution (%d px)", (width) => {
     "shows the viewport-appropriate reply cue in %s layout",
     async (direction) => {
       host.dir = direction;
-      const { row } = await draw("Casey Morgan", "Original question");
+      const { row } = await draw("Casey Morgan");
       const group = row.closest(".chat-group")!;
       const icon = row.querySelector<HTMLElement>(".chat-reply-attribution__mobile-icon")!;
       if (width < 768) {
@@ -176,68 +176,27 @@ describe.each([1440, 390, 360])("reply attribution (%d px)", (width) => {
     },
   );
 
-  it("keeps Casey Morgan complete with an emoji and sacrifices a long excerpt first", async () => {
-    const short = await draw("Casey Morgan", "👩🏽‍💻");
-    expectSingleLine(short.row);
-    expect(short.name.textContent).toBe("Casey Morgan");
-    expect(short.name.scrollWidth - short.name.clientWidth).toBeLessThanOrEqual(1);
-    const nameWidth = short.name.getBoundingClientRect().width;
-    const long = await draw("Casey Morgan", "Please review the release checklist. ".repeat(30));
-    expectSingleLine(long.row);
-    expect(long.name.scrollWidth - long.name.clientWidth).toBeLessThanOrEqual(1);
-    expect(Math.abs(long.name.getBoundingClientRect().width - nameWidth)).toBeLessThanOrEqual(1);
-    if (width < 768) {
-      expect(long.excerpt).toBeNull();
-    } else {
-      expect(long.excerpt!.scrollWidth).toBeGreaterThan(long.excerpt!.clientWidth);
-    }
-  });
-
-  it("keeps long text, unbroken URLs, emoji, RTL and unavailable sources on one line", async () => {
-    for (const [name, excerpt] of [
-      ["Casey Morgan", `https://example.test/${"release-checklist".repeat(60)}`],
-      ["Casey Morgan", "👩🏽‍💻".repeat(80)],
-      ["ليلى منصور", "يرجى مراجعة خطة الإصدار ".repeat(40)],
-      ["Casey Morgan", null],
-      ["A very long participant name ".repeat(40), null],
-    ] as const) {
-      const result = await draw(name, excerpt);
-      expectSingleLine(result.row);
-      if (width < 768) {
-        expect(
-          result.row.querySelector(
-            ".chat-reply-attribution__excerpt, .chat-reply-attribution__unavailable",
-          ),
-        ).toBeNull();
-      }
-    }
-  });
-
-  it("keeps the name usable and the desktop excerpt visible when a name cannot fit", async () => {
-    const result = await draw("Casey Morgan ".repeat(80), "Original question ".repeat(40));
+  it.each([
+    { name: "Casey Morgan 👩🏽‍💻", source: true, fits: true },
+    { name: "ليلى منصور", source: true, fits: true },
+    { name: "Casey Morgan", source: false, fits: true },
+    { name: "A very long participant name ".repeat(40), source: true, fits: false },
+  ])("keeps the label and name $name on one line", async ({ name, source, fits }) => {
+    const result = await draw(name, source);
     expectSingleLine(result.row);
-    expect(result.name.scrollWidth).toBeGreaterThan(result.name.clientWidth);
+    const label = result.row.querySelector<HTMLElement>(".chat-reply-attribution__label")!;
+    expect(label.scrollWidth - label.clientWidth).toBeLessThanOrEqual(1);
     expect(result.name.clientWidth).toBeGreaterThan(0);
-    if (width < 768) {
-      expect(result.excerpt).toBeNull();
-    } else {
-      expect(result.excerpt!.getBoundingClientRect().width).toBeGreaterThan(0);
-    }
+    expect(result.name.scrollWidth - result.name.clientWidth > 1).toBe(!fits);
   });
 });
 
 it("updates a mounted reply across the mobile breakpoint without losing navigation", async () => {
   await page.viewport(1440, 800);
   const onOpenReply = vi.fn();
-  const { row } = await draw("Casey Morgan", "Original question", onOpenReply);
-  expect(row.querySelector(".chat-reply-attribution__excerpt-text")?.textContent).toBe(
-    "Original question",
-  );
+  await draw("Casey Morgan", true, onOpenReply);
   for (const width of [390, 360, 1440]) {
     await page.viewport(width, 800);
-    await expect
-      .poll(() => Boolean(host.querySelector(".chat-reply-attribution__excerpt-text")))
-      .toBe(width === 1440);
     const target = page.getByRole("button", { name: "Replying to Casey Morgan", exact: true });
     await target.click();
     expect(onOpenReply).toHaveBeenLastCalledWith("prompt");
@@ -294,10 +253,8 @@ it.each([1440, 390])(
       const name = row.querySelector<HTMLElement>(".chat-reply-attribution__name")!;
       const label = row.querySelector<HTMLElement>(".chat-reply-attribution__label")!;
       const button = row.querySelector<HTMLButtonElement>("button")!;
-      const excerpt = row.querySelector<HTMLElement>(".chat-reply-attribution__excerpt-text")!;
       expect(name.scrollWidth - name.clientWidth).toBeLessThanOrEqual(1);
       expect(label.scrollWidth - label.clientWidth).toBeLessThanOrEqual(1);
-      expect(excerpt.scrollWidth).toBeGreaterThan(excerpt.clientWidth);
       const a = label.getBoundingClientRect(),
         b = button.getBoundingClientRect();
       const bubble = row.closest(".chat-bubble")!.getBoundingClientRect();

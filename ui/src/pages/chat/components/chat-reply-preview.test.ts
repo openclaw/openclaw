@@ -11,7 +11,7 @@ describe("attachment reply previews", () => {
     { location: "loaded", caption: "Please review this report" },
     { location: "fetched", caption: "Please review this report" },
   ])(
-    "distinguishes document-only content from its caption in $location history: $caption",
+    "resolves document-only content and its caption in $location history: $caption",
     ({ location, caption }) => {
       const sourceId = "document-source";
       const source = {
@@ -50,7 +50,6 @@ describe("attachment reply previews", () => {
         sourceMessageId: sourceId,
         senderLabel: "OpenClaw",
         text: caption || "report.pdf",
-        isAttachment: !caption,
       });
     },
   );

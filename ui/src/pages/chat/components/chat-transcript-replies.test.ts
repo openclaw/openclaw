@@ -72,7 +72,6 @@ describe("chat transcript replies", () => {
         ".chat-reply-attribution--inline button",
       );
       expect(preview?.getAttribute("aria-label")).toBe("Replying to Molty");
-      expect(preview?.textContent).toContain("The original answer");
       expect(preview?.textContent).not.toContain("source-message");
 
       const sourceBubble = [...container.querySelectorAll<HTMLElement>(".chat-bubble")].find(
@@ -152,7 +151,6 @@ describe("chat transcript replies", () => {
         expect(preview?.querySelector(".chat-reply-attribution__name")?.textContent?.trim()).toBe(
           senderLabel,
         );
-        expect(preview?.textContent).toContain("The original message");
         expect(container.querySelector("[data-entry-id='source-message']")).toBeNull();
         preview?.click();
         expect(open).toHaveBeenCalledWith("source-message");

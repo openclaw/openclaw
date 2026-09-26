@@ -184,17 +184,13 @@ suite.define(() => {
           .waitFor();
         await gateway.waitForRequest("chat.message.get");
         await expectRequestCountStable(gateway, "chat.message.get", 1);
-        if (initial === "previous success") {
-          expect(await preview.textContent()).toContain("Previous preview.");
-        } else {
-          // An unconfirmed or anonymous missing source adds no quote strip.
-          expect(await preview.count()).toBe(0);
-        }
+        // An unconfirmed or anonymous missing source adds no reply strip.
+        expect(await preview.count()).toBe(initial === "previous success" ? 1 : 0);
         await gateway.setMethodResponse("chat.message.get", { ok: true, message: source });
         const connectCount = (await gateway.getRequests("connect")).length;
         await gateway.closeLatest(1006, "reply preview recovery");
         await waitForRequests(gateway, "connect", connectCount + 1);
-        await expect.poll(() => preview.textContent()).toContain("The current original answer.");
+        await expect.poll(() => preview.getByRole("button").count()).toBe(1);
         await expectRequestCountStable(gateway, "chat.message.get", 2);
 
         await preview.getByRole("button").click();

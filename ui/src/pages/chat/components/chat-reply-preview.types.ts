@@ -12,8 +12,6 @@ export type ReplyPreview = MessageReplyTarget & {
   sourceMessageId: string;
   sender?: ReturnType<typeof normalizeMessage>["sender"];
   isLoaded?: boolean;
-  isAttachment?: boolean;
-  isImage?: boolean;
   agentAvatar?: Parameters<typeof renderChatAuthorAvatar>[2];
 };
 

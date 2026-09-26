@@ -403,7 +403,9 @@ describe("chat transcript invalidation", () => {
         rerender();
         transcript.hostConnected();
         await flushDeferredRowPrune();
-        expect(attribution().textContent).toContain("Old snapshot");
+        expect(attribution().querySelector(".chat-reply-attribution__name")?.textContent).toBe(
+          "Old label",
+        );
         expect(attribution().querySelector("button")).toBeNull();
         const unrelatedKey = expectDefined(
           container
@@ -429,10 +431,9 @@ describe("chat transcript invalidation", () => {
           ];
           rerender();
           await flushDeferredRowPrune();
-          expect(attribution().querySelector(".chat-reply-attribution__name")?.textContent).toBe(
-            name,
-          );
-          expect(attribution().querySelector("button")?.textContent).toContain(text);
+          expect(
+            attribution().querySelector("button .chat-reply-attribution__name")?.textContent,
+          ).toBe(name);
           expect(renderGroup.mock.calls.filter(([group]) => group.key === unrelatedKey)).toEqual(
             [],
           );

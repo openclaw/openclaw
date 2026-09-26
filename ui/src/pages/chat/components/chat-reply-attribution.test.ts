@@ -99,27 +99,7 @@ function draw(
   };
 }
 
-describe("reply attribution excerpt", () => {
-  it.each([
-    [
-      "123456789012345678901234567890123456789012345",
-      "123456789012345678901234567890123456789012345",
-    ],
-    [
-      "\n  # **Review** [the plan](https://example.test) and `notes`\nDo not quote this line",
-      "Review the plan and notes",
-    ],
-    ["  Several    spaces\tbetween words ", "Several spaces between words"],
-    ["```typescript\nconst value = 1;\n```\nLater question", "const value = 1;"],
-    ["👩🏽‍💻".repeat(41), "👩🏽‍💻".repeat(41)],
-  ])("preserves the first useful plain-text line for CSS truncation of %j", (input, expected) => {
-    const { row } = draw({ ...prompt, content: input });
-    const excerpt = row.querySelector(".chat-reply-attribution__excerpt");
-    expect(excerpt?.textContent?.trim() ?? "").toBe(expected);
-  });
-});
-
-it("renders one recipient and excerpt per group, suppresses duplicate name and navigates by persisted ID", () => {
+it("renders one recipient per group, suppresses duplicate name and navigates from the name by persisted ID", () => {
   const { row, onOpenReply } = draw(prompt, [
     { role: "assistant", content: "First answer" },
     { role: "assistant", content: "Second answer", __openclaw: { replyToId: "prompt" } },
@@ -128,38 +108,20 @@ it("renders one recipient and excerpt per group, suppresses duplicate name and n
   expect(container.querySelector(".chat-sender-name")).toBeNull();
   expect(container.querySelector(".chat-reply-attribution--inline")).toBeNull();
   expect(row.querySelector(".chat-author-avatar")).not.toBeNull();
-  const excerpt = row.querySelector<HTMLButtonElement>("button")!;
-  expect(excerpt.textContent).toContain("Original question");
-  excerpt.click();
+  expect(row.textContent).not.toContain("Original question");
+  const target = row.querySelector<HTMLButtonElement>("button")!;
+  expect(target.getAttribute("aria-label")).toBe("Replying to Alice");
+  expect(target.querySelector(".chat-author-avatar")).not.toBeNull();
+  expect(target.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Alice");
+  target.click();
   expect(onOpenReply).toHaveBeenCalledWith("prompt");
-});
-
-it("renders a file icon and unquoted filename for an attachment-only prompt", () => {
-  const source = {
-    ...prompt,
-    content: [
-      {
-        type: "attachment",
-        attachment: {
-          kind: "document",
-          url: "https://files.example.test/release-plan.pdf",
-          label: "release-plan.pdf",
-          mimeType: "application/pdf",
-        },
-      },
-    ],
-  };
-  const { row } = draw(source);
-  expect(row.querySelector(".chat-reply-attribution__excerpt")?.textContent?.trim()).toBe(
-    "release-plan.pdf",
-  );
-  expect(row.querySelector(".chat-reply-attribution__file svg")).not.toBeNull();
 });
 
 it.each([
   { snapshot: undefined, missing: [] },
   { snapshot: { senderLabel: "Jordan", text: "" }, missing: [] },
   { snapshot: undefined, missing: ["deleted"] },
+  { snapshot: { senderLabel: "", text: "Earlier question" }, missing: ["deleted"] },
 ])(
   "renders no strip for an unresolved or anonymous missing reference %o",
   ({ snapshot, missing }) => {
@@ -232,9 +194,6 @@ it.each([
       presentation,
     );
     expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Jordan");
-    expect(row.querySelector(".chat-reply-attribution__excerpt")?.textContent).toContain(
-      "Earlier question",
-    );
     expect(row.querySelector("button, a")).toBeNull();
     expect(container.querySelector(".chat-reply-attribution--inline")).toBeNull();
   },
@@ -251,9 +210,7 @@ it("preserves the resolved display label when sender metadata contains only an I
 
 it("keeps pending prompts without a persisted ID noninteractive", () => {
   const { row } = draw({ role: "user", content: "Pending question" });
-  expect(row.querySelector(".chat-reply-attribution__excerpt")?.textContent).toContain(
-    "Pending question",
-  );
+  expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Alice");
   expect(row.querySelector("button, a")).toBeNull();
 });
 
@@ -348,14 +305,12 @@ it.each([
 it("renders an automatic recipient without claiming a textless source is unavailable", () => {
   const { row } = draw(null);
   expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Alice");
-  // The label carries only the decorative mobile icon; the name and excerpt
-  // identify the target and the row's aria-label keeps the spoken form.
+  // The decorative mobile icon adds no text to the visible label.
   const label = row.querySelector(".chat-reply-attribution__label")!;
-  expect(label.textContent?.trim()).toBe("");
+  expect(label.textContent?.trim()).toBe("Replying to");
   expect(
     label.querySelector(".chat-reply-attribution__mobile-icon")?.getAttribute("aria-hidden"),
   ).toBe("true");
-  expect(row.querySelector(".chat-reply-attribution__excerpt")).toBeNull();
   expect(row.querySelector(".chat-reply-attribution__unavailable")).toBeNull();
   expect(row.querySelector("button, a")).toBeNull();
   expect(row.nextElementSibling?.classList.contains("chat-bubble")).toBe(true);
@@ -388,7 +343,7 @@ it.each([
     expect(Boolean(row)).toBe(strip);
     if (row) {
       expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Alice");
-      expect(row.querySelector("button")?.textContent).toContain("Original question");
+      expect(row.querySelector("button")?.textContent).toContain("Alice");
     }
   },
 );
@@ -476,7 +431,7 @@ it.each([
     ),
     container,
   );
-  // Only a known excerpt resolves the quote before its source loads.
+  // Only snapshot text resolves the reference before its source loads.
   expect(container.querySelector(".chat-reply-attribution__name")?.textContent).toBe(
     preview?.text ? "Jordan" : undefined,
   );
@@ -555,7 +510,6 @@ it.each([
     expect(row.getAttribute("aria-label")).toBe(`Replying to ${label}`);
     expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe(label);
     expect(row.querySelector(".chat-author-avatar")).not.toBeNull();
-    expect(row.querySelector(".chat-reply-attribution__excerpt[title]")).toBeNull();
     expect(Boolean(row.querySelector(".identity-avatar--agent"))).toBe(role === "assistant");
     expect(container.querySelector(".chat-reply-connector")).toBeNull();
     const labelElement = container.querySelector<HTMLElement>(".chat-reply-attribution__label")!;

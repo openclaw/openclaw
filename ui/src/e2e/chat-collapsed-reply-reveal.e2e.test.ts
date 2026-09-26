@@ -134,7 +134,7 @@ suite.define(() => {
           await expect.poll(() => workToggle.getAttribute("aria-expanded")).toBe("false");
           expect(await earlierMessage.count()).toBe(0);
           const preview = pane.locator(".chat-reply-attribution--inline");
-          await expect.poll(() => preview.textContent()).toContain(sourceText);
+          await expect.poll(() => preview.getByRole("button").count()).toBe(1);
           await page.screenshot({ path: path.join(artifactDir, "before-reveal.png") });
 
           await preview.getByRole("button").click();
