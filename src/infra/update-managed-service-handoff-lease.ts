@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
 import { hasErrnoCode } from "./errno.js";
@@ -26,7 +27,6 @@ import {
 import { createManagedHandoffMutationReader } from "./update-managed-service-handoff-mutation.js";
 import { createManagedHandoffOriginalAcquisition } from "./update-managed-service-handoff-original-acquisition.js";
 import {
-  createManagedHandoffOriginalOwner,
   hasOriginalUpdateExecutorCustody,
   readOriginalUpdateDependents,
   type ManagedHandoffOriginalAdmission,
@@ -184,7 +184,6 @@ export function createManagedHandoffLeaseStore(
     source?: ManagedHandoffLease,
     legacyParent?: BorrowedLegacyHandoffParent,
     originalParent?: ManagedHandoffParent,
-    admissionDatabase?: HandoffDatabase,
   ): LeaseAcquisition {
     const run = (db: HandoffDatabase): LeaseAcquisition => {
       // Probe liveness before taking the write lock; commit only if both observations still match.
@@ -285,11 +284,10 @@ export function createManagedHandoffLeaseStore(
         };
       });
     };
-    return admissionDatabase ? run(admissionDatabase) : withDatabase(true, run);
+    return withDatabase(true, run);
   }
   const acquire = createManagedHandoffOriginalAcquisition({
     options,
-    transact,
     acquirePinnedOriginal: (pinnedOptions, root, owner, action) =>
       createManagedHandoffLeaseStore(pinnedOptions, logger).acquire(root, owner, action),
     withDatabase,
@@ -403,31 +401,53 @@ export function createManagedHandoffLeaseStore(
     }
     return cas(lease, action, processIdentity(pid, argv));
   }
-  const {
-    bindUpdateChildren,
-    bindOriginalUpdateExecutor,
-    returnOriginalUpdateExecutor,
-    selectOriginalUpdateRetainedRoot,
-    releaseOriginalUpdate,
-  } = createManagedHandoffOriginalOwner({
-    existingIdentity: options.existingIdentity,
-    originalUpdateAdmissions,
-    deleteRow,
-    childAliases,
-    admitRetained: (root, owner, payload, db) =>
-      admit(root, owner, payload, undefined, undefined, undefined, db),
-    withDatabase,
-    transact,
-    mutationCurrent,
-    hasUnsettledChildren,
-    processIdentity,
-    processState,
-    owns,
-    row,
-    sameRow,
-    handle,
-    updateRow,
-  });
+  // Paired original-root/occupied-slot child rows must become bound atomically.
+  // A parent dying between separate binds must not expose either installation.
+  function bindUpdateChildren(
+    leases: ManagedHandoffLease[],
+    pid: number,
+    argv?: readonly string[],
+  ) {
+    if (
+      !leases.length ||
+      new Set(leases.map((lease) => lease.key)).size !== leases.length ||
+      leases.some(
+        (lease) =>
+          lease.version !== 2 ||
+          lease.action.kind !== "update" ||
+          !lease.key.includes("/.openclaw-update-child-") ||
+          !owns(lease) ||
+          !isDeepStrictEqual(lease.helper, lease.executor),
+      )
+    ) {
+      return null;
+    }
+    const executor = processIdentity(pid, argv);
+    return withDatabase(true, (db) =>
+      transact(db, () => {
+        if (leases.some((lease) => !storedCurrent(lease, db) || hasUnsettledChildren(lease, db))) {
+          return null;
+        }
+        return leases.map((lease) => {
+          const payload = JSON.stringify({
+            version: 2,
+            helper: lease.helper,
+            executor,
+            action: lease.action,
+          });
+          const updatedAt = Math.max(Date.now(), lease.updatedAt + 1);
+          if (!updateRow(db, lease, { payload_json: payload, updated_at: updatedAt })) {
+            throw new Error("Candidate process binding changed.");
+          }
+          return handle(lease.key, {
+            owner: lease.owner,
+            payload_json: payload,
+            updated_at: updatedAt,
+          });
+        });
+      }),
+    );
+  }
   function retarget(
     lease: ManagedHandoffLease,
     root: string,
@@ -564,11 +584,7 @@ export function createManagedHandoffLeaseStore(
                 [...childAliases(lease.key, db), ...readOriginalUpdateDependents(lease, db)].some(
                   (key) => !leases.some((paired) => paired.key === key),
                 )) ||
-              !sameRow(row(db, lease.key), {
-                owner: lease.owner,
-                payload_json: lease.payload,
-                updated_at: lease.updatedAt,
-              }),
+              !storedCurrent(lease, db),
           )
         ) {
           return false;
@@ -672,10 +688,6 @@ export function createManagedHandoffLeaseStore(
     acquire,
     bind,
     bindUpdateChildren,
-    bindOriginalUpdateExecutor,
-    returnOriginalUpdateExecutor,
-    selectOriginalUpdateRetainedRoot,
-    releaseOriginalUpdate,
     cancelUpdate,
     releaseAll,
     retarget,

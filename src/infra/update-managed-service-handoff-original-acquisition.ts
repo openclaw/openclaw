@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import {
   captureManagedUpdateLeaseDatabaseIdentity,
   type createManagedHandoffLeaseDatabase,
@@ -11,10 +9,7 @@ import type {
   ManagedHandoffParent,
 } from "./update-managed-service-handoff-lease-types.js";
 import type { BorrowedLegacyHandoffParent } from "./update-managed-service-handoff-legacy-parent.js";
-import {
-  readManagedHandoffDescendant,
-  type ManagedHandoffOriginalAdmission,
-} from "./update-managed-service-handoff-original-owner.js";
+import type { ManagedHandoffOriginalAdmission } from "./update-managed-service-handoff-original-owner.js";
 import type { createManagedHandoffProcessIdentityReader } from "./update-managed-service-handoff-process.js";
 import type { createManagedHandoffLeaseRows } from "./update-managed-service-handoff-rows.js";
 import { managedHandoffLeaseText as text } from "./update-managed-service-handoff-rows.js";
@@ -33,7 +28,6 @@ export function createManagedHandoffOriginalAcquisition(deps: {
     action: ManagedHandoffLeaseAction,
   ) => LeaseAcquisition;
   withDatabase: ReturnType<typeof createManagedHandoffLeaseDatabase>;
-  transact: <T>(db: HandoffDatabase, run: () => T) => T;
   processIdentity: ReturnType<typeof createManagedHandoffProcessIdentityReader>["processIdentity"];
   read: ReturnType<typeof createManagedHandoffLeaseRows>["read"];
   admit: (
@@ -43,7 +37,6 @@ export function createManagedHandoffOriginalAcquisition(deps: {
     source?: ManagedHandoffLease,
     legacyParent?: BorrowedLegacyHandoffParent,
     originalParent?: ManagedHandoffParent,
-    admissionDatabase?: HandoffDatabase,
   ) => LeaseAcquisition;
   originalUpdateAdmissions: WeakMap<ManagedHandoffLease, ManagedHandoffOriginalAdmission>;
 }): (
@@ -58,13 +51,12 @@ export function createManagedHandoffOriginalAcquisition(deps: {
     options,
     acquirePinnedOriginal,
     withDatabase,
-    transact,
     processIdentity,
     read,
     admit,
     originalUpdateAdmissions,
   } = deps;
-  const { databasePath, originalUpdateRetainedKey } = options;
+  const { databasePath } = options;
   function acquire(
     root: string,
     owner: string,
@@ -142,76 +134,12 @@ export function createManagedHandoffOriginalAcquisition(deps: {
       }
       return { kind: "acquired", lease: result.lease };
     }
-    let result: LeaseAcquisition;
-    if (originalUpdateOwner && originalUpdateRetainedKey !== undefined) {
-      const retainedRoot = originalUpdateRetainedKey;
-      if (
-        retainedRoot === root ||
-        retainedRoot.includes("/.openclaw-update-child-") ||
-        fs.realpathSync(root) !== root ||
-        fs.realpathSync(retainedRoot) !== retainedRoot
-      ) {
-        throw new Error("Original retained update root is invalid");
-      }
-      // Both admissions use one pinned connection/transaction. A busy second
-      // root rolls back the first; no release/reacquire gap or orphan authority.
-      let busy: Extract<LeaseAcquisition, { kind: "busy" }> | undefined;
-      const refused = new Error("Original retained update pair is busy");
-      try {
-        result = withDatabase(true, (db) =>
-          transact(db, () => {
-            const unsettled =
-              readManagedHandoffDescendant(root, db) ??
-              readManagedHandoffDescendant(retainedRoot, db);
-            if (unsettled) {
-              busy = { kind: "busy", owner: unsettled.owner };
-              throw refused;
-            }
-            const original = admit(root, owner, payload, undefined, undefined, undefined, db);
-            if (original.kind !== "acquired") {
-              busy = original;
-              throw refused;
-            }
-            const retained = admit(
-              retainedRoot,
-              owner,
-              payload,
-              undefined,
-              undefined,
-              undefined,
-              db,
-            );
-            if (retained.kind !== "acquired") {
-              busy = retained;
-              throw refused;
-            }
-            return { ...original, retainedLease: retained.lease };
-          }),
-        );
-      } catch (error) {
-        if (error !== refused || !busy) {
-          throw error;
-        }
-        return busy;
-      }
-    } else {
-      result = admit(root, owner, payload, undefined, legacyParent, originalParent);
-    }
+    const result = admit(root, owner, payload, undefined, legacyParent, originalParent);
     if (result.kind === "acquired" && originalUpdateOwner && options.existingIdentity) {
       const originalDatabaseIdentity = Object.freeze({ ...options.existingIdentity });
       originalUpdateAdmissions.set(result.lease, {
         database: originalDatabaseIdentity,
         original: structuredClone(result.lease),
-        current: structuredClone(result.lease),
-        ...(result.retainedLease
-          ? {
-              retainedSelection: result.retainedLease.key,
-              retained: {
-                original: structuredClone(result.retainedLease),
-                current: structuredClone(result.retainedLease),
-              },
-            }
-          : {}),
       });
       // Carry the physical pin established before commit back to the live owner.
       // It must not recapture another inode or admit service rows through an

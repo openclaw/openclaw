@@ -1,5 +1,7 @@
+import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import {
   acquireGatewayMaintenanceCoordinator,
   hasGatewayLifecycleCoordinator,
@@ -22,13 +24,19 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 type Progress = MutableUpdateExecutionParams["progress"];
 
 export async function captureUpdateDatabases(params: {
-  backupRoot: string;
+  transaction: PackageUpdateTransaction;
   execution: MutableUpdateExecutionParams;
   context: OwnedManagedUpdateContext | undefined;
   assertCurrent: () => void;
 }) {
   const startedAt = Date.now();
-  const { execution, context } = params;
+  const { execution, context, transaction } = params;
+  // Atomic publication retires its anchor after success. Keep migration
+  // snapshots in a sibling so they remain durable recovery evidence.
+  const backupRoot =
+    transaction.reversePublication === undefined
+      ? transaction.backupRoot
+      : path.dirname(transaction.backupRoot);
   const env = context?.env ?? execution.opts.run!.env;
   params.assertCurrent();
   const source = await readUpdateCandidateSource(env, execution.legacyConfigPlan);
@@ -47,7 +55,7 @@ export async function captureUpdateDatabases(params: {
   let backup: UpdateDatabaseBackup;
   try {
     backup = await createUpdateDatabaseBackup({
-      backupRoot: params.backupRoot,
+      backupRoot,
       stateDir: resolveStateDir(env),
       config: source.config,
       env,

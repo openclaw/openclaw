@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   type OpenClawDatabaseMaintenanceScope,
@@ -36,22 +37,13 @@ export async function publishUpdateRecoveryGeneration(params: {
   maintenance: OpenClawDatabaseMaintenanceScope;
   authority: Authority;
   initialStores: Admission;
-  beforeRetire?: () => Promise<void>;
 }) {
   const publication = params.transaction.reversePublication;
   if (!publication) {
     refuse("original reverse transaction is unavailable");
   }
   const preparation = packageActivationReversePreparationSchema.parse(params.binding);
-  const freeze = (value: object): void => {
-    for (const child of Object.values(value)) {
-      if (child && typeof child === "object") {
-        freeze(child);
-      }
-    }
-    Object.freeze(value);
-  };
-  freeze(preparation);
+  freezeJsonSnapshot(preparation);
   const initial = params.initialStores;
   const selection = initial.selection;
   const originalAssert = params.authority.assertCurrent.bind(params.authority);
@@ -129,20 +121,15 @@ export async function publishUpdateRecoveryGeneration(params: {
   };
   // The provider callback precedes the first state effect. If all state is
   // unchanged, retire here before a package-only inode transition can occur.
+  assertHeld();
+  initial.assertCurrent();
   if (!preparation.state.some((resource) => resource.move)) {
-    await params.beforeRetire?.();
-    assertHeld();
-    initial.assertCurrent();
     initial.close();
     retired = true;
-  } else {
-    await params.beforeRetire?.();
-    assertHeld();
-    initial.assertCurrent();
   }
   const preparedResult = await prepare(preparation, authority);
   const binding = packageActivationReverseBindingSchema.parse(preparedResult.binding);
-  freeze(binding);
+  freezeJsonSnapshot(binding);
   const sealedState = binding.resources.find(
     (resource) => resource.role === "state" && resource.live === selection.state.databasePath,
   );

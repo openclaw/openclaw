@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import {
   publishUpdateInitialPackageGeneration,
   publishUpdateInitialStoreGeneration,
@@ -112,26 +111,15 @@ export function registerUpdateCommandGenerationOwner(params: {
   assertCurrent: () => void;
   assertPublicationCurrent: () => void;
   initial: () => Admission;
-  beforeRetire?: (transition: string, current: UpdateInitialStoreTransport) => Promise<void>;
   retired: () => void;
-  selected: (admission: Admission, transition: string) => void | Promise<void>;
+  selected: (admission: Admission) => void;
 }) {
   const { fence, runId, authority, assertCurrent, assertPublicationCurrent } = params;
   let state: "ready" | "publishing" | "failed" = "ready";
   let admissionOpen = true;
   let task: Promise<unknown> | undefined;
-  const beforeRetire = params.beforeRetire?.bind(params);
   const selected = params.selected.bind(params);
   const retired = params.retired.bind(params);
-  function retire(initial: Admission, transition: string) {
-    return beforeRetire?.(
-      transition,
-      Object.freeze({
-        protocol: "initial-pair-v1" as const,
-        selection: initial.selection,
-      }),
-    );
-  }
   function admit(requestedRunId: string) {
     if (!admissionOpen || state !== "ready") {
       throw new UpdateCommandRecoveryPendingError("Publication admission is closed.");
@@ -151,7 +139,6 @@ export function registerUpdateCommandGenerationOwner(params: {
   }
   originalPackageGenerations.set(fence, (requestedRunId, operationId) => {
     const initial = admit(requestedRunId);
-    const transition = randomUUID();
     state = "publishing";
     preflightReleases.delete(fence);
     return retain(
@@ -163,12 +150,9 @@ export function registerUpdateCommandGenerationOwner(params: {
             runId,
             operationId,
             assertCurrent: assertPublicationCurrent,
-            beforeRetire: async () => {
-              await retire(initial, transition);
-            },
             onRetired: retired,
           });
-          await selected(result.admission, transition);
+          selected(result.admission);
           assertPublicationCurrent();
           result.commitInvocation();
           state = "ready";
@@ -186,7 +170,6 @@ export function registerUpdateCommandGenerationOwner(params: {
     if (input.binding.runId !== runId) {
       throw new UpdateCommandRecoveryPendingError("Publication changed its original run.");
     }
-    const transition = randomUUID();
     const binding = structuredClone(input.binding);
     const assertWritersSettled = input.assertWritersSettled.bind(input);
     const validateTarget = input.validateTarget.bind(input);
@@ -213,13 +196,10 @@ export function registerUpdateCommandGenerationOwner(params: {
               },
             },
             {
-              beforeRetire: async () => {
-                await retire(initial, transition);
-              },
               onRetired: retired,
             },
           );
-          await selected(result.admission, transition);
+          selected(result.admission);
           assertPublicationCurrent();
           state = "ready";
           return result.completion;

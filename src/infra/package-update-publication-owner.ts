@@ -21,7 +21,6 @@ import {
   type PackageActivationRecord,
   encodePackageActivationLauncher,
 } from "./package-update-activation-journal.js";
-import type { PackageActivationReverseBinding } from "./package-update-activation-reverse-schema.js";
 import { createPackageActivationReverseOwner } from "./package-update-activation-reverse.js";
 import type { PackageActivationStatus } from "./package-update-activation-status.js";
 import {
@@ -172,11 +171,10 @@ export function createPublicationOwner(
     phase: PackageActivationPhase,
     intent: PackageActivationIntent = null,
     publications = record.publications,
-    reverse?: PackageActivationReverseBinding,
     assertExecutor = assertion,
   ) => {
     assertCurrent(assertExecutor);
-    record = journal.transition(record, phase, intent, assertExecutor, publications, reverse);
+    record = journal.transition(record, phase, intent, assertExecutor, publications);
   };
   const matches = async (file: string, expected: PackageIntegrityFingerprint, logical: string) => {
     if (!(await packagePathEntryExists(file))) {

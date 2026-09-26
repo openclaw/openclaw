@@ -15,7 +15,6 @@ import { VERSION } from "../../version.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   confirmUpdateDowngrade,
-  UpdatePreMutationError,
   resolveGitInstallDir,
   type UpdateCommandOptions,
 } from "./shared.js";
@@ -119,6 +118,16 @@ async function updateCommandWithRuntime(
     assertUpdatePackageActivationAdmission(root, { serviceRoot });
     const needsInitialization = await updateStateNeedsInitialization(env);
     assertUpdateInitialStoreInvocation(root, env);
+    const execute = (initialization?: InitializedUpdate) =>
+      runAdmittedUpdate(
+        inputOpts,
+        prepared,
+        recoveryState,
+        invocationCwd,
+        retainRuntime,
+        initialization,
+        executorOptions,
+      );
     if (needsInitialization) {
       if (currentUpdateInitialStoreAdmission()) {
         throw new Error("Explicit private update invocation requires existing initialized state.");
@@ -130,28 +139,11 @@ async function updateCommandWithRuntime(
         recoveryState,
         invocationCwd,
         env,
-        (initialization) =>
-          runAdmittedUpdate(
-            inputOpts,
-            prepared,
-            recoveryState,
-            invocationCwd,
-            retainRuntime,
-            initialization,
-            executorOptions,
-          ),
+        execute,
         executorOptions,
       );
     }
-    return await runAdmittedUpdate(
-      inputOpts,
-      prepared,
-      recoveryState,
-      invocationCwd,
-      retainRuntime,
-      undefined,
-      executorOptions,
-    );
+    return await execute();
   });
 }
 
@@ -305,49 +297,31 @@ async function updateCommandInternal(
   if (!target) {
     return;
   }
-  try {
-    return await withUpdateCandidateAdmission(
-      {
-        target,
-        prepared,
-        opts,
-        timeoutMs: updateStepTimeoutMs,
-        invocationCwd,
-        presentation,
-        stagedPackage: initialization?.stagedPackage,
-        candidateAdmission: initialization?.candidateAdmission,
-      },
-      (stagedPackage) =>
-        runResolvedUpdate(
-          opts,
-          recoveryState,
-          invocationCwd,
-          prepared,
-          presentation,
-          executor,
-          retainRuntime,
-          target,
-          stagedPackage,
-          initialization,
-        ),
-    );
-  } catch (error) {
-    if (!(error instanceof UpdatePreMutationError)) {
-      throw error;
-    }
-    return await reportPreMutationUpdateResult({
-      root: target.root,
-      mode: target.mode,
-      installKind: target.updateInstallKind,
+  return await withUpdateCandidateAdmission(
+    {
+      target,
+      prepared,
       opts,
-      controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
-      reason: error.reason,
-      message: error.message,
-      nextAction: error.nextAction,
-      failureFacts: error.failureFacts,
-      recoverySteps: error.recoverySteps,
-    });
-  }
+      timeoutMs: updateStepTimeoutMs,
+      invocationCwd,
+      presentation,
+      stagedPackage: initialization?.stagedPackage,
+      candidateAdmission: initialization?.candidateAdmission,
+    },
+    (stagedPackage) =>
+      runResolvedUpdate(
+        opts,
+        recoveryState,
+        invocationCwd,
+        prepared,
+        presentation,
+        executor,
+        retainRuntime,
+        target,
+        stagedPackage,
+        initialization,
+      ),
+  );
 }
 
 async function runResolvedUpdate(

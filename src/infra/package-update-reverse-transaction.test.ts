@@ -1,6 +1,9 @@
 import { expect, it, vi } from "vitest";
 import type { PackageActivationRecord } from "./package-update-activation-journal.js";
-import type { PackageActivationReverseBinding } from "./package-update-activation-reverse-schema.js";
+import type {
+  PackageActivationReverseBinding,
+  PackageActivationReversePreparation,
+} from "./package-update-activation-reverse-schema.js";
 import type { PackageReverseAuthority } from "./package-update-activation-reverse.js";
 import { withPackageReverseTransaction } from "./package-update-reverse-transaction.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
@@ -8,6 +11,7 @@ import type { PackageUpdateTransaction } from "./package-update-swap-contract.js
 // Controlled activation boundary; these tests qualify transaction lifetime and
 // delegation, not source proof, executor admission, SQLite or file publication.
 const binding = {} as PackageActivationReverseBinding;
+const preparation = {} as PackageActivationReversePreparation;
 const authority: PackageReverseAuthority = {
   assertCurrent: () => {},
   assertWritersSettled: () => {},
@@ -63,10 +67,9 @@ function fixture(legacyRollbackAllowed = true) {
       }
     }),
     journal: { read: () => structuredClone(record) },
-    reverse: vi.fn(() => work.promise),
     prepareReverse: vi.fn(async () => ({
-      status,
-      binding: {} as never,
+      status: await work.promise,
+      binding,
     })),
     settleReverse: vi.fn(() => settlement.promise),
     resourceCustody: vi.fn(async () => ({
@@ -104,8 +107,8 @@ function fixture(legacyRollbackAllowed = true) {
     pin: () => {
       record = {
         ...record,
-        phase: "reverse-in-progress",
-        descriptor: { ...record.descriptor, reverse: binding },
+        phase: "reverse-preparing",
+        descriptor: { ...record.descriptor, reversePreparation: preparation },
       };
     },
   };
@@ -116,13 +119,13 @@ it("leaves transactions without native activation on their original path", async
   expect(withPackageReverseTransaction(f.legacy, undefined)).toBe(f.legacy);
   await f.transaction.rollback(assertion);
   expect(f.legacy.rollback).toHaveBeenCalledExactlyOnceWith(assertion);
-  expect(() => f.reverse.publish(binding, authority)).toThrow("rollback has started");
+  expect(() => f.reverse.prepare(preparation, authority)).toThrow("rollback has started");
 });
 
 it("joins issued publication before returning retention and never delegates unverified cleanup", async () => {
   const f = fixture();
-  const publishing = f.reverse.publish(binding, authority);
-  expect(() => f.reverse.publish(binding, authority)).toThrow("already started");
+  const publishing = f.reverse.prepare(preparation, authority);
+  expect(() => f.reverse.prepare(preparation, authority)).toThrow("already started");
   const completion = f.transaction.complete({ activationVerified: true }, assertion);
   let returned = false;
   void completion.then(() => {
@@ -139,7 +142,7 @@ it("joins issued publication before returning retention and never delegates unve
 
 it("joins both issued phases before delegating the original completion policy", async () => {
   const f = fixture();
-  const publishing = f.reverse.publish(binding, authority);
+  const publishing = f.reverse.prepare(preparation, authority);
   const settling = f.reverse.settle(authority);
   expect(f.reverse.settle(authority)).toBe(settling);
   const outcome = { activationVerified: false };
@@ -153,12 +156,12 @@ it("joins both issued phases before delegating the original completion policy", 
   await settling;
   await completion;
   expect(f.legacy.complete).toHaveBeenCalledExactlyOnceWith(outcome, assertion);
-  expect(() => f.reverse.publish(binding, authority)).toThrow("settlement");
+  expect(() => f.reverse.prepare(preparation, authority)).toThrow("settlement");
 });
 
 it("waits for issued work after original executor revocation and refuses replacement cleanup authority", async () => {
   const f = fixture();
-  const publishing = f.reverse.publish(binding, authority);
+  const publishing = f.reverse.prepare(preparation, authority);
   f.revoke();
   const completion = f.transaction.complete({ activationVerified: true }, assertion);
   const rejected = expect(completion).rejects.toThrow("original executor revoked");
@@ -181,18 +184,21 @@ it("waits for issued work after original executor revocation and refuses replace
 
 it("allows a proved pre-pin refusal to retry but retains committed failure for its own recovery", async () => {
   const f = fixture();
-  const first = f.reverse.publish(binding, authority);
+  const first = f.reverse.prepare(preparation, authority);
   const refusal = expect(first).rejects.toThrow("target refused");
   f.work.reject(new Error("target refused"));
   await refusal;
   const retry = deferred();
-  vi.mocked(f.activation.reverse).mockReturnValueOnce(retry.promise);
-  const second = f.reverse.publish(binding, authority);
+  vi.mocked(f.activation.prepareReverse).mockImplementationOnce(async () => ({
+    status: await retry.promise,
+    binding,
+  }));
+  const second = f.reverse.prepare(preparation, authority);
   f.pin();
   const failure = expect(second).rejects.toThrow("after durable pin");
   retry.reject(new Error("after durable pin"));
   await failure;
-  expect(() => f.reverse.publish(binding, authority)).toThrow("already started");
+  expect(() => f.reverse.prepare(preparation, authority)).toThrow("already started");
   expect(await f.transaction.rollback(assertion)).toMatchObject({
     name: "package-rollback",
     exitCode: 1,
@@ -217,7 +223,7 @@ it("requires settlement before completion readback and rechecks authority across
   await expect(f.reverse.verifyCompletion(binding, authority)).rejects.toThrow(
     "exhaustive settlement",
   );
-  const publishing = f.reverse.publish(binding, authority);
+  const publishing = f.reverse.prepare(preparation, authority);
   const settling = f.reverse.settle(authority);
   f.work.resolve(status);
   f.settlement.resolve(status);
@@ -257,9 +263,9 @@ it("keeps native reverse publication usable after legacy rollback is refused", a
   expect(f.legacy.rollback).not.toHaveBeenCalled();
   expect(replacementAssertion).not.toHaveBeenCalled();
   expect(f.reverse.selection()).toMatchObject({ originalRunId: "original" });
-  const publishing = f.reverse.publish(binding, authority);
+  const publishing = f.reverse.prepare(preparation, authority);
   f.work.resolve(status);
-  await expect(publishing).resolves.toEqual(status);
+  await expect(publishing).resolves.toEqual({ status, binding });
 });
 
 it("captures queued settlement authority before waiting for publication", async () => {
@@ -283,7 +289,7 @@ it("captures queued settlement authority before waiting for publication", async 
     settled = true;
     return status;
   });
-  const publishing = f.reverse.publish(binding, guard);
+  const publishing = f.reverse.prepare(preparation, guard);
   const settling = f.reverse.settle(guard);
   const refused = expect(settling).rejects.toThrow("queued original maintenance closed");
   guard.assertCurrent = replacement;

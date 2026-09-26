@@ -90,7 +90,7 @@ export async function publishUpdateInitialStoreGeneration(
   params: Parameters<
     typeof import("./update-recovery-generation-consumer.js").publishUpdateRecoveryGeneration
   >[0],
-  lifecycle: { beforeRetire?: () => Promise<void>; onRetired: () => void },
+  lifecycle: { onRetired: () => void },
 ) {
   const scope = invocation.getStore();
   const lexical = currentUpdateInitialStoreAdmission();
@@ -113,7 +113,6 @@ export async function publishUpdateInitialStoreGeneration(
         resourceCustody: publication.resourceCustody.bind(publication),
         selection: publication.selection.bind(publication),
         prepare: publication.prepare.bind(publication),
-        publish: publication.publish.bind(publication),
         settle: publication.settle.bind(publication),
         verifyCompletion: publication.verifyCompletion.bind(publication),
         commitCompletion: publication.commitCompletion.bind(publication),
@@ -128,7 +127,6 @@ export async function publishUpdateInitialStoreGeneration(
       validateTarget: params.authority.validateTarget.bind(params.authority),
       assertCapturedSource: params.authority.assertCapturedSource?.bind(params.authority),
     },
-    beforeRetire: lifecycle.beforeRetire?.bind(lifecycle),
   };
   if (scope) {
     scope.publishing = true;
@@ -173,7 +171,6 @@ export async function publishUpdateInitialPackageGeneration(params: {
   operationId: string;
   assertCurrent: () => void;
   onRetired: () => void;
-  beforeRetire?: () => Promise<void>;
 }) {
   const scope = invocation.getStore();
   const lexical = currentUpdateInitialStoreAdmission();
@@ -183,7 +180,6 @@ export async function publishUpdateInitialPackageGeneration(params: {
   const operationId = params.operationId;
   const assertCurrent = params.assertCurrent.bind(params);
   const onRetired = params.onRetired.bind(params);
-  const beforeRetire = params.beforeRetire?.bind(params);
   initial.assertCurrent();
   lexical?.assertCurrent();
   if (lexical && !isDeepStrictEqual(lexical.selection, initial.selection)) {
@@ -214,11 +210,6 @@ export async function publishUpdateInitialPackageGeneration(params: {
   }
   const owner = createPublicationOwner(anchor, journal, assertCurrent, record);
   await owner.preflight("repair");
-  assertCurrent();
-  initial.assertCurrent();
-  lexical?.assertCurrent();
-  journal.assertCurrent(record);
-  await beforeRetire?.();
   assertCurrent();
   initial.assertCurrent();
   lexical?.assertCurrent();

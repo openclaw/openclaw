@@ -171,6 +171,7 @@ export async function materializePackageReversePreparation(
     entries: generations.candidate.entries,
   });
   const assertCurrent = () => params.assertAuthority(preparation, guard);
+  let assertOriginalCapture: (() => void) | undefined;
   if (params.resuming) {
     await assertUpdateRecoverySourceAttestationCurrent(
       sourceAttestation,
@@ -178,7 +179,7 @@ export async function materializePackageReversePreparation(
       assertCurrent,
     );
   } else {
-    await assertUpdateRecoverySourceAttestationAdmission(
+    assertOriginalCapture = await assertUpdateRecoverySourceAttestationAdmission(
       sourceAttestation,
       generations.candidate.entries,
       {
@@ -388,6 +389,7 @@ export async function materializePackageReversePreparation(
     [binding.sourceAttestation.path, binding.target.nodePath],
   );
   params.assertAuthority(binding, guard);
+  assertOriginalCapture?.();
   params.sealReverse(binding, params.assertExecutor);
   return { binding, status: await params.publish(guard) };
 }

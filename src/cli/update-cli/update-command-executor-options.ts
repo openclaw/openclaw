@@ -4,7 +4,6 @@ import type { UpdateInitialStoreInvocation } from "../../infra/update-initial-st
 import {
   snapshotUpdateInitialStoreTransport,
   type UpdateInitialStoreTransport,
-  type UpdateManagedGenerationIssuer,
 } from "../../infra/update-initial-store-transport.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
@@ -14,20 +13,10 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 
 export type UpdateCommandExecutorOptions = {
   initialStores?: UpdateInitialStoreTransport;
-  /** Existing helper control owner; native bound-child admission is still mandatory. */
-  managedGeneration?: UpdateManagedGenerationIssuer;
 } & (
   | {
       /** Location only: direct admission must still acquire its own live owner. */
       directOriginal: { databasePath: string };
-      existingAuthority?: never;
-      legacyManagedParent?: never;
-      legacyPackageParent?: never;
-      legacyPackageHandoff?: never;
-    }
-  | {
-      managedGeneration: UpdateManagedGenerationIssuer;
-      directOriginal?: never;
       existingAuthority?: never;
       legacyManagedParent?: never;
       legacyPackageParent?: never;

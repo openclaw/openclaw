@@ -20,7 +20,10 @@ import {
   resolvePackageActivationJournalPath,
   type PackageActivationDescriptor,
 } from "./package-update-activation-journal.js";
-import type { PackageActivationReverseBinding } from "./package-update-activation-reverse-schema.js";
+import type {
+  PackageActivationReverseBinding,
+  PackageActivationReversePreparation,
+} from "./package-update-activation-reverse-schema.js";
 import * as runtimeWorker from "./runtime-worker-url.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "./state-database-coordinator.js";
 
@@ -144,6 +147,7 @@ function fixture(original = true) {
     manifestPath: path.join(root, name, "manifest.json"),
     manifestSha256: digest,
   });
+  const packageImage = { kind: "package" as const, uid: "1", gid: "1", mode: 0o700 };
   const binding: PackageActivationReverseBinding = {
     protocol: "package-state-reverse-v1",
     operationId,
@@ -176,8 +180,44 @@ function fixture(original = true) {
         after: { kind: "missing" },
         move: null,
       },
+      {
+        role: "package",
+        live,
+        parentIdentity: id(root),
+        before: { ...packageImage, ...descriptor.candidate },
+        after: { ...packageImage, ...descriptor.previous },
+        move: {
+          staged: path.join(anchor, "previous"),
+          displaced: path.join(anchor, "candidate"),
+          stagedParentIdentity: id(anchor),
+          displacedParentIdentity: id(anchor),
+        },
+      },
     ],
   };
+  const { protocol: _protocol, resources, ...generation } = binding;
+  const preparation: PackageActivationReversePreparation = {
+    ...generation,
+    protocol: "package-state-reverse-preparation-v1",
+    state: resources
+      .filter((resource) => resource.role === "state")
+      .map((resource) => ({
+        role: "state",
+        live: resource.live,
+        parentIdentity: resource.parentIdentity,
+        before: resource.before,
+        desired: resource.after,
+        move: null,
+      })),
+    packageResources: resources.filter((resource) => resource.role !== "state"),
+  };
+  const prepare = () =>
+    journal.transition(
+      journal.prepareReverse(record, preparation, assertCurrent),
+      "reverse-preparing",
+      { kind: "reverse-prepare", completed: preparation.state.length, effect: null },
+      assertCurrent,
+    );
   return {
     root,
     childGuardEnv,
@@ -185,20 +225,19 @@ function fixture(original = true) {
     journal,
     record,
     binding,
+    preparation,
+    prepare,
     journalPath: resolvePackageActivationJournalPath(anchor),
   };
 }
 
 it("pins exact source reference once and retains it through durable reverse progress and reopen", () => {
   const f = fixture();
-  const admitted = f.journal.transition(
-    f.record,
-    "reverse-in-progress",
-    start,
-    assertCurrent,
-    [],
-    f.binding,
+  const prepared = f.prepare();
+  expect(openPackageActivationJournal(f.anchor).read().descriptor.reversePreparation).toEqual(
+    f.preparation,
   );
+  const admitted = f.journal.sealReverse(prepared, f.binding, assertCurrent);
   expect(openPackageActivationJournal(f.anchor).read().descriptor.reverse).toEqual(f.binding);
   const saved = structuredClone(f.binding.sourceAttestation);
   f.binding.sourceAttestation.path = path.join(f.root, "reissued.json");
@@ -208,59 +247,55 @@ it("pins exact source reference once and retains it through durable reverse prog
   const completed = f.journal.transition(
     admitted,
     "reverse-complete",
-    { ...start, completed: 1 },
+    { ...start, completed: f.binding.resources.length },
     assertCurrent,
   );
   const settled = f.journal.transition(
     completed,
     "rolled-back",
-    { ...start, completed: 1 },
+    { ...start, completed: f.binding.resources.length },
     assertCurrent,
   );
-  expect(settled.revision).toBe(f.record.revision + 3);
+  expect(settled.revision).toBe(f.record.revision + 5);
   expect(openPackageActivationJournal(f.anchor).read()).toEqual(settled);
   expect(settled.descriptor.authority).toEqual(f.record.descriptor.authority);
 });
 
 it("refuses foreign run/operation, missing proof ref and wrong admission phase without a durable transition", () => {
   const f = fixture();
+  const prepared = f.prepare();
   for (const binding of [
     { ...f.binding, runId: "foreign-run" },
     { ...f.binding, operationId: randomUUID() },
     { ...f.binding, sourceAttestation: undefined },
   ]) {
     expect(() =>
-      f.journal.transition(
-        f.record,
-        "reverse-in-progress",
-        start,
-        assertCurrent,
-        [],
-        binding as PackageActivationReverseBinding,
-      ),
+      f.journal.sealReverse(prepared, binding as PackageActivationReverseBinding, assertCurrent),
     ).toThrow();
-    expect(f.journal.read()).toEqual(f.record);
+    expect(f.journal.read()).toEqual(prepared);
   }
-  const prepared = f.journal.transition(f.record, "prepared", null, assertCurrent);
-  expect(() =>
-    f.journal.transition(prepared, "reverse-in-progress", start, assertCurrent, [], f.binding),
-  ).toThrow("only be committed once");
+  expect(() => f.journal.prepareReverse(prepared, f.preparation, assertCurrent)).toThrow(
+    "untouched original publication",
+  );
   expect(f.journal.read()).toEqual(prepared);
 });
 
 it("refuses replacement bindings, forward rearming, missing progress and premature reverse completion", () => {
   const f = fixture();
-  const admitted = f.journal.transition(
-    f.record,
-    "reverse-in-progress",
-    start,
-    assertCurrent,
-    [],
-    f.binding,
+  const preparing = f.journal.prepareReverse(f.record, f.preparation, assertCurrent);
+  expect(() => f.journal.sealReverse(preparing, f.binding, assertCurrent)).toThrow(
+    "completely sealed durable preparation",
   );
-  expect(() =>
-    f.journal.transition(admitted, "reverse-in-progress", start, assertCurrent, [], f.binding),
-  ).toThrow("only be committed once");
+  const prepared = f.journal.transition(
+    preparing,
+    "reverse-preparing",
+    { kind: "reverse-prepare", completed: f.preparation.state.length, effect: null },
+    assertCurrent,
+  );
+  const admitted = f.journal.sealReverse(prepared, f.binding, assertCurrent);
+  expect(() => f.journal.sealReverse(admitted, f.binding, assertCurrent)).toThrow(
+    "completely sealed durable preparation",
+  );
   expect(() => f.journal.transition(admitted, "publishing", null, assertCurrent)).toThrow(
     "original operation phase",
   );
@@ -274,7 +309,7 @@ it("refuses replacement bindings, forward rearming, missing progress and prematu
     f.journal.transition(
       admitted,
       "reverse-in-progress",
-      { ...start, completed: 2 },
+      { ...start, completed: f.binding.resources.length + 1 },
       assertCurrent,
     ),
   ).toThrow("incomplete");
@@ -283,43 +318,30 @@ it("refuses replacement bindings, forward rearming, missing progress and prematu
 
 it("rolls back pinning on last-moment authority loss and rejects stale expected records", () => {
   const f = fixture();
+  const prepared = f.prepare();
   let calls = 0;
   expect(() =>
-    f.journal.transition(
-      f.record,
-      "reverse-in-progress",
-      start,
-      () => {
-        if (++calls === 3) {
-          throw new Error("original authority revoked at commit");
-        }
-      },
-      [],
-      f.binding,
-    ),
+    f.journal.sealReverse(prepared, f.binding, () => {
+      if (++calls === 3) {
+        throw new Error("original authority revoked at commit");
+      }
+    }),
   ).toThrow("revoked at commit");
   expect(calls).toBe(3);
-  expect(f.journal.read()).toEqual(f.record);
-  const admitted = f.journal.transition(
-    f.record,
-    "reverse-in-progress",
-    start,
-    assertCurrent,
-    [],
-    f.binding,
+  expect(f.journal.read()).toEqual(prepared);
+  const admitted = f.journal.sealReverse(prepared, f.binding, assertCurrent);
+  expect(() => f.journal.sealReverse(prepared, f.binding, assertCurrent)).toThrow(
+    "no longer current",
   );
-  expect(() =>
-    f.journal.transition(f.record, "reverse-in-progress", start, assertCurrent, [], f.binding),
-  ).toThrow("no longer current");
   expect(f.journal.read()).toEqual(admitted);
 });
 
 it("keeps legacy journals readable but does not manufacture original reverse run identity", () => {
   const f = fixture(false);
   expect(f.journal.read().descriptor.originalRunId).toBeUndefined();
-  expect(() =>
-    f.journal.transition(f.record, "reverse-in-progress", start, assertCurrent, [], f.binding),
-  ).toThrow("only be committed once");
+  expect(() => f.journal.prepareReverse(f.record, f.preparation, assertCurrent)).toThrow(
+    "untouched original publication",
+  );
   expect(f.journal.read()).toEqual(f.record);
   expect(f.journal.transition(f.record, "rollback-in-progress", null, assertCurrent).phase).toBe(
     "rollback-in-progress",
@@ -328,14 +350,7 @@ it("keeps legacy journals readable but does not manufacture original reverse run
 
 it("recovers an interrupted reverse-progress write without replacing the sealed source reference", async () => {
   const f = fixture();
-  const admitted = f.journal.transition(
-    f.record,
-    "reverse-in-progress",
-    start,
-    assertCurrent,
-    [],
-    f.binding,
-  );
+  const admitted = f.journal.sealReverse(f.prepare(), f.binding, assertCurrent);
   const child = spawnSync(
     process.execPath,
     [

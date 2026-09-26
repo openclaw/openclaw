@@ -384,15 +384,15 @@ it("retains sealed bytes but refuses the receipt when authority is lost during c
     const actual = captures.captureUpdateRecoveryBackup;
     let retainedDirectory: string | undefined;
     vi.spyOn(captures, "captureUpdateRecoveryBackup").mockImplementation(async (params) => {
-      const ref = await actual(params);
-      retainedDirectory = ref.directory;
+      const captured = await actual(params);
+      retainedDirectory = captured.ref.directory;
       f.run.executorFence = {
         ...original,
         assertCurrent() {
           throw new Error("substituted");
         },
       };
-      return ref;
+      return captured;
     });
     try {
       await expect(f.capture()).rejects.toThrow(

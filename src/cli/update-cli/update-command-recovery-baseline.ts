@@ -75,7 +75,7 @@ export async function captureOriginalUpdateRecoveryBaseline(params: {
   const ref = await withUpdateRecoverySourceCustody(
     { runId, installRoot, env, assertOwned: assertCaptureCurrent },
     async ({ assertCurrent: assertCapture }) => {
-      const captured = await captureUpdateRecoveryBackup({
+      const { ref: captured } = await captureUpdateRecoveryBackup({
         runId,
         installRoot,
         env,

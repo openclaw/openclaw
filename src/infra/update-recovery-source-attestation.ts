@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { UpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import type { PackageActivationReverseImage } from "./package-update-activation-reverse-schema.js";
 import {
   assertUpdateRecoverySourceInventory,
@@ -223,14 +224,7 @@ export async function assertUpdateRecoverySourceAttestationAdmission(
     throw new Error("Original pre-snapshot source capture proof is missing.");
   }
   // Retain the authenticated values, not a caller-mutable object or a later stat.
-  const source = structuredClone(attestation);
-  const freeze = (value: unknown): void => {
-    if (value && typeof value === "object") {
-      Object.values(value).forEach(freeze);
-      Object.freeze(value);
-    }
-  };
-  freeze(source);
+  const source = freezeJsonSnapshot(structuredClone(attestation));
   const assertOriginalCapture = () => {
     assertCurrent();
     assertCaptured(ref, source);

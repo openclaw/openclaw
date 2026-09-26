@@ -32,12 +32,14 @@ import {
   captureInspectedUpdateRecoverySourcePublication,
   bindUpdateRecoverySourcePublication,
   updateRecoveryInspectedSourceResources,
+  type UpdateRecoverySourceAttestationRef,
 } from "./update-recovery-source-publication.js";
 import { captureUpdateRecoverySourceSnapshot } from "./update-recovery-source-snapshot.js";
 
-export async function captureUpdateRecoveryBackup(
-  input: CaptureParams,
-): Promise<UpdateRecoveryBackupRef> {
+export async function captureUpdateRecoveryBackup(input: CaptureParams): Promise<{
+  ref: UpdateRecoveryBackupRef;
+  sourceAttestationRef?: UpdateRecoverySourceAttestationRef;
+}> {
   const params = bindUpdateRecoverySourcePublication(input);
   // Discovery readers share only this pass's private bytes. Reinspection below
   // opens a fresh snapshot; live ownership guards never consume this snapshot.
@@ -197,13 +199,11 @@ export async function captureUpdateRecoveryBackup(
     );
     requireDirectorySync(await directoryPin.sync(), "Update recovery backup");
     const ref = { directory, manifestPath, manifestSha256: digest(raw) };
-    if (sourceCapture) {
-      const attestation = await sourceCapture.seal(ref);
-      params.assertOwned();
-      params.sourcePublication!.onSealed(attestation);
+    const sourceAttestationRef = sourceCapture ? await sourceCapture.seal(ref) : undefined;
+    if (sourceAttestationRef) {
       params.assertOwned();
     }
-    return ref;
+    return { ref, sourceAttestationRef };
   } catch (error) {
     throw new Error(
       `Update recovery ${params.baseline ? "candidate preservation" : "backup before migrations"} failed; retained partial backup: ${directory}`,

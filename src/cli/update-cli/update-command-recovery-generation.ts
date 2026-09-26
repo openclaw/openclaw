@@ -63,7 +63,6 @@ export async function publishOriginalUpdateRecoveryGeneration(params: {
     selection: publication.selection.bind(publication),
     resourceCustody: publication.resourceCustody.bind(publication),
     prepare: publication.prepare.bind(publication),
-    publish: publication.publish.bind(publication),
     settle: publication.settle.bind(publication),
     verifyCompletion: publication.verifyCompletion.bind(publication),
     commitCompletion: publication.commitCompletion.bind(publication),

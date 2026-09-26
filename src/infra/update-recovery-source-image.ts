@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 
 // These are physical stopped-source images, NOT SQLite snapshot payload digests.
 // The caller must hold the continuing ORIGINAL publication maintenance throughout
@@ -160,16 +161,6 @@ async function readImage(
   return image;
 }
 
-function freeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    for (const child of Object.values(value)) {
-      freeze(child);
-    }
-    Object.freeze(value);
-  }
-  return value;
-}
-
 /** Capture physical images without opening live SQLite or changing its artifacts. */
 export async function captureUpdateRecoverySourceInventory(
   params: CaptureParams,
@@ -219,7 +210,7 @@ export async function captureUpdateRecoverySourceInventory(
     resources.push({ sourcePath: input.sourcePath, ancestor, image, sidecars });
   }
   assertCurrent();
-  return freeze({ runId, operationId, resources });
+  return freezeJsonSnapshot({ runId, operationId, resources });
 }
 
 /** Run after snapshotting and fresh resource discovery, before manifest publication.

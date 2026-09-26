@@ -18,7 +18,6 @@ export type LeaseAcquisition =
       kind: "acquired";
       lease: ManagedHandoffLease;
       originalDatabaseIdentity?: ManagedUpdateLeaseDatabaseIdentity;
-      retainedLease?: ManagedHandoffLease;
     };
 
 export type ManagedHandoffLeaseStoreOptions = {
@@ -26,7 +25,6 @@ export type ManagedHandoffLeaseStoreOptions = {
   serviceManagerEnv: NodeJS.ProcessEnv;
   existingIdentity?: ManagedUpdateLeaseDatabaseIdentity;
   originalUpdateKey?: string;
-  originalUpdateRetainedKey?: string;
   initialStoreAdmission?: ReturnType<typeof admitUpdateInitialStores>;
   onProcessIdentityWarning?: (pid: number, message: string) => void;
 };

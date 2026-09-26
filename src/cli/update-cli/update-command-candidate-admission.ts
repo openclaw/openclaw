@@ -29,6 +29,7 @@ import type { StagedPackageInstallUpdate } from "./update-command-package.js";
 import type { prepareUpdateCommand } from "./update-command-run.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import type { resolveUpdateCommandTarget } from "./update-command-target.js";
+import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 
 type Target = NonNullable<Awaited<ReturnType<typeof resolveUpdateCommandTarget>>>;
 type CandidateAdmissionParams = {
@@ -247,54 +248,72 @@ export async function withUpdateCandidateAdmission<T>(
 ): Promise<T> {
   const { target, opts, prepared } = params;
   const run = opts.run!;
-  if (params.candidateAdmission) {
-    applyUpdateCandidateAdmission({ target, opts, result: params.candidateAdmission });
-    return await execute(params.stagedPackage);
-  }
-  if (
-    !usesCandidateUpdateAdmission(opts, prepared.installKind) ||
-    target.updateInstallKind !== "package"
-  ) {
-    applyUpdateCandidateAdmission({
-      target,
-      opts,
-      result: {
-        owner: "installed",
-        ...(opts.admission === "installed" ? { fallbackReason: "forced-installed" } : {}),
+  try {
+    if (params.candidateAdmission) {
+      applyUpdateCandidateAdmission({ target, opts, result: params.candidateAdmission });
+      return await execute(params.stagedPackage);
+    }
+    if (
+      !usesCandidateUpdateAdmission(opts, prepared.installKind) ||
+      target.updateInstallKind !== "package"
+    ) {
+      applyUpdateCandidateAdmission({
+        target,
+        opts,
+        result: {
+          owner: "installed",
+          ...(opts.admission === "installed" ? { fallbackReason: "forced-installed" } : {}),
+        },
+      });
+      return await execute(params.stagedPackage);
+    }
+    const inspect = async (stage: StagedPackageInstallUpdate): Promise<T> => {
+      const result = await inspectStagedUpdateCandidateAdmission({
+        ...params,
+        candidateRoot: stage.root,
+        runId: run.runId,
+        assertCurrent: () => run.executorFence?.assertCurrent(),
+      });
+      applyUpdateCandidateAdmission({ target, opts, result });
+      return await execute(stage);
+    };
+    if (params.stagedPackage) {
+      return await inspect(params.stagedPackage);
+    }
+    return await withPrivateStagedPackageInstall(
+      {
+        root: target.root,
+        installKind: prepared.installKind,
+        tag: target.tag,
+        installSpec: target.packageInstallSpec ?? undefined,
+        timeoutMs: params.timeoutMs,
+        workTimeoutMs: prepared.timeoutMs ?? null,
+        startedAt: prepared.startedAt,
+        progress: params.presentation.progress,
+        invocationCwd: params.invocationCwd,
+        nodeRunner: target.packageUpdateNodeRunner,
+        installEnv: target.packageInstallEnv,
+        installTarget: target.packageInstallTarget,
+        pauseBeforeVerification: true,
+        assertCurrent: () => run.executorFence?.assertCurrent(),
       },
-    });
-    return await execute(params.stagedPackage);
-  }
-  const inspect = async (stage: StagedPackageInstallUpdate): Promise<T> => {
-    const result = await inspectStagedUpdateCandidateAdmission({
-      ...params,
-      candidateRoot: stage.root,
-      runId: run.runId,
-      assertCurrent: () => run.executorFence?.assertCurrent(),
-    });
-    applyUpdateCandidateAdmission({ target, opts, result });
-    return await execute(stage);
-  };
-  if (params.stagedPackage) {
-    return await inspect(params.stagedPackage);
-  }
-  return await withPrivateStagedPackageInstall(
-    {
+      ({ stage }) => inspect(stage),
+    );
+  } catch (error) {
+    if (!(error instanceof UpdatePreMutationError)) {
+      throw error;
+    }
+    return await reportPreMutationUpdateResult({
       root: target.root,
-      installKind: prepared.installKind,
-      tag: target.tag,
-      installSpec: target.packageInstallSpec ?? undefined,
-      timeoutMs: params.timeoutMs,
-      workTimeoutMs: prepared.timeoutMs ?? null,
-      startedAt: prepared.startedAt,
-      progress: params.presentation.progress,
-      invocationCwd: params.invocationCwd,
-      nodeRunner: target.packageUpdateNodeRunner,
-      installEnv: target.packageInstallEnv,
-      installTarget: target.packageInstallTarget,
-      pauseBeforeVerification: true,
-      assertCurrent: () => run.executorFence?.assertCurrent(),
-    },
-    ({ stage }) => inspect(stage),
-  );
+      mode: target.mode,
+      installKind: target.updateInstallKind,
+      opts,
+      controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
+      reason: error.reason,
+      message: error.message,
+      nextAction: error.nextAction,
+      failureFacts: error.failureFacts,
+      recoverySteps: error.recoverySteps,
+    });
+  }
 }

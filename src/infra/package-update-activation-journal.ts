@@ -529,27 +529,11 @@ export function openPackageActivationJournal(anchor: string) {
       intent: PackageActivationIntent,
       assertCurrent: () => void,
       publications = expected.publications,
-      reverse?: PackageActivationReverseBinding,
     ): PackageActivationRecord {
-      if (
-        reverse &&
-        (expected.descriptor.reverse ||
-          expected.phase !== "publication-complete" ||
-          phase !== "reverse-in-progress" ||
-          reverse.operationId !== expected.descriptor.operationId ||
-          reverse.runId !== expected.descriptor.originalRunId ||
-          intent?.kind !== "reverse" ||
-          intent.completed !== 0 ||
-          intent.effect !== null)
-      ) {
-        throw new Error(
-          "Reverse binding can only be committed once by original publication admission.",
-        );
-      }
       return transitionRecord(
         expected,
         phase,
-        reverse ? { ...expected.descriptor, reverse } : expected.descriptor,
+        expected.descriptor,
         intent,
         publications,
         assertCurrent,

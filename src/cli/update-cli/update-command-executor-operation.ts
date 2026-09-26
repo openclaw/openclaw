@@ -2,10 +2,6 @@ import type { createManagedHandoffLeaseStore } from "../../infra/update-managed-
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import type { createChildOwner } from "./update-command-executor-children.js";
 import type { registerUpdateCommandGenerationOwner } from "./update-command-executor-generation.js";
-import {
-  revokeManagedUpdateCommandOutcome,
-  type admitManagedUpdateCommandGeneration,
-} from "./update-command-executor-managed.js";
 
 /** Keep the selected reader through the original operation, including late cleanup. */
 export function createUpdateCommandReadConnections() {
@@ -27,7 +23,6 @@ export function createUpdateCommandReadConnections() {
 /** Join publication and every admitted descendant before the command scope settles. */
 export async function runUpdateCommandExecutorOperation<T>(params: {
   operation: () => Promise<T>;
-  managed: () => Awaited<ReturnType<typeof admitManagedUpdateCommandGeneration>> | undefined;
   generation: () => ReturnType<typeof registerUpdateCommandGenerationOwner> | undefined;
   children: ReturnType<typeof createChildOwner>;
   assertCurrent: () => void;
@@ -44,10 +39,6 @@ export async function runUpdateCommandExecutorOperation<T>(params: {
             error: cause instanceof Error ? cause : new Error("Update execution failed", { cause }),
           };
         }
-        operationOutcome = await revokeManagedUpdateCommandOutcome(
-          params.managed(),
-          operationOutcome,
-        );
         params.generation()?.closeAdmission();
         params.children.close();
         try {

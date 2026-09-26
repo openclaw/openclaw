@@ -1,6 +1,5 @@
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
-import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
 import {
   createManagedHandoffLeaseDatabase,
@@ -72,21 +71,12 @@ export function createManagedHandoffCancellation(deps: CancellationDependencies)
       existingIdentity,
       processState,
     );
-    if (
-      !admission ||
-      (admission.retained &&
-        requestedRetained &&
-        !isDeepStrictEqual(admission.retained.original, requestedRetained)) ||
-      (admission.child && requestedRetained && !admission.retained)
-    ) {
+    if (!admission) {
       return null;
     }
-    const lease = admission.current;
-    const retained = admission.retained?.current ?? requestedRetained;
-    // Direct-original callers keep their synchronous paired cancellation path.
-    // A bound helper can revoke only the pair captured at its own acquisition.
+    const lease = admission.original;
+    const retained = requestedRetained;
     if (
-      !admission.retained &&
       retained &&
       (retained.key === lease.key ||
         retained.key.includes("/.openclaw-update-child-") ||
@@ -206,10 +196,6 @@ export function createManagedHandoffCancellation(deps: CancellationDependencies)
           transact(db, () => {
             if (
               processState(lease.helper) !== "live" ||
-              (admission.child &&
-                (!admission.child.closed ||
-                  processState(lease.executor) !== "dead" ||
-                  (process.platform !== "win32" && isChildProcessTreeAlive(lease.executor)))) ||
               [lease, ...(retained ? [retained] : [])].some((parent) =>
                 readOriginalUpdateDependents(parent, db).some(
                   (key) => !paired.some((item) => item.key === key),

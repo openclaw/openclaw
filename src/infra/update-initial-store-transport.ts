@@ -2,8 +2,6 @@ import {
   admitUpdateInitialStores,
   type UpdateInitialStoreSelection,
 } from "./update-initial-store-admission.js";
-import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
-import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease.js";
 
 /** Correlation only. The native lease and the state publication owner retain authority. */
 export type UpdateInitialStoreTransport = Readonly<{
@@ -38,31 +36,3 @@ export function snapshotUpdateInitialStoreTransport(input: UpdateInitialStoreTra
   admission.close();
   return transport;
 }
-
-/** Trusted control port, not a serialized grant. Its implementation must authenticate
- * the real IPC parent/child and exact native pair before admitting any transition. */
-export type UpdateManagedGenerationIssuer = (
-  input: Readonly<{
-    runId: string;
-    lease: ManagedHandoffLease;
-    /** Actual target/service-plan selection; null explicitly means no distinct root.
-     * Helper must select/acquire/bind it natively before issuer resolves. */
-    retainedRoot: string | null;
-    database: ManagedUpdateLeaseDatabaseIdentity;
-    initialStores: UpdateInitialStoreTransport;
-  }>,
-) => Promise<UpdateManagedGenerationRoute>;
-
-type UpdateManagedGenerationRoute = {
-  /** Refuse disconnected/cancelled control locally, including while stores are retired. */
-  assertCurrent: () => void;
-  /** ACK only after all helper readers, Workers and handles have closed and joined. */
-  retire: (transition: string, current: UpdateInitialStoreTransport) => Promise<void>;
-  /** Accept only these verified provider facts for the same retired transition. */
-  select: (transition: string, successor: UpdateInitialStoreTransport) => Promise<void>;
-  /** Exact live child, after local operation/descendant joins; unchanged/no-op is valid. */
-  terminal: (current: UpdateInitialStoreTransport) => Promise<void>;
-  /** ACK means native revoke committed, NOT final settlement or release. The helper
-   * joins this child's close and its own control/descendants before final release. */
-  revoke: (cause: Error) => Promise<void>;
-};

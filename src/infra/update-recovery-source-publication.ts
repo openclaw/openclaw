@@ -48,7 +48,6 @@ export type UpdateRecoverySourcePublication = {
   operationId: string;
   /** Continuing original executor AND stopped-C native publication maintenance. */
   assertCurrent: () => void;
-  onSealed: (ref: UpdateRecoverySourceAttestationRef) => void;
 };
 
 // Only wrappers composed here can be reused as an already-combined guard.
@@ -96,7 +95,6 @@ export function bindUpdateRecoverySourcePublication<
     sourcePublication: {
       operationId: publication.operationId,
       assertCurrent,
-      onSealed: publication.onSealed.bind(publication),
     },
   };
 }

@@ -19,13 +19,12 @@ export function withPackageReverseTransaction(
   const assertCurrent = activation.assertReverseCurrent.bind(activation);
   const assertLegacyRollback = activation.assertLegacyRollback.bind(activation);
   const read = activation.journal.read.bind(activation.journal);
-  const publish = activation.reverse.bind(activation);
   const prepare = activation.prepareReverse.bind(activation);
   const settle = activation.settleReverse.bind(activation);
   const resources = activation.resourceCustody.bind(activation);
   const verify = activation.verifyCompletion.bind(activation);
   const commitCompletion = activation.commitCompletion.bind(activation);
-  let reverse: ReturnType<Publication["publish"]> | undefined;
+  let reverse: ReturnType<Publication["prepare"]> | undefined;
   let settlement: ReturnType<Publication["settle"]> | undefined;
   let settled = false;
   let closing = false;
@@ -93,40 +92,13 @@ export function withPackageReverseTransaction(
           },
         });
       },
-      publish: (binding, authority) => {
-        assertOpen();
-        if (reverse) {
-          throw new Error("Package reverse publication has already started.");
-        }
-        const before = read();
-        reverse = publish(binding, authority).catch((error: unknown) => {
-          try {
-            assertCurrent();
-            if (
-              !hasCommandProcessCleanupError(error) &&
-              before.phase === "publication-complete" &&
-              !before.descriptor.reverse &&
-              isDeepStrictEqual(before, read())
-            ) {
-              // Only a proved refusal before pinning may reopen first admission.
-              reverse = undefined;
-              settlement = undefined;
-              settled = false;
-            }
-          } catch {
-            /* A committed, revoked or uncertain effect remains latched. */
-          }
-          throw error;
-        });
-        return reverse;
-      },
       prepare: (preparation, authority) => {
         assertOpen();
         if (reverse) {
           throw new Error("Package reverse publication has already started.");
         }
         const before = read();
-        const preparing = prepare(preparation, authority).catch((error: unknown) => {
+        reverse = prepare(preparation, authority).catch((error: unknown) => {
           try {
             assertCurrent();
             if (
@@ -145,8 +117,7 @@ export function withPackageReverseTransaction(
           }
           throw error;
         });
-        reverse = preparing.then((result) => result.status);
-        return preparing;
+        return reverse;
       },
       settle: (authority) => {
         assertOpen();

@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   readPackageActivationRecordStatus,
-  resolvePackageActivationAnchor,
-  resolvePackageActivationHelper,
   type PackageActivationJournal,
   type PackageActivationRecord,
   type PackageActivationPhase,
@@ -14,10 +13,7 @@ import {
   assertPackageReverseBinding,
   readPackageReverseGenerations,
 } from "./package-update-activation-reverse-binding.js";
-import {
-  assertReverseParents,
-  syncPackageReverseInputs,
-} from "./package-update-activation-reverse-files.js";
+import { assertReverseParents } from "./package-update-activation-reverse-files.js";
 import {
   assertPackageReverseProgress,
   inspectPackageReverseTargetAndLaunchers,
@@ -68,13 +64,6 @@ function packageReverseBindingDigest(binding: PackageActivationReverseBinding) {
     .update(JSON.stringify(packageActivationReverseBindingSchema.parse(binding)))
     .digest("hex");
 }
-function freeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    Object.values(value).forEach(freeze);
-    Object.freeze(value);
-  }
-  return value;
-}
 export function createPackageActivationReverseOwner(params: {
   journal: PackageActivationJournal;
   current: () => PackageActivationRecord;
@@ -82,7 +71,6 @@ export function createPackageActivationReverseOwner(params: {
     phase: PackageActivationPhase,
     intent: PackageActivationIntent,
     publications?: PackageActivationRecord["publications"],
-    reverse?: PackageActivationReverseBinding,
     assertExecutor?: () => void,
   ) => void;
   prepareReverse: (
@@ -113,8 +101,8 @@ export function createPackageActivationReverseOwner(params: {
     assertExecutor();
     params.assertCurrent(assertExecutor);
   };
-  const transition: typeof params.transition = (phase, intent, publications, reverse) =>
-    params.transition(phase, intent, publications, reverse, assertExecutor);
+  const transition: typeof params.transition = (phase, intent, publications) =>
+    params.transition(phase, intent, publications, assertExecutor);
   const assertAuthority = (
     binding: Pick<PackageActivationReverseBinding, "runId">,
     guard: Pick<PackageReverseAuthority, "assertCurrent" | "assertWritersSettled">,
@@ -191,7 +179,9 @@ export function createPackageActivationReverseOwner(params: {
       throw new Error("Operation is not a restartable reverse publication.");
     }
     assertAuthority(binding, guard);
-    await guard.validateTarget(freeze(packageActivationReverseBindingSchema.parse(binding)));
+    await guard.validateTarget(
+      freezeJsonSnapshot(packageActivationReverseBindingSchema.parse(binding)),
+    );
     const initialRows = await inspect(guard);
     let assertOriginalCapture: (() => void) | undefined;
     if (initialRows.every((row) => row === "initial" || row === "unchanged")) {
@@ -331,7 +321,7 @@ export function createPackageActivationReverseOwner(params: {
         assertCurrent();
         const result = await readPackageReverseResourceCustody(record, assertCurrent);
         assertCurrent();
-        return freeze(result);
+        return freezeJsonSnapshot(result);
       });
     },
     prepareReverse: (
@@ -340,7 +330,7 @@ export function createPackageActivationReverseOwner(params: {
     ) =>
       exclusively(async () => {
         const guard = capturePackageReverseAuthority(authority);
-        const preparation = freeze(
+        const preparation = freezeJsonSnapshot(
           packageActivationReversePreparationSchema.parse(preparationInput),
         );
         const record = params.current();
@@ -363,7 +353,7 @@ export function createPackageActivationReverseOwner(params: {
             entries: generations.candidate.entries,
           },
         );
-        await assertUpdateRecoverySourceAttestationAdmission(
+        const assertOriginalCapture = await assertUpdateRecoverySourceAttestationAdmission(
           sourceAttestation,
           generations.candidate.entries,
           {
@@ -398,81 +388,12 @@ export function createPackageActivationReverseOwner(params: {
           }),
         );
         assertAuthority(preparation, guard);
+        assertOriginalCapture();
         params.prepareReverse(preparation, assertExecutor);
         return materializePreparation(guard);
       }),
     resumePreparation: (authority: PackageReverseAuthority) =>
       exclusively(() => materializePreparation(capturePackageReverseAuthority(authority))),
-    reverse: (bindingInput: PackageActivationReverseBinding, authority: PackageReverseAuthority) =>
-      exclusively(async () => {
-        const guard = capturePackageReverseAuthority(authority);
-        const binding = freeze(packageActivationReverseBindingSchema.parse(bindingInput));
-        const record = params.current();
-        if (
-          record.phase !== "publication-complete" ||
-          record.descriptor.reverse ||
-          params.resuming
-        ) {
-          throw new Error(
-            "Reverse admission requires an untouched original completed publication.",
-          );
-        }
-        assertAuthority(binding, guard);
-        const generations = assertPackageReverseBinding(binding, record.descriptor);
-        await verifyCapturedSource(binding, guard);
-        await params.verifyForward(assertExecutor);
-        const provisional = {
-          ...record,
-          phase: "reverse-in-progress" as const,
-          descriptor: { ...record.descriptor, reverse: binding },
-          intent: {
-            kind: "reverse" as const,
-            direction: "reverse" as const,
-            completed: 0,
-            effect: null,
-          },
-        };
-        const rows = await observePackageReverseResources(provisional);
-        assertPackageReverseProgress(provisional, rows);
-        await inspectPackageReverseTargetAndLaunchers(provisional, rows);
-        await guard.validateTarget(binding);
-        await syncPackageReverseInputs(
-          binding.resources,
-          () => assertAuthority(binding, guard),
-          (["baseline", "candidate", "prepared"] as const).map((kind) => ({
-            directory: binding[kind].directory,
-            files: [
-              binding[kind].manifestPath,
-              ...generations[kind].entries.flatMap((entry) =>
-                entry.kind === "file"
-                  ? [path.join(binding[kind].directory, entry.archivePath)]
-                  : [],
-              ),
-            ],
-          })),
-          [
-            resolvePackageActivationHelper(
-              resolvePackageActivationAnchor(record.descriptor.authority.installKey),
-            ),
-            binding.sourceAttestation.path,
-            binding.target.nodePath,
-            record.descriptor.authority.databasePath,
-          ],
-        );
-        await params.verifyClosure(assertExecutor);
-        assertPackageReverseProgress(
-          provisional,
-          await observePackageReverseResources(provisional),
-        );
-        await inspectPackageReverseTargetAndLaunchers(provisional, rows);
-        assertAuthority(binding, guard);
-        const assertPinCapture = await verifyCapturedSource(binding, guard);
-        assertPinCapture?.();
-        // The immutable binding and reverse direction commit in the SAME journal
-        // transaction before any live package, launcher or state effect.
-        transition("reverse-in-progress", provisional.intent, undefined, binding);
-        return publish(guard);
-      }),
     // Completion proof belongs to the still-held, pre-first-writer maintenance
     // scope. It is not a permanent assertion that serving state must equal T.
     verifyCompletion: (
@@ -481,7 +402,9 @@ export function createPackageActivationReverseOwner(params: {
     ) =>
       exclusively(async () => {
         const guard = capturePackageReverseAuthority(authority);
-        const binding = freeze(packageActivationReverseBindingSchema.parse(bindingInput));
+        const binding = freezeJsonSnapshot(
+          packageActivationReverseBindingSchema.parse(bindingInput),
+        );
         const record = params.current();
         if (
           !["reverse-complete", "rolled-back"].includes(record.phase) ||
@@ -524,7 +447,7 @@ export function createPackageActivationReverseOwner(params: {
             "Reverse completion requires exactly one recorded global state database.",
           );
         }
-        return freeze({
+        return freezeJsonSnapshot({
           ...readPackageActivationRecordStatus(record),
           publishedState: {
             operationId: binding.operationId,
@@ -548,7 +471,9 @@ export function createPackageActivationReverseOwner(params: {
     ) =>
       exclusively(async () => {
         const guard = capturePackageReverseAuthority(authority);
-        const binding = freeze(packageActivationReverseBindingSchema.parse(bindingInput));
+        const binding = freezeJsonSnapshot(
+          packageActivationReverseBindingSchema.parse(bindingInput),
+        );
         const record = params.current();
         if (
           !["reverse-complete", "rolled-back"].includes(record.phase) ||

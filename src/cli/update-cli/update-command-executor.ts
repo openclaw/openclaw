@@ -33,15 +33,6 @@ import {
   type LegacyUpdateExecutorParent,
 } from "./update-command-executor-legacy.js";
 import {
-  admitManagedUpdateCommandGeneration,
-  assertManagedAdmission,
-  assertManagedUpdateCommandPlan,
-  assertManagedUpdateCommandRoot,
-  completeManagedUpdateCommandOutcome,
-  finishManagedUpdateCommandGeneration,
-  readManagedUpdateCommandRetainedLease,
-} from "./update-command-executor-managed.js";
-import {
   createUpdateCommandReadConnections,
   runUpdateCommandExecutorOperation,
 } from "./update-command-executor-operation.js";
@@ -80,7 +71,6 @@ export async function withUpdateCommandExecutor<T>(
   operation: (executor: UpdateCommandExecutor) => Promise<T>,
   options?: UpdateCommandExecutorOptions,
 ): Promise<T> {
-  const managedIssuer = options?.managedGeneration;
   let initialStores =
     options && Object.hasOwn(options, "initialStores")
       ? snapshotUpdateInitialStoreTransport(options.initialStores!)
@@ -112,7 +102,6 @@ export async function withUpdateCommandExecutor<T>(
           let serviceKey: string | undefined;
           let admissionComplete = false;
           let generation: ReturnType<typeof registerUpdateCommandGenerationOwner> | undefined;
-          let managed: Awaited<ReturnType<typeof admitManagedUpdateCommandGeneration>> | undefined;
           let legacyChild: ManagedHandoffLease | undefined;
           let legacyTarget: ManagedHandoffLease | undefined;
           const cancellation = createUpdateCommandOriginalCancellation({
@@ -123,7 +112,7 @@ export async function withUpdateCommandExecutor<T>(
           });
           const identityWarnings = createUpdateIdentityWarningReporter(runId);
           const assertBase = () => {
-            const cancelled = cancellation.cause ?? managed?.cause;
+            const cancelled = cancellation.cause;
             if (cancelled) {
               throw cancelled;
             }
@@ -153,7 +142,6 @@ export async function withUpdateCommandExecutor<T>(
           };
           const assertPublicationCurrent = () => {
             assertBase();
-            managed?.assertCurrent();
             generation?.assertPublicationCurrent();
             if (lease?.version === 3 || serviceLease?.version === 3) {
               throw new UpdateCommandRecoveryPendingError(
@@ -280,14 +268,12 @@ export async function withUpdateCommandExecutor<T>(
               if (options?.existingAuthority && root !== key) {
                 throw new UpdateCommandRecoveryPendingError("Recovery installation key changed.");
               }
-              assertManagedUpdateCommandPlan(managedIssuer, enterOptions);
               const distinctServiceKey = resolveUpdateCommandRetainedRoot(
                 enterOptions?.serviceRoot,
                 key,
                 Boolean(options?.existingAuthority),
               );
               if (lease) {
-                assertManagedAdmission(managedIssuer, managed, admissionComplete);
                 assertCurrent();
                 identityWarnings.flush();
                 if (
@@ -315,7 +301,6 @@ export async function withUpdateCommandExecutor<T>(
                 databasePath =
                   options?.existingAuthority?.databasePath ??
                   directDatabasePath ??
-                  (managedIssuer ? initialStores?.selection.handoff.databasePath : undefined) ??
                   resolveManagedUpdateLeaseDatabasePath();
                 let existingIdentity =
                   options?.existingAuthority ??
@@ -348,7 +333,6 @@ export async function withUpdateCommandExecutor<T>(
                     "Update executor state is unreadable.",
                   );
                 }
-                assertManagedUpdateCommandRoot(managedIssuer, found, key);
                 const legacyParent: LegacyUpdateExecutorParent | undefined =
                   options?.legacyManagedParent
                     ? { kind: "managed", ...options.legacyManagedParent }
@@ -418,14 +402,7 @@ export async function withUpdateCommandExecutor<T>(
                   }
                 }
                 serviceKey = distinctServiceKey;
-                if (managedIssuer && (!managedHandoff || !initialStoreAdmission)) {
-                  throw new UpdateCommandRecoveryPendingError(
-                    "Managed generation requires initial bound-child admission.",
-                  );
-                }
-                // Managed pair admission belongs to the helper issuer below, after
-                // the actual read-only target plan has supplied its retained root.
-                if (serviceKey && !managedIssuer) {
+                if (serviceKey) {
                   const acquired = store.acquire(serviceKey, randomUUID(), { kind: "update" });
                   if (acquired.kind !== "acquired") {
                     throw new UpdateCommandRecoveryPendingError(
@@ -467,33 +444,6 @@ export async function withUpdateCommandExecutor<T>(
                   );
                 }
                 assertCurrent();
-                if (managedIssuer && initialStores) {
-                  if (lease.version === 1) {
-                    throw new UpdateCommandRecoveryPendingError(
-                      "Managed generation cannot borrow legacy authority.",
-                    );
-                  }
-                  managed = await admitManagedUpdateCommandGeneration({
-                    issuer: managedIssuer,
-                    input: {
-                      runId,
-                      lease,
-                      retainedRoot: serviceKey ?? null,
-                      database: authority,
-                      initialStores,
-                    },
-                    assertNative: assertBase,
-                    closeEffects: (cause) => {
-                      generation?.closeAdmission();
-                      children.close();
-                      cancellationSignal.abort(cause);
-                    },
-                  });
-                  if (serviceKey) {
-                    serviceLease = readManagedUpdateCommandRetainedLease(store, serviceKey, lease);
-                  }
-                  assertCurrent();
-                }
                 admittedAuthorities.set(fence, {
                   authority,
                   assertCurrent: assertBase,
@@ -525,7 +475,7 @@ export async function withUpdateCommandExecutor<T>(
                       onProcessIdentityWarning: identityWarnings.warn,
                     }),
                   );
-                if ((originalOwner || managed) && initialStoreAdmission) {
+                if (originalOwner && initialStoreAdmission) {
                   generation = registerUpdateCommandGenerationOwner({
                     fence,
                     runId,
@@ -533,22 +483,17 @@ export async function withUpdateCommandExecutor<T>(
                     assertCurrent,
                     assertPublicationCurrent,
                     initial: () => initialStoreAdmission!,
-                    beforeRetire: managed?.beforeRetire.bind(managed),
                     retired: () => {
                       store = generationStore();
                       assertPublicationCurrent();
                     },
-                    selected: async (admission, transition) => {
-                      // Retain the verified guard for cleanup even if helper selection fails.
+                    selected: (admission) => {
                       initialStoreAdmission = admission;
                       initialStores = Object.freeze({
                         protocol: "initial-pair-v1",
                         selection: admission.selection,
                       });
                       store = generationStore(admission);
-                      if (managed) {
-                        await managed.select(transition, initialStores);
-                      }
                       assertPublicationCurrent();
                     },
                   });
@@ -606,17 +551,13 @@ export async function withUpdateCommandExecutor<T>(
                   );
                 }
                 return fence;
-              } catch (cause) {
-                admissionComplete = admissionComplete && !managedIssuer;
-                throw cause;
               } finally {
                 entering = false;
               }
             },
           };
-          let outcome = await runUpdateCommandExecutorOperation({
+          const operationOutcome = await runUpdateCommandExecutorOperation({
             operation: () => operation(executor),
-            managed: () => managed,
             generation: () => generation,
             children,
             assertCurrent: () => {
@@ -626,14 +567,7 @@ export async function withUpdateCommandExecutor<T>(
               identityWarnings.flush();
             },
           });
-          outcome = await finishManagedUpdateCommandGeneration(
-            managed,
-            outcome,
-            initialStores,
-            () => generation?.assertReady(),
-          );
-          outcome = managed ? await completeManagedUpdateCommandOutcome(managed, outcome) : outcome;
-          outcome = cancellation.mergeOutcome(outcome);
+          const outcome = cancellation.mergeOutcome(operationOutcome);
           originalFence = undefined;
           originalCancellations.delete(fence);
           generation?.closeAdmission();
@@ -654,7 +588,6 @@ export async function withUpdateCommandExecutor<T>(
             if (
               serviceLease &&
               store &&
-              !managed &&
               !cancellation.successor &&
               (serviceLease.version === 3 || !store.release(serviceLease))
             ) {

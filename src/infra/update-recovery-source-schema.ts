@@ -1,5 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 
 export const MAX_SOURCE_ATTESTATION_BYTES = 32 * 1024 * 1024;
 const count = 100_000;
@@ -150,14 +151,5 @@ export function parseUpdateRecoverySourceAttestation(raw: Buffer): UpdateRecover
   if (!raw.equals(Buffer.from(serializeUpdateRecoverySourceAttestation(value)))) {
     throw new Error("Update recovery source attestation is not the canonical encoding.");
   }
-  const freeze = (object: object) => {
-    for (const item of Object.values(object)) {
-      if (item && typeof item === "object") {
-        freeze(item);
-      }
-    }
-    Object.freeze(object);
-  };
-  freeze(value);
-  return value;
+  return freezeJsonSnapshot(value);
 }

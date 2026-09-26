@@ -37,10 +37,6 @@ export type PackageReversePublication = {
     PackageActivationDescriptor,
     "operationId" | "originalRunId" | "previous" | "previousRuntime"
   > & { anchor: string };
-  publish: (
-    binding: PackageActivationReverseBinding,
-    authority: PackageReverseAuthority,
-  ) => Promise<PackageActivationStatus>;
   prepare: (
     preparation: PackageActivationReversePreparation,
     authority: PackageReverseAuthority,

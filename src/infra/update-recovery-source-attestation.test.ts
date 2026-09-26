@@ -21,7 +21,10 @@ import {
   readPackageReverseImage,
   reverseFileDigest,
 } from "./package-update-activation-reverse-files.js";
-import type { PackageActivationReverseBinding } from "./package-update-activation-reverse-schema.js";
+import type {
+  PackageActivationReverseBinding,
+  PackageActivationReversePreparation,
+} from "./package-update-activation-reverse-schema.js";
 import { createPackageActivationReverseOwner } from "./package-update-activation-reverse.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
@@ -68,6 +71,7 @@ it.each([
   { journalMode: "DELETE", flow: "resume" },
   { journalMode: "DELETE", flow: "admit" },
   { journalMode: "DELETE", flow: "late-revoke" },
+  { journalMode: "DELETE", flow: "pre-seal-revoke" },
   { journalMode: "DELETE", flow: "pre-publish-revoke" },
   { journalMode: "DELETE", flow: "effect-revoke" },
 ] as const)(
@@ -466,7 +470,7 @@ it.each([
               };
               const transition = vi.fn<
                 Parameters<typeof createPackageActivationReverseOwner>[0]["transition"]
-              >((phase, intent, publications, reverse) => {
+              >((phase, intent, publications) => {
                 assertCurrent();
                 record = {
                   ...record,
@@ -474,9 +478,43 @@ it.each([
                   phase,
                   intent,
                   publications: publications ?? record.publications,
-                  descriptor: reverse ? { ...record.descriptor, reverse } : record.descriptor,
                 };
-                if (reverse && flow === "pre-publish-revoke") {
+                if (
+                  flow === "pre-seal-revoke" &&
+                  intent?.kind === "reverse-prepare" &&
+                  intent.completed === record.descriptor.reversePreparation?.state.length
+                ) {
+                  proofHeld = false;
+                }
+              });
+              const prepareReverse = vi.fn<
+                Parameters<typeof createPackageActivationReverseOwner>[0]["prepareReverse"]
+              >((preparation, assertExecutor) => {
+                assertExecutor();
+                assertCurrent();
+                record = {
+                  ...record,
+                  revision: record.revision + 1,
+                  phase: "reverse-preparing",
+                  intent: { kind: "reverse-prepare", completed: 0, effect: null },
+                  descriptor: { ...record.descriptor, reversePreparation: preparation },
+                };
+              });
+              const sealReverse = vi.fn<
+                Parameters<typeof createPackageActivationReverseOwner>[0]["sealReverse"]
+              >((reverse, assertExecutor) => {
+                assertExecutor();
+                assertCurrent();
+                const { reversePreparation: _preparation, ...retainedDescriptor } =
+                  record.descriptor;
+                record = {
+                  ...record,
+                  revision: record.revision + 1,
+                  phase: "reverse-in-progress",
+                  intent: { kind: "reverse", direction: "reverse", completed: 0, effect: null },
+                  descriptor: { ...retainedDescriptor, reverse },
+                };
+                if (flow === "pre-publish-revoke") {
                   proofHeld = false;
                 }
               });
@@ -499,8 +537,8 @@ it.each([
                 journal,
                 current: () => record,
                 transition,
-                prepareReverse: unexpectedJournalWrite,
-                sealReverse: unexpectedJournalWrite,
+                prepareReverse,
+                sealReverse,
                 assertCurrent,
                 verifyClosure: async () => {
                   assertCurrent();
@@ -568,18 +606,70 @@ it.each([
                 expect(rows(state)).toEqual([{ rowid: 37, value: "newer acknowledged write" }]);
                 return;
               }
+              const preparation: PackageActivationReversePreparation = {
+                protocol: "package-state-reverse-preparation-v1",
+                operationId,
+                runId,
+                baseline: binding.baseline,
+                candidate: binding.candidate,
+                prepared: binding.prepared,
+                sourceAttestation: binding.sourceAttestation,
+                target: binding.target,
+                initialStores: binding.initialStores,
+                state: binding.resources
+                  .filter((resource) => resource.role === "state")
+                  .map((resource) => {
+                    const { after } = resource;
+                    return {
+                      role: "state",
+                      live: resource.live,
+                      parentIdentity: resource.parentIdentity,
+                      before: resource.before,
+                      desired:
+                        after.kind === "file"
+                          ? {
+                              kind: "file",
+                              uid: after.uid,
+                              gid: after.gid,
+                              mode: after.mode,
+                              sha256: after.sha256,
+                              size: after.size,
+                            }
+                          : after,
+                      move: resource.move
+                        ? {
+                            directory: staging,
+                            parentIdentity: identity(root),
+                            staged: resource.move.staged,
+                            displaced: resource.move.displaced,
+                          }
+                        : null,
+                    };
+                  }),
+                packageResources: binding.resources.filter((resource) => resource.role !== "state"),
+              };
+              fs.rmSync(staging, { recursive: true, force: true });
               const owner = createPackageActivationReverseOwner(ownerParams);
               if (
                 flow === "admit" ||
                 flow === "late-revoke" ||
+                flow === "pre-seal-revoke" ||
                 flow === "pre-publish-revoke" ||
                 flow === "effect-revoke"
               ) {
-                const admission = owner.reverse(binding, { ...authority, assertCapturedSource });
+                const admission = owner.prepareReverse(preparation, {
+                  ...authority,
+                  assertCapturedSource,
+                });
                 if (flow === "admit") {
-                  await expect(admission).resolves.toMatchObject({ phase: "reverse-complete" });
-                  const pin = transition.mock.calls.find((call) => call[3]);
-                  expect(pin?.[3]?.sourceAttestation).toEqual(capturedRef);
+                  await expect(admission).resolves.toMatchObject({
+                    status: { phase: "reverse-complete" },
+                    binding: { sourceAttestation: capturedRef },
+                  });
+                  expect(prepareReverse).toHaveBeenCalledOnce();
+                  expect(sealReverse).toHaveBeenCalledOnce();
+                  expect(prepareReverse.mock.calls[0]?.[0].sourceAttestation).toEqual(capturedRef);
+                  expect(sealReverse.mock.calls[0]?.[0].sourceAttestation).toEqual(capturedRef);
                   expect(record.descriptor.reverse?.sourceAttestation).toEqual(capturedRef);
                   expect(authority.beforeStatePublication).toHaveBeenCalledOnce();
                   expect(rows(state)).toEqual([{ rowid: 37, value: "newer acknowledged write" }]);
@@ -589,14 +679,27 @@ it.each([
                 } else {
                   await expect(admission).rejects.toThrow("Capture proof revoked");
                   expect(authority.validateTarget).toHaveBeenCalled();
-                  if (flow === "effect-revoke") {
-                    expect(record.phase).toBe("reverse-in-progress");
-                    expect(record.intent).toMatchObject({ kind: "reverse", effect: "displace" });
-                    expect(record.descriptor.reverse?.sourceAttestation).toEqual(capturedRef);
+                  if (flow === "late-revoke") {
+                    expect(prepareReverse).not.toHaveBeenCalled();
+                    expect(sealReverse).not.toHaveBeenCalled();
+                    expect(transition).not.toHaveBeenCalled();
+                    expect(record.phase).toBe("publication-complete");
+                  } else if (flow === "pre-seal-revoke") {
+                    expect(sealReverse).not.toHaveBeenCalled();
+                    expect(record.phase).toBe("reverse-preparing");
+                    expect(record.intent).toEqual({
+                      kind: "reverse-prepare",
+                      completed: preparation.state.length,
+                      effect: null,
+                    });
+                    expect(record.descriptor.reverse).toBeUndefined();
                   } else {
-                    expect(transition).toHaveBeenCalledTimes(flow === "late-revoke" ? 0 : 1);
-                  }
-                  if (flow === "pre-publish-revoke") {
+                    expect(sealReverse).toHaveBeenCalledOnce();
+                    expect(record.phase).toBe("reverse-in-progress");
+                    expect(record.intent).toMatchObject({
+                      kind: "reverse",
+                      effect: flow === "effect-revoke" ? "displace" : null,
+                    });
                     expect(record.descriptor.reverse?.sourceAttestation).toEqual(capturedRef);
                   }
                   expect(authority.beforeStatePublication).not.toHaveBeenCalled();
@@ -606,20 +709,27 @@ it.each([
                 return;
               }
 
-              await expect(owner.reverse(binding, authority)).rejects.toThrow("proof is missing");
+              await expect(owner.prepareReverse(preparation, authority)).rejects.toThrow(
+                "proof is missing",
+              );
               const rejectProof = vi.fn(() => {
                 throw new Error("Rejected original capture");
               });
               await expect(
-                owner.reverse(binding, { ...authority, assertCapturedSource: rejectProof }),
+                owner.prepareReverse(preparation, {
+                  ...authority,
+                  assertCapturedSource: rejectProof,
+                }),
               ).rejects.toThrow("Rejected original capture");
-              const reissued = structuredClone(binding);
+              const reissued = structuredClone(preparation);
               reissued.sourceAttestation.path = path.join(root, "reissued-source.json");
               fs.writeFileSync(reissued.sourceAttestation.path, raw, { flag: "wx", mode: 0o600 });
               await expect(
-                owner.reverse(reissued, { ...authority, assertCapturedSource }),
+                owner.prepareReverse(reissued, { ...authority, assertCapturedSource }),
               ).rejects.toThrow("Fabricated capture proof");
               expect(rejectProof).toHaveBeenCalledOnce();
+              expect(prepareReverse).not.toHaveBeenCalled();
+              expect(sealReverse).not.toHaveBeenCalled();
               expect(transition).not.toHaveBeenCalled();
               expect(authority.validateTarget).not.toHaveBeenCalled();
               expect(authority.beforeStatePublication).not.toHaveBeenCalled();
