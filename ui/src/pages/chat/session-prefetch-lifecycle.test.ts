@@ -16,6 +16,7 @@ import {
   prefetchSessionKeyFromCall as sessionKeyFromCall,
   settleSessionPrefetch as settlePromises,
 } from "./session-prefetch.test-support.ts";
+import * as snapshotPrewarm from "./session-snapshot-prewarm.ts";
 
 describe("session prefetch pane and navigation ownership", () => {
   let fixture: ReturnType<typeof createSessionPrefetchFixture>;
@@ -27,6 +28,33 @@ describe("session prefetch pane and navigation ownership", () => {
     ({ cache, shell, updatePrefetch } = fixture);
   });
   afterEach(async () => fixture.dispose());
+  it.each(["pointerover", "focusin"])(
+    "starts the intended session's persisted snapshot read immediately on %s",
+    async (eventType) => {
+      const intended = "agent:main:intended";
+      const startPrewarm = vi
+        .spyOn(snapshotPrewarm, "prewarmChatSnapshot")
+        .mockImplementation(() => undefined);
+      const request = vi.fn(async () => historyResult(intended));
+      updatePrefetch({
+        client: createTestGatewayClient(request),
+        listRevision: 1,
+        openSessionKeys: ["agent:main:foreground"],
+        rows: [row(intended, NOW - 1)],
+      });
+      const target = document.createElement("a");
+      target.dataset.sessionKey = intended;
+      shell.append(target);
+      onTestFinished(() => target.remove());
+
+      target.dispatchEvent(new Event(eventType, { bubbles: true, composed: true }));
+
+      expect(startPrewarm).toHaveBeenCalledOnce();
+      expect(startPrewarm).toHaveBeenCalledWith(intended);
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["pointerover", "focusin"])(
     "prioritizes the session receiving %s before idle history warming",
     async (eventType) => {
