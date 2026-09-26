@@ -46,6 +46,12 @@ function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boo
 
 const isWorkerDeployConfig = (config: TsdownConfig) =>
   hasWorkerEntry(config, "worker/worker", "src/worker/worker-deploy-entry.ts");
+const isWorkerFileToolPlanningConfig = (config: TsdownConfig) =>
+  hasWorkerEntry(
+    config,
+    "worker/file-tool-planning.worker",
+    "src/worker/worker-deploy-file-tool-planning.ts",
+  );
 const isWorkerImageProcessorConfig = (config: TsdownConfig) =>
   hasWorkerEntry(
     config,
@@ -76,6 +82,7 @@ const isWorkerServiceChildGroupAnchorConfig = (config: TsdownConfig) =>
   );
 const workerBuildTargets = [
   ["worker", isWorkerDeployConfig],
+  ["file-tool-planning", isWorkerFileToolPlanningConfig],
   ["image-processor", isWorkerImageProcessorConfig],
   ["sqlite-store", isWorkerSqliteStoreConfig],
   ["receiver", isWorkerRsyncReceiverConfig],
@@ -1205,6 +1212,7 @@ console.log("relocated Bash parser works without native grammar package");
 
   it("builds self-contained worker deploy executables with every dependency bundled", () => {
     const workerConfig = configs.find(isWorkerDeployConfig);
+    const fileToolPlanningConfig = configs.find(isWorkerFileToolPlanningConfig);
     const imageProcessorConfig = configs.find(isWorkerImageProcessorConfig);
     const sqliteStoreConfig = configs.find(isWorkerSqliteStoreConfig);
     const receiverConfig = configs.find(isWorkerRsyncReceiverConfig);
@@ -1213,6 +1221,9 @@ console.log("relocated Bash parser works without native grammar package");
     const anchorConfig = configs.find(isWorkerServiceChildGroupAnchorConfig);
     expect(workerConfig?.entry).toEqual({
       "worker/worker": "src/worker/worker-deploy-entry.ts",
+    });
+    expect(fileToolPlanningConfig?.entry).toEqual({
+      "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
     });
     expect(imageProcessorConfig?.entry).toEqual({
       "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
@@ -1282,6 +1293,7 @@ console.log("relocated Bash parser works without native grammar package");
     } as Parameters<OutExtensions>[0];
     for (const config of [
       workerConfig,
+      fileToolPlanningConfig,
       imageProcessorConfig,
       sqliteStoreConfig,
       receiverConfig,
