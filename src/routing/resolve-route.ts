@@ -7,6 +7,7 @@ import {
 } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
+import { listRouteBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import type { DmScope, GroupScope } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,7 +18,6 @@ import {
   normalizeRouteBindingRoles,
   routeBindingScopeMatches,
 } from "./binding-scope.js";
-import { listBindings } from "./bindings.js";
 import { peerKindMatches } from "./peer-kind-match.js";
 import {
   buildAgentMainSessionKey,
@@ -194,7 +194,7 @@ type NormalizedBindingMatch = {
 };
 
 type EvaluatedBinding = {
-  binding: ReturnType<typeof listBindings>[number];
+  binding: AgentRouteBinding;
   match: NormalizedBindingMatch;
   order: number;
 };
@@ -251,7 +251,7 @@ function buildEvaluatedBindingsByChannel(
 ): Map<string, EvaluatedBindingsByChannel> {
   const byChannel = new Map<string, EvaluatedBindingsByChannel>();
   let order = 0;
-  for (const binding of listBindings(cfg)) {
+  for (const binding of listRouteBindings(cfg)) {
     if (!binding || typeof binding !== "object") {
       continue;
     }
@@ -719,7 +719,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
 
 /** @internal Lists bindings selectable by at least one group/channel route under runtime precedence. */
 export function listEffectiveGroupRouteBindings(cfg: OpenClawConfig) {
-  const bindings = listBindings(cfg);
+  const bindings = listRouteBindings(cfg);
   const usedIds = new Set<string>();
   for (const binding of bindings) {
     usedIds.add(normalizeAccountId(binding.match.accountId));

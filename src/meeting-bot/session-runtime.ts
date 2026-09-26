@@ -5,6 +5,7 @@ import type {
   TranscriptStopRequest,
   TranscriptsStopResult,
 } from "../transcripts/provider-types.js";
+import { sleep } from "../utils/sleep.js";
 import {
   meetingCaptionParticipationSources,
   snapshotMeetingObservation,
@@ -331,9 +332,7 @@ export class MeetingSessionRuntime<
     );
     const deadline = Date.now() + waitMs;
     while (Date.now() < deadline) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, Math.min(250, Math.max(0, deadline - Date.now())));
-      });
+      await sleep(Math.min(250, Math.max(0, deadline - Date.now())));
       result = await this.speak(session.id, instructions);
       if (result.spoken) {
         return true;

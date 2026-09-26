@@ -37,19 +37,16 @@ private object SystemNotificationsStateProvider : NotificationsStateProvider {
     return DeviceNotificationListenerService.snapshot(context, enabled = true)
   }
 
-  /** Requests a platform listener rebind after access has been granted. */
   override fun requestServiceRebind(context: Context) {
     DeviceNotificationListenerService.requestServiceRebind(context)
   }
 
-  /** Delegates actions to the active listener service instance. */
   override fun executeAction(
     context: Context,
     request: NotificationActionRequest,
   ): NotificationActionResult = DeviceNotificationListenerService.executeAction(context, request)
 }
 
-/** Handles notification listing and actions via the Android listener service. */
 class NotificationsHandler internal constructor(
   private val appContext: Context,
   private val stateProvider: NotificationsStateProvider = SystemNotificationsStateProvider,
@@ -60,7 +57,6 @@ class NotificationsHandler internal constructor(
     return GatewaySession.InvokeResult.ok(snapshotPayloadJson(snapshot))
   }
 
-  /** Executes an action against a notification key from the current listener snapshot. */
   suspend fun handleNotificationsActions(paramsJson: String?): GatewaySession.InvokeResult {
     readSnapshotWithRebind()
 

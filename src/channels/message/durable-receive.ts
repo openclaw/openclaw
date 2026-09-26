@@ -4,25 +4,21 @@
  * Tracks accepted, pending, completed, and retryable inbound platform events.
  */
 import type { ChannelIngressQueue, ChannelIngressQueuePruneOptions } from "./ingress-queue.js";
+import type {
+  ChannelIngressQueueCompletedRecord,
+  ChannelIngressQueueRecord,
+} from "./ingress-queue.types.js";
 
 /** Pending inbound receive record kept until agent dispatch or durable send completes. */
-type DurableInboundReceivePendingRecord<TPayload, TMetadata = unknown> = {
-  id: string;
-  payload: TPayload;
-  metadata?: TMetadata;
-  receivedAt: number;
-  updatedAt: number;
-  attempts: number;
-  lastAttemptAt?: number;
-  lastError?: string;
-};
+type DurableInboundReceivePendingRecord<TPayload, TMetadata = unknown> = Omit<
+  ChannelIngressQueueRecord<TPayload, TMetadata>,
+  "channelId" | "accountId" | "queueName" | "laneKey"
+>;
 
-/** Completed inbound receive tombstone used to detect duplicate platform events. */
-type DurableInboundReceiveCompletedRecord<TMetadata = unknown> = {
-  id: string;
-  completedAt: number;
-  metadata?: TMetadata;
-};
+type DurableInboundReceiveCompletedRecord<TMetadata = unknown> = Pick<
+  ChannelIngressQueueCompletedRecord<TMetadata>,
+  "id" | "completedAt" | "metadata"
+>;
 
 /** Accept result for a new or duplicate inbound platform event. */
 type DurableInboundReceiveAcceptResult<TPayload, TMetadata, TCompletedMetadata> =
@@ -109,13 +105,14 @@ export function createDurableInboundReceiveJournalFromQueue<
   return {
     accept: async (id, payload, acceptOptions) => {
       await prune();
-      const result = await options.queue.enqueue(normalizeDurableInboundReceiveId(id), payload, {
+      const eventId = normalizeDurableInboundReceiveId(id);
+      const result = await options.queue.enqueue(eventId, payload, {
         ...(acceptOptions?.metadata === undefined ? {} : { metadata: acceptOptions.metadata }),
         ...(acceptOptions?.receivedAt === undefined
           ? {}
           : { receivedAt: acceptOptions.receivedAt }),
       });
-      await prune(normalizeDurableInboundReceiveId(id));
+      await prune(eventId);
       if (result.kind === "accepted") {
         return { kind: "accepted", duplicate: false, record: result.record };
       }

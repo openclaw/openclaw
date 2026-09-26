@@ -268,9 +268,11 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli.test.ts",
   "src/cli/update-cli.windows-lifecycle.test.ts",
   "src/cli/update-cli.windows-recovery.test.ts",
+  "src/cli/update-cli/status.test.ts",
   "src/cli/update-cli/update-command-convergence-authority.test.ts",
   "src/cli/update-cli/update-command-doctor-authority-callers.test.ts",
   "src/cli/update-cli/update-command-doctor-capability.test.ts",
+  "src/cli/update-cli/update-command-finalize-refusal.test.ts",
   "src/cli/update-cli/update-command-plugin-caller.test.ts",
   "src/cli/update-cli/update-command-plugins.degradation.test.ts",
   "src/cli/update-cli/update-command-service-publication.test.ts",
@@ -603,6 +605,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugins/loader.gateway-bindings.test.ts",
   "src/infra/outbound/channel-bootstrap.lifecycle.test.ts",
   "src/plugins/setup-registry.lifecycle.test.ts",
+  "src/plugins/installed-plugin-index-store-write.custody.test.ts",
   "src/plugins/installed-plugin-index-store-write.receipt.test.ts",
   "src/plugins/install-record-commit.retention.test.ts",
   "src/plugins/management-service.policy-imports.test.ts",
@@ -610,6 +613,7 @@ export const databaseWorkerCoreTestFiles = [
 
   "src/plugins/installed-plugin-index-generation-precedence.test.ts",
   "src/plugins/installed-plugin-index-read-state.test.ts",
+  "src/plugins/installed-plugin-index-store.availability.test.ts",
   "src/plugins/installed-plugin-index-store.install-record-map.test.ts",
   "src/plugins/installed-plugin-index-store.test.ts",
   "src/plugins/install-record-commit.sqlite.test.ts",
@@ -688,6 +692,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/fleet/service.runtime.test.ts",
   "src/fleet/service-upgrade.runtime.test.ts",
   "src/fleet/service-removal.runtime.test.ts",
+  "src/flows/doctor-health-contribution-runners.config.deferred.test.ts",
   "src/flows/doctor-health.dangling-workshop-index.test.ts",
   "src/flows/doctor-health.managed-admission.test.ts",
   "src/flows/doctor-health.managed-approvals.test.ts",
@@ -807,6 +812,7 @@ const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);
 
 // Preserve watch admission for consumers previously inferred into fast lanes.
 export const databaseWorkerCoreFormerFastKinds = new Map([
+  ["src/plugins/installed-plugin-index-store.availability.test.ts", "unitFast"],
   ["test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts", "unitFast"],
   ["src/infra/outbound/bound-delivery-router.test.ts", "unitFast"],
   ["src/agents/harness/agent-end-side-effects.no-verbatim-capture.test.ts", "unitFast"],

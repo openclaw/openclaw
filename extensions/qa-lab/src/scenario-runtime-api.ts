@@ -1,4 +1,3 @@
-// Qa Lab API module exposes the plugin public contract.
 import type { QaTransportAdapter } from "./qa-transport.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 

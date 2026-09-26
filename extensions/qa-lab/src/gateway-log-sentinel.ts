@@ -2,6 +2,7 @@ import {
   isRecord,
   normalizeOptionalString as readNonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readQaMessageFunctionCalls, readQaTranscriptMessages } from "./runtime-transcript.js";
 
 type GatewayLogSentinelKind =
   | "plugin-hook-failure"
@@ -217,19 +218,10 @@ function extractAssistantToolCalls(message: Record<string, unknown>): GatewayLog
     }
   }
 
-  const rawToolCalls =
-    message.tool_calls ?? message.toolCalls ?? message.function_call ?? message.functionCall;
-  const toolCalls = Array.isArray(rawToolCalls) ? rawToolCalls : rawToolCalls ? [rawToolCalls] : [];
-  for (const call of toolCalls) {
-    if (!isRecord(call)) {
-      continue;
-    }
-    const functionRecord = isRecord(call.function) ? call.function : undefined;
+  for (const call of readQaMessageFunctionCalls(message)) {
     calls.push({
-      name: readNonEmptyString(call.name) ?? readNonEmptyString(functionRecord?.name) ?? "unknown",
-      args: parseJsonArguments(
-        call.arguments ?? functionRecord?.arguments ?? call.input ?? functionRecord?.input ?? null,
-      ),
+      name: call.tool ?? "unknown",
+      args: parseJsonArguments(call.args),
     });
   }
   return calls;
@@ -296,20 +288,8 @@ export function scanDirectReplyTranscriptSentinels(
   transcriptBytes: string,
 ): GatewayLogSentinelFinding[] {
   const scanner = createDirectReplyTranscriptSentinelScanner();
-  for (const line of transcriptBytes.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      const message = isRecord(parsed) && isRecord(parsed.message) ? parsed.message : undefined;
-      if (message) {
-        scanner.recordMessage(message);
-      }
-    } catch {
-      // Ignore malformed QA transcript rows and keep sentinel scans deterministic.
-    }
+  for (const message of readQaTranscriptMessages(transcriptBytes)) {
+    scanner.recordMessage(message);
   }
   return scanner.findings();
 }

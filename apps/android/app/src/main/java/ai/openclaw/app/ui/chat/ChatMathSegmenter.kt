@@ -36,13 +36,11 @@ internal fun segmentChatMarkdown(
   val document = parseChatMarkdown(source)
   val topLevelParagraphLines = mutableSetOf<Int>()
   val protectedInlineLines = mutableSetOf<Int>()
-  var child = document.firstChild
-  while (child != null) {
+  for (child in markdownSiblings(document.firstChild)) {
     if (child is Paragraph) {
       child.sourceSpans.forEach { span -> topLevelParagraphLines.add(span.lineIndex) }
       collectProtectedInlineLines(child.firstChild, protectedInlineLines)
     }
-    child = child.next
   }
 
   val lines = source.split('\n')
@@ -120,8 +118,7 @@ private fun containsReferenceStyleLink(
   source: String,
 ): Boolean {
   fun search(start: Node?): Boolean {
-    var node = start
-    while (node != null) {
+    for (node in markdownSiblings(start)) {
       if (node is MarkdownLink || node is MarkdownImage) {
         val spans = node.sourceSpans
         val startIndex = spans.minOfOrNull { span -> span.inputIndex }
@@ -131,7 +128,6 @@ private fun containsReferenceStyleLink(
         }
       }
       if (search(node.firstChild)) return true
-      node = node.next
     }
     return false
   }
@@ -142,8 +138,7 @@ private fun collectProtectedInlineLines(
   start: Node?,
   lines: MutableSet<Int>,
 ) {
-  var node = start
-  while (node != null) {
+  for (node in markdownSiblings(start)) {
     if (node is Code) {
       node.sourceSpans.forEach { span -> lines.add(span.lineIndex) }
     }
@@ -155,7 +150,6 @@ private fun collectProtectedInlineLines(
       lines.addAll(checkNotNull(spannedLines.minOrNull())..checkNotNull(spannedLines.maxOrNull()))
     }
     collectProtectedInlineLines(node.firstChild, lines)
-    node = node.next
   }
 }
 

@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements Slack live transport adapter behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

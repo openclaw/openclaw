@@ -1,6 +1,6 @@
-// QA Lab Slack native approval observation and resolution.
 import { randomUUID } from "node:crypto";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { requestLiveQaApproval } from "../shared/live-approval-request.js";
 import { assertApprovalDecisionResult } from "../shared/live-approval-result.js";
 import {
@@ -154,9 +154,7 @@ export async function waitForSlackApprovalPrompt(params: {
         observedAt: new Date().toISOString(),
       };
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1_000);
-    });
+    await sleep(1_000);
   }
   throw new Error(
     [
@@ -238,9 +236,7 @@ export async function waitForSlackApprovalResolvedUpdate(params: {
         };
       }
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1_000);
-    });
+    await sleep(1_000);
   }
   throw new Error(
     `timed out after ${params.timeoutMs}ms waiting for Slack ${params.approvalKind} approval resolution update`,

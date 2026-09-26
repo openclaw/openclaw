@@ -1,6 +1,7 @@
 import { lstat, mkdir, readdir, realpath, rmdir, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, parse, relative, resolve, sep } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { readClawManifestFile } from "./reader.js";
 import { isCanonicalClawHubPackageName, portableClawPathKey } from "./schema-portability.js";
@@ -312,14 +313,8 @@ export async function validateClawProject(
     };
   }
 
-  const record =
-    packageValue && typeof packageValue === "object" && !Array.isArray(packageValue)
-      ? (packageValue as Record<string, unknown>)
-      : undefined;
-  const openclaw =
-    record?.openclaw && typeof record.openclaw === "object" && !Array.isArray(record.openclaw)
-      ? (record.openclaw as Record<string, unknown>)
-      : undefined;
+  const record = asOptionalRecord(packageValue);
+  const openclaw = asOptionalRecord(record?.openclaw);
   const scripts = record?.scripts;
   const diagnostics: ClawDiagnostic[] = [];
   if (openclaw?.claw !== "CLAW.md") {

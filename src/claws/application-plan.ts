@@ -96,17 +96,6 @@ export function clawAgentConfigurationNotices(
   return notices;
 }
 
-export function clawProfileExtensionPackages(
-  profile: ClawOpenClawProfile | undefined,
-): ClawPackage[] {
-  return (profile?.extensions ?? []).map((extension) => ({
-    kind: "plugin",
-    source: extension.source,
-    ref: extension.ref,
-    version: extension.version,
-  }));
-}
-
 function blocker(code: string, path: string, message: string): ClawDiagnostic {
   return { level: "error", code, phase: "plan", path, message };
 }

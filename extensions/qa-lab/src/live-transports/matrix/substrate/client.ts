@@ -1,9 +1,7 @@
-// Qa Lab Matrix module implements client behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildMatrixQaMediaMessageContent,
@@ -14,11 +12,10 @@ import {
   type MatrixQaUiaaResponse,
 } from "./client-message-content.js";
 import type { MatrixQaObservedEvent } from "./events.js";
-import { MATRIX_QA_JSON_MAX_BYTES, requestMatrixJson, type MatrixQaFetchLike } from "./request.js";
+import { readMatrixQaJsonResponse, requestMatrixJson, type MatrixQaFetchLike } from "./request.js";
 import {
+  createMatrixQaRoomObserver,
   primeMatrixQaRoom,
-  waitForMatrixQaRoomEvent,
-  waitForOptionalMatrixQaRoomEvent,
   type MatrixQaRoomObserver,
 } from "./sync.js";
 import {
@@ -30,6 +27,13 @@ import {
 } from "./topology.js";
 
 export type { MatrixQaRoomObserver } from "./sync.js";
+
+type MatrixQaClientRoomEventWaitParams = Parameters<
+  MatrixQaRoomObserver["waitForOptionalRoomEvent"]
+>[0] & {
+  observedEvents: MatrixQaObservedEvent[];
+  since?: string;
+};
 
 type MatrixQaRegisterResponse = {
   access_token?: string;
@@ -109,22 +113,10 @@ async function uploadMatrixQaContent(params: {
     body: uploadBody,
     signal: AbortSignal.timeout(20_000),
   });
-  // Bound the media-upload response body before parsing, mirroring
-  // `requestMatrixJson`. The overflow error is read *outside* the parse
-  // try/catch so it fails closed (propagates) instead of being swallowed into
-  // `{}`; malformed-but-in-bounds JSON still falls back to `{}` as before.
-  const uploadBytes = await readResponseWithLimit(response, MATRIX_QA_JSON_MAX_BYTES, {
-    onOverflow: ({ maxBytes }) => new Error(`Matrix homeserver response exceeds ${maxBytes} bytes`),
-  });
-  let body: { content_uri?: string; error?: string };
-  try {
-    body = JSON.parse(new TextDecoder().decode(uploadBytes)) as {
-      content_uri?: string;
-      error?: string;
-    };
-  } catch {
-    body = {};
-  }
+  const body = (await readMatrixQaJsonResponse(response)) as {
+    content_uri?: string;
+    error?: string;
+  };
   if (response.status !== 200) {
     throw new Error(body.error ?? `Matrix media upload failed with status ${response.status}`);
   }
@@ -170,6 +162,15 @@ export function createMatrixQaClient(params: {
 }) {
   const fetchImpl = params.fetchImpl ?? fetch;
   const syncObserver = params.syncObserver;
+  const resolveRoomObserver = (opts: MatrixQaClientRoomEventWaitParams) =>
+    syncObserver ??
+    createMatrixQaRoomObserver({
+      accessToken: params.accessToken,
+      baseUrl: params.baseUrl,
+      fetchImpl,
+      observedEvents: opts.observedEvents,
+      since: opts.since,
+    });
   const request = <T>(
     options: Omit<Parameters<typeof requestMatrixJson<T>>[0], "baseUrl" | "fetchImpl">,
   ) =>
@@ -409,46 +410,18 @@ export function createMatrixQaClient(params: {
         method: "POST",
       });
     },
-    waitForOptionalRoomEvent(opts: {
-      observedEvents: MatrixQaObservedEvent[];
-      predicate: (event: MatrixQaObservedEvent) => boolean;
-      roomId: string;
-      since?: string;
-      timeoutMs: number;
-    }) {
-      if (syncObserver) {
-        return syncObserver.waitForOptionalRoomEvent({
-          predicate: opts.predicate,
-          roomId: opts.roomId,
-          timeoutMs: opts.timeoutMs,
-        });
-      }
-      return waitForOptionalMatrixQaRoomEvent({
-        accessToken: params.accessToken,
-        baseUrl: params.baseUrl,
-        fetchImpl,
-        ...opts,
+    waitForOptionalRoomEvent(opts: MatrixQaClientRoomEventWaitParams) {
+      return resolveRoomObserver(opts).waitForOptionalRoomEvent({
+        predicate: opts.predicate,
+        roomId: opts.roomId,
+        timeoutMs: opts.timeoutMs,
       });
     },
-    async waitForRoomEvent(opts: {
-      observedEvents: MatrixQaObservedEvent[];
-      predicate: (event: MatrixQaObservedEvent) => boolean;
-      roomId: string;
-      since?: string;
-      timeoutMs: number;
-    }) {
-      if (syncObserver) {
-        return await syncObserver.waitForRoomEvent({
-          predicate: opts.predicate,
-          roomId: opts.roomId,
-          timeoutMs: opts.timeoutMs,
-        });
-      }
-      return await waitForMatrixQaRoomEvent({
-        accessToken: params.accessToken,
-        baseUrl: params.baseUrl,
-        fetchImpl,
-        ...opts,
+    async waitForRoomEvent(opts: MatrixQaClientRoomEventWaitParams) {
+      return await resolveRoomObserver(opts).waitForRoomEvent({
+        predicate: opts.predicate,
+        roomId: opts.roomId,
+        timeoutMs: opts.timeoutMs,
       });
     },
   };

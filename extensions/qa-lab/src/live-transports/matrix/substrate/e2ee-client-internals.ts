@@ -119,13 +119,8 @@ function shouldRecordMatrixQaObservedEventUpdate(params: {
   }
   const next = params.next;
   return (
-    (previous.body === undefined && next.body !== undefined) ||
-    (previous.formattedBody === undefined && next.formattedBody !== undefined) ||
-    (previous.msgtype === undefined && next.msgtype !== undefined) ||
-    (previous.relatesTo === undefined && next.relatesTo !== undefined) ||
-    (previous.mentions === undefined && next.mentions !== undefined) ||
-    (previous.attachment === undefined && next.attachment !== undefined)
-  );
+    ["body", "formattedBody", "msgtype", "relatesTo", "mentions", "attachment"] as const
+  ).some((field) => previous[field] === undefined && next[field] !== undefined);
 }
 
 export function createMatrixQaE2eeObservedEventRecorder(params: {

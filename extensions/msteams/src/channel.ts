@@ -65,7 +65,7 @@ import {
 } from "./approval-native.js";
 import { resolveMSTeamsAccount, type ResolvedMSTeamsAccount } from "./channel-config.js";
 import { msteamsSetupPlugin } from "./channel.setup.js";
-import { collectMSTeamsMutableAllowlistWarnings } from "./doctor.js";
+import { msteamsDoctor } from "./doctor.js";
 import {
   MSTEAMS_GROUP_MANAGEMENT_ACTIONS,
   withMSTeamsGraphMutationCurrentness,
@@ -373,13 +373,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         resolveToolPolicy: resolveMSTeamsGroupToolPolicy,
       },
       approvalCapability: msTeamsApprovalCapability,
-      doctor: {
-        dmAllowFromMode: "topOnly",
-        groupModel: "hybrid",
-        groupAllowFromFallbackToAllowFrom: true,
-        warnOnEmptyGroupSenderAllowlist: true,
-        collectMutableAllowlistWarnings: collectMSTeamsMutableAllowlistWarnings,
-      },
+      doctor: msteamsDoctor,
       messaging: {
         targetPrefixes: ["msteams", "teams"],
         directTargetStyle: "user-prefixed",
@@ -932,12 +926,11 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           }
           return lines;
         },
-        resolveAccountSnapshot: ({ account, runtime }) => ({
+        resolveAccountSnapshot: ({ account }) => ({
           accountId: account.accountId,
           enabled: account.enabled,
           configured: account.configured,
           extra: {
-            port: runtime?.port ?? null,
             tokenStatus: account.tokenStatus,
           },
         }),
@@ -945,13 +938,12 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       gateway: {
         startAccount: async (ctx) => {
           const { monitorMSTeamsProvider } = await import("./monitor.js");
-          const port = ctx.cfg.channels?.msteams?.webhook?.port ?? 3978;
+          const webhookPath = ctx.cfg.channels?.msteams?.webhook?.path || "/api/messages";
           const statusSink = createAccountStatusSink({
             accountId: ctx.accountId,
             setStatus: ctx.setStatus,
           });
-          statusSink({ port });
-          ctx.log?.info(`starting provider (port ${port})`);
+          ctx.log?.info(`starting provider (Gateway route ${webhookPath})`);
           if (isMSTeamsNativeApprovalClientEnabled({ cfg: ctx.cfg, accountId: ctx.accountId })) {
             registerChannelRuntimeContext({
               channelRuntime: ctx.channelRuntime,

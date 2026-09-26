@@ -53,20 +53,8 @@ export async function streamSpeech(
           }
           return {
             kind: "ready",
-            synthesize: async ({
-              prepared,
-              cfg: runtimeCfg,
-              target: synthesisTarget,
-              timeoutMs,
-            }) => {
-              const synthesis = await resolvedProvider.provider.streamSynthesize!({
-                text: prepared.text,
-                cfg: runtimeCfg,
-                providerConfig: prepared.providerConfig,
-                target: synthesisTarget,
-                providerOverrides: prepared.providerOverrides,
-                timeoutMs,
-              });
+            synthesize: async (request) => {
+              const synthesis = await resolvedProvider.provider.streamSynthesize!(request);
               return {
                 providerResult: synthesis,
                 transport: await captureSpeechProviderStream(synthesis, acquired),

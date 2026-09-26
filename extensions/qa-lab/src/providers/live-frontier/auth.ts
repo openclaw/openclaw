@@ -62,17 +62,6 @@ function qaLiveOpenAiUsesCodexByDefault(cfg: OpenClawConfig): boolean {
   );
 }
 
-function expandQaLiveApiKeyProviderIds(params: {
-  cfg: OpenClawConfig;
-  providerIds: readonly string[];
-}) {
-  const expanded = new Set(normalizeQaLiveProviderIds(params.providerIds));
-  if (expanded.has(QA_OPENAI_PROVIDER_ID) && qaLiveOpenAiUsesCodexByDefault(params.cfg)) {
-    expanded.add(QA_OPENAI_PROVIDER_ID);
-  }
-  return [...expanded].toSorted();
-}
-
 function resolveQaLiveEnvApiKey(params: {
   providerId: string;
   env: NodeJS.ProcessEnv;
@@ -222,7 +211,7 @@ export async function stageQaLiveApiKeyProfiles(params: {
   agentIds?: readonly string[];
 }): Promise<OpenClawConfig> {
   const env = params.env ?? process.env;
-  const providerIds = uniqueStrings(normalizeStringEntries(params.providerIds)).toSorted();
+  const providerIds = normalizeQaLiveProviderIds(params.providerIds);
   const profiles: Record<
     string,
     {
@@ -233,7 +222,7 @@ export async function stageQaLiveApiKeyProfiles(params: {
     }
   > = {};
   let next = params.cfg;
-  for (const providerId of expandQaLiveApiKeyProviderIds({ cfg: next, providerIds })) {
+  for (const providerId of providerIds) {
     const resolved = resolveQaLiveApiKey({ providerId, env, cfg: next });
     if (!resolved?.apiKey) {
       continue;

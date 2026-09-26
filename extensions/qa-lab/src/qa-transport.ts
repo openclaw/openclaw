@@ -20,24 +20,12 @@ type QaTransportAdapterDefinition = Awaited<
   ReturnType<NonNullable<QaRunnerCliRegistration["adapterFactory"]>["create"]>
 >;
 
-type QaTransportGatewayClient = {
-  call: (
-    method: string,
-    params?: unknown,
-    options?: {
-      expectFinal?: boolean;
-      timeoutMs?: number;
-    },
-  ) => Promise<unknown>;
-};
-
-export async function waitForQaTransportAccountReady(params: {
-  accountId: string;
-  channel: string;
-  gateway: QaTransportGatewayClient;
-  pollIntervalMs?: number;
-  timeoutMs?: number;
-}): Promise<void> {
+export async function waitForQaTransportAccountReady(
+  params: Parameters<QaTransportAdapterDefinition["waitReady"]>[0] & {
+    accountId: string;
+    channel: string;
+  },
+): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 45_000;
   const pollIntervalMs = params.pollIntervalMs ?? 500;
   const deadline = Date.now() + timeoutMs;

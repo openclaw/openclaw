@@ -1,4 +1,3 @@
-// Qa Lab Matrix module implements sync behavior.
 import {
   findMatrixQaObservedEventMatch,
   inheritMatrixQaReplacementRelation,
@@ -223,36 +222,4 @@ export function createMatrixQaRoomObserver(
       throw new Error(`timed out after ${waitParams.timeoutMs}ms waiting for Matrix room event`);
     },
   };
-}
-
-export async function waitForOptionalMatrixQaRoomEvent(
-  params: MatrixQaSyncParams & {
-    observedEvents: MatrixQaObservedEvent[];
-    predicate: (event: MatrixQaObservedEvent) => boolean;
-    roomId: string;
-    since?: string;
-    timeoutMs: number;
-  },
-): Promise<MatrixQaRoomEventWaitResult> {
-  return await createMatrixQaRoomObserver(params).waitForOptionalRoomEvent({
-    predicate: params.predicate,
-    roomId: params.roomId,
-    timeoutMs: params.timeoutMs,
-  });
-}
-
-export async function waitForMatrixQaRoomEvent(
-  params: MatrixQaSyncParams & {
-    observedEvents: MatrixQaObservedEvent[];
-    predicate: (event: MatrixQaObservedEvent) => boolean;
-    roomId: string;
-    since?: string;
-    timeoutMs: number;
-  },
-) {
-  return await createMatrixQaRoomObserver(params).waitForRoomEvent({
-    predicate: params.predicate,
-    roomId: params.roomId,
-    timeoutMs: params.timeoutMs,
-  });
 }

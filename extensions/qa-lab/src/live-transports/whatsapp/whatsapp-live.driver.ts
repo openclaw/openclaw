@@ -1,4 +1,3 @@
-// QA Lab WhatsApp driver lifecycle and no-reply waits.
 import {
   startWhatsAppQaDriverSession,
   type WhatsAppQaDriverObservedMessage,

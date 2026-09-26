@@ -1,8 +1,7 @@
-// Qa Matrix plugin module implements recovery-key CLI E2EE scenarios.
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { createMatrixQaClient } from "../substrate/client.js";
 import {
   assertMatrixQaCliE2eeStatus,
+  assertMatrixQaCliEncryptionSetupResult,
   buildMatrixQaCliE2eeAccountConfig,
   runMatrixQaCliExpectedFailure,
 } from "./scenario-runtime-e2ee-cli-config.js";
@@ -11,6 +10,7 @@ import {
   createMatrixQaE2eeCliOwnerClient,
   isMatrixQaCliBackupUsable,
   parseMatrixQaCliJson,
+  loginMatrixQaCliDevice,
   registerMatrixQaCliE2eeAccount,
   runMatrixQaSetupCliJson,
   type MatrixQaCliEncryptionSetupStatus,
@@ -34,42 +34,38 @@ export async function runMatrixQaE2eeCliRecoveryKeySetupScenario(
     context,
     scenarioId: "matrix-e2ee-cli-recovery-key-setup",
   });
-  const loginClient = createMatrixQaClient({
-    baseUrl: context.baseUrl,
-  });
-  const ready = await ensureMatrixQaE2eeOwnDeviceVerified({
-    client: owner,
-    label: "driver",
-  });
-  const encodedRecoveryKey = ready.recoveryKey?.encodedPrivateKey?.trim();
-  if (!encodedRecoveryKey) {
-    await owner.stop().catch(() => undefined);
-    throw new Error("Matrix E2EE CLI recovery-key setup did not expose a recovery key");
-  }
-  const cliDevice = await loginClient.loginWithPassword({
-    deviceName: "OpenClaw Matrix QA CLI Recovery Key Setup Device",
-    password: account.password,
-    userId: account.userId,
-  });
-  if (!cliDevice.deviceId) {
-    await owner.stop().catch(() => undefined);
-    throw new Error("Matrix E2EE CLI recovery-key setup login did not return a device id");
-  }
-  const cli = await createMatrixQaCliE2eeSetupRuntime({
-    artifactLabel: "cli-recovery-key-setup",
-    context,
-    initialConfig: buildMatrixQaCliE2eeAccountConfig({
-      accountId,
-      accessToken: cliDevice.accessToken,
-      baseUrl: context.baseUrl,
-      deviceId: cliDevice.deviceId,
-      encryption: false,
-      name: "Matrix QA CLI Recovery Key Setup",
-      password: account.password,
-      userId: cliDevice.userId,
-    }),
-  });
+  let cli: Awaited<ReturnType<typeof createMatrixQaCliE2eeSetupRuntime>> | undefined;
+  let cliDeviceId: string | undefined;
   try {
+    const ready = await ensureMatrixQaE2eeOwnDeviceVerified({
+      client: owner,
+      label: "driver",
+    });
+    const encodedRecoveryKey = ready.recoveryKey?.encodedPrivateKey?.trim();
+    if (!encodedRecoveryKey) {
+      throw new Error("Matrix E2EE CLI recovery-key setup did not expose a recovery key");
+    }
+    const cliDevice = await loginMatrixQaCliDevice(
+      context.baseUrl,
+      account,
+      "OpenClaw Matrix QA CLI Recovery Key Setup Device",
+      "Matrix E2EE CLI recovery-key setup",
+    );
+    cliDeviceId = cliDevice.deviceId;
+    cli = await createMatrixQaCliE2eeSetupRuntime({
+      artifactLabel: "cli-recovery-key-setup",
+      context,
+      initialConfig: buildMatrixQaCliE2eeAccountConfig({
+        accountId,
+        accessToken: cliDevice.accessToken,
+        baseUrl: context.baseUrl,
+        deviceId: cliDevice.deviceId,
+        encryption: false,
+        name: "Matrix QA CLI Recovery Key Setup",
+        password: account.password,
+        userId: cliDevice.userId,
+      }),
+    });
     const { artifacts: setupArtifacts, payload: setupPayload } = await runMatrixQaSetupCliJson(
       cli,
       "recovery-key-setup",
@@ -78,17 +74,12 @@ export async function runMatrixQaE2eeCliRecoveryKeySetupScenario(
       `${encodedRecoveryKey}\n`,
     );
     const setup = setupPayload as MatrixQaCliEncryptionSetupStatus;
-    if (
-      setup.accountId !== accountId ||
-      setup.success !== true ||
-      setup.encryptionChanged !== true ||
-      setup.bootstrap?.success !== true ||
-      !setup.status
-    ) {
-      throw new Error(
-        `Matrix CLI recovery-key encryption setup did not succeed: ${setup.bootstrap?.error ?? "unknown error"}`,
-      );
-    }
+    assertMatrixQaCliEncryptionSetupResult(
+      setup,
+      accountId,
+      true,
+      "Matrix CLI recovery-key encryption setup did not succeed",
+    );
     assertMatrixQaCliE2eeStatus("Matrix CLI recovery-key encryption setup", setup.status, {
       allowUntrustedMatchingKey: true,
     });
@@ -122,9 +113,11 @@ export async function runMatrixQaE2eeCliRecoveryKeySetupScenario(
   } finally {
     try {
       await owner.stop().catch(() => undefined);
-      await owner.deleteOwnDevices([cliDevice.deviceId]).catch(() => undefined);
+      if (cliDeviceId) {
+        await owner.deleteOwnDevices([cliDeviceId]).catch(() => undefined);
+      }
     } finally {
-      await cli.dispose();
+      await cli?.dispose();
     }
   }
 }
@@ -144,41 +137,37 @@ export async function runMatrixQaE2eeCliRecoveryKeyInvalidScenario(
     context,
     scenarioId: "matrix-e2ee-cli-recovery-key-invalid",
   });
-  const ready = await ensureMatrixQaE2eeOwnDeviceVerified({
-    client: owner,
-    label: "cli invalid recovery-key owner",
-  });
-  if (!ready.recoveryKey?.encodedPrivateKey?.trim()) {
-    await owner.stop().catch(() => undefined);
-    throw new Error("Matrix E2EE CLI invalid recovery-key setup did not seed secret storage");
-  }
-  const loginClient = createMatrixQaClient({
-    baseUrl: context.baseUrl,
-  });
-  const cliDevice = await loginClient.loginWithPassword({
-    deviceName: "OpenClaw Matrix QA CLI Invalid Recovery Key Device",
-    password: account.password,
-    userId: account.userId,
-  });
-  if (!cliDevice.deviceId) {
-    await owner.stop().catch(() => undefined);
-    throw new Error("Matrix E2EE CLI invalid recovery-key login did not return a device id");
-  }
-  const cli = await createMatrixQaCliE2eeSetupRuntime({
-    artifactLabel: "cli-recovery-key-invalid",
-    context,
-    initialConfig: buildMatrixQaCliE2eeAccountConfig({
-      accountId,
-      accessToken: cliDevice.accessToken,
-      baseUrl: context.baseUrl,
-      deviceId: cliDevice.deviceId,
-      encryption: false,
-      name: "Matrix QA CLI Invalid Recovery Key",
-      password: account.password,
-      userId: cliDevice.userId,
-    }),
-  });
+  let cli: Awaited<ReturnType<typeof createMatrixQaCliE2eeSetupRuntime>> | undefined;
+  let cliDeviceId: string | undefined;
   try {
+    const ready = await ensureMatrixQaE2eeOwnDeviceVerified({
+      client: owner,
+      label: "cli invalid recovery-key owner",
+    });
+    if (!ready.recoveryKey?.encodedPrivateKey?.trim()) {
+      throw new Error("Matrix E2EE CLI invalid recovery-key setup did not seed secret storage");
+    }
+    const cliDevice = await loginMatrixQaCliDevice(
+      context.baseUrl,
+      account,
+      "OpenClaw Matrix QA CLI Invalid Recovery Key Device",
+      "Matrix E2EE CLI invalid recovery-key",
+    );
+    cliDeviceId = cliDevice.deviceId;
+    cli = await createMatrixQaCliE2eeSetupRuntime({
+      artifactLabel: "cli-recovery-key-invalid",
+      context,
+      initialConfig: buildMatrixQaCliE2eeAccountConfig({
+        accountId,
+        accessToken: cliDevice.accessToken,
+        baseUrl: context.baseUrl,
+        deviceId: cliDevice.deviceId,
+        encryption: false,
+        name: "Matrix QA CLI Invalid Recovery Key",
+        password: account.password,
+        userId: cliDevice.userId,
+      }),
+    });
     const failed = await runMatrixQaCliExpectedFailure({
       args: [
         "matrix",
@@ -236,9 +225,11 @@ export async function runMatrixQaE2eeCliRecoveryKeyInvalidScenario(
   } finally {
     try {
       await owner.stop().catch(() => undefined);
-      await owner.deleteOwnDevices([cliDevice.deviceId]).catch(() => undefined);
+      if (cliDeviceId) {
+        await owner.deleteOwnDevices([cliDeviceId]).catch(() => undefined);
+      }
     } finally {
-      await cli.dispose();
+      await cli?.dispose();
     }
   }
 }

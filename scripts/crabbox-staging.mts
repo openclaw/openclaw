@@ -89,6 +89,7 @@ const receiptSchema = z.strictObject({
       key: z.string().regex(/^[a-f0-9]{64}$/u),
       slotIdentity: identitySchema,
       idle: z.boolean(),
+      disposing: z.literal(true).optional(),
       lastUsed: z.number().int().nonnegative(),
       database: z
         .string()
@@ -99,6 +100,15 @@ const receiptSchema = z.strictObject({
   hold: z.enum(["artifacts", "claims", "writers", "registration"]).optional(),
 });
 type Receipt = z.infer<typeof receiptSchema>;
+const disposalSchema = z.strictObject({
+  version: z.literal(1),
+  id: z.uuid(),
+  key: z.string().regex(/^[a-f0-9]{64}$/u),
+  slotIdentity: identitySchema,
+  // An absent receipt records root absence; it never authorizes deleting a root.
+  receipt: receiptSchema.optional(),
+});
+type Disposal = z.infer<typeof disposalSchema>;
 type Identity = CrabboxArtifactIdentity;
 const entrySchema = z.strictObject({
   path: z.string().min(1),
@@ -590,7 +600,7 @@ function privateMirrorDirectory(path: string) {
   return identity(path);
 }
 
-function mirrorLock(path: string) {
+function mirrorLock(path: string, waitForAllocation = false) {
   const parent = dirname(path);
   const parentIdentity = privateMirrorDirectory(parent);
   try {
@@ -639,11 +649,26 @@ function mirrorLock(path: string) {
     // A lock-only transaction never commits data or writes a journal. SQLite
     // owns every open descriptor so closing a competing connection cannot drop
     // another connection's POSIX locks. Kernel locks disappear on producer exit.
-    database.exec("PRAGMA journal_mode=MEMORY; BEGIN EXCLUSIVE");
+    try {
+      database.exec("PRAGMA journal_mode=MEMORY; BEGIN EXCLUSIVE");
+    } catch (error) {
+      if (!waitForAllocation || !sqliteBusy(error)) {
+        throw error;
+      }
+      console.error("[crabbox] waiting for source mirror allocation...");
+      const deadline = performance.now() + 120_000;
+      database.exec("PRAGMA busy_timeout=120000");
+      database.exec("PRAGMA journal_mode=MEMORY");
+      // SQLite resets its busy budget for each statement, and another allocator
+      // can win between the journal-mode probe and BEGIN.
+      const remaining = Math.max(0, Math.ceil(deadline - performance.now()));
+      database.exec(`PRAGMA busy_timeout=${remaining}`);
+      database.exec("BEGIN EXCLUSIVE");
+    }
     assertOwned();
   } catch (error) {
     database?.close();
-    if (typeof error === "object" && error !== null && "errcode" in error && error.errcode === 5) {
+    if (sqliteBusy(error)) {
       return undefined;
     }
     throw error;
@@ -668,25 +693,31 @@ function mirrorLock(path: string) {
   return Object.assign(release, { assertOwned, remove });
 }
 
-function mirrorSlot(syncRoot: string, key: string) {
+function sqliteBusy(error: unknown) {
+  return typeof error === "object" && error !== null && "errcode" in error && error.errcode === 5;
+}
+
+function mirrorSlot(syncRoot: string, key: string, expectedId?: string) {
   const slot = join(syncRoot, "mirrors", key);
   const slotIdentity = privateMirrorDirectory(slot);
   if (readdirSync(slot).some((name) => name !== "stage" && name !== "lock")) {
     throw new Error("source mirror slot has unknown metadata");
   }
-  const id = readBounded(join(slot, "stage"), 128).toString("utf8").trim();
-  if (!z.uuid().safeParse(id).success) {
+  const id = lstatSync(join(slot, "stage"), { throwIfNoEntry: false })
+    ? readBounded(join(slot, "stage"), 128).toString("utf8").trim()
+    : expectedId;
+  if (!id || !z.uuid().safeParse(id).success) {
     throw new Error("source mirror slot has an invalid staging identity");
   }
   const root = join(syncRoot, prefix + id);
-  const receipt = lstatSync(root, { throwIfNoEntry: false }) ? readReceipt(root) : undefined;
+  const { receipt, disposal } = readMirrorState(syncRoot, id);
   if (
     receipt &&
     (receipt.mirror?.key !== key || !sameIdentity(receipt.mirror.slotIdentity, slotIdentity))
   ) {
     throw new Error("source mirror staging ownership does not match its slot");
   }
-  return { slot, slotIdentity, root, receipt, id };
+  return { slot, slotIdentity, root, receipt, disposal, id };
 }
 
 function idleMirror(receipt: Receipt) {
@@ -728,36 +759,343 @@ function databaseDigest(root: string, witness?: SourceWitness) {
   );
 }
 
-/** The old producer's explicit idle handoff, never PID absence, grants disposal. */
-function disposeIdleMirror(syncRoot: string, key: string, expectedId?: string) {
+function disposalPath(syncRoot: string, id: string) {
+  return join(syncRoot, prefix + "disposal-" + id);
+}
+
+function readDisposal(syncRoot: string, id: string) {
+  const path = disposalPath(syncRoot, id);
+  const stat = lstatSync(path);
+  if (
+    !stat.isFile() ||
+    stat.isSymbolicLink() ||
+    stat.nlink !== 1 ||
+    (stat.mode & 0o077) !== 0 ||
+    (process.getuid && stat.uid !== process.getuid())
+  ) {
+    throw new Error("source mirror disposal record is not private");
+  }
+  const record = disposalSchema.parse(JSON.parse(readBounded(path, headerLimit).toString("utf8")));
+  const receipt = record.receipt;
+  if (
+    record.id !== id ||
+    (receipt &&
+      (receipt.id !== id ||
+        !receipt.mirror?.disposing ||
+        !idleMirror(receipt) ||
+        receipt.mirror.key !== record.key ||
+        !sameIdentity(receipt.mirror.slotIdentity, record.slotIdentity)))
+  ) {
+    throw new Error("source mirror disposal record has invalid ownership");
+  }
+  return record;
+}
+
+function readMirrorState(syncRoot: string, id: string) {
+  const root = join(syncRoot, prefix + id);
+  const record = lstatSync(disposalPath(syncRoot, id), { throwIfNoEntry: false })
+    ? readDisposal(syncRoot, id)
+    : undefined;
+  const present = lstatSync(root, { throwIfNoEntry: false });
+  if (record && present) {
+    if (!record.receipt) {
+      throw new Error("source mirror root appeared after empty-slot disposal was recorded");
+    }
+    assertIdentity(root, record.receipt.rootIdentity);
+  }
+  if (lstatSync(join(root, receiptName), { throwIfNoEntry: false })) {
+    const receipt = readReceipt(root);
+    if (record && JSON.stringify(record.receipt) !== JSON.stringify(receipt)) {
+      throw new Error("source mirror disposal record does not match its receipt");
+    }
+    return { receipt, disposal: record };
+  }
+  if (record) {
+    if (present && readdirSync(root).length) {
+      throw new Error("source mirror lost its receipt before payload disposal completed");
+    }
+    return { receipt: record.receipt, disposal: record };
+  }
+  return { receipt: present ? readReceipt(root) : undefined, disposal: undefined };
+}
+
+function saveDisposal(syncRoot: string, input: Disposal) {
+  const record = disposalSchema.parse(input);
+  const path = disposalPath(syncRoot, record.id);
+  if (lstatSync(path, { throwIfNoEntry: false })) {
+    if (JSON.stringify(readDisposal(syncRoot, record.id)) !== JSON.stringify(record)) {
+      throw new Error("source mirror disposal record changed");
+    }
+    // Retry an interrupted durability flush without rewriting committed custody.
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      if (!syncFile(fd) || !syncDirectory(syncRoot)) {
+        throw new Error("source mirror disposal record durability is unavailable");
+      }
+    } finally {
+      closeSync(fd);
+    }
+  } else if (!writeAtomic(syncRoot, basename(path), JSON.stringify(record) + "\n")) {
+    throw new Error("source mirror disposal record could not be recorded durably");
+  }
+  return record;
+}
+
+function removeDisposal(syncRoot: string, expected: Disposal) {
+  if (JSON.stringify(readDisposal(syncRoot, expected.id)) !== JSON.stringify(expected)) {
+    throw new Error("source mirror disposal record changed");
+  }
+  if (!syncDirectory(join(syncRoot, "mirrors")) || !syncDirectory(syncRoot)) {
+    throw new Error("source mirror namespace removal could not be recorded durably");
+  }
+  rmSync(disposalPath(syncRoot, expected.id));
+}
+
+/** Claim under allocation; keep the slot reserved until its recorded disposal finishes. */
+function claimIdleMirror(syncRoot: string, key: string, expectedId?: string) {
   const slot = join(syncRoot, "mirrors", key);
   privateMirrorDirectory(slot);
+  // A missing stage/lock is valid only after recorded root removal. Check before
+  // mirrorLock can recreate the empty lock database during terminal recovery.
+  if (
+    !lstatSync(join(slot, "stage"), { throwIfNoEntry: false }) ||
+    !lstatSync(join(slot, "lock"), { throwIfNoEntry: false })
+  ) {
+    if (!expectedId) {
+      return undefined;
+    }
+    const disposal = readDisposal(syncRoot, expectedId);
+    assertIdentity(slot, disposal.slotIdentity);
+    if (
+      disposal.key !== key ||
+      lstatSync(join(syncRoot, prefix + expectedId), { throwIfNoEntry: false }) ||
+      readdirSync(slot).some((name) => name !== "lock")
+    ) {
+      throw new Error("source mirror terminal disposal ownership changed");
+    }
+  }
   const release = mirrorLock(join(slot, "lock"));
   if (!release) {
-    return false;
+    return undefined;
   }
   try {
-    const current = mirrorSlot(syncRoot, key);
+    const current = mirrorSlot(syncRoot, key, expectedId);
     if (
       (expectedId && current.id !== expectedId) ||
       (current.receipt && !idleMirror(current.receipt))
     ) {
-      return false;
+      release();
+      return undefined;
     }
-    if (current.receipt) {
-      recoveryMetadata(current.root, join(current.root, "payload", "source"));
-      assertIdentity(current.root, current.receipt.rootIdentity);
-      release.assertOwned();
-      rmSync(current.root, { recursive: true, force: true });
-    }
-    assertIdentity(slot, current.slotIdentity);
-    rmSync(join(slot, "stage"));
+    let disposal: Disposal | undefined;
+    return {
+      release,
+      removePayload() {
+        release.assertOwned();
+        if (!current.receipt) {
+          if (lstatSync(current.root, { throwIfNoEntry: false })) {
+            throw new Error("source mirror root appeared before empty-slot disposal");
+          }
+          disposal = saveDisposal(syncRoot, {
+            version: 1,
+            id: current.id,
+            key,
+            slotIdentity: current.slotIdentity,
+          });
+          return;
+        }
+        let receipt = current.receipt;
+        if (
+          JSON.stringify(readMirrorState(syncRoot, current.id).receipt) !== JSON.stringify(receipt)
+        ) {
+          throw new Error("source mirror disposal ownership changed");
+        }
+        if (!lstatSync(join(current.root, receiptName), { throwIfNoEntry: false })) {
+          // Only a durable record can admit an absent or identity-checked empty root.
+          disposal = saveDisposal(syncRoot, readDisposal(syncRoot, current.id));
+          return;
+        }
+        const generations = recoveryMetadata(current.root, join(current.root, "payload", "source"));
+        const payload = join(current.root, "payload");
+        if (!receipt.mirror?.disposing || lstatSync(payload, { throwIfNoEntry: false })) {
+          assertIdentity(payload, receipt.payloadIdentity);
+        }
+        // Never downgrade an already committed disposal during a retry.
+        if (!receipt.mirror?.disposing) {
+          receipt = receiptSchema.parse({
+            ...receipt,
+            mirror: { ...receipt.mirror!, disposing: true },
+          });
+          saveMirrorReceipt(current.root, receipt);
+        }
+        disposal = saveDisposal(syncRoot, {
+          version: 1,
+          id: current.id,
+          key,
+          slotIdentity: current.slotIdentity,
+          receipt,
+        });
+        release.assertOwned();
+        assertIdentity(current.root, receipt.rootIdentity);
+        for (const name of generations) {
+          rmSync(join(current.root, name));
+        }
+        // Recovery must not resurrect artifact records after their source is gone.
+        if (generations.length && !syncDirectory(current.root)) {
+          throw new Error("source mirror metadata removal could not be recorded durably");
+        }
+        rmSync(payload, { recursive: true, force: true });
+        for (const name of [
+          manifestName,
+          mirrorDatabase,
+          `${mirrorDatabase}-journal`,
+          `${mirrorDatabase}-wal`,
+          `${mirrorDatabase}-shm`,
+        ]) {
+          rmSync(join(current.root, name), { force: true });
+        }
+      },
+      // Allocation must be reacquired before unlinking the lock namespace.
+      removeSlot() {
+        release.assertOwned();
+        if (
+          !disposal ||
+          JSON.stringify(readDisposal(syncRoot, current.id)) !== JSON.stringify(disposal)
+        ) {
+          throw new Error("source mirror disposal record changed before namespace removal");
+        }
+        const latest = mirrorSlot(syncRoot, key, current.id);
+        if (latest.id !== current.id || !sameIdentity(latest.slotIdentity, current.slotIdentity)) {
+          throw new Error("source mirror slot changed during disposal");
+        }
+        if (latest.receipt) {
+          if (JSON.stringify(latest.receipt) !== JSON.stringify(disposal.receipt)) {
+            throw new Error("source mirror disposal was not recorded");
+          }
+          if (lstatSync(current.root, { throwIfNoEntry: false })) {
+            assertIdentity(current.root, latest.receipt.rootIdentity);
+            if (readdirSync(current.root).some((name) => name !== receiptName)) {
+              throw new Error("source mirror disposal has remaining metadata");
+            }
+            rmSync(join(current.root, receiptName), { force: true });
+            rmdirSync(current.root);
+          }
+        } else if (lstatSync(current.root, { throwIfNoEntry: false })) {
+          throw new Error("source mirror root appeared during empty-slot disposal");
+        }
+        // Root absence must persist before the slot can disappear or be reused.
+        if (!syncDirectory(syncRoot)) {
+          throw new Error("source mirror root removal could not be recorded durably");
+        }
+        assertIdentity(slot, current.slotIdentity);
+        rmSync(join(slot, "stage"), { force: true });
+        if (!syncDirectory(slot)) {
+          throw new Error("source mirror slot handoff removal could not be recorded durably");
+        }
+        release();
+        release.remove();
+        rmdirSync(slot);
+        removeDisposal(syncRoot, disposal);
+      },
+    };
+  } catch (error) {
     release();
-    release.remove();
-    rmdirSync(slot);
-    return true;
+    throw error;
+  }
+}
+
+function allocateMirrorSlot(syncRoot: string, key: string) {
+  const mirrors = join(syncRoot, "mirrors");
+  const slot = join(mirrors, key);
+  let allocation: ReturnType<typeof mirrorLock>;
+  const acquire = () => {
+    allocation = mirrorLock(join(mirrors, ".allocation.lock"), true);
+    if (!allocation) {
+      console.error("[crabbox] source mirror allocation is busy; using a fresh capsule");
+    }
+    return allocation;
+  };
+  try {
+    if (!acquire()) {
+      return undefined;
+    }
+    const attempted = new Set<string>();
+    for (;;) {
+      let createdSlot = false;
+      if (!lstatSync(slot, { throwIfNoEntry: false })) {
+        const slots = readdirSync(mirrors).filter((name) => name !== ".allocation.lock");
+        if (slots.length >= mirrorLimit) {
+          const idle = slots
+            .flatMap((name) => {
+              try {
+                if (!/^[a-f0-9]{64}$/u.test(name) || attempted.has(name)) {
+                  return [];
+                }
+                const value = mirrorSlot(syncRoot, name);
+                return !value.receipt || idleMirror(value.receipt)
+                  ? [{ key: name, lastUsed: value.receipt?.mirror?.lastUsed ?? 0 }]
+                  : [];
+              } catch {
+                return [];
+              }
+            })
+            .toSorted((a, b) => a.lastUsed - b.lastUsed);
+          let victim: ReturnType<typeof claimIdleMirror>;
+          for (const entry of idle) {
+            attempted.add(entry.key);
+            try {
+              victim = claimIdleMirror(syncRoot, entry.key);
+              if (victim) {
+                break;
+              }
+            } catch {
+              // Unknown ownership stays protected and counts toward capacity.
+            }
+          }
+          if (!victim) {
+            console.error(
+              "[crabbox] source mirror limit reached; protected copies retained, using a fresh capsule",
+            );
+            return undefined;
+          }
+          allocation!();
+          allocation = undefined;
+          try {
+            victim.removePayload();
+            if (!acquire()) {
+              return undefined;
+            }
+            victim.removeSlot();
+          } catch (error) {
+            console.error(
+              "[crabbox] source mirror eviction could not verify a candidate; retained it and checking later idle mirrors: " +
+                (error instanceof Error ? error.message : String(error)),
+            );
+          } finally {
+            victim.release();
+          }
+          if (!allocation && !acquire()) {
+            return undefined;
+          }
+          // Other allocators may have created our slot or consumed capacity
+          // while deletion ran. Re-read both before making a namespace change.
+          continue;
+        }
+        mkdirSync(slot, { mode: 0o700 });
+        createdSlot = true;
+      }
+      const slotIdentity = privateMirrorDirectory(slot);
+      const release = mirrorLock(join(slot, "lock"));
+      if (!release) {
+        console.error(
+          "[crabbox] source mirror is in use or has an unresolved owner; using a fresh capsule",
+        );
+        return undefined;
+      }
+      return { slot, slotIdentity, createdSlot, release };
+    }
   } finally {
-    release();
+    allocation?.();
   }
 }
 
@@ -773,7 +1111,6 @@ export function createMirrorStaging(
   syncRootInput: string,
   repositoryInput: string,
 ): MirrorStagingHandle | undefined {
-  let allocation: ReturnType<typeof mirrorLock>;
   let release: ReturnType<typeof mirrorLock>;
   try {
     if (!processDomain()) {
@@ -797,63 +1134,13 @@ export function createMirrorStaging(
     const mirrors = join(syncRoot, "mirrors");
     mkdirSync(mirrors, { recursive: true, mode: 0o700 });
     privateMirrorDirectory(mirrors);
-    allocation = mirrorLock(join(mirrors, ".allocation.lock"));
-    if (!allocation) {
-      console.error("[crabbox] source mirror allocation is busy; using a fresh capsule");
-      return undefined;
-    }
     const key = createHash("sha256").update(repository).digest("hex");
-    const slot = join(mirrors, key);
-    let createdSlot = false;
-    if (!lstatSync(slot, { throwIfNoEntry: false })) {
-      const slots = readdirSync(mirrors).filter((name) => name !== ".allocation.lock");
-      if (slots.length >= mirrorLimit) {
-        const idle = slots
-          .flatMap((name) => {
-            try {
-              if (!/^[a-f0-9]{64}$/u.test(name)) {
-                return [];
-              }
-              const value = mirrorSlot(syncRoot, name);
-              return !value.receipt || idleMirror(value.receipt)
-                ? [{ key: name, lastUsed: value.receipt?.mirror?.lastUsed ?? 0 }]
-                : [];
-            } catch {
-              return [];
-            }
-          })
-          .toSorted((a, b) => a.lastUsed - b.lastUsed);
-        if (
-          !idle.some((entry) => {
-            try {
-              return disposeIdleMirror(syncRoot, entry.key);
-            } catch (error) {
-              console.error(
-                "[crabbox] source mirror eviction could not verify a candidate; retained it and checking later idle mirrors: " +
-                  (error instanceof Error ? error.message : String(error)),
-              );
-              return false;
-            }
-          }) ||
-          readdirSync(mirrors).filter((name) => name !== ".allocation.lock").length >= mirrorLimit
-        ) {
-          console.error(
-            "[crabbox] source mirror limit reached; protected copies retained, using a fresh capsule",
-          );
-          return undefined;
-        }
-      }
-      mkdirSync(slot, { mode: 0o700 });
-      createdSlot = true;
-    }
-    const slotIdentity = privateMirrorDirectory(slot);
-    release = mirrorLock(join(slot, "lock"));
-    if (!release) {
-      console.error(
-        "[crabbox] source mirror is in use or has an unresolved owner; using a fresh capsule",
-      );
+    const allocated = allocateMirrorSlot(syncRoot, key);
+    if (!allocated) {
       return undefined;
     }
+    const { slot, slotIdentity, createdSlot } = allocated;
+    release = allocated.release;
     let receipt: Receipt | undefined;
     let root: string | undefined;
     if (!createdSlot && !lstatSync(join(slot, "stage"), { throwIfNoEntry: false })) {
@@ -863,7 +1150,7 @@ export function createMirrorStaging(
       const previous = mirrorSlot(syncRoot, key);
       receipt = previous.receipt;
       root = previous.root;
-      if (receipt && !idleMirror(receipt)) {
+      if (previous.disposal || (receipt && (!idleMirror(receipt) || receipt.mirror?.disposing))) {
         console.error(
           "[crabbox] source mirror has no completed idle handoff; using a fresh capsule",
         );
@@ -1025,7 +1312,6 @@ export function createMirrorStaging(
     return undefined;
   } finally {
     release?.();
-    allocation?.();
   }
 }
 
@@ -1143,9 +1429,10 @@ function metadataStatus(root: string, receipt: Receipt, explicit = false): Stagi
   if (idleMirror(receipt)) {
     return {
       ...base,
-      status: "protected",
-      reason:
-        "Idle source mirror retained for reuse; capacity eviction or explicit staging recover uses its exclusive mirror lock.",
+      status: receipt.mirror?.disposing ? "candidate" : "protected",
+      reason: receipt.mirror?.disposing
+        ? "Interrupted idle source mirror disposal; its exclusive slot lock must be acquired before resuming."
+        : "Idle source mirror retained for reuse; capacity eviction or explicit staging recover uses its exclusive mirror lock.",
     };
   }
   if (!receipt.ownerDomain || receipt.ownerDomain !== processDomain()) {
@@ -1275,7 +1562,30 @@ function inspectStaging(
       nextCursor = entry.name;
       const root = join(syncRoot, entry.name);
       try {
-        entries.push(metadataStatus(root, readReceipt(root)));
+        const disposalId = entry.name.startsWith(prefix + "disposal-")
+          ? entry.name.slice((prefix + "disposal-").length)
+          : undefined;
+        const disposal = disposalId ? readDisposal(syncRoot, disposalId) : undefined;
+        const receipt = disposal
+          ? disposal.receipt
+          : readMirrorState(syncRoot, entry.name.slice(prefix.length)).receipt;
+        if (!receipt && !disposal) {
+          throw new Error("staging has no recorded owner");
+        }
+        const id = disposal?.id ?? receipt!.id;
+        if (!entries.some((value) => value.id === id)) {
+          entries.push(
+            receipt
+              ? { ...metadataStatus(join(syncRoot, prefix + id), receipt), directory: root }
+              : {
+                  id,
+                  directory: root,
+                  status: "candidate",
+                  reason:
+                    "Recorded empty source mirror slot disposal; its allocation and slot locks must be acquired before resuming.",
+                },
+          );
+        }
       } catch {
         entries.push({
           id: entry.name,
@@ -1428,16 +1738,18 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
   const lock = join(root, "recovery.lock");
   try {
     options.signal?.throwIfAborted();
-    const before = readReceipt(root);
-    if (idleMirror(before)) {
-      if (options.automatic) {
+    const { receipt: before, disposal: recordedDisposal } = readMirrorState(syncRoot, id);
+    if (recordedDisposal || (before && idleMirror(before))) {
+      const key = recordedDisposal?.key ?? before!.mirror!.key;
+      const slotIdentity = recordedDisposal?.slotIdentity ?? before!.mirror!.slotIdentity;
+      if (options.automatic && !recordedDisposal && !before?.mirror?.disposing) {
         return {
           id,
           recovered: false,
           reason: "Idle source mirrors are retained until capacity eviction or explicit recovery.",
         };
       }
-      const allocation = mirrorLock(join(syncRoot, "mirrors", ".allocation.lock"));
+      let allocation = mirrorLock(join(syncRoot, "mirrors", ".allocation.lock"), true);
       if (!allocation) {
         return {
           id,
@@ -1445,8 +1757,42 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
           reason: "Source mirror allocation is busy; retry after the active command finishes.",
         };
       }
+      let victim: ReturnType<typeof claimIdleMirror>;
       try {
-        const recovered = disposeIdleMirror(syncRoot, before.mirror!.key, id);
+        const slot = join(syncRoot, "mirrors", key);
+        if (recordedDisposal && !lstatSync(root, { throwIfNoEntry: false })) {
+          const present = lstatSync(slot, { throwIfNoEntry: false });
+          if (!present || !sameIdentity(identity(slot), slotIdentity)) {
+            if (present) {
+              // A later recorded owner may already have allocated this key.
+              // Its slot is never modified while finishing the old tombstone.
+              const newer = mirrorSlot(syncRoot, key);
+              if (!newer.receipt || newer.id === id) {
+                throw new Error("Source mirror disposal slot identity changed.");
+              }
+            }
+            removeDisposal(syncRoot, recordedDisposal);
+            return {
+              id,
+              recovered: true,
+              reason: "Completed source mirror disposal record removed.",
+            };
+          }
+        }
+        victim = claimIdleMirror(syncRoot, key, id);
+        allocation();
+        allocation = undefined;
+        if (victim) {
+          victim.removePayload();
+          allocation = mirrorLock(join(syncRoot, "mirrors", ".allocation.lock"), true);
+          if (!allocation) {
+            throw new Error(
+              "Source mirror allocation is busy; recorded disposal retained for recovery.",
+            );
+          }
+          victim.removeSlot();
+        }
+        const recovered = Boolean(victim);
         return {
           id,
           recovered,
@@ -1455,8 +1801,12 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
             : "Source mirror is in use or its ownership changed; retained.",
         };
       } finally {
-        allocation();
+        victim?.release();
+        allocation?.();
       }
+    }
+    if (!before) {
+      throw new Error("Staging has no recorded owner.");
     }
     const selectedWitness = options.witness ?? before.witness;
     const status = metadataStatus(
@@ -1468,7 +1818,7 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
       return { id, recovered: false, reason: status.reason };
     }
     if (before.mirror) {
-      const allocation = mirrorLock(join(syncRoot, "mirrors", ".allocation.lock"));
+      const allocation = mirrorLock(join(syncRoot, "mirrors", ".allocation.lock"), true);
       if (!allocation) {
         return {
           id,

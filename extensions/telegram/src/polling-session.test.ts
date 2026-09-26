@@ -327,7 +327,8 @@ function createIdleIngressWorker() {
 function createListeningIngressWorker() {
   let listener: WorkerMessageListener | undefined;
   const idle = createIdleIngressWorker();
-  const ackSpooledUpdate = vi.fn();
+  const firstAck = createDeferred<void>();
+  const ackSpooledUpdate = vi.fn(() => firstAck.resolve());
   const createWorker = vi.fn(() => {
     const worker = idle.createWorker();
     return {
@@ -341,6 +342,7 @@ function createListeningIngressWorker() {
   });
   return {
     ackSpooledUpdate,
+    firstAck: firstAck.promise,
     createWorker,
     emit: (message: TestWorkerMessage) => listener?.(message as TelegramIngressWorkerMessage),
     hasListener: () => listener !== undefined,
@@ -566,12 +568,11 @@ describe("TelegramPollingSession", () => {
             },
             queued: 1,
           });
-          await waitForTelegramTestState(() =>
-            expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("topic-capability-1", {
-              ok: true,
-              updateId: 143,
-            }),
-          );
+          await worker.firstAck;
+          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("topic-capability-1", {
+            ok: true,
+            updateId: 143,
+          });
           await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledOnce());
           const { database, kysely } = openTelegramSpoolTestKysely(tempDir);
           const rows = executeSqliteQuerySync(
@@ -619,12 +620,11 @@ describe("TelegramPollingSession", () => {
           update,
           queued: 1,
         });
-        await waitForTelegramTestState(() =>
-          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("offset-gap", {
-            ok: true,
-            updateId: 42,
-          }),
-        );
+        await worker.firstAck;
+        expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("offset-gap", {
+          ok: true,
+          updateId: 42,
+        });
         expect(
           expectDefined(persistUpdateId.mock.invocationCallOrder[0], "offset persistence order"),
         ).toBeLessThan(
@@ -661,12 +661,11 @@ describe("TelegramPollingSession", () => {
           update,
           queued: 1,
         });
-        await waitForTelegramTestState(() =>
-          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("offset-failure", {
-            ok: true,
-            updateId: 43,
-          }),
-        );
+        await worker.firstAck;
+        expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("offset-failure", {
+          ok: true,
+          updateId: 43,
+        });
         expectLogIncludes(log, "isolated polling offset persist failed updateId=43");
       } finally {
         abort.abort();
@@ -697,12 +696,11 @@ describe("TelegramPollingSession", () => {
           update,
           queued: 1,
         });
-        await waitForTelegramTestState(() =>
-          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("offset-catching-up", {
-            ok: true,
-            updateId: 44,
-          }),
-        );
+        await worker.firstAck;
+        expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("offset-catching-up", {
+          ok: true,
+          updateId: 44,
+        });
         await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledOnce());
       } finally {
         offsetWrite.resolve();
@@ -746,12 +744,11 @@ describe("TelegramPollingSession", () => {
           update,
           queued: 1,
         });
-        await waitForTelegramTestState(() =>
-          expect(firstWorker.ackSpooledUpdate).toHaveBeenCalledWith("first-delivery", {
-            ok: true,
-            updateId: 42,
-          }),
-        );
+        await firstWorker.firstAck;
+        expect(firstWorker.ackSpooledUpdate).toHaveBeenCalledWith("first-delivery", {
+          ok: true,
+          updateId: 42,
+        });
         await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledOnce());
         await waitForTelegramTestState(() =>
           expect(firstOffsetPersistence.getCommittedUpdateId()).toBe(42),
@@ -793,12 +790,11 @@ describe("TelegramPollingSession", () => {
           update,
           queued: 1,
         });
-        await waitForTelegramTestState(() =>
-          expect(restartWorker.ackSpooledUpdate).toHaveBeenCalledWith("restart-replay", {
-            ok: true,
-            updateId: 42,
-          }),
-        );
+        await restartWorker.firstAck;
+        expect(restartWorker.ackSpooledUpdate).toHaveBeenCalledWith("restart-replay", {
+          ok: true,
+          updateId: 42,
+        });
         expect(handleUpdate).toHaveBeenCalledOnce();
         expect(restartWriteUpdateId).not.toHaveBeenCalled();
       } finally {
@@ -829,12 +825,11 @@ describe("TelegramPollingSession", () => {
           update: { message: { text: "missing update id" } },
           queued: 1,
         });
-        await waitForTelegramTestState(() =>
-          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("spool-failure", {
-            ok: false,
-            message: "Telegram update missing numeric update_id.",
-          }),
-        );
+        await worker.firstAck;
+        expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("spool-failure", {
+          ok: false,
+          message: "Telegram update missing numeric update_id.",
+        });
         expect(persistUpdateId).not.toHaveBeenCalled();
       } finally {
         abort.abort();
@@ -864,12 +859,11 @@ describe("TelegramPollingSession", () => {
           update,
           queued: 1,
         });
-        await waitForTelegramTestState(() =>
-          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("write-1", {
-            ok: true,
-            updateId: 42,
-          }),
-        );
+        await worker.firstAck;
+        expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("write-1", {
+          ok: true,
+          updateId: 42,
+        });
         worker.emit({ type: "spooled", updateId: 42, queued: 1 });
         await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledWith(update));
         await waitForTelegramTestState(async () =>

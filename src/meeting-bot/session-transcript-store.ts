@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import type {
   MeetingSessionRecord,
@@ -55,7 +56,7 @@ export class MeetingTranscriptDeliveryError extends Error {
   readonly finalCaptureError?: string;
 
   constructor(cause: unknown, finalCaptureError?: unknown) {
-    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    super(coerceErrorMessage(cause), { cause });
     this.name = "MeetingTranscriptDeliveryError";
     if (finalCaptureError !== undefined) {
       this.finalCaptureError =

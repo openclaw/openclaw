@@ -32,7 +32,7 @@ const qaCoverageEvidenceRoleSchema = z.enum(["primary", "secondary"]);
 export const qaScorecardEvidenceModeSchema = z.enum(["full", "slim"]);
 export const qaScorecardChannelDriverSchema = z.enum(["qa-channel", "crabline", "live"]);
 
-const qaProofClassSchema = z.enum([
+export const qaProofClassSchema = z.enum([
   "fixture-only",
   "real-plugin/local-protocol",
   "native-host",
@@ -583,12 +583,7 @@ type MaturityCategoryRef = {
   id: string;
   surfaceId: string;
   categoryName: string;
-  features: MaturityFeatureRef[];
-  coverageIds: string[];
-};
-
-type MaturityFeatureRef = {
-  name: string;
+  features: QaScorecardCategoryFeatureCoverageReport[];
   coverageIds: string[];
 };
 
@@ -685,14 +680,6 @@ type ScenarioInventoryRef = {
   path: string | null;
 };
 
-function scenarioInventoryKind(scenario: QaSeedScenarioWithSource): QaScorecardEvidenceKind {
-  return scenario.execution.kind === "flow" ? "qa-scenario" : scenario.execution.kind;
-}
-
-function scenarioInventoryPath(scenario: QaSeedScenarioWithSource) {
-  return scenario.execution.kind === "flow" ? null : scenario.execution.path;
-}
-
 function collectScenarioInventoryByCoverageId(params: {
   scenarios: readonly QaSeedScenarioWithSource[];
   role: QaCoverageEvidenceRole;
@@ -704,8 +691,8 @@ function collectScenarioInventoryByCoverageId(params: {
       const refs = refsByCoverageId.get(coverageId) ?? [];
       refs.push({
         sourcePath: scenario.sourcePath,
-        kind: scenarioInventoryKind(scenario),
-        path: scenarioInventoryPath(scenario),
+        kind: scenario.execution.kind === "flow" ? "qa-scenario" : scenario.execution.kind,
+        path: scenario.execution.kind === "flow" ? null : scenario.execution.path,
       });
       refsByCoverageId.set(coverageId, refs);
     }

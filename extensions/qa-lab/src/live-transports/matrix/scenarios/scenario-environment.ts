@@ -1,10 +1,11 @@
-// QA Lab Matrix setup prepares transport state for the shared flow host.
 import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readLiveQaChannelAccounts } from "../../shared/live-channel-status.js";
 import type { MatrixQaProvisionResult, MatrixQaRoomObserver } from "../substrate/client.js";
 import { buildMatrixQaConfig, type MatrixQaConfigOverrides } from "../substrate/config.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
@@ -17,7 +18,6 @@ import type { MatrixQaCanaryArtifact } from "./scenario-types.js";
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 type FlowPreparationInput = Parameters<NonNullable<AdapterDefinition["prepareFlow"]>>[0];
-type MatrixQaGateway = FlowPreparationInput["gateway"];
 type MatrixQaHarness = Awaited<ReturnType<typeof startMatrixQaHarness>>;
 
 const MATRIX_QA_PREPARATION_TIMEOUT_MS = 60_000;
@@ -193,18 +193,14 @@ async function waitForMatrixAccountReady(params: {
   let remainingMs: number;
   while ((remainingMs = deadline - Date.now()) > 0) {
     try {
-      const accounts = await readMatrixAccountStatuses(
-        params.gateway,
-        remainingMs,
-        params.deadline,
-      );
+      const accounts = await readLiveQaChannelAccounts(params.gateway, "matrix", {
+        timeoutMs: remainingMs,
+        deadlineMs: params.deadline,
+      });
       lastAccounts = accounts;
       const account = accounts.find((entry) => entry.accountId === params.accountId);
       if (
-        account?.running === true &&
-        account.connected === true &&
-        account.restartPending !== true &&
-        account.healthState !== "degraded" &&
+        isMatrixQaAccountReady(account) &&
         (params.afterStartAt === undefined ||
           (typeof account.lastStartAt === "number" && account.lastStartAt > params.afterStartAt))
       ) {
@@ -253,29 +249,15 @@ async function waitForGatewayConfigApplied(params: {
   );
 }
 
-type MatrixAccountStatus = {
-  accountId?: string;
-  connected?: boolean;
-  healthState?: string;
-  lastStartAt?: number;
-  restartPending?: boolean;
-  running?: boolean;
-};
-
-async function readMatrixAccountStatuses(
-  gateway: MatrixQaGateway,
-  timeoutMs = 5_000,
-  deadlineMs?: number,
-) {
-  const payload = (await gateway.call(
-    "channels.status",
-    { probe: false, timeoutMs: Math.min(2_000, timeoutMs) },
-    {
-      ...(deadlineMs === undefined ? {} : { deadlineMs }),
-      timeoutMs: Math.min(5_000, timeoutMs),
-    },
-  )) as { channelAccounts?: Record<string, MatrixAccountStatus[]> };
-  return payload.channelAccounts?.matrix ?? [];
+export function isMatrixQaAccountReady(
+  account: ChannelAccountSnapshot | undefined,
+): account is ChannelAccountSnapshot {
+  return (
+    account?.running === true &&
+    account.connected === true &&
+    account.restartPending !== true &&
+    account.healthState !== "degraded"
+  );
 }
 
 export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnvironmentParams) {
@@ -334,7 +316,9 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
     );
     const patchStartedAt = Date.now();
     const accountStartAtBeforePatch = (
-      await readMatrixAccountStatuses(input.gateway, 5_000, preparationDeadline).catch(() => [])
+      await readLiveQaChannelAccounts(input.gateway, "matrix", {
+        deadlineMs: preparationDeadline,
+      }).catch(() => [])
     ).find((account) => account.accountId === params.accountId)?.lastStartAt;
     const patchResult = await patchGatewayConfig({
       deadlineMs: preparationDeadline,
@@ -419,7 +403,7 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
         }
         const waitAccountId = opts?.waitAccountId ?? params.accountId;
         const beforeRestartAt = (
-          await readMatrixAccountStatuses(input.gateway).catch(() => [])
+          await readLiveQaChannelAccounts(input.gateway, "matrix").catch(() => [])
         ).find((account) => account.accountId === waitAccountId)?.lastStartAt;
         const restartStartedAt = Date.now();
         await restart(async ({ stateDir }) => await mutateState({ stateDir }));
@@ -479,9 +463,9 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
         });
       },
       readGatewayAccountStartAt: async (accountId: string) =>
-        (await readMatrixAccountStatuses(input.gateway)).find(
+        (await readLiveQaChannelAccounts(input.gateway, "matrix")).find(
           (account) => account.accountId === accountId,
-        )?.lastStartAt,
+        )?.lastStartAt ?? undefined,
       waitGatewayAccountReady: async (
         accountId: string,
         opts?: { afterStartAt?: number; timeoutMs?: number },
