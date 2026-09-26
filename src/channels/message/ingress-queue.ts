@@ -203,6 +203,8 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
     shouldRecoverCorrupt?: (claim: ChannelIngressQueueCorruptClaim) => boolean | Promise<boolean>;
   }): Promise<number>;
   prune(options?: ChannelIngressQueuePruneOptions): Promise<number>;
+  /** Delete every state for this channel/account; callers must stop its producers and drain first. */
+  purge(): Promise<number>;
 };
 
 /** Construction options for a channel/account-scoped ingress queue. */
@@ -1319,6 +1321,22 @@ export function createChannelIngressQueue<
     );
   };
 
+  const purge: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["purge"] = async () => {
+    const database = openChannelIngressDatabase(options.stateDir);
+    return runOpenClawStateWriteTransaction(
+      (tx) =>
+        affectedRows(
+          executeSqliteQuerySync(
+            tx.db,
+            getChannelIngressKysely(tx.db)
+              .deleteFrom("channel_ingress_events")
+              .where("queue_name", "=", queueName),
+          ),
+        ),
+      { path: database.path },
+    );
+  };
+
   const prune: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["prune"] = async (
     pruneOptions,
   ) => {
@@ -1443,6 +1461,7 @@ export function createChannelIngressQueue<
     delete: deleteEntry,
     recoverStaleClaims,
     prune,
+    purge,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

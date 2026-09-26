@@ -13,6 +13,7 @@ import { isTelegramExecApprovalHandlerConfigured } from "./exec-approvals.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import type { MonitorTelegramOpts } from "./monitor.types.js";
 import { acquireTelegramPollingLease } from "./polling-lease.js";
+import { getTelegramRuntime } from "./runtime.js";
 import {
   createTelegramUpdateOffsetPersistence,
   normalizeTelegramUpdateId,
@@ -153,11 +154,13 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       botToken: token,
       onRotationDetected: async (info) => {
         log(formatTelegramOffsetRotationMessage(account.accountId, info));
-        try {
-          await deleteTelegramUpdateOffset({ accountId: account.accountId });
-        } catch (err) {
-          logError(`telegram: failed to delete stale update offset after rotation: ${String(err)}`);
-        }
+        // Keep the old identity until the queue purge commits so interrupted resets retry.
+        await getTelegramRuntime()
+          .state.openChannelIngressQueue({
+            accountId: account.accountId,
+          })
+          .purge();
+        await deleteTelegramUpdateOffset({ accountId: account.accountId });
       },
     });
     const lastUpdateId = normalizeTelegramUpdateId(persistedOffsetRaw);
