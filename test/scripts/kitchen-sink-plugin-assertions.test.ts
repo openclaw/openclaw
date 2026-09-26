@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -246,6 +247,7 @@ function runAssertClawhubInstalled({
         },
       }),
       record,
+      wrongPeerRealPath: wrongPeerTarget ? realpathSync(path.join(home, "other-host")) : undefined,
     };
   } finally {
     rmSync(home, { force: true, recursive: true });
@@ -697,8 +699,9 @@ describe("kitchen-sink plugin assertions", () => {
       });
       if (wrongPeerTarget) {
         expect(result.status).toBe(1);
-        expect(result.stderr).toContain("expected kitchen-sink openclaw peer ");
-        expect(result.stderr).toContain(" to target ");
+        expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
+          `expected kitchen-sink openclaw peer ${result.wrongPeerRealPath} to target ${realpathSync(process.cwd())}`,
+        );
       } else if (errorPrefix === null) {
         expect(result.status, result.stderr).toBe(0);
       } else {

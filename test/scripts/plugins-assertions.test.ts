@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -2016,7 +2017,6 @@ fs.renameSync = (source, destination) => {
         npmTarballName: "package.tgz",
       },
       wrongPeerTarget: true,
-      contractError: "expected ClawHub openclaw peer ",
     },
     {
       name: "accepts an optional dependency inside the ClawHub installation",
@@ -2043,7 +2043,6 @@ fs.renameSync = (source, destination) => {
         npmTarballName: "package.tgz",
       },
       optionalDependency: "escaped",
-      contractError: "ClawHub isolated dependency resolved outside ",
     },
     {
       name: "rejects an empty install path before invalid metadata",
@@ -2059,15 +2058,7 @@ fs.renameSync = (source, destination) => {
     },
   ])(
     "$name",
-    ({
-      escaped,
-      recordOverrides,
-      errorPrefix,
-      pathError,
-      wrongPeerTarget,
-      optionalDependency,
-      contractError,
-    }) => {
+    ({ escaped, recordOverrides, errorPrefix, pathError, wrongPeerTarget, optionalDependency }) => {
       const root = autoCleanupTempDirs.make("openclaw-plugins-clawhub-path-");
       const home = path.join(root, "home");
       const scratchRoot = path.join(root, "scratch");
@@ -2146,9 +2137,12 @@ fs.renameSync = (source, destination) => {
         expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
           "missing ClawHub install path for openclaw-kitchen-sink-fixture",
         );
-      } else if (contractError) {
+      } else if (wrongPeerTarget || optionalDependency === "escaped") {
         expect(result.status).toBe(1);
-        expect(result.stderr).toContain(contractError);
+        const expectedError = wrongPeerTarget
+          ? `expected ClawHub openclaw peer ${realpathSync(path.join(root, "other-host"))} to target ${realpathSync(process.cwd())}`
+          : `ClawHub isolated dependency resolved outside ${installPath}: ${realpathSync(path.join(root, "other-dependency", "package.json"))}`;
+        expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(expectedError);
       } else if (errorPrefix) {
         expect(result.status).toBe(1);
         expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
