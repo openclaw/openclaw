@@ -85,7 +85,7 @@ class ChatFullMessageCancellationTest {
       withReader { fixture ->
         val old = fixture.prepare()
         val oldConnection = fixture.gateway.operatorConnection.get()
-        val gate = RequestGate()
+        val gate = RequestGate("chat.message.get")
         fixture.dispatchGate.set(gate)
         val pending = async(Dispatchers.IO) { old.execute() }
         try {
@@ -121,10 +121,19 @@ class ChatFullMessageCancellationTest {
       withReader { fixture ->
         val old = fixture.prepare()
         val connection = fixture.gateway.operatorConnection.get()
-        val gate = RequestGate()
+        val gate = RequestGate("chat.message.get")
         fixture.dispatchGate.set(gate)
-        val pending = async(Dispatchers.IO) { old.execute() }
+        val pending = async(Dispatchers.IO, start = CoroutineStart.LAZY) { old.execute() }
+        // Bootstrap can still be fetching metadata after chat readiness. An unrelated
+        // endpoint request must not consume the gate before the full-message read starts.
+        val discovery =
+          async(start = CoroutineStart.UNDISPATCHED) {
+            fixture.controller.fetchSessionSelectionCandidates("main")
+          }
         try {
+          assertFalse("Session discovery must not consume the full-message gate", gate.entered.isCompleted)
+          withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { discovery.await() }
+          pending.start()
           withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { gate.entered.await() }
           fixture.controller.switchSession(FULL_MESSAGE_SECOND_CHAT, ownerAgentId = "main")
           fixture.awaitReady(FULL_MESSAGE_SECOND_CHAT)
@@ -133,7 +142,9 @@ class ChatFullMessageCancellationTest {
           fixture.assertOnlyCurrentRead(connection)
           assertEquals(ChatFullMessageState.Loading, old.state.value)
         } finally {
+          fixture.dispatchGate.compareAndSet(gate, null)
           gate.release.complete(Unit)
+          discovery.cancelAndJoin()
           pending.cancelAndJoin()
         }
       }
@@ -236,7 +247,7 @@ class ChatFullMessageCancellationTest {
         fixture.gateway.historyRetryableRefusals.set(1)
         fixture.controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"main","agentId":"main","phase":"message"}""")
         withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { fixture.gateway.historyAgentReads.first { it.size == before + 1 } }
-        val gate = RequestGate()
+        val gate = RequestGate("chat.history")
         fixture.dispatchGate.set(gate)
         try {
           withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { gate.entered.await() }
@@ -308,8 +319,11 @@ class ChatFullMessageCancellationTest {
     val defaultAgent = AtomicReference("main")
     val defaultAgentRevision = AtomicLong()
 
-    suspend fun throughDispatchGate(block: suspend () -> String): String {
-      val gate = dispatchGate.getAndSet(null)
+    suspend fun throughDispatchGate(
+      method: String,
+      block: suspend () -> String,
+    ): String {
+      val gate = dispatchGate.get()?.takeIf { it.method == method && dispatchGate.compareAndSet(it, null) }
       try {
         gate?.let {
           it.entered.complete(Unit)
@@ -364,7 +378,7 @@ class ChatFullMessageCancellationTest {
           json = Json { ignoreUnknownKeys = true },
           requestGateway = { method, params -> liveSession.request(method, params) },
           requestGatewayForGateway = { gatewayId, method, params ->
-            throughDispatchGate { liveSession.requestForEndpoint(gatewayId, method, params) }
+            throughDispatchGate(method) { liveSession.requestForEndpoint(gatewayId, method, params) }
           },
           currentDefaultAgentId = defaultAgent::get,
           currentDefaultAgentRevision = defaultAgentRevision::get,
@@ -377,7 +391,7 @@ class ChatFullMessageCancellationTest {
               ) { method, params, timeout, withEnqueue ->
                 // The request boundary is outside the controller's logical monitor. A real
                 // replacement hello can complete here; all lease authority stays delegated.
-                throughDispatchGate { actualLease.request(method, params, timeout, withEnqueue) }
+                throughDispatchGate(method) { actualLease.request(method, params, timeout, withEnqueue) }
               }
             }
           },
@@ -424,7 +438,9 @@ class ChatFullMessageCancellationTest {
     }
   }
 
-  private class RequestGate {
+  private class RequestGate(
+    val method: String,
+  ) {
     val entered = CompletableDeferred<Unit>()
     val release = CompletableDeferred<Unit>()
     val finished = CompletableDeferred<Unit>()

@@ -275,7 +275,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
       'export { monitorTelegramProvider } from "./src/monitor.js";',
       'export { probeTelegram } from "./src/probe.js";',
       'export { resolveTelegramFetch, resolveTelegramTransport, shouldRetryTelegramTransportFallback } from "./src/fetch.js";',
-      'export { makeProxyFetch } from "./src/proxy.js";',
+      'export { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";',
       'export { createForumTopicTelegram, deleteMessageTelegram, editForumTopicTelegram, editMessageReplyMarkupTelegram, editMessageTelegram, pinMessageTelegram, reactMessageTelegram, renameForumTopicTelegram, sendMessageTelegram, sendPollTelegram, sendStickerTelegram, sendTypingTelegram, unpinMessageTelegram } from "./src/send.js";',
       'export { createTelegramThreadBindingManager, getTelegramThreadBindingManager, setTelegramThreadBindingIdleTimeoutBySessionKey, setTelegramThreadBindingMaxAgeBySessionKey } from "./src/thread-bindings.js";',
       'export { resolveTelegramToken } from "./src/token.js";',

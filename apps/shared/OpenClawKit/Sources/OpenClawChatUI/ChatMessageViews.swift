@@ -1166,6 +1166,28 @@ struct ChatStreamingAssistantBubble: View {
 }
 
 @MainActor
+struct EquatableChatStreamingAssistantBubble: View {
+    let bubble: ChatStreamingAssistantBubble
+
+    var body: some View {
+        self.bubble
+    }
+}
+
+extension EquatableChatStreamingAssistantBubble: @MainActor Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.bubble.text.sourceText == rhs.bubble.text.sourceText &&
+            lhs.bubble.text.includesThinking == rhs.bubble.text.includesThinking &&
+            lhs.bubble.markdownVariant == rhs.bubble.markdownVariant &&
+            lhs.bubble.assistantName == rhs.bubble.assistantName &&
+            lhs.bubble.assistantAvatarText == rhs.bubble.assistantAvatarText &&
+            lhs.bubble.assistantAvatarTint == rhs.bubble.assistantAvatarTint &&
+            lhs.bubble.showsAssistantAvatar == rhs.bubble.showsAssistantAvatar &&
+            lhs.bubble.isClean == rhs.bubble.isClean
+    }
+}
+
+@MainActor
 struct ChatPendingToolsBubble: View {
     let toolCalls: [OpenClawChatPendingToolCall]
 

@@ -4,7 +4,6 @@ import { isDeepStrictEqual } from "node:util";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/env-vars.js";
 import { createConfigIO } from "../../config/io.js";
-import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../../config/sessions/targets.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -19,6 +18,7 @@ import {
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { UpdatePreMutationError } from "./shared.js";
+import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 
 type TargetDatabaseSchemaContext = {
   config: OpenClawConfig;
@@ -142,23 +142,7 @@ export async function captureTargetDatabaseSchemaContext(
     (!snapshot.valid && !legacyConfigPlan && configValidation !== "candidate") ||
     snapshot.readError
   ) {
-    throw new UpdatePreMutationError(
-      "invalid-config",
-      [
-        `Update refused: configuration is invalid or unreadable at ${snapshot.path}.`,
-        ...formatConfigIssueLines(
-          // Validator messages can contain config values, including misplaced secrets.
-          snapshot.issues.map(({ path: issuePath, pathSegments }) => ({
-            path: issuePath,
-            pathSegments,
-            message: "Invalid configuration field",
-          })),
-          "-",
-          { normalizeRoot: true },
-        ),
-        "Run `openclaw doctor --fix` to repair retired or unrecognized configuration fields, then correct any remaining errors before retrying.",
-      ].join("\n"),
-    );
+    throw createUpdateConfigFailure(snapshot);
   }
   return {
     env: inspectionEnv,

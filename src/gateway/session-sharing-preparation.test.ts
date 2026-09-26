@@ -355,7 +355,15 @@ it.each(["durable", "incognito"] as const)(
           }
         };
         assertWithoutSql(true);
-        replaceSessionEntrySync(scope, { ...entry, label: "cosmetic change", updatedAt: 2 });
+        sessionChanges.emit({ all: true, scope: "subagent-runs" });
+        assertWithoutSql(true);
+        replaceSessionEntrySync(scope, {
+          ...entry,
+          archivedAt: 2,
+          label: "cosmetic change",
+          updatedAt: 2,
+        });
+        expect(read.readCurrent(cfg).target.entry.archivedAt).toBe(2);
         assertWithoutSql(true);
         expect(observed.at(-1)).toEqual({ visibility: "read-only", member: true });
         await removeSessionMember(scope, "requester");

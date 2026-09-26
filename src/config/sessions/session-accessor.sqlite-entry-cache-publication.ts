@@ -656,6 +656,13 @@ export function retainSessionEntryWorkerPublication(params: {
         const sharingEntry = replacement?.current.get(sessionKey);
         const placeholder =
           initialization?.sessionKey === sessionKey ? initialization.placeholder : undefined;
+        const creationSource = creation?.source;
+        const ownsCreation =
+          creation?.active &&
+          creationSource?.kind === "file" &&
+          creationSource.databaseIdentity === params.databaseIdentity &&
+          creationSource.agentId === params.agentId &&
+          creation.sessionKey === sessionKey;
         for (const read of preparedSharingReads.get(`${identityKey}\0${sessionKey}`) ?? []) {
           publishRetainedSessionGeneration(
             read,
@@ -675,21 +682,14 @@ export function retainSessionEntryWorkerPublication(params: {
         }
         const change: SessionRowChange = {
           agentId: params.agentId,
-          storePath: params.storePath,
+          storePath: ownsCreation ? creationSource.path : params.storePath,
           sessionKey,
           factsInvalidated: true,
           ...(receipt && !unknown ? { scope: "session-entry" as const } : {}),
         };
         if (receipt) {
           // A COMMIT receipt can survive unknown settlement without retaining creation custody.
-          const ownedPlaceholder =
-            !unknown &&
-            placeholder &&
-            creation?.active &&
-            creation.source.kind === "file" &&
-            creation.source.databaseIdentity === params.databaseIdentity &&
-            creation.source.agentId === params.agentId &&
-            creation.sessionKey === sessionKey;
+          const ownedPlaceholder = !unknown && placeholder && ownsCreation;
           preparedSharingChanges.changes.set(
             change,
             ownedPlaceholder

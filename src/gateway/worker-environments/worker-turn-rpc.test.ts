@@ -144,7 +144,7 @@ describe("worker environment service", () => {
     const environmentId = "worker-sensitive-environment";
     const sessionId = "session-sensitive-worker";
     const environmentIdentity = await support.seedAttachedIdentity(environmentId, sessionId);
-    const { claim, store } = claimWorkerPlacement({
+    const { claim, store } = await claimWorkerPlacement({
       environmentId,
       ownerEpoch: environmentIdentity.ownerEpoch,
       runId: "run-worker-receipts",
@@ -225,7 +225,7 @@ describe("worker environment service", () => {
     const environmentId = "worker-admission-replacement";
     const sessionId = "session-admission-replacement";
     const environmentIdentity = await support.seedAttachedIdentity(environmentId, sessionId);
-    const { claim: first, store } = claimWorkerPlacement({
+    const { claim: first, store } = await claimWorkerPlacement({
       environmentId,
       ownerEpoch: environmentIdentity.ownerEpoch,
       runId: "run-admission-replacement",
@@ -276,10 +276,10 @@ describe("worker environment service", () => {
         expect(support.testState.prepareInstallation).toHaveBeenCalledOnce(),
       );
 
-      store.releaseTurn(first);
+      await store.releaseTurn(first);
       releaseAgentRunDelegatedAuthority(firstAuthority);
       const placement = store.get(sessionId)!;
-      const second = store.claimTurn({
+      const second = await store.claimTurn({
         sessionId,
         agentId: placement.agentId,
         sessionKey: placement.sessionKey,
@@ -325,7 +325,7 @@ describe("worker environment service", () => {
     const environmentId = "worker-inherited-claim";
     const sessionId = "session-inherited-claim";
     const environmentIdentity = await support.seedAttachedIdentity(environmentId, sessionId);
-    const { claim, store } = claimWorkerPlacement({
+    const { claim, store } = await claimWorkerPlacement({
       environmentId,
       ownerEpoch: environmentIdentity.ownerEpoch,
       sessionId,
@@ -406,7 +406,7 @@ describe("worker environment service", () => {
     const environmentId = "worker-claim-credential";
     const sessionId = "session-claim-credential";
     const environmentIdentity = await support.seedAttachedIdentity(environmentId, sessionId);
-    const { claim: first, store } = claimWorkerPlacement({
+    const { claim: first, store } = await claimWorkerPlacement({
       environmentId,
       ownerEpoch: environmentIdentity.ownerEpoch,
       sessionId,
@@ -443,9 +443,9 @@ describe("worker environment service", () => {
     ).resolves.toEqual({ ok: false, reason: "placement-mismatch" });
     const firstAdmission = await workerService.admitWorker(admission);
     expect(firstAdmission).toMatchObject({ ok: true, identity: { turnClaim: first } });
-    store.releaseTurn(first);
+    await store.releaseTurn(first);
     const placement = store.get(sessionId)!;
-    const second = store.claimTurn({
+    const second = await store.claimTurn({
       sessionId,
       agentId: placement.agentId,
       sessionKey: placement.sessionKey,
@@ -480,7 +480,7 @@ describe("worker environment service", () => {
     const environmentId = "worker-claim-inference";
     const sessionId = "session-claim-inference";
     const environmentIdentity = await support.seedAttachedIdentity(environmentId, sessionId);
-    const { claim: first, store } = claimWorkerPlacement({
+    const { claim: first, store } = await claimWorkerPlacement({
       environmentId,
       ownerEpoch: environmentIdentity.ownerEpoch,
       sessionId,
@@ -503,9 +503,9 @@ describe("worker environment service", () => {
     const admitClaim = async (claim: WorkerSessionTurnClaim) => {
       const instance = createOperationalRunInstanceRef(claim.runId);
       const authority = claimAgentRunDelegatedAuthority(instance);
-      support.testState.releaseTurnOwners.push(() => {
+      support.testState.releaseTurnOwners.push(async () => {
         if (store.validateTurnClaim(claim)) {
-          store.releaseTurn(claim);
+          await store.releaseTurn(claim);
         }
         releaseAgentRunDelegatedAuthority(authority);
       });
@@ -568,10 +568,10 @@ describe("worker environment service", () => {
       first.runId,
     );
     expect(originalCancellation?.runIds).toEqual([first.runId]);
-    store.releaseTurn(first);
+    await store.releaseTurn(first);
     expect(signals[0]?.aborted).toBe(true);
     const placement = store.get(sessionId)!;
-    const second = store.claimTurn({
+    const second = await store.claimTurn({
       sessionId,
       agentId: placement.agentId,
       sessionKey: placement.sessionKey,
@@ -595,9 +595,9 @@ describe("worker environment service", () => {
     expect(
       captureWorkerInferenceCancellation(workerService, sessionId, first.runId)?.runIds,
     ).toEqual([first.runId]);
-    expect(() => store.releaseTurn(first)).toThrow("turn claim changed before release");
+    await expect(store.releaseTurn(first)).rejects.toThrow("turn claim changed before release");
     expect(signals[1]?.aborted).toBe(false);
-    store.releaseTurn(second);
+    await store.releaseTurn(second);
     expect(signals[1]?.aborted).toBe(true);
   });
 

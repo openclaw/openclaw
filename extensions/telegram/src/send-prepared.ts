@@ -8,7 +8,7 @@ import {
   isTelegramSkippableChunkSendError,
   mergeTelegramPartialDeliveryError,
 } from "./chunk-delivery.js";
-import { rethrowTelegramSendError, shouldRetryTelegramSendError } from "./network-errors.js";
+import { rethrowTelegramSendError, isSafeToRetrySendError } from "./network-errors.js";
 import {
   sendTelegramCaptionedMediaWithFallback,
   sendTelegramOutboundMediaWithPhotoFallback,
@@ -44,7 +44,7 @@ type PreparedRequest = <T>(
 
 export function createTelegramReplyRequest(runtime: RuntimeEnv): PreparedRequest {
   const retry = createChannelApiRetryRunner({
-    shouldRetry: shouldRetryTelegramSendError,
+    shouldRetry: isSafeToRetrySendError,
     strictShouldRetry: true,
   });
   return (send, operation, options) =>
@@ -313,12 +313,12 @@ export function createTelegramPreparedSender(config: {
   };
 
   const sendMedia = async (params: {
-    sender: TelegramOutboundMediaSender<Message>;
-    documentSender?: TelegramOutboundMediaSender<Message>;
+    sender: TelegramOutboundMediaSender;
+    documentSender?: TelegramOutboundMediaSender;
     requestParams: Record<string, unknown>;
     plainCaption?: string;
   }) => {
-    const send = async (sender: TelegramOutboundMediaSender<Message>) => {
+    const send = async (sender: TelegramOutboundMediaSender) => {
       await config.beforeMedia?.();
       return sendTelegramCaptionedMediaWithFallback({
         operation: sender.operation,

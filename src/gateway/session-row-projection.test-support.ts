@@ -250,6 +250,9 @@ export function createSessionRowProjectionFixture(params: {
     dirtyRowCount: 0,
     needsMaterialization: false,
     getPolicyConfig: () => cfg,
+    get sharingRevision() {
+      return revisionToken;
+    },
     state: {
       get revision() {
         return revisionToken;

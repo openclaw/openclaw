@@ -53,6 +53,8 @@ async function writePackageLauncher(owner: string): Promise<string> {
 const MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND = "/Applications/Codex.app/Contents/Resources/codex";
 const MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND =
   "/Applications/ChatGPT.app/Contents/Resources/codex";
+const MACOS_DESKTOP_CHATGPT_SIGNED_APP_SERVER_COMMAND =
+  "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
 
 describe("managed Codex app-server binary", () => {
   let root: string;
@@ -133,13 +135,16 @@ describe("managed Codex app-server binary", () => {
     }
   });
 
-  it("reports the desktop bundle binary as its native artifact", () => {
+  it.each([
+    MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND,
+    MACOS_DESKTOP_CHATGPT_SIGNED_APP_SERVER_COMMAND,
+  ])("reports the desktop bundle binary %s as its native artifact", (command) => {
     expect(
-      resolveManagedCodexNativeCommand(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND, {
+      resolveManagedCodexNativeCommand(command, {
         platform: "darwin",
         arch: "arm64",
       }),
-    ).toBe(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND);
+    ).toBe(command);
   });
 
   it.each([true, false])(
@@ -292,6 +297,7 @@ describe("managed Codex app-server binary", () => {
     { order: "package-only", desktop: "both" },
     { order: "package-first", desktop: "both" },
     { order: "desktop-first", desktop: "both" },
+    { order: "desktop-first", desktop: "signed" },
     { order: "desktop-first", desktop: "legacy" },
     { order: "desktop-first", desktop: "none" },
   ] as const)(
@@ -301,9 +307,11 @@ describe("managed Codex app-server binary", () => {
       const desktopCommands =
         desktop === "both"
           ? [MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND, MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND]
-          : desktop === "legacy"
-            ? [MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND]
-            : [];
+          : desktop === "signed"
+            ? [MACOS_DESKTOP_CHATGPT_SIGNED_APP_SERVER_COMMAND]
+            : desktop === "legacy"
+              ? [MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND]
+              : [];
       const commands =
         order === "package-only"
           ? [launcher]

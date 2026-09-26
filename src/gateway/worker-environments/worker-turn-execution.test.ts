@@ -211,7 +211,7 @@ describe("worker turn execution", () => {
         } else if (change === "run") {
           current = false;
         } else if (change === "claim") {
-          placements.releaseTurn(claim);
+          await placements.releaseTurn(claim);
         } else if (change === "session") {
           await patchSessionEntryCore(sessionTarget, () => ({ sessionId: "replacement-session" }));
         }
@@ -409,7 +409,7 @@ describe("worker turn execution", () => {
         if (change === "cancel") {
           abort.abort(new Error("cancel during node context preparation"));
         } else if (change === "claim") {
-          placements.releaseTurn(claim);
+          await placements.releaseTurn(claim);
         } else if (change === "session") {
           await patchSessionEntryCore(sessionTarget, () => ({ sessionId: "replacement-session" }));
         }

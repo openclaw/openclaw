@@ -194,6 +194,21 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
       typeof descriptor.order === "number" && Number.isFinite(descriptor.order)
         ? descriptor.order
         : undefined;
+    const capability =
+      surface === "tab"
+        ? "page"
+        : surface === "widget"
+          ? "widget"
+          : surface === "link-reader"
+            ? "link-reader"
+            : undefined;
+    // Missing declarations are advisory: metadata never grants or denies a UI registration.
+    if (capability && record.uiCapabilities && !record.uiCapabilities.includes(capability)) {
+      state.reportRegistrationWarning(
+        record,
+        `Registered UI capability "${capability}" is missing from uiCapabilities in openclaw.plugin.json.`,
+      );
+    }
     registry.controlUiDescriptors.push(
       createRegistration(record, {
         descriptor: {
