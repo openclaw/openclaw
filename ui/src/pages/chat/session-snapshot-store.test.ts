@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
+import { IDBFactory, IDBObjectStore, IDBTransaction } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -18,6 +18,7 @@ import {
   CHAT_SNAPSHOT_STORE_NAME,
   readStoredChatSnapshotRecord,
 } from "./session-snapshot-database.ts";
+import { publishSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
 import {
   clearStoredChatSnapshots,
   deleteStoredChatSnapshot,
@@ -530,6 +531,164 @@ describe("persistent chat session snapshots", () => {
       }
     },
   );
+
+  it("does not publish a stale flush after a mid-write global invalidation", async () => {
+    const sessionKey = "agent:main:stale-generation-write";
+    const unrelatedKey = "agent:main:unrelated-write";
+    // Unconnected so the global invalidation does not wait for this flush.
+    const writer = new SessionSnapshotStore();
+    writer.write(unrelatedKey, snapshot("unrelated transcript", "session-unrelated"));
+    await writer.flush();
+    writer.write(sessionKey, snapshot("stale transcript"));
+
+    let invalidated = false;
+    const originalGetAll = Reflect.get(
+      IDBObjectStore.prototype,
+      "getAll",
+    ) as IDBObjectStore["getAll"];
+    vi.spyOn(IDBObjectStore.prototype, "getAll").mockImplementationOnce(function (
+      this: IDBObjectStore,
+      ...args
+    ) {
+      const request = originalGetAll.apply(this, args);
+      request.addEventListener("success", () => {
+        invalidated = true;
+        void publishSnapshotInvalidation({});
+      });
+      return request;
+    });
+
+    await writer.flush();
+
+    expect(invalidated).toBe(true);
+    expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
+    // Surgical suppression: the pre-existing unrelated record must survive.
+    expect(await new SessionSnapshotStore().read(unrelatedKey)).toEqual(
+      snapshot("unrelated transcript", "session-unrelated"),
+    );
+  });
+
+  it("does not publish a stale flush after a commit-tail global invalidation", async () => {
+    const sessionKey = "agent:main:stale-commit-tail";
+    const unrelatedKey = "agent:main:unrelated-tail";
+    // Unconnected so the global invalidation does not wait for this flush.
+    const writer = new SessionSnapshotStore();
+    writer.write(unrelatedKey, snapshot("unrelated transcript", "session-unrelated"));
+    await writer.flush();
+    writer.write(sessionKey, snapshot("stale transcript"));
+
+    // Inject after puts are queued but before commit settles: the post-getAll
+    // check has already passed, so only the commit-tail guard can suppress.
+    let invalidated = false;
+    const originalPut = Reflect.get(IDBObjectStore.prototype, "put") as IDBObjectStore["put"];
+    vi.spyOn(IDBObjectStore.prototype, "put").mockImplementationOnce(function (
+      this: IDBObjectStore,
+      ...args
+    ) {
+      const request = originalPut.apply(this, args);
+      invalidated = true;
+      void publishSnapshotInvalidation({});
+      return request;
+    });
+
+    await writer.flush();
+
+    expect(invalidated).toBe(true);
+    expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
+    // Surgical suppression, not a database reset.
+    expect(await new SessionSnapshotStore().read(unrelatedKey)).toEqual(
+      snapshot("unrelated transcript", "session-unrelated"),
+    );
+  });
+
+  it("preserves a same-key replacement committed before commit-tail cleanup", async () => {
+    const sessionKey = "agent:main:stale-replaced";
+    const unrelatedKey = "agent:main:unrelated-replaced";
+    // Unconnected so the global invalidation does not wait for this flush.
+    const writer = new SessionSnapshotStore();
+    writer.write(unrelatedKey, snapshot("unrelated transcript", "session-unrelated"));
+    await writer.flush();
+    writer.write(sessionKey, snapshot("stale transcript"));
+
+    const replacement = snapshot("replacement transcript");
+    // Force the commit-won branch: the live abort can no longer win, so the
+    // post-commit retract path must handle the stale write.
+    vi.spyOn(IDBTransaction.prototype, "abort").mockImplementationOnce(() => {
+      throw new DOMException("transaction already committed", "InvalidStateError");
+    });
+
+    let invalidated = false;
+    let replacementFlush: Promise<void> | undefined;
+    const originalPut = Reflect.get(IDBObjectStore.prototype, "put") as IDBObjectStore["put"];
+    vi.spyOn(IDBObjectStore.prototype, "put").mockImplementationOnce(function (
+      this: IDBObjectStore,
+      ...args
+    ) {
+      const request = originalPut.apply(this, args);
+      request.addEventListener("success", () => {
+        invalidated = true;
+        void publishSnapshotInvalidation({});
+        // Newer-generation writer reuses the same key after the invalidation.
+        const newer = new SessionSnapshotStore();
+        newer.write(sessionKey, replacement);
+        replacementFlush = newer.flush();
+      });
+      return request;
+    });
+
+    await writer.flush();
+
+    expect(invalidated).toBe(true);
+    expect(replacementFlush).toBeDefined();
+    await replacementFlush;
+    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(replacement);
+    expect(await new SessionSnapshotStore().read(unrelatedKey)).toEqual(
+      snapshot("unrelated transcript", "session-unrelated"),
+    );
+  });
+
+  it("preserves an equal-timestamp same-key replacement during commit-tail cleanup", async () => {
+    // savedAt comes from Date.now(), so independent writers can share a
+    // timestamp under coarse timer precision; identity must not rely on it.
+    vi.spyOn(Date, "now").mockReturnValue(123456789);
+    const sessionKey = "agent:main:stale-same-timestamp";
+    // Unconnected so the global invalidation does not wait for this flush.
+    const writer = new SessionSnapshotStore();
+    writer.write(sessionKey, snapshot("stale transcript"));
+
+    const replacement = snapshot("replacement transcript");
+    // Force the commit-won branch: the live abort can no longer win, so the
+    // post-commit retract path must handle the stale write.
+    vi.spyOn(IDBTransaction.prototype, "abort").mockImplementationOnce(() => {
+      throw new DOMException("transaction already committed", "InvalidStateError");
+    });
+
+    let invalidated = false;
+    let replacementFlush: Promise<void> | undefined;
+    const originalPut = Reflect.get(IDBObjectStore.prototype, "put") as IDBObjectStore["put"];
+    vi.spyOn(IDBObjectStore.prototype, "put").mockImplementationOnce(function (
+      this: IDBObjectStore,
+      ...args
+    ) {
+      const request = originalPut.apply(this, args);
+      request.addEventListener("success", () => {
+        invalidated = true;
+        void publishSnapshotInvalidation({});
+        // Same savedAt as the stale write, different content.
+        const newer = new SessionSnapshotStore();
+        newer.write(sessionKey, replacement);
+        replacementFlush = newer.flush();
+      });
+      return request;
+    });
+
+    await writer.flush();
+
+    expect(invalidated).toBe(true);
+    expect(replacementFlush).toBeDefined();
+    await replacementFlush;
+    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(replacement);
+  });
 
   it.each([undefined, "cache-eviction"] as const)(
     "does not restore deleted metadata while seeding the snapshot index (%s)",
