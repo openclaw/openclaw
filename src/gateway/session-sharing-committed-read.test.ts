@@ -9,6 +9,7 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
+import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -110,6 +111,15 @@ describe("committed session mutation authorization", () => {
             throw new Error("Expected session mutation authorization");
           }
           const owner = openOpenClawAgentDatabase({ agentId: "main" });
+          registerOpenClawAgentDatabase({ agentId: "main", path: owner.path });
+          expect(() => authorization.assertCurrent()).not.toThrow();
+          removeSessionMember(scope, identityId);
+          expect(() => authorization.assertCurrent()).toThrow(
+            "session is shared for this connection",
+          );
+          addSessionMember(scope, { identityId, addedBy: "test-owner" });
+          expect(() => authorization.assertCurrent()).not.toThrow();
+          await projection?.ensureMaterialized();
           const parse = vi.spyOn(JSON, "parse");
           const unrelatedParses = () =>
             parse.mock.calls.filter(([value]) => value.includes("unrelated-committed-probe-"))

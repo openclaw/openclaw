@@ -513,21 +513,23 @@ export function resolveSessionMutationAuthorization(params: {
         const projected = expected?.projection
           ? readProjectedSessionMutationTarget(targetRef, currentCfg, expected.projection)
           : undefined;
-        if (expected?.projection && !projected) {
+        if (expected?.projection && projected?.status === "unavailable") {
           throw targetChanged(targetRef.sessionKey);
         }
+        // Pending refreshes retain the captured native identity, never stale membership.
         const current =
-          projected ??
-          resolveSessionSharingTarget({
-            cfg: currentCfg,
-            sessionKey: targetRef.sessionKey,
-            agentId: targetRef.agentId,
-            ...currentLookupCaches,
-            exactRead:
-              Boolean(expected?.resolved?.readSource) ||
-              !currentLookupCaches ||
-              authorizedTargets.length === 1,
-          });
+          projected?.status === "ready"
+            ? projected.target
+            : resolveSessionSharingTarget({
+                cfg: currentCfg,
+                sessionKey: targetRef.sessionKey,
+                agentId: targetRef.agentId,
+                ...currentLookupCaches,
+                exactRead:
+                  Boolean(expected?.resolved?.readSource) ||
+                  !currentLookupCaches ||
+                  authorizedTargets.length === 1,
+              });
         // The guarded ensure may mint this row/id. Its result permits only that
         // materialization, never a replacement of an already admitted session.
         const ensuredTarget =
@@ -595,7 +597,11 @@ export function resolveSessionMutationAuthorization(params: {
           }) ??
           (visibilityAuthorized
             ? null
-            : authorizeTargetAccess(policyConfig, current, expected?.projection));
+            : authorizeTargetAccess(
+                policyConfig,
+                current,
+                projected?.status === "ready" ? expected?.projection : undefined,
+              ));
         if (error) {
           throw new SessionMutationAuthorizationChangedError(error);
         }

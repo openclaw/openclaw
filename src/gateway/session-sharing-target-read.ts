@@ -33,15 +33,15 @@ export const readProjectedSessionMutationTarget = (
   targetRef: SessionMutationTarget,
   cfg: OpenClawConfig,
   projection: SessionRowProjection,
-): SessionSharingTarget | undefined => {
+): { status: "ready"; target: SessionSharingTarget } | { status: "pending" | "unavailable" } => {
   const agent = resolveRequestedSessionAgentId(cfg, targetRef.sessionKey, targetRef.agentId);
   if (!agent.ok) {
-    return undefined;
+    return { status: "unavailable" };
   }
   const query = { key: targetRef.sessionKey, agentId: agent.agentId };
   const state = projection.sharingTargetState(query);
   if (state.status !== "ready") {
-    return undefined;
+    return { status: state.status === "pending" ? "pending" : "unavailable" };
   }
   const readSource = projection.readSource({ ...query, storePath: state.target.storePath });
   // Legacy selectors and filesystem aliases retain the native candidate-selection contract.
@@ -50,14 +50,14 @@ export const readProjectedSessionMutationTarget = (
     readSource.path !== state.target.storePath ||
     typeof readSource.databaseIdentity !== "string"
   ) {
-    return undefined;
+    return { status: "unavailable" };
   }
   assertExistingDatabaseIdentity(
     readSource.path,
     `file:${readSource.databaseIdentity}`,
     readSource.databaseBirthtime,
   );
-  return { ...state.target, readSource };
+  return { status: "ready", target: { ...state.target, readSource } };
 };
 
 export function readSessionMutationTarget(params: {
@@ -94,10 +94,14 @@ export function readSessionMutationTarget(params: {
       projection && readProjectedSessionMutationTarget(params.targetRef, params.cfg, projection);
     // Prepared callers retain logical locators; resident rows expose physical store paths.
     if (
-      projected &&
-      (!params.expectedTarget || projected.storePath === params.expectedTarget.storePath)
+      projected?.status === "ready" &&
+      (!params.expectedTarget || projected.target.storePath === params.expectedTarget.storePath)
     ) {
-      return { target: projected, preparedReadSource: projected.readSource, projection };
+      return {
+        target: projected.target,
+        preparedReadSource: projected.target.readSource,
+        projection,
+      };
     }
     if (
       params.sessionRowRead &&
