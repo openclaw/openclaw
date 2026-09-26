@@ -565,7 +565,9 @@ Raw-only history stays a conservative fallback. Hosted PR bundles carry the
 measured `sharedPreparationSeconds` once within their 200-second setup
 reserve; this does not reduce that reserve or the separate runtime/private-QA
 build allowance. Raw span, preparation, workload, and full job wall remain
-separately reviewable. Native CI must still prove the ten-minute row objective.
+separately reviewable. Ordinary hosted PR bundles admit at most 375 seconds of
+packed work, leaving 25 seconds of additional margin below the ten-minute row
+objective after the setup reserve. Native CI must still prove that objective.
 
 For split compact groups, the refit also records the parent cost from a complete
 generation within one run and runner profile. It sums each part's median span,

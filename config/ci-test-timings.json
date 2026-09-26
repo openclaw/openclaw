@@ -1772,6 +1772,10 @@
           "rawSeconds": 499,
           "workloadSeconds": 499
         },
+        "agentic-gateway-core-3#membership#selector-131-d060e2bec466#generation-c8ad60cea13c#part-1-of-1#include-131-fbc80bb174c1": {
+          "rawSeconds": 408,
+          "workloadSeconds": 380
+        },
         "agentic-gateway-core-3#membership#selector-261-192d8d877df7#generation-8e979267a8b3#part-1-of-1#include-261-5ed0ac392f91": {
           "rawSeconds": 499,
           "workloadSeconds": 499
@@ -1823,6 +1827,10 @@
         },
         "agentic-gateway-core-3#membership#selector-89-d1dfab74a1b7#generation-199cf1ebcc9b#part-1-of-1#include-89-8891da08f99d": {
           "rawSeconds": 273
+        },
+        "agentic-gateway-core-3#selector-261-f70e122ed150#generation-468ad518ba4f#part-1-of-2#include-131-fbc80bb174c1": {
+          "rawSeconds": 408,
+          "workloadSeconds": 380
         },
         "agentic-gateway-core-inventory": {
           "rawSeconds": 27,
@@ -2607,8 +2615,8 @@
           "workloadSeconds": 264
         },
         "agentic-gateway-server-isolated#membership#selector-22-ad35c2ab8548#generation-864004113149#part-1-of-1#include-22-0ab04a7273fc": {
-          "rawSeconds": 175,
-          "workloadSeconds": 160
+          "rawSeconds": 321,
+          "workloadSeconds": 293
         },
         "agentic-gateway-server-isolated#membership#selector-22-b65b663875aa#generation-52549fee2aed#part-1-of-1#include-22-2d7d0002995b": {
           "rawSeconds": 309,
@@ -3848,8 +3856,8 @@
           "workloadSeconds": 181
         },
         "changed-agentic-gateway-server-isolated#selector-330-16e73820edc9#generation-257d09a3b63e#part-10-of-17#include-22-0ab04a7273fc": {
-          "rawSeconds": 175,
-          "workloadSeconds": 160
+          "rawSeconds": 321,
+          "workloadSeconds": 293
         },
         "changed-agentic-gateway-server-isolated#selector-330-16e73820edc9#generation-257d09a3b63e#part-11-of-17#include-22-61e7c429245f": {
           "rawSeconds": 293,
@@ -6463,7 +6471,7 @@
         },
         "core-runtime-media-ui-1": {
           "rawSeconds": 415,
-          "workloadSeconds": 316
+          "workloadSeconds": 348
         },
         "core-runtime-media-ui-1#membership#selector-146-f84721e5e26f#generation-190ec24f85f7#part-1-of-1#include-146-f73ed02bf645": {
           "rawSeconds": 178
@@ -6495,8 +6503,8 @@
           "rawSeconds": 357
         },
         "core-runtime-media-ui-1#membership#selector-457-390e59d03fba#generation-6b2974bdd345#part-1-of-1#include-457-dfe48e57b801": {
-          "rawSeconds": 249,
-          "workloadSeconds": 230
+          "rawSeconds": 376,
+          "workloadSeconds": 348
         },
         "core-runtime-media-ui-1#selector-454-0421c232e0d3#generation-521169c6cf02#part-1-of-2#include-223-71989d82c134": {
           "rawSeconds": 173
@@ -7771,7 +7779,7 @@
     ],
     "github": []
   },
-  "source": "hosted PR qualification seed from complete descriptor spans: 36255492762; retained other timings: hosted PR qualification seed from complete descriptor spans: 36237146431; retained other timings: hosted PR qualification seed from complete descriptor spans: 36232667443; retained other timings: hosted PR qualification seed from complete descriptor spans: 36215159024; retained other timings: hosted PR qualification seed from complete descriptor spans: 36199853523; retained other timings: hosted PR qualification seed from complete descriptor spans: 36182096172; retained other timings: median of successful timing jobs from 2 CI and release-check runs: 35934070111, 35937762430",
+  "source": "hosted PR qualification seed from complete descriptor spans: 36261613061; retained other timings: hosted PR qualification seed from complete descriptor spans: 36255492762; retained other timings: hosted PR qualification seed from complete descriptor spans: 36237146431; retained other timings: hosted PR qualification seed from complete descriptor spans: 36232667443; retained other timings: hosted PR qualification seed from complete descriptor spans: 36215159024; retained other timings: hosted PR qualification seed from complete descriptor spans: 36199853523; retained other timings: hosted PR qualification seed from complete descriptor spans: 36182096172; retained other timings: median of successful timing jobs from 2 CI and release-check runs: 35934070111, 35937762430",
   "toolingFileSeconds": {
     "blacksmith": {
       "src/scripts/ci-changed-scope.contract-fixtures.test.ts": 1,

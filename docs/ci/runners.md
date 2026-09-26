@@ -37,9 +37,9 @@ Main, manual qualification, and release routing remain unchanged.
 Current PR Node plans use measured hosted costs kept separately from hourly main
 costs. Smaller groups retain the complete inventory, worker limits, and test
 deadlines. Ordinary group admission targets 340 seconds and packed compute targets
-400 seconds; CLI process groups retain a 120-second target for runtime preparation.
-The remaining 200-second job budget covers setup and measurement variation,
-including shared worker-bundle preparation once per job. PR timing records keep
+375 seconds; CLI process groups retain a 120-second target for runtime preparation.
+The 200-second setup reserve includes shared worker-bundle preparation once per
+job, leaving another 25 seconds for workload variation. PR timing records keep
 raw spans separate from workload measurements: only a uniquely attributed parent
 preparation is removed from its triggering group's workload. The emitted
 `sharedPreparationSeconds` records that cost in the job's setup reserve; runtime

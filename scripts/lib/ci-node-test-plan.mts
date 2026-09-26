@@ -429,7 +429,8 @@ const COMPACT_HOSTED_PR_SETUP_SECONDS = 200;
 // CLI process consumers retain smaller stripes around their runtime preparation.
 const COMPACT_HOSTED_PR_GROUP_SECONDS = 340;
 const COMPACT_HOSTED_PR_CLI_GROUP_SECONDS = 120;
-const COMPACT_HOSTED_PR_JOB_SECONDS = 600 - COMPACT_HOSTED_PR_SETUP_SECONDS;
+// Repeated native tails need 25s of packing margin beyond the setup reserve.
+const COMPACT_HOSTED_PR_JOB_SECONDS = 375;
 // Hosted run 35477045216 timed out after an hour on a 203-file serial stripe;
 // its 196-file sibling took 2867s. Bound admission independently of stale costs.
 const COMPACT_HOSTED_STORAGE_STATE_MAX_FILES = 64;
