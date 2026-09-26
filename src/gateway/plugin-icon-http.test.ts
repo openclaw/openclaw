@@ -396,7 +396,8 @@ describe("Control UI plugin and catalog icon routes", () => {
       pathname,
       method: label === "plugin" ? "HEAD" : "GET",
     })),
-    ...(["GET", "HEAD"] as const).map((method) => ({ ...ACTIVITY_ROUTE, method })),
+    { ...ACTIVITY_ROUTE, method: "GET" },
+    { ...ACTIVITY_ROUTE, method: "HEAD" },
   ])(
     "authenticates $method $label icons before resolving their metadata",
     async ({ method, pathname }) => {

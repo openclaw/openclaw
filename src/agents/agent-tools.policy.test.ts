@@ -20,8 +20,7 @@ import {
   resolveSubagentToolPolicyForSession,
   resolveTrustedGroupId,
 } from "./agent-tools.policy.js";
-import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
-import { filterToolsByPolicy, isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 
 vi.mock("../channels/plugins/session-conversation.js", () => ({
   resolveSessionConversation: ({ rawId }: { rawId: string }) => ({
