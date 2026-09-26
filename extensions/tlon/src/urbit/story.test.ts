@@ -4,7 +4,6 @@ import { markdownToStory, type Story } from "./story.js";
 type ListRenderingFixture = {
   name: string;
   markdown: string;
-  before: Story;
   after: Story;
 };
 
@@ -12,19 +11,6 @@ const listRenderingFixtures: ListRenderingFixture[] = [
   {
     name: "unordered markers become one native unordered listing",
     markdown: "- alpha\n- **beta**\n- [site](https://example.com)",
-    before: [
-      {
-        inline: [
-          "- alpha",
-          { break: null },
-          "- ",
-          { bold: ["beta"] },
-          { break: null },
-          "- ",
-          { link: { href: "https://example.com", content: "site" } },
-        ],
-      },
-    ],
     after: [
       {
         block: {
@@ -48,7 +34,6 @@ const listRenderingFixtures: ListRenderingFixture[] = [
   {
     name: "ordered markers become a native ordered listing",
     markdown: "1. first\n2. second",
-    before: [{ inline: ["1. first", { break: null }, "2. second"] }],
     after: [
       {
         block: {
@@ -66,11 +51,6 @@ const listRenderingFixtures: ListRenderingFixture[] = [
   {
     name: "task markers become native task inlines inside a task listing",
     markdown: "- [ ] todo\n- [x] **done**",
-    before: [
-      {
-        inline: ["- [ ] todo", { break: null }, "- [x] ", { bold: ["done"] }],
-      },
-    ],
     after: [
       {
         block: {
@@ -93,19 +73,6 @@ const listRenderingFixtures: ListRenderingFixture[] = [
   {
     name: "nested ordered items stay recursive under their unordered parent",
     markdown: "- parent\n  1. first\n  2. second\n- sibling",
-    before: [
-      {
-        inline: [
-          "- parent",
-          { break: null },
-          "  1. first",
-          { break: null },
-          "  2. second",
-          { break: null },
-          "- sibling",
-        ],
-      },
-    ],
     after: [
       {
         block: {
@@ -132,19 +99,6 @@ const listRenderingFixtures: ListRenderingFixture[] = [
   {
     name: "mixed task and plain children stay in their nested bullet list",
     markdown: "- parent\n  - [ ] todo\n  - note\n- sibling",
-    before: [
-      {
-        inline: [
-          "- parent",
-          { break: null },
-          "  - [ ] todo",
-          { break: null },
-          "  - note",
-          { break: null },
-          "- sibling",
-        ],
-      },
-    ],
     after: [
       {
         block: {
@@ -174,7 +128,6 @@ const listRenderingFixtures: ListRenderingFixture[] = [
   {
     name: "empty bullet items stay inside their native listing",
     markdown: "- first\n-\n- third",
-    before: [{ inline: ["- first", { break: null }, "-", { break: null }, "- third"] }],
     after: [
       {
         block: {
@@ -209,8 +162,7 @@ describe("markdownToStory paragraph boundaries", () => {
 });
 
 describe("markdownToStory list rendering", () => {
-  it.each(listRenderingFixtures)("$name", ({ markdown, before, after }) => {
-    expect(before).not.toEqual(after);
+  it.each(listRenderingFixtures)("$name", ({ markdown, after }) => {
     expect(markdownToStory(markdown)).toEqual(after);
   });
 
