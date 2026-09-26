@@ -462,7 +462,6 @@ class SkillsPage extends OpenClawLightDomElement {
           id=${this.surface === "discovery" ? PLUGINS_HUB_PANEL_ID : nothing}
           role=${this.surface === "discovery" ? "tabpanel" : nothing}
           aria-labelledby=${this.surface === "discovery" ? "plugins-tab-skills" : nothing}
-          ?data-openclaw-presentation-pending=${this.surface === "settings" && this.library.loading && !this.library.list && !this.library.error}
         >
           ${renderSkills({
             state: this,

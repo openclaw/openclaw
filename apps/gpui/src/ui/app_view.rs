@@ -426,6 +426,8 @@ impl Render for AppView {
         };
         div()
             .id("openclaw-app")
+            .role(Role::Group)
+            .aria_label("OpenClaw")
             .track_focus(&self.focus_handle)
             .size_full()
             .v_flex()

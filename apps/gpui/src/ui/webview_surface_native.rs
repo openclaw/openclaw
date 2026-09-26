@@ -89,11 +89,7 @@ pub(super) fn build(
     {
         // WebKit's identifier factory returns autoreleased store/configuration
         // references. Do not let GPUI's outer pool keep retired sessions in use.
-        objc2::rc::autoreleasepool(|_| {
-            crate::background::with_suppressed_activation(|| {
-                build_view(spec, store, events, bounds, window)
-            })
-        })
+        objc2::rc::autoreleasepool(|_| build_view(spec, store, events, bounds, window))
     }
     #[cfg(target_os = "windows")]
     build_view(spec, store, events, bounds, window)

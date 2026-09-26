@@ -90,13 +90,10 @@ describe("bootstrapApplication", () => {
         await starting;
         expect(startGateway).toHaveBeenCalledTimes(stopEarly ? 0 : 1);
         expect(changed).toHaveBeenCalledTimes(stopEarly ? 0 : 1);
-        // The panel host receives its presentation state; the Gateway action bridge stays silent.
+        // Gateway actions stay silent; panel hosts receive their presentation state.
         if (bridge === "panel" && !stopEarly) {
           expect(postMessage).toHaveBeenCalledWith(
-            expect.objectContaining({
-              type: "openclaw-presentation-state",
-              phase: "loading",
-            }),
+            expect.objectContaining({ type: "openclaw-presentation-state", phase: "loading" }),
           );
         } else {
           expect(postMessage).not.toHaveBeenCalled();

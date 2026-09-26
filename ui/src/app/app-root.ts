@@ -451,11 +451,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
     const context = this.context;
     const runtime = this.runtime;
     if (!context || !runtime) {
-      return html`<main
-        class="app-shell app-shell--booting"
-        aria-busy="true"
-        data-openclaw-presentation-pending
-      ></main>`;
+      return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
     const gatewayUrlConfirmation = this.pendingGatewayUrl
       ? html`

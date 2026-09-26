@@ -11,7 +11,6 @@ export function renderSettingsWorkspace(
     id?: string;
     role?: string;
     ariaLabel?: string;
-    initialContentPending?: boolean;
   } = {},
 ) {
   const className = options.fillHeight
@@ -23,7 +22,6 @@ export function renderSettingsWorkspace(
       id=${ifDefined(options.id)}
       role=${ifDefined(options.role)}
       aria-label=${ifDefined(options.ariaLabel)}
-      ?data-openclaw-presentation-pending=${options.initialContentPending}
     >
       <div class="settings-workspace__body">${body}</div>
     </section>

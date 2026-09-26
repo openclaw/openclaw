@@ -137,7 +137,6 @@ export function renderSkillDiscovery(props: SkillsProps) {
     <div
       class="plugin-catalog-grid plugin-catalog-grid--results"
       aria-busy=${props.loading || state.clawhubSearchLoading}
-      ?data-openclaw-presentation-pending=${entries.length === 0 && state.connected && !props.error && !state.clawhubSearchError && (state.skillsLoading || state.clawhubSearchLoading)}
     >
       ${repeat(
         entries,

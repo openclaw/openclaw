@@ -11,6 +11,10 @@ pub struct WebPresentation {
 }
 
 impl WebPresentation {
+    pub fn revealable(&self) -> bool {
+        self.ready && self.url != "about:blank"
+    }
+
     pub fn navigate_document(&mut self, url: &str) {
         self.navigation += 1;
         self.document = None;
@@ -100,8 +104,14 @@ mod tests {
     #[test]
     fn native_same_route_and_acknowledged_redirect_can_reveal_without_reloading() {
         let mut view = WebPresentation::default();
+        view.document("blank", "about:blank", view.navigation);
+        view.update("blank", 0, "about:blank", true);
+        assert!(view.ready);
+        assert!(!view.revealable());
+        view.navigate_document("https://example.test/settings");
         view.document("doc", "https://example.test/settings", view.navigation);
         view.update("doc", 1, "https://example.test/settings", true);
+        assert!(view.revealable());
         view.navigate_route("https://example.test/settings");
         assert!(view.update("doc", 1, "https://example.test/settings", true));
         view.navigate_route("https://example.test/old-route");

@@ -524,7 +524,7 @@ color scheme without changing the system setting.
 
 Each visible surface keeps a theme-matched native loading placeholder until its
 document is ready. The Control UI reports typed, generation-scoped presentation
-state after route loaders and declared initial-content loaders finish; empty and
+state after the shell, route, and shared loading surfaces settle; empty and
 error states are revealable. Navigation masks the previous document before the
 next route renders. Two drawable web frames precede reveal. Reading documents
 wait for load, fonts and two drawable frames; a blank reading tab keeps a native
@@ -533,10 +533,9 @@ asynchronous updates remain owned by those sites.
 
 On macOS, a transparent native container lets WebKit finish rendering without
 displaying intermediate frames or intercepting clicks. Its bounds stay fixed
-during loading. Window activation remains with the app's window owner: it
-suppresses wry's constructor activation even in ordinary mode, and blocks
-application activation throughout `OPENCLAW_GPUI_BACKGROUND=1` runs. Native
-webviews keep their original WebKit class and observation state.
+during loading. The patched wry constructor respects hidden/unfocused webviews;
+`gateway_windows.rs` retains the `OPENCLAW_GPUI_BACKGROUND` window-activation
+switch. Native webviews keep their original WebKit class and observation state.
 
 `webview_open` diagnostics record request-to-reveal timing. Fully occluded windows
 may have drawing paused by macOS; background frame proof uses an unobscured

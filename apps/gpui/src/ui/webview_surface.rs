@@ -701,20 +701,20 @@ impl WebViewSurface {
                         );
                     let presentation = state.events.presentation.borrow();
                     let ready = presentation.ready;
-                    let blank = state.spec.auth.is_none() && presentation.url == "about:blank";
+                    let revealable = presentation.revealable();
                     drop(presentation);
-                    if let Some(view) = &state.view {
-                        if let Err(error) = native::present(
+                    if let Some(view) = &state.view
+                        && let Err(error) = native::present(
                             view,
                             visible || state.spec.background,
-                            visible && ready && !blank,
-                        ) {
-                            state.events.push(WebViewEvent::Error(error.clone()));
-                            state.error = Some(error);
-                            return;
-                        }
+                            visible && revealable,
+                        )
+                    {
+                        state.events.push(WebViewEvent::Error(error.clone()));
+                        state.error = Some(error);
+                        return;
                     }
-                    state.visible = visible && ready && !blank;
+                    state.visible = visible && revealable;
                     if visible && ready {
                         state.events.revealed();
                     }
@@ -755,15 +755,15 @@ impl SurfaceState {
             return;
         }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
-        if let Some(view) = &self.view {
-            if let Err(error) = native::present(
+        if let Some(view) = &self.view
+            && let Err(error) = native::present(
                 view,
                 visible,
-                visible && self.events.presentation.borrow().ready,
-            ) {
-                self.events.push(WebViewEvent::Error(error.clone()));
-                self.error = Some(error);
-            }
+                visible && self.events.presentation.borrow().revealable(),
+            )
+        {
+            self.events.push(WebViewEvent::Error(error.clone()));
+            self.error = Some(error);
         }
         self.visible = visible;
     }

@@ -228,7 +228,7 @@ class SystemsSidebar extends OpenClawLightDomElement {
         </button>
       </div>
       <div class="systems-sidebar__list" aria-busy=${controller.loading}>
-        ${controller.loading && !controller.inventory ? html`<p class="systems-sidebar__empty" role="status" data-openclaw-presentation-pending>${t("systems.loading")}</p>` : nothing}
+        ${controller.loading && !controller.inventory ? html`<p class="systems-sidebar__empty" role="status">${t("systems.loading")}</p>` : nothing}
         ${rows.filter((row) => systemKind(row) === "host").map(renderRow)}
         ${(["node", "worker"] as const).map((kind) => {
           const group = rows.filter((row) => systemKind(row) === kind);

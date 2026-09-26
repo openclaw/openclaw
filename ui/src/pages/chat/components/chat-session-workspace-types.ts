@@ -12,7 +12,6 @@ export type SessionWorkspaceProps = {
   browserPath: string;
   browserSearch: string;
   collapsed: boolean;
-  connected: boolean;
   sessionKey: string;
   list: SessionWorkspaceListResult | null;
   loading: boolean;

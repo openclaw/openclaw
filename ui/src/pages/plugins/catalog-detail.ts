@@ -126,7 +126,6 @@ export function renderPluginCatalogDetail(props: PluginCatalogDetailProps): Temp
           ? renderDetail(props.result, props)
           : html`<section
               class="plugin-catalog-detail plugin-catalog-detail--loading"
-              data-openclaw-presentation-pending
               aria-label=${t("pluginsPage.detailLoading")}
             >
               <div class="plugin-catalog-detail__back skeleton"></div>

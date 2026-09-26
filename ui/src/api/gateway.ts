@@ -362,6 +362,10 @@ export class GatewayBrowserClient {
     return this.client.connected;
   }
 
+  get hasPendingRequests(): boolean {
+    return this.client.hasPendingRequests;
+  }
+
   get needsWakeReconnect() {
     return (
       !this.client.connected ||

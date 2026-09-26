@@ -143,12 +143,7 @@ export function renderSkillLibrary(library: SkillLibraryController) {
             /></label>
             ${
               library.loading
-                ? html`<p
-                    role="status"
-                    ?data-openclaw-presentation-pending=${!library.list && !library.error}
-                  >
-                    ${t("common.loading")}
-                  </p>`
+                ? html`<p role="status">${t("common.loading")}</p>`
                 : renderSettingsSection(
                     { title: t(`skillLibrary.${library.view}`), count: entries.length },
                     entries.length === 0

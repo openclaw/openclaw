@@ -543,7 +543,6 @@ export function renderSettingsLoadingSkeleton(
   return html`
     <div
       class="settings-loading-skeleton"
-      data-openclaw-presentation-pending
       role="status"
       aria-busy="true"
       aria-label=${options.label ?? t("common.loading")}

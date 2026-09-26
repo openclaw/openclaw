@@ -454,7 +454,6 @@ export function renderPanelLoadingSkeleton(
       ?overlay=${overlay}
       role="status"
       aria-busy="true"
-      data-openclaw-presentation-pending
       aria-label=${label}
     ></openclaw-panel-loading-skeleton>
   `;

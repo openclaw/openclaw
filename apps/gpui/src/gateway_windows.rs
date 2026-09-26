@@ -7,11 +7,16 @@ use gpui_kit::{
 use serde::Deserialize;
 use tokio::runtime::Handle;
 
-use crate::background::activates;
 use crate::gateway::{
     config::{self, ConnectionConfig},
     profiles::{GatewayProfile, ProfileStore},
 };
+
+/// `OPENCLAW_GPUI_BACKGROUND=1` opens and reuses windows without activating the
+/// app, so UI automation (Peekaboo background input) never steals focus.
+fn activates() -> bool {
+    std::env::var_os("OPENCLAW_GPUI_BACKGROUND").as_deref() != Some(std::ffi::OsStr::new("1"))
+}
 
 #[derive(Action, Clone, PartialEq, Deserialize)]
 #[action(namespace = openclaw, no_json)]

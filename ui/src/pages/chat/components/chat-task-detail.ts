@@ -68,11 +68,7 @@ export function renderTaskDetailPanel(params: {
       `;
     }
     return html`
-      <div
-        class="sidebar-panel chat-task-detail"
-        data-task-detail-panel
-        ?data-openclaw-presentation-pending=${backgroundTasks.connected && Boolean(taskId) && !error && !backgroundTasks.error}
-      >
+      <div class="sidebar-panel chat-task-detail" data-task-detail-panel>
         ${renderTaskHeader(t("chat.backgroundTasks.taskDetailTitle"), undefined, undefined, params.onBack)}
         ${renderBackgroundTasksError(backgroundTasks.error)}
         <div class="sidebar-content chat-task-detail__state">

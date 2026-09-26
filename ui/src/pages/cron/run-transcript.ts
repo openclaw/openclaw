@@ -183,9 +183,7 @@ export class CronRunTranscript implements ReactiveController {
               </button>`
           : this.task
             ? renderTaskTranscript({ host: this.transcript, task: this.task })
-            : html`<p role="status" data-openclaw-presentation-pending>
-                ${t("tasksPage.loading")}
-              </p>`
+            : html`<p role="status">${t("tasksPage.loading")}</p>`
       }
     </section>`;
   }

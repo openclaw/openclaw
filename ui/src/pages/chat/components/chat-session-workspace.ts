@@ -502,7 +502,6 @@ export function createSessionWorkspaceProps(
   const diffContent = resolveSessionDiffSidebarContent(state);
   return {
     collapsed: options?.expanded === true ? false : workspace.collapsed,
-    connected: state.connected,
     sessionKey: state.sessionKey,
     list: workspace.list?.sessionKey === state.sessionKey ? workspace.list : null,
     loading: workspace.loading,

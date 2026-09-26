@@ -87,7 +87,6 @@ export function renderCurrentWork(props: CurrentWorkProps) {
     class="activity-current-work"
     aria-label=${t("activity.currentWork.title")}
     aria-busy=${props.loading}
-    ?data-openclaw-presentation-pending=${props.connected && !props.error && (!props.result || (rows.length === 0 && props.incomplete))}
   >
     <div class="settings-section__header">
       <h2 class="settings-section__heading">${t("activity.currentWork.title")}</h2>

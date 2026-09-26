@@ -81,7 +81,6 @@ export class ChatPane extends ChatPaneLayoutRender {
 
   override render() {
     const state = this.state;
-    this.toggleAttribute("data-openclaw-presentation-pending", !state);
     if (!state) {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
@@ -233,6 +232,7 @@ export class ChatPane extends ChatPaneLayoutRender {
     const historyHasMore = catalogKey
       ? Boolean(this.catalogCursor)
       : state.chatHistoryPagination.hasMore;
+    const fetchLinkFavicon = resolveChatLinkFaviconFetcher(state);
     const sessionActionCallbacks = createChatPaneSessionActionCallbacks({
       getSnapshot: () => this.context.gateway.snapshot,
       state,
@@ -681,7 +681,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       connectionEpoch: state.connectionEpoch,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
-      fetchLinkFavicon: resolveChatLinkFaviconFetcher(state),
+      fetchLinkFavicon,
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
       branding: this.context?.theme.branding,
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),

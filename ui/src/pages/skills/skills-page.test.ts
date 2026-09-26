@@ -1,19 +1,15 @@
 // @vitest-environment jsdom
 import type { SkillsLibraryListResult } from "@openclaw/gateway-protocol";
-import { createRouter, definePage } from "@openclaw/uirouter";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-route-paths.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { startNativePresentation } from "../../app/native-presentation.runtime.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { SkillsRouteData } from "./skills-page.ts";
 import { createSkill } from "./view.test-support.ts";
@@ -103,37 +99,6 @@ function mountSkills(
 afterEach(() => document.body.replaceChildren());
 
 describe("Skills discovery lifecycle", () => {
-  it("reveals ready discovery cards while the independent library read is pending", async () => {
-    const library = deferred<SkillsLibraryListResult>();
-    const { page, context } = mountSkills(async (method) =>
-      method === "skills.library.list" ? library.promise : { results: [remoteSkill] },
-    );
-    const router = createRouter<RouteId, undefined>({
-      routes: [
-        definePage({
-          id: "skills",
-          path: "/skills",
-          component: () => ({}),
-        }),
-      ],
-    });
-    await router.navigate("skills", undefined);
-    await settleLitElement(page);
-    const stop = startNativePresentation({ router, gateway: context.gateway });
-    try {
-      await vi.dynamicImportSettled();
-      expect(page.querySelector('[data-skill-id="remote:@alice/calendar"]')).not.toBeNull();
-      expect(Reflect.get(window, "__OPENCLAW_NATIVE_PRESENTATION__")).toMatchObject({
-        phase: "ready",
-      });
-    } finally {
-      stop();
-      router.stop();
-      library.resolve(personalLibrary);
-      await settleLitElement(page);
-    }
-  });
-
   it("opens Plugins and Skill workshop from the shared tabs", async () => {
     const { page, context } = mountSkills(async (method) =>
       method === "skills.library.list" ? personalLibrary : { results: [] },

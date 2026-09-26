@@ -8,7 +8,6 @@ export function renderAssistantPanelLoading() {
     aria-live="polite"
     aria-label=${t("common.loading")}
     aria-busy="true"
-    data-openclaw-presentation-pending
   >
     <div class="assistant-panel-loading__content" aria-hidden="true">
       <div class="assistant-panel-loading__messages">

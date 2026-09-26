@@ -315,9 +315,7 @@ function renderClawHubDetailDialog(props: SkillsProps) {
         <div class="skill-reader-dialog__body clawhub-skill-detail__body">
           ${
             state.clawhubDetailLoading
-              ? html`<div class="muted" role="status" data-openclaw-presentation-pending>
-                  ${t("common.loading")}
-                </div>`
+              ? html`<div class="muted" role="status">${t("common.loading")}</div>`
               : state.clawhubDetailError
                 ? html`<div class="callout danger skill-reader-dialog__error" role="alert">
                     <span aria-hidden="true">${icons.alertTriangle}</span>

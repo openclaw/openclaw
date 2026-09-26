@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 export const NATIVE_HISTORY_STATE_EVENT = "openclaw:native-history-state";
-export const NATIVE_PRESENTATION_STATE_EVENT = "openclaw:native-presentation-state";
 export const NATIVE_PRESENTATION_REQUEST_EVENT = "openclaw:native-presentation-request";
 
 export type NativePresentationState = {

@@ -451,7 +451,6 @@ function renderPanel(
   return html`
     <div
       class="run-inspector__panel"
-      ?data-openclaw-presentation-pending=${state.status === "loading"}
       role=${state.status === "error" || state.status === "unauthorized" ? "alert" : "status"}
     >
       <h3>${t(`activity.runInspector.panels.${key}.title`)}</h3>
