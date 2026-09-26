@@ -68,14 +68,15 @@ export function readSessionColdStorageProtection(
       }
     }
     for (const checkpoint of readLegacyCompactionHistory(entry)) {
-      if (checkpoint.sessionId) {
-        protectedIds.add(checkpoint.sessionId);
-      }
-      if (checkpoint.preCompaction.sessionId) {
-        protectedIds.add(checkpoint.preCompaction.sessionId);
-      }
-      if (checkpoint.postCompaction.sessionId) {
-        protectedIds.add(checkpoint.postCompaction.sessionId);
+      // A self-reference is not cross-generation; the current window stays governed by activity.
+      for (const id of [
+        checkpoint.sessionId,
+        checkpoint.preCompaction.sessionId,
+        checkpoint.postCompaction.sessionId,
+      ]) {
+        if (id && id !== row.current_session_id) {
+          protectedIds.add(id);
+        }
       }
     }
   }

@@ -160,6 +160,28 @@ describe("cold-storage protection selection", () => {
     expect(protect()).toEqual(new Set(["previous", "usage", "checkpoint", "before", "after"]));
   });
 
+  it("does not let legacy checkpoint self-references protect an idle current window", () => {
+    addNode("idle", {
+      compactionCheckpoints: [
+        {
+          sessionId: "idle",
+          preCompaction: { sessionId: "idle" },
+          postCompaction: { sessionId: "idle" },
+        },
+        {
+          sessionId: "idle",
+          preCompaction: { sessionId: "older-generation" },
+          postCompaction: { sessionId: "idle" },
+        },
+      ],
+    });
+    expect(protect()).toEqual(new Set(["older-generation"]));
+    database
+      .prepare("UPDATE session_nodes SET last_activity_at = ? WHERE current_session_id = ?")
+      .run(cutoff, "idle");
+    expect(protect()).toEqual(new Set(["idle", "older-generation"]));
+  });
+
   it.each([
     { restartRecoveryBeforeAgentReplyState: "admitted" },
     { restartRecoveryBeforeAgentReplyState: "pending" },
