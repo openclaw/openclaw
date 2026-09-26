@@ -2803,7 +2803,6 @@ create_or_update_github_release() { record draft; }
 dispatch_workflow() { record "dispatch:$*"; printf '404\\n'; }
 wait_for_run() {
   record "wait:$1:\${4:-terminal}:\${5:-true}"
-  if [[ -n "\${6:-}" ]]; then record "approval-environment:$6"; fi
   local result=0
   case "$1" in
     plugin-npm-release.yml) result="\${MOCK_PLUGIN_NPM_RESULT:-0}" ;;
@@ -5522,9 +5521,7 @@ const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify
       );
       expect(planner["working-directory"]).toBeUndefined();
     }
-    expect(identity.if).toBe(
-      "github.event_name == 'workflow_dispatch' && (inputs.preflight_only || inputs.release_candidate_branch != '' || (inputs.npm_dist_tag == 'extended-stable' && github.ref == 'refs/heads/main'))",
-    );
+    expect(identity.if).toBe("github.event_name == 'workflow_dispatch'");
     expect(identity.env).toMatchObject({
       GH_TOKEN: "${{ github.token }}",
       WORKFLOW_FULL_REF: "${{ github.ref }}",
@@ -5949,7 +5946,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       "${{ inputs.release_publish_full_ref }}",
     );
     expect(evidenceStep.env?.RELEASE_PUBLISH_PARENT_STATE_POLICY).toBe(
-      "${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery') || '' }}",
+      "${{ inputs.release_publish_run_id != '' && (needs.validate_release_publish_approval.outputs.parent_approval == 'receipt' && 'active' || (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery')) || '' }}",
     );
     expect(evidenceStep.run).toContain("node scripts/release-tooling-identity.mjs verify");
     expect(evidenceStep.run).toContain('--workflow-ref "$WORKFLOW_HEAD_BRANCH"');
@@ -6012,7 +6009,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       OPENCLAW_RELEASE_PUBLISH_REF: "${{ inputs.release_publish_branch }}",
       OPENCLAW_RELEASE_PUBLISH_FULL_REF: "${{ inputs.release_publish_full_ref }}",
       OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY:
-        "${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery') || '' }}",
+        "${{ inputs.release_publish_run_id != '' && (needs.validate_release_publish_approval.outputs.parent_approval == 'receipt' && 'active' || (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery')) || '' }}",
       OPENCLAW_RELEASE_TOOLING_FULL_REF: "${{ github.ref }}",
       OPENCLAW_RELEASE_TOOLING_REF: "${{ github.ref_name }}",
       OPENCLAW_RELEASE_TOOLING_REPOSITORY: "${{ github.repository }}",
@@ -6033,7 +6030,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     expect(bootstrapPublish.env).toMatchObject({
       GH_TOKEN: "${{ github.token }}",
       RELEASE_PUBLISH_PARENT_STATE_POLICY:
-        "${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery') || '' }}",
+        "${{ inputs.release_publish_run_id != '' && (needs.validate_release_publish_approval.outputs.parent_approval == 'receipt' && 'active' || (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery')) || '' }}",
       RELEASE_PUBLISH_RUN_ATTEMPT: "${{ inputs.release_publish_run_attempt }}",
       RELEASE_PUBLISH_RUN_ID: "${{ inputs.release_publish_run_id }}",
       RELEASE_PUBLISH_REF: "${{ inputs.release_publish_branch }}",
@@ -6138,7 +6135,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     }
   });
 
-  it("starts and approves core npm before the ClawHub receipt and bootstrap barriers", () => {
+  it("starts core npm without child approvals before the ClawHub receipt and bootstrap barriers", () => {
     const fixture = createReleasePublishFixture();
     const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
     for (const step of job.steps ?? []) {
@@ -6166,10 +6163,10 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     expect(events).not.toContain("windows");
     expect(events).not.toContain("android");
     expect(dispatchIndex).toBeGreaterThan(draftIndex);
-    const gateIndex = events.indexOf("wait:openclaw-npm-release.yml:publish_openclaw_npm:true");
-    expect(gateIndex).toBeGreaterThan(dispatchIndex);
-    expect(gateIndex).toBeLessThan(receiptIndex);
-    expect(events).toContain("approval-environment:npm-release");
+    const startIndex = events.indexOf("wait:openclaw-npm-release.yml:publish_openclaw_npm:false");
+    expect(startIndex).toBeGreaterThan(dispatchIndex);
+    expect(startIndex).toBeLessThan(receiptIndex);
+    expect(events).toContain("wait:plugin-npm-release.yml:terminal:false");
     expect(events.indexOf("wait:plugin-clawhub-new.yml:terminal:true")).toBeGreaterThan(
       dispatchIndex,
     );
@@ -6557,20 +6554,20 @@ print_failed_run_summary 404
   });
 
   it.each([
-    ["lagged", 0, 1],
-    ["approved-queued", 0, 1],
-    ["unrelated-environment", 1, 0],
-    ["manual", 0, 0],
+    ["queued", 0, 0],
+    ["started", 0, 0],
     ["duplicate", 1, 0],
     ["wrong-sha", 1, 0],
-    ["changed-sha-after-approval", 1, 1],
-    ["approval-failed", 1, 1],
-    ["passive", 0, 0],
-  ])("observes the core publication gate: %s", (mode, exit, approvals) => {
+    ["changed-sha-after-start", 1, 0],
+    ["terminal", 0, 0],
+    ["bootstrap-lagged", 0, 1],
+    ["bootstrap-approval-failed", 1, 1],
+  ])("observes child publication with only bootstrap approvals: %s", (mode, exit, approvals) => {
     const root = tempDirs.make("release-publish-wait-");
     const calls = join(root, "calls");
     writeFileSync(calls, "");
     const source = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
+    const bootstrap = mode.startsWith("bootstrap-");
     const result = spawnSync(
       "bash",
       [
@@ -6583,47 +6580,44 @@ gh() {
   if [[ "$1 $2" == "run view" ]]; then
     if [[ "$*" == *"--json headSha,url"* ]]; then
       local sha="$EXPECTED_SHA"
-      if [[ "$MODE" == "wrong-sha" || ( "$MODE" == "changed-sha-after-approval" && -f "$APPROVED" ) ]]; then
+      if [[ "$MODE" == "wrong-sha" || ( "$MODE" == "changed-sha-after-start" && "$iteration" -gt 0 ) ]]; then
         sha="${"b".repeat(40)}"
       fi
       printf '{"headSha":"%s","url":"https://example.invalid/run/404"}\\n' "$sha"
     elif [[ "$*" == *"--json status,url,updatedAt"* ]]; then
       local state=in_progress
-      if [[ ( "$MODE" == "passive" || "$MODE" == "unrelated-environment" ) && "$iteration" -gt 0 ]]; then state=completed; fi
+      if [[ ( "$MODE" == "terminal" && "$iteration" -gt 0 ) || -f "$APPROVED" ]]; then state=completed; fi
       printf '{"status":"%s","url":"https://example.invalid/run/404","updatedAt":"2026-09-01T00:00:00Z"}\\n' "$state"
     elif [[ "$*" == *"--json jobs"* ]]; then
       local jobs
       if [[ "$MODE" == "duplicate" ]]; then
         jobs='[{"name":"publish_openclaw_npm","status":"in_progress"},{"name":"publish_openclaw_npm","status":"in_progress"}]'
-      elif [[ "$MODE" == "manual" || ( -f "$APPROVED" && "$MODE" != "approved-queued" ) ]]; then
+      elif [[ "$MODE" == "started" || "$iteration" -gt 0 ]]; then
         jobs='[{"name":"publish_openclaw_npm","status":"in_progress"}]'
       else
         jobs='[{"name":"publish_openclaw_npm","status":"queued"}]'
       fi
       printf '{"jobs":%s}\\n' "$jobs" | jq -c "\${!#}"
     else
-      local conclusion=success
-      if [[ "$MODE" == "unrelated-environment" ]]; then conclusion=cancelled; fi
-      printf '{"conclusion":"%s","url":"https://example.invalid/run/404","createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-01T00:00:01Z"}\\n' "$conclusion"
+      printf '{"conclusion":"success","url":"https://example.invalid/run/404","createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-01T00:00:01Z"}\\n'
     fi
-  elif [[ "$1 $2 $3" == "api -X GET" ]]; then
-    if [[ "$MODE" == "lagged" && "$iteration" -eq 0 ]]; then printf '[]\\n';
-    elif [[ "$MODE" == "unrelated-environment" ]]; then printf '[{"environment":{"id":8,"name":"other-release"},"current_user_can_approve":true}]\\n';
-    else printf '[{"environment":{"id":7,"name":"npm-release"},"current_user_can_approve":true}]\\n'; fi
-  elif [[ "$1 $2 $3" == "api -X POST" ]]; then
+  elif [[ "$1 $2 $3" == "api -X GET" && "$MODE" == bootstrap-* ]]; then
+    if [[ "$MODE" == "bootstrap-lagged" && "$iteration" -eq 0 ]]; then printf '[]\\n';
+    else printf '[{"environment":{"id":7,"name":"clawhub-plugin-bootstrap"},"current_user_can_approve":true}]\\n'; fi
+  elif [[ "$1 $2 $3" == "api -X POST" && "$MODE" == bootstrap-* ]]; then
     printf 'approval\\n' >> "$CALLS"
-    if [[ "$MODE" == "approval-failed" ]]; then return 42; fi
+    if [[ "$MODE" == "bootstrap-approval-failed" ]]; then return 42; fi
     touch "$APPROVED"
-  else return 99; fi
+  else printf 'unexpected:%s\\n' "$*" >> "$CALLS"; return 99; fi
 }
 sleep() { iteration=$((iteration + 1)); if [[ "$iteration" -gt 3 ]]; then exit 91; fi; }
-print_pending_deployments() { :; }
 print_failed_run_summary() { :; }
 ${shellFunctionSource(source, "gh_read")}
 ${shellFunctionSource(source, "verify_child_run_sha")}
+${shellFunctionSource(source, "print_pending_deployments")}
 ${shellFunctionSource(source, "approve_pending_deployments")}
 ${shellFunctionSource(source, "wait_for_run")}
-wait_for_run openclaw-npm-release.yml 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMENTS" "$APPROVED_ENVIRONMENT"
+wait_for_run "$WORKFLOW" 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMENTS"
 `,
       ],
       {
@@ -6637,14 +6631,19 @@ wait_for_run openclaw-npm-release.yml 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPRO
           GITHUB_STEP_SUMMARY: join(root, "summary"),
           APPROVED: join(root, "approved"),
           CALLS: calls,
-          STARTED_JOB: mode === "passive" ? "" : "publish_openclaw_npm",
-          APPROVE_ENVIRONMENTS: String(mode !== "passive"),
-          APPROVED_ENVIRONMENT: mode === "passive" ? "" : "npm-release",
+          WORKFLOW: bootstrap ? "plugin-clawhub-new.yml" : "openclaw-npm-release.yml",
+          STARTED_JOB: bootstrap || mode === "terminal" ? "" : "publish_openclaw_npm",
+          APPROVE_ENVIRONMENTS: String(bootstrap),
         },
       },
     );
     expect(result.status, result.stderr || result.stdout).toBe(exit);
-    expect(readFileSync(calls, "utf8").split("\n").filter(Boolean)).toHaveLength(approvals);
+    expect(readFileSync(calls, "utf8").split("\n").filter(Boolean)).toEqual(
+      Array.from({ length: approvals }, () => "approval"),
+    );
+    if (!bootstrap) {
+      expect(result.stdout).not.toContain("approve: gh api");
+    }
   });
 
   it.each(["2026.9.1\nsha=" + "b".repeat(40), "", "v2026.9.1", "2026.13.1", "2026.9"])(
@@ -6847,7 +6846,7 @@ wait_for_run openclaw-npm-release.yml 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPRO
       'verify_child_run_sha "$workflow" "$run_id" "$expected_sha" || return 1',
       'approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}"',
       'dispatch_workflow_at_ref "${RELEASE_TAG}" "${TARGET_SHA}" android-release.yml',
-      'if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}" "" true "" true; then',
+      'if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}" "" false true; then',
       'wait_for_run_background openclaw-npm-release.yml "${openclaw_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
       '-f release_publish_branch="${PARENT_WORKFLOW_BRANCH}"',
       '-f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}"',
@@ -14753,8 +14752,8 @@ promote_windows_release_assets
     }
 
     for (const [workflowPath, publishJobName, environment] of [
-      [PLUGIN_NPM_RELEASE_WORKFLOW, "publish_plugins_npm", "npm-release"],
-      [OPENCLAW_NPM_RELEASE_WORKFLOW, "publish_openclaw_npm", "npm-release"],
+      [PLUGIN_NPM_RELEASE_WORKFLOW, "publish_plugins_npm", "npm-publish"],
+      [OPENCLAW_NPM_RELEASE_WORKFLOW, "publish_openclaw_npm", "npm-publish"],
       [
         ".github/workflows/plugin-clawhub-new.yml",
         "publish_bootstrap_plugins",

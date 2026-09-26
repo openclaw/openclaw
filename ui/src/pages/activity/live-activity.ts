@@ -1,4 +1,3 @@
-import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { notifyGatewayObservers } from "../../app/gateway-observers.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { parseActivityEvent, updateToolActivity, type ActivityEntry } from "./tool-activity.ts";
@@ -37,52 +36,34 @@ export function createLiveActivity(gateway: ApplicationGateway): LiveActivity {
     );
   };
 
-  const reduce = (
-    current: ActivityEntry[],
-    eventName: string,
-    payload: unknown,
-    receivedAt: number,
-  ): ActivityEntry[] => {
-    if (eventName !== "agent" && eventName !== "session.tool") {
-      return current;
-    }
-    const event = parseActivityEvent(payload, receivedAt);
-    if (!event) {
-      return current;
-    }
-    return updateToolActivity(current, event);
-  };
-
   const retireChangedContext = () => {
     const revision = gateway.eventLogRevision;
     if (revision === eventLogRevision) {
-      return false;
+      return;
     }
     eventLogRevision = revision;
-    // Log notification precedes event delivery; replay would apply the next event twice.
     publish([], true);
-    return true;
   };
 
-  // Gateway delivery owns visibility; Activity is independent of the selected chat.
-  let initialEntries: ActivityEntry[] = [];
-  for (const event of gateway.eventLog.toReversed()) {
-    initialEntries = reduce(initialEntries, event.event, event.payload, event.ts);
-  }
-  publish(initialEntries, true);
+  // Bootstrap attaches Activity before starting the Gateway; it owns its reduced history.
   const stopGateway = gateway.subscribe(() => {
     if (!disposed) {
       retireChangedContext();
     }
   });
-  const stopEventLog = gateway.subscribeEventLog(() => {
-    if (!disposed) {
-      retireChangedContext();
+  const stopEvents = gateway.subscribeEvents((event) => {
+    if (disposed || (event.event !== "agent" && event.event !== "session.tool")) {
+      return;
     }
-  });
-  const stopEvents = gateway.subscribeEvents((event: GatewayEventFrame) => {
-    if (!disposed) {
-      publish(reduce(entries, event.event, event.payload, Date.now()));
+    const client = gateway.snapshot.client;
+    const revision = gateway.eventLogRevision;
+    retireChangedContext();
+    if (disposed || client !== gateway.snapshot.client || revision !== gateway.eventLogRevision) {
+      return;
+    }
+    const activityEvent = parseActivityEvent(event.payload, Date.now());
+    if (activityEvent) {
+      publish(updateToolActivity(entries, activityEvent));
     }
   });
 
@@ -100,7 +81,6 @@ export function createLiveActivity(gateway: ApplicationGateway): LiveActivity {
     dispose() {
       disposed = true;
       stopGateway();
-      stopEventLog();
       stopEvents();
       entries = [];
       snapshot = { entries, revision: snapshot.revision + 1 };

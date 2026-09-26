@@ -264,7 +264,7 @@ describe("worker chat.abort settlement", () => {
         );
         const cursorAtAbort = harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor;
         if (fence === "claim") {
-          harness.settleRun(RUN_ID);
+          await harness.settleRun(RUN_ID);
         } else if (fence === "credential") {
           const credential = harness.store.getCredential(ENVIRONMENT_ID)!;
           await harness.store.renewCredential({

@@ -35,6 +35,7 @@ import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 import { withOwnedManagedUpdateEnv, withUpdateEnv } from "./update-command-service-env.js";
 
 export async function convergeUpdatePlugins(params: {
+  databaseBackup?: import("../../infra/update-database-backup.js").UpdateDatabaseBackup;
   coreAlreadyCurrent?: boolean;
   /** Local running-code context, never installation state or mutation authority. */
   candidateRuntime?: boolean;
@@ -262,6 +263,8 @@ export async function convergeUpdatePlugins(params: {
         const producedPluginUpdate = postCorePluginUpdate;
         const completedPluginUpdate = await completePostCorePluginUpdate({
           root: postUpdateRoot,
+          databaseBackup: params.databaseBackup,
+          onDatabaseWriteStep: (step) => params.result.steps.push(step),
           opts: params.opts,
           ...(params.candidateRuntime ? { doctorConfigWrites: true as const } : {}),
           pluginUpdate: producedPluginUpdate,

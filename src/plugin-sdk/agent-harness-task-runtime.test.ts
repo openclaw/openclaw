@@ -24,6 +24,11 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createAgentHarnessTaskRuntimeScope } from "../tasks/agent-harness-task-runtime-scope.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
 import {
+  finalizeTaskRunByRunIdAsync,
+  setDetachedTaskDeliveryStatusByRunIdAsync,
+  transitionTaskAssignmentAsync,
+} from "../tasks/detached-task-runtime.async.js";
+import {
   createRunningTaskRun,
   finalizeTaskRunByRunId,
   recordTaskRunProgressByRunId,
@@ -82,6 +87,16 @@ vi.mock("../tasks/detached-task-runtime.js", () => ({
 
 vi.mock("../tasks/runtime-internal.js", () => ({
   listTaskRecords: vi.fn(() => []),
+}));
+
+vi.mock("../tasks/detached-task-runtime.async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tasks/detached-task-runtime.async.js")>()),
+  finalizeTaskRunByRunIdAsync: vi.fn(async () => []),
+  setDetachedTaskDeliveryStatusByRunIdAsync: vi.fn(async () => []),
+  transitionTaskAssignmentAsync: vi.fn(async (params) => {
+    params.assertCurrent();
+    return [];
+  }),
 }));
 
 vi.mock("../tasks/task-registry-read.js", () => ({
@@ -238,7 +253,7 @@ describe("agent-harness-task-runtime", () => {
 
   it.each([false, true])(
     "projects private task content before every writer (private: %s)",
-    (privateSession) => {
+    async (privateSession) => {
       const requesterSessionKey = privateSession
         ? "agent:main:dashboard:incognito-native"
         : "agent:main:main";
@@ -283,19 +298,38 @@ describe("agent-harness-task-runtime", () => {
           deliveryStatus: "pending",
           error: content,
         });
+        await runtime.finalizeTaskRunByRunIdAsync!({
+          ...identity,
+          status: "failed",
+          endedAt: 2,
+          error: content,
+          progressSummary: content,
+          terminalSummary: content,
+          detail,
+        });
+        await runtime.setDetachedTaskDeliveryStatusByRunIdAsync!({
+          ...identity,
+          deliveryStatus: "pending",
+          error: content,
+        });
       }
       for (const writer of [
         recordTaskRunProgressByRunId,
         finalizeTaskRunByRunId,
         setDetachedTaskDeliveryStatusByRunId,
+        finalizeTaskRunByRunIdAsync,
+        setDetachedTaskDeliveryStatusByRunIdAsync,
       ]) {
         expect(JSON.stringify(vi.mocked(writer).mock.calls).includes(content)).toBe(
           !privateSession,
         );
         expect(writer).toHaveBeenCalledOnce();
       }
-      const transitions = vi.mocked(transitionTaskAssignment).mock.calls.map(([input]) => input);
-      expect(transitions).toHaveLength(3);
+      const transitions = [
+        ...vi.mocked(transitionTaskAssignment).mock.calls,
+        ...vi.mocked(transitionTaskAssignmentAsync).mock.calls,
+      ].map(([input]) => input);
+      expect(transitions).toHaveLength(5);
       expect(JSON.stringify(transitions).includes(content)).toBe(!privateSession);
       for (const transition of transitions) {
         expect(transition.expectedTask).toEqual(expectedTask);
@@ -305,6 +339,11 @@ describe("agent-harness-task-runtime", () => {
         });
       }
       expect(transitions[1]?.transition.params).toMatchObject({
+        status: "failed",
+        endedAt: 2,
+        detail,
+      });
+      expect(transitions[3]?.transition.params).toMatchObject({
         status: "failed",
         endedAt: 2,
         detail,

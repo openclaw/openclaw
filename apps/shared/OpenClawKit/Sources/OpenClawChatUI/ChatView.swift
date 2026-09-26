@@ -61,20 +61,6 @@ func chatReaderShowsJumpToLatest(
     hasNewerContentBelow && !isAtLiveEdge && hasVisibleContent && !isLoading
 }
 
-/// The view's own one-shot positioning always runs in a nil-animation transaction, so
-/// `.animating` only comes from system scrolls (status-bar scroll-to-top, keyboard
-/// avoidance). Not releasing there lets the next timeline tick yank the reader back down.
-func chatReaderScrollReleasesFollow(_ phase: ScrollPhase) -> Bool {
-    switch phase {
-    case .interacting, .animating:
-        true
-    case .idle, .tracking, .decelerating:
-        false
-    @unknown default:
-        false
-    }
-}
-
 private enum ScrollFollowTarget: Equatable {
     case latest
     case turn(UUID)
@@ -131,7 +117,7 @@ public struct OpenClawChatView: View {
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     @State private var contentWidth: CGFloat = 0
     @State private var scrollerBottomID = UUID()
-    @State private var scrollPosition: UUID?
+    @State private var scrollCommand = ChatScrollCommand()
     @State private var hasPerformedInitialScroll = false
     @State private var lastTurnStartID: UUID?
     @State private var hasNewerContentBelow = false
@@ -293,7 +279,9 @@ public struct OpenClawChatView: View {
         }
         #endif
     }
+}
 
+extension OpenClawChatView {
     private var content: some View {
         VStack(spacing: 0) {
             self.messageList
@@ -305,6 +293,9 @@ public struct OpenClawChatView: View {
                         selectedMessageID: self.$searchMessageID,
                         isPresented: self.$isSearchPresented,
                         onSelect: self.revealSearchMessage))
+                    .onChange(of: self.searchMessageID) { previousID, _ in
+                        self.scrollCommand.cancel(targetID: previousID)
+                    }
                     .onChange(of: self.isSearchPresented) { wasPresented, isPresented in
                         if wasPresented, !isPresented { self.composerFocusRequest += 1 }
                     }
@@ -420,8 +411,6 @@ public struct OpenClawChatView: View {
                         #endif
                         .id(self.scrollerBottomID)
                 }
-                // Use scroll targets for stable auto-scroll without ScrollViewReader relayout glitches.
-                .scrollTargetLayout()
                 .padding(.top, self.isDesktopLayout ? 24 : Layout.messageListPaddingTop)
                 .frame(maxWidth: self.readingColumnWidth)
                 .padding(
@@ -430,13 +419,13 @@ public struct OpenClawChatView: View {
                         (self.isDesktopLayout ? 16 : Layout.messageListPaddingHorizontal))
                 .frame(maxWidth: .infinity)
             }
+            .accessibilityIdentifier("chat-transcript")
             #if !os(macOS)
             .scrollDismissesKeyboard(.interactively)
             #endif
             .safeAreaInset(edge: .top, spacing: 0) {
                 self.messageListNoticeBanner
             }
-            .scrollPosition(id: self.$scrollPosition, anchor: .bottom)
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 let distanceFromBottom = geometry.contentSize.height - geometry.visibleRect.maxY
                 return distanceFromBottom <= Layout.liveEdgeThreshold
@@ -454,6 +443,7 @@ public struct OpenClawChatView: View {
                     self.restoresLiveEdgeAfterKeyboardShows = false
                 }
                 if chatReaderScrollReleasesFollow(phase) {
+                    self.scrollCommand.cancel()
                     self.isUserScrolling = true
                     self.followTarget = nil
                 } else if phase == .idle, self.isUserScrolling {
@@ -482,6 +472,7 @@ public struct OpenClawChatView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .modifier(ChatScrollCommandModifier(command: self.$scrollCommand) { self.viewModel.currentSessionTarget })
         // Ensure the message list claims vertical space on the first layout pass.
         .frame(maxHeight: .infinity, alignment: .top)
         .layoutPriority(1)
@@ -497,6 +488,7 @@ public struct OpenClawChatView: View {
         }
         .onChange(of: self.viewModel.currentSessionTarget) { _, _ in
             self.speech?.stop()
+            self.scrollCommand.cancel()
             self.hasPerformedInitialScroll = false
             self.followTarget = .latest
             self.isAtLiveEdge = true
@@ -513,6 +505,7 @@ public struct OpenClawChatView: View {
         }
         .onDisappear {
             self.speech?.stop()
+            self.scrollCommand.cancel()
         }
         .onChange(of: self.viewModel.timelineRevision) { _, _ in
             self.handleTimelineChange()
@@ -1130,6 +1123,7 @@ extension OpenClawChatView {
             visibleIDs: visibleTurnStartIDs)
         {
         case let .removed(latestRemainingID):
+            self.scrollCommand.cancel(targetID: self.lastTurnStartID)
             self.lastTurnStartID = latestRemainingID
             if case let .turn(messageID) = followTarget,
                !visibleTurnStartIDs.contains(messageID)
@@ -1161,7 +1155,7 @@ extension OpenClawChatView {
             self.hasNewerContentBelow = false
             self.moveScrollPosition(to: self.scrollerBottomID)
         case let .turn(messageID):
-            // Reader policy stays on this turn after the one-shot scroll binding is released. Reissuing
+            // Reader policy stays on this turn after the one-shot scroll command completes. Reissuing
             // that target for every streaming delta can loop SwiftUI layout and starve interaction.
             self.hasNewerContentBelow = chatReaderHasNewerContent(
                 after: messageID,
@@ -1176,17 +1170,10 @@ extension OpenClawChatView {
         to id: UUID,
         anchor: UnitPoint = .bottom)
     {
-        var transaction = Transaction(animation: nil)
-        transaction.scrollTargetAnchor = anchor
-        withTransaction(transaction) {
-            self.scrollPosition = id
-        }
-        DispatchQueue.main.async {
-            guard self.scrollPosition == id else { return }
-            // Reader policy lives in followTarget. The binding is only a one-shot positioning request;
-            // keeping an overflowing transcript bound to any row can loop SwiftUI scroll layout.
-            self.scrollPosition = nil
-        }
+        self.scrollCommand.enqueue(
+            to: id,
+            anchor: anchor,
+            sessionTarget: self.viewModel.currentSessionTarget)
     }
 
     private func revealSearchMessage(_ messageID: UUID) {
@@ -1205,9 +1192,7 @@ extension OpenClawChatView {
             for: nil)
         #endif
     }
-}
 
-extension OpenClawChatView {
     private func mergeToolResults(in messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
         var result: [OpenClawChatMessage] = []
         result.reserveCapacity(messages.count)
