@@ -312,12 +312,17 @@ export async function buildReplyPayloads(params: {
     }
   }
   const retryBlockedDirectPayloads = (params.directBlockDeliveries ?? [])
-    .filter((delivery) => delivery.pending || !shouldRetryReplyDispatch(delivery.outcome))
+    .filter(
+      (delivery) =>
+        !delivery.independentDurableBlock &&
+        (delivery.pending || !shouldRetryReplyDispatch(delivery.outcome)),
+    )
     .map((delivery) => delivery.payload);
   for (const payload of dedupedPayloads) {
     const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
     const direct = (params.directBlockDeliveries ?? []).filter(
       (delivery) =>
+        !delivery.independentDurableBlock &&
         isReplyPayloadTerminalContent(delivery.payload) &&
         getReplyPayloadMetadata(delivery.payload)?.assistantMessageIndex === assistantMessageIndex,
     );

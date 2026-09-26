@@ -231,6 +231,7 @@ export async function resolveTerminalReplyDelivery(params: {
     blockReplyPipeline?.hasRetryBlockedTerminalDelivery?.(minimumAssistantMessageIndex) === true;
   for (const delivery of params.directBlockDeliveries ?? []) {
     if (
+      delivery.independentDurableBlock ||
       (getReplyPayloadMetadata(delivery.payload)?.assistantMessageIndex ?? 0) <
         minimumAssistantMessageIndex ||
       !isReplyPayloadTerminalContent(delivery.payload)

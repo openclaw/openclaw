@@ -21,6 +21,8 @@ type ReplyDirectiveParseMode = "always" | "auto" | "never";
 
 export type DirectBlockDelivery = Awaited<ReturnType<typeof deliverBlockReply>> & {
   payload: ReplyPayload;
+  /** Independent intents are not fragments of the turn's final reply. */
+  independentDurableBlock?: true;
   /** Captured at settlement; later source-completeness changes do not rewrite this fact. */
   terminalDeliveryConfirmed?: true;
 };
@@ -98,24 +100,29 @@ async function sendDirectBlockReply(params: {
   onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   directBlockDeliveries: DirectBlockDelivery[];
   payload: ReplyPayload;
+  context?: BlockReplyContext;
 }) {
   const attempt: DirectBlockDelivery = {
     payload: params.payload,
     outcome: "failed-deliver",
     pending: true,
+    ...(params.context?.deliveryIntentId !== undefined ? { independentDurableBlock: true } : {}),
   };
   params.directBlockDeliveries.push(attempt);
-  const delivery = await deliverBlockReply(() => params.onBlockReply(params.payload)).catch(
-    (error: unknown) => {
-      attempt.outcome = resolveReplyDispatchErrorOutcome(error);
-      attempt.pending = false;
-      throw error;
-    },
-  );
+  const delivery = await deliverBlockReply(() =>
+    params.context
+      ? params.onBlockReply(params.payload, params.context)
+      : params.onBlockReply(params.payload),
+  ).catch((error: unknown) => {
+    attempt.outcome = resolveReplyDispatchErrorOutcome(error);
+    attempt.pending = false;
+    throw error;
+  });
   Object.assign(attempt, delivery, { pending: delivery.pending === true });
   if (
     delivery.outcome === "delivered" &&
     !delivery.pending &&
+    !attempt.independentDurableBlock &&
     delivery.source?.complete !== false &&
     isReplyPayloadTerminalContent(params.payload)
   ) {
@@ -215,8 +222,21 @@ export function createBlockReplyDeliveryHandler(params: {
       });
     }
 
-    // Use pipeline if available (block streaming enabled), otherwise send directly.
-    if (params.blockStreamingEnabled && params.blockReplyPipeline) {
+    // An independent durable intent is a complete send, not a stream fragment.
+    // Do not flush before it: a buffered stream may be blocked on the answer.
+    // The pipeline does not carry delivery context, and non-streaming text
+    // fragments are otherwise held for the final answer.
+    if (options?.deliveryIntentId !== undefined) {
+      if (!options.deliveryIntentId) {
+        throw new Error("independent block delivery requires a non-empty intent id");
+      }
+      await sendDirectBlockReply({
+        onBlockReply: params.onBlockReply,
+        directBlockDeliveries: params.directBlockDeliveries,
+        payload: blockPayload,
+        context: options,
+      });
+    } else if (params.blockStreamingEnabled && params.blockReplyPipeline) {
       if (options?.completed) {
         // A completed answer is a delivery boundary, not another streaming chunk.
         // Keep prior commentary separate and do not wait for a size/idle threshold.

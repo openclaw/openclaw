@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { resolveTerminalReplyDelivery } from "./agent-runner-core.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import {
@@ -18,6 +19,141 @@ type BlockReplyPipelineLike = NonNullable<
 >;
 
 describe("createBlockReplyDeliveryHandler", () => {
+  it.each([false, true])(
+    "sends independent durable text directly with its intent (streaming=%s)",
+    async (blockStreamingEnabled) => {
+      const onBlockReply = vi.fn(async () => {});
+      const enqueue = vi.fn();
+      const directBlockDeliveries: DirectBlockDelivery[] = [];
+      const handler = createBlockReplyDeliveryHandler({
+        onBlockReply,
+        normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+        applyReplyToMode: (payload) => payload,
+        typingSignals: { signalTextDelta: vi.fn(async () => {}) } as unknown as TypingSignaler,
+        blockStreamingEnabled,
+        blockReplyPipeline: blockStreamingEnabled
+          ? ({ enqueue } as unknown as BlockReplyPipelineLike)
+          : null,
+        directBlockDeliveries,
+      });
+
+      await handler(
+        { text: "Which format?\n- Markdown\n- Plain text" },
+        { deliveryIntentId: "codex-async-question-1" },
+      );
+
+      expect(onBlockReply).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ text: "Which format?\n- Markdown\n- Plain text" }),
+        { deliveryIntentId: "codex-async-question-1" },
+      );
+      expect(enqueue).not.toHaveBeenCalled();
+      expect(directBlockDeliveries).toHaveLength(1);
+      expect(directBlockDeliveries[0]).toMatchObject({
+        outcome: "delivered",
+        independentDurableBlock: true,
+      });
+      expect(directBlockDeliveries[0]?.terminalDeliveryConfirmed).toBeUndefined();
+      expect(await resolveTerminalReplyDelivery({ directBlockDeliveries })).toBe("missing");
+
+      // An independent question and a later final answer are distinct messages,
+      // even if their visible text happens to match exactly.
+      const { replyPayloads } = await buildReplyPayloads({
+        payloads: [{ text: "Which format?\n- Markdown\n- Plain text" }],
+        isHeartbeat: false,
+        didLogHeartbeatStrip: false,
+        blockStreamingEnabled,
+        blockReplyPipeline: null,
+        directBlockDeliveries,
+        replyToMode: "off",
+      });
+      expect(replyPayloads).toEqual([
+        expect.objectContaining({ text: "Which format?\n- Markdown\n- Plain text" }),
+      ]);
+    },
+  );
+
+  it("sends an independent prompt without draining a buffered stream", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const enqueue = vi.fn();
+    const flush = vi.fn(async () => {
+      throw new Error("buffered stream is waiting for an answer");
+    });
+    const abortSignal = new AbortController().signal;
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply,
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: { signalTextDelta: vi.fn(async () => {}) } as unknown as TypingSignaler,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: { enqueue, flush } as unknown as BlockReplyPipelineLike,
+      directBlockDeliveries: [],
+    });
+
+    await handler({ text: "Earlier buffered text" });
+    await handler(
+      { text: "Which format?" },
+      {
+        completed: true,
+        abortSignal,
+        timeoutMs: 3_000,
+        deliveryIntentId: "question-1",
+      },
+    );
+
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(flush).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: "Which format?" }),
+      expect.objectContaining({ abortSignal, timeoutMs: 3_000, deliveryIntentId: "question-1" }),
+    );
+  });
+
+  it("records a failed independent send without claiming terminal delivery", async () => {
+    const failure = new Error("transport unavailable");
+    const onBlockReply = vi.fn(async () => {
+      throw failure;
+    });
+    const directBlockDeliveries: DirectBlockDelivery[] = [];
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply,
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: { signalTextDelta: vi.fn(async () => {}) } as unknown as TypingSignaler,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directBlockDeliveries,
+    });
+
+    await expect(
+      handler({ text: "Which format?" }, { deliveryIntentId: "question-1" }),
+    ).rejects.toBe(failure);
+    expect(directBlockDeliveries).toMatchObject([
+      { outcome: "failed-deliver", pending: false, independentDurableBlock: true },
+    ]);
+    expect(directBlockDeliveries[0]?.terminalDeliveryConfirmed).toBeUndefined();
+    expect(await resolveTerminalReplyDelivery({ directBlockDeliveries })).toBe("missing");
+  });
+
+  it("rejects an empty durable intent before dispatch", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const directBlockDeliveries: DirectBlockDelivery[] = [];
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply,
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: { signalTextDelta: vi.fn(async () => {}) } as unknown as TypingSignaler,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directBlockDeliveries,
+    });
+
+    await expect(handler({ text: "Which format?" }, { deliveryIntentId: "" })).rejects.toThrow(
+      "non-empty intent id",
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(directBlockDeliveries).toHaveLength(0);
+  });
+
   it.each([
     ["reasoning", { text: "internal reasoning", isReasoning: true }, "reasoningPayloadsEnabled"],
     [
