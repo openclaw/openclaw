@@ -3,8 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import type { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import * as processExec from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
@@ -108,6 +111,120 @@ async function publicationFixture(root: string, content = "working tree\n") {
   return { sha, input: { publicationStagingRoot, publicationDigest: hash(metadata) } };
 }
 
+it("keeps publication staging workspace-row reads independent of distinct blob count", async () => {
+  const measure = async (blobCount: number) => {
+    const { root, remote, database, store, workspace, stage } = await fixture();
+    const files = Array.from({ length: blobCount }, (_, index) => {
+      const content = `publication blob ${index}\n`;
+      const sha = createHash("sha1")
+        .update(`blob ${Buffer.byteLength(content)}\0`)
+        .update(content)
+        .digest("hex");
+      return { path: `edit-${index}.txt`, content, sha };
+    });
+    const publicationStagingRoot = path.join(root, "publication");
+    await fs.mkdir(path.join(publicationStagingRoot, "blobs"), { recursive: true });
+    for (const file of files) {
+      await fs.writeFile(path.join(remote, file.path), file.content.replace("\n", "\r\n"));
+      await fs.writeFile(path.join(publicationStagingRoot, "blobs", file.sha), file.content);
+    }
+    const metadata = JSON.stringify({
+      version: 1,
+      baseCommit,
+      baseTree: "b".repeat(40),
+      workspaceTree: "c".repeat(40),
+      entries: files.map(({ path: entryPath, sha }) => ({ path: entryPath, mode: "100644", sha })),
+    });
+    await fs.writeFile(path.join(publicationStagingRoot, "snapshot.json"), metadata);
+    const counter = trackSqliteStatementExecutions(database.db, ["workspaceRows"], (sql) =>
+      /^\s*select\b/iu.test(sql) && /\bfrom\s+["`[]?session_repository_workspaces\b/iu.test(sql)
+        ? "workspaceRows"
+        : null,
+    );
+    // Measure staging only; preparation uses the real store revision predicate.
+    const prepared = await stage(`publication-query-cost-${blobCount}`, {
+      publicationStagingRoot,
+      publicationDigest: hash(metadata),
+    }).finally(counter.restore);
+    try {
+      const artifact = store.artifactPath(workspace.workspaceId);
+      const refs = (
+        await requireWorkspaceResultGit(artifact, [
+          "for-each-ref",
+          "--format=%(refname)",
+          "refs/openclaw/worker-result-candidates/",
+        ])
+      )
+        .split("\n")
+        .filter(Boolean);
+      const candidates = await Promise.all(
+        refs.map((ref) => readStagedWorkerWorkspaceResult(artifact, ref)),
+      );
+      const recovery = candidates.find((candidate) => candidate.base.baseCommit === baseCommit);
+      const companion = candidates.find((candidate) => candidate.base.baseCommit === null);
+      const payload = new Map<string, string>();
+      if (companion) {
+        for await (const { entry, content } of companion.readEntries()) {
+          if (content) {
+            payload.set(entry.path, Buffer.from(content).toString("utf8"));
+          }
+        }
+      }
+      let recoveryFilesMatching = 0;
+      if (recovery) {
+        for await (const { entry, content } of recovery.readEntries()) {
+          const file = files.find((candidateFile) => candidateFile.path === entry.path);
+          if (
+            file &&
+            content &&
+            Buffer.from(content).toString("utf8") === file.content.replace("\n", "\r\n")
+          ) {
+            recoveryFilesMatching += 1;
+          }
+        }
+      }
+      return {
+        blobCount,
+        distinctBlobs: new Set(files.map((file) => file.sha)).size,
+        workspaceRowReads: counter.counts.workspaceRows,
+        workspaceRowsReturned: counter.rowCounts.workspaceRows,
+        candidateCount: candidates.length,
+        companionFileCount: payload.size,
+        companionBlobsMatching: files.filter(
+          (file) => payload.get(`blobs/${file.sha}`) === file.content,
+        ).length,
+        metadataMatches: payload.get("snapshot.json") === metadata,
+        bindingMatches:
+          payload.get("binding.json") ===
+          JSON.stringify({
+            currentManifestRef: recovery?.currentManifestRef,
+            publicationDigest: hash(metadata),
+          }),
+        recoveryFilesMatching,
+      };
+    } finally {
+      await prepared.discard();
+    }
+  };
+  const samples = [await measure(1), await measure(8)];
+  // Emit both real execution counts and imported-content facts before the red assertion.
+  console.info("publication-staging-workspace-reads", JSON.stringify(samples));
+  for (const sample of samples) {
+    expect(sample).toMatchObject({
+      distinctBlobs: sample.blobCount,
+      candidateCount: 2,
+      companionFileCount: sample.blobCount + 2,
+      companionBlobsMatching: sample.blobCount,
+      metadataMatches: true,
+      bindingMatches: true,
+      recoveryFilesMatching: sample.blobCount,
+    });
+    expect(sample.workspaceRowReads).toBeGreaterThan(0);
+    expect(sample.workspaceRowsReturned).toBe(sample.workspaceRowReads);
+  }
+  expect(samples[1]!.workspaceRowReads).toBe(samples[0]!.workspaceRowReads);
+});
+
 it.each([false, true])(
   "fences Git initialization after checkpoint directory creation (revoked=%s)",
   async (revoke) => {
@@ -158,81 +275,101 @@ it.each([false, true])(
   },
 );
 
-it("does not dispatch fast-import after a queued checkpoint stage loses authority", async () => {
-  const { store, workspace, stage } = await fixture();
-  const artifact = store.artifactPath(workspace.workspaceId);
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const mutate = workspaceResultGit.withWorkspaceResultRefMutation;
-  let current = true;
-  let held = false;
-  vi.spyOn(workspaceResultGit, "withWorkspaceResultRefMutation").mockImplementation(
-    async (root, operation) => {
-      if (!held && root === artifact) {
-        held = true;
-        entered.resolve();
-        await release.promise;
-      }
-      return await mutate(root, operation);
-    },
-  );
-  const imports = vi.spyOn(processExec, "runExec");
-  const pending = stage("queue-authority", {
-    assertCurrent: () => {
-      if (!current) {
-        throw new Error("checkpoint authority closed");
-      }
-    },
-  }).catch((error: unknown) => error);
-  await Promise.race([
-    entered.promise,
-    pending.then((outcome) => {
-      throw new Error("Checkpoint settled before ref admission", { cause: outcome });
-    }),
-  ]);
-  current = false;
-  release.resolve();
-  expect(await pending).toMatchObject({ message: "checkpoint authority closed" });
-  expect(
-    imports.mock.calls.filter(
-      ([command, args]) => command === "git" && args.includes("fast-import"),
-    ),
-  ).toHaveLength(0);
-  expect(store.get(workspace.workspaceId)?.checkpointRef).toBeNull();
-});
-
-it.each([
-  { boundary: "preparation", closure: "none" },
-  { boundary: "preparation", closure: "authority" },
-  { boundary: "preparation", closure: "revision" },
-  { boundary: "import", closure: "none" },
-  { boundary: "import", closure: "authority" },
-  { boundary: "import", closure: "revision" },
+it.for([
+  { boundary: "metadata", closure: "authority", publication: true },
+  { boundary: "queue", closure: "authority", publication: false },
+  ...["preparation", "import"].flatMap((boundary) =>
+    ["none", "authority", "revision"].map((closure) => ({ boundary, closure, publication: false })),
+  ),
+  ...["before-preparation", "preparation", "queue"].flatMap((boundary) =>
+    ["none", "authority", "revision"].map((closure) => ({ boundary, closure, publication: true })),
+  ),
 ])(
-  "fences checkpoint staging after $boundary with $closure closure and cleans candidates",
-  async ({ boundary, closure }) => {
-    const { remote, store, workspace, stage } = await fixture();
-    await fs.writeFile(path.join(remote, "edit.txt"), "worker-prepared result\n");
+  "fences publication=$publication at $boundary with $closure closure",
+  async ({ boundary, closure, publication }, { signal }) => {
+    const { root, remote, store, workspace, stage } = await fixture();
+    await fs.writeFile(path.join(remote, "edit.txt"), "working tree\n");
+    const { input } = await publicationFixture(root);
+    const artifact = store.artifactPath(workspace.workspaceId);
+    await fs.mkdir(artifact, { recursive: true });
+    await requireWorkspaceResultGit(artifact, ["init", "--quiet", "--bare"]);
+    const common = await fs.realpath(artifact);
+    const queueKey = process.platform === "win32" ? common.toLowerCase() : common;
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const prepare = workspaceManifestWorker.prepareWorkspaceStageInput;
-    const runExec = processExec.runExec;
-    const inputPaths: string[] = [];
-    let current = true;
+    const unblock = () => release.resolve();
+    signal.addEventListener("abort", unblock, { once: true });
     const pause = async () => {
       entered.resolve();
       await release.promise;
     };
-    vi.spyOn(workspaceManifestWorker, "prepareWorkspaceStageInput").mockImplementation(
+    let current = true;
+    let publicationPreparations = 0;
+    let queueOwner: Promise<void> | undefined;
+    const importRoots: string[] = [];
+    const holdQueue = async () => {
+      const held = createDeferredCore();
+      queueOwner = workspaceResultGit.withWorkspaceResultRefMutation(artifact, async () => {
+        held.resolve();
+        await release.promise;
+      });
+      await Promise.race([held.promise, queueOwner]);
+      const queue = resolveGlobalSingleton<KeyedAsyncQueue>(
+        Symbol.for("openclaw.gitRefMutations"),
+        () => {
+          throw new Error("Git ref queue not initialized");
+        },
+      );
+      const enqueue = queue.enqueue.bind(queue);
+      vi.spyOn(queue, "enqueue").mockImplementation((key, task, hooks) => {
+        const queued = enqueue(key, task, hooks);
+        if (key === queueKey) {
+          entered.resolve();
+        }
+        return queued;
+      });
+    };
+    const metadata = publicationSnapshot.readGitHubRepositoryPublicationMetadata;
+    vi.spyOn(publicationSnapshot, "readGitHubRepositoryPublicationMetadata").mockImplementation(
       async (...args) => {
-        const result = await prepare(...args);
-        inputPaths.push(args[0].inputPath);
-        if (boundary === "preparation") {
+        const result = await metadata(...args);
+        if (boundary === "metadata") {
           await pause();
         }
         return result;
       },
     );
+    const mkdtemp = fs.mkdtemp.bind(fs);
+    vi.spyOn(fs, "mkdtemp").mockImplementation(async (...args) => {
+      const result = await mkdtemp(...args);
+      if (path.basename(args[0]).startsWith("openclaw-workspace-import-")) {
+        importRoots.push(result);
+        if (boundary === "before-preparation" && importRoots.length === 2) {
+          await pause();
+        }
+      }
+      return result;
+    });
+    const prepare = workspaceManifestWorker.prepareWorkspaceStageInput;
+    vi.spyOn(workspaceManifestWorker, "prepareWorkspaceStageInput").mockImplementation(
+      async (params) => {
+        if ("publication" in params) {
+          publicationPreparations++;
+        }
+        const result = await prepare(params);
+        if ("publication" in params === publication) {
+          // A real admitted worker completes its private input; closure does not cancel it instantly.
+          if (boundary === "preparation") {
+            await pause();
+          }
+          if (boundary === "queue") {
+            await holdQueue();
+          }
+        }
+        return result;
+      },
+    );
+    const runExec = processExec.runExec;
     const imports = vi.spyOn(processExec, "runExec").mockImplementation(async (...args) => {
       const result = await runExec(...args);
       if (boundary === "import" && args[0] === "git" && args[1].includes("fast-import")) {
@@ -240,7 +377,8 @@ it.each([
       }
       return result;
     });
-    const pending = stage("worker-preparation-authority", {
+    const pending = stage("publication-authority", {
+      ...(publication ? input : {}),
       assertCurrent: () => {
         if (!current) {
           throw new Error("checkpoint authority closed");
@@ -254,11 +392,16 @@ it.each([
       await Promise.race([
         entered.promise,
         pending.then((outcome) => {
-          throw new Error("Checkpoint settled before the staging boundary", { cause: outcome });
+          throw new Error("Checkpoint settled before publication boundary", { cause: outcome });
         }),
       ]);
-      expect(inputPaths).toHaveLength(1);
-      expect((await fs.stat(inputPaths[0]!)).size).toBeGreaterThan(0);
+      const preparedInput = ["preparation", "queue", "import"].includes(boundary);
+      expect(publicationPreparations).toBe(publication && preparedInput ? 1 : 0);
+      if (preparedInput) {
+        expect((await fs.stat(path.join(importRoots.at(-1)!, "fast-import"))).size).toBeGreaterThan(
+          0,
+        );
+      }
       current = closure !== "authority";
       if (closure === "revision") {
         store.bindBase({
@@ -268,115 +411,54 @@ it.each([
           assertCurrent,
         });
       }
-    } finally {
+      const atRelease = store.get(workspace.workspaceId);
       release.resolve();
-      const settled = await pending;
-      if (settled.ok) {
-        await settled.value.discard();
+      const outcome = await pending;
+      if (outcome.ok) {
+        await outcome.value.publish();
+        await outcome.value.discard();
       }
-    }
-    const outcome = await pending;
-    const candidateRefs = await requireWorkspaceResultGit(
-      store.artifactPath(workspace.workspaceId),
-      ["for-each-ref", "--format=%(refname)", "refs/openclaw/worker-result-candidates/"],
-    );
-    for (const inputPath of inputPaths) {
-      await expect(fs.stat(path.dirname(inputPath))).rejects.toMatchObject({ code: "ENOENT" });
-    }
-    expect(candidateRefs).toBe("");
-    expect(outcome.ok).toBe(closure === "none");
-    if (!outcome.ok) {
-      expect(outcome.error).toMatchObject({
-        message:
-          closure === "authority"
-            ? "checkpoint authority closed"
-            : "Repository workspace revision changed",
-      });
-    }
-    expect(
-      imports.mock.calls.filter(
-        ([command, args]) => command === "git" && args.includes("fast-import"),
-      ),
-    ).toHaveLength(boundary === "import" || closure === "none" ? 1 : 0);
-    expect(store.get(workspace.workspaceId)?.checkpointRef).toBeNull();
-  },
-);
-
-it.each(["metadata", "blob"] as const)(
-  "stops publication writes after authority closes during the %s read",
-  async (boundary) => {
-    const { root, remote, store, workspace, stage } = await fixture();
-    await fs.writeFile(path.join(remote, "edit.txt"), "working tree\n");
-    const { input } = await publicationFixture(root);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    let current = true;
-    const pause = async () => {
-      entered.resolve();
-      await release.promise;
-    };
-    const metadata = publicationSnapshot.readGitHubRepositoryPublicationMetadata;
-    const blob = publicationSnapshot.readGitHubRepositoryPublicationBlob;
-    vi.spyOn(publicationSnapshot, "readGitHubRepositoryPublicationMetadata").mockImplementation(
-      async (...args) => {
-        const result = await metadata(...args);
-        if (boundary === "metadata") {
-          await pause();
-        }
-        return result;
-      },
-    );
-    vi.spyOn(publicationSnapshot, "readGitHubRepositoryPublicationBlob").mockImplementation(
-      async (...args) => {
-        const result = await blob(...args);
-        if (boundary === "blob") {
-          await pause();
-        }
-        return result;
-      },
-    );
-    const temporary = vi.spyOn(fs, "mkdtemp");
-    const writes = vi.spyOn(fs, "writeFile");
-    const imports = vi.spyOn(processExec, "runExec");
-    const pending = stage("publication-authority", {
-      ...input,
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("checkpoint authority closed");
-        }
-      },
-    }).catch((error: unknown) => error);
-    await Promise.race([
-      entered.promise,
-      pending.then((outcome) => {
-        throw new Error("Checkpoint settled before publication read", { cause: outcome });
-      }),
-    ]);
-    const written = writes.mock.calls.length;
-    const created = temporary.mock.calls.length;
-    current = false;
-    release.resolve();
-    expect(await pending).toMatchObject({ message: "checkpoint authority closed" });
-    expect(writes).toHaveBeenCalledTimes(written);
-    expect(temporary).toHaveBeenCalledTimes(created);
-    // Only raw recovery was imported; revoked authority cannot stage a companion.
-    expect(
-      imports.mock.calls.filter(
-        ([command, args]) => command === "git" && args.includes("fast-import"),
-      ),
-    ).toHaveLength(1);
-    expect(store.get(workspace.workspaceId)?.checkpointRef).toBeNull();
-    expect(
-      await requireWorkspaceResultGit(store.artifactPath(workspace.workspaceId), [
+      await queueOwner;
+      expect(outcome.ok).toBe(closure === "none");
+      if (!outcome.ok) {
+        expect(outcome.error).toMatchObject({
+          message:
+            closure === "authority"
+              ? "checkpoint authority closed"
+              : "Repository workspace revision changed",
+        });
+        expect(store.get(workspace.workspaceId)).toEqual(atRelease);
+      }
+      expect(
+        imports.mock.calls.filter(
+          ([command, args]) => command === "git" && args.includes("fast-import"),
+        ),
+      ).toHaveLength(
+        closure === "none" ? (publication ? 2 : 1) : publication || boundary === "import" ? 1 : 0,
+      );
+      for (const directory of importRoots) {
+        await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      const refs = await requireWorkspaceResultGit(artifact, [
         "for-each-ref",
         "--format=%(refname)",
-        "refs/openclaw/worker-result-candidates/",
-      ]),
-    ).toBe("");
-    for (const result of temporary.mock.results) {
-      if (result.type === "return") {
-        await expect(fs.stat(await result.value)).rejects.toMatchObject({ code: "ENOENT" });
+        "refs/openclaw/",
+      ]);
+      expect(refs.split("\n").filter(Boolean)).toHaveLength(
+        closure === "none" ? (publication ? 2 : 1) : 0,
+      );
+      expect(refs).not.toContain("worker-result-candidates");
+      expect(publicationPreparations).toBe(
+        publication && (closure === "none" || preparedInput) ? 1 : 0,
+      );
+    } finally {
+      release.resolve();
+      const outcome = await pending;
+      await queueOwner;
+      if (outcome.ok) {
+        await outcome.value.discard();
       }
+      signal.removeEventListener("abort", unblock);
     }
   },
 );

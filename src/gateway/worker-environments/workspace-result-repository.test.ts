@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
@@ -25,6 +27,11 @@ import {
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import * as publicationSnapshot from "../github-repository-publication-snapshot.js";
+import { workerService } from "../server-methods/environments.test-support.js";
+import { resolveRepositoryWorkspaceAccess } from "../server-methods/session-repository-workspace-access.js";
+import { createGatewayRequestContext } from "../server-request-context.js";
+import { makeContextParams } from "../server-request-context.test-support.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils-store.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
@@ -39,6 +46,7 @@ import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { SessionWorkspaceReservationBusyError } from "./placement-workspace-reservation.js";
 import { createRepositoryWorkspaceMutationService } from "./repository-workspace-mutation.js";
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
+import * as checkpoints from "./session-repository-checkpoints.js";
 import {
   readSessionRepositoryArtifacts,
   withSessionRepositoryCheckpoint,
@@ -92,6 +100,9 @@ describe("repository workspace result ownership", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
   });
+
+  const readArtifact = (workspaceId: string, previewPath: string) =>
+    readSessionRepositoryArtifacts({ workspaceId, previewPath, assertCurrent: () => {} });
 
   async function initializeOriginSeed(origin: string, runSetupScript: boolean) {
     if (runSetupScript) {
@@ -303,6 +314,8 @@ describe("repository workspace result ownership", () => {
       const f = await fixture(executionMode);
       const before = f.store.get(f.repository.workspaceId)!;
       const artifactRoot = f.store.artifactPath(before.workspaceId);
+      const refs = () => requireWorkspaceResultGit(artifactRoot, ["show-ref"]);
+      const beforeRefs = await refs();
       const commonDir = await fs.realpath(artifactRoot);
       const queueKey = process.platform === "win32" ? commonDir.toLowerCase() : commonDir;
       const payloadPrefix = path.join(os.tmpdir(), "openclaw-publication-payload-");
@@ -313,6 +326,7 @@ describe("repository workspace result ownership", () => {
       // Runner cancellation releases the real predecessor without a second timer.
       const unblock = () => release.resolve();
       signal.addEventListener("abort", unblock, { once: true });
+      let publicationMetadata: { raw: string; digest: string } | undefined;
       let observedBoundary = false;
       let resumes = 0;
       let assertMutationCurrent: (() => void) | undefined;
@@ -377,21 +391,20 @@ describe("repository workspace result ownership", () => {
             }
             return queued;
           });
-        } else {
-          const read = publicationSnapshot.readGitHubRepositoryPublicationMetadata;
-          vi.spyOn(
-            publicationSnapshot,
-            "readGitHubRepositoryPublicationMetadata",
-          ).mockImplementation(async (...args) => {
+        }
+        const read = publicationSnapshot.readGitHubRepositoryPublicationMetadata;
+        vi.spyOn(publicationSnapshot, "readGitHubRepositoryPublicationMetadata").mockImplementation(
+          async (...args) => {
             const metadata = await read(...args);
-            if (!observedBoundary) {
+            publicationMetadata = { raw: metadata.raw, digest: args[1] };
+            if (boundary === "publication-metadata" && !observedBoundary) {
               observedBoundary = true;
               entered.resolve();
               await release.promise;
             }
             return metadata;
-          });
-        }
+          },
+        );
         const admittedClaims = vi.spyOn(placements, "claimWorkspaceMutationResult");
         saving = f.mutations
           .mutate({
@@ -430,12 +443,6 @@ describe("repository workspace result ownership", () => {
         const pausedCandidates = await candidates();
         expect(pausedCandidates).toHaveLength(boundary === "publication-metadata" ? 1 : 0);
         if (boundary === "publication-metadata") {
-          expect(
-            await requireWorkspaceResultGit(artifactRoot, [
-              "rev-parse",
-              `${pausedCandidates[0]}^{commit}`,
-            ]),
-          ).toMatch(/^[a-f0-9]{40}$/);
           const raw = await readStagedWorkerWorkspaceResult(artifactRoot, pausedCandidates[0]!);
           expect(raw.current.baseCommit).toBe(before.baseCommit);
           expect(raw.changedEntries.map((entry) => entry.path)).toContain("editor.txt");
@@ -451,82 +458,37 @@ describe("repository workspace result ownership", () => {
             state: "draining",
             generation: claim.placementGeneration + 1,
           });
+          expect(assertMutationCurrent).toThrow(
+            "Repository workspace edit lost its exact session placement owner",
+          );
+        } else {
+          expect(assertMutationCurrent).not.toThrow();
         }
-        let guardRejected = false;
-        try {
-          assertMutationCurrent();
-        } catch (error) {
-          guardRejected = true;
-          expect(error).toMatchObject({
-            message: "Repository workspace edit lost its exact session placement owner",
-          });
-        }
-        expect(guardRejected).toBe(drained);
         // Operation authority closes without physical worker shutdown or deletion
         // of the pending result that still owns eventual recovery.
         expect(f.ownerSignal.aborted).toBe(false);
-        const custodyAtRelease = placements.validateWorkspaceResultClaim(claim);
-        expect(custodyAtRelease).toBe(true);
+        expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
         release.resolve();
         const outcome = await saving;
         await queueOwner;
         const remainingCandidates = await candidates();
         const after = f.store.get(before.workspaceId)!;
         const pending = placements.listPendingWorkspaceResults(SESSION_ID);
-        let editorReadable: boolean | null = null;
-        if (!drained && outcome.ok) {
-          const checkpoint = await readSessionRepositoryArtifacts({
-            workspaceId: before.workspaceId,
-            previewPath: "editor.txt",
-            assertCurrent: () => {},
-          });
-          editorReadable = Buffer.from(checkpoint.preview ?? []).equals(Buffer.from(editorBytes));
-        }
-        const payloadRoots: string[] = [];
+        // The intermediate copy is gone; only the real private import inputs exist.
         const importRoots: string[] = [];
         for (const [index, [prefix]] of temporary.mock.calls.entries()) {
+          expect(prefix.startsWith(payloadPrefix)).toBe(false);
           const result = temporary.mock.results[index];
-          if (result?.type !== "return") {
-            continue;
-          }
-          if (prefix.startsWith(payloadPrefix)) {
-            payloadRoots.push(String(await result.value));
-          } else if (path.basename(prefix).startsWith("openclaw-workspace-import-")) {
+          if (
+            result?.type === "return" &&
+            path.basename(prefix).startsWith("openclaw-workspace-import-")
+          ) {
             importRoots.push(String(await result.value));
           }
         }
-        for (const payloadRoot of [...payloadRoots, ...importRoots]) {
-          await expect(fs.stat(payloadRoot)).rejects.toMatchObject({ code: "ENOENT" });
+        for (const importRoot of importRoots) {
+          await expect(fs.stat(importRoot)).rejects.toMatchObject({ code: "ENOENT" });
         }
-        console.log(
-          JSON.stringify({
-            proof: "repository-checkpoint-lifecycle",
-            executionMode,
-            boundary,
-            drained,
-            paused: {
-              rawCandidates: pausedCandidates.length,
-              fastImports: importsBefore,
-              publicationWrites: writesBefore,
-            },
-            authority: { guardRejected, custodyAtRelease },
-            settled: {
-              ok: outcome.ok,
-              fastImportsAfterBoundary: fastImports() - importsBefore,
-              publicationWritesAfterBoundary: publicationWrites() - writesBefore,
-              candidateRefsRemaining: remainingCandidates.length,
-              checkpointChanged: after.checkpointRef !== before.checkpointRef,
-              revisionDelta: after.revision - before.revision,
-              editorReadable,
-              pendingResults: pending.length,
-              recoveryRequested: pending.some((row) => row.recoveryRequestedAtMs !== null),
-              ownerAborted: f.ownerSignal.aborted,
-              resumed: resumes,
-              publicationPayloadsRemoved: payloadRoots.length,
-              importPayloadsRemoved: importRoots.length,
-            },
-          }),
-        );
         // Observe the real file-backed command rather than the retired buffered seam.
         for (const [command, args, options] of imports.mock.calls) {
           if (command === "git" && args.includes(artifactRoot) && args.includes("fast-import")) {
@@ -545,8 +507,8 @@ describe("repository workspace result ownership", () => {
           });
           expect(fastImports()).toBe(importsBefore);
           expect(publicationWrites()).toBe(writesBefore);
-          expect(payloadRoots).toEqual([]);
           expect(after).toEqual(before);
+          expect(await refs()).toBe(beforeRefs);
           expect(pending).toMatchObject([
             {
               claimId: claim.claimId,
@@ -560,10 +522,36 @@ describe("repository workspace result ownership", () => {
           expect(outcome).toEqual({ ok: true, value: "saved" });
           expect(after.checkpointRef).not.toBe(before.checkpointRef);
           expect(fastImports()).toBe(2);
-          expect(publicationWrites()).toBeGreaterThanOrEqual(3);
+          expect(publicationWrites()).toBe(0);
+          expect(publicationMetadata).toBeDefined();
+          const expectedPublication = publicationMetadata!;
+          await withSessionRepositoryCheckpoint(
+            { workspaceId: before.workspaceId, includePublication: true },
+            async (snapshot) => {
+              expect(await fs.readFile(path.join(snapshot.stagingRoot, "editor.txt"), "utf8")).toBe(
+                editorBytes,
+              );
+              expect(snapshot.publicationDigest).toBe(expectedPublication.digest);
+              const publicationRoot = snapshot.publicationStagingRoot!;
+              expect(await fs.readFile(path.join(publicationRoot, "snapshot.json"), "utf8")).toBe(
+                expectedPublication.raw,
+              );
+              expect(await fs.readFile(path.join(publicationRoot, "binding.json"), "utf8")).toBe(
+                JSON.stringify({
+                  currentManifestRef: snapshot.currentManifestRef,
+                  publicationDigest: expectedPublication.digest,
+                }),
+              );
+              const sha = createHash("sha1")
+                .update(`blob ${Buffer.byteLength(editorBytes)}\0${editorBytes}`)
+                .digest("hex");
+              expect(await fs.readFile(path.join(publicationRoot, "blobs", sha), "utf8")).toBe(
+                editorBytes,
+              );
+            },
+          );
           expect(pending).toEqual([]);
           expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
-          expect(editorReadable).toBe(true);
         }
       } finally {
         release.resolve();
@@ -575,29 +563,85 @@ describe("repository workspace result ownership", () => {
   );
 
   it.each(["worker-turn", "remote-exec"] as const)(
-    "makes a successful %s editor save durable before returning and leaves unchanged saves untouched",
+    "keeps %s editor staging SQL constant across publication blobs and unchanged saves untouched",
     async (executionMode) => {
       const f = await fixture(executionMode);
-      const saved = await f.mutations.mutate({
-        ...sessionTarget,
-        assertCurrent: () => {},
-        mutate: async (assertCurrent) => {
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
-          assertCurrent();
-          await fs.writeFile(path.join(f.remote, "editor.txt"), "saved from editor\n");
-          return { changed: true, value: "saved" };
-        },
-      });
-      expect(saved).toBe("saved");
-      const checkpoint = await readSessionRepositoryArtifacts({
-        workspaceId: f.repository.workspaceId,
-        previewPath: "editor.txt",
-        assertCurrent: () => {},
-      });
-      expect(checkpoint.preview).toEqual(new Uint8Array(Buffer.from("saved from editor\n")));
-      expect(placements.get(SESSION_ID)?.workspaceBaseManifestRef).toBe(
-        checkpoint.currentManifestRef,
-      );
+      const context = createGatewayRequestContext(makeContextParams());
+      context.workerSessionPlacementService = placements;
+      context.workerEnvironmentService = { ...workerService(), ...f.environments };
+      context.workerRepositoryWorkspaceMutationService = f.mutations;
+      const authorize = vi.fn();
+      const stage = checkpoints.stageSessionRepositoryCheckpoint;
+      const stageCosts: Array<{ callbacks: number; statements: number }> = [];
+      for (const blobCount of [1, 8]) {
+        authorize.mockClear();
+        // Fixed raw inventory/byte count; only publication deduplication varies.
+        const content = (index: number) => `sample-${blobCount}-blob-${index % blobCount}\n`;
+        for (let index = 0; index < 8; index++) {
+          await fs.writeFile(path.join(f.remote, `edit-${index}.txt`), content(index));
+        }
+        await fs.writeFile(path.join(f.remote, "edit-0.txt"), "before\n");
+        const access = resolveRepositoryWorkspaceAccess(
+          loadGatewaySessionEntryReadOnly(sessionTarget.sessionKey),
+          context,
+        );
+        if (access?.kind !== "active") {
+          throw new Error("Expected live repository editor access");
+        }
+        const sql = observeHostDataSql();
+        const count = () => ({
+          callbacks: authorize.mock.calls.length,
+          statements: sql.calls
+            .slice(1)
+            .reduce((total, called) => total + called.mock.calls.length, 0),
+        });
+        const observer = vi
+          .spyOn(checkpoints, "stageSessionRepositoryCheckpoint")
+          .mockImplementation(async (params) => {
+            const before = count();
+            const prepared = await stage(params);
+            const after = count();
+            stageCosts.push({
+              callbacks: after.callbacks - before.callbacks,
+              statements: after.statements - before.statements,
+            });
+            return prepared;
+          });
+        try {
+          const saved = await access.inspect(
+            "set",
+            {
+              path: "edit-0.txt",
+              content: content(0),
+              expectedHash: createHash("sha256").update("before\n").digest("hex"),
+            },
+            authorize,
+          );
+          expect(saved).toMatchObject({ status: "updated" });
+          console.info("editor-stage-sql", executionMode, blobCount, stageCosts.at(-1), count());
+        } finally {
+          observer.mockRestore();
+          sql.restore();
+        }
+        await withSessionRepositoryCheckpoint(
+          { workspaceId: f.repository.workspaceId, includePublication: true },
+          async (snapshot) => {
+            expect(snapshot.changedEntries).toHaveLength(8);
+            const blobs = await fs.readdir(path.join(snapshot.publicationStagingRoot!, "blobs"));
+            expect(blobs).toHaveLength(blobCount);
+            expect(await fs.readFile(path.join(snapshot.stagingRoot, "edit-0.txt"), "utf8")).toBe(
+              content(0),
+            );
+            expect(placements.get(SESSION_ID)?.workspaceBaseManifestRef).toBe(
+              snapshot.currentManifestRef,
+            );
+          },
+        );
+      }
+      expect(stageCosts).toHaveLength(2);
+      expect(stageCosts[0]!.callbacks).toBeGreaterThan(0);
+      expect(stageCosts[0]!.statements).toBeGreaterThan(0);
+      expect(stageCosts[1]).toEqual(stageCosts[0]);
       const accepted = f.store.get(f.repository.workspaceId);
       await expect(
         f.mutations.mutate({
@@ -647,11 +691,7 @@ describe("repository workspace result ownership", () => {
       );
       expect(placements.listPendingWorkspaceResults()).toEqual([]);
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-      const checkpoint = await readSessionRepositoryArtifacts({
-        workspaceId: f.repository.workspaceId,
-        previewPath: "uncertain.txt",
-        assertCurrent: () => {},
-      });
+      const checkpoint = await readArtifact(f.repository.workspaceId, "uncertain.txt");
       expect(checkpoint.preview).toEqual(
         new Uint8Array(Buffer.from("write completed before transport loss\n")),
       );
@@ -922,26 +962,11 @@ describe("repository workspace result ownership", () => {
         database: openOpenClawStateDatabase(),
       });
       const environments: WorkerDispatchEnvironmentService = {
-        prepareProjectIntent: async () => {
-          throw new Error("unexpected local-project preparation");
-        },
-        assertPreparedIntentCurrent: vi.fn(),
-        getPreparedCandidates: () => [],
-        schedulePreparedRefill: vi.fn(),
-        bindPreparedWorkspace: async () => {
-          throw new Error("unexpected prepared binding");
-        },
+        ...f.environments,
         get: () => undefined,
-        createWithRequest: vi.fn(async () => attachedEnvironment()),
-        attachSession: vi.fn(async () => credential()),
-        destroy: vi.fn(async () => attachedEnvironment()),
         startTunnel: vi.fn(async () => {
           throw new Error("worker is gone");
         }),
-        stopTunnel: vi.fn(async () => {}),
-        reconcileEnvironment: vi.fn(async () => {}),
-        reconcileOnce: vi.fn(async () => {}),
-        supportsProviderExecutionMode: () => true,
       };
       const reportWorkspaceResultRecoveryFailure = vi.fn(async () => {});
       await recoverPendingWorkspaceResults(
@@ -967,11 +992,7 @@ describe("repository workspace result ownership", () => {
         turnClaim: null,
       });
       expect(environments.startTunnel).not.toHaveBeenCalled();
-      const saved = await readSessionRepositoryArtifacts({
-        workspaceId: f.repository.workspaceId,
-        previewPath: "survives.txt",
-        assertCurrent: () => {},
-      });
+      const saved = await readArtifact(f.repository.workspaceId, "survives.txt");
       expect(saved.preview).toEqual(new Uint8Array(Buffer.from("durable before restart\n")));
     },
   );

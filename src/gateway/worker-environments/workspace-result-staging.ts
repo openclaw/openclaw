@@ -13,6 +13,7 @@ import {
   withWorkspaceHashMemo,
 } from "./workspace-hash-memo.js";
 import { parseChangedWorkspaceResult } from "./workspace-manifest-comparison.js";
+import type { WorkspaceStageInputSource } from "./workspace-manifest-computation.js";
 import {
   prepareWorkspaceStageInput,
   loadStagedWorkspaceManifest,
@@ -164,24 +165,26 @@ export async function hasWorkerWorkspaceResultRef(params: {
   throw new Error((result.stderr || result.stdout || "git show-ref failed").trim());
 }
 
-async function stageWorkerWorkspaceResult(params: {
-  root: string;
-  stagingRoot: string;
-  stagedResultRef: string;
-  baseManifestRef: string;
-  currentManifestRef: string;
-  baseManifestRaw: string;
-  currentManifestRaw: string;
-  assertCurrent?: () => void;
-}): Promise<string> {
+async function stageWorkerWorkspaceResult(
+  params: WorkspaceStageInputSource<string> & {
+    root: string;
+    stagingRoot: string;
+    stagedResultRef: string;
+    assertCurrent?: () => void;
+  },
+): Promise<string> {
   const root = await ensureWorkerWorkspaceResultRepository(params.root, params.assertCurrent);
   const stagedResultRef = requireWorkerResultStorageRef(params.stagedResultRef);
+  params.assertCurrent?.();
   const temporary = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-workspace-import-"),
   );
   try {
     const inputPath = path.join(temporary, "fast-import");
+    // Preparation owns only a private input file, never the accepted refs.
+    params.assertCurrent?.();
     await prepareWorkspaceStageInput({ ...params, inputPath });
+    params.assertCurrent?.();
     const input = await fs.open(inputPath, "r");
     try {
       await withWorkspaceResultRefMutation(root, (baseEnv) => {

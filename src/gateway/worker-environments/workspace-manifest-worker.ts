@@ -8,6 +8,7 @@ import type {
   WorkspaceManifestComputationCommand,
   WorkspaceManifestComputationOperations,
   WorkspaceManifestValueInputs,
+  WorkspaceStageInput,
 } from "./workspace-manifest-computation.js";
 import type {
   WorkerWorkspaceManifest,
@@ -52,8 +53,13 @@ function computationInputBytes(command: WorkspaceManifestComputationCommand): nu
     case "workspace.manifest.stage-input":
       return (
         bytes +
-        command.input.baseManifestRaw.byteLength +
-        command.input.currentManifestRaw.byteLength
+        ("publication" in command.input
+          ? command.input.publication.metadata.byteLength +
+            (command.input.publication.publicationDigest.length +
+              command.input.publication.currentManifestRef.length +
+              command.input.publication.baseCommit.length) *
+              2
+          : command.input.baseManifestRaw.byteLength + command.input.currentManifestRaw.byteLength)
       );
     case "workspace.manifest.serialize":
     case "workspace.reconcile.preflight":
@@ -91,7 +97,9 @@ function transferableManifestInput(command: GitWorkerCommand): ArrayBuffer[] {
     case "workspace.manifest.pair":
       return [command.input.baseRaw.buffer, command.input.currentRaw.buffer];
     case "workspace.manifest.stage-input":
-      return [command.input.baseManifestRaw.buffer, command.input.currentManifestRaw.buffer];
+      return "publication" in command.input
+        ? [command.input.publication.metadata.buffer]
+        : [command.input.baseManifestRaw.buffer, command.input.currentManifestRaw.buffer];
     case "workspace.manifest.serialize":
     case "workspace.reconcile.preflight":
     case "workspace.manifest.overlay":
@@ -365,10 +373,7 @@ export async function* readStagedWorkspaceManifestEntries(
 }
 
 export async function prepareWorkspaceStageInput(
-  input: Omit<
-    WorkspaceManifestComputationOperations["workspace.manifest.stage-input"]["input"],
-    "baseManifestRaw" | "currentManifestRaw"
-  > & { baseManifestRaw: string; currentManifestRaw: string },
+  input: WorkspaceStageInput<string>,
   signal?: AbortSignal,
 ) {
   signal?.throwIfAborted();
@@ -380,10 +385,19 @@ export async function prepareWorkspaceStageInput(
         inputPath: input.inputPath,
         stagingRoot: input.stagingRoot,
         stagedResultRef: input.stagedResultRef,
-        baseManifestRef: input.baseManifestRef,
-        currentManifestRef: input.currentManifestRef,
-        baseManifestRaw: encoder.encode(input.baseManifestRaw),
-        currentManifestRaw: encoder.encode(input.currentManifestRaw),
+        ...("publication" in input
+          ? {
+              publication: {
+                ...input.publication,
+                metadata: encoder.encode(input.publication.metadata),
+              },
+            }
+          : {
+              baseManifestRef: input.baseManifestRef,
+              currentManifestRef: input.currentManifestRef,
+              baseManifestRaw: encoder.encode(input.baseManifestRaw),
+              currentManifestRaw: encoder.encode(input.currentManifestRaw),
+            }),
       },
     },
     signal,

@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
@@ -10,19 +9,9 @@ import {
   type SessionRepositoryWorkspaceStore,
 } from "../../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
-import {
-  readGitHubRepositoryPublicationBlob,
-  readGitHubRepositoryPublicationMetadata,
-} from "../github-repository-publication-snapshot.js";
+import { readGitHubRepositoryPublicationMetadata } from "../github-repository-publication-snapshot.js";
 import { boundedWorkerError } from "./worker-error.js";
-import {
-  captureWorkspaceSnapshot,
-  parseWorkspaceManifestPair,
-} from "./workspace-manifest-worker.js";
-import {
-  MAX_RECONCILIATION_TOTAL_BYTES,
-  serializeWorkerWorkspaceManifest,
-} from "./workspace-manifest.js";
+import { parseWorkspaceManifestPair } from "./workspace-manifest-worker.js";
 import {
   requireWorkspaceResultGit,
   updateWorkspaceResultRefs,
@@ -46,7 +35,6 @@ export type SessionRepositoryCheckpointPayload = CheckpointSnapshot & {
   publicationStagingRoot?: string;
   publicationDigest?: string;
 };
-const digest = (raw: string) => `sha256:${createHash("sha256").update(raw).digest("hex")}`;
 const publicationRef = (ref: string) =>
   workerWorkspaceResultRef(`publication-${createHash("sha256").update(ref).digest("hex")}`);
 const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
@@ -208,59 +196,18 @@ async function stagePublication(params: {
     throw new Error("Repository publication checkpoint base changed");
   }
   params.assertCurrent();
-  const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-publication-payload-"));
-  try {
-    params.assertCurrent();
-    await fs.mkdir(path.join(stagingRoot, "blobs"), { mode: 0o700 });
-    params.assertCurrent();
-    await fs.writeFile(path.join(stagingRoot, "snapshot.json"), metadata, { mode: 0o600 });
-    params.assertCurrent();
-    await fs.writeFile(
-      path.join(stagingRoot, "binding.json"),
-      JSON.stringify({
-        currentManifestRef: params.currentManifestRef,
-        publicationDigest: params.publicationDigest,
-      }),
-      { mode: 0o600 },
-    );
-    let bytes = Buffer.byteLength(metadata);
-    const blobs = new Set(
-      snapshot.entries
-        .filter((entry) => entry.sha && entry.mode !== "160000")
-        .map((entry) => entry.sha!),
-    );
-    for (const sha of blobs) {
-      params.assertCurrent();
-      const content = await readGitHubRepositoryPublicationBlob(params.publicationStagingRoot, sha);
-      bytes += content.byteLength;
-      if (bytes > MAX_RECONCILIATION_TOTAL_BYTES) {
-        throw new Error("Repository publication checkpoint exceeds its byte budget");
-      }
-      params.assertCurrent();
-      await fs.writeFile(path.join(stagingRoot, "blobs", sha), content, { mode: 0o600 });
-    }
-    const baseManifestRaw = serializeWorkerWorkspaceManifest({
-      version: 1,
-      baseCommit: null,
-      entries: [],
-    });
-    params.assertCurrent();
-    const current = await captureWorkspaceSnapshot({ root: stagingRoot, baseCommit: null });
-    const currentManifestRaw = current.rawManifest;
-    params.assertCurrent();
-    return await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
-      assertCurrent: params.assertCurrent,
-      root: params.root,
-      stagingRoot,
-      stagedResultRef: params.candidateRef,
-      baseManifestRaw,
-      baseManifestRef: digest(baseManifestRaw),
-      currentManifestRaw,
-      currentManifestRef: current.manifestRef,
-    });
-  } finally {
-    await fs.rm(stagingRoot, { recursive: true, force: true });
-  }
+  return await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
+    assertCurrent: params.assertCurrent,
+    root: params.root,
+    stagingRoot: params.publicationStagingRoot,
+    stagedResultRef: params.candidateRef,
+    publication: {
+      metadata,
+      publicationDigest: params.publicationDigest,
+      currentManifestRef: params.currentManifestRef,
+      baseCommit: params.baseCommit,
+    },
+  });
 }
 
 export async function recoverSessionRepositoryCheckpoint(
