@@ -4,29 +4,61 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createChannelIngressQueue } from "./ingress-queue.js";
+import {
+  createChannelIngressQueue,
+  type ChannelIngressQueue,
+  type ChannelIngressQueueClaimRef,
+} from "./ingress-queue.js";
 
 export type IngressDrainTestPayload = { text: string };
 
 /** Observe the real commit, not just invocation of a queue write. */
-export function observeChannelIngressQueueWrite<
-  TMethod extends "complete" | "release" | "fail",
-  TArgs extends [string | { id: string }, ...unknown[]],
->(
-  queue: Record<TMethod, (...args: TArgs) => Promise<boolean>>,
-  method: TMethod,
+export function observeChannelIngressQueueWrite<TCompletedMetadata>(
+  queue: Pick<
+    ChannelIngressQueue<unknown, unknown, TCompletedMetadata>,
+    "complete" | "release" | "fail"
+  >,
+  method: "complete" | "release" | "fail",
   eventId?: string,
 ): Promise<boolean> {
   const committed = createDeferredCore<boolean>();
-  const write = queue[method];
-  queue[method] = (...args) => {
-    const result = write.apply(queue, args);
-    if (eventId === undefined || (typeof args[0] === "string" ? args[0] : args[0].id) === eventId) {
-      queue[method] = write;
+  const observe = (
+    id: string | ChannelIngressQueueClaimRef,
+    result: Promise<boolean>,
+    restore: () => void,
+  ) => {
+    if (eventId === undefined || (typeof id === "string" ? id : id.id) === eventId) {
+      restore();
       committed.resolve(result);
     }
     return result;
   };
+  switch (method) {
+    case "complete": {
+      const write = queue.complete;
+      queue.complete = (...args) =>
+        observe(args[0], write.apply(queue, args), () => {
+          queue.complete = write;
+        });
+      break;
+    }
+    case "release": {
+      const write = queue.release;
+      queue.release = (...args) =>
+        observe(args[0], write.apply(queue, args), () => {
+          queue.release = write;
+        });
+      break;
+    }
+    case "fail": {
+      const write = queue.fail;
+      queue.fail = (...args) =>
+        observe(args[0], write.apply(queue, args), () => {
+          queue.fail = write;
+        });
+      break;
+    }
+  }
   return committed.promise;
 }
 
