@@ -9,10 +9,12 @@ import {
 import { once } from "node:events";
 import {
   chmodSync,
+  closeSync,
   cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   realpathSync,
@@ -1069,15 +1071,22 @@ describePosix("scripts/pr per-PR operation lock", () => {
         OPENCLAW_TEST_FAILURE: failure,
         OPENCLAW_TEST_AUTH_FAILURE: failure === "auth" ? "1" : "0",
       };
-      const controller = spawn(
-        cli,
-        [command, "42", ...(command === "review-tests" ? ["missing-fixture.test.ts"] : [])],
-        {
-          cwd: repoDir,
-          env: childEnv,
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
+      // A concurrent fork can retain the copied script's writable descriptor on Linux.
+      const writableCli = openSync(cli, "r+");
+      let controller: ChildProcess;
+      try {
+        controller = spawn(
+          join(binDir, "bash"),
+          [cli, command, "42", ...(command === "review-tests" ? ["missing-fixture.test.ts"] : [])],
+          {
+            cwd: repoDir,
+            env: childEnv,
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        );
+      } finally {
+        closeSync(writableCli);
+      }
       let output = "";
       controller.stdout!.setEncoding("utf8");
       controller.stderr!.setEncoding("utf8");
