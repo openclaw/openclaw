@@ -39,7 +39,7 @@ export function classifyAssistantMediaError(err: unknown): AssistantMediaAvailab
     }
   }
   if (err instanceof Error && "code" in err) {
-    const errorCode = (err as { code?: unknown }).code;
+    const errorCode = err.code;
     switch (typeof errorCode === "string" ? errorCode : "") {
       case "unsupported-media-type":
         return { available: false, code: "unsupported-media-type", reason: "Not an image" };
