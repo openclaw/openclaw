@@ -8,9 +8,11 @@ import type {
 } from "openclaw/plugin-sdk/session-catalog";
 import { publishSessionCatalogHost } from "openclaw/plugin-sdk/session-catalog-paging";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
+import { withTimeout } from "./app-server/timeout.js";
 import { CodexCatalogLoadingError } from "./session-catalog-availability.js";
 import { currentCodexCatalogListDiagnostics } from "./session-catalog-diagnostics.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
+import { CODEX_CATALOG_LOCAL_HOST_RESPONSE_TIMEOUT_MS } from "./session-catalog-limits.js";
 import type { CatalogNode } from "./session-catalog-node-continue.js";
 import {
   CodexCatalogNodeSnapshots,
@@ -364,7 +366,18 @@ class CodexCatalogListDriver {
       return;
     }
     try {
-      const page = await host.page.next();
+      const pending = host.page.next();
+      let page: Awaited<typeof pending>;
+      try {
+        page = await withTimeout(
+          pending,
+          CODEX_CATALOG_LOCAL_HOST_RESPONSE_TIMEOUT_MS,
+          "Codex session catalog host timed out",
+        );
+      } catch (error) {
+        void pending.catch(() => undefined);
+        throw error;
+      }
       params.signal?.throwIfAborted();
       if (page.done) {
         host.value = await projectLocalHost(

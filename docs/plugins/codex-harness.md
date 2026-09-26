@@ -49,8 +49,12 @@ resident query. The Gateway also reads session entries from its resident session
 projection once ready; mutations can require exact-key refreshes before delivery.
 Native adoption bindings still use their storage owner, and paired-node enumeration
 can use network I/O. Previews remain limited to 500 characters;
-native hydration and catalog pages remain limited to 64 rows each. Native `thread/list` has no bounded metadata projection, so wire JSON can still be
-large. Complete catalog `thread/list` pages and metadata-only `thread/read` responses
+native hydration and catalog pages remain limited to 64 rows each. Native `thread/list`
+does not cap stored previews, so wire JSON can still be large. Catalog decoding
+truncates each `preview` string to the display prefix before JSON.parse so an
+oversized page does not exhaust incomplete-frame recovery. Each catalog host has
+its own fail-soft response budget, so one slow or unavailable host cannot stall
+the rest of the list. Complete catalog `thread/list` pages and metadata-only `thread/read` responses
 up to 64 KiB are parsed and projected inline, avoiding worker startup for small
 catalog refreshes. Larger responses use a worker owned by their app-server client.
 Both paths apply the same projection. The stdout reader waits for the compact result
@@ -62,8 +66,8 @@ projection and the captured row admission. Native control reads, normal streamin
 and full-history reads keep their in-process decoder. Control reads preserve complete
 native metadata, including model selection and direct-input capability; transcript
 consumers require complete native raw items.
-Each native list page contains at most 64 rows (less than 6 MiB of serialized
-catalog metadata even at all field limits). Both paths apply the existing
+Each native list page contains at most 64 rows. Incoming previews are truncated
+to the prefix used for display before parse, then both paths apply the existing
 prefix-first preview selector and 500-character display bound. Unchanged
 background rows can reuse resident previews before delivery. Large native payloads
 and their temporary objects stay in the worker. Metadata reads preserve exact

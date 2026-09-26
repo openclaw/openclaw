@@ -893,4 +893,42 @@ describe("Codex catalog list operation", () => {
       await Promise.allSettled(f.publications);
     }
   });
+
+  it("returns a sibling local host when one exceeds the catalog response timeout", async () => {
+    const f = await fixture(2);
+    vi.useFakeTimers();
+    const surviving = createDeferred<CodexSessionCatalogPage>();
+    const survivorStarted = createDeferred<void>();
+    f.listPage.mockImplementation(async (home) => {
+      if (home === "home-0") {
+        return new Promise(() => undefined);
+      }
+      survivorStarted.resolve();
+      return surviving.promise;
+    });
+    const operation = f.start();
+    const advancing = observe(operation.next());
+    try {
+      await survivorStarted.promise;
+      surviving.resolve(page(["survivor"]));
+      await nextTurn();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await expect(advancing.done).resolves.toMatchObject({
+        status: "fulfilled",
+        value: {
+          done: true,
+          hosts: [
+            { error: { code: "APP_SERVER_UNAVAILABLE" } },
+            { sessions: [{ threadId: "survivor" }] },
+          ],
+        },
+      });
+    } finally {
+      surviving.resolve(page([]));
+      await advancing.done;
+      operation.close();
+      await Promise.allSettled(f.publications);
+      vi.useRealTimers();
+    }
+  });
 });

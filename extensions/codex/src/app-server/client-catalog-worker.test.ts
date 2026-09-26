@@ -596,17 +596,32 @@ describe("Codex catalog worker transport", () => {
       const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
       const request = harness.client.request("thread/list", {}, { catalogPreview: true });
       harness.process.stdout.write(
-        `{"id":${JSON.stringify(requestId(harness))},"result":{"data":[{"id":"large","preview":"${"x".repeat(8 * 1024 * 1024)}\n`,
+        `{"id":${JSON.stringify(requestId(harness))},"result":{"unused":"${"x".repeat(8 * 1024 * 1024)}\n`,
       );
-      harness.process.stdout.write(complete ? 'last"}]}}\n' : "incomplete\n");
+      harness.process.stdout.write(complete ? 'last","data":[]}}\n' : "incomplete\n");
       if (!complete) {
         harness.send({ id: requestId(harness), result: { data: [] } });
       }
-      await expect(request).resolves.toEqual({
-        data: complete ? [{ id: "large", projectId: null, preview: "x".repeat(500) }] : [],
-      });
+      await expect(request).resolves.toEqual({ data: [] });
       expect(warn).toHaveBeenCalledTimes(complete ? 0 : 1);
       expect(parse).not.toHaveBeenCalled();
     },
   );
+
+  it("recovers a thread/list page whose preview exceeds the incomplete-message bound", async () => {
+    const harness = createHarness();
+    const parse = vi.spyOn(CodexAppServerMessageDecoder.prototype, "parse");
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const request = harness.client.request("thread/list", {}, { catalogPreview: true });
+    harness.process.stdout.write(
+      `{"id":${JSON.stringify(requestId(harness))},"result":{"data":[{"id":"large","preview":"${"x".repeat(9 * 1024 * 1024)}\n`,
+    );
+    harness.process.stdout.write(`${"y".repeat(1_000)}\n`);
+    harness.process.stdout.write('end"}]}}\n');
+    await expect(request).resolves.toEqual({
+      data: [{ id: "large", projectId: null, preview: "x".repeat(500) }],
+    });
+    expect(warn).not.toHaveBeenCalled();
+    expect(parse).not.toHaveBeenCalled();
+  });
 });
