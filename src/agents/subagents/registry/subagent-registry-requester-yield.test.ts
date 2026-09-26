@@ -39,7 +39,7 @@ function accepted(entry: SubagentRunRecord) {
   };
 }
 
-function settle(
+function settleRuns(
   entries: SubagentRunRecord[],
   overrides: Partial<Parameters<typeof settleRequesterTurnAfterSessionSpawns>[0]> = {},
 ) {
@@ -169,7 +169,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const schedule = vi.fn();
 
     expect(
-      settle([first, second], {
+      settleRuns([first, second], {
         persistOrThrow,
         schedule,
       }),
@@ -253,7 +253,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     });
 
     expect(
-      settle([entry], {
+      settleRuns([entry], {
         requesterAgentId: "main",
         persistOrThrow,
       }),
@@ -286,7 +286,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     });
 
     expect(() =>
-      settle([entry], {
+      settleRuns([entry], {
         requesterAgentId: "main",
         persistOrThrow: () => {
           throw new Error("persist failed");
@@ -317,7 +317,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       const schedule = vi.fn();
 
       expect(
-        settle([first, missing], {
+        settleRuns([first, missing], {
           requesterYielded,
           runs,
           persistOrThrow,
@@ -341,7 +341,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const schedule = vi.fn();
 
     expect(
-      settle([entry], {
+      settleRuns([entry], {
         schedule,
       }),
     ).toBe(true);
@@ -391,7 +391,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     };
     invalidate(entry);
 
-    expect(settle([entry])).toBe(true);
+    expect(settleRuns([entry])).toBe(true);
     expect(entry.requesterSettleWake?.requesterYieldBatch).toBe(true);
   });
 
@@ -416,7 +416,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       }),
     ).toBe(1);
     expect(
-      settle([entry], {
+      settleRuns([entry], {
         acceptedSessionSpawns: [
           { runId: originalRunId, childSessionKey: sessionKey, expectsCompletionMessage: true },
         ],
@@ -443,7 +443,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const schedule = vi.fn();
 
     expect(
-      settle([entry], {
+      settleRuns([entry], {
         schedule,
       }),
     ).toBe(true);
@@ -464,7 +464,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const schedule = vi.fn(() => calls.push("schedule"));
 
     expect(
-      settle([alpha, beta], {
+      settleRuns([alpha, beta], {
         persistOrThrow,
         schedule,
       }),
@@ -513,7 +513,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       }
 
       expect(
-        settle([inline, completion], {
+        settleRuns([inline, completion], {
           requesterYielded,
           runs,
           persistOrThrow,
@@ -547,7 +547,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const runs = new Map([[entry.runId, entry]]);
 
     expect(
-      settle([entry], {
+      settleRuns([entry], {
         runs,
       }),
     ).toBe(true);
@@ -571,7 +571,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const runs = new Map([[entry.runId, entry]]);
 
     expect(
-      settle([entry], {
+      settleRuns([entry], {
         runs,
       }),
     ).toBe(true);
@@ -584,7 +584,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const runs = new Map([[entry.runId, entry]]);
 
     expect(
-      settle([entry], {
+      settleRuns([entry], {
         requesterYielded: false,
         runs,
       }),
@@ -599,7 +599,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const failure = new Error("sqlite unavailable");
 
     expect(() =>
-      settle([entry], {
+      settleRuns([entry], {
         requesterYielded: false,
         runs,
         persistOrThrow: () => {
