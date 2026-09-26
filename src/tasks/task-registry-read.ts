@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-coordinator.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { isTaskFlowCancellationPending } from "./task-cancellation-state.js";
@@ -224,12 +224,7 @@ export async function prepareTaskRegistryReadOwner(
     ...mutations,
   ]);
   const errors = settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw createSqliteLifecycleAggregateError(errors, "Task read preparation failed", errors[0]);
-  }
+  throwSqliteLifecycleErrors(errors, "Task read preparation failed");
   const assertCurrent = () => assertTaskRegistryOwnerCurrent(context, store);
   assertCurrent();
   return { context, store, assertCurrent };

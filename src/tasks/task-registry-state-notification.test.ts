@@ -464,14 +464,12 @@ describe("task state notification acknowledgements", () => {
       if (phase === "initial") {
         commitTaskDeliveryFixture({ taskId: task.taskId });
       } else {
-        const load = deliveryRuntime.loadTaskRegistryDeliveryRuntime;
-        vi.spyOn(deliveryRuntime, "loadTaskRegistryDeliveryRuntime").mockImplementationOnce(
-          async () => {
-            const runtime = await load();
-            commitTaskDeliveryFixture({ taskId: task.taskId });
-            return runtime;
-          },
-        );
+        const load = deliveryRuntime.deliveryRuntimeLoader.load;
+        vi.spyOn(deliveryRuntime.deliveryRuntimeLoader, "load").mockImplementationOnce(async () => {
+          const runtime = await load();
+          commitTaskDeliveryFixture({ taskId: task.taskId });
+          return runtime;
+        });
       }
       const cleanupFailure = new Error("Synthetic post-queue preparation cleanup failure");
       const queued = failPreparationAfterQueue(cleanupFailure);
@@ -678,14 +676,12 @@ describe("task state notification acknowledgements", () => {
       const event = progress(task.createdAt + 10);
       const loading = createDeferred();
       const release = createDeferred();
-      const load = deliveryRuntime.loadTaskRegistryDeliveryRuntime;
-      vi.spyOn(deliveryRuntime, "loadTaskRegistryDeliveryRuntime").mockImplementationOnce(
-        async () => {
-          loading.resolve();
-          await release.promise;
-          return await load();
-        },
-      );
+      const load = deliveryRuntime.deliveryRuntimeLoader.load;
+      vi.spyOn(deliveryRuntime.deliveryRuntimeLoader, "load").mockImplementationOnce(async () => {
+        loading.resolve();
+        await release.promise;
+        return await load();
+      });
       sendMessage.mockResolvedValue(sent);
       const result = maybeDeliverTaskStateChangeUpdate(task, event);
       notifications.push({ complete: () => release.resolve(), result });

@@ -6,6 +6,7 @@ import {
   withPluginRuntimeGatewayContextResolver,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuationScope } from "../process/gateway-work-admission.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   assertAgentHarnessTaskRuntimeScope,
   type AgentHarnessTaskRuntimeScope,
@@ -29,12 +30,10 @@ type CompletionOwner = {
   run: <T>(run: () => T) => T;
   emit: (run: () => void) => void;
 };
-const registryKey = Symbol.for("openclaw.agentHarnessCompletionCustody.registry");
-// SAFETY: This module owns the process-global symbol and initializes only this typed WeakMap.
-const globalRegistry = globalThis as typeof globalThis & {
-  [registryKey]?: WeakMap<AgentHarnessCompletionCustody, CompletionOwner>;
-};
-const owners = (globalRegistry[registryKey] ??= new WeakMap());
+const owners = resolveGlobalSingleton(
+  Symbol.for("openclaw.agentHarnessCompletionCustody.registry"),
+  () => new WeakMap<AgentHarnessCompletionCustody, CompletionOwner>(),
+);
 
 function getCompletionOwner(
   custody: AgentHarnessCompletionCustody,

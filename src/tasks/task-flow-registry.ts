@@ -22,6 +22,7 @@ import {
   prepareTaskMirroredFlowSyncFromCurrent,
   type CreateFlowRecordParams,
   type ManagedTaskFlowCreateFields,
+  type ManagedTaskFlowMutation,
   type FlowRecordPatch,
   type PreparedTaskMirroredFlowSync,
   type TaskFlowSyncInput,
@@ -484,6 +485,17 @@ export function updateFlowRecordByIdExpectedRevision(params: {
     : result;
 }
 
+function mutateManagedFlow(
+  mutation: ManagedTaskFlowMutation,
+  params: FlowRecordPatch & { flowId: string; expectedRevision: number },
+): TaskFlowUpdateResult {
+  return updateFlowRecordByIdExpectedRevision({
+    flowId: params.flowId,
+    expectedRevision: params.expectedRevision,
+    patch: buildManagedTaskFlowPatch(mutation, params),
+  });
+}
+
 export function setFlowWaiting(params: {
   flowId: string;
   expectedRevision: number;
@@ -494,11 +506,7 @@ export function setFlowWaiting(params: {
   blockedSummary?: string | null;
   updatedAt?: number;
 }): TaskFlowUpdateResult {
-  return updateFlowRecordByIdExpectedRevision({
-    flowId: params.flowId,
-    expectedRevision: params.expectedRevision,
-    patch: buildManagedTaskFlowPatch("setWaiting", params),
-  });
+  return mutateManagedFlow("setWaiting", params);
 }
 
 export function resumeFlow(params: {
@@ -509,11 +517,7 @@ export function resumeFlow(params: {
   stateJson?: JsonValue | null;
   updatedAt?: number;
 }): TaskFlowUpdateResult {
-  return updateFlowRecordByIdExpectedRevision({
-    flowId: params.flowId,
-    expectedRevision: params.expectedRevision,
-    patch: buildManagedTaskFlowPatch("resume", params),
-  });
+  return mutateManagedFlow("resume", params);
 }
 
 export function finishFlow(params: {
@@ -524,11 +528,7 @@ export function finishFlow(params: {
   updatedAt?: number;
   endedAt?: number;
 }): TaskFlowUpdateResult {
-  return updateFlowRecordByIdExpectedRevision({
-    flowId: params.flowId,
-    expectedRevision: params.expectedRevision,
-    patch: buildManagedTaskFlowPatch("finish", params),
-  });
+  return mutateManagedFlow("finish", params);
 }
 
 export function failFlow(params: {
@@ -541,11 +541,7 @@ export function failFlow(params: {
   updatedAt?: number;
   endedAt?: number;
 }): TaskFlowUpdateResult {
-  return updateFlowRecordByIdExpectedRevision({
-    flowId: params.flowId,
-    expectedRevision: params.expectedRevision,
-    patch: buildManagedTaskFlowPatch("fail", params),
-  });
+  return mutateManagedFlow("fail", params);
 }
 
 export function requestFlowCancel(params: {
@@ -554,11 +550,7 @@ export function requestFlowCancel(params: {
   cancelRequestedAt?: number;
   updatedAt?: number;
 }): TaskFlowUpdateResult {
-  return updateFlowRecordByIdExpectedRevision({
-    flowId: params.flowId,
-    expectedRevision: params.expectedRevision,
-    patch: buildManagedTaskFlowPatch("requestCancel", params),
-  });
+  return mutateManagedFlow("requestCancel", params);
 }
 
 export function syncFlowFromTaskResult(task: TaskFlowSyncInput): TaskFlowSyncResult {

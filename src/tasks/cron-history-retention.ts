@@ -4,15 +4,11 @@ import {
   cronRunRecordStoreKey,
   resolveCronRunRecordTimestamp,
 } from "../cron/run-history-detail.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 import { resolveEffectiveTaskCleanupAfter } from "./task-retention.js";
 
 // Replaces configurable cron.runLog.keepLines with one ledger-owned bound.
 export const CRON_HISTORY_KEEP_PER_JOB = 2000;
-
-function isTerminalTask(task: TaskRecord): boolean {
-  return task.status !== "queued" && task.status !== "running";
-}
 
 type CronHistoryRetentionPartition = {
   history: TaskRecord[];
@@ -42,7 +38,7 @@ export function collectCronHistoryOverflowTaskIds(tasks: readonly TaskRecord[]):
     if (
       task.runtime !== "cron" ||
       !task.sourceId ||
-      !isTerminalTask(task) ||
+      !isTerminalTaskStatus(task.status) ||
       task.status === "lost"
     ) {
       continue;
@@ -76,7 +72,7 @@ export function shouldPruneTerminalTask(
   now: number,
   cronHistoryOverflowTaskIds: Pick<ReadonlySet<string>, "has">,
 ): boolean {
-  if (!isTerminalTask(task)) {
+  if (!isTerminalTaskStatus(task.status)) {
     return false;
   }
   if (cronHistoryOverflowTaskIds.has(task.taskId)) {

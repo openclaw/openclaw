@@ -1,4 +1,3 @@
-// TUI theme defines shared colors and text styles for Pi TUI components.
 import type {
   EditorTheme,
   MarkdownTheme,
@@ -138,10 +137,7 @@ const palette = lightMode ? lightPalette : darkPalette;
 const fg = (hex: string) => (text: string) => chalk.hex(hex)(text);
 const bg = (hex: string) => (text: string) => chalk.bgHex(hex)(text);
 
-/**
- * Render code blocks with the theme code color without pulling a parser into the base TUI path.
- * Returns an array of lines with ANSI escape codes.
- */
+// Keep code blocks parser-free on the base TUI path.
 function highlightCode(code: string): string[] {
   return code.split("\n").map((line) => fg(palette.code)(line));
 }
@@ -186,7 +182,7 @@ export const markdownTheme: MarkdownTheme = {
   highlightCode,
 };
 
-const baseSelectListTheme: SelectListTheme = {
+export const selectListTheme: SelectListTheme = {
   selectedPrefix: (text) => fg(palette.accent)(text),
   selectedText: (text) => chalk.bold(fg(palette.accent)(text)),
   description: (text) => fg(palette.dim)(text),
@@ -194,10 +190,8 @@ const baseSelectListTheme: SelectListTheme = {
   noMatch: (text) => fg(palette.dim)(text),
 };
 
-export const selectListTheme: SelectListTheme = baseSelectListTheme;
-
 export const filterableSelectListTheme = {
-  ...baseSelectListTheme,
+  ...selectListTheme,
   filterLabel: (text: string) => fg(palette.dim)(text),
 };
 
@@ -216,7 +210,7 @@ export const editorTheme: EditorTheme = {
 };
 
 export const searchableSelectListTheme: SearchableSelectListTheme = {
-  ...baseSelectListTheme,
+  ...selectListTheme,
   searchPrompt: (text) => fg(palette.accentSoft)(text),
   searchInput: (text) => fg(palette.text)(text),
   matchHighlight: (text) => chalk.bold(fg(palette.accent)(text)),

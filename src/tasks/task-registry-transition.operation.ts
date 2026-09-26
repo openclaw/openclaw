@@ -114,7 +114,7 @@ function prepareStateTransition(
   }
   const eventAt = params.lastEventAt ?? params.endedAt ?? now;
   if (params.status) {
-    patch.status = normalizeTaskStatus(params.status);
+    patch.status = nextStatus;
   }
   if (params.startedAt != null) {
     patch.startedAt = params.startedAt;
@@ -161,23 +161,20 @@ function prepareStateTransition(
     // arrive after queues are cleared, or they can repopulate the stopped session.
     patch.deliveryStatus = "not_applicable";
   }
+  const explicitEventSummary = normalizeTaskSummary(params.eventSummary);
   const eventSummary =
-    normalizeTaskSummary(params.eventSummary) ??
+    explicitEventSummary ??
     (nextStatus === "failed"
       ? normalizeTaskSummary(params.error ?? current.error)
       : nextStatus === "succeeded"
         ? normalizeTaskSummary(params.terminalSummary ?? current.terminalSummary)
         : undefined);
   const shouldAppendEvent =
-    (params.status && params.status !== current.status) ||
-    Boolean(normalizeTaskSummary(params.eventSummary));
+    (params.status && params.status !== current.status) || Boolean(explicitEventSummary);
   const nextEvent = shouldAppendEvent
     ? appendTaskEvent({
         at: eventAt,
-        kind:
-          params.status && normalizeTaskStatus(params.status) !== current.status
-            ? normalizeTaskStatus(params.status)
-            : "progress",
+        kind: params.status && nextStatus !== current.status ? nextStatus : "progress",
         summary: eventSummary,
       })
     : undefined;

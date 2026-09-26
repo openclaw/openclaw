@@ -563,10 +563,7 @@ export async function readScheduledTaskRuntime(
     probe.state === 4 ? "running" : probe.state === 1 || probe.state === 3 ? "stopped" : "unknown";
   // A detached/lingering process may outlive its task. Retain exact persisted-argv ownership
   // evidence (including PID) without treating it as proof of Scheduler supervision.
-  const observedRuntime =
-    deadlineMs === undefined
-      ? await resolveListenerBackedScheduledTaskRuntime(env)
-      : await resolveListenerBackedScheduledTaskRuntime(env, deadlineMs);
+  const observedRuntime = await resolveListenerBackedScheduledTaskRuntime(env, deadlineMs);
   return {
     ...observedRuntime,
     status: status === "unknown" ? status : (observedRuntime?.status ?? status),

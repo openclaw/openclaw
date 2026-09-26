@@ -1,6 +1,7 @@
 // Resolves task runtime scope for agent harness launches.
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
@@ -11,16 +12,10 @@ type ScopeRegistry = {
   hostIssuedScopes: WeakSet<object>;
 };
 
-type GlobalWithScopeRegistry = typeof globalThis & {
-  [scopeRegistryKey]?: ScopeRegistry;
-};
-
 function getScopeRegistry(): ScopeRegistry {
-  const globalState = globalThis as GlobalWithScopeRegistry;
-  globalState[scopeRegistryKey] ??= {
+  return resolveGlobalSingleton(scopeRegistryKey, () => ({
     hostIssuedScopes: new WeakSet<object>(),
-  };
-  return globalState[scopeRegistryKey];
+  }));
 }
 
 export type AgentHarnessTaskRuntimeScope = {

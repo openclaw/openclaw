@@ -22,7 +22,7 @@ import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-flow-link.js"
 import { updateTask } from "./task-registry-mutation.js";
 import { finalizeTaskRecordByRunId, updateTaskStateByRunId } from "./task-registry-record-api.js";
 import { cloneTaskRecord } from "./task-registry-records.js";
-import { loadTaskRegistryControlRuntime } from "./task-registry-runtime-loaders.js";
+import { controlRuntimeLoader } from "./task-registry-runtime-loaders.js";
 import {
   ensureTaskRegistryReady,
   getTasksByRunScope,
@@ -212,7 +212,7 @@ export async function cancelTaskById(params: {
     // owning subagent run before promotion so its canonical completion can win.
     if (isBackgroundExecTask(task)) {
       const processSessionId = task.sourceId?.trim();
-      const { cancelBackgroundExecSession } = await loadTaskRegistryControlRuntime();
+      const { cancelBackgroundExecSession } = await controlRuntimeLoader.load();
       for (let pending = control?.prepareRead?.(); pending; pending = control?.prepareRead?.()) {
         await pending;
       }
@@ -235,7 +235,7 @@ export async function cancelTaskById(params: {
         : notCancelled(result.error);
     } else {
       if (task.runtime === "cron") {
-        const { cancelActiveCronTaskRun } = await loadTaskRegistryControlRuntime();
+        const { cancelActiveCronTaskRun } = await controlRuntimeLoader.load();
         for (let pending = control?.prepareRead?.(); pending; pending = control?.prepareRead?.()) {
           await pending;
         }
@@ -263,7 +263,7 @@ export async function cancelTaskById(params: {
             : "Task has no cancellable child session.",
         );
       } else if (task.runtime === "acp") {
-        const { getAcpSessionManager } = await loadTaskRegistryControlRuntime();
+        const { getAcpSessionManager } = await controlRuntimeLoader.load();
         for (let pending = control?.prepareRead?.(); pending; pending = control?.prepareRead?.()) {
           await pending;
         }
@@ -301,7 +301,7 @@ export async function cancelTaskById(params: {
           return settled;
         }
       } else if (task.runtime === "subagent") {
-        const { killSubagentRunAdmin } = await loadTaskRegistryControlRuntime();
+        const { killSubagentRunAdmin } = await controlRuntimeLoader.load();
         for (let pending = control?.prepareRead?.(); pending; pending = control?.prepareRead?.()) {
           await pending;
         }

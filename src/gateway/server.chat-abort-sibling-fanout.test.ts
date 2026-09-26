@@ -35,7 +35,7 @@ import {
   type SessionWorkAdmissionLease,
 } from "../sessions/session-lifecycle-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
-import { loadTaskRegistryStateFromSqliteReadOnlyResult } from "../tasks/task-registry.store.sqlite.js";
+import { loadTaskRegistryStateFromSqliteReadOnly } from "../tasks/task-registry.store.sqlite.js";
 import {
   agentCommandMock,
   connectOk,
@@ -329,9 +329,8 @@ for (const { name, fault, replaceParent } of [
         const persistedRuns = new Map(
           loadSubagentRunsForControllerFromSqlite(parentKey).map((run) => [run.runId, run]),
         );
-        const persistedTasks = loadTaskRegistryStateFromSqliteReadOnlyResult();
-        expect(persistedTasks.state).toBe("ready");
-        const tasks = [...persistedTasks.snapshot.tasks.values()].filter((task) =>
+        const persistedTasks = loadTaskRegistryStateFromSqliteReadOnly();
+        const tasks = [...persistedTasks.tasks.values()].filter((task) =>
           selected.includes(task.runId ?? ""),
         );
         expect(tasks).toHaveLength(selected.length);

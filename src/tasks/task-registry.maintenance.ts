@@ -91,10 +91,7 @@ import {
   summarizeTaskAuditFindings,
 } from "./task-registry.audit.js";
 import type { TaskAuditFinding, TaskAuditSummary } from "./task-registry.audit.js";
-import {
-  listTaskRegistryRecordsByRuntimeSourceIdFromSqlite,
-  loadTaskRegistryStateFromSqliteReadOnlyResult,
-} from "./task-registry.store.sqlite.js";
+import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "./task-registry.store.sqlite.js";
 import {
   addTaskStatusSummaryRecord,
   createEmptyTaskStatusSummary,
@@ -489,22 +486,6 @@ function reconcileTaskRecordsForOperatorInspection(tasks: TaskRecord[]): TaskRec
 export function reconcileInspectableTasks(): TaskRecord[] {
   ensureTaskRegistryReady();
   return reconcileTaskRecordsForOperatorInspection(listTaskRecords());
-}
-
-/** Reads and reconciles persisted tasks without initializing the process task runtime. */
-export function listInspectableTasksReadOnly(): TaskRecord[] {
-  return inspectTasksReadOnly().tasks;
-}
-
-export function inspectTasksReadOnly(): {
-  tasks: TaskRecord[];
-  state: "ready" | "migration-required";
-} {
-  const loaded = loadTaskRegistryStateFromSqliteReadOnlyResult();
-  return {
-    state: loaded.state,
-    tasks: reconcileTaskRecordsForOperatorInspection([...loaded.snapshot.tasks.values()]),
-  };
 }
 
 type TaskStatusInspection = TaskStatusSummary & { state: "ready" | "migration-required" };

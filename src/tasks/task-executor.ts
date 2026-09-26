@@ -38,6 +38,7 @@ import {
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-runtime-internal.js";
 import { isOneTaskFlowEligible } from "./task-initial-flow.rules.js";
+import type { CreateTaskRecordParams } from "./task-registry-records.js";
 import { withTaskRegistryMutation } from "./task-registry-state.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskDeliveryState, TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
@@ -90,11 +91,8 @@ function ensureSingleTaskFlow(params: {
   }
 }
 
-export function createQueuedTaskRunCore(params: DetachedTaskCreateParams): TaskRecord | null {
-  const task = createTaskRecord({
-    ...params,
-    status: "queued",
-  });
+function createTaskRunCore(params: CreateTaskRecordParams): TaskRecord | null {
+  const task = createTaskRecord(params);
   if (!task) {
     return null;
   }
@@ -102,6 +100,10 @@ export function createQueuedTaskRunCore(params: DetachedTaskCreateParams): TaskR
     task,
     requesterOrigin: params.requesterOrigin,
   });
+}
+
+export function createQueuedTaskRunCore(params: DetachedTaskCreateParams): TaskRecord | null {
+  return createTaskRunCore({ ...params, status: "queued" });
 }
 
 export function getFlowTaskSummary(flowId: string): TaskRegistrySummary {
@@ -111,17 +113,7 @@ export function getFlowTaskSummary(flowId: string): TaskRegistrySummary {
 export function createRunningTaskRunCore(
   params: DetachedRunningTaskCreateParams,
 ): TaskRecord | null {
-  const task = createTaskRecord({
-    ...params,
-    status: "running",
-  });
-  if (!task) {
-    return null;
-  }
-  return ensureSingleTaskFlow({
-    task,
-    requesterOrigin: params.requesterOrigin,
-  });
+  return createTaskRunCore({ ...params, status: "running" });
 }
 
 export function completeTaskRunByRunIdCore(params: DetachedTaskCompleteParams) {

@@ -45,10 +45,6 @@ export async function loadTaskAcpSessionCloser(): Promise<CloseAcpSession> {
   };
 }
 
-function getNormalizedTaskChildSessionKey(task: TaskRecord): string | undefined {
-  return normalizeOptionalString(task.childSessionKey);
-}
-
 function getAcpSessionParentKeys(acpEntry: Pick<AcpSessionStoreEntry, "entry">): string[] {
   return [
     normalizeOptionalString(acpEntry.entry?.spawnedBy),
@@ -68,10 +64,6 @@ function isParentOwnedAcpSessionTask(
   const requesterKey = normalizeOptionalString(task.requesterSessionKey);
   const parentKeys = getAcpSessionParentKeys({ entry });
   return parentKeys.some((parentKey) => parentKey === ownerKey || parentKey === requesterKey);
-}
-
-function isParentOwnedAcpSessionEntry(acpEntry: Pick<AcpSessionStoreEntry, "entry">): boolean {
-  return getAcpSessionParentKeys(acpEntry).length > 0;
 }
 
 function hasActiveSessionBinding(
@@ -96,7 +88,7 @@ function shouldCloseTerminalAcpSession(
   if (task.runtime !== "acp" || task.status === "queued" || task.status === "running") {
     return false;
   }
-  const sessionKey = getNormalizedTaskChildSessionKey(task);
+  const sessionKey = normalizeOptionalString(task.childSessionKey);
   if (
     !sessionKey ||
     runtime.hasActiveTaskForChildSessionKey({
@@ -128,7 +120,7 @@ function shouldCloseOrphanedParentOwnedAcpSession(
   runtime: TaskRegistryAcpMaintenanceRuntime,
   acpEntry: AcpSessionStoreEntry,
 ): boolean {
-  if (!acpEntry.entry || !acpEntry.acp || !isParentOwnedAcpSessionEntry(acpEntry)) {
+  if (!acpEntry.entry || !acpEntry.acp || getAcpSessionParentKeys(acpEntry).length === 0) {
     return false;
   }
   const sessionKey = normalizeOptionalString(acpEntry.sessionKey);
@@ -157,7 +149,7 @@ export async function cleanupTerminalAcpSession(
   if (!shouldCloseTerminalAcpSession(runtime, task)) {
     return;
   }
-  const sessionKey = getNormalizedTaskChildSessionKey(task);
+  const sessionKey = normalizeOptionalString(task.childSessionKey);
   if (!sessionKey) {
     return;
   }
@@ -169,39 +161,12 @@ export async function cleanupTerminalAcpSession(
   if (!acpEntry || !closeAcpSession) {
     return;
   }
-  assertOwnerCurrent();
-  try {
-    await closeAcpSession({
-      cfg: acpEntry.cfg,
-      agentId: acpEntry.agentId,
-      sessionKey,
-      reason: "terminal-task-cleanup",
-    });
-  } catch (error) {
-    assertOwnerCurrent();
-    log.warn("Failed to close terminal ACP session during task maintenance", {
-      sessionKey,
-      taskId: task.taskId,
-      error,
-    });
-    return;
-  }
-  assertOwnerCurrent();
-  try {
-    await runtime.unbindSessionBindings?.({
-      targetSessionKey: sessionKey,
-      reason: "terminal-task-cleanup",
-    });
-  } catch (error) {
-    assertOwnerCurrent();
-    log.warn("Failed to unbind terminal ACP session during task maintenance", {
-      sessionKey,
-      taskId: task.taskId,
-      error,
-    });
-    return;
-  }
-  assertOwnerCurrent();
+  return closeAndUnbindAcpSession(runtime, closeAcpSession, assertOwnerCurrent, {
+    cfg: acpEntry.cfg,
+    agentId: acpEntry.agentId,
+    sessionKey,
+    taskId: task.taskId,
+  });
 }
 
 export async function cleanupOrphanedParentOwnedAcpSessions(
@@ -238,36 +203,40 @@ export async function cleanupOrphanedParentOwnedAcpSessions(
     if (!closeAcpSession) {
       continue;
     }
-    assertOwnerCurrent();
-    try {
-      await closeAcpSession({
-        cfg: acpEntry.cfg,
-        agentId: acpEntry.agentId,
-        sessionKey,
-        reason: "orphaned-parent-task-cleanup",
-      });
-    } catch (error) {
-      assertOwnerCurrent();
-      log.warn("Failed to close orphaned parent-owned ACP session during task maintenance", {
-        sessionKey,
-        error,
-      });
-      continue;
-    }
-    assertOwnerCurrent();
-    try {
-      await runtime.unbindSessionBindings?.({
-        targetSessionKey: sessionKey,
-        reason: "orphaned-parent-task-cleanup",
-      });
-    } catch (error) {
-      assertOwnerCurrent();
-      log.warn("Failed to unbind orphaned parent-owned ACP session during task maintenance", {
-        sessionKey,
-        error,
-      });
-      continue;
-    }
-    assertOwnerCurrent();
+    await closeAndUnbindAcpSession(runtime, closeAcpSession, assertOwnerCurrent, {
+      cfg: acpEntry.cfg,
+      agentId: acpEntry.agentId,
+      sessionKey,
+    });
   }
+}
+
+async function closeAndUnbindAcpSession(
+  runtime: TaskRegistryAcpMaintenanceRuntime,
+  closeAcpSession: CloseAcpSession,
+  assertOwnerCurrent: () => void,
+  target: Pick<AcpSessionStoreEntry, "cfg" | "agentId" | "sessionKey"> & { taskId?: string },
+): Promise<void> {
+  const { cfg, agentId, sessionKey, taskId } = target;
+  const reason = taskId === undefined ? "orphaned-parent-task-cleanup" : "terminal-task-cleanup";
+  const description =
+    taskId === undefined ? "orphaned parent-owned ACP session" : "terminal ACP session";
+  const metadata = { sessionKey, ...(taskId === undefined ? {} : { taskId }) };
+  assertOwnerCurrent();
+  try {
+    await closeAcpSession({ cfg, agentId, sessionKey, reason });
+  } catch (error) {
+    assertOwnerCurrent();
+    log.warn(`Failed to close ${description} during task maintenance`, { ...metadata, error });
+    return;
+  }
+  assertOwnerCurrent();
+  try {
+    await runtime.unbindSessionBindings?.({ targetSessionKey: sessionKey, reason });
+  } catch (error) {
+    assertOwnerCurrent();
+    log.warn(`Failed to unbind ${description} during task maintenance`, { ...metadata, error });
+    return;
+  }
+  assertOwnerCurrent();
 }

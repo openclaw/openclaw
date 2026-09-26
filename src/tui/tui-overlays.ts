@@ -1,15 +1,9 @@
-// Renders TUI overlays for help, sessions, status, and command UI.
 import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 
-// Small adapter around pi-tui overlay focus behavior.
 type OverlayHost = Pick<TUI, "showOverlay" | "hideOverlay" | "hasOverlay" | "setFocus">;
 
 /** Creates open/close handlers that restore focus when no overlay is active. */
 export function createOverlayHandlers(host: OverlayHost, fallbackFocus: Component) {
-  const openOverlay: TUI["showOverlay"] = (...args) => {
-    return host.showOverlay(...args);
-  };
-
   const closeOverlay = (handle?: OverlayHandle) => {
     if (handle) {
       handle.hide();
@@ -25,5 +19,5 @@ export function createOverlayHandlers(host: OverlayHost, fallbackFocus: Componen
     host.setFocus(fallbackFocus);
   };
 
-  return { openOverlay, closeOverlay };
+  return { openOverlay: host.showOverlay.bind(host), closeOverlay };
 }

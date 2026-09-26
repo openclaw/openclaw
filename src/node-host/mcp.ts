@@ -10,6 +10,7 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import pLimit from "p-limit";
@@ -177,13 +178,6 @@ function reserveDescriptorName(baseName: string, usedNames: Set<string>): string
   }
 }
 
-function normalizeInputSchema(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return { type: "object", properties: {}, additionalProperties: true };
-}
-
 /** Builds provider-safe MCP descriptors in stable server/tool order. */
 function buildNodeMcpToolDescriptors(
   listedTools: ReadonlyArray<{ serverName: string; tool: Tool }>,
@@ -206,7 +200,11 @@ function buildNodeMcpToolDescriptors(
           "MCP tool",
         NODE_MCP_DESCRIPTION_MAX_CHARS,
       ),
-      parameters: normalizeInputSchema(tool.inputSchema),
+      parameters: asOptionalRecord(tool.inputSchema) ?? {
+        type: "object",
+        properties: {},
+        additionalProperties: true,
+      },
       command: NODE_MCP_TOOLS_CALL_COMMAND,
       mcp: { server: serverName, tool: toolName },
     };

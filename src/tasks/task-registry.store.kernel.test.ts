@@ -281,9 +281,9 @@ it("isolates supplied connections and rolls back compound task, flow, delivery, 
     expect(tasks.readTaskRecord(first, task.taskId)).toEqual(task);
     expect(tasks.readTaskRecord(second, task.taskId)?.task).toBe("Other connection");
     expect(flows.readTaskFlowRecord(first, flow.flowId)).toEqual(flow);
-    expect(tasks.readTaskRegistrySnapshotIfReady({ db: first, path: ":memory:" }).state).toBe(
-      "ready",
-    );
+    expect(
+      tasks.readTaskRegistrySnapshotIfReady({ db: first, path: ":memory:" }).tasks.get(task.taskId),
+    ).toEqual(task);
     expect(tasks.listTaskRecordsByOwnerKeyInDatabase(first, task.ownerKey)).toEqual([task]);
     expect(tasks.listTaskRecordsByRuntimeSourceIdInDatabase(first, "cron", "source-a")).toEqual([
       task,

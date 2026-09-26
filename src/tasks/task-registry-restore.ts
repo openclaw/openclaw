@@ -1,5 +1,8 @@
 import { formatErrorMessage } from "../infra/errors.js";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import {
+  createSqliteLifecycleAggregateError,
+  throwSqliteLifecycleErrors,
+} from "../infra/sqlite-coordinator.js";
 import { isSqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import type { OpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -138,16 +141,7 @@ export function createAsyncRegistryRestore<Snapshot, Store extends SnapshotStore
             errors.push(error);
           }
         }
-        if (errors.length === 1) {
-          throw errors[0];
-        }
-        if (errors.length > 1) {
-          throw createSqliteLifecycleAggregateError(
-            errors,
-            "Registry restore receipt reconciliation failed",
-            errors[0],
-          );
-        }
+        throwSqliteLifecycleErrors(errors, "Registry restore receipt reconciliation failed");
       };
       let failCurrent: (() => boolean) | undefined;
       try {

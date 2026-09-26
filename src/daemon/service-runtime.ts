@@ -2,9 +2,8 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
-  findServiceOwnershipRefusal,
+  assertServiceInspectionFallbackAllowed,
   ServiceInspectionError,
   type ServiceInspectionReason,
 } from "./service-inspection-error.js";
@@ -69,13 +68,7 @@ export function createServiceRuntimeInspectionFailure(
   error: unknown,
   timeoutMs?: number,
 ): GatewayServiceRuntime {
-  if (hasCommandProcessCleanupError(error)) {
-    throw error;
-  }
-  const refusal = findServiceOwnershipRefusal(error);
-  if (refusal) {
-    throw refusal;
-  }
+  assertServiceInspectionFallbackAllowed(error);
   const rawDetail = error instanceof Error ? error.message : String(error);
   return {
     status: "unknown",

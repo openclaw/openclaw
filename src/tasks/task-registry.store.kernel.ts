@@ -117,11 +117,6 @@ const TASK_DELIVERY_STATE_SELECT_COLUMNS = [
   "last_notified_event_at",
 ] as const;
 
-export type TaskRegistryReadOnlyLoadResult = {
-  state: "ready" | "migration-required";
-  snapshot: TaskRegistryStoreSnapshot;
-};
-
 function serializeJson(value: unknown): string | null {
   return value === undefined ? null : (JSON.stringify(value) ?? null);
 }
@@ -655,13 +650,10 @@ export function readTaskRegistryMutationSnapshotInDatabase(
 /** Inspect only the supplied existing connection; never create or repair its schema. */
 export function readTaskRegistrySnapshotIfReady(
   database: TaskRegistryDatabase,
-): TaskRegistryReadOnlyLoadResult {
+): TaskRegistryStoreSnapshot {
   return hasReadableTaskRegistrySchema(database.db)
-    ? { state: "ready", snapshot: readTaskRegistrySnapshot(database) }
-    : {
-        state: "migration-required",
-        snapshot: { tasks: new Map(), deliveryStates: new Map() },
-      };
+    ? readTaskRegistrySnapshot(database)
+    : { tasks: new Map(), deliveryStates: new Map() };
 }
 
 export function hasReadableTaskRegistrySchema(db: DatabaseSync): boolean {

@@ -324,6 +324,8 @@ export class QuestionPrompt implements Component, Focusable {
     if (this.closed) {
       return [];
     }
+    const rendered: string[] = [];
+    const appendText = (text: string) => rendered.push(...new Text(text, 0, 0).render(width));
     const question = this.question;
     const seconds = Math.max(0, Math.ceil((this.record.expiresAtMs - Date.now()) / 1_000));
     const lines = [
@@ -346,23 +348,19 @@ export class QuestionPrompt implements Component, Focusable {
         lines.push(theme.accent("An existing value will be replaced."));
       }
     }
-    const rendered = new Text(lines.join("\n"), 0, 0).render(width);
+    appendText(lines.join("\n"));
     for (const [index, row] of this.rows().entries()) {
       const selected = !this.editing && index === this.selectedRow;
       const checked = row.kind === "option" && this.selections.get(this.step)?.has(row.index);
       const marker =
         row.kind === "option" && question.multiSelect ? `[${checked ? "x" : " "}] ` : "";
-      rendered.push(
-        ...new Text(
-          (selected ? theme.accent : theme.fg)(`${selected ? "›" : " "} ${marker}${row.label}`),
-          0,
-          0,
-        ).render(width),
+      appendText(
+        (selected ? theme.accent : theme.fg)(`${selected ? "›" : " "} ${marker}${row.label}`),
       );
       if (row.kind === "option") {
         const description = question.options[row.index]?.description;
         if (description) {
-          rendered.push(...new Text(theme.dim(`    ${safeText(description)}`), 0, 0).render(width));
+          appendText(theme.dim(`    ${safeText(description)}`));
         }
       }
       if (row.kind === "other" && (this.editing || this.draft())) {
@@ -374,28 +372,18 @@ export class QuestionPrompt implements Component, Focusable {
         );
       }
     }
-    rendered.push(
-      ...new Text(
-        theme.dim(
-          this.editing
-            ? "Enter next/submit · Tab choices · Esc collapse"
-            : `↑/↓ or numbers select${question.multiSelect ? " · Space toggles" : ""} · Enter confirm · Esc collapse`,
-        ),
-        0,
-        0,
-      ).render(width),
+    appendText(
+      theme.dim(
+        this.editing
+          ? "Enter next/submit · Tab choices · Esc collapse"
+          : `↑/↓ or numbers select${question.multiSelect ? " · Space toggles" : ""} · Enter confirm · Esc collapse`,
+      ),
     );
     if (question.isSecret) {
-      rendered.push(
-        ...new Text(
-          theme.dim("Masked entry · Answer through this prompt, not the composer."),
-          0,
-          0,
-        ).render(width),
-      );
+      appendText(theme.dim("Masked entry · Answer through this prompt, not the composer."));
     }
     if (this.message) {
-      rendered.push(...new Text(theme.error(this.message), 0, 0).render(width));
+      appendText(theme.error(this.message));
     }
     return rendered;
   }

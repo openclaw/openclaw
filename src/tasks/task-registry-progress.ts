@@ -24,7 +24,7 @@ import {
   resolveYieldedTaskProgress,
   type ProgressRead,
 } from "./task-progress-batch.js";
-import { loadTaskRegistryDeliveryRuntime } from "./task-registry-runtime-loaders.js";
+import { deliveryRuntimeLoader } from "./task-registry-runtime-loaders.js";
 import {
   getTasksByRunId,
   tasks,
@@ -552,7 +552,7 @@ async function runProgressPublication(key: string, batch: TaskProgressBatch): Pr
           return null;
         }
       } else {
-        const { sendMessage } = await loadTaskRegistryDeliveryRuntime();
+        const { sendMessage } = await deliveryRuntimeLoader.load();
         assertCurrent();
         const idempotencyKey = `task-progress:${createHash("sha256").update(key).digest("hex")}:${Date.now()}`;
         await sendMessage({

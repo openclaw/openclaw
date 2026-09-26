@@ -82,16 +82,6 @@ export function updateTaskStateByRunId(params: TaskRunStateTransitionParams): Ta
   return transitionTaskRecordsByRunNative({ kind: "state", params });
 }
 
-function updateTaskDeliveryByRunId(params: {
-  runId: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
-  deliveryStatus: TaskDeliveryStatus;
-  error?: string;
-}) {
-  return transitionTaskRecordsByRunNative({ kind: "delivery", params });
-}
-
 export function markTaskRunningByRunId(params: {
   runId: string;
   taskId?: string;
@@ -186,7 +176,7 @@ export function setTaskRunDeliveryStatusByRunId(params: {
   deliveryStatus: TaskDeliveryStatus;
   error?: string;
 }) {
-  return updateTaskDeliveryByRunId(params);
+  return transitionTaskRecordsByRunNative({ kind: "delivery", params });
 }
 
 export function updateTaskNotifyPolicyById(params: {

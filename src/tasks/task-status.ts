@@ -1,11 +1,11 @@
 // Builds task status summaries and formatted status text for user-facing surfaces.
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-facing-text.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
   stripInternalRuntimeContext,
 } from "../agents/internal-runtime-context.js";
-import { truncateUtf16Safe } from "../utils.js";
 import { matchesTaskStatusFilter, type TaskRecord } from "./task-registry.types.js";
 
 const FAILURE_TASK_STATUSES = new Set(["failed", "timed_out", "lost", "blocked"]);
@@ -24,11 +24,7 @@ export function isTaskStatusIssue(task: Pick<TaskRecord, "status" | "terminalOut
 
 /** Applies a task display limit to text that its caller has already sanitized. */
 export function truncateTaskStatusText(value: string, maxChars: number): string {
-  const trimmed = value.trim();
-  if (trimmed.length <= maxChars) {
-    return trimmed;
-  }
-  return `${truncateUtf16Safe(trimmed, Math.max(0, maxChars - 1)).trimEnd()}…`;
+  return truncateWithMarker(value.trim(), maxChars, { marker: "…", reserve: 1, trimEnd: true });
 }
 
 function stripInlineLeakedInternalContext(value: string): string {
