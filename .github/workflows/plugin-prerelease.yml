@@ -302,14 +302,14 @@ jobs:
                   .flatMap((shard) => shard.extensionIds)
                   .filter((extensionId) => extensionId !== "telegram")
               : [];
-            const batchShards = (
+            const batchShards = await Promise.all((
               hasJobSplitter
                 ? planner.createExtensionTestShards({
                     extensionIds: genericExtensionIds,
                     shardCount: planner.DEFAULT_EXTENSION_TEST_SHARD_COUNT,
                   })
                 : allExtensionShards
-            ).map((shard) => ({
+            ).map(async (shard) => ({
               check_name: shard.checkName,
               extensions_csv: shard.extensionIds.join(","),
               exclusion_configs: shard.planGroups.map((group) => ({
@@ -329,12 +329,12 @@ jobs:
                     : "blacksmith-4vcpu-ubuntu-2404",
               shard_index: shard.index + 1,
               task: "extensions-batch",
-              ...resolveExtensionRuntime({
+              ...await resolveExtensionRuntime({
                 planGroups: shard.planGroups,
                 fullReleaseValidation,
                 vitestArgs: extensionVitestArgs,
               }),
-            }));
+            })));
             const telegramShards = [];
             for (const group of telegramPlanGroups) {
               const vitestConfig = (await import(`./${group.config}`)).default;

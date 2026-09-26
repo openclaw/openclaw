@@ -196,7 +196,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     },
   ])(
     "selects runtime setup for $name",
-    ({ fullReleaseValidation, memory, vitestArgs, requiresBun }) => {
+    async ({ fullReleaseValidation, memory, vitestArgs, requiresBun }) => {
       const planGroups = [
         {
           config: "test/vitest/vitest.extension-database-workers.config.ts",
@@ -213,7 +213,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       ];
 
       expect(
-        resolvePluginPrereleaseExtensionRuntime({ planGroups, fullReleaseValidation, vitestArgs }),
+        await resolvePluginPrereleaseExtensionRuntime({
+          planGroups,
+          fullReleaseValidation,
+          vitestArgs,
+        }),
       ).toEqual({ test_runtime_policy: requiresBun ? "dual" : "node", requires_bun: requiresBun });
     },
   );

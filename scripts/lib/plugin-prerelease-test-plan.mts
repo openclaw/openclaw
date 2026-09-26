@@ -1,5 +1,4 @@
 // Defines the plugin prerelease validation surface and matching test lanes.
-import { ciTestShardRequiresBun } from "./ci-test-runtime.mts";
 import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "./docker-e2e-scenarios.mts";
 import type { ExtensionTestPlanGroup } from "./extension-test-plan.mts";
 
@@ -147,7 +146,7 @@ function coveredSurfaces(entries: readonly PrereleaseSurfaceEntry[]): string[] {
 }
 
 /** Keep each release batch on Node and add only its qualified Bun groups. */
-export function resolvePluginPrereleaseExtensionRuntime({
+export async function resolvePluginPrereleaseExtensionRuntime({
   planGroups,
   fullReleaseValidation,
   vitestArgs = [],
@@ -155,21 +154,24 @@ export function resolvePluginPrereleaseExtensionRuntime({
   planGroups: readonly Pick<ExtensionTestPlanGroup, "config" | "roots">[];
   fullReleaseValidation: boolean;
   vitestArgs?: readonly string[];
-}): { test_runtime_policy: "dual" | "node"; requires_bun: boolean } {
-  const requiresBun =
-    fullReleaseValidation &&
-    ciTestShardRequiresBun(
-      {
-        groups: planGroups.map(({ config, roots }) => ({
-          configs: [config],
-          includePatterns: roots.map((root) =>
-            /\.test\.tsx?$/u.test(root) ? root : `${root}/**/*.test.ts`,
-          ),
-          vitestArgs,
-        })),
-      },
-      "dual",
-    );
+}): Promise<{ test_runtime_policy: "dual" | "node"; requires_bun: boolean }> {
+  if (!fullReleaseValidation) {
+    return { test_runtime_policy: "node", requires_bun: false };
+  }
+  // Static release plans also run from bounded tooling copies without test inventories.
+  const { ciTestShardRequiresBun } = await import("./ci-test-runtime.mts");
+  const requiresBun = ciTestShardRequiresBun(
+    {
+      groups: planGroups.map(({ config, roots }) => ({
+        configs: [config],
+        includePatterns: roots.map((root) =>
+          /\.test\.tsx?$/u.test(root) ? root : `${root}/**/*.test.ts`,
+        ),
+        vitestArgs,
+      })),
+    },
+    "dual",
+  );
   return { test_runtime_policy: requiresBun ? "dual" : "node", requires_bun: requiresBun };
 }
 
