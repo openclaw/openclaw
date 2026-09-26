@@ -439,6 +439,7 @@ export async function maybeRepairGatewayServiceConfig(
     expectedManagedServiceEnvKeys,
     expectedServicePath: expectedPlan.environment.PATH,
     expectedPort: repairPort,
+    expectedDurableEnvironment: expectedPlan.environment,
     ...(installationDrift ? { expectedCommand: expectedPlan } : {}),
   });
   reportServiceDefinitionDrift(audit);

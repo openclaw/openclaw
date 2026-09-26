@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import "./test-helpers/service-audit-mocks.js";
 import {
   auditGatewayServiceConfig,
+  checkManagedServiceEnvDrift,
   checkTokenDrift,
   needsNodeRuntimeMigration,
   SERVICE_AUDIT_CODES,
@@ -802,6 +803,124 @@ describe("checkTokenDrift", () => {
   it("returns null when service has token but config does not", () => {
     // This is not really drift - service will work, just config is incomplete
     const result = checkTokenDrift({ serviceToken: "service-token", configToken: undefined });
+    expect(result).toBeNull();
+  });
+});
+
+describe("checkManagedServiceEnvDrift", () => {
+  it("returns null when serviceEnvironment is undefined", () => {
+    const result = checkManagedServiceEnvDrift({
+      serviceEnvironment: undefined,
+      durableEnvironment: { TAVILY_API_KEY: "tvly-new" },
+      platform: "darwin",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when durableEnvironment is undefined", () => {
+    const result = checkManagedServiceEnvDrift({
+      serviceEnvironment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+        TAVILY_API_KEY: "tvly-old",
+      },
+      durableEnvironment: undefined,
+      platform: "darwin",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when service has no managed keys", () => {
+    const result = checkManagedServiceEnvDrift({
+      serviceEnvironment: {
+        TAVILY_API_KEY: "tvly-old",
+      },
+      durableEnvironment: {
+        TAVILY_API_KEY: "tvly-new",
+      },
+      platform: "darwin",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when managed keys match durable environment", () => {
+    const result = checkManagedServiceEnvDrift({
+      serviceEnvironment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY,OPENROUTER_API_KEY",
+        TAVILY_API_KEY: "tvly-val",
+        OPENROUTER_API_KEY: "or-val",
+      },
+      durableEnvironment: {
+        TAVILY_API_KEY: "tvly-val",
+        OPENROUTER_API_KEY: "or-val",
+      },
+      platform: "darwin",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("detects drift when managed key value changes in durable environment", () => {
+    const result = checkManagedServiceEnvDrift({
+      serviceEnvironment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+        TAVILY_API_KEY: "tvly-old-secret",
+      },
+      durableEnvironment: {
+        TAVILY_API_KEY: "tvly-new-secret",
+      },
+      platform: "darwin",
+    });
+    expect(result).toStrictEqual({
+      code: SERVICE_AUDIT_CODES.gatewayEnvDrift,
+      message:
+        "State-dir .env differs from service environment for managed keys (TAVILY_API_KEY). The daemon will use the old environment after restart.",
+      detail: "drifted keys: TAVILY_API_KEY",
+      environmentKeys: ["TAVILY_API_KEY"],
+      level: "recommended",
+    });
+    // Secrets must NOT be exposed anywhere in the returned issue
+    expect(JSON.stringify(result)).not.toContain("tvly-old-secret");
+    expect(JSON.stringify(result)).not.toContain("tvly-new-secret");
+  });
+
+  it("detects drift when managed key is removed from durable environment", () => {
+    const result = checkManagedServiceEnvDrift({
+      serviceEnvironment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+        TAVILY_API_KEY: "tvly-old",
+      },
+      durableEnvironment: {},
+      platform: "darwin",
+    });
+    expect(result?.code).toBe(SERVICE_AUDIT_CODES.gatewayEnvDrift);
+    expect(result?.environmentKeys).toEqual(["TAVILY_API_KEY"]);
+  });
+
+  it("skips systemd where managed keys are overridden dynamically at startup", () => {
+    const result = checkManagedServiceEnvDrift({
+      serviceEnvironment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+        TAVILY_API_KEY: "tvly-old",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
+      },
+      durableEnvironment: {
+        TAVILY_API_KEY: "tvly-new",
+      },
+      platform: "linux",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("skips OPENCLAW_GATEWAY_TOKEN since token drift has dedicated audit", () => {
+    const result = checkManagedServiceEnvDrift({
+      serviceEnvironment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENCLAW_GATEWAY_TOKEN",
+        OPENCLAW_GATEWAY_TOKEN: "tok-old",
+      },
+      durableEnvironment: {
+        OPENCLAW_GATEWAY_TOKEN: "tok-new",
+      },
+      platform: "darwin",
+    });
     expect(result).toBeNull();
   });
 });

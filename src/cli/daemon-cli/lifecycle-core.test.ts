@@ -528,6 +528,29 @@ describe("runServiceRestart token drift", () => {
     );
   });
 
+  it("warns when managed service environment has drifted on restart", async () => {
+    loadConfig.mockReturnValue({});
+    service.readCommand.mockResolvedValue({
+      programArguments: [],
+      environment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+        TAVILY_API_KEY: "tvly-stale-value",
+      },
+    });
+
+    await runServiceRestart(createServiceRunArgs(true));
+
+    const payload = readJsonLog<{ warnings?: string[] }>();
+    expect(
+      payload.warnings?.some((warning) =>
+        warning.includes("State-dir .env differs from service environment for managed keys (TAVILY_API_KEY)"),
+      ),
+    ).toBe(true);
+    expect(
+      payload.warnings?.some((warning) => warning.includes("gateway install --force")),
+    ).toBe(true);
+  });
+
   it("prefers service command env over process env for SecretRef token drift resolution", async () => {
     stubConfigSecretRefGatewayToken();
     stubServiceGatewayTokenEnv();

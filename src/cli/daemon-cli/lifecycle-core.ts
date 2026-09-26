@@ -2,7 +2,7 @@
 import type { Writable } from "node:stream";
 import { readBestEffortConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
-import { checkTokenDrift } from "../../daemon/service-audit.js";
+import { checkManagedServiceEnvDrift, checkTokenDrift } from "../../daemon/service-audit.js";
 import { readGatewayServiceLoadState } from "../../daemon/service-load-state.js";
 import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
 import type {
@@ -606,6 +606,24 @@ export async function runServiceRestart(params: {
           resolveDaemonInstallBlockMessage("gateway") ??
           `Run \`${formatCliCommand("openclaw gateway install --force")}\` to refresh the service token source.`;
         const warning = `${driftIssue.message} ${recovery}`;
+        warnings.push(warning);
+        if (!json) {
+          defaultRuntime.log(`\n⚠️  ${warning}\n`);
+        }
+      }
+      const { readStateDirDotEnvFromStateDir } = await import("../../config/state-dir-dotenv.js");
+      const { resolveStateDir } = await import("../../config/paths.js");
+      const stateDir = resolveStateDir(driftEnv);
+      const stateDirDotEnv = readStateDirDotEnvFromStateDir(stateDir).entries;
+      const envDriftIssue = checkManagedServiceEnvDrift({
+        serviceEnvironment: command?.environment,
+        durableEnvironment: stateDirDotEnv,
+      });
+      if (envDriftIssue) {
+        const recovery =
+          resolveDaemonInstallBlockMessage("gateway") ??
+          `Run \`${formatCliCommand("openclaw gateway install --force")}\` to refresh the service environment.`;
+        const warning = `${envDriftIssue.message} ${recovery}`;
         warnings.push(warning);
         if (!json) {
           defaultRuntime.log(`\n⚠️  ${warning}\n`);

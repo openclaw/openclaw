@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveInlineCommandMatch } from "../infra/shell-inline-command.js";
 import { POSIX_SHELL_WRAPPERS } from "../infra/shell-wrapper-resolution.js";
+import { detectRespawnSupervisor } from "../infra/supervisor-markers.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { auditLaunchdDefinition } from "./service-audit-launchd.js";
 import { auditGatewayInstallPreservation } from "./service-audit-preservation.js";
@@ -22,7 +23,9 @@ import {
   collectInlineServiceEnvKeys,
   hasInlineEnvironmentSource,
   isEnvironmentFileOnlySource,
+  normalizeServiceEnvKey,
   readEnvironmentValueSource,
+  readManagedServiceEnvKeysFromEnvironment,
 } from "./service-managed-env.js";
 import { isNonMinimalServicePathEntry, normalizeServicePathEntry } from "./service-path-policy.js";
 
@@ -55,6 +58,7 @@ export const SERVICE_AUDIT_CODES = {
   gatewayProxyEnvEmbedded: "gateway-proxy-env-embedded",
   gatewayTokenMismatch: "gateway-token-mismatch",
   gatewayTokenDrift: "gateway-token-drift",
+  gatewayEnvDrift: "gateway-env-drift",
   launchdKeepAlive: "launchd-keep-alive",
   launchdRunAtLoad: "launchd-run-at-load",
 } as const;
@@ -358,6 +362,75 @@ export function checkTokenDrift(params: {
   return null;
 }
 
+/**
+ * Check if the service's recorded managed environment variables differ from
+ * the current durable environment (e.g. from state-dir .env).
+ * Returns an issue if drift is detected (service will retain old environment after restart).
+ */
+export function checkManagedServiceEnvDrift(params: {
+  serviceEnvironment: Record<string, string | undefined> | undefined;
+  durableEnvironment: Record<string, string | undefined> | undefined;
+  platform?: NodeJS.Platform;
+}): ServiceConfigIssue | null {
+  if (!params.serviceEnvironment || !params.durableEnvironment) {
+    return null;
+  }
+  const platform = params.platform ?? process.platform;
+  // systemd dynamically overrides managed keys at runtime via pre-bootstrap loader,
+  // so static service-env drift does not cause the running daemon to retain stale values.
+  if (
+    platform === "linux" &&
+    detectRespawnSupervisor(params.serviceEnvironment, "linux") === "systemd"
+  ) {
+    return null;
+  }
+  const managedKeys = readManagedServiceEnvKeysFromEnvironment(params.serviceEnvironment);
+  if (managedKeys.size === 0) {
+    return null;
+  }
+  const driftedKeys: string[] = [];
+  for (const rawManagedKey of managedKeys) {
+    const normalizedManaged = normalizeServiceEnvKey(rawManagedKey);
+    if (
+      !normalizedManaged ||
+      normalizedManaged === "OPENCLAW_GATEWAY_TOKEN" ||
+      normalizedManaged === "OPENCLAW_SERVICE_VERSION"
+    ) {
+      continue;
+    }
+    let serviceValue: string | undefined;
+    for (const [key, value] of Object.entries(params.serviceEnvironment)) {
+      if (normalizeServiceEnvKey(key) === normalizedManaged) {
+        serviceValue = value;
+        break;
+      }
+    }
+    let durableValue: string | undefined;
+    for (const [key, value] of Object.entries(params.durableEnvironment)) {
+      if (normalizeServiceEnvKey(key) === normalizedManaged) {
+        durableValue = value;
+        break;
+      }
+    }
+    const serviceTrimmed = serviceValue?.trim() ?? "";
+    const durableTrimmed = durableValue?.trim() ?? "";
+    if (serviceTrimmed !== durableTrimmed) {
+      driftedKeys.push(rawManagedKey);
+    }
+  }
+  if (driftedKeys.length === 0) {
+    return null;
+  }
+  driftedKeys.sort();
+  return {
+    code: SERVICE_AUDIT_CODES.gatewayEnvDrift,
+    message: `State-dir .env differs from service environment for managed keys (${driftedKeys.join(", ")}). The daemon will use the old environment after restart.`,
+    detail: `drifted keys: ${driftedKeys.join(", ")}`,
+    environmentKeys: driftedKeys,
+    level: "recommended",
+  };
+}
+
 export async function auditGatewayServiceConfig(params: {
   env: Record<string, string | undefined>;
   command: GatewayServiceCommand;
@@ -367,6 +440,7 @@ export async function auditGatewayServiceConfig(params: {
   expectedManagedServiceEnvKeys?: Iterable<string>;
   expectedServicePath?: string;
   expectedPort?: number;
+  expectedDurableEnvironment?: Record<string, string | undefined>;
   timeoutMs?: number;
 }): Promise<ServiceConfigAudit> {
   const issues: ServiceConfigIssue[] = [];
@@ -393,6 +467,14 @@ export async function auditGatewayServiceConfig(params: {
   auditGatewayToken(params.command, issues, params.expectedGatewayToken);
   auditGatewayPassword(params.command, issues);
   auditGatewayServicePath(params.command, issues, params.env, platform, params.expectedServicePath);
+  const envDrift = checkManagedServiceEnvDrift({
+    serviceEnvironment: params.command?.environment,
+    durableEnvironment: params.expectedDurableEnvironment,
+    platform,
+  });
+  if (envDrift) {
+    issues.push(envDrift);
+  }
   const runtimeNote = await auditGatewayRuntime(
     params.env,
     params.command,
