@@ -112,6 +112,7 @@ async function fixture() {
         seq: 1,
         state: "delta",
         deltaText: stream,
+        message: { role: "assistant", content: [{ type: "text", text: stream }] },
       } satisfies ChatEvent);
       mounted.emitGatewayEvent("agent", {
         sessionKey: idle.key,

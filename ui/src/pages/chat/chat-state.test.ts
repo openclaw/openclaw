@@ -3512,11 +3512,17 @@ describe("ChatStateController render lifecycle", () => {
       requestUpdate,
     });
 
-    for (const deltaText of ["A", "B", "C"]) {
+    for (const text of ["A", "AB", "ABC"]) {
       handlePageGatewayEvent(state, {
         type: "event",
         event: "chat",
-        payload: { state: "delta", runId: "run-1", sessionKey: "main", deltaText },
+        payload: {
+          state: "delta",
+          runId: "run-1",
+          sessionKey: "main",
+          deltaText: text.slice(-1),
+          message: { role: "assistant", content: [{ type: "text", text }] },
+        },
       });
     }
 
@@ -3532,7 +3538,13 @@ describe("ChatStateController render lifecycle", () => {
     handlePageGatewayEvent(state, {
       type: "event",
       event: "chat",
-      payload: { state: "delta", runId: "run-1", sessionKey: "main", deltaText: "D" },
+      payload: {
+        state: "delta",
+        runId: "run-1",
+        sessionKey: "main",
+        deltaText: "D",
+        message: { role: "assistant", content: [{ type: "text", text: "ABCD" }] },
+      },
     });
     const staleFrame = frames.get(2);
     handlePageGatewayEvent(state, {
@@ -3557,11 +3569,17 @@ describe("ChatStateController render lifecycle", () => {
     const requestUpdate = vi.fn();
     const state = createStreamEventState({ requestUpdate });
 
-    for (const deltaText of ["A", "B", "C"]) {
+    for (const text of ["A", "AB", "ABC"]) {
       handlePageGatewayEvent(state, {
         type: "event",
         event: "chat",
-        payload: { state: "delta", runId: "run-1", sessionKey: "main", deltaText },
+        payload: {
+          state: "delta",
+          runId: "run-1",
+          sessionKey: "main",
+          deltaText: text.slice(-1),
+          message: { role: "assistant", content: [{ type: "text", text }] },
+        },
       });
     }
 

@@ -536,6 +536,10 @@ suite.define(() => {
       runId,
       state: "delta",
       deltaText: "Waiting for the accepted abort to settle.",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Waiting for the accepted abort to settle." }],
+      },
     });
     await currentPage
       .getByText("Waiting for the accepted abort to settle.", { exact: false })
