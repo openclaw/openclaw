@@ -59,6 +59,8 @@ export interface ProcessSession {
   command: string;
   scopeKey?: string;
   sessionKey?: string;
+  /** Owning agent-run id; correlation survives cgroup SIGKILL when the child never exits cleanly. */
+  runId?: string;
   /** Admission-owned duration; another agent's tools cannot change this result's lifetime. */
   readonly cleanupMs: number;
   /** Agent owner frozen when the exec process starts. */

@@ -175,6 +175,44 @@ describe("runExecProcess cursor tracking", () => {
   });
 });
 
+describe("runExecProcess exit-notify run correlation", () => {
+  it("persisted run id shows up in the structured exit event for later correlation", async () => {
+    supervisorMock.spawn.mockImplementationOnce(async () => ({
+      activity: { resultSettled: true, lastOutputAtMs: Date.now() },
+      runId: "supervisor-run",
+      startedAtMs: Date.now(),
+      pid: 123,
+      wait: async () => createRunExit({ exitCode: 7 }),
+      cancel: vi.fn(),
+    }));
+    const scopeKey = "agent:main:exec-run-correlation";
+    const run = await runExecProcess({
+      command: "test-command",
+      workdir: "/tmp",
+      env: {},
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: true,
+      sessionKey: scopeKey,
+      runId: "run-155329-correlation",
+      timeoutSec: null,
+    });
+    markBackgrounded(run.session);
+    await run.promise;
+    const outcome = await run.promise;
+    expect(run.session.runId).toBe("run-155329-correlation");
+    const [firstCall] = enqueueSystemEventWithReceiptMock.mock.calls;
+    expect(firstCall).toBeDefined();
+    const [eventText] = firstCall;
+    const text = typeof eventText === "string" ? eventText : String(eventText);
+    expect(text).toMatch(
+      /Exec (completed|failed) \([a-z0-9-]{1,8}, code 7, run run-155329-correlation\)/,
+    );
+  });
+});
+
 describe("sandbox exec preparation failures", () => {
   it.each(["preparation", "supervisor"] as const)(
     "rechecks the admitting repair authority after deferred %s work",

@@ -8,14 +8,19 @@ import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 
 const MAX_EXEC_EVENT_PROMPT_CHARS = 8_000;
 export const HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX = "heartbeat-delivery:";
+// Exec completion events are producer/pARSER-shared with bash-tools.exec-runtime.ts.
+// Grammar: "Exec <completed|failed> (<exec-slug>, (code <n>|signal <SIG>)[, run <escaped-id>])[ :: <output>]".
+// The run id is delimiter-escaped by the producer (`)` becomes %29) so a single
+// capture-until-close-paren keeps arbitrary supported run ids (#155329).
 const STRUCTURED_EXEC_COMPLETION_EVENT_RE =
-  /^exec (completed|failed) \(([a-z0-9_-]{1,64}), (code -?\d+|signal [^)]+)\)(?: :: ([\s\S]*))?$/i;
+  /^exec (completed|failed) \(([a-z0-9_-]{1,64}), (code -?\d+|signal [A-Za-z0-9]+)(?:, run ([^)]{1,128}))?\)(?: :: ([\s\S]*))?$/i;
 
 type StructuredExecCompletionEvent = {
   raw: string;
   action: string;
   id: string;
   result: string;
+  runId?: string;
   output: string;
   succeeded: boolean;
 };
@@ -33,9 +38,19 @@ function parseStructuredExecCompletionEvent(evt: string): StructuredExecCompleti
     action,
     id: match[2] ?? "",
     result,
-    output: (match[4] ?? "").trim(),
+    // The producer escapes ) as %29; other characters round-trip verbatim.
+    runId: match[4] ? parseRunSegment(match[4]) : undefined,
+    output: (match[5] ?? "").trim(),
     succeeded: action.toLowerCase() === "completed" && result.toLowerCase() === "code 0",
   };
+}
+
+function parseRunSegment(segment: string): string {
+  return segment.replace(/%29/gi, ")");
+}
+
+function formatRunSegment(runId?: string): string {
+  return runId ? `, run ${runId}` : "";
 }
 
 export function isRelayableExecCompletionEvent(evt: string): boolean {
@@ -65,7 +80,7 @@ function formatExecEventPromptText(pendingEvents: string[]): {
     }
     hasMissingOutputFailure = true;
     return [
-      `Exec ${parsed.action} (${parsed.id}, ${parsed.result}) without captured stdout/stderr.`,
+      `Exec ${parsed.action} (${parsed.id}, ${parsed.result}${formatRunSegment(parsed.runId)}) without captured stdout/stderr.`,
     ];
   });
   return { text: lines.join("\n").trim(), hasMissingOutputFailure };
