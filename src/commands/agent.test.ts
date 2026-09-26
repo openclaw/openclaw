@@ -563,7 +563,11 @@ describe("agentCommand", () => {
   );
 
   it.each([
-    { name: "completed stop", meta: { stopReason: "stop" }, outcome: "completed" },
+    {
+      name: "completed stop",
+      meta: { stopReason: "stop", finalAssistantVisibleText: "ok", finalAssistantRawText: "ok" },
+      outcome: "completed",
+    },
     {
       name: "structured blocked result",
       meta: {
@@ -642,6 +646,9 @@ describe("agentCommand", () => {
           { text, mediaUrl: null, ...(meta.error ? { isError: true } : {}) },
         ]);
         expect(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]).toBe(JSON.stringify(result, null, 2));
+        if (outcome === "completed" && !meta.yielded) {
+          expect(result?.meta.terminalReply).toEqual({ disposition: "visible", text });
+        }
         expect(readAgentRunTerminalOutcome(rawResult)).toBeUndefined();
         expect(readAgentRunTerminalError(rawResult)).toBeUndefined();
         expect(readAgentRunTerminalOutcome(result)).toBe(outcome);

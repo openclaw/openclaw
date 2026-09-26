@@ -25,6 +25,7 @@ export type QueueEntry = {
   warnAfterMs: number;
   queuedAheadAtEnqueue: number;
   activeAheadAtEnqueue: number;
+  taskIdentity?: CommandQueueEnqueueOptions["taskIdentity"];
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
   taskTimeoutSubscribe?: CommandQueueEnqueueOptions["taskTimeoutSubscribe"];

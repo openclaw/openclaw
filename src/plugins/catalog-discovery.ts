@@ -258,6 +258,12 @@ export function joinLocalPluginDetail(params: {
 }): { plugin: PluginDiscoveryEntry; detail: PluginDiscoveryDetail } {
   const plugin = projectLocalDiscoveryEntry(params.plugin, params.local.mutationAllowed);
   const inspection = params.inspection;
+  const capabilities = inspection?.overview?.capabilities;
+  const contracts = { ...capabilities?.contracts };
+  // The declared tool union also includes names supplied only by tool metadata.
+  if (inspection?.declared.tools.length) {
+    contracts.tools = inspection.declared.tools;
+  }
   return {
     plugin,
     detail: {
@@ -276,13 +282,10 @@ export function joinLocalPluginDetail(params: {
       ...(inspection?.overview?.documentationUrl
         ? { documentationUrl: inspection.overview.documentationUrl }
         : {}),
-      ...(inspection?.declared.tools.length
-        ? { contracts: { tools: inspection.declared.tools } }
-        : {}),
-      ...(inspection?.declared.providers.length
-        ? { providers: inspection.declared.providers }
-        : {}),
-      ...(inspection?.declared.channels.length ? { channels: inspection.declared.channels } : {}),
+      ...(Object.keys(contracts).length ? { contracts } : {}),
+      ...(capabilities?.providers.length ? { providers: capabilities.providers } : {}),
+      ...(capabilities?.channels.length ? { channels: capabilities.channels } : {}),
+      ...(capabilities?.ui !== undefined ? { uiCapabilities: capabilities.ui } : {}),
       configuration: [],
       mcpServers: inspection?.components.mcpServers ?? [],
       skills: (inspection?.components.skills ?? []).map((name) => ({ name })),
@@ -313,6 +316,9 @@ export function joinClawHubPluginDetail(params: {
     ...(params.remote.contracts ? { contracts: params.remote.contracts } : {}),
     ...(params.remote.providers ? { providers: params.remote.providers } : {}),
     ...(params.remote.channels ? { channels: params.remote.channels } : {}),
+    ...(params.remote.uiCapabilities !== undefined
+      ? { uiCapabilities: params.remote.uiCapabilities }
+      : {}),
     configuration: params.remote.configFields,
     mcpServers: params.remote.mcpServers,
     skills: params.remote.skills,

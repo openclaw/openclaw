@@ -428,7 +428,8 @@ require_correction_publication_gates() (
 )
 
 derive_prepare_gate_change_plan() {
-  PREPARE_GATE_CHANGED_FILES=$(pr_git diff --name-only "$PR_MAIN_SHA...${1:-HEAD}") || return 1
+  PREPARE_GATE_BASE_SHA=$(pr_git merge-base "$PR_MAIN_SHA" "${1:-HEAD}") || return 1
+  PREPARE_GATE_CHANGED_FILES=$(pr_git diff --name-only "$PREPARE_GATE_BASE_SHA" "${1:-HEAD}") || return 1
   PREPARE_GATE_DOCS_ONLY=false
   if file_list_is_docsish_only "$PREPARE_GATE_CHANGED_FILES"; then
     PREPARE_GATE_DOCS_ONLY=true
@@ -466,7 +467,10 @@ prepare_gates() {
   source .local/pr-meta.env
 
   require_prepared_review "$pr" || return 1
-  derive_prepare_gate_change_plan
+  local current_head
+  current_head=$(pr_git rev-parse HEAD) || return 1
+  derive_prepare_gate_change_plan "$current_head" || return 1
+  local check_base="$PREPARE_GATE_BASE_SHA"
   local changed_files="$PREPARE_GATE_CHANGED_FILES"
   local docs_only="$PREPARE_GATE_DOCS_ONLY"
   local changelog_only="$PREPARE_GATE_CHANGELOG_ONLY"
@@ -516,8 +520,6 @@ prepare_gates() {
     echo "Changelog not required for this changed-file set."
   fi
 
-  local current_head
-  current_head=$(pr_git rev-parse HEAD)
   local previous_last_verified_head=""
   local previous_full_gates_head=""
   local remote_gates_provider=""
@@ -578,7 +580,7 @@ prepare_gates() {
   else
     prepare_local_gate_workspace
     run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
-    run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check
+    run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check --base "$check_base"
 
     if [ "$docs_only" = "true" ]; then
       gates_mode="docs_only"

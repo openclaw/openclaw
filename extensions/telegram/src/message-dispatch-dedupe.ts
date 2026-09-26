@@ -25,14 +25,12 @@ type TelegramMessageDispatchClaim =
   | { kind: "duplicate" }
   | { kind: "invalid" };
 
-export type TelegramMessageDispatchReplayClaim = ChannelReplayClaimHandle;
-
 type TelegramMessageDispatchReplayForgetFailure = {
   key: string;
   error?: unknown;
 };
 
-class TelegramMessageDispatchReplayForgetError extends Error {
+export class TelegramMessageDispatchReplayForgetError extends Error {
   readonly failures: TelegramMessageDispatchReplayForgetFailure[];
   override readonly cause: unknown;
 
@@ -45,12 +43,6 @@ class TelegramMessageDispatchReplayForgetError extends Error {
     this.failures = [...failures];
     this.cause = failures.find((failure) => failure.error !== undefined)?.error;
   }
-}
-
-export function isTelegramMessageDispatchReplayForgetError(
-  error: unknown,
-): error is TelegramMessageDispatchReplayForgetError {
-  return error instanceof TelegramMessageDispatchReplayForgetError;
 }
 
 function buildTelegramMessageDispatchStoredReplayKey(params: {
@@ -124,7 +116,7 @@ export async function claimTelegramMessageDispatchReplay(params: {
 
 export async function commitTelegramMessageDispatchReplay(params: {
   guard: TelegramMessageDispatchReplayGuard;
-  claims?: readonly TelegramMessageDispatchReplayClaim[];
+  claims?: readonly ChannelReplayClaimHandle[];
   /** Require every claim to reach SQLite before the caller acknowledges durable adoption. */
   requirePersistent?: boolean;
 }): Promise<void> {
@@ -194,7 +186,7 @@ export async function commitTelegramMessageDispatchReplay(params: {
 }
 
 export function releaseTelegramMessageDispatchReplay(params: {
-  claims?: readonly TelegramMessageDispatchReplayClaim[];
+  claims?: readonly ChannelReplayClaimHandle[];
   error?: unknown;
 }): void {
   for (const claim of new Set(params.claims ?? [])) {

@@ -58,7 +58,8 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
     if (!snapshot) {
       throw new Error("Session creation lost its initialized database");
     }
-    const { normalizedKey, legacyKeys, labels, databaseIdentity, ...context } = snapshot;
+    const { normalizedKey, legacyKeys, labels, databaseIdentity, databasePath, ...context } =
+      snapshot;
     const assertDatabaseCurrent = () => {
       reader.assertCurrent();
       assertExistingDatabaseIdentity(scope.path, `file:${databaseIdentity}`);
@@ -70,7 +71,7 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
         agentId: scope.agentId,
         sessionKey: normalizedKey,
         file: {
-          path: scope.path,
+          path: databasePath,
           agentId: databaseOptions.agentId,
           databaseIdentity,
           assertCurrent: assertDatabaseCurrent,
@@ -85,6 +86,7 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
                 runWithSessionEntryCreationPublication(operation, () => run(assertCurrent)),
               )
           : undefined;
+        options.onPhase?.("entry");
         const created = await createEntry({
           ...context,
           isLabelInUse: (label) => labels.has(label),
@@ -122,6 +124,7 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
           }
           return undefined;
         };
+        options.onPhase?.("transcript");
         const transcriptError = withCommit ? await withCommit(initialize) : await initialize();
         if (transcriptError !== undefined) {
           return { ok: false, error: transcriptError, phase: "transcript" };
@@ -200,10 +203,12 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
           return { ok: true, entry: created.entry, sessionFile: normalizedKey };
         }
         let adopted = false;
+        options.onPhase?.("writerAdmission");
         const commit = (assertSourceCurrent?: () => void) =>
           runExclusiveSqliteSessionWrite(
             scope,
             async () => {
+              options.onPhase?.("commit");
               const assertHeld = () => {
                 assertCurrent();
                 assertSourceCurrent?.();

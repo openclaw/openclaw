@@ -116,7 +116,7 @@ it("routes each iOS simulator test through workflow-owned log capture and retain
   );
   expect(attachments?.run).toBe('/bin/bash scripts/test-ios-chat-attachments.sh "$BASELINE_SHA"');
   expect(attachments?.if).toBe(
-    "matrix.phase == 'tests' && needs.preflight.outputs.compatibility_target != 'true'",
+    "matrix.phase == 'tests' && needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.compatibility_target != 'true'",
   );
   const smoke = steps.find((step) => step.name === "Run focused iOS voice cleanup simulator tests");
   expect(smoke?.if).toContain("matrix.phase == 'smoke'");

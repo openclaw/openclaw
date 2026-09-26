@@ -15,10 +15,7 @@ import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js
 import { normalizeGitHubLogin } from "../utils/github-login.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
-import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "./openclaw-state-db.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { deleteUserPreference, selectUserPreferenceValues } from "./user-preferences.store.js";
@@ -32,7 +29,7 @@ import {
   setUserProfileEmailBinding,
   userProfilesDb,
 } from "./user-profiles-internal.js";
-import { ensureUserProfilesSchema, UserProfileOwnerError } from "./user-profiles-schema.js";
+import { UserProfileOwnerError } from "./user-profiles-schema.js";
 import type {
   CachedGitHubIdentity,
   StoredGitHubIdentity,
@@ -177,20 +174,6 @@ function resolveCachedGitHubIdentityInDatabase(
   return identity?.accounts.some((account) => account.accountId === params.accountId)
     ? { profileId: profile.id, updatedAt: profile.updated_at }
     : undefined;
-}
-
-/** All verified handles are searchable; the primary controls only public credit/projection. */
-export function listUserProfileGitHubLogins(
-  options: OpenClawStateDatabaseOptions = {},
-): Map<string, string[]> {
-  const database = openOpenClawStateDatabase(options);
-  ensureUserProfilesSchema(options, database);
-  return new Map(
-    [...selectStoredGitHubIdentities(database.db)].map(([id, profile]) => [
-      id,
-      profile.accounts.map((account) => account.login),
-    ]),
-  );
 }
 
 export function githubAuthenticationSubject(login: string): string {

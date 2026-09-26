@@ -4608,7 +4608,7 @@ describe("gateway session utils", () => {
           },
         },
       };
-      const loadApprovals = vi.spyOn(execApprovalsStore, "loadExecApprovals");
+      const loadApprovals = vi.spyOn(execApprovalsStore, "loadExecApprovalsReadOnlyAsync");
       onTestFinished(() => loadApprovals.mockRestore());
       expect(
         (await listAgentsForGateway(cfg)).agents.map(({ id, defaultPermissionMode }) => [

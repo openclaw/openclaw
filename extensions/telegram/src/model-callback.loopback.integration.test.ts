@@ -189,12 +189,6 @@ describe("Telegram model callback loopback", () => {
         },
       } as unknown as TelegramHandlerAuthorization;
       const message = {
-        buildSyntheticTextMessage: () => {
-          throw new Error("model callback must not enter generic callback dispatch");
-        },
-        buildSyntheticContext: () => {
-          throw new Error("model callback must not enter generic callback dispatch");
-        },
         processMessageWithReplyChain: async () => {
           throw new Error("model callback must not enter generic callback dispatch");
         },
