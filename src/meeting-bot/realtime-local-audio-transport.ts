@@ -317,7 +317,12 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
           return;
         }
         const stats = readPcm16AudioStats(audio);
-        if (!bargeInGate.accept(stats, { nowMs: Date.now(), onTrigger: () => onBargeIn(audio) })) {
+        if (
+          !bargeInGate.accept(stats, {
+            nowMs: performance.now(),
+            onTrigger: () => onBargeIn(audio),
+          })
+        ) {
           return;
         }
         params.logger.debug?.(
