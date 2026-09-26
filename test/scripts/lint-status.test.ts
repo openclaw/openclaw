@@ -53,6 +53,7 @@ export function waitForFile(file) {
     "lib/tsx-cli-shim.mjs",
     "lib/local-check-runtime.mts",
     "lib/check-limits.mts",
+    "lib/oxlint-changed-scope.mts",
     "lib/direct-run.mjs",
     "lib/dist-artifact-ownership.mts",
     "lib/dist-artifact-lock.mts",

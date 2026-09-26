@@ -38,6 +38,7 @@ import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { readNativeTypeScriptConfig } from "./lib/native-typescript-config.mts";
+import { createChangedOxlintEnv, isOxlintCommand } from "./lib/oxlint-changed-scope.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mts";
 import type { createChangedCoreTestCheck } from "./run-tsgo-core-test-shards.mts";
@@ -170,10 +171,6 @@ async function ensureChangedCheckRuntimeDependencies(paths: string[]) {
 // delays package-backed imports until after lane and remote-routing selection.
 if (!isDirectRun()) {
   await ensureChangedCheckRuntimeDependencies(["package.json"]);
-}
-
-function createChangedCheckChildEnv(baseEnv: NodeJS.ProcessEnv = process.env) {
-  return resolveLocalCheckEnv(baseEnv);
 }
 
 function hasAndroidVersionSyncPath(paths: string[]) {
@@ -477,7 +474,8 @@ export function createChangedCheckPlan(
   const broadAudits = new Set<ChangedCheckCommand>();
   const typechecks = new Set<ChangedCheckCommand>();
   const lintChecks = new Set<ChangedCheckCommand>();
-  const baseEnv: NodeJS.ProcessEnv = createChangedCheckChildEnv(options.env ?? process.env);
+  const baseEnv = { ...resolveLocalCheckEnv(options.env ?? process.env) };
+  delete baseEnv.OPENCLAW_OXLINT_CHANGED_PATHS;
   const cwd = process.cwd();
   if (
     result.paths.some((changedPath) => LINTABLE_EXTENSION_PATH_RE.test(changedPath)) &&
@@ -543,7 +541,11 @@ export function createChangedCheckPlan(
         baseEnv,
       );
     }
+    for (const command of [...lintChecks].filter(isOxlintCommand)) {
+      command.env = createChangedOxlintEnv(result.paths, command.env ?? baseEnv);
+    }
     if (options.lintOnly) {
+      const lintEnv = createChangedOxlintEnv(result.paths, baseEnv);
       const lintCommands = commands.filter((command) => lintChecks.has(command));
       const selection = options.lintSelection;
       return {
@@ -562,7 +564,7 @@ export function createChangedCheckPlan(
                         : command,
                     )
                 : []),
-              ...createCiLintCommands(selection, options.lintThreads ?? 1, baseEnv),
+              ...createCiLintCommands(selection, options.lintThreads ?? 1, lintEnv),
             ]
           : lintCommands,
         summary,
@@ -1249,7 +1251,7 @@ export function createTargetedCoreLintCommands(
   options: TargetedLintOptions & { platform?: NodeJS.Platform } = {},
 ) {
   const command = createTargetedOxlintCommand({
-    env: createChangedCheckChildEnv(env),
+    env: resolveLocalCheckEnv(env),
     label: "core",
     lintablePathRe: LINTABLE_CORE_PATH_RE,
     neutralPathRe: CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
@@ -1381,8 +1383,7 @@ export async function runChangedCheck(
     return 0;
   }
   await ensureChangedCheckRuntimeDependencies(result.paths);
-  const baseEnv = resolveLocalCheckEnv(options.env ?? process.env);
-  const childEnv = createChangedCheckChildEnv(baseEnv);
+  const childEnv = resolveLocalCheckEnv(options.env ?? process.env);
   const plan = createChangedCheckPlan(result, {
     ...options,
     env: childEnv,

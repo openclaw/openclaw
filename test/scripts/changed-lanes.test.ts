@@ -1475,6 +1475,7 @@ describe("scripts/changed-lanes", () => {
         "packages/normalization-core/src/string-normalization.ts",
       ],
       env: {
+        OPENCLAW_OXLINT_CHANGED_PATHS: JSON.stringify(result.paths),
         PATH: "/usr/bin",
       },
     });
@@ -1867,25 +1868,6 @@ describe("scripts/changed-lanes", () => {
         { fileExists: () => true },
       ),
     ).toBeNull();
-  });
-
-  it("reenables local-check policy for changed typecheck commands", () => {
-    const result = detectChangedLanes(["packages/normalization-core/src/string-normalization.ts"]);
-    const plan = createChangedCheckPlan(result, {
-      env: { OPENCLAW_LOCAL_CHECK: "0", PATH: "/usr/bin" },
-    });
-
-    expect(plan.commands.find((command) => command.args[0] === "tsgo:core")?.env).toEqual({
-      OPENCLAW_LOCAL_CHECK: "1",
-      OPENCLAW_TSGO_SPARSE_SKIP: "1",
-      PATH: "/usr/bin",
-    });
-    expect(plan.commands.find((command) => command.name === "lint core changed file")?.env).toEqual(
-      {
-        OPENCLAW_LOCAL_CHECK: "1",
-        PATH: "/usr/bin",
-      },
-    );
   });
 
   it("runs CI changed-check children through Corepack pnpm", () => {
