@@ -747,7 +747,7 @@ describe("security review ownership", () => {
 
   it("preserves separate release-manager ownership", () => {
     expect(ownersFor(".github/workflows/openclaw-npm-release.yml")).toEqual([
-      "@openclaw/openclaw-release-managers",
+      "@openclaw/release-managers-openclaw",
     ]);
   });
 });
