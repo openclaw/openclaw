@@ -26,6 +26,20 @@ the account's bindings unchanged. An unresolved account stays blocked
 with that reason while the Gateway and other accounts continue running; it does
 not enter a restart loop. Add the reported binding and restart the Gateway.
 
+## Device worker inference naming
+
+For pre-release opt-in `cloudWorkers.profiles` entries whose provider is `device`,
+Doctor renames
+`settings.inference: "runtime-local"` to `"worker"`. Explicit `"gateway"`, omitted
+inference, and other providers' settings stay unchanged. Eligible Gateway startup
+uses the same transform and normal config backup/validation safeguards.
+
+This repairs authored configuration only. Existing worker environments keep their
+recorded snapshots, including the earlier spelling, and retain worker inference
+until reclaimed or retired. Profile edits do not change an existing binding. The
+worker launch dialect, database schema, and Gateway/proxied defaults do not change.
+See [Worker-local inference](/gateway/cloud-workers/native-inference).
+
 ## Channel webhook listeners
 
 Feishu and Telegram now receive webhooks on Gateway HTTP routes. Their plugin-owned

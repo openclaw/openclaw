@@ -45,6 +45,7 @@ export function nodeWorkerEnvironmentBinding(input: NodeWorkerLaunchInput) {
     workspaceDir: assignment.workspaceDir,
     containmentRoot: assignment.workerContainmentRoot,
     permissionMode: assignment.permissionMode,
+    inference: assignment.inference,
   };
 }
 
@@ -137,7 +138,7 @@ export type NodeWorkerObservedTerminal = NodeWorkerActiveBase & {
   reconciliation?: Promise<NodeWorkerLaunchReceipt>;
 };
 
-export function createNodeWorkerObservedTerminal(
+function createNodeWorkerObservedTerminal(
   active: NodeWorkerRunningChild,
   outcome: NodeWorkerTerminalOutcome,
 ): NodeWorkerObservedTerminal {
@@ -167,6 +168,8 @@ export type NodeWorkerSupervisorOptions = {
   workspace?: NodeWorkerWorkspaceRuntime;
   containerEngine?: NodeWorkerContainerEngine;
   containerImage?: string;
+  /** Node-local trusted configuration, captured synchronously at construction. */
+  nativeInferenceConfig?: string;
 };
 
 /** Match both process bookkeeping and exact authoritative container identity. */
@@ -190,4 +193,28 @@ export function nodeWorkerReceiptMatchesOwner(
     receipt.container?.containerId === container?.containerId &&
     receipt.container?.engineTarget === container?.engineTarget
   );
+}
+
+/** Retains a terminal observation until its exact supervisor owner durably reconciles it. */
+export function createNodeWorkerTerminalObserver(
+  activeOwners: Map<string, NodeWorkerActiveOwnership>,
+  reconcile: (observed: NodeWorkerObservedTerminal) => Promise<unknown>,
+) {
+  return async (
+    active: NodeWorkerRunningChild,
+    outcome: NodeWorkerTerminalOutcome,
+  ): Promise<void> => {
+    const observed = createNodeWorkerObservedTerminal(active, outcome);
+    if (activeOwners.get(active.launchId) !== active) {
+      return;
+    }
+    activeOwners.set(active.launchId, observed);
+    try {
+      await reconcile(observed);
+    } catch {
+      // The observed outcome stays owned in memory for the next supervisor operation.
+      return;
+    }
+    active.turn = undefined;
+  };
 }

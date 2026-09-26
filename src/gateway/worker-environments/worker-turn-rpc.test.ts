@@ -18,6 +18,7 @@ import { publishWorkerEnvironmentFixture } from "./placement-test-fixtures.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
+import { registerWorkerNativeInferenceRpcTests } from "./worker-turn-rpc.native-inference.suite.js";
 import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
 
 type WorkerEnvironmentServiceOptions = support.WorkerEnvironmentServiceOptions;
@@ -904,60 +905,7 @@ describe("worker environment service", () => {
     expect(applyTranscriptCommit).toHaveBeenCalledOnce();
   });
 
-  it("fences inference by epoch and the durable session credential", async () => {
-    const executeInference = vi.fn<WorkerEnvironmentServiceOptions["executeInference"]>(
-      async () => ({
-        type: "error",
-        reason: "provider-error",
-        message: "Provider request failed",
-      }),
-    );
-    const { identity, workerService } = await support.placementHarness(
-      "worker-inference-fence",
-      "session-inference-fence",
-      { executeInference },
-    );
-    const request = support.inferenceRequest(identity);
-    expect(
-      await workerService.startInference(
-        identity,
-        { ...request, sessionId: "session-other" },
-        { connectionId: "connection-a", send: vi.fn() },
-      ),
-    ).toEqual({ ok: false, reason: "session-not-attached" });
-    expect(
-      await workerService.startInference(
-        identity,
-        { ...request, runEpoch: request.runEpoch + 1 },
-        { connectionId: "connection-b", send: vi.fn() },
-      ),
-    ).toEqual({ ok: false, reason: "epoch-mismatch" });
-
-    const send = vi.fn();
-    const started = await workerService.startInference(identity, request, {
-      connectionId: "connection-c",
-      send,
-    });
-    expect(started.ok).toBe(true);
-    if (!started.ok) {
-      throw new Error("inference fixture failed to start");
-    }
-    await support.testState.store.renewCredential({
-      environmentId: identity.environmentId,
-      expectedOwnerEpoch: identity.ownerEpoch,
-      sessionId: identity.sessionId,
-      rpcSetVersion: identity.rpcSetVersion,
-      expiresAtMs: identity.credentialExpiresAtMs,
-      credentialHash: hashWorkerCredential(["replacement", identity.environmentId].join("-")),
-    });
-    started.launch();
-    await support.waitForFast(() => expect(send).toHaveBeenCalledOnce());
-    expect(executeInference).not.toHaveBeenCalled();
-    expect(send.mock.calls[0]?.[0]).toMatchObject({
-      event: "worker.inference.terminal",
-      payload: { outcome: { reason: "session-not-attached" } },
-    });
-  });
+  registerWorkerNativeInferenceRpcTests();
 
   it("fences and rotates live credentials", async () => {
     const environmentId = "worker-live";

@@ -22,6 +22,7 @@ import {
   WorkerTranscriptMessageSchema,
   WorkerTranscriptUserMessageSchema,
   WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
+  WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerInferenceModelRef,
@@ -233,6 +234,7 @@ const AssignmentSchema = workerProtocolObject({
   modelRef: z.custom<WorkerInferenceModelRef>((value) =>
     Value.Check(WorkerInferenceModelRefSchema, value),
   ),
+  inference: z.literal("runtime-local").optional(),
   inferenceOptions: z.custom<WorkerInferenceOptions>((value) =>
     Value.Check(WorkerInferenceOptionsSchema, value),
   ),
@@ -308,6 +310,10 @@ function validateWorkerLaunchPlan(candidate: WorkerLaunchPlan): WorkerLaunchPlan
     !Value.Check(WorkerConnectRequestFrameSchema, frame) ||
     candidate.admission.sessionId === null ||
     candidate.admission.ownerEpoch < 1 ||
+    (candidate.assignment.inference === "runtime-local" &&
+      !candidate.admission.handshake.protocolFeatures.includes(
+        WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE,
+      )) ||
     !isWorkerTranscriptMessageFrameSafe({
       role: "user",
       content:

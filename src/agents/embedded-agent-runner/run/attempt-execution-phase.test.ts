@@ -501,7 +501,8 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       }
     });
     let requests = 0;
-    streamMocks.streamSimple.mockImplementation(async (activeModel, _context, options) => {
+    let summaryProducer: Promise<void> | undefined;
+    streamMocks.streamSimple.mockImplementation((activeModel, _context, options) => {
       if (++requests === 1) {
         return createAssistantResultStream(
           createAssistant(
@@ -512,12 +513,20 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           ),
         );
       }
+      const stream = createAssistantMessageEventStream();
       summaryStarted.resolve();
-      await releaseSummary.promise;
-      expect(options?.signal?.aborted).toBe(false);
-      return createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "Blue Heron summary" }]),
-      );
+      summaryProducer = releaseSummary.promise.then(() => {
+        expect(options?.signal?.aborted).toBe(false);
+        const message = createAssistant(activeModel, [
+          { type: "text", text: "Blue Heron summary" },
+        ]);
+        stream.push({ type: "done", reason: "stop", message });
+        stream.end();
+      });
+      // Unblock consumption on producer failure; the test awaits the original
+      // producer promise below so failed assertions are observed, never detached.
+      void summaryProducer.catch(() => stream.end());
+      return stream;
     });
     const network = vi
       .spyOn(globalThis, "fetch")
@@ -579,6 +588,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       }
       releaseSummary.resolve();
       const error = await outcome;
+      await summaryProducer;
       const compacted = sessionManager.getEntries().filter((entry) => entry.type === "compaction");
       expect(compacted).toHaveLength(owner === "active" ? 1 : 0);
       if (phase === "before installation") {
@@ -610,7 +620,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       expect(network).not.toHaveBeenCalled();
     } finally {
       releaseSummary.resolve();
-      await Promise.allSettled([work]);
+      await Promise.allSettled([work, summaryProducer]);
       admission.close();
       replacement.close();
     }

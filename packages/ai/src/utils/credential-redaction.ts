@@ -112,7 +112,9 @@ function normalizeDiagnosticFieldName(value: string): string {
   return value.toLowerCase().replaceAll(DIAGNOSTIC_FIELD_SEPARATOR_RE, "");
 }
 
-function isCredentialFieldName(normalized: string): boolean {
+/** Classifies credential-bearing fields, including case-insensitive HTTP header names. */
+export function isCredentialFieldName(name: string): boolean {
+  const normalized = normalizeDiagnosticFieldName(name);
   if (!normalized || NON_CREDENTIAL_FIELD_NAMES.has(normalized)) {
     return false;
   }

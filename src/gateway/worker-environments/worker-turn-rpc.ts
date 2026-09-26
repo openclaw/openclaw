@@ -17,10 +17,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerInferenceCancelParams,
-  WorkerInferenceCancelResult,
-  WorkerInferenceErrorReason,
   WorkerInferenceStartParams,
-  WorkerInferenceStartResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
   WorkerSkillWorkshopParamsSchema,
@@ -36,7 +33,12 @@ import {
   type WorkerConnectionIdentity,
 } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
+import { workerInferencePlacement } from "./inference-placement.js";
 import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
+import type {
+  WorkerInferenceStartApplicationResult,
+  WorkerInferenceCancelApplicationResult,
+} from "./inference.types.js";
 import type { WorkerLiveEventApplicationResult, WorkerLiveEventReceiver } from "./live-events.js";
 import { sameWorkerSessionTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
 import {
@@ -94,17 +96,11 @@ type WorkerLiveEventServiceResult =
   | { ok: false; closeReason: WorkerProtocolCloseReason };
 
 type WorkerInferenceStartServiceResult =
-  | {
-      ok: true;
-      result: WorkerInferenceStartResult;
-      launch: () => void;
-    }
-  | { ok: false; reason: WorkerInferenceErrorReason }
+  | WorkerInferenceStartApplicationResult
   | { ok: false; closeReason: WorkerProtocolCloseReason };
 
 type WorkerInferenceCancelServiceResult =
-  | { ok: true; result: WorkerInferenceCancelResult }
-  | { ok: false; reason: WorkerInferenceErrorReason }
+  | WorkerInferenceCancelApplicationResult
   | { ok: false; closeReason: WorkerProtocolCloseReason };
 
 type WorkerSessionToolServiceResult =
@@ -614,6 +610,10 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     });
     if (!binding.ok) {
       return binding;
+    }
+    const environment = options.store.get(identity.environmentId);
+    if (!environment || workerInferencePlacement(environment) !== "gateway") {
+      return { ok: false, reason: "model-not-approved" };
     }
     const source = sourceFor(identity);
     if (!source) {

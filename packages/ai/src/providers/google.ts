@@ -1,7 +1,8 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, type HttpOptions } from "@google/genai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
+import { buildManagedModelFetch } from "../transports/host-policy.js";
 import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
 import { mergeTransportHeaders } from "../transports/transport-stream-shared.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
@@ -64,8 +65,11 @@ function createClient(
   apiKey?: string,
   optionsHeaders?: Record<string, string>,
 ): GoogleGenAI {
-  const httpOptions: { baseUrl?: string; apiVersion?: string; headers?: Record<string, string> } =
-    {};
+  const httpOptions: HttpOptions = {};
+  const fetcher = buildManagedModelFetch(model);
+  if (fetcher) {
+    httpOptions.fetch = fetcher;
+  }
   if (model.baseUrl) {
     httpOptions.baseUrl = model.baseUrl;
     httpOptions.apiVersion = ""; // baseUrl already includes version path, don't append
@@ -76,7 +80,7 @@ function createClient(
     );
   }
 
-  // @google/genai exposes RequestInit options but no custom fetch; unwrap at construction.
+  // Authentication is resolved before construction; the SDK also retains the host fetch policy.
   const resolvedApiKey = apiKey ? getAiTransportHost().resolveSecretSentinel(apiKey) : undefined;
   return new GoogleGenAI({
     apiKey: resolvedApiKey,

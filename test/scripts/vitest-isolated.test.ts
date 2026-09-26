@@ -50,7 +50,7 @@ function containerInspection() {
       User: `${process.getuid?.()}:${process.getgid?.()}`,
       Env: create.flatMap((arg, index) => (arg === "--env" ? [create[index + 1]!] : [])),
     },
-    HostConfig: { NetworkMode: "none", Privileged: false, ReadonlyRootfs: true },
+    HostConfig: { NetworkMode: "none", Privileged: false, ReadonlyRootfs: true, Init: true },
     Mounts: [{ Type: "bind", Source: "/owned/source", Destination: "/workspace", RW: true }],
     State: { Running: false, Status: "exited", ExitCode: 0 },
   };
@@ -131,6 +131,7 @@ describe("isolated Vitest admission", () => {
         "--security-opt=no-new-privileges",
         "--read-only",
         "--userns=keep-id",
+        "--init",
         "--cpus=4",
         "--memory=8g",
         "--pids-limit=512",
@@ -169,6 +170,11 @@ describe("isolated Vitest admission", () => {
     expect(() =>
       verifyIsolatedVitestContainer(containerInspection(), name, expected),
     ).not.toThrow();
+    const unreaped = containerInspection();
+    unreaped.HostConfig.Init = false;
+    expect(() => verifyIsolatedVitestContainer(unreaped, name, expected)).toThrow(
+      "isolation settings",
+    );
     const poisoned = containerInspection();
     poisoned.Config.Env.push("HTTP_PROXY=http://credential-proxy");
     expect(() => verifyIsolatedVitestContainer(poisoned, name, expected)).toThrow("environment");

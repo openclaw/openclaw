@@ -21,7 +21,14 @@ Provider ids, credentials, model catalogs, retries, and failover remain
 application concerns. OpenClaw supplies those policies around this package.
 Host policy (request fetch guarding, secret redaction, strict-tool defaults,
 provider plugin hooks, and diagnostics logging) can be injected with
-`configureAiTransportHost`; the defaults are inert.
+`configureAiTransportHost`; the defaults are inert. A runtime can instead own an
+explicit policy with `createLlmRuntime(registry, { transportHost })`. An empty
+`transportHost` selects the package defaults for that runtime only. Provider
+execution, lazy stream iteration, and result settlement retain this policy across
+asynchronous work, without replacing the process default. Ordinary runtimes select
+the current process-default policy at invocation, including when nested inside an
+explicitly scoped runtime. Global installers use `getDefaultAiTransportHost()`,
+not the operation-scoped `getAiTransportHost()`.
 
 The explicit `@openclaw/ai/internal/anthropic`, `google-model-family`, `openai`,
 `openai-completions-compat`, `openai-responses-payload-policy`, `retry-after`, `runtime`, `shared`, and

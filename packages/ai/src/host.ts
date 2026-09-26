@@ -3,6 +3,7 @@
 // the embedding application (OpenClaw core installs its implementations via
 // configureAiTransportHost); the library defaults below are inert so external
 // consumers get safe, dependency-free behavior without wiring anything.
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { Api, Context, Model, StreamFn } from "@openclaw/llm-core";
 import type { ApiRegistry } from "./api-registry.js";
 import { transformMessages } from "./transcript-transform.js";
@@ -273,10 +274,11 @@ const inertAiTransportHost: ActiveAiTransportHost = {
 };
 
 let activeAiTransportHost: ActiveAiTransportHost = inertAiTransportHost;
+const scopedAiTransportHost = new AsyncLocalStorage<ActiveAiTransportHost>();
 
-/** Installs host implementations for the transport policy ports. */
-export function configureAiTransportHost(host: Partial<AiTransportHost>): void {
-  activeAiTransportHost = {
+/** Resolves an explicit embedding policy without replacing the process default. */
+export function createAiTransportHost(host: Partial<AiTransportHost> = {}): ActiveAiTransportHost {
+  return {
     ...inertAiTransportHost,
     ...host,
     normalizeAnthropicInlineContentBlocks:
@@ -284,6 +286,21 @@ export function configureAiTransportHost(host: Partial<AiTransportHost>): void {
       inertAiTransportHost.normalizeAnthropicInlineContentBlocks,
     plugin: { ...inertAiTransportHost.plugin, ...host.plugin },
   };
+}
+
+/** Provider operations retain their policy across lazy loads and asynchronous I/O. */
+export function runWithAiTransportHost<T>(host: ActiveAiTransportHost, run: () => T): T {
+  return scopedAiTransportHost.run(host, run);
+}
+
+/** Installers must read the process default, never an unrelated operation's scoped policy. */
+export function getDefaultAiTransportHost(): ActiveAiTransportHost {
+  return activeAiTransportHost;
+}
+
+/** Installs host implementations for the transport policy ports. */
+export function configureAiTransportHost(host: Partial<AiTransportHost>): void {
+  activeAiTransportHost = createAiTransportHost(host);
   const transportHost = activeAiTransportHost;
   if (
     transportHost.registerCustomApi === inertAiTransportHost.registerCustomApi ||
@@ -311,7 +328,7 @@ export function configureAiTransportHost(host: Partial<AiTransportHost>): void {
 
 /** Returns the active transport host (inert defaults unless configured). */
 export function getAiTransportHost(): ActiveAiTransportHost {
-  return activeAiTransportHost;
+  return scopedAiTransportHost.getStore() ?? activeAiTransportHost;
 }
 
 /** Resolves sentinel substrings in custom headers at a no-fetch adapter boundary. */

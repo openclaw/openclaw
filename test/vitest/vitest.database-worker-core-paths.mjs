@@ -772,6 +772,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/auth-profiles.markauthprofilefailure.test.ts",
 
   "src/node-host/node-worker-launch-store.test.ts",
+  "src/node-host/node-worker-native-inference.test.ts",
   "src/node-host/node-worker-turn-store.test.ts",
   "src/node-host/node-worker-supervisor.test.ts",
   "src/node-host/node-worker-supervisor.admission.test.ts",

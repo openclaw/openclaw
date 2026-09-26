@@ -145,6 +145,58 @@ describe("Gateway node worker bundle installer", () => {
     ).toBeUndefined();
   });
 
+  it("accepts a current replacement connection with the same pairing authority", async () => {
+    const transfer = createNodeWorkerBundleTransferService();
+    const replacement = { ...node, connId: "conn-2" };
+    let current = node;
+    const transport: NodeWorkerSupervisorTransport = {
+      hasCurrentRunner: () => false,
+      getCurrentNode: async (nodeId) => (node.nodeId === nodeId ? current : undefined),
+      listCurrentNodes: async () => [current],
+      isCurrent: (candidate) => candidate === current,
+      invoke: async () => {
+        current = replacement;
+        return { ok: true, payloadJSON: JSON.stringify(receipt) };
+      },
+    };
+    const ensure = createGatewayNodeWorkerBundleInstaller({
+      gatewayNamespace: "gateway-test",
+      getTransport: () => transport,
+      transfer,
+    });
+
+    await expect(ensure({ deviceId: node.nodeId, artifact, prewarm: true })).resolves.toEqual(
+      receipt,
+    );
+    transfer.closeAll();
+  });
+
+  it("rejects a replacement connection with different pairing authority", async () => {
+    const transfer = createNodeWorkerBundleTransferService();
+    const replacement = { ...node, connId: "conn-2", pairingGeneration: "generation-2" };
+    let current = node;
+    const transport: NodeWorkerSupervisorTransport = {
+      hasCurrentRunner: () => false,
+      getCurrentNode: async (nodeId) => (node.nodeId === nodeId ? current : undefined),
+      listCurrentNodes: async () => [current],
+      isCurrent: (candidate) => candidate === current,
+      invoke: async () => {
+        current = replacement;
+        return { ok: true, payloadJSON: JSON.stringify(receipt) };
+      },
+    };
+    const ensure = createGatewayNodeWorkerBundleInstaller({
+      gatewayNamespace: "gateway-test",
+      getTransport: () => transport,
+      transfer,
+    });
+
+    await expect(ensure({ deviceId: node.nodeId, artifact, prewarm: true })).rejects.toThrow(
+      "connection is no longer current",
+    );
+    transfer.closeAll();
+  });
+
   it("rejects a mismatched node receipt", async () => {
     const transfer = createNodeWorkerBundleTransferService({
       generateToken: () => "B".repeat(43),

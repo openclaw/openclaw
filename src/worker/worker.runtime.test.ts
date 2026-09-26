@@ -82,6 +82,7 @@ import {
   registerWorkerBackgroundExecLifecycleTests,
   registerWorkerExecEnvironmentFinalizationTests,
 } from "./worker-runtime-background-exec.suite.js";
+import { registerWorkerGitHubFailureTests } from "./worker-runtime-github-failures.suite.js";
 import { registerWorkerPermissionTests } from "./worker-runtime-permissions.suite.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
@@ -2210,57 +2211,7 @@ describe("worker runtime", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")(
-    "keeps exec unbound and creates no GitHub profile without a turn identity",
-    async () => {
-      const { gateway, launch } = await setup({
-        inferencePlans: ["tool", "text"],
-        execCommand: 'printf "profile=%s\\n" "${GH_CONFIG_DIR-unset}"',
-      });
-      const environment = await createWorkerRuntimeEnvironment(SESSION_ID);
-      try {
-        await expect(
-          runWorkerDescriptor(launch, { environmentStateDir: environment.stateDir }),
-        ).resolves.toMatchObject({ status: "completed" });
-
-        const toolResult = gateway.inferenceRequests[1]?.context.messages.find(
-          (message) => message.role === "toolResult" && message.toolName === "exec",
-        );
-        expect(toolResult).toMatchObject({
-          isError: false,
-          content: [{ type: "text", text: expect.stringContaining("profile=unset") }],
-        });
-        await expect(
-          stat(path.join(environment.stateDir, "github-profiles")),
-        ).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-      } finally {
-        await environment.close();
-      }
-    },
-  );
-
-  it("reports a GitHub profile write failure before running inference", async () => {
-    const { gateway, launch } = await setup();
-    launch.assignment.github = {
-      token: "worker-profile-write-fixture-token",
-      login: "worker-fixture",
-      branch: "openclaw/session-fixture",
-    };
-    const environment = await createWorkerRuntimeEnvironment(SESSION_ID);
-    try {
-      // A file in the root's parent path cannot be repaired by removing github-profiles.
-      const blockedStateDir = path.join(environment.stateDir, "obstruction");
-      await writeFile(blockedStateDir, "obstruction");
-      await expect(
-        runWorkerDescriptor(launch, { environmentStateDir: blockedStateDir }),
-      ).rejects.toThrow("Worker GitHub identity profile could not be written:");
-      expect(gateway.inferenceRequests).toHaveLength(0);
-    } finally {
-      await environment.close();
-    }
-  });
+  registerWorkerGitHubFailureTests({ setup, sessionId: SESSION_ID });
 
   registerWorkerPermissionTests({ setup });
 

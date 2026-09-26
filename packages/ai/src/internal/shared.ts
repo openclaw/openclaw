@@ -4,7 +4,7 @@ export * from "../providers/tool-result-text.js";
 export { hasMediaPayload, isImageWithMediaPayload } from "../media-payload.js";
 export * from "../providers/transform-messages.js";
 export * from "../replay-turn-classification.js";
-export { createDiagnosticRecord } from "../utils/credential-redaction.js";
+export { createDiagnosticRecord, isCredentialFieldName } from "../utils/credential-redaction.js";
 export { projectProviderError } from "../utils/provider-error.js";
 export * from "../utils/prompt-cache-stability.js";
 export * from "../utils/sanitize-unicode.js";
