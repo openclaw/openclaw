@@ -181,11 +181,17 @@ describe("createWhatsAppLoginTool", () => {
     });
   });
 
-  it("rejects unknown actions before starting or waiting for login", async () => {
+  it.each([
+    { action: "bogus", rendered: "bogus" },
+    { action: null, rendered: "null" },
+    { action: 42, rendered: "42" },
+  ])("rejects malformed action $rendered before login", async ({ action, rendered }) => {
     const tool = createOwnerLoginTool();
+    startWebLoginWithQrMock.mockResolvedValueOnce({ message: "login started" });
+    const signal = new AbortController().signal;
 
-    await expect(tool.execute("tool-call-unknown", { action: "bogus" })).rejects.toThrow(
-      "Unknown WhatsApp login action: bogus",
+    await expect(tool.execute("tool-call-unknown", { action }, signal)).rejects.toThrow(
+      `Unknown WhatsApp login action: ${rendered}`,
     );
     expect(startWebLoginWithQrMock).not.toHaveBeenCalled();
     expect(waitForWebLoginMock).not.toHaveBeenCalled();

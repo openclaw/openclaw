@@ -62,7 +62,8 @@ export function createWhatsAppLoginTool(
         });
       };
 
-      const action = (args as { action?: string })?.action ?? "start";
+      const rawAction = (args as { action?: unknown })?.action;
+      const action = rawAction === undefined ? "start" : rawAction;
       if (action !== "start" && action !== "wait") {
         throw new Error(`Unknown WhatsApp login action: ${action}`);
       }
