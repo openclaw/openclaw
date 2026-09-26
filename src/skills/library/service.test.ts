@@ -14,9 +14,9 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { getProfileAvatar } from "../../state/user-profiles-avatar.test-support.js";
 import {
   ensureProfileForEmail,
-  getProfileAvatar,
   linkEmail,
   setAvatar,
   setDisplayName,

@@ -76,7 +76,7 @@ describe("worker portal tool execution", () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-portal-"));
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placements = createWorkerSessionPlacementStore({ database });
-    let placement = placements.startDispatch(SOURCE);
+    let placement = await placements.startDispatch(SOURCE);
     placement = placements.transition({
       sessionId: SOURCE.sessionId,
       from: "requested",

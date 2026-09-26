@@ -43,7 +43,7 @@ import {
   resetGatewayWorkAdmission,
   runWithGatewayRootWorkReadmission,
 } from "./gateway-work-admission.js";
-import { CommandLane, SUBAGENT_LANE_PREFIX } from "./lanes.js";
+import { CommandLane, SUBAGENT_LANE_PREFIX, SWARM_LANE_PREFIX } from "./lanes.js";
 export { GatewayDrainingError } from "./gateway-work-admission.js";
 export type { CommandLaneTaskMarker } from "./command-queue.state.js";
 export type { CommandLaneSnapshot } from "./command-queue.types.js";
@@ -124,7 +124,7 @@ function getLaneDepth(state: LaneState): number {
 }
 
 function getDefaultLaneConcurrency(lane: string): number {
-  return lane.startsWith(SUBAGENT_LANE_PREFIX)
+  return lane.startsWith(SUBAGENT_LANE_PREFIX) && !lane.startsWith(SWARM_LANE_PREFIX)
     ? (getQueueState().lanes.get(CommandLane.Subagent)?.maxConcurrent ?? 1)
     : 1;
 }
@@ -473,7 +473,10 @@ function updateLaneConcurrency(lane: string, maxConcurrent: number): LaneState[]
     // The named lane owns the setting; each spawning session gets its own
     // capacity. Publish every existing queue's new width before admitting work.
     for (const scoped of getQueueState().lanes.values()) {
-      if (scoped.lane.startsWith(SUBAGENT_LANE_PREFIX)) {
+      if (
+        scoped.lane.startsWith(SUBAGENT_LANE_PREFIX) &&
+        !scoped.lane.startsWith(SWARM_LANE_PREFIX)
+      ) {
         scoped.maxConcurrent = state.maxConcurrent;
         updated.push(scoped);
       }
@@ -581,6 +584,9 @@ export function enqueueCommandInLane<T>(
   const cleaned = normalizeLane(lane);
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
+  if (opts?.maxConcurrent !== undefined) {
+    state.maxConcurrent = Math.max(0, Math.floor(opts.maxConcurrent));
+  }
   return new Promise<T>((resolve, reject) => {
     const entry: QueueEntry = {
       task: (marker) => runInAsyncContext(runWithGatewayRootWorkReadmission, () => task(marker)),
@@ -648,6 +654,12 @@ export function getCommandLaneSnapshot(lane: string = CommandLane.Main): Command
     draining: state?.draining ?? false,
     generation: state?.generation ?? 0,
     blockedBy: null,
+    ...(resolved.startsWith(SWARM_LANE_PREFIX)
+      ? {
+          concurrencyScope: "swarm" as const,
+          swarmGroupKey: resolved.slice(SWARM_LANE_PREFIX.length),
+        }
+      : {}),
   };
   // Missing or retired lanes can still be group members; never recreate them to read capacity.
   applyCommandLaneCapacity(snapshot);

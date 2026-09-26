@@ -24,6 +24,14 @@ export function buildAssistantMediaContentDisposition(filename: string, mime?: s
   return `${inline ? "inline" : "attachment"}; filename="${fallback}"; filename*=UTF-8''${extended}`;
 }
 
+export function buildManagedMediaContentDisposition(
+  value: string | null,
+  contentType: string,
+): string {
+  const fallback = contentType.startsWith("image/") ? "generated-image" : "generated-media";
+  return buildAssistantMediaContentDisposition(value?.trim() || fallback, contentType);
+}
+
 function toWellFormedFilename(value: string): string {
   let result = "";
   for (const char of value) {

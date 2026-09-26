@@ -1,6 +1,5 @@
 import { t } from "../../i18n/index.ts";
 import { discardConfigFormValue } from "./config-draft-model.ts";
-import type { ConfigSubmission } from "./config-gateway-operations.ts";
 import {
   currentConfigConnectionEpoch,
   isCurrentConfigConnection,
@@ -11,7 +10,7 @@ export function createConfigFieldDiscard(options: {
   state: RuntimeConfigState;
   serialize: (task: () => Promise<boolean>) => Promise<boolean>;
   readSnapshot: () => Promise<boolean>;
-  getLastSubmission: () => ConfigSubmission | null;
+  hasUnacknowledgedDraftWrite: () => boolean;
   holdAutoSave: () => (resume: boolean) => void;
   isDisposed: () => boolean;
   publish: () => void;
@@ -53,13 +52,7 @@ export function createConfigFieldDiscard(options: {
           if (state.configRecoveryError !== null) {
             return false;
           }
-          const submitted = options.getLastSubmission();
-          if (
-            submitted &&
-            submitted.operation !== "independent" &&
-            !submitted.ack &&
-            !submitted.rejected
-          ) {
+          if (options.hasUnacknowledgedDraftWrite()) {
             state.lastError = t("configView.discardUnconfirmed");
             state.configAutoSaveStatus = "error";
             return false;

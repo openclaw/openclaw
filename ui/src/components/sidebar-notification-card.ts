@@ -3,6 +3,32 @@ import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
 import "./relative-time.ts";
 
+export function renderSidebarDismissButton(
+  itemLabel: string,
+  onDismiss?: () => void,
+  dismissing?: boolean,
+) {
+  if (!onDismiss) {
+    return nothing;
+  }
+  const label = t("attention.dismissItem", { item: itemLabel });
+  return html`<button
+    type="button"
+    class="sidebar-issues-panel__dismiss"
+    aria-label=${label}
+    aria-busy=${dismissing ? "true" : nothing}
+    title=${dismissing ? t("attention.mentions.dismissing") : label}
+    ?disabled=${dismissing}
+    @click=${(event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onDismiss();
+    }}
+  >
+    ${icons.x}
+  </button>`;
+}
+
 export function renderSidebarNotificationCard(props: {
   title: string;
   detail: string;
@@ -15,7 +41,6 @@ export function renderSidebarNotificationCard(props: {
   body: TemplateResult | typeof nothing;
   bodyClass?: string;
 }) {
-  const dismissLabel = t("attention.dismissItem", { item: props.title });
   return html`<details
     class="sidebar-issues-panel__details ${props.severity ? `sidebar-issues-panel__details--${props.severity}` : ""}"
   >
@@ -42,25 +67,7 @@ export function renderSidebarNotificationCard(props: {
           }
         </span>
       </span>
-      ${
-        props.onDismiss
-          ? html`<button
-              type="button"
-              class="sidebar-issues-panel__dismiss"
-              aria-label=${dismissLabel}
-              aria-busy=${props.dismissing ? "true" : nothing}
-              title=${props.dismissing ? t("attention.mentions.dismissing") : dismissLabel}
-              ?disabled=${props.dismissing}
-              @click=${(event: Event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                props.onDismiss?.();
-              }}
-            >
-              ${icons.x}
-            </button>`
-          : nothing
-      }
+      ${renderSidebarDismissButton(props.title, props.onDismiss, props.dismissing)}
       <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
     </summary>
     <div class="sidebar-issues-panel__body ${props.bodyClass ?? ""}">${props.body}</div>

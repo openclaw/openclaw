@@ -15,6 +15,7 @@ import {
   type FeishuIngressLifecycle,
 } from "./feishu-ingress.js";
 import { isMentionForwardRequest } from "./mention.js";
+import { parsePostContent } from "./post.js";
 import type { getFeishuSequentialKey } from "./sequential-key.js";
 import { createSequentialQueue } from "./sequential-queue.js";
 import { normalizeFeishuEventChatType } from "./types.js";
@@ -420,6 +421,18 @@ export function createFeishuMessageReceiveHandler({
       return undefined;
     }
     const messageDedupeKey = resolveFeishuMessageDedupeKey(event);
+    // Attachment-free posts used their raw message ID before retry-stable keys.
+    // Honor retained records until their normal replay TTL expires.
+    if (
+      event.message.message_type.trim() === "post" &&
+      messageDedupeKey !== messageId &&
+      (await hasProcessedMessage(messageId, accountId, log)) &&
+      parsePostContent(event.message.content).attachments.length === 0
+    ) {
+      log(`feishu[${accountId}]: dropping duplicate event for message ${messageId}`);
+      await completeSuppressedIngress();
+      return undefined;
+    }
     const claim = await claimUnprocessedFeishuMessage({
       messageId: messageDedupeKey,
       namespace: accountId,

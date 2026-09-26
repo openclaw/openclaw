@@ -12,7 +12,7 @@ import { ensureDeviceToken, revokeDeviceToken } from "../infra/device-pairing-to
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import * as hostAccountAvatar from "../infra/host-account-avatar.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import * as userProfiles from "../state/user-profiles.js";
+import * as profileAvatars from "../state/user-profiles-avatar.js";
 import {
   ensureGatewayOwnerProfile,
   linkEmail,
@@ -32,7 +32,12 @@ const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64",
 );
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterAll(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  });
+});
 
 // Most cases cross real HTTP, auth, device pairing, profile storage and the UI loader.
 // Provider-backed cases use in-memory HTTP transport and stub external identity responses,
@@ -94,11 +99,10 @@ describe("personal avatar HTTP authentication", () => {
     avatarPath = "/api/users/gateway-owner/avatar?v=synthetic-png";
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     setAvatarGatewayOrigin(null);
     rateLimiter?.dispose();
     rateLimiter = undefined;
-    await closeStateDatabaseForTest();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -140,19 +144,40 @@ describe("personal avatar HTTP authentication", () => {
     return fetch(origin + avatarPath, { ...init, headers });
   }
 
-  it.each(["host", "Gravatar"])(
+  it.each(["inspection", "saved", "host", "Gravatar"] as const)(
     "withholds a prepared %s avatar after credentials rotate",
     async (source) => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      vi.spyOn(userProfiles, "getProfileAvatar").mockReturnValue(undefined);
+      const createReader = profileAvatars.createProfileAvatarReader;
+      vi.spyOn(profileAvatars, "createProfileAvatarReader").mockImplementation((id, options) => {
+        const reader = createReader(id, options);
+        return {
+          async inspect() {
+            if (source === "inspection") {
+              entered.resolve();
+              await release.promise;
+            }
+            const prepared = await reader.inspect();
+            return {
+              ...prepared,
+              avatar: source === "host" || source === "Gravatar" ? undefined : prepared.avatar,
+              async loadBytes() {
+                entered.resolve();
+                await release.promise;
+                return prepared.loadBytes();
+              },
+            };
+          },
+        };
+      });
       if (source === "host") {
         vi.spyOn(hostAccountAvatar, "resolveHostAccountAvatar").mockImplementation(async () => {
           entered.resolve();
           await release.promise;
           return { bytes: PNG, mime: "image/jpeg", sha256: "synthetic-avatar" };
         });
-      } else {
+      } else if (source === "Gravatar") {
         vi.spyOn(hostAccountAvatar, "resolveHostAccountAvatar").mockResolvedValue(null);
         const profile = syncGitHubIdentity({
           identity: { accountId: 9871, login: "avatar-authority" },
@@ -278,7 +303,7 @@ describe("personal avatar HTTP authentication", () => {
     setAvatar(primary.id, PNG, "image/png");
     setUserProfileRole(primary.id, "reader");
     avatarPath = "/api/users/" + primary.id + "/avatar";
-    const readAvatar = vi.spyOn(userProfiles, "getProfileAvatar");
+    const readAvatar = vi.spyOn(profileAvatars, "createProfileAvatarReader");
     const send = async (email = identity.email) => {
       const req = new IncomingMessage(new Socket());
       Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1" });

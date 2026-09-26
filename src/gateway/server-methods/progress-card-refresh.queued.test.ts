@@ -2,10 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressCard } from "../../../packages/gateway-protocol/src/index.js";
 import { createFollowupRunner } from "../../auto-reply/reply/followup-runner.js";
-import type {
-  AdmittedFollowupTurn,
-  FollowupRunnerParams,
-} from "../../auto-reply/reply/followup-turn-admission.js";
+import type { AdmittedFollowupTurn } from "../../auto-reply/reply/followup-turn-admission.js";
 import type { FollowupExecutionResult } from "../../auto-reply/reply/followup-turn-execution.js";
 import { scheduleFollowupDrain } from "../../auto-reply/reply/queue/drain.js";
 import { enqueueFollowupRun, parkSteerCandidate } from "../../auto-reply/reply/queue/enqueue.js";
@@ -47,9 +44,6 @@ vi.mock("./chat-send-source-finalization.js", () => ({
 // replace session/provider admission and the execution/accounting/delivery edges.
 vi.mock("../../auto-reply/reply/followup-turn-admission.js", () => ({
   admitFollowupTurn: mocks.admit,
-  settleQueuedFollowupPresentation: async (defaults: FollowupRunnerParams) => {
-    await defaults.opts?.onQueuedFollowupSettled?.();
-  },
 }));
 vi.mock("../../auto-reply/reply/followup-turn-execution.js", () => ({
   executeFollowupTurn: mocks.execute,

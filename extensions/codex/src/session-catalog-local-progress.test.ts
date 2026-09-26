@@ -57,7 +57,7 @@ it.each([true, false])(
   "bounds cold local progress and reuses resident rows (partial: %s)",
   async (partial) => {
     const f = fixture();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const result = observe(f.list(partial));
     try {
       await f.started.promise;

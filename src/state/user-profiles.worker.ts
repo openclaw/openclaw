@@ -18,6 +18,7 @@ import {
 } from "./user-profile-writes.worker.js";
 import {
   selectProfileDisplayEntries,
+  inspectProfileAvatarInDatabase,
   selectResolvedUserProfileById,
   toUserProfile,
   userProfilesDb,
@@ -79,7 +80,7 @@ function executeUserProfileReadCommand(
 type UserProfileAvatarWorkerOperations = {
   "userProfiles.avatar.inspect": {
     input: { profileId: string };
-    output: { profile: ReturnType<typeof toUserProfile> | undefined; hasAvatar: boolean };
+    output: ReturnType<typeof inspectProfileAvatarInDatabase>;
   };
   "userProfiles.avatar.adopt": {
     input: { profileId: string; bytes: Uint8Array; mime: UserProfileAvatarMime; now: number };
@@ -95,14 +96,10 @@ function executeUserProfileAvatarCommand(
   options: OpenClawStateDatabaseOptions,
 ): UserProfileAvatarWorkerOperations[keyof UserProfileAvatarWorkerOperations]["output"] {
   if (command.type === "userProfiles.avatar.inspect") {
-    const profile = selectResolvedUserProfileById(
+    return inspectProfileAvatarInDatabase(
       openOpenClawStateDatabase(options).db,
       command.input.profileId,
     );
-    return {
-      profile: profile && toUserProfile(profile),
-      hasAvatar: profile !== undefined && profile.avatar !== null,
-    };
   }
   const { input } = command;
   const sha256 = createHash("sha256").update(input.bytes).digest("hex");

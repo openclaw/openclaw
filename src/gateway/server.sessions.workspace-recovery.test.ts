@@ -54,7 +54,7 @@ async function seedPendingWorkspace(scenario: RecoveryScenario) {
     nodeDeviceId: "runner-1",
   };
   writePlacementEnvironmentFixture(database, environment);
-  seedActivePlacement(placements, environment);
+  await seedActivePlacement(placements, environment);
   const claim = await placements.claimTurn({
     sessionId,
     sessionKey,

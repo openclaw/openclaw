@@ -5,45 +5,14 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import type { Command } from "commander";
-import { resolveAgentDir } from "../../agents/agent-scope.js";
-import {
-  assertOkOrThrowHttpError,
-  assertProviderBinaryResponseContent,
-} from "../../agents/provider-http-errors.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readResponseWithLimit } from "../../infra/http-body.js";
-import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
-import { describeVideoFile } from "../../media-understanding/runtime.js";
-import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
-import {
-  fetchWithTimeoutGuarded,
-  resolveProviderHttpRequestConfig,
-  sanitizeConfiguredModelProviderRequest,
-} from "../../plugin-sdk/provider-http.js";
 import { defaultRuntime } from "../../runtime.js";
-import {
-  generateVideo,
-  listRuntimeVideoGenerationProviders,
-} from "../../video-generation/runtime.js";
 import type { VideoGenerationResolution } from "../../video-generation/types.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
-import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
-import { publishOutputFileAtomically, writeOutputAsset } from "../media-output.js";
-import { prepareLocalCapabilityAccountSecrets } from "./local-account-secrets.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { emitJsonOrText, formatEnvelopeForText } from "./output.js";
-import {
-  parseOptionalFiniteNumber,
-  parseOptionalTimeoutMs,
-  providerHasGenericConfig,
-  registerLocalProvidersCommand,
-  requireProviderModelOverride,
-  resolveCapabilityAgentOption,
-  resolveCapabilityProviderAgentId,
-  resolveLocalCapabilityRuntimeConfig,
-  resolveSelectedProviderFromModelRef,
-} from "./shared.js";
+import { registerLocalProvidersCommand } from "./providers-command.js";
 
 const GENERATED_VIDEO_DOWNLOAD_TIMEOUT_MS = 120_000;
 
@@ -70,6 +39,13 @@ async function fetchGeneratedVideoDownload(params: {
   provider: string;
   url: string;
 }) {
+  const { assertOkOrThrowHttpError, assertProviderBinaryResponseContent } =
+    await import("../../agents/provider-http-errors.js");
+  const {
+    fetchWithTimeoutGuarded,
+    resolveProviderHttpRequestConfig,
+    sanitizeConfiguredModelProviderRequest,
+  } = await import("../../plugin-sdk/provider-http.js");
   const providerConfig = params.cfg.models?.providers?.[params.provider];
   const { allowPrivateNetwork, dispatcherPolicy } = resolveProviderHttpRequestConfig({
     baseUrl: params.url,
@@ -120,12 +96,24 @@ async function runVideoGenerate(params: {
   timeoutMs?: number;
   agent?: string;
 }) {
+  const {
+    requireProviderModelOverride,
+    resolveCapabilityProviderAgentId,
+    resolveLocalCapabilityRuntimeConfig,
+  } = await import("./shared.js");
+  const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
+  const { resolveAgentDir } = await import("../../agents/agent-scope.js");
+  const { generateVideo } = await import("../../video-generation/runtime.js");
+  const { readResponseWithLimit } = await import("../../infra/http-body.js");
+  const { resolveGeneratedMediaMaxBytes } = await import("../../media/configured-max-bytes.js");
+  const { publishOutputFileAtomically, writeOutputAsset } = await import("../media-output.js");
   requireProviderModelOverride(params.model);
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer video.generate",
     targetIds: getModelsCommandSecretTargetIds(),
   });
   const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer video.generate");
+  const { prepareLocalCapabilityAccountSecrets } = await import("./local-account-secrets.js");
   await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
   const agentDir = resolveAgentDir(cfg, agentId);
   const result = await generateVideo({
@@ -226,11 +214,20 @@ async function runVideoGenerate(params: {
 }
 
 async function runVideoDescribe(params: { file: string; model?: string; agent?: string }) {
+  const {
+    requireProviderModelOverride,
+    resolveCapabilityProviderAgentId,
+    resolveLocalCapabilityRuntimeConfig,
+  } = await import("./shared.js");
+  const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
+  const { resolveAgentDir } = await import("../../agents/agent-scope.js");
+  const { describeVideoFile } = await import("../../media-understanding/runtime.js");
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer video.describe",
     targetIds: getModelsCommandSecretTargetIds(),
   });
   const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer video describe");
+  const { prepareLocalCapabilityAccountSecrets } = await import("./local-account-secrets.js");
   await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
   const agentDir = resolveAgentDir(cfg, agentId);
   const activeModel = requireProviderModelOverride(params.model);
@@ -281,6 +278,8 @@ export function registerVideoCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { parseOptionalFiniteNumber, parseOptionalTimeoutMs, resolveCapabilityAgentOption } =
+          await import("./shared.js");
         const result = await runVideoGenerate({
           prompt: String(opts.prompt),
           agent: resolveCapabilityAgentOption(command, opts.agent),
@@ -307,6 +306,7 @@ export function registerVideoCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { resolveCapabilityAgentOption } = await import("./shared.js");
         const result = await runVideoDescribe({
           file: String(opts.file),
           agent: resolveCapabilityAgentOption(command, opts.agent),
@@ -319,7 +319,13 @@ export function registerVideoCapabilityCommands(capability: Command): void {
   registerLocalProvidersCommand(
     video,
     "List video generation and description providers",
-    (cfg, agentId) => {
+    async (cfg, agentId) => {
+      const { providerHasGenericConfig, resolveSelectedProviderFromModelRef } =
+        await import("./shared.js");
+      const { listRuntimeVideoGenerationProviders } =
+        await import("../../video-generation/runtime.js");
+      const { buildMediaUnderstandingRegistry } =
+        await import("../../media-understanding/provider-registry.js");
       const selectedGenerationProvider = resolveSelectedProviderFromModelRef(
         resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.video),
       );

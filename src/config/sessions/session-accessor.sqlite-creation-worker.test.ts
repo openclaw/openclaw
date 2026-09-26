@@ -1,5 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { deserialize } from "node:v8";
+import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareInternalSessionEffectsSession } from "../../agents/internal-session-effects.js";
@@ -344,6 +347,7 @@ it("publishes the logical creator identity while retaining the shared database's
 it("adopts admitted Signal history and collaboration without host SQL, preserving a case-distinct Matrix sibling", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
+    using post = vi.spyOn(Worker.prototype, "postMessage");
     const sessionKey = "agent:main:signal:group:AbC";
     const alias = sessionKey.toLowerCase();
     const scope = { agentId: "main", storePath: database.path, sessionKey: alias };
@@ -465,6 +469,19 @@ it("adopts admitted Signal history and collaboration without host SQL, preservin
       ).ok,
     ).toBe(true);
     expect(readExactSessionEntryRow(database, sibling)?.entry.sessionId).toBe("matrix-sibling");
+    const commands = post.mock.calls.flatMap(([request]) => {
+      if (
+        !isRecord(request) ||
+        request.type !== "execute" ||
+        !(request.input instanceof Uint8Array)
+      ) {
+        return [];
+      }
+      const command: unknown = deserialize(request.input);
+      return isRecord(command) ? [command.type] : [];
+    });
+    expect(commands).toContain("session.entries.replace");
+    expect(commands).not.toContain("session.archives.preparePublication");
   });
 });
 

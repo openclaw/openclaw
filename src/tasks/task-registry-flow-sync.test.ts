@@ -224,6 +224,13 @@ describe("restored task flow synchronization", () => {
       store: {
         ...first.store,
         async syncTaskFlowAsync(this: TaskRegistryStore, context, params) {
+          const admission = context.admission;
+          context.admission = {
+            ...admission,
+            get identity() {
+              return admission.identity;
+            },
+          };
           let failure: unknown;
           try {
             retryCalls += 1;
