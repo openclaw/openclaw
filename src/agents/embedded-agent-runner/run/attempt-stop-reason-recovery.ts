@@ -3,6 +3,7 @@
  */
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
+import { registerHostPluginIterator } from "../../../plugins/plugin-instance-value-views.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
@@ -95,7 +96,7 @@ function wrapStreamHandleUnhandledStopReason(
     function () {
       const iterator = originalAsyncIterator();
       let emittedSyntheticTerminal = false;
-      return createStreamIteratorWrapper({
+      const wrapper = createStreamIteratorWrapper({
         iterator,
         next: async (streamIterator) => {
           if (emittedSyntheticTerminal) {
@@ -136,6 +137,7 @@ function wrapStreamHandleUnhandledStopReason(
           }
         },
       });
+      return registerHostPluginIterator(wrapper);
     };
 
   return stream;

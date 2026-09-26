@@ -6,6 +6,19 @@ import type { PluginInstanceCallLease, PluginIteratorAdmission } from "./plugin-
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
 
 const { values: valueInstances } = pluginInstanceState;
+const coreIteratorMethods = new WeakSet<Function>();
+
+/** Register only host methods whose plugin calls already cross managed value views. */
+export function registerHostPluginIterator<T extends AsyncIterator<unknown>>(iterator: T): T {
+  for (const key of ["next", "return", "throw"]) {
+    const method: unknown = Object.getOwnPropertyDescriptor(iterator, key)?.value;
+    if (typeof method === "function") {
+      coreIteratorMethods.add(method);
+    }
+  }
+  return iterator;
+}
+
 // Active core readers fence their own lease and admit any plugin code they reach.
 const iteratorResultReaders = new WeakMap<
   object,
@@ -232,6 +245,7 @@ export function createPluginValueView(
     instance: PluginInstanceHandle;
     originalValues: WeakMap<object, object>;
     invoke: <T>(run: () => T, lease?: PluginInstanceCallLease) => T;
+    invokeCore: <T>(run: () => T, lease: PluginInstanceCallLease) => T;
     lease: () => PluginInstanceCallLease;
     hasToken: (token: object) => boolean;
   },
@@ -367,6 +381,9 @@ export function createPluginValueView(
                 return owner.call(key, property, args);
               };
         methods.set(key, { original: property, receiver: resolvedReceiver, wrapped: bound });
+        if (key !== Symbol.asyncIterator) {
+          coreIteratorMethods.add(bound);
+        }
         valueInstances.set(bound, bindings.instance);
         return bound;
       }
@@ -545,10 +562,10 @@ export function createPluginValueView(
         throw new Error(`Plugin ${bindings.instance.pluginId} stream is closed`);
       }
     };
-    const invoke = <T>(run: () => T): T => {
+    const invoke = <T>(run: () => T, execute: typeof bindings.invokeCore = bindings.invoke): T => {
       assertActive();
       pending += 1;
-      return bindings.invoke(run, { token, release: releaseOperation });
+      return execute(run, { token, release: releaseOperation });
     };
     const readResultMember = (result: object, key: "done" | "value"): unknown => {
       assertActive();
@@ -604,6 +621,8 @@ export function createPluginValueView(
             return { done: true, value: undefined };
           });
         }
+        const execute =
+          method && coreIteratorMethods.has(method) ? bindings.invokeCore : bindings.invoke;
         return invoke(async () => {
           try {
             if (!method) {
@@ -635,7 +654,7 @@ export function createPluginValueView(
             state = "done";
             throw error;
           }
-        });
+        }, execute);
       },
     };
     iterators.set(iterator, admission);

@@ -13,6 +13,7 @@ import { areDiagnosticsEnabledForProcess } from "../../../infra/diagnostic-event
 import { toErrorObject } from "../../../infra/errors.js";
 import type { AssistantMessageEvent } from "../../../llm/types.js";
 import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
+import { registerHostPluginIterator } from "../../../plugins/plugin-instance-value-views.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
@@ -494,7 +495,7 @@ export function streamWithIdleTimeout(
           // pending-next guard: a parked consumer cannot prove producer silence.
           void producerCompletion?.then(settle, settle);
 
-          return createStreamIteratorWrapper({
+          const wrapper = createStreamIteratorWrapper({
             iterator,
             next: async (streamIterator) => {
               let pendingNext: ReturnType<typeof streamIterator.next> | undefined;
@@ -541,6 +542,7 @@ export function streamWithIdleTimeout(
               );
             },
           });
+          return registerHostPluginIterator(wrapper);
         };
 
       return stream;

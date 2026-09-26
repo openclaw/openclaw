@@ -159,6 +159,7 @@ export function withPluginRuntimePluginScope<T>(
   run: () => T,
   registry?: PluginRegistry,
   invocation?: PluginInstanceInvocation,
+  reuseCurrent = false,
 ): T {
   const current = getPluginGatewayScope();
   // Instance calls combine registry and identity without adding a second async frame.
@@ -168,6 +169,18 @@ export function withPluginRuntimePluginScope<T>(
       ? { ...current }
       : { isWebchatConnect: isNotWebchatConnect };
   applyPluginScope(scoped, scope);
+  if (reuseCurrent && current && invocation === pluginInstanceInvocation.getStore()) {
+    const keys = Reflect.ownKeys(scoped);
+    if (
+      keys.length === Reflect.ownKeys(current).length &&
+      keys.every((key) => {
+        const descriptor = Object.getOwnPropertyDescriptor(current, key);
+        return descriptor && "value" in descriptor && descriptor.value === Reflect.get(scoped, key);
+      })
+    ) {
+      return run();
+    }
+  }
   return runWithPluginGatewayScope(scoped, run, invocation);
 }
 

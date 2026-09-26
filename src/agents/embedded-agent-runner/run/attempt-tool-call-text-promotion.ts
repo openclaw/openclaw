@@ -10,6 +10,7 @@ import {
   type PlainTextToolCallMessageNormalization,
   type PlainTextToolCallNameMatcher,
 } from "../../../../packages/tool-call-repair/src/index.js";
+import { registerHostPluginIterator } from "../../../plugins/plugin-instance-value-views.js";
 import { findCodeRegions } from "../../../shared/text/code-regions.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
@@ -130,7 +131,7 @@ function wrapStreamPromoteStandaloneTextToolCalls(
       resolveProtectedRanges: findCodeRegions,
     })[Symbol.asyncIterator]();
     let started = false;
-    return createStreamIteratorWrapper({
+    const wrapper = createStreamIteratorWrapper({
       iterator: normalized,
       next: (iterator) => {
         started = true;
@@ -149,6 +150,7 @@ function wrapStreamPromoteStandaloneTextToolCalls(
         }
       },
     });
+    return registerHostPluginIterator(wrapper);
   };
   if (!Reflect.set(stream, Symbol.asyncIterator, wrappedAsyncIterator)) {
     throw new TypeError("Cannot replace stream async iterator");

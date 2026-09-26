@@ -21,6 +21,47 @@ afterEach(async () => {
 });
 
 describe("plugin async iterable protocol", () => {
+  it.each(["method", "getter"] as const)(
+    "admits a replaced iterator %s through nested consumer views",
+    async (kind) => {
+      const instance = owner();
+      const consumer = instance.retainConsumer();
+      const source = {
+        [Symbol.asyncIterator]() {
+          return this;
+        },
+        next: async () => ({ done: false, value: "first" }),
+        return: async () => ({ done: true, value: "done" }),
+      };
+      const iterator = consumer.wrap(instance.wrap(source))[Symbol.asyncIterator]();
+      const replacement = vi.fn(async function (this: typeof source) {
+        expect(this).toBe(source);
+        expect(instance.hasActiveCall).toBe(true);
+        return { done: false, value: "replacement" };
+      });
+      try {
+        expect((await iterator.next()).value).toBe("first");
+        if (kind === "getter") {
+          Object.defineProperty(source, "next", {
+            get() {
+              expect(instance.hasActiveCall).toBe(true);
+              return replacement;
+            },
+          });
+        } else {
+          source.next = replacement;
+        }
+        expect((await iterator.next()).value).toBe("replacement");
+        expect(replacement).toHaveBeenCalledOnce();
+        consumer.release();
+        expect(() => iterator.next).toThrow("stream is closed");
+        expect(replacement).toHaveBeenCalledOnce();
+      } finally {
+        consumer.release();
+      }
+    },
+  );
+
   it.each(["next", "throw"] as const)(
     "preserves native %s completion after exhaustion while its owner is live",
     async (method) => {

@@ -1,9 +1,14 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { AssistantMessageEvent } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { PluginInstance } from "../../../plugins/plugin-instance.js";
+import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import { createPluginRecord } from "../../../plugins/status.test-helpers.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
-import { wrapStreamObjectEvents } from "./stream-wrapper.js";
+import { wrapStreamObjectEvents, wrapStreamObjectSettlement } from "./stream-wrapper.js";
 
 function createStream(): MutableAssistantMessageEventStream {
   const message = makeAssistantMessageFixture();
@@ -16,6 +21,61 @@ function createStream(): MutableAssistantMessageEventStream {
 }
 
 describe("stream event transforms", () => {
+  it("retains the consumer's repair authority and registry while the instance is quiesced", async () => {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "retained-repair" });
+    registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry });
+    const retainedRegistry = createEmptyPluginRegistry();
+    const consumer = instance.retainConsumer(undefined, retainedRegistry);
+    const stream = consumer.wrap(createStream());
+    const repair = instance.wrap(() => {
+      expect(instance.hasActiveCall).toBe(true);
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(retainedRegistry);
+    });
+    wrapStreamObjectEvents(stream, repair);
+    const iterator = stream[Symbol.asyncIterator]();
+    try {
+      instance.quiesce();
+      expect(await iterator.next()).toMatchObject({ done: false, value: { type: "start" } });
+      await iterator.return?.();
+    } finally {
+      consumer.release();
+      await instance.dispose();
+    }
+  });
+
+  it("coalesces owned stream transforms without reentering plugin scope for host decorators", async () => {
+    const instance = new PluginInstance("stream-decorators");
+    const consumer = instance.retainConsumer();
+    const stream = consumer.wrap(createStream());
+    const calls: string[] = [];
+    wrapStreamObjectEvents(stream, () => {
+      calls.push("first");
+    });
+    const projected = stream[Symbol.asyncIterator];
+    wrapStreamObjectEvents(stream, () => {
+      calls.push("second");
+    });
+    expect(stream[Symbol.asyncIterator]).toBe(projected);
+    wrapStreamObjectSettlement(stream, async () => {
+      calls.push("settled");
+    });
+    const iterator = stream[Symbol.asyncIterator]();
+    const frames = vi.spyOn(AsyncLocalStorage.prototype, "run");
+    try {
+      expect(await iterator.next()).toMatchObject({ done: false, value: { type: "start" } });
+      expect(calls).toEqual(["first", "second", "settled"]);
+      expect(frames).toHaveBeenCalledTimes(2);
+      consumer.release();
+      await expect(iterator.next()).rejects.toThrow("stream is closed");
+    } finally {
+      frames.mockRestore();
+      consumer.release();
+      await instance.dispose();
+    }
+  });
+
   it("awaits asynchronous transforms in registration order before exposing the event", async () => {
     const stream = createStream();
     const entered = createDeferred();

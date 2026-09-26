@@ -128,7 +128,7 @@ export class PluginInstance {
   run<T>(run: () => T): T {
     const current = this.activeCall();
     if (current) {
-      return this.enter(current.token, run);
+      return this.enter(current.token, false, run);
     }
     const scoped = pluginInvocationContext.getStore()?.lookup(this);
     if (scoped) {
@@ -147,7 +147,7 @@ export class PluginInstance {
   ): T {
     const current = this.activeCall();
     if (current) {
-      return this.enter(current.token, run);
+      return this.enter(current.token, false, run);
     }
     // Fresh ordinary calls never inherit a scope's retained-consumer admission.
     if (!this.accepting || this.owner?.revoked) {
@@ -351,10 +351,11 @@ export class PluginInstance {
     run: () => T,
     { token, release }: PluginInstanceCallLease = this.lease(),
     cleanupFailures?: Set<unknown>,
+    reuseCurrent = false,
   ): T {
     const cleanup = this.calls.get(token)?.cleanup === true;
     try {
-      return this.enter(token, () => {
+      return this.enter(token, reuseCurrent, () => {
         const value = run();
         const completion = resolvePluginReturnPromise(value);
         if (completion) {
@@ -391,12 +392,12 @@ export class PluginInstance {
     }
   }
 
-  private enter<T>(token: object, run: () => T): T {
+  private enter<T>(token: object, reuseCurrent: boolean, run: () => T): T {
     const current = invocation.getStore();
     const call =
       current?.instance === this && current.token === token ? current : { instance: this, token };
     if (!this.owner) {
-      const enter = () => invocation.run(call, run);
+      const enter = reuseCurrent && current === call ? run : () => invocation.run(call, run);
       // Deferred setup imports use the same SDK resolver facts as their initial load.
       return this.setupCache ? withPluginCache(this.setupCache, enter) : enter();
     }
@@ -418,6 +419,7 @@ export class PluginInstance {
       run,
       registry,
       call,
+      reuseCurrent,
     );
   }
 
@@ -476,6 +478,7 @@ export class PluginInstance {
         instance: this,
         originalValues: this.originalValues,
         invoke: (run, lease) => this.invoke(run, lease),
+        invokeCore: (run, lease) => this.invoke(run, lease, undefined, true),
         lease: () => this.lease(),
         hasToken: (token) => this.hasToken(token),
       },

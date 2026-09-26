@@ -1,4 +1,5 @@
 import type { AssistantMessageEvent } from "../../../llm/types.js";
+import { registerHostPluginIterator } from "../../../plugins/plugin-instance-value-views.js";
 /**
  * Wraps stream object events with mutable assistant-message transforms.
  */
@@ -31,8 +32,8 @@ export function wrapStreamObjectSettlement(
     }
   };
   const originalIterator = stream[Symbol.asyncIterator].bind(stream);
-  stream[Symbol.asyncIterator] = () =>
-    createStreamIteratorWrapper({
+  stream[Symbol.asyncIterator] = () => {
+    const wrapper = createStreamIteratorWrapper({
       iterator: originalIterator(),
       next: async (iterator) => {
         let next: IteratorResult<AssistantMessageEvent>;
@@ -65,6 +66,8 @@ export function wrapStreamObjectSettlement(
         }
       },
     });
+    return registerHostPluginIterator(wrapper);
+  };
   return stream;
 }
 
@@ -89,7 +92,7 @@ export function wrapStreamObjectEvents(
   const iterator = function () {
     // An already opened iterator keeps the transforms installed when it opened.
     const activeTransforms = transforms.slice();
-    return createStreamIteratorWrapper({
+    const wrapper = createStreamIteratorWrapper({
       iterator: originalAsyncIterator(),
       next: async (streamIterator) => {
         const result = await streamIterator.next();
@@ -104,9 +107,10 @@ export function wrapStreamObjectEvents(
         return result;
       },
     });
+    return registerHostPluginIterator(wrapper);
   };
   stream[Symbol.asyncIterator] = iterator;
-  eventTransforms.set(stream, { iterator, transforms });
+  eventTransforms.set(stream, { iterator: stream[Symbol.asyncIterator], transforms });
   return stream;
 }
 
