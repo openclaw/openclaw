@@ -189,16 +189,11 @@ public actor OpenClawChatSourceResources {
         automaticallyFetchFavicons: Bool) -> ContextSnapshot?
     {
         guard let basePath = Self.normalizedBasePath(basePath) else { return nil }
-        let resourceBaseURL: URL? = if basePath.isEmpty,
-                                       let controlPageURL = self.controlPageURL(gatewayURL: gatewayURL)
-        {
-            controlPageURL
-        } else {
-            Self.resourceURL(gatewayURL: gatewayURL, basePath: basePath, path: "")
-        }
-        guard let resourceBaseURL,
-              let components = URLComponents(url: resourceBaseURL, resolvingAgainstBaseURL: false)
+        let controlPageURL = basePath.isEmpty ? self.controlPageURL(gatewayURL: gatewayURL) : nil
+        guard var components = URLComponents(url: controlPageURL ?? gatewayURL, resolvingAgainstBaseURL: false)
         else { return nil }
+        if controlPageURL == nil { components.path = basePath }
+        guard let resourceBaseURL = components.url else { return nil }
         let mount = components.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         return ContextSnapshot(
             context: OpenClawChatSourceContext(
@@ -249,15 +244,6 @@ public actor OpenClawChatSourceResources {
             components.percentEncodedPath.removeLast()
         }
         components.percentEncodedPath += path
-        return components.url
-    }
-
-    private static func resourceURL(gatewayURL: URL, basePath: String, path: String) -> URL? {
-        guard let basePath = normalizedBasePath(basePath),
-              let url = httpURL(gatewayURL),
-              var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        else { return nil }
-        components.path = basePath + path
         return components.url
     }
 
