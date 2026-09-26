@@ -229,7 +229,7 @@ type ResolveSandboxContextParams = {
   sessionKey?: string;
   skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;
-  /** Classification for this session, retained by the caller's worker read scope. */
+  /** Classification already prepared for this session's workspace setup. */
   preparedRuntimeStatus?: ReturnType<typeof resolveSandboxRuntimeStatus>;
 };
 

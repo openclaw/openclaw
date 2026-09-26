@@ -34,7 +34,6 @@ type PreparedEmbeddedAttemptHistory = {
 
 export async function prepareEmbeddedAttemptHistory(
   input: EmbeddedAttemptExecutionPhaseInput,
-  assertCurrent: () => void,
 ): Promise<PreparedEmbeddedAttemptHistory> {
   const { attempt, activeContextEngine, isRawModelRun } = input;
   const {
@@ -93,14 +92,11 @@ export async function prepareEmbeddedAttemptHistory(
       const storePath = resolveSessionStorePathCore(attempt.config?.session?.store, {
         agentId: sessionAgentId,
       });
-      const sessionEntry = await loadAttemptSessionEntryAfterQuotaMaintenance(
-        {
-          agentId: sessionAgentId,
-          storePath,
-          sessionKey: attempt.sessionKey,
-        },
-        assertCurrent,
-      );
+      const sessionEntry = await loadAttemptSessionEntryAfterQuotaMaintenance({
+        agentId: sessionAgentId,
+        storePath,
+        sessionKey: attempt.sessionKey,
+      });
       const suspension = sessionEntry?.quotaSuspension;
       if (sessionEntry && suspension?.state === "resuming") {
         const subagents = listSessionEntriesReadOnly({

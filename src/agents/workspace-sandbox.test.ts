@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
@@ -151,14 +150,13 @@ it.each(["realpath", "mkdir"] as const)(
   },
 );
 
-it("prepares opted-out sandbox policy without main-thread data SQL or duplicate workspace creation", async () => {
+it("reports the selected sandbox policy without duplicate workspace creation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const sessionKey = "agent:main:optional";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },
       { sessionId: "optional", updatedAt: 1, sandboxMode: "off" },
     );
-    const sqlite = observeHostDataSql(state.env);
     const mkdir = vi.spyOn(fs, "mkdir");
     try {
       const prepared = await resolveAttemptWorkspaceSandbox({
@@ -170,11 +168,9 @@ it("prepares opted-out sandbox policy without main-thread data SQL or duplicate 
         config: { agents: { defaults: { sandbox: { mode: "all" } } } },
       });
       expect(prepared.sandbox).toBeNull();
-      expect(sqlite.queries).toEqual([]);
       expect(prepared.sandboxReport).toEqual({ mode: "all", sandboxed: false });
       expect(mkdir.mock.calls.filter(([dir]) => dir === state.workspaceDir)).toHaveLength(1);
     } finally {
-      sqlite.restore();
       mkdir.mockRestore();
     }
   });

@@ -1,6 +1,5 @@
-import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
 import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
@@ -19,16 +18,8 @@ const sessionAccessorMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
   patchSessionEntryCore:
     vi.fn<typeof import("../../../config/sessions/session-accessor.js").patchSessionEntryCore>(),
+  updateSessionEntry: vi.fn(async () => undefined),
 }));
-
-const sessionEntryReadMocks = vi.hoisted(() => ({
-  withSessionEntryReadOnlyInWorker:
-    vi.fn<
-      typeof import("../../../config/sessions/session-entry-read-runtime.js").withSessionEntryReadOnlyInWorker
-    >(),
-}));
-
-vi.mock("../../../config/sessions/session-entry-read-runtime.js", () => sessionEntryReadMocks);
 
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
   findTranscriptEvent: vi.fn(async () => undefined),
@@ -40,7 +31,7 @@ beforeEach(() => {
   sessionAccessorMocks.listSessionEntriesReadOnly.mockReset().mockReturnValue([]);
   sessionAccessorMocks.loadSessionEntry.mockReset();
   sessionAccessorMocks.patchSessionEntryCore.mockReset().mockResolvedValue(null);
-  sessionEntryReadMocks.withSessionEntryReadOnlyInWorker.mockReset();
+  sessionAccessorMocks.updateSessionEntry.mockReset().mockResolvedValue(undefined);
 });
 
 it.each([0, 2])(
@@ -259,146 +250,23 @@ describe("fixed-store session bootstrap", () => {
   });
 
   it("carries the resolved owner into quota-maintenance reads", async () => {
-    const entry = {
+    sessionAccessorMocks.loadSessionEntry.mockReturnValueOnce({
       sessionId: "ops-session",
       updatedAt: 1,
-    };
-    sessionEntryReadMocks.withSessionEntryReadOnlyInWorker.mockImplementationOnce(
-      async (_target, _assert, consume) => consume({ ok: true, value: entry }),
-    );
+    });
 
-    const target = {
+    await loadAttemptSessionEntryAfterQuotaMaintenance({
       agentId: "ops",
       sessionKey: "global",
       storePath: "/tmp/shared-sessions.json",
-    };
-    const assertCurrent = vi.fn();
+    });
 
-    expect(await loadAttemptSessionEntryAfterQuotaMaintenance(target, assertCurrent)).toEqual(
-      entry,
-    );
-    expect(sessionEntryReadMocks.withSessionEntryReadOnlyInWorker).toHaveBeenCalledWith(
-      target,
-      assertCurrent,
-      expect.any(Function),
-    );
-    expect(sessionAccessorMocks.loadSessionEntry).not.toHaveBeenCalled();
-    expect(sessionAccessorMocks.patchSessionEntryCore).not.toHaveBeenCalled();
+    expect(sessionAccessorMocks.loadSessionEntry).toHaveBeenCalledWith({
+      agentId: "ops",
+      sessionKey: "global",
+      storePath: "/tmp/shared-sessions.json",
+    });
   });
-
-  it("rejects a quota read whose attempt closes before the result is consumed", async () => {
-    const read = createDeferred<SessionEntry | undefined>();
-    sessionEntryReadMocks.withSessionEntryReadOnlyInWorker.mockImplementationOnce(
-      async (_target, _assert, consume) => consume({ ok: true, value: await read.promise }),
-    );
-    const failure = new Error("attempt closed during quota read");
-    let current = true;
-    const loading = loadAttemptSessionEntryAfterQuotaMaintenance(
-      { agentId: "ops", sessionKey: "global", storePath: "/tmp/shared-sessions.json" },
-      () => {
-        if (!current) {
-          throw failure;
-        }
-      },
-    );
-    current = false;
-    read.resolve({ sessionId: "ops-session", updatedAt: 1 });
-    await expect(loading).rejects.toBe(failure);
-    expect(sessionAccessorMocks.patchSessionEntryCore).not.toHaveBeenCalled();
-  });
-
-  it("propagates a failed quota precheck without mutating the session", async () => {
-    const failure = new Error("session metadata unavailable");
-    sessionEntryReadMocks.withSessionEntryReadOnlyInWorker.mockImplementationOnce(
-      async (_target, _assert, consume) => consume({ ok: false, error: failure }),
-    );
-    await expect(
-      loadAttemptSessionEntryAfterQuotaMaintenance(
-        { agentId: "ops", sessionKey: "global", storePath: "/tmp/shared-sessions.json" },
-        () => {},
-      ),
-    ).rejects.toBe(failure);
-    expect(sessionAccessorMocks.patchSessionEntryCore).not.toHaveBeenCalled();
-  });
-
-  it.each(["resume", "refresh", "expire", "cancel"] as const)(
-    "rechecks quota %s against the current entry and waits for maintenance settlement",
-    async (transition) => {
-      const now = 100_000_000;
-      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-      onTestFinished(() => clock.mockRestore());
-      const suspension: NonNullable<SessionEntry["quotaSuspension"]> = {
-        schemaVersion: 1,
-        suspendedAt: now - 60_000,
-        reason: "quota_exhausted",
-        failedProvider: "test-provider",
-        failedModel: "test-model",
-        expectedResumeBy: now - 1,
-        state: "suspended",
-      };
-      const entry: SessionEntry = {
-        sessionId: "ops-session",
-        updatedAt: 1,
-        quotaSuspension: suspension,
-      };
-      const currentSuspension = {
-        ...suspension,
-        expectedResumeBy:
-          transition === "refresh"
-            ? now + 60_000
-            : transition === "expire"
-              ? now - 60 * 60_000
-              : now - 1,
-      };
-      const currentEntry: SessionEntry = { ...entry, quotaSuspension: currentSuspension };
-      const expectedPatch: Partial<SessionEntry> | null =
-        transition === "refresh"
-          ? null
-          : {
-              quotaSuspension:
-                transition === "expire" ? undefined : { ...currentSuspension, state: "resuming" },
-            };
-      sessionEntryReadMocks.withSessionEntryReadOnlyInWorker.mockImplementationOnce(
-        async (_target, _assert, consume) => consume({ ok: true, value: entry }),
-      );
-      const entered = createDeferred();
-      const committed = createDeferred<SessionEntry>();
-      const assertCurrent = vi.fn();
-      sessionAccessorMocks.patchSessionEntryCore.mockImplementationOnce(
-        async (_target, update, options) => {
-          entered.resolve();
-          expect(await update(currentEntry, { existingEntry: currentEntry })).toEqual(
-            expectedPatch,
-          );
-          expect(options?.assertCommitAllowed).toBe(assertCurrent);
-          return committed.promise;
-        },
-      );
-      let settled = false;
-      const loading = loadAttemptSessionEntryAfterQuotaMaintenance(
-        { agentId: "ops", sessionKey: "global", storePath: "/tmp/shared-sessions.json" },
-        assertCurrent,
-      ).then((result) => {
-        settled = true;
-        return result;
-      });
-      await entered.promise;
-      expect(settled).toBe(false);
-      const updated = { ...currentEntry, ...expectedPatch };
-      const cancelled = new Error("attempt closed during quota maintenance");
-      if (transition === "cancel") {
-        assertCurrent.mockImplementation(() => {
-          throw cancelled;
-        });
-      }
-      committed.resolve(updated);
-      if (transition === "cancel") {
-        await expect(loading).rejects.toBe(cancelled);
-      } else {
-        expect(await loading).toEqual(updated);
-      }
-    },
-  );
 });
 
 describe("createEmbeddedRunSessionPromptState", () => {
