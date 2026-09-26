@@ -227,6 +227,15 @@ export async function inspectInstalledTaskAuthority(params: {
           "foreign",
         )),
       };
+      observations.retainedOwnedBecameForeign = {
+        admission: admitted.serviceUpdateVerdict,
+        current: foreign.serviceUpdateVerdict,
+        ...(await observeRefusal(
+          () => resumeScheduledTaskAutoStartAfterUpdate(task.env, controlOptions(admitted)),
+          "Gateway service ownership or manager identity changed; inspect it before restarting manually.",
+          "retained-owned-became-foreign",
+        )),
+      };
 
       await registerDisabled(scripts.owned, "retained");
       const retained = await inspect();

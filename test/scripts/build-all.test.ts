@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   BUILD_ALL_PROFILES,
   BUILD_ALL_PROFILE_STEP_ENV,
@@ -28,6 +28,7 @@ import {
   type BuildCache,
 } from "../../scripts/lib/build-artifact-cache.mts";
 import { listBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import * as liveGatewayDistFence from "../../scripts/lib/live-gateway-dist-fence.mts";
 import { createManagedCommandInvocation } from "../../scripts/lib/managed-child-process.mts";
 import { TSDOWN_UNIFIED_CONFIG_GROUP } from "../../scripts/lib/tsdown-config-groups.mts";
 import { runNodeMain } from "../../scripts/run-node.mts";
@@ -37,6 +38,13 @@ import {
 } from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
+
+beforeEach(() => {
+  const fence = vi
+    .spyOn(liveGatewayDistFence, "resolveLiveManagedGatewayDistFence")
+    .mockResolvedValue({ refuse: false });
+  onTestFinished(() => fence.mockRestore());
+});
 
 vi.mock("../../src/cli/update-cli/update-command-service-publication.js", () => ({
   withGatewayRuntimeArtifactPublication: async (
@@ -430,6 +438,38 @@ describe("resolveBuildAllSteps", () => {
       expect(logger.warn).not.toHaveBeenCalled();
     },
   );
+
+  it("returns admissionRefused when the live Gateway fence refuses before any step", async () => {
+    vi.spyOn(liveGatewayDistFence, "resolveLiveManagedGatewayDistFence").mockResolvedValue({
+      refuse: true,
+      message: "[openclaw] Refusing to rebuild dist while a managed Gateway is still running.",
+    });
+    const runStep = vi.fn(() => ({ status: 0 }));
+    const resolveCacheState = vi.fn(() => ({
+      cacheable: false,
+      fresh: false,
+      reason: "no-cache",
+    }));
+    const logger = { error: vi.fn(), warn: vi.fn() };
+    const result = await runBuildAllSteps("full", {
+      env: {},
+      logger,
+      resolveCacheState,
+      restoreCache: vi.fn(() => true),
+      finalizeCache: vi.fn(() => true),
+      runStep,
+    });
+    expect(result).toEqual({
+      exitCode: 1,
+      timings: [],
+      admissionRefused: true,
+    });
+    expect(runStep).not.toHaveBeenCalled();
+    expect(resolveCacheState).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      "[openclaw] Refusing to rebuild dist while a managed Gateway is still running.",
+    );
+  });
 
   it("admits package once and freezes its heap for every child", async () => {
     const profile = "package";

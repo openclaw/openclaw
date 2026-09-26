@@ -83,6 +83,34 @@ service's Node path, and checks that Node version against the target release's
 
 ## Source-checkout servers (reference script)
 
+Before manually rebuilding a source checkout, stop every Gateway serving its
+`dist` files. Build entry points inspect discoverable managed Gateways, including
+sibling profiles, and refuse when a live service shares that output. On systemd,
+this includes processes remaining in the service cgroup after its main PID exits.
+Use an external terminal, outside the running Gateway's agent session. Follow the
+reported service/profile stop commands, rebuild, then start those same services.
+For the default profile, run these commands from the source checkout:
+
+```bash
+openclaw gateway stop &&
+pnpm build &&
+openclaw gateway start
+```
+
+Stop every listed sibling before building and start each one afterward. Preserve
+its profile and custom service overrides, or use the matching native service
+commands. A Startup-only sibling must be stopped using the exact Startup-file
+guidance and restarted through that same Startup entry; updating the selected
+service cannot stop that sibling. Start services only after the build succeeds.
+`openclaw update` can apply an available update, but `skipped` / `already-current`
+does not rebuild stale `dist`; use the external stop, rebuild, and start sequence
+for that case.
+
+A separate candidate checkout with independent output can build while the installed Gateway
+continues serving. This check observes current services; it does not prevent a
+service from starting during compilation, and unavailable inspection does not
+prove that no Gateway is running.
+
 Teams running a gateway directly from a git checkout on a server can update it
 with `scripts/update-gateway.sh` from inside that checkout. It is the reference
 for a source-server update: it fails closed on all tracked local changes,
@@ -129,6 +157,27 @@ the first update across the pin change. Validate that launcher against both the
 intended target and the known-good rollback ref before starting the update.
 Updating target files alone does not repair an older running binary.
 </Warning>
+
+The published 2026.9.4 source-server script also builds before its final restart.
+Candidate build entry points recognize its existing update marker only when the
+selected, natively owned Gateway serves this checkout's physical `dist`. The
+existing source-build transaction stops that Gateway before writing and restores
+the previous output on a settled build failure. A separate candidate checkout or
+a sibling-only match never grants permission to stop another service.
+If that native stop partially succeeds and then fails, the candidate revalidates
+and restarts the original service through its native owner, without running a
+custom shell command or starting the build. The original stop failure is still
+reported, including any failure to complete recovery.
+
+For that first hop, the old script still owns its one successful restart,
+including an authored custom restart command. Its empty or whitespace-only
+restart setting remains manual and does not trigger an automatic stop. The old
+script cannot receive the candidate process's recovery state: after a successful
+build, the candidate settles native autostart and retires its build backup before
+returning. A subsequent old-script restart failure therefore requires operator
+recovery; it does not gain the newer script's retained-backup guarantee. Unjoined
+build writers or failed output restoration leave the Gateway stopped and retain
+recovery material.
 
 Generated output roots such as `dist`, `dist-runtime`, and package-local
 `dist` directories must be real directories. Builds refuse symbolic-link roots

@@ -214,6 +214,17 @@ export type GatewayServiceReadOptions = {
   loadForInspection?: GatewayServiceUnitInspection;
 };
 
+export type ReadGatewayServiceStateArgs = GatewayServiceEnvArgs & {
+  windowsStartupEntry?: string;
+  systemdReadTarget?: GatewayServiceReadOptions["systemdReadTarget"];
+  systemdInstallation?: GatewayServiceState["systemdInstallation"];
+  requireEffective?: boolean;
+  requireLoadedCommand?: boolean;
+  loadForInspection?: GatewayServiceReadOptions["loadForInspection"];
+  systemdReadBinding?: GatewayServiceReadOptions["systemdReadBinding"];
+  validateEnvBeforeStatusRead?: (env: GatewayServiceEnv) => void;
+};
+
 export type GatewayServiceEnvironmentValueSource = "inline" | "file" | "inline-and-file";
 
 export type GatewayServiceLoadState =
@@ -295,6 +306,8 @@ export type GatewayServiceManagedOverrides = {
 export type GatewayServiceCommandConfig = GatewayServiceCommandSnapshot & {
   sourcePath?: string;
   definitionPaths?: string[];
+  /** Selected login items observed with the Scheduled Task registration missing. */
+  startupEntryPaths?: string[];
   managedDefinition?: GatewayServiceCommandSnapshot;
   managedOverrides?: GatewayServiceManagedOverrides;
   reloadPending?: true;

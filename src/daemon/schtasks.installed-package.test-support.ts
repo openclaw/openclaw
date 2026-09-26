@@ -96,7 +96,7 @@ export const keys = ["fresh", "2026.9.3", "2026.9.4"] as const;
 const installedCellBodyTimeoutMs = {
   fresh: 360_000,
   "2026.9.3": 1_080_000,
-  "2026.9.4": 1_080_000,
+  "2026.9.4": 1_440_000,
 } satisfies Record<(typeof keys)[number], number>;
 export function createInstalledProgressRecorder(params: {
   input: Input;
@@ -155,6 +155,13 @@ export function createInstalledProgressRecorder(params: {
       outputPhase = "selected-status-verified";
     } else if (phase.startsWith("authority:")) {
       outputPhase = "authority-checkpoint";
+    } else if (
+      phase.startsWith("task-sibling-refusal:") ||
+      phase.startsWith("startup-alias-refusal:")
+    ) {
+      outputPhase = "sibling-refusal-checkpoint";
+    } else if (phase === "fingerprint-result") {
+      outputPhase = "fingerprint-result";
     } else if (phase.endsWith(":hash-verified")) {
       outputPhase = "install-hash-verified";
     } else if (phase.endsWith("cleanup:command-result")) {

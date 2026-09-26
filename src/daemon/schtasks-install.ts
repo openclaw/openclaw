@@ -18,7 +18,6 @@ import {
 } from "./schtasks-install-files.js";
 import {
   buildHiddenLauncherScript,
-  buildScheduledTaskXml,
   buildStartupLauncherScript,
   buildTaskScript,
   encodeWindowsLauncherScript,
@@ -30,7 +29,6 @@ import {
   resolveTaskScriptPath,
   shouldFallbackToStartupEntry,
   shouldUseHiddenWindowsTaskLauncher,
-  writeTaskXmlTempFile,
 } from "./schtasks-layout.js";
 import {
   assertReplacementPortAvailableForTakeover,
@@ -47,6 +45,7 @@ import {
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import { buildScheduledTaskXml, writeTaskXmlTempFile } from "./schtasks-xml.js";
 import { preserveServicePolicyXml } from "./service-policy-xml.js";
 import { resolveTaskUser } from "./service-process-env.js";
 import { publishServiceFile } from "./service-stage.js";

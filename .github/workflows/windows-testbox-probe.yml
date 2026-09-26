@@ -1122,6 +1122,7 @@ jobs:
             }
             if ($records.Count -eq 0) { Write-Host "No installed task mutation was admitted."; exit 0 }
             $seen = @{}
+            $startupEntries = @()
             # Validate the entire finite authority set before performing any cleanup.
             foreach ($record in $records) {
               $index = [array]::IndexOf(@("fresh", "2026.9.3", "2026.9.4"), [string]$record.cell)
@@ -1141,7 +1142,24 @@ jobs:
               }
               if ($discovery -and [IO.Path]::GetFullPath($record.scriptPath) -ine [IO.Path]::GetFullPath((Join-Path $expectedRoot "$($record.role).cmd"))) { throw "Discovery launcher path differs from its fixture." }
               if ($record.role -cin @("direct", "extra") -and $record.cleanupNeedle -cne $expectedProfile) { throw "Diagnostic task cleanup token differs from its exact profile." }
+              if ($record.PSObject.Properties.Name -ccontains "startupEntryPaths") {
+                $entryCount = @($record.startupEntryPaths).Count
+                if ($record.role -cnotin @("selected", "peer") -or ($record.cell -ceq "fresh" -and $record.role -cne "selected") -or $record.startupEntriesInitiallyAbsent -ne $true -or $entryCount -notin @(2, 3) -or ($entryCount -eq 3 -and $record.role -cne "selected" -and -not ($record.cell -ceq "2026.9.4" -and $record.role -ceq "peer"))) { throw "Startup paths lack their exact installed fixture admission." }
+                $startupRoot = Join-Path $expectedRoot "appdata/Microsoft/Windows/Start Menu/Programs/Startup"
+                $extensions = @("cmd", "vbs", "sibling.vbs")
+                foreach ($entryIndex in 0..($entryCount - 1)) {
+                  $expectedEntry = Join-Path $startupRoot "$expectedTask.$($extensions[$entryIndex])"
+                  if ([IO.Path]::GetFullPath($record.startupEntryPaths[$entryIndex]) -ine [IO.Path]::GetFullPath($expectedEntry)) { throw "Startup cleanup path differs from its exact fixture." }
+                  $startupEntries += $expectedEntry
+                }
+              }
               $seen[$expectedTask] = $true
+            }
+            foreach ($startupEntry in $startupEntries) {
+              try {
+                if (Test-Path -LiteralPath $startupEntry -ErrorAction Stop) { Remove-Item -LiteralPath $startupEntry -Force -ErrorAction Stop }
+                if (Test-Path -LiteralPath $startupEntry -ErrorAction Stop) { throw "Startup entry remains: $startupEntry" }
+              } catch { $cleanupErrors += "Startup entry absence is unverified: $startupEntry" }
             }
             foreach ($record in $records) { schtasks.exe /End /TN $record.taskName 2>$null }
             foreach ($record in $records) {
@@ -1247,6 +1265,15 @@ jobs:
             throw ($cleanupErrors -join " ")
           }
           exit 0
+
+      - name: Diagnose PowerShell context after settled fresh failure
+        if: ${{ always() && !cancelled() && inputs.installed_startup_package != '' && steps.native_schtasks_fresh.outcome == 'failure' && steps.native_cleanup_fresh.outcome == 'success' && steps.native_cleanup_fresh.outputs.owned_package_cleanup == 'true' }}
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$NODE_BIN:$PATH"
+          node --import ./scripts/tsx.mjs src/daemon/schtasks.installed-powershell-context.test-support.mts .artifacts/windows-schtasks/installed-input.json
 
       - name: Retain installed cell proof fresh
         id: native_cell_proof_fresh
@@ -1362,8 +1389,8 @@ jobs:
       - name: Run installed Scheduled Task cell 2026.9.4
         id: native_schtasks_9_4
         if: ${{ inputs.run_windows_ci && inputs.installed_startup_package != '' && steps.native_prepare_9_4.outcome == 'success' }}
-        # 18-minute installed body, three-minute teardown hook, one-minute runner margin.
-        timeout-minutes: 22
+        # 24-minute installed body, three-minute teardown hook, one-minute runner margin.
+        timeout-minutes: 28
         shell: bash
         env:
           OPENCLAW_VITEST_WORKER_CACHE: "1"
@@ -1485,6 +1512,7 @@ jobs:
           name: windows-schtasks-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .artifacts/windows-schtasks/proof.json
+            .artifacts/windows-schtasks/powershell-context.json
             .artifacts/windows-schtasks/package-handoff.json
             .artifacts/windows-schtasks/installed-input.json*
             .artifacts/windows-schtasks/cells/*/*.json*

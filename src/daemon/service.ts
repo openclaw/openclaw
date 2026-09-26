@@ -41,11 +41,9 @@ import type {
   GatewayService,
   GatewayServiceControlArgs,
   GatewayServiceEnv,
-  GatewayServiceEnvArgs,
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
-  GatewayServiceStartRepairIssue,
   GatewayServiceStartResult,
   GatewayServiceState,
 } from "./service-types.js";
@@ -86,26 +84,13 @@ function ignoreServiceWriteResult<TArgs extends GatewayServiceInstallArgs>(
   };
 }
 
-/** Reads the installed service and reports definition drift that must be repaired before launch. */
-export async function inspectGatewayServiceStartRepair(
-  service: GatewayService,
-  args: GatewayServiceEnvArgs,
-  expectedPort?: number,
-): Promise<{ state: GatewayServiceState; issues: GatewayServiceStartRepairIssue[] }> {
-  const state = await readGatewayServiceState(service, args);
-  return { state, issues: collectGatewayServiceStartRepairIssues(state, expectedPort) };
-}
-
 export async function startGatewayService(
   service: GatewayService,
   args: GatewayServiceControlArgs,
   expectedPort?: number,
 ): Promise<GatewayServiceStartResult> {
-  const { state, issues: repairIssues } = await inspectGatewayServiceStartRepair(
-    service,
-    { env: args.env },
-    expectedPort,
-  );
+  const state = await readGatewayServiceState(service, { env: args.env });
+  const repairIssues = collectGatewayServiceStartRepairIssues(state, expectedPort);
   if (state.loadState.status === "unknown") {
     throw new Error(`Service status inspection failed: ${state.loadState.detail}`);
   }

@@ -4,12 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { z } from "zod";
-import { hashFile } from "../../scripts/lib/gateway-bench-installed-package.ts";
+import { hashFile, hashInstall } from "../../scripts/lib/gateway-bench-installed-package.ts";
 import { listUpdateRunsAsync } from "../infra/update-run-reader.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { sleep } from "../utils/sleep.js";
 import { run, type CommandRecord } from "./schtasks.installed-command.test-support.js";
 import {
+  packageRoot,
   type parseInstalledPreview,
   type readInput,
   recordCapacityBoundary,
@@ -559,5 +560,61 @@ export async function inspectDisabledDiscoveryTasks(params: {
     launcherExecutionRequested: false,
     missingDefinitionScope:
       "ENOENT for an owned registered CMD path; no access-denied or ACL claim",
+  };
+}
+
+/** Native installed-peer build admission; no source-checkout compile or successful build claim. */
+export async function assertInstalledSiblingBuildRefusal(params: {
+  toolingEntry: string;
+  startupEntry?: string;
+  selected: InstalledTask;
+  peer: InstalledTask;
+  commands: CommandRecord[];
+  signal: AbortSignal;
+  verifyContinuity: () => Promise<void>;
+  recordProgress: (phase: string, error?: Error) => Promise<void>;
+}) {
+  const { toolingEntry, selected, peer, commands, signal, verifyContinuity, recordProgress } =
+    params;
+  const phase = params.startupEntry ? "startup-alias-refusal" : "task-sibling-refusal";
+  const buildRoot = await fs.realpath(packageRoot(peer.installRoot));
+  const dist = path.join(buildRoot, "dist");
+  assert.equal((await fs.lstat(dist)).isDirectory(), true);
+  assert.notEqual(await fs.realpath(packageRoot(selected.installRoot)), buildRoot);
+  const before = await hashInstall(peer.installRoot);
+  await recordProgress(`${phase}:initial-hash`);
+  const toolingEntrySha256 = await hashFile(toolingEntry);
+  await run(
+    [toolingEntry, "models", "status"],
+    { ...selected.env, OPENCLAW_FORCE_BUILD: "1" },
+    buildRoot,
+    commands,
+    1,
+    signal,
+    {
+      expectedStderr: [
+        `Refusing to rebuild dist while a managed Gateway (profile ${peer.profile})`,
+        params.startupEntry
+          ? `stop the process launched by Startup entry ${JSON.stringify(params.startupEntry)}`
+          : `openclaw gateway stop --profile ${peer.profile}`,
+      ],
+    },
+  );
+  await recordProgress(`${phase}:command-result`);
+  await verifyContinuity();
+  await recordProgress(`${phase}:continuity-verified`);
+  assert.deepEqual(await hashInstall(peer.installRoot), before);
+  await recordProgress(`${phase}:final-hash`);
+  return {
+    kind: "native-installed-peer-build-admission",
+    toolingEntry,
+    toolingEntrySha256,
+    buildRoot,
+    dist,
+    peerProfile: peer.profile,
+    exactSiblingRefusal: true,
+    installedFilesUnchanged: true,
+    liveRpcAndPidContinuity: true,
+    successfulBuildObserved: false,
   };
 }

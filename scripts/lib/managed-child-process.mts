@@ -86,6 +86,7 @@ type RunManagedCommandOptions = ManagedCommandOptions & {
   abortKillGraceMs?: number;
   cleanupDrainTimeoutMs?: number;
   onSignal?: (signal: NodeJS.Signals) => void;
+  assertCurrent?: () => void;
 };
 
 type ManagedCommandOutcome =
@@ -464,6 +465,7 @@ export async function runManagedCommand({
   abortKillGraceMs,
   cleanupDrainTimeoutMs,
   onSignal,
+  assertCurrent,
   ...commandOptions
 }: RunManagedCommandOptions) {
   if (platform === "win32" && requireProcessTreeExit) {
@@ -517,6 +519,7 @@ export async function runManagedCommand({
   installSignalHandlers();
   let child: ChildProcess;
   try {
+    assertCurrent?.();
     child = spawnManagedChild(spawnSpec.command, spawnSpec.args, spawnSpec.options);
   } catch (error) {
     removeSignalHandlersIfIdle();

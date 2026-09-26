@@ -1,5 +1,5 @@
-import "./service-definition-backup.mocks.test-support.js";
 import fs from "node:fs/promises";
+import "./service-definition-backup.mocks.test-support.js";
 import { expect, it, vi } from "vitest";
 import * as exec from "../process/exec.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
@@ -7,7 +7,8 @@ import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { buildLaunchAgentPlist } from "./launchd-plist.js";
 import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
-import { buildScheduledTaskXml, buildTaskScript } from "./schtasks-layout.js";
+import { buildTaskScript } from "./schtasks-layout.js";
+import { buildScheduledTaskXml } from "./schtasks-xml.js";
 import { restoreGatewayServiceDefinitionBackup } from "./service-definition-backup.js";
 import { fixture } from "./service-definition-backup.test-support.js";
 import { reconcileGatewayServiceDefinition } from "./service-reconciliation.js";

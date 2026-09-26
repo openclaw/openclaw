@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findExtraGatewayServices } from "./inspect.js";
 import { readScheduledTaskCommand } from "./schtasks-layout.js";
 
@@ -9,6 +10,8 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawnSync,
 }));
 beforeEach(() => spawnSync.mockReset());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 it("excludes a static non-Gateway runtime command without admitting its missing profile", async () => {
   const taskName = "\\OpenClaw Helper (non-gateway)";
   const scriptPath = "C:\\openclaw-schtasks\\non-gateway\\non-gateway.cmd";
@@ -30,6 +33,7 @@ it("excludes a static non-Gateway runtime command without admitting its missing 
   Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
   const env = {
     USERPROFILE: "C:\\Users\\test",
+    APPDATA: tempDirs.make("unrelated-task-startup-"),
   };
   try {
     await expect(findExtraGatewayServices(env, { deep: true })).resolves.toEqual({
@@ -151,7 +155,11 @@ it.each([
   });
   const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
   Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
-  const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_PROFILE: profile };
+  const env = {
+    USERPROFILE: "C:\\Users\\test",
+    APPDATA: tempDirs.make("registered-task-startup-"),
+    OPENCLAW_PROFILE: profile,
+  };
   try {
     await expect(findExtraGatewayServices(env, { deep: true })).resolves.toEqual({
       services: [

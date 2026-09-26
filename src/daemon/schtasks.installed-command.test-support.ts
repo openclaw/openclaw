@@ -112,11 +112,12 @@ export async function run(
   expectedExit = 0,
   signal?: AbortSignal,
   options: {
+    expectedStderr?: readonly string[];
     observeService?: ServiceObservation;
     commandBudget?: "published-update";
   } = {},
 ) {
-  const { observeService } = options;
+  const { expectedStderr = [], observeService } = options;
   const started = performance.now();
   let child: ChildProcess | undefined;
   let stdout = "";
@@ -166,6 +167,7 @@ export async function run(
   const afterCleanup = child
     ? inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" })
     : undefined;
+  const stderrMatches = expectedStderr.every((expected) => stderr.includes(expected));
   const failed =
     failure ||
     afterCleanup !== "dead" ||
@@ -173,7 +175,8 @@ export async function run(
     truncated ||
     exitSignal !== null ||
     code !== expectedExit ||
-    result !== expectedExit;
+    result !== expectedExit ||
+    !stderrMatches;
   const redaction = { env, stateDir: env.OPENCLAW_STATE_DIR ?? cwd };
   const diagnostic = (value: string) => {
     // A truncated capture may have lost the field name needed for redaction.
@@ -206,9 +209,7 @@ export async function run(
     elapsedMs: performance.now() - started,
     ...(failureOutput ? { failureOutput } : {}),
     ...(observeService
-      ? {
-          serviceOutput: captureServiceOutput(observeService, stdout, truncated, diagnostic),
-        }
+      ? { serviceOutput: captureServiceOutput(observeService, stdout, truncated, diagnostic) }
       : {}),
   });
   if (child && afterCleanup !== "dead") {
@@ -229,5 +230,10 @@ export async function run(
   const details = failureOutput ? JSON.stringify(failureOutput, null, 2) : "";
   assert.equal(code, expectedExit, details);
   assert.equal(result, expectedExit, details);
+  assert.equal(
+    stderrMatches,
+    true,
+    `Command stderr did not match expected diagnostics.\n${details}`,
+  );
   return stdout;
 }

@@ -171,7 +171,19 @@ Gateway status and Doctor read the Scheduled Task's numeric current state, indep
 
 Strict maintenance inspection follows the task's registered CMD or VBS launcher, or a directly registered executable with literal arguments, and rechecks its captured definition before using the result. Runtime inspection uses that registered command rather than a default launcher. Direct executable inspection does not grant ownership to rewrite the executable or its task definition. Automatic update service management still reports these custom actions as unavailable and leaves them untouched because it cannot restore a managed launcher; environment expansion and ambiguous argument quoting remain uninspectable. Deep discovery identifies OpenClaw and legacy helpers from executable or launcher evidence; an unrelated task's display name alone does not identify a service. Canonical and selected task names suppress extra-service findings only when the registered action is a modern Gateway; legacy and Node actions remain visible. Doctor reports incomplete inspection separately from services eligible for existing cleanup.
 
-Doctor and deep status provide read-only `schtasks /Query` hints for extra Scheduled Tasks, including Node hosts. Discovery shares one 60-second budget across the inventory query and launcher inspection. If it expires, completed discoveries remain available and Doctor reports that some services could not be inspected. Review the registered command and purpose before choosing removal through the service's owner.
+`openclaw gateway status --deep` and `openclaw doctor --deep` report sibling
+profiles from the current account's Startup folder. If its Scheduled Task is
+absent, the selected modern Gateway fallback is omitted from the extra-service list. Each
+Startup file remains a separate service definition even when a task has the same
+name. Inspection follows that exact file and its captured Gateway
+script. The complete inventory retains errors for unreadable or malformed Gateway
+launchers; Doctor and status list only successfully inspected extra services.
+Startup inspection hints use the exact file path and do not grant Task Scheduler
+control over it.
+Local builds also check these definitions for a running Gateway using that
+installation's `dist`. Stop the matching Gateway before rebuilding its files.
+
+Doctor and deep status provide read-only `schtasks /Query` hints for extra Scheduled Tasks, including Node hosts. Discovery shares one 60-second budget across the inventory query, Startup directory scan, and launcher inspection. If it expires, completed discoveries remain available and Doctor reports that some services could not be inspected. Review the registered command and purpose before choosing removal through the service's owner.
 
 Doctor recognizes the waiting VBS launcher shipped with 2026.9.3 during an owned
 service refresh. Custom launcher behavior still preserves the existing definition.

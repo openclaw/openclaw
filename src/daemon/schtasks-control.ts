@@ -10,7 +10,6 @@ import {
   readScheduledTaskCommand,
   resolveTaskName,
   resolveTaskScriptPath,
-  writeTaskXmlTempFile,
 } from "./schtasks-layout.js";
 import {
   describeUnverifiedPortListeners,
@@ -45,6 +44,7 @@ import {
 } from "./schtasks-runtime.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import { ScheduledTaskAutoStartRecoveryError } from "./schtasks-update-recovery.js";
+import { writeTaskXmlTempFile } from "./schtasks-xml.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import type {
