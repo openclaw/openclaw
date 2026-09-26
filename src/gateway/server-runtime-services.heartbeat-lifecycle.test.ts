@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HeartbeatWakeHandler } from "../infra/heartbeat-wake-contracts.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createLog,
   resetRuntimeServiceMocks,
@@ -50,6 +51,7 @@ describe("scheduled heartbeat execution loading", { concurrent: false }, () => {
       const { requestHeartbeatAndWait, setHeartbeatWakeHandler } =
         await import("../infra/heartbeat-wake.js");
       const services = activateGatewayScheduledServices({
+        scheduler: createTestGatewayScheduler(),
         minimalTestGateway: false,
         cfgAtStart: cfg,
         deps: {} as never,

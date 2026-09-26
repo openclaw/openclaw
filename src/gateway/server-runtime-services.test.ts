@@ -93,6 +93,7 @@ describe("server-runtime-services", () => {
     vi.useFakeTimers();
     const warn = vi.fn();
     activateGatewayScheduledServices({
+      scheduler: createTestGatewayScheduler(),
       minimalTestGateway: false,
       cfgAtStart,
       deps: {} as never,
@@ -927,6 +928,7 @@ describe("server-runtime-services", () => {
 
   it("keeps scheduled services disabled for minimal test gateways", () => {
     const services = activateGatewayScheduledServices({
+      scheduler: createTestGatewayScheduler(),
       minimalTestGateway: true,
       cfgAtStart: {} as never,
       deps: {} as never,
@@ -950,6 +952,7 @@ function activateScheduledServicesForTest(
   const log = overrides.log ?? createLog();
   const cfgAtStart = overrides.cfgAtStart ?? ({} as never);
   const services = activateGatewayScheduledServices({
+    scheduler: createTestGatewayScheduler(),
     minimalTestGateway: false,
     cfgAtStart,
     deps: {} as never,
