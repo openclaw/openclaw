@@ -240,16 +240,20 @@ export function createSessionHistoryWorkerReaders(
           return value;
         },
       ),
-    readExactEntries: async (input, signal) =>
-      await runRequest(
-        () => ({ kind: "session-exact-entries", ...input }),
-        JSON.stringify(input).length * 2,
+    readExactEntries: async (input, signal) => {
+      // Windows platform-semantics env proxies cannot cross the worker structured-clone
+      // boundary; submit the spread shape, matching readRowFacts.
+      const captured = { ...input, env: { ...input.env } };
+      return await runRequest(
+        () => ({ kind: "session-exact-entries", ...captured }),
+        JSON.stringify(captured).length * 2,
         (value) => {
           assertResultKind(value, "session-exact-entries", "exact entries");
           return value;
         },
         signal,
-      ),
+      );
+    },
     readRowFacts: async (input) => {
       if (input.sessionKeys.length > MAX_SESSION_ROW_FACTS_KEYS) {
         throw new Error(`Session row facts support at most ${MAX_SESSION_ROW_FACTS_KEYS} keys`);
