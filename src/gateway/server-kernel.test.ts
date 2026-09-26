@@ -254,10 +254,10 @@ describe("createGatewayKernel", () => {
         const projectionDispose = vi.spyOn(projection, "dispose");
         const prepareRows = projection.withPreparedExactRows.bind(projection);
         vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(
-          async (queries, consume, options) => {
+          async (queries, consume, prepareOptions) => {
             publicationStarted.resolve();
             await publicationPreparation.promise;
-            return prepareRows(queries, consume, options);
+            return prepareRows(queries, consume, prepareOptions);
           },
         );
         const publish = vi.fn();
