@@ -1,16 +1,19 @@
 import fs from "node:fs/promises";
+import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
 import { requireValidConfigFileSnapshot } from "../commands/config-validation.js";
 import { readConfigFileSnapshot } from "../config/io.js";
-import { ExitError, type RuntimeEnv } from "../runtime.js";
+import { defaultRuntime, ExitError, type RuntimeEnv } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { ensureValidConfigSnapshotForCli } from "./config-cli-validation.js";
+import { registerConfigCli } from "./config-cli.js";
 import { ensureConfigReady, testApi } from "./program/config-guard.js";
 
 const originalArgv = process.argv;
 afterEach(() => {
   process.argv = originalArgv;
   testApi.resetConfigGuardStateForTests();
+  vi.restoreAllMocks();
 });
 
 function runtime() {
@@ -56,6 +59,32 @@ it.each(entrypoints)(
     });
   },
 );
+
+it("config validate reports unavailable metadata without schema repair advice", async () => {
+  await withOpenClawTestState({}, async (state) => {
+    await state.writeConfig({ $include: "missing.json" });
+    const errors = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    for (const flags of [[], ["--json"]]) {
+      const program = new Command().exitOverride();
+      registerConfigCli(program);
+      await expect(
+        program.parseAsync(["config", "validate", ...flags], { from: "user" }),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+    }
+    const diagnostic = errors.mock.calls.flat().join("\n");
+    expect(diagnostic).toContain("OpenClaw config could not be read");
+    expect(diagnostic).toContain("Failed to read include file: missing.json");
+    expect(diagnostic).toContain("Resolve the read error shown above, then retry.");
+    expect(diagnostic).not.toMatch(/Config needs correction|config schema/);
+    expect(json.mock.calls[0]?.[0]).toMatchObject({
+      ok: false,
+      valid: false,
+      error: { message: expect.stringContaining("OpenClaw config could not be read") },
+      issues: [{ message: expect.stringContaining("Failed to read include file: missing.json") }],
+    });
+  });
+});
 
 it("retains read-failure classification in JSON readiness output", async () => {
   await withOpenClawTestState({}, async (state) => {

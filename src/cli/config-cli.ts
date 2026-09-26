@@ -1,5 +1,6 @@
 // Config CLI command implementation for get/set/unset/patch/validate and secret refs.
 import type { Command } from "commander";
+import { configFailureHeading, isConfigReadFailure } from "../config/io.invalid-config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
@@ -261,15 +262,18 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
     }
     if (!snapshot.valid) {
       const issues = normalizeConfigIssues(snapshot.issues);
+      const readFailure = isConfigReadFailure(snapshot);
       if (opts.json) {
         writeRuntimeJson(runtime, {
-          ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortPath}`),
+          ...formatCliJsonFailure(`${configFailureHeading(snapshot)}: ${shortPath}`),
           valid: false,
           path: outputPath,
           issues,
         });
       } else {
-        runtime.error(`Config needs correction: ${shortPath}`);
+        runtime.error(
+          `${readFailure ? configFailureHeading(snapshot) : "Config needs correction"}: ${shortPath}`,
+        );
         for (const line of renderConfigValidationIssueLines(snapshot, "-")) {
           runtime.error(`  ${line}`);
         }
@@ -277,9 +281,11 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
         runtime.error(
           formatInvalidConfigRepairHint(snapshot, "to repair, or fix the keys above manually."),
         );
-        runtime.error(
-          `Run ${formatCliCommand("openclaw config schema")} to inspect supported settings and values, then rerun ${formatCliCommand("openclaw config validate")}.`,
-        );
+        if (!readFailure) {
+          runtime.error(
+            `Run ${formatCliCommand("openclaw config schema")} to inspect supported settings and values, then rerun ${formatCliCommand("openclaw config validate")}.`,
+          );
+        }
       }
       exitCliAfterOutput(runtime, 1);
     }

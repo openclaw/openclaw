@@ -29,6 +29,20 @@ export function formatInvalidConfigDetails(issues: ConfigValidationIssue[]): str
   return formatConfigIssueLines(issues, "-", { normalizeRoot: true }).join("\n");
 }
 
+/** Complete read-failure diagnostic, or undefined when the snapshot failed validation instead. */
+export function formatConfigReadFailure(
+  snapshot: Pick<ConfigFileSnapshot, "path" | "issues" | "readError">,
+): string | undefined {
+  if (!isConfigReadFailure(snapshot)) {
+    return undefined;
+  }
+  return [
+    `${configFailureHeading(snapshot)}: ${snapshot.path}`,
+    formatInvalidConfigDetails(snapshot.issues),
+    "Resolve the read error shown above, then retry.",
+  ].join("\n");
+}
+
 type InvalidConfigError = Error & {
   code: "INVALID_CONFIG";
   details?: string;

@@ -32,6 +32,43 @@ function createRuntime() {
   };
 }
 
+it("reports an unreadable config to setup entrypoints without repair advice", async () => {
+  await withDoctorConfigPreflightHome(async (home) => {
+    const configPath = await writeOpenClawConfig(home, { $include: "missing.json" });
+    const original = await fs.readFile(configPath, "utf8");
+
+    const baseline = createRuntime();
+    await expect(setupCommand({}, baseline)).rejects.toThrow("exit:1");
+    const baselineJson = createRuntime();
+    await expect(setupCommand({ json: true }, baselineJson)).rejects.toThrow("exit:1");
+    const nonInteractive = createRuntime();
+    await expect(
+      runNonInteractiveSetup({ nonInteractive: true, acceptRisk: true }, nonInteractive),
+    ).rejects.toThrow("exit:1");
+    const classic = createRuntime();
+    const prompter = makePrompter();
+    await expect(runSetupWizard({ acceptRisk: true }, classic, prompter)).rejects.toThrow("exit:1");
+
+    for (const output of [
+      baseline.error.mock.calls,
+      nonInteractive.error.mock.calls,
+      vi.mocked(prompter.outro).mock.calls,
+    ].map((calls) => calls.flat().join("\n"))) {
+      expect(output).toContain(`OpenClaw config could not be read: ${configPath}`);
+      expect(output).toContain("Failed to read include file: missing.json");
+      expect(output).toContain("Resolve the read error shown above, then retry.");
+      expect(output).not.toMatch(/config invalid|doctor --fix/i);
+    }
+    expect(vi.mocked(prompter.note).mock.calls.flat().join("\n")).not.toContain("Invalid config");
+    expect(JSON.parse(String(baselineJson.log.mock.calls[0]?.[0]))).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("OpenClaw config could not be read:") },
+      issues: [{ message: expect.stringContaining("Failed to read include file: missing.json") }],
+    });
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+  });
+});
+
 it("points failed setup to a repair that works without a terminal", async () => {
   const stdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
   Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });

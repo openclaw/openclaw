@@ -78,6 +78,35 @@ describe("runConfigureWizard", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
+  it("reports an unreadable config without directing it to doctor repair", async () => {
+    setupBaseWizardState();
+    mocks.readConfigFileSnapshot.mockResolvedValueOnce({
+      ...EMPTY_CONFIG_SNAPSHOT,
+      path: "/tmp/openclaw.json",
+      exists: true,
+      valid: false,
+      issues: [
+        {
+          path: "",
+          errorCode: "CONFIG_READ_FAILED",
+          message: "Failed to read include file: missing.json",
+        },
+      ],
+    });
+    const runtime = createRuntime();
+
+    await runConfigureWizard({ command: "configure" }, runtime);
+
+    const output = [...mocks.note.mock.calls, ...mocks.clackOutro.mock.calls].flat().join("\n");
+    expect(output).toContain("OpenClaw config could not be read: /tmp/openclaw.json");
+    expect(output).toContain("Failed to read include file: missing.json");
+    expect(output).toContain("Resolve the read error shown above, then retry.");
+    expect(output).not.toMatch(/invalid config|doctor --fix/i);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.clackSelect).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it.each(["gateway", "daemon", "health", "web"] as const)(
     "configures %s without requiring an agent owner",
     async (section) => {

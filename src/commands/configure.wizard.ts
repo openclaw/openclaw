@@ -28,6 +28,7 @@ import { WizardCancelledError } from "../wizard/prompts.js";
 import { writeWizardConfigFile } from "../wizard/setup.shared.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon, type DaemonSetupOutcome } from "./configure.daemon.js";
+import { noteExistingConfig } from "./configure.existing-config.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
 import { promptGatewayConfig, validateGatewayPortInput } from "./configure.gateway.js";
 import type {
@@ -59,7 +60,6 @@ import {
   probeGatewayReachable,
   resolveAdvertisedControlUiLinks,
   resolveLocalControlUiProbeLinks,
-  summarizeExistingConfig,
   waitForGatewayReachable,
 } from "./onboard-helpers.js";
 import { promptRemoteGatewayConfig } from "./onboard-remote.js";
@@ -452,26 +452,9 @@ export async function runConfigureWizard(
       ? (snapshot.sourceConfig ?? snapshot.config)
       : {};
 
-    if (snapshot.exists) {
-      const title = snapshot.valid ? "Existing config detected" : "Invalid config";
-      note(summarizeExistingConfig(baseConfig), title);
-      if (!snapshot.valid && snapshot.issues.length > 0) {
-        note(
-          [
-            ...snapshot.issues.map((iss) => `- ${iss.path}: ${iss.message}`),
-            "",
-            "Docs: https://docs.openclaw.ai/gateway/configuration",
-          ].join("\n"),
-          "Config issues",
-        );
-      }
-      if (!snapshot.valid) {
-        outro(
-          `Config invalid. Run \`${formatCliCommand("openclaw doctor --fix")}\` to apply supported repairs, then re-run configure.`,
-        );
-        runtime.exit(1);
-        return;
-      }
+    if (snapshot.exists && !noteExistingConfig(snapshot, baseConfig)) {
+      runtime.exit(1);
+      return;
     }
 
     const selectedSections = opts.sections;

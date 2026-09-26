@@ -6,6 +6,7 @@ import * as firstAgentOnboarding from "../commands/onboard-first-agent.js";
 import type { OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { ConfigMutationConflictError } from "../config/config.js";
+import { formatConfigReadFailure } from "../config/io.invalid-config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
@@ -101,6 +102,12 @@ async function runSetupWizardOnce(
   };
 
   if (snapshot.exists && !snapshot.valid) {
+    const readFailure = formatConfigReadFailure(snapshot);
+    if (readFailure) {
+      await prompter.outro(readFailure);
+      runtime.exit(1);
+      return;
+    }
     await prompter.note(
       onboardHelpers.summarizeExistingConfig(baseConfig),
       t("wizard.setup.invalidConfigTitle"),

@@ -5,6 +5,7 @@ import {
   resolveManifestToolOwnerInRegistry,
   type PluginManifestCommandAliasRegistry,
 } from "../plugins/manifest-command-aliases.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   resolveGatewayCatalogCommandPath,
   resolveGatewayRunPreBootstrapOptions,
@@ -67,6 +68,26 @@ describe("Gateway fast-path Commander parsing", () => {
         expect.objectContaining({ [key]: true, token: "--no-color" }),
         expect.any(Object),
       );
+    }
+  });
+});
+
+it("reports an unreadable config to noninteractive bare root without doctor advice", async () => {
+  await withOpenClawTestState({}, async (state) => {
+    await state.writeConfig({ $include: "missing.json" });
+    const previousExitCode = process.exitCode;
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await runCli(["node", "openclaw"]);
+      expect(process.exitCode).toBe(1);
+      const diagnostic = error.mock.calls.flat().join("\n");
+      expect(diagnostic).toContain(`OpenClaw config could not be read: ${state.configPath}`);
+      expect(diagnostic).toContain("Failed to read include file: missing.json");
+      expect(diagnostic).toContain("Resolve the read error shown above, then retry.");
+      expect(diagnostic).not.toMatch(/config is invalid|doctor --fix/);
+    } finally {
+      error.mockRestore();
+      process.exitCode = previousExitCode;
     }
   });
 });

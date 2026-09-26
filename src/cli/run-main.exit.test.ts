@@ -4051,11 +4051,9 @@ describe("runCli exit behavior", () => {
   });
 
   it("points noninteractive invalid config to doctor before onboarding", async () => {
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      exists: true,
-      valid: false,
-      sourceConfig: { gateway: { mode: "local" } },
-    });
+    readConfigFileSnapshotMock.mockResolvedValueOnce(
+      validConfig({ gateway: { mode: "local" } }, { valid: false, issues: [] }),
+    );
     await expectNonInteractiveBareCliError(
       "OpenClaw config is invalid. Run `openclaw doctor --fix` before onboarding.",
       () => expect(setupWizardCommandMock).not.toHaveBeenCalled(),

@@ -9,6 +9,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import {
   createInvalidConfigError,
+  formatConfigReadFailure,
   formatInvalidConfigDetails,
 } from "../config/io.invalid-config.js";
 import { resolveGatewayPort, resolveStateDir } from "../config/paths.js";
@@ -257,7 +258,7 @@ type GatewayLaunchTarget = {
 };
 
 type BareRootLaunchTarget =
-  | { kind: "onboarding"; classic?: boolean }
+  | { kind: "onboarding"; invalidConfig?: ConfigFileSnapshot }
   | { kind: "remote-gateway-inference"; target: GatewayLaunchTarget }
   | { kind: "tui"; local: true }
   | ({ kind: "tui"; local: false } & GatewayLaunchTarget);
@@ -272,11 +273,27 @@ async function resolveBareRootLaunchTarget(argv: string[]): Promise<BareRootLaun
     return { kind: "onboarding" };
   }
   if (!snapshot.valid) {
-    return { kind: "onboarding", classic: true };
+    return { kind: "onboarding", invalidConfig: snapshot };
   }
   return resolveConfiguredTuiLaunchTarget(snapshot.config ?? snapshot.sourceConfig, {
     hasConfiguredGateway: snapshot.sourceConfig.gateway !== undefined,
   });
+}
+
+function formatBareRootTtyRequirement(target: BareRootLaunchTarget): string {
+  if (target.kind === "remote-gateway-inference") {
+    return "Remote Gateway inference setup needs an interactive TTY. Re-run `openclaw` in a terminal connected to this Gateway.";
+  }
+  if (target.kind === "tui") {
+    return "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.";
+  }
+  if (!target.invalidConfig) {
+    return "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.";
+  }
+  return (
+    formatConfigReadFailure(target.invalidConfig) ??
+    "OpenClaw config is invalid. Run `openclaw doctor --fix` before onboarding."
+  );
 }
 
 async function resolveConfiguredTuiLaunchTarget(
@@ -1353,41 +1370,23 @@ async function runCliWithPreparedOutputMode(
       : null;
 
     if (bareRootLaunchTarget) {
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        console.error(formatBareRootTtyRequirement(bareRootLaunchTarget));
+        process.exitCode = 1;
+        return;
+      }
       if (bareRootLaunchTarget.kind === "remote-gateway-inference") {
-        if (!process.stdin.isTTY || !process.stdout.isTTY) {
-          console.error(
-            "Remote Gateway inference setup needs an interactive TTY. Re-run `openclaw` in a terminal connected to this Gateway.",
-          );
-          process.exitCode = 1;
-          return;
-        }
         const { runRemoteGatewayInferenceOnboarding } =
           await import("../commands/onboard-remote-gateway.js");
         await runRemoteGatewayInferenceOnboarding(bareRootLaunchTarget.target);
         return;
       }
       if (bareRootLaunchTarget.kind === "onboarding") {
-        if (!process.stdin.isTTY || !process.stdout.isTTY) {
-          console.error(
-            bareRootLaunchTarget.classic
-              ? "OpenClaw config is invalid. Run `openclaw doctor --fix` before onboarding."
-              : "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
-          );
-          process.exitCode = 1;
-          return;
-        }
         const { setupWizardCommand } = await import("../commands/onboard.js");
-        await setupWizardCommand(bareRootLaunchTarget.classic ? { classic: true } : {});
+        await setupWizardCommand(bareRootLaunchTarget.invalidConfig ? { classic: true } : {});
         return;
       }
       if (bareRootLaunchTarget.kind === "tui") {
-        if (!process.stdin.isTTY || !process.stdout.isTTY) {
-          console.error(
-            "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.",
-          );
-          process.exitCode = 1;
-          return;
-        }
         const { runTui } = await import("../tui/tui.js");
         // This TUI now shares the CLI process, so keep its final exit fallback armed
         // in case imported runtime handles survive the normal teardown.
