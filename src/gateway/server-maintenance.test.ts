@@ -557,13 +557,8 @@ describe("startGatewayMaintenanceTimers", () => {
 
   it("does not overlap default outbound cleanup and drains it on shutdown", async () => {
     vi.useFakeTimers();
-    let resolveCleanup = () => {};
-    pruneOutboundMediaMock.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveCleanup = resolve;
-        }),
-    );
+    const cleanup = createDeferred();
+    pruneOutboundMediaMock.mockReturnValue(cleanup.promise);
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const timers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
     timers.startMediaCleanup();
@@ -579,7 +574,7 @@ describe("startGatewayMaintenanceTimers", () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(stopped).toBe(false);
-    resolveCleanup();
+    cleanup.resolve();
     await stopping;
     expect(stopped).toBe(true);
 
