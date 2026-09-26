@@ -232,8 +232,8 @@ describe("nextcloud-talk inbound media security", () => {
 
   it.each([
     {
-      label: "malformed public-share path",
-      shareUrl: "https://cloud.example.com/f/9004",
+      label: "malformed short file path",
+      shareUrl: "https://cloud.example.com/f/9004/extra",
       reason: "media_invalid_link",
     },
     {

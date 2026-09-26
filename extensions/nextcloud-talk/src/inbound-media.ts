@@ -127,11 +127,14 @@ export function resolveNextcloudTalkAttachmentReference(params: {
   const basePath = base.pathname.replace(/\/+$/u, "");
   const sharePrefix = `${basePath}/s/`;
   const filePrefix = `${basePath}/index.php/f/`;
+  const shortFilePrefix = `${basePath}/f/`;
   const suffix = share.pathname.startsWith(sharePrefix)
     ? share.pathname.slice(sharePrefix.length)
     : share.pathname.startsWith(filePrefix)
       ? share.pathname.slice(filePrefix.length)
-      : "";
+      : share.pathname.startsWith(shortFilePrefix)
+        ? share.pathname.slice(shortFilePrefix.length)
+        : "";
   if (!suffix || suffix.includes("/")) {
     return { ok: false, reason: "media_invalid_link" };
   }

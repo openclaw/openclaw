@@ -78,6 +78,16 @@ describe("Nextcloud Talk inbound media policy", () => {
       baseUrl: "https://nextcloud.example/cloud/",
       shareUrl: "https://nextcloud.example/cloud/index.php/f/9001",
     },
+    {
+      label: "root short file link",
+      baseUrl: "https://nextcloud.example",
+      shareUrl: "https://nextcloud.example/f/9001",
+    },
+    {
+      label: "subpath short file link",
+      baseUrl: "https://nextcloud.example/cloud/",
+      shareUrl: "https://nextcloud.example/cloud/f/9001",
+    },
   ])("validates the Talk share reference for a $label", (testCase) => {
     expect(
       resolveNextcloudTalkAttachmentReference({
@@ -108,7 +118,8 @@ describe("Nextcloud Talk inbound media policy", () => {
       label: "fragment-bearing",
       shareUrl: "https://nextcloud.example/s/redacted-token#fragment",
     },
-    { label: "wrong path", shareUrl: "https://nextcloud.example/f/9001" },
+    { label: "wrong path", shareUrl: "https://nextcloud.example/other/9001" },
+    { label: "extra short file path", shareUrl: "https://nextcloud.example/f/9001/extra" },
     {
       label: "extra share path",
       shareUrl: "https://nextcloud.example/s/redacted-token/extra",
