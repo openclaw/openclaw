@@ -34,7 +34,6 @@ import {
   makeThreadBootstrapBinding,
   requireRecord,
   runCodexAppServerAttempt,
-  withPersistentCodexTestToolPolicy,
   writeCodexAppServerBinding,
 } from "./run-attempt.context-engine.test-support.js";
 import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";

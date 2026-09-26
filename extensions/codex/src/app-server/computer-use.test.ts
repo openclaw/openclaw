@@ -7,7 +7,6 @@ import {
   expectRequestMethodNotCalled,
   expectSetupErrorStatus,
   expectStatusFields,
-  marketplaceEntry,
   pluginSummary,
   requestCalls,
 } from "./computer-use.test-support.js";

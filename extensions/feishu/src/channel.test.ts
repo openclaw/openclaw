@@ -1873,7 +1873,7 @@ describe("feishuPlugin actions", () => {
       // success (issue #112244, ClawSweeper P1).
       { location: "`attachments` array with null entry", params: { attachments: [null] } },
     ].map((scenario, index) =>
-      Object.assign({ action: index === 0 ? "thread-reply" : "send" }, scenario),
+      Object.assign({ action: index === 0 ? "thread-reply" : "send" } as const, scenario),
     ),
   )(
     "rejects $location malformed media source on $action instead of text-only success",
