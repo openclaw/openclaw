@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
@@ -14,17 +15,20 @@ it.each(["git", "unknown"] as const)(
   async (mode) => {
     vi.mocked(runDaemonInstall).mockClear();
     await withTestDir({ prefix: "openclaw-native-missing-target-" }, async (root) => {
+      const onGatewayStartAttempted = vi.fn();
       await expect(
         runUpdatedInstallGatewayCommand(
           {
             result: { root, mode },
             opts: { json: true },
             invocationEnv: {},
+            onGatewayStartAttempted,
           },
           "install",
         ),
       ).rejects.toThrow("updated install entrypoint not found");
       expect(runDaemonInstall).not.toHaveBeenCalled();
+      expect(onGatewayStartAttempted).not.toHaveBeenCalled();
     });
   },
 );
@@ -110,9 +114,11 @@ it("restarts the updated runtime without admitting another definition writer", a
   await withTestDir({ prefix: "openclaw-definition-restart-" }, async (root) => {
     await fs.mkdir(path.join(root, "dist"));
     const received = path.join(root, "received-arguments");
+    const activation = path.join(root, "activation-attempted");
     await fs.writeFile(
       path.join(root, "dist", "index.mjs"),
       `import fs from "node:fs";
+       fs.readFileSync(${JSON.stringify(activation)});
        fs.writeFileSync(${JSON.stringify(received)}, process.argv.slice(2).join("\\n"));
        process.stdout.write(JSON.stringify({ action: "restart", ok: true, result: "restarted" }));`,
     );
@@ -122,6 +128,7 @@ it("restarts the updated runtime without admitting another definition writer", a
           result: { root, mode: "npm" },
           opts: { json: true },
           invocationEnv: {},
+          onGatewayStartAttempted: () => writeFileSync(activation, "attempted"),
         },
         "restart",
       ),

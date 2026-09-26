@@ -66,7 +66,12 @@ export interface FrvClient {
 }
 
 export type FrvConcreteClient = FrvClient &
-  Required<Pick<FrvClient, "rerunFailed" | "rerunJob" | "rerunParent" | "verify" | "verifySeal">>;
+  Required<
+    Pick<
+      FrvClient,
+      "rerunFailed" | "rerunJob" | "rerunParent" | "listRuns" | "verify" | "verifySeal"
+    >
+  >;
 
 export function prioritizeRelease(
   parentRunId: string,

@@ -17,6 +17,7 @@ import {
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
+import { createPlacementTurnClaimFixtureOps } from "./placement-test-fixtures.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
@@ -35,7 +36,7 @@ describe("worker transcript claim fences", () => {
         "worker-commit-race",
         "session-commit-race",
       );
-      const { claim, store } = claimWorkerPlacement({
+      const { claim, store } = await claimWorkerPlacement({
         environmentId: identity.environmentId,
         ownerEpoch: identity.ownerEpoch,
         sessionId: "session-commit-race",
@@ -78,8 +79,9 @@ describe("worker transcript claim fences", () => {
       });
       const instance = createOperationalRunInstanceRef(claim.runId);
       const authority = claimAgentRunDelegatedAuthority(instance);
+      const claimOps = createPlacementTurnClaimFixtureOps(support.testState.stateDb);
       const prepare = vi.fn((message: ReturnType<typeof makeAgentAssistantMessage>) => {
-        store.releaseTurn(claim);
+        claimOps.releaseTurn(claim);
         return message;
       });
       const writerHeld = createDeferredCore();
@@ -115,9 +117,9 @@ describe("worker transcript claim fences", () => {
         await applicationStarted.promise;
         expect(await loadTranscriptEvents(target)).toEqual([]);
         if (scenario !== "preparation") {
-          store.releaseTurn(claim);
+          await store.releaseTurn(claim);
           if (scenario === "replaced") {
-            replacement = store.claimTurn({
+            replacement = await store.claimTurn({
               ...target,
               claimId: "replacement-claim",
               runId: "replacement-run",
@@ -134,7 +136,7 @@ describe("worker transcript claim fences", () => {
         expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBeNull();
         expect(prepare).toHaveBeenCalledTimes(scenario === "preparation" ? 1 : 0);
 
-        replacement ??= store.claimTurn({
+        replacement ??= await store.claimTurn({
           ...target,
           claimId: "replacement-claim",
           runId: "replacement-run",
@@ -182,7 +184,7 @@ describe("worker transcript claim fences", () => {
         await blocker;
         unsubscribe();
         if (store.validateTurnClaim(replacement ?? claim)) {
-          store.releaseTurn(replacement ?? claim);
+          await store.releaseTurn(replacement ?? claim);
         }
         releaseAgentRunDelegatedAuthority(authority);
         if (replacementAuthority) {
@@ -196,7 +198,7 @@ describe("worker transcript claim fences", () => {
     "keeps an admitted transcript on its original store after configuration changes: %s",
     async (scenario) => {
       const identity = await support.seedAttachedIdentity("worker-source", "session-source");
-      const { claim, store } = claimWorkerPlacement({
+      const { claim, store } = await claimWorkerPlacement({
         environmentId: identity.environmentId,
         ownerEpoch: identity.ownerEpoch,
         sessionId: "session-source",
@@ -249,7 +251,7 @@ describe("worker transcript claim fences", () => {
             }),
           ).resolves.toMatchObject({ deleted: true });
         } else if (scenario === "claim-released") {
-          store.releaseTurn(claim);
+          await store.releaseTurn(claim);
         }
         const result = workerService.commitTranscript(
           identity,
@@ -280,7 +282,7 @@ describe("worker transcript claim fences", () => {
         expect(loadSessionEntry(replacement)).toEqual(replacementBefore);
       } finally {
         if (store.validateTurnClaim(claim)) {
-          store.releaseTurn(claim);
+          await store.releaseTurn(claim);
         }
         releaseAgentRunDelegatedAuthority(authority);
       }

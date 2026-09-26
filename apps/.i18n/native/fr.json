@@ -903,6 +903,7 @@
     "native.android.8363c18ba7fdf0fd": "Limite de débit",
     "native.android.837744e8aa3c8155": "Connecté",
     "native.android.83e4fdeca6722756": "Inspecter et gérer l’état des compétences installées.",
+    "native.android.83e7a975bb7a5ea0": "Réduire l’aperçu du lien",
     "native.android.83e80579dc21643d": "Parlez à votre agent",
     "native.android.841570a28a49db67": "Les modifications Cron nécessitent operator.admin. Les codes de configuration ne l’accordent pas, par conception. Reconnectez-vous avec le jeton partagé ou le mot de passe du Gateway pour demander un accès administrateur. Si cet appareil ne dispose toujours pas de cet accès, approuvez l’extension des autorisations en attente depuis un client administrateur existant.",
     "native.android.84244f73da2b8e3b": "OpenClaw",

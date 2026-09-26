@@ -5,15 +5,10 @@
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import type { DedupeCache } from "../infra/dedupe.js";
 import { formatConfigIssueLines } from "./issue-format.js";
-
-/** Minimal validation issue shape accepted from schema and mutation validation paths. */
-type ConfigValidationIssueLike = {
-  path: string;
-  message: string;
-};
+import type { ConfigValidationIssue } from "./types.js";
 
 /** Formats validation issues as terminal-safe bullet lines for config load failures. */
-export function formatInvalidConfigDetails(issues: ConfigValidationIssueLike[]): string {
+export function formatInvalidConfigDetails(issues: ConfigValidationIssue[]): string {
   return formatConfigIssueLines(issues, "-", { normalizeRoot: true }).join("\n");
 }
 
@@ -51,7 +46,7 @@ export function isDoctorRecoverableInvalidConfigError(err: unknown): boolean {
 /** Logs and throws the standard invalid-config error for a validation result. */
 export function throwInvalidConfig(params: {
   configPath: string;
-  issues: ConfigValidationIssueLike[];
+  issues: ConfigValidationIssue[];
   logger: Pick<typeof console, "error">;
   loggedConfigPaths: DedupeCache;
 }): never {

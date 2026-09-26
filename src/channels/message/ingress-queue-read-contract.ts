@@ -7,8 +7,22 @@ export type ChannelIngressFailedHealth = {
   oldestFailedAt?: number;
 };
 
+export type ChannelIngressPressureHealth = {
+  channelId: string;
+  accountId: string;
+  laneCount: number;
+  pendingCount: number;
+  claimedCount: number;
+  blockedCount: number;
+  oldestReceivedAt: number;
+};
+
 type ChannelIngressReadOperations = {
   "channelIngress.failedHealth": { input: undefined; output: ChannelIngressFailedHealth[] };
+  "channelIngress.pressureHealth": {
+    input: { now: number };
+    output: ChannelIngressPressureHealth[];
+  };
 };
 
 export type ChannelIngressReadCommand = {
@@ -20,8 +34,16 @@ export type ChannelIngressReadCommand = {
 }[keyof ChannelIngressReadOperations];
 
 export function isChannelIngressReadCommand(value: unknown): value is ChannelIngressReadCommand {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value.type === "channelIngress.failedHealth") {
+    return value.input === undefined;
+  }
   return (
-    isRecord(value) && value.type === "channelIngress.failedHealth" && value.input === undefined
+    value.type === "channelIngress.pressureHealth" &&
+    isRecord(value.input) &&
+    typeof value.input.now === "number"
   );
 }
 

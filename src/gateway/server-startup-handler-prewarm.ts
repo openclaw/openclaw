@@ -16,6 +16,21 @@ type GatewayHandlerPrewarmItem = {
 function dashboardDataPrewarmItems(cfg: OpenClawConfig): GatewayHandlerPrewarmItem[] {
   return [
     {
+      name: "memory-search",
+      load: async () => {
+        const { getMemoryCapabilityRegistration } = await import("../plugins/memory-state.js");
+        if (getMemoryCapabilityRegistration()?.pluginId !== "memory-core") {
+          return;
+        }
+        const { loadBundledPluginPublicArtifactModuleSync } =
+          await import("../plugins/public-surface-loader.js");
+        const { prewarmMemorySearchWorker } = loadBundledPluginPublicArtifactModuleSync<{
+          prewarmMemorySearchWorker: () => Promise<void>;
+        }>({ dirName: "memory-core", artifactBasename: "prewarm-api.js" });
+        await prewarmMemorySearchWorker();
+      },
+    },
+    {
       name: "plugins",
       load: async () => {
         const { listManagedPlugins } = await import("../plugins/management-service.js");
@@ -32,7 +47,7 @@ export function scheduleGatewayHandlerPrewarm(params: {
   items?: readonly GatewayHandlerPrewarmItem[];
   waitForPostReadyWork?: () => Promise<void>;
 }): GatewayIdleTaskHandle {
-  // Session rows are resident; only process-stable plugin data needs optional prewarm.
+  // Session rows are resident; warm only process-stable plugin data and retrieval code.
   // Provider catalogs stay request-driven because their adapters may do unbounded external work.
   const items = params.items ?? dashboardDataPrewarmItems(params.cfgAtStart);
   let stopped = false;
