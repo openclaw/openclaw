@@ -290,6 +290,7 @@ export class NewSessionDraftController {
       this.place.modelControl.load(context, this.place.agentId, !isCatalogTarget(data), {
         agent: this.place.selectedAgent(),
         preference: this.gateway.readPreference(this.place.agentId),
+        configuredDefaults: this.place.requiredWorkerInference,
       });
     }
     if (

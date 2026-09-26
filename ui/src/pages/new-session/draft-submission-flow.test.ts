@@ -861,6 +861,7 @@ describe("DraftSubmissionFlow", () => {
       { requestUpdate: vi.fn(), closeTransientUi: vi.fn() },
     );
     gateway.synchronize(context.gateway);
+    await gateway.refreshCloudProfiles();
     place.setAgentsHydrated(true);
     place.adoptAgentDefaults();
     flow.setMessage("@Alex keep this cloud task", [

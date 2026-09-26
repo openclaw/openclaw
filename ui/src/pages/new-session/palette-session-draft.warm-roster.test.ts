@@ -11,6 +11,12 @@ import { PaletteSessionDraft } from "./palette-session-draft.ts";
 
 class WarmRosterHost extends OpenClawLightDomElement {
   context: ApplicationContext | undefined;
+  readonly placementReady = createDeferred();
+  override updated() {
+    if (this.querySelector(".palette-session-settings__workspace")) {
+      this.placementReady.resolve();
+    }
+  }
   readonly draft = new PaletteSessionDraft(this, () => ({ context: this.context, open: true }), {
     onClose: () => undefined,
   });
@@ -51,6 +57,9 @@ describe("palette warm roster authority", () => {
       let requested = false;
       const { context } = createDraftFixture({
         request: (method) => {
+          if (method === "environments.list") {
+            return Promise.resolve({ profiles: [], environments: [] });
+          }
           if (method !== "agents.list") {
             return Promise.resolve({ repositoryStatus: "not_git", branches: [] });
           }
@@ -86,8 +95,7 @@ describe("palette warm roster authority", () => {
       host.context = context;
       document.body.append(host);
       host.draft.open();
-      await host.updateComplete;
-      await host.updateComplete;
+      await host.placementReady.promise;
       try {
         host.draft.setMessage("Keep this draft while defaults refresh");
         if (choice === "explicit-folder") {

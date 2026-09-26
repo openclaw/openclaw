@@ -26,7 +26,6 @@ import {
   finalizeAcceptedContextEngineTurn,
   type ContextEngineTurnAttemptFacts,
 } from "../harness/context-engine-turn-attempt.js";
-import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../harness/selection.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
@@ -40,7 +39,7 @@ import type {
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
-import { resolveSessionPlacementRuntimeOverride } from "../session-placement-admission.js";
+import { sessionPlacementUsesWorkerInference } from "../session-placement-admission.js";
 import {
   didEmbeddedCyberFailoverTargetCommitWork,
   EMBEDDED_CYBER_FAILOVER_TRIGGER_CODE,
@@ -56,6 +55,7 @@ import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
 } from "./result-fallback-classifier.js";
+import { prepareRunEntryPlacement } from "./run-entry-placement.js";
 import {
   buildRunEntryTerminal,
   canAdvanceContextEngineTurn,
@@ -178,22 +178,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
   const operatorAuthority = readPreparedRunOperatorAuthority(params.preparedRunAdmission);
   const lifecycleGeneration = captureAgentRunLifecycleGeneration(params.identity.runId);
   const runContext = getAgentRunContext(params.identity.runId);
-  const placementRuntime = resolveSessionPlacementRuntimeOverride(params.identity);
-  const resolveRuntimeOverride = (provider: string, model: string) => {
-    const requestedRuntime = params.harness.resolveRuntimeOverride(provider, model);
-    if (requestedRuntime || !placementRuntime) {
-      return requestedRuntime;
-    }
-    const policy = resolveAgentHarnessPolicy({
-      config: params.selection.cfg,
-      provider,
-      modelId: model,
-      agentId: params.identity.agentId,
-      sessionKey: params.harness.sessionKey,
-    });
-    // Explicit runtime choices still reach placement's compatibility check.
-    return policy.runtimeSource === "implicit" ? placementRuntime : undefined;
-  };
+  const resolveRuntimeOverride = await prepareRunEntryPlacement(params);
   const clearObservedModel = () => {
     const event = {
       ...params.identity,
@@ -282,6 +267,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
         ...selection,
         ...params.identity,
         operatorAuthority,
+        skipAuthProfileRuntime: sessionPlacementUsesWorkerInference(params.identity),
         abortSignal: params.abortSignal,
         resolveAgentHarnessRuntimeOverride: resolveRuntimeOverride,
         prepareCandidateChain: async (candidates) => {

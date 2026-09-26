@@ -7,6 +7,7 @@ export type NewSessionModelLoadOptions = {
   agent?: GatewayAgentRow;
   preference?: NewSessionPreference | null;
   initialModel?: string;
+  configuredDefaults?: boolean;
 };
 
 export type ModelSelectionChange = (

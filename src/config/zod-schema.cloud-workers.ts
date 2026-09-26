@@ -121,6 +121,10 @@ const CloudWorkerPreparedPoolShape = {
 };
 
 const CloudWorkersConfigShape = {
+  requiredProfile: CloudWorkerProfileIdSchema.optional().register(configUiMetadata, {
+    label: "Required Worker Profile",
+    help: "Require every session to execute on this worker profile. Sessions are placed automatically and cannot fall back to Gateway execution. Unavailable workers block turns, not Gateway startup.",
+  }),
   desktop: z.boolean().optional().register(configUiMetadata, {
     label: "Cloud Worker Desktop (Labs)",
     help: "Enables the experimental worker.desktop.observe surface and Control UI Desktop panel for desktop-capable cloud worker environments.",

@@ -329,6 +329,9 @@ export const environmentsHandlers: GatewayRequestHandlers = {
         true,
         {
           environments,
+          ...(context.getRuntimeConfig().cloudWorkers?.requiredProfile
+            ? { requiredProfile: context.getRuntimeConfig().cloudWorkers?.requiredProfile }
+            : {}),
           ...(profiles.length > 0
             ? {
                 profiles: includeCurrentPreparedDetails

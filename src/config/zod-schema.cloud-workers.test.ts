@@ -76,6 +76,19 @@ describe("OpenClawSchema cloudWorkers config", () => {
     expect(parseCloudWorkers({})).toStrictEqual({});
   });
 
+  it("retains a required profile before enrollment without blocking startup", () => {
+    expect(parseCloudWorkers({ requiredProfile: "not-enrolled-yet" })).toEqual({
+      requiredProfile: "not-enrolled-yet",
+    });
+  });
+
+  it.each(["", " ", " worker", "worker ", null, true, 3])(
+    "rejects invalid required profile %j",
+    (requiredProfile) => {
+      expect(OpenClawSchema.safeParse({ cloudWorkers: { requiredProfile } }).success).toBe(false);
+    },
+  );
+
   it("accepts the desktop Labs gate only as a boolean", () => {
     expect(parseCloudWorkers({ desktop: true })).toStrictEqual({ desktop: true });
     expect(OpenClawSchema.safeParse({ cloudWorkers: { desktop: "true" } }).success).toBe(false);

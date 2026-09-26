@@ -1,3 +1,4 @@
+import { getRuntimeConfig } from "../../config/config.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerDevicePlacementRequirementResolver } from "./placement-dispatch-startup.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
@@ -59,10 +60,12 @@ export function createWorkerPlacementRedispatch(params: {
       }
       devicePlacement = await params.resolveDevicePlacementRequirement(identity);
     }
+    const requiredProfile = getRuntimeConfig().cloudWorkers?.requiredProfile;
     return await params.dispatch(
       {
         ...identity,
         profileId,
+        ...(requiredProfile ? { requiredProfile } : {}),
         expectedPlacement: {
           state: placement.state,
           generation: placement.generation,

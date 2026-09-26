@@ -4,11 +4,14 @@ import type {
   LocalTurnPlacementClaim,
   SessionPlacementAdmissionProvider,
 } from "../../agents/session-placement-admission.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { WORKER_ADMISSION_DEADLINE_MS } from "../../worker/worker-connection-contract.js";
 import { StaleWorkerBuildError } from "./admission.js";
+import { workerInferencePlacement } from "./inference-placement.js";
+import { isCurrentActiveWorkerEnvironment } from "./placement-dispatch-failure.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import { placementTurnOwner, sameWorkerSessionTurnClaim } from "./placement-record.js";
 import type {
@@ -53,6 +56,7 @@ type RedispatchableWorkerPlacement = Extract<
 >;
 
 type WorkerTurnLauncherOptions = {
+  prepareRequiredSession?: SessionPlacementAdmissionProvider["prepareRequiredSession"];
   environments: WorkerTurnEnvironmentService;
   placements: WorkerSessionPlacementStore;
   resolveWorkspace: (
@@ -88,6 +92,22 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       workspaceDir: string;
     }): Promise<SandboxContext | null>;
   } = {
+    prepareRequiredSession: options.prepareRequiredSession,
+    usesWorkerInference(identity) {
+      const placement = options.placements.get(identity.sessionId);
+      const environment = placement?.environmentId
+        ? options.environments.get(placement.environmentId)
+        : undefined;
+      return Boolean(
+        placement?.state === "active" &&
+        placement.executionMode === "worker-turn" &&
+        placement.agentId === identity.agentId &&
+        placement.sessionKey === identity.sessionKey &&
+        environment &&
+        isCurrentActiveWorkerEnvironment(placement, environment) &&
+        workerInferencePlacement(environment) === "worker",
+      );
+    },
     resolveRuntimeOverride(identity) {
       const placement = options.placements.get(identity.sessionId);
       return placement &&
@@ -170,6 +190,9 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       runLocal: () => Promise<T>,
       assertCurrent?: () => void,
     ) {
+      if (getRuntimeConfig().cloudWorkers?.requiredProfile) {
+        throw new Error("Local execution is disabled by the required worker profile policy.");
+      }
       return await executeLocalTurn({
         claim,
         placements: options.placements,
@@ -178,6 +201,17 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       });
     },
     async executeTurn(claim, inputTurn, runLocal, onAdmitted, assertRunCurrent) {
+      if (
+        getRuntimeConfig().cloudWorkers?.requiredProfile ||
+        inputTurn.config?.cloudWorkers?.requiredProfile
+      ) {
+        if (!options.prepareRequiredSession) {
+          throw new Error(
+            "Required worker placement is unavailable; repair the configured profile and retry.",
+          );
+        }
+        await options.prepareRequiredSession(claim, assertRunCurrent, inputTurn.abortSignal);
+      }
       const runLocalTurn = () =>
         executeLocalTurn({
           claim,
@@ -210,6 +244,23 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         inputTurn.abortSignal?.throwIfAborted();
         assertRunCurrent?.();
         assertInitialSetupCurrent?.();
+        const required = getRuntimeConfig().cloudWorkers?.requiredProfile;
+        if (required) {
+          const live = options.placements.get(claim.sessionId);
+          const environment = live?.environmentId
+            ? options.environments.get(live.environmentId)
+            : undefined;
+          if (
+            !live ||
+            live.state === "local" ||
+            live.executionMode !== "worker-turn" ||
+            (environment && environment.profileId !== required)
+          ) {
+            throw new Error(
+              "The live placement no longer satisfies the required worker profile policy.",
+            );
+          }
+        }
       };
       let placement: ActiveWorkerPlacement;
       let turnClaim: WorkerSessionTurnClaim;

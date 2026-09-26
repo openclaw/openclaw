@@ -187,6 +187,8 @@ export type WorkerPlacementDispatchRequest = {
   agentId: string;
   profileId: string;
   executionMode: WorkerPlacementExecutionMode;
+  /** Initial mandatory admission cannot cancel the input it is preparing. Never exposed over RPC. */
+  requiredProfile?: string;
   expectedPlacement?: Pick<
     WorkerSessionPlacementRecord,
     "state" | "generation" | "environmentId" | "activeOwnerEpoch"
@@ -258,6 +260,14 @@ export type WorkerPlacementReclaimSourceCheck = (
 // Leaf dispatch contract: GatewayRequestContext must not import the dispatch
 // runtime (it reaches agents/plugins and closes an import cycle through core).
 export type WorkerPlacementDispatchContract = {
+  /** Server-owned placement under existing session creation/run authority, not manual dispatch. */
+  prepareRequiredSession?(
+    this: void,
+    identity: { sessionId: string; sessionKey?: string; agentId?: string },
+    assertCurrent?: () => void,
+    signal?: AbortSignal,
+    options?: { waitForReady: false },
+  ): Promise<void>;
   getPendingDeviceDispatchCount?(deviceId: string, excludeSessionId?: string): number;
   getAdmittedDeviceSessionCounts?(excludeSessionId?: string): ReadonlyMap<string, number>;
   dispatch(

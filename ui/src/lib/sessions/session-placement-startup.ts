@@ -1,5 +1,6 @@
 import type {
   SessionPlacement,
+  EnvironmentsListResult,
   SessionsDispatchResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import {
@@ -371,19 +372,44 @@ export async function startSessionPlacementInitialTurn(
   const message = params.message;
   const mentions = params.mentions?.map((mention) => ({ ...mention }));
   const cleanupOnCancellation = params.cleanupOnCancellation ?? (() => true);
-  let resolution: PlacementResolution | undefined;
+  let resolution: PlacementResolution = { status: "dispatch" };
   let dispatchError = "";
-  if (params.mode !== "dispatch") {
+  const requiredTarget =
+    params.target.kind === "profile" && params.target.required ? params.target : undefined;
+  if (requiredTarget) {
+    // A recovered draft carries intent, not authority. Revalidate the policy before
+    // observing placement or admitting a Retry through the ordinary run owner.
+    try {
+      const catalog = await client.request<EnvironmentsListResult>("environments.list", {});
+      if (!isCurrent()) {
+        return cancelSessionPlacement(client, params, cleanupOnCancellation);
+      }
+      if (catalog.requiredProfile !== requiredTarget.profileId) {
+        return { status: "dispatch-rejected", error: t("newSession.requiredWorkerChanged") };
+      }
+      if (!catalog.profiles?.some((profile) => profile.id === requiredTarget.profileId)) {
+        return { status: "dispatch-rejected", error: t("newSession.requiredWorkerUnavailable") };
+      }
+    } catch (error) {
+      if (!isCurrent()) {
+        return cancelSessionPlacement(client, params, cleanupOnCancellation);
+      }
+      return { status: "dispatch-rejected", error: formatUiError(error) };
+    }
+  }
+  if (params.mode !== "dispatch" || requiredTarget) {
     resolution = await resolveActivePlacement(
       client,
       { key: params.key, agentId: params.agentId, mode: params.mode, cleanupOnCancellation },
       isCurrent,
     );
+    if (resolution.status === "dispatch" && !isCurrent()) {
+      return cancelSessionPlacement(client, params, cleanupOnCancellation);
+    }
   }
-  if (resolution?.status === "dispatch" && !isCurrent()) {
-    return cancelSessionPlacement(client, params, cleanupOnCancellation);
-  }
-  if (!resolution || resolution.status === "dispatch") {
+  // Creation already starts mandatory placement. Explicit Retry of a stopped/failed
+  // required worker is admitted by sessions.send, never by the admin dispatch API.
+  if (!requiredTarget && resolution.status === "dispatch") {
     try {
       const dispatched = await client.request<SessionsDispatchResult>(
         "sessions.dispatch",

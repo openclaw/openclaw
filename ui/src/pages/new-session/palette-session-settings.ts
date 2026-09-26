@@ -16,7 +16,7 @@ import type { NewSessionDraftController } from "./draft-controller.ts";
 import type { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import { folderDisplayName } from "./path.ts";
 import { resolveProjectChip } from "./project-chip.ts";
-import { renderAgentSelect } from "./target-controls.ts";
+import { renderAgentSelect, renderRequiredSessionPlacement } from "./target-controls.ts";
 import { resolveWhereChip } from "./where-chip.ts";
 import "../../styles/palette-session-settings.css";
 
@@ -135,6 +135,10 @@ export class PaletteSessionSettings {
   render(options: SettingsOptions) {
     const { draft, context, preferences, onChange } = options;
     const { place, gateway, submission } = draft;
+    const placementLocked = !gateway.placementPolicyReady || place.requiredPlacement;
+    if (placementLocked) {
+      this.places = false;
+    }
     const locked =
       submission.submitting ||
       Boolean(submission.pendingPlacement.sessionKey) ||
@@ -334,37 +338,47 @@ export class PaletteSessionSettings {
                       onOpenChange: options.onAgentPickerOpen,
                     })}
                   </div>
-                  <button
-                    class="palette-session-settings__row palette-session-settings__workspace"
-                    type="button"
-                    ?disabled=${locked}
-                    @click=${(event: MouseEvent) => this.showPlaces(true, event.detail > 0)}
-                  >
-                    <span class="palette-session-settings__icon">${icons.folder}</span
-                    ><span class="palette-session-settings__copy"
-                      ><span class="palette-session-settings__label">${projectState.label}</span
-                      ><span class="palette-session-settings__secondary"
-                        >${machineLabel}${cloudSummary ? " · " + cloudSummary : ""}</span
-                      ></span
-                    ><span class="palette-session-settings__chevron">${icons.chevronRight}</span>
-                  </button>
-                  <button
-                    class="palette-session-settings__row palette-session-settings__worktree"
-                    type="button"
-                    role="switch"
-                    aria-checked=${String(place.worktree)}
-                    aria-label=${t("newSession.checkoutWorktree")}
-                    title=${place.remotePlacement ? t("newSession.checkoutRemoteLocked") : !place.worktreeAvailable() ? t("newSession.worktreeUnavailable") : nothing}
-                    ?disabled=${locked || place.remotePlacement || !place.worktreeAvailable()}
-                    @click=${() => {
-                      place.selectWorktree(!place.worktree);
-                      onChange();
-                    }}
-                  >
-                    <span class="palette-session-settings__icon">${icons.gitBranch}</span
-                    ><span>${t("newSession.checkoutWorktree")}</span
-                    ><span class="palette-session-settings__switch" aria-hidden="true"></span>
-                  </button>
+                  ${
+                    placementLocked
+                      ? renderRequiredSessionPlacement(gateway)
+                      : html`<button
+                            class="palette-session-settings__row palette-session-settings__workspace"
+                            type="button"
+                            ?disabled=${locked}
+                            @click=${(event: MouseEvent) => this.showPlaces(true, event.detail > 0)}
+                          >
+                            <span class="palette-session-settings__icon">${icons.folder}</span
+                            ><span class="palette-session-settings__copy"
+                              ><span class="palette-session-settings__label"
+                                >${projectState.label}</span
+                              ><span class="palette-session-settings__secondary"
+                                >${machineLabel}${cloudSummary ? " · " + cloudSummary : ""}</span
+                              ></span
+                            ><span class="palette-session-settings__chevron"
+                              >${icons.chevronRight}</span
+                            >
+                          </button>
+                          <button
+                            class="palette-session-settings__row palette-session-settings__worktree"
+                            type="button"
+                            role="switch"
+                            aria-checked=${String(place.worktree)}
+                            aria-label=${t("newSession.checkoutWorktree")}
+                            title=${place.remotePlacement ? t("newSession.checkoutRemoteLocked") : !place.worktreeAvailable() ? t("newSession.worktreeUnavailable") : nothing}
+                            ?disabled=${locked || place.remotePlacement || !place.worktreeAvailable()}
+                            @click=${() => {
+                              place.selectWorktree(!place.worktree);
+                              onChange();
+                            }}
+                          >
+                            <span class="palette-session-settings__icon">${icons.gitBranch}</span
+                            ><span>${t("newSession.checkoutWorktree")}</span
+                            ><span
+                              class="palette-session-settings__switch"
+                              aria-hidden="true"
+                            ></span>
+                          </button>`
+                  }
                 `
           }
           ${

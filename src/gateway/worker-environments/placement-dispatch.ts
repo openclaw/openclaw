@@ -1,4 +1,8 @@
 import { getRuntimeConfig } from "../../config/config.js";
+import {
+  assertRequiredWorkerDispatch,
+  RequiredWorkerProfileError,
+} from "../../config/required-worker-profile.js";
 import { resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import type { WorkerNodePlacementAuthority } from "./device-placement-eligibility.js";
 import {
@@ -52,6 +56,7 @@ type WorkerLocalDispatchBarrier = (params: {
   agentId: string;
   executionMode: WorkerPlacementDispatchRequest["executionMode"];
   authorize?: WorkerPlacementAuthorization;
+  requiredProfile?: string;
   signal?: AbortSignal;
   startDispatch: () => Promise<WorkerDispatchPlacement>;
 }) => Promise<WorkerDispatchPlacement>;
@@ -110,7 +115,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     const assertCurrent = () => {
       signal?.throwIfAborted();
       authorize?.();
+      assertRequiredWorkerDispatch(getRuntimeConfig(), request);
     };
+    assertCurrent();
     let placement: WorkerDispatchPlacement | undefined;
     try {
       signal?.throwIfAborted();
@@ -120,6 +127,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         agentId: request.agentId,
         executionMode: request.executionMode,
         authorize: assertCurrent,
+        requiredProfile: request.requiredProfile,
         signal,
         startDispatch: async () => {
           placement = await placements.startDispatch(
@@ -402,6 +410,11 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     onTransition?: (placement: WorkerDispatchPlacement) => void,
   ): Promise<WorkerReclaimPlacement> => {
     const assertGatewayRecoverySource = () => {
+      if (request.recoverToGateway && getRuntimeConfig().cloudWorkers?.requiredProfile) {
+        throw new RequiredWorkerProfileError(
+          "Gateway recovery is disabled by the required worker profile policy; Stop retains the workspace for remote recovery.",
+        );
+      }
       if (!request.recoverToGateway) {
         return;
       }
@@ -473,7 +486,31 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   return {
     dispatch,
     forceDestroyEnvironment: abandonment.forceDestroyEnvironment,
-    move: moveService.move,
+    move: async (
+      request: WorkerPlacementMoveRequest,
+      onTransition?: (placement: WorkerDispatchPlacement) => void,
+      authorize?: WorkerPlacementAuthorization,
+      signal?: AbortSignal,
+    ) => {
+      const assertCurrent = () => {
+        signal?.throwIfAborted();
+        authorize?.();
+        const required = getRuntimeConfig().cloudWorkers?.requiredProfile;
+        if (
+          required &&
+          (request.target.kind !== "profile" ||
+            request.target.profileId !== required ||
+            request.target.machineClass !== undefined ||
+            request.target.os !== undefined)
+        ) {
+          throw new RequiredWorkerProfileError(
+            "Session placement changes are disabled by the required worker profile policy.",
+          );
+        }
+      };
+      assertCurrent();
+      return await moveService.move(request, onTransition, assertCurrent, signal);
+    },
     reclaim,
     reconcile: recovery.reconcile,
     reconcileActive: recovery.reconcileActive,

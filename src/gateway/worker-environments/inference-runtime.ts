@@ -374,6 +374,9 @@ async function resolveApprovedModel(params: {
     // Route projection and credential selection are one decision. Pin even an
     // automatic profile so generic auth fallback cannot cross to another route.
     const prepared = await prepareSimpleCompletionModel({
+      // The RPC owner already verified the exact current session/turn and the
+      // environment's recorded Gateway-inference choice. This is not a sessionless helper.
+      workerInferenceAuthority: { assertCurrent: params.assertCurrent },
       cfg: modelConfig,
       agentId: target.agentId,
       provider: resolved.ref.provider,

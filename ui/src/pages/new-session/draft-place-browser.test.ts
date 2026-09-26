@@ -204,7 +204,7 @@ describe("DraftPlaceBrowser", () => {
   });
 
   it("does not reattach a disposed draft catalog from a queued Lit update", async () => {
-    const request = vi.fn(async () => ({ projects: [] }));
+    const request = vi.fn(async (_method: string) => ({ projects: [] }));
     const fixture = createBrowser(request);
     await fixture.browser.refreshProjects();
     const reads = request.mock.calls.length;
@@ -215,7 +215,12 @@ describe("DraftPlaceBrowser", () => {
     expect(request).toHaveBeenCalledTimes(reads);
     fixture.update();
     await fixture.browser.refreshProjects();
-    expect(request).toHaveBeenCalledTimes(reads + 1);
+    expect(
+      request.mock.calls
+        .slice(reads)
+        .map(([method]) => method)
+        .toSorted(),
+    ).toEqual(["environments.list", "projects.list"]);
   });
   it("keeps environment search transient and separate from project search", () => {
     const { browser } = createBrowser(async () => ({}));
