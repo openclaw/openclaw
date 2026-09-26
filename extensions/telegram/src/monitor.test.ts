@@ -9,12 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { monitorTelegramProvider } from "./monitor.js";
 import type { MonitorTelegramOpts } from "./monitor.types.js";
 import type { TelegramPollingSession } from "./polling-session.js";
-import { setTelegramRuntime } from "./runtime.js";
-import {
-  clearTelegramRuntimeForTest,
-  resetTelegramPollingLeasesForTest,
-} from "./runtime.test-support.js";
-import type { TelegramRuntime } from "./runtime.types.js";
+import { resetTelegramPollingLeasesForTest } from "./runtime.test-support.js";
 import type * as OffsetStore from "./update-offset-store.js";
 
 type SessionOptions = ConstructorParameters<typeof TelegramPollingSession>[0];
@@ -28,11 +23,13 @@ const mocks = vi.hoisted(() => ({
   deleteOffset: vi.fn<typeof OffsetStore.deleteTelegramUpdateOffset>(),
   startWebhook: vi.fn(async (_params: unknown) => ({ stop: vi.fn(async () => {}) })),
   closeTransport: vi.fn(async () => {}),
+  runtime: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
   getRuntimeConfig: mocks.config,
 }));
+vi.mock("./runtime.js", () => ({ getTelegramRuntime: mocks.runtime }));
 vi.mock("./polling-session.js", () => ({
   TelegramPollingSession: class {
     constructor(private readonly options: SessionOptions) {
@@ -91,6 +88,7 @@ describe("monitorTelegramProvider", () => {
     mocks.readOffset.mockReset().mockResolvedValue(41);
     mocks.config.mockReturnValue({ channels: { telegram: {} } });
     mocks.deleteOffset.mockReset().mockResolvedValue(undefined);
+    mocks.runtime.mockReset();
     resetTelegramPollingLeasesForTest();
   });
   afterEach(async () => {
@@ -99,7 +97,6 @@ describe("monitorTelegramProvider", () => {
     }
     await Promise.allSettled(monitors.splice(0));
     resetTelegramPollingLeasesForTest();
-    clearTelegramRuntimeForTest();
     closeOpenClawStateDatabaseForTest();
   });
 
@@ -112,7 +109,7 @@ describe("monitorTelegramProvider", () => {
         accountId: "default",
         stateDir,
       });
-      setTelegramRuntime({
+      mocks.runtime.mockReturnValue({
         state: {
           openChannelIngressQueue: () => queue,
           openKeyedStore: () => ({
@@ -123,7 +120,7 @@ describe("monitorTelegramProvider", () => {
             delete: async (key: string) => offsets.delete(key),
           }),
         },
-      } as TelegramRuntime);
+      });
       mocks.readOffset.mockImplementation(store.readTelegramUpdateOffset);
       mocks.deleteOffset
         .mockImplementationOnce(async () => {
@@ -147,14 +144,14 @@ describe("monitorTelegramProvider", () => {
 
       await startMonitor({ token: "222222:token-b" }).task;
       expect(await queue.listPending()).toEqual([]);
-      expect(mocks.sessions[0].getCommittedUpdateId()).toBeNull();
+      expect(mocks.sessions[0]?.getCommittedUpdateId()).toBeNull();
       await queue.enqueue("1", { text: "bot B pending" });
       await store.writeTelegramUpdateOffset({ botToken: "222222:token-b", updateId: 1 });
       await startMonitor({ token: "222222:token-b" }).task;
       expect(await queue.listPending()).toMatchObject([
         { id: "1", payload: { text: "bot B pending" } },
       ]);
-      expect(mocks.sessions[1].getCommittedUpdateId()).toBe(1);
+      expect(mocks.sessions[1]?.getCommittedUpdateId()).toBe(1);
     });
   });
   it("refuses a second live monitor for the same token", async () => {

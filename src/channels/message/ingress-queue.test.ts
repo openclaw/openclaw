@@ -59,7 +59,7 @@ describe("channel ingress queue", () => {
         createChannelIngressQueue({ channelId: "telegram", accountId: "a", stateDir }),
         createChannelIngressQueue({ channelId: "telegram", accountId: "b", stateDir }),
         createChannelIngressQueue({ channelId: "other", accountId: "a", stateDir }),
-      ];
+      ] as const;
       const states = ["pending", "claimed", "completed", "failed"] as const;
       for (const queue of queues) {
         for (const state of states) {
