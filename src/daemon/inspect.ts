@@ -41,6 +41,7 @@ import {
   resolveTaskName,
 } from "./schtasks-layout.js";
 import { listScheduledTasks } from "./schtasks-state-probe.js";
+import { resolveWindowsServiceCommandProfile } from "./service-env-merge.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 
 export type ExtraGatewayService = {
@@ -63,7 +64,11 @@ export type GatewayServiceInventory = {
   errors: Array<{ source: string; message: string }>;
 };
 
-type InspectedGatewayService = ExtraGatewayService & {
+type ManagedGatewayService = ExtraGatewayService & {
+  windowsProfile?: string;
+};
+
+type InspectedGatewayService = ManagedGatewayService & {
   extra: boolean;
   managedGateway: boolean;
 };
@@ -71,6 +76,7 @@ type InspectedGatewayService = ExtraGatewayService & {
 function projectService({
   extra: _extra,
   managedGateway: _managed,
+  windowsProfile: _windowsProfile,
   ...service
 }: InspectedGatewayService): ExtraGatewayService {
   return service;
@@ -137,7 +143,6 @@ export function renderGatewayServiceCleanupHints(
 async function scanLaunchdDir(params: {
   dir: string;
   scope: "user" | "system";
-  reportManagedAsExtra?: boolean;
   managedLabel?: string;
   selectedName?: string;
   errors?: GatewayServiceInventory["errors"];
@@ -188,7 +193,7 @@ async function scanLaunchdDir(params: {
       legacy: marker !== "openclaw" || isLegacyLabel(label),
       managedGateway: marker === "openclaw" && (serviceMarker || executionMarker === "openclaw"),
       extra:
-        Boolean(params.reportManagedAsExtra) ||
+        params.scope === "system" ||
         (label !== resolveGatewayLaunchAgentLabel() &&
           !(
             marker === "openclaw" &&
@@ -355,6 +360,7 @@ async function scanWindowsStartupEntries(
       const serviceMarker = hasGatewayServiceMarker(command.environment);
       gateway = hasGatewaySubcommandArg(command.programArguments) || serviceMarker;
       marker = serviceMarker ? "openclaw" : (commandMarker ?? undefined);
+      const profile = resolveWindowsServiceCommandProfile(command);
       const label = command.environment?.OPENCLAW_WINDOWS_TASK_NAME?.trim() || name;
       if (!marker || (!gateway && marker !== "clawdbot")) {
         continue;
@@ -369,6 +375,7 @@ async function scanWindowsStartupEntries(
         windowsStartupEntry: pathname,
         extra: marker !== "openclaw" || !selectedStartupEntries.has(pathIdentity),
         managedGateway: marker === "openclaw" && gateway,
+        ...(profile.kind === "resolved" ? { windowsProfile: profile.profile } : {}),
       });
     } catch {
       if (gateway || selected.has(pathIdentity)) {
@@ -420,7 +427,6 @@ async function scanGatewayServices(
         for (const svc of await scanLaunchdDir({
           dir: path.join(path.sep, "Library", "LaunchDaemons"),
           scope: "system",
-          reportManagedAsExtra: true,
           managedLabel: resolveLaunchAgentLabel(env),
           selectedName: resolveLaunchAgentLabel(env),
           errors,
@@ -531,6 +537,10 @@ async function scanGatewayServices(
       let gateway = actionArgv.some(
         (argv, index) => actionMarkers[index] === "openclaw" && hasGatewaySubcommandArg(argv),
       );
+      let profile =
+        actionArgv.length === 1
+          ? resolveWindowsServiceCommandProfile({ programArguments: actionArgv[0]! })
+          : undefined;
       let recognizableLauncher = launcherReference;
       if (launcherReference || task.actions.some((action) => /\.(?:cmd|vbs)$/i.test(action.path))) {
         try {
@@ -539,11 +549,13 @@ async function scanGatewayServices(
             {
               requireEffective: true,
               requireLoaded: true,
+              profileScope: "registered",
               onLauncherContent: (content) => {
                 recognizableLauncher ||= Boolean(detectLauncherGatewayMarker(content));
               },
             },
           );
+          profile = command ? resolveWindowsServiceCommandProfile(command) : undefined;
           const serviceMarker = command?.environment?.OPENCLAW_SERVICE_MARKER;
           const serviceKind = command?.environment?.OPENCLAW_SERVICE_KIND;
           marker = command
@@ -592,6 +604,7 @@ async function scanGatewayServices(
           (selected || isOpenClawGatewayTaskName(name))
         ),
         managedGateway: marker === "openclaw" && gateway,
+        ...(profile?.kind === "resolved" ? { windowsProfile: profile.profile } : {}),
       });
     }
     for (const service of await scanWindowsStartupEntries(env, errors)) {
@@ -617,10 +630,12 @@ export async function findExtraGatewayServices(
 /** Complete managed selectors are discovery facts, not native lifecycle authority. */
 export async function listManagedOpenClawGatewayServices(
   env: Record<string, string | undefined>,
-): Promise<GatewayServiceInventory> {
+): Promise<{ services: ManagedGatewayService[]; errors: GatewayServiceInventory["errors"] }> {
   const inventory = await scanGatewayServices(env, { deep: true });
   return {
-    services: inventory.services.filter((service) => service.managedGateway).map(projectService),
+    services: inventory.services
+      .filter((service) => service.managedGateway)
+      .map(({ extra: _extra, managedGateway: _managed, ...service }) => service),
     errors: inventory.errors,
   };
 }

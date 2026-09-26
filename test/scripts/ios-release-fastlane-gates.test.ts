@@ -1001,6 +1001,12 @@ end
     const verifier = functionBody(fastfile, "verify_snapshot_test_result!");
 
     expect(screenshots).toContain("devices = snapshot_devices");
+    const prepare = screenshots.indexOf('"../../../scripts/ios-simulator-prepare.sh"');
+    expect(prepare).toBeGreaterThan(screenshots.indexOf('device_udid = device.fetch("udid")'));
+    expect(prepare).toBeLessThan(
+      screenshots.indexOf('sh("xcrun", "simctl", "bootstatus", device_udid'),
+    );
+    expect(screenshots).toContain('ENV.fetch("OPENCLAW_CI_SIMSLIM_BINARY", "").empty?');
     expect(screenshots).toContain('"build-for-testing"');
     expect(screenshots).toContain("RELEASE_IOS_SCREENSHOT_TESTS.each");
     expect(screenshots).toContain("capture_release_ios_screenshot!(");

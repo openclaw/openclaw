@@ -5,6 +5,8 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { resolveLiveManagedGatewayDistFence } from "../../scripts/lib/live-gateway-dist-fence.mts";
 import * as gatewayBindings from "../../src/daemon/managed-gateway-bindings.js";
 import type { ManagedGatewayBinding } from "../../src/daemon/managed-gateway-bindings.js";
+import * as schtasksExec from "../../src/daemon/schtasks-exec.js";
+import * as schtasksProbe from "../../src/daemon/schtasks-state-probe.js";
 import * as serviceLayout from "../../src/daemon/service-layout.js";
 import type { GatewayServiceState } from "../../src/daemon/service-types.ts";
 import * as gatewayService from "../../src/daemon/service.js";
@@ -374,6 +376,226 @@ describe("live-gateway-dist-fence physical overlap", () => {
 });
 
 describe("live-gateway-dist-fence cross-profile overlap", () => {
+  it.each(["saved environment", "root argv"] as const)(
+    "fences a custom Windows Task using its %s profile without mutating the service",
+    async (profileSource) => {
+      await withTestDir({ prefix: "openclaw-live-dist-windows-profile-" }, async (tmp) => {
+        const checkout = path.join(tmp, "checkout");
+        const other = path.join(tmp, "other");
+        const launcher = path.join(tmp, "gateway.cmd");
+        await writeOpenClawPackage(checkout);
+        await writeOpenClawPackage(other);
+        const scriptPath = "C:\\Services\\Recovery\\gateway.cmd";
+        const task = {
+          taskPath: "\\Services\\Recovery",
+          state: 4,
+          actions: [{ type: 0, path: scriptPath, arguments: "", workingDirectory: "" }],
+        };
+        await fs.writeFile(
+          launcher,
+          [
+            "@echo off",
+            'set "OPENCLAW_WINDOWS_TASK_NAME=Services\\Recovery"',
+            `set "OPENCLAW_PROFILE=${profileSource === "root argv" ? "stale" : "rescue"}"`,
+            'set "OPENCLAW_SERVICE_MARKER=openclaw"',
+            'set "OPENCLAW_SERVICE_KIND=gateway"',
+            `"${process.execPath}" "${path.join(checkout, "dist", "index.js")}" ${profileSource === "root argv" ? "--profile rescue " : ""}gateway run < NUL`,
+          ].join("\r\n"),
+        );
+        const readFile = fs.readFile;
+        const files = vi
+          .spyOn(fs, "readFile")
+          .mockImplementation((...args: Parameters<typeof fs.readFile>) => {
+            if (args[0] === scriptPath) {
+              args[0] = launcher;
+            }
+            return readFile(...args);
+          });
+        const inventory = vi.spyOn(schtasksProbe, "listScheduledTasks").mockReturnValue([task]);
+        const probe = vi
+          .spyOn(schtasksProbe, "probeScheduledTaskState")
+          .mockImplementation((name) =>
+            name.replace(/^\\+/, "") === "Services\\Recovery"
+              ? { status: "found", ...task }
+              : { status: "missing" },
+          );
+        const native = vi.spyOn(schtasksExec, "execSchtasks").mockImplementation(async (args) => {
+          if (args[0] !== "/Query") {
+            throw new Error("Unexpected Scheduled Task mutation");
+          }
+          return { stdout: "", stderr: "", code: 0 };
+        });
+        const writes = vi.spyOn(fs, "writeFile").mockRejectedValue(new Error("Unexpected write"));
+        const renames = vi.spyOn(fs, "rename").mockRejectedValue(new Error("Unexpected rename"));
+        const removals = vi.spyOn(fs, "rm").mockRejectedValue(new Error("Unexpected removal"));
+        const signals = vi.spyOn(process, "kill").mockReturnValue(true);
+        try {
+          await withMockedPlatform("win32", async () => {
+            const env = { HOME: tmp, USERPROFILE: tmp, OPENCLAW_PROFILE: "selected" };
+            const result = await resolveLiveManagedGatewayDistFence(checkout, { env });
+            expect(result).toMatchObject({
+              refuse: true,
+              message: expect.stringContaining("profile rescue"),
+            });
+            const bindings = await gatewayBindings.discoverManagedGatewayBindings(env);
+            expect(bindings).toEqual([
+              expect.objectContaining({
+                profile: "rescue",
+                env: expect.objectContaining({
+                  OPENCLAW_PROFILE: "rescue",
+                  OPENCLAW_WINDOWS_TASK_NAME: "Services\\Recovery",
+                }),
+              }),
+            ]);
+            const binding = bindings[0]!;
+            await expect(
+              gatewayService.readGatewayServiceState(gatewayService.resolveGatewayService(), {
+                env: binding.env,
+                requireEffective: true,
+                requireLoadedCommand: true,
+              }),
+            ).resolves.toMatchObject({ installed: true, running: true });
+            await expect(resolveLiveManagedGatewayDistFence(other, { env })).resolves.toEqual({
+              refuse: false,
+            });
+            task.state = 3;
+            await expect(resolveLiveManagedGatewayDistFence(checkout, { env })).resolves.toEqual({
+              refuse: false,
+            });
+            expect(probe).toHaveBeenCalled();
+            expect(native).not.toHaveBeenCalled();
+            for (const mutation of [writes, renames, removals, signals]) {
+              expect(mutation).not.toHaveBeenCalled();
+            }
+          });
+        } finally {
+          for (const mock of [
+            signals,
+            removals,
+            renames,
+            writes,
+            native,
+            probe,
+            inventory,
+            files,
+          ]) {
+            mock.mockRestore();
+          }
+        }
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each([
+    ["literal", "Environment=OPENCLAW_PROFILE=fenceproof", "custom-rescue.service"],
+    ["spaced", "Environment = OPENCLAW_PROFILE=fenceproof", "custom-rescue.service"],
+    [
+      "last assignment",
+      "Environment=OPENCLAW_PROFILE=stale\nEnvironment=OPENCLAW_PROFILE=fenceproof",
+      "custom-rescue.service",
+    ],
+    [
+      "spaced reset",
+      "Environment=OPENCLAW_PROFILE=stale\nEnvironment =\nEnvironment=OPENCLAW_SERVICE_MARKER=openclaw\nEnvironment=OPENCLAW_SERVICE_KIND=gateway",
+      "openclaw-gateway-fenceproof.service",
+    ],
+    [
+      "section and case",
+      "Environment=OPENCLAW_PROFILE=fenceproof\n[Unit]\nEnvironment=OPENCLAW_PROFILE=wrong-section\n[Service]\nenvironment=OPENCLAW_PROFILE=wrong-case",
+      "custom-rescue.service",
+    ],
+  ] as const)(
+    "refuses through modeled Linux real-FS sibling bindings with %s inline profile metadata",
+    async (_name, metadata, siblingUnit) =>
+      withMockedPlatform("linux", async () => {
+        await withTestDir({ prefix: "openclaw-live-dist-unit-fixture-" }, async (tmp) => {
+          const home = path.join(tmp, "home");
+          const checkout = path.join(tmp, "checkout");
+          const other = path.join(tmp, "other");
+          const systemdDir = path.join(home, ".config", "systemd", "user");
+          isolateSystemdInventory(home);
+          await writeOpenClawPackage(checkout);
+          await writeOpenClawPackage(other);
+          await fs.mkdir(systemdDir, { recursive: true });
+          const unitBody = [
+            "[Service]",
+            "ExecStart=/usr/bin/node /srv/worker/dist/index.js gateway",
+            "Environment=OPENCLAW_SERVICE_MARKER=openclaw",
+            "Environment=OPENCLAW_SERVICE_KIND=gateway",
+            "",
+          ].join("\n");
+          await fs.writeFile(path.join(systemdDir, "openclaw-gateway.service"), unitBody);
+          await fs.writeFile(path.join(systemdDir, siblingUnit), `${unitBody}${metadata}\n`);
+
+          const { discoverManagedGatewayBindings } =
+            await import("../../src/daemon/managed-gateway-bindings.ts");
+          const hostConnection = {
+            XDG_RUNTIME_DIR: path.join(tmp, "caller-runtime"),
+            DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(tmp, "caller-bus")}`,
+            USER: "fixture-caller",
+            LOGNAME: "fixture-caller",
+            SUDO_USER: "fixture-origin",
+          };
+          const callerEnv = { HOME: home, ...hostConnection, OPENCLAW_PROFILE: "selected" };
+          const bindings = await discoverManagedGatewayBindings(callerEnv);
+          expect(bindings.map((binding) => binding.profile).toSorted()).toEqual([
+            "default",
+            "fenceproof",
+          ]);
+          expect(bindings.every((binding) => binding.scope === "user")).toBe(true);
+          for (const binding of bindings) {
+            expect(binding.env).toMatchObject(hostConnection);
+            expect(binding.env.OPENCLAW_PROFILE).not.toBe("selected");
+          }
+
+          const result = await inspectFixtureGateway(checkout, {
+            env: callerEnv,
+            listBindings: async () => bindings,
+            readState: async (binding) => {
+              if (binding?.profile === "fenceproof") {
+                return baseState({
+                  running: true,
+                  command: {
+                    programArguments: [
+                      process.execPath,
+                      path.join(checkout, "dist", "index.js"),
+                      "gateway",
+                    ],
+                  },
+                  runtime: {
+                    status: "running",
+                    pid: 77,
+                    systemd: { unit: siblingUnit },
+                  },
+                });
+              }
+              return baseState({
+                running: true,
+                command: {
+                  programArguments: [
+                    process.execPath,
+                    path.join(other, "dist", "index.js"),
+                    "gateway",
+                  ],
+                },
+                runtime: {
+                  status: "running",
+                  pid: 76,
+                  systemd: { unit: "openclaw-gateway.service" },
+                },
+              });
+            },
+          });
+          expect(result.refuse).toBe(true);
+          if (result.refuse) {
+            expect(result.message).toContain("fenceproof");
+            expect(result.message).toContain("openclaw update");
+            expect(result.message).not.toContain("profiles default, fenceproof");
+          }
+        });
+      }),
+  );
+
   it.each([true, false])(
     "keeps distinct Startup file bindings when only the second holds dist (running=%s)",
     async (running) => {

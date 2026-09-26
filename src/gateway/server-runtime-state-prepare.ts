@@ -37,7 +37,9 @@ import type { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.j
 import { createGatewayTransportBridge } from "./server-transport-bridge.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
+import { getHealthVersion, incrementPresenceVersion } from "./server/health-state.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
+import { createPresencePublisher } from "./server/presence-events.js";
 import { createReadinessChecker, createStartupChecker } from "./server/readiness.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
@@ -188,6 +190,7 @@ export async function prepareGatewayKernelState(params: {
     workerPlacementModule
       ? await startupTrace.measure("worker-environments.placement-runtime", async () =>
           workerPlacementModule.createGatewayWorkerPlacementRuntime({
+            scheduler,
             placements: workerEnvironmentStartup.placementStore,
             getCommittedRuntimeConfig,
             environments: workerEnvironmentService,
@@ -392,7 +395,7 @@ export async function prepareGatewayKernelState(params: {
     loadGatewayTlsServerRuntime(cfgAtStart.gateway?.tls, log.child("tls")),
   );
   const serverStartedAt = Date.now();
-  const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor();
+  const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor({ scheduler });
   const startupState = {
     sidecarsReady: minimalTestGateway,
     pendingReason: "startup-sidecars",
@@ -463,12 +466,22 @@ export async function prepareGatewayKernelState(params: {
   log.info("starting HTTP server...");
   const connectionState = await startupTrace.measure("runtime.state", () =>
     createGatewayConnectionState({
+      scheduler,
       bootId,
       cfg: cfgAtStart,
       getRuntimeConfig,
     }),
   );
   const transportBridge = createGatewayTransportBridge();
+  const presencePublisher = createPresencePublisher({
+    broadcast: connectionState.broadcast,
+    incrementPresenceVersion,
+    getHealthVersion,
+    prepare: () => {
+      const projection = connectionState.getSessionRowProjection();
+      return projection?.needsMembershipPreparation() ? projection.prepareMembership() : undefined;
+    },
+  });
   const createHttpTransportOptions = () => ({
     cfg: cfgAtStart,
     getRuntimeConfig,
@@ -594,6 +607,8 @@ export async function prepareGatewayKernelState(params: {
     createHttpTransportOptions,
     transportBridge,
     connectionWork: connectionState.connectionWork,
+    publishPresence: presencePublisher.publish,
+    stopPresencePublications: presencePublisher.stop,
     getSessionRowProjection: connectionState.getSessionRowProjection,
     attachSessionRowProjection: connectionState.attachSessionRowProjection,
     clients,

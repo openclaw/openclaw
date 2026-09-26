@@ -194,11 +194,11 @@ The task probe allows Windows PowerShell to inherit or create a console because
 some PowerShell 5.1 hosts fail inspection when console creation is disabled.
 Invoking it from an app without a console can briefly display a console window.
 Without an explicit caller deadline, each probe allows up to 60 seconds for
-PowerShell's cold startup. The read-only `schtasks /Query` registration check
-also allows 60 seconds for both total runtime and time without output; explicit
-inspection budgets replace both limits. Direct lifecycle commands retain their
-existing limits. A timeout remains an inspection failure, not proof that a task
-is absent.
+PowerShell's cold startup. Registration inspection uses the same native probe
+and shares its budget with any Startup-folder checks. Explicit inspection
+budgets replace the default allowance. Direct lifecycle commands retain their
+existing limits. Access-denied and timeout results remain inspection failures,
+not proof that a task is absent.
 If inspection fails, Doctor and update refusals include the underlying probe
 detail; an empty response identifies the exit code and reports that PowerShell
 produced no output.

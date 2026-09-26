@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  identifiedClient,
+  initializeSessionReadContext,
+} from "./sessions-read-cache.test-support.js";
 import { sessionSuggestionHandlers } from "./sessions-suggestions.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -18,24 +22,13 @@ export function upsertDefaultSuggestionSession() {
 }
 
 export function client(profileId: string, displayName: string, admin = false): GatewayClient {
-  return {
-    connId: `conn-${profileId}`,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: "openclaw-control-ui",
-        version: "test",
-        platform: "test",
-        mode: "webchat",
-        instanceId: `instance-${profileId}`,
-      },
-      role: "operator",
-      scopes: admin ? ["operator.admin"] : ["operator.read", "operator.write"],
-    },
-    authenticatedUserId: `${profileId}@example.com`,
-    authenticatedUserProfile: { profileId, displayName, hasAvatar: false, updatedAt: 1 },
-  };
+  const result = identifiedClient(profileId);
+  result.connId = `conn-${profileId}`;
+  result.connect.client.instanceId = `instance-${profileId}`;
+  result.connect.scopes = admin ? ["operator.admin"] : ["operator.read", "operator.write"];
+  result.authenticatedUserId = `${profileId}@example.com`;
+  result.authenticatedUserProfile = { profileId, displayName, hasAvatar: false, updatedAt: 1 };
+  return result;
 }
 
 export function context(
@@ -61,6 +54,9 @@ export async function call(
   requestClient: GatewayClient | null,
   requestContext = context(),
 ) {
+  if (method === "session.typing") {
+    await initializeSessionReadContext(requestContext);
+  }
   const responses: Parameters<RespondFn>[] = [];
   await sessionSuggestionHandlers[method]?.({
     req: { type: "req", id: "request-1", method, params },

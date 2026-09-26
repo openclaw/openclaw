@@ -30,6 +30,7 @@ import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
+import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import {
   annotateInterSessionPromptText,
   type InputProvenance,
@@ -98,6 +99,7 @@ export async function startAgentRunExecution(params: {
   inputProvenance?: InputProvenance;
   runId: string;
   agentDedupeKeys: readonly string[];
+  swarmExecutionLane?: CommandLaneConfiguration;
   spawnedBy?: string;
   groupId?: string;
   groupChannel?: string;
@@ -487,6 +489,7 @@ export async function startAgentRunExecution(params: {
                 messageChannel: params.delivery.originMessageChannel,
                 runId: params.runId,
                 lane: params.request.lane,
+                swarmExecutionLane: params.swarmExecutionLane,
                 modelRun: params.request.modelRun === true,
                 promptMode: params.request.promptMode,
                 extraSystemPrompt: params.request.extraSystemPrompt,

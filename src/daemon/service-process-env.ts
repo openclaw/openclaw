@@ -1,4 +1,6 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { mergeProcessEnv, resolveDiagnosticProcessEnv } from "../infra/process-env.js";
+import type { GatewayServiceEnv } from "./service-types.js";
 
 const SERVICE_MANAGER_ENV_KEYS = new Set([
   "TERM",
@@ -32,4 +34,22 @@ export function resolveServiceManagerEnv(
     }
   }
   return native;
+}
+
+export function resolveTaskUser(env: GatewayServiceEnv): string | null {
+  const username = env.USERNAME || env.USER || env.LOGNAME;
+  if (!username) {
+    return null;
+  }
+  if (username.includes("\\")) {
+    return username;
+  }
+  const domain = env.USERDOMAIN;
+  if (normalizeLowercaseStringOrEmpty(domain) === "workgroup") {
+    return username;
+  }
+  if (domain) {
+    return `${domain}\\${username}`;
+  }
+  return username;
 }

@@ -765,9 +765,16 @@ def threads(pid):
         raise RuntimeError("thread bound")
     rows = []
     for entry in entries:
-        fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+        try:
+            fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+        except FileNotFoundError:
+            if entry.name == str(pid):
+                raise
+            continue
         rows.append({"pid": pid, "tid": int(entry.name), "state": fields[0],
                      "pgid": int(fields[2]), "sid": int(fields[3])})
+    if not any(row["tid"] == pid for row in rows):
+        raise RuntimeError("owned process leader missing from thread snapshot")
     return sorted(rows, key=lambda r: r["tid"])
 def session_rows(ps):
     raw = subprocess.run([ps, "-s", str(leader), "-L", "-o", "pid=,ppid=,pgid=,sid=,lwp=,stat="],

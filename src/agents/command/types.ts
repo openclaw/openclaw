@@ -12,6 +12,7 @@ import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
+import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type {
   UserTurnInput,
@@ -142,6 +143,7 @@ export type AgentCommandOpts = {
   /** Original operator restriction; host-only and never accepted from public ingress. */
   operatorAuthority?: import("../admitted-run-context.js").AdmittedRunOperatorAuthority;
   lane?: string;
+  swarmExecutionLane?: CommandLaneConfiguration;
   runId?: string;
   /** Immutable gateway lifecycle ownership captured when this run was admitted. */
   lifecycleGeneration?: string;

@@ -381,11 +381,14 @@ class ChatPositionRailDirective extends AsyncDirective {
 
   private syncVisibleMarks() {
     this.syncReaderViewport();
-    const visible = new Set(
-      Array.from(this.observedMessages.values())
-        .filter((message) => message.visible)
-        .map((message) => message.id),
-    );
+    const visible = new Set<string>();
+    const visibleMessageIds = new Set<string>();
+    for (const message of this.observedMessages.values()) {
+      if (message.visible) {
+        visible.add(message.id);
+        visibleMessageIds.add(message.messageId);
+      }
+    }
     for (const id of this.visibleIds) {
       if (!visible.has(id)) {
         this.markerElements.get(id)?.removeAttribute("data-visible");
@@ -403,11 +406,6 @@ class ChatPositionRailDirective extends AsyncDirective {
       this.followActive = true;
       this.scheduleLayout();
     }
-    const visibleMessageIds = new Set(
-      Array.from(this.observedMessages.values())
-        .filter((message) => message.visible)
-        .map((message) => message.messageId),
-    );
     const visibleOrder = this.positionMessageIds.filter((id) => visibleMessageIds.has(id));
     // A continuation, folded tool row, or virtualized jump still belongs to a transcript position.
     const activeMessageId = this.session?.activeMessageId(

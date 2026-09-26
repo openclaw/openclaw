@@ -32,7 +32,10 @@ vi.mock("node:child_process", async (importOriginal) => ({
   })),
 }));
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-beforeEach(() => mockSystemAccountHome());
+beforeEach(() => {
+  mockSystemAccountHome();
+  vi.spyOn(performance, "now").mockReturnValue(1_000);
+});
 afterEach(() => vi.restoreAllMocks());
 
 async function withServiceHome(run: (home: string) => Promise<void>): Promise<void> {

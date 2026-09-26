@@ -3,19 +3,29 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { isValidProfileName, normalizeProfileName } from "../cli/profile-utils.js";
+import { normalizeProfileName } from "../cli/profile-utils.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 import {
   decodeWindowsLauncherScript,
   encodeWindowsLauncherScript,
 } from "../infra/windows-launcher-encoding.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
-import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
+import {
+  parseCmdScriptCommandLine,
+  quoteCmdScriptArg,
+  stripTrailingCmdRedirections,
+} from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { normalizeWindowsTaskIdentity, resolveGatewayWindowsTaskName } from "./constants.js";
 import { resolveGatewayTaskScriptPath as resolveTaskScriptPath } from "./paths.js";
-import { probeScheduledTaskState, ScheduledTaskInspectionError } from "./schtasks-state-probe.js";
+import {
+  isScheduledTaskDefinitionAbsent,
+  probeScheduledTaskState,
+  ScheduledTaskInspectionError,
+} from "./schtasks-state-probe.js";
+import { resolveWindowsServiceCommandProfile } from "./service-env-merge.js";
 import { ServiceInspectionError } from "./service-inspection-error.js";
 import type {
   GatewayServiceCommandConfig,
@@ -40,107 +50,6 @@ export function resolveTaskName(env: GatewayServiceEnv): string {
 // Keeps the service gateway's stdin off the (possibly hidden) console so TTY
 // heuristics fail closed for permission prompts (#112173).
 const STDIN_NUL_REDIRECT = "< NUL";
-
-function stripTrailingCmdRedirections(commandLine: string): string | null {
-  const tokens: { start: number; end: number; redirect?: string }[] = [];
-  // Validate the entire command before removing anything. A compound command or
-  // uncertain cmd/argv quote boundary must never become exact process-ownership proof.
-  for (let index = 0; index < commandLine.length;) {
-    if (/[ \t]/.test(commandLine.charAt(index))) {
-      index++;
-      continue;
-    }
-    let start = index;
-    const operator = commandLine[index];
-    if (operator === ">" || operator === "<") {
-      const previous = tokens.at(-1);
-      if (previous && !previous.redirect && previous.end === index) {
-        const word = commandLine.slice(previous.start, previous.end);
-        if (/\d$/.test(word)) {
-          // A digit attached to an argument can instead be cmd's handle number.
-          // Do not guess which bytes of that argument belong to the process.
-          if (!/^\d$/.test(word)) {
-            return null;
-          }
-          start = previous.start;
-          tokens.pop();
-        }
-      }
-      index++;
-      let redirect: "<" | ">" | ">>" | ">&" = operator;
-      if (operator === ">" && commandLine[index] === ">") {
-        redirect = ">>";
-        index++;
-      }
-      if (redirect === ">" && commandLine[index] === "&") {
-        if (!/[0-9]/.test(commandLine[index + 1] ?? "")) {
-          return null;
-        }
-        redirect = ">&";
-        index += 2;
-      }
-      tokens.push({ start, end: index, redirect });
-      continue;
-    }
-    let quoted = false;
-    while (index < commandLine.length) {
-      const char = commandLine.charAt(index);
-      if (
-        char === "\r" ||
-        char === "\n" ||
-        (char === "\\" && commandLine[index + 1] === '"') ||
-        (char === "^" && (!quoted || commandLine[index + 1] === '"'))
-      ) {
-        return null;
-      }
-      if (char === '"') {
-        quoted = !quoted;
-      } else if (!quoted) {
-        if ("&|()".includes(char)) {
-          return null;
-        }
-        if (/[ \t<>]/.test(char)) {
-          break;
-        }
-      }
-      index++;
-    }
-    if (quoted) {
-      return null;
-    }
-    tokens.push({ start, end: index });
-  }
-
-  const firstRedirect = tokens.findIndex((token) => token.redirect !== undefined);
-  const firstToken = tokens[firstRedirect];
-  if (!firstToken) {
-    return commandLine;
-  }
-  for (let index = firstRedirect; index < tokens.length; index++) {
-    const token = tokens[index];
-    if (!token?.redirect) {
-      return null;
-    }
-    if (token.redirect === ">&") {
-      continue;
-    }
-    const target = tokens[++index];
-    if (!target || target.redirect) {
-      return null;
-    }
-    const value = commandLine.slice(target.start, target.end);
-    // Unquoted expansions can introduce filename delimiters and leave extra argv.
-    if (
-      (value.includes('"') && !/^"[^"]+"$/.test(value)) ||
-      (!value.includes('"') && /[,;=%!]/.test(value)) ||
-      (token.redirect === "<" && !/^(?:NUL|"NUL")$/i.test(value))
-    ) {
-      return null;
-    }
-  }
-  // Redirection alone has no executable for the service reader to inspect.
-  return commandLine.slice(0, firstToken.start);
-}
 
 export function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
   // Permission failures and hung schtasks calls can use the per-user Startup fallback.
@@ -201,24 +110,6 @@ export function quoteSchtasksArg(value: string): string {
     return value;
   }
   return `"${value.replace(/"/g, '\\"')}"`;
-}
-
-export function resolveTaskUser(env: GatewayServiceEnv): string | null {
-  const username = env.USERNAME || env.USER || env.LOGNAME;
-  if (!username) {
-    return null;
-  }
-  if (username.includes("\\")) {
-    return username;
-  }
-  const domain = env.USERDOMAIN;
-  if (normalizeLowercaseStringOrEmpty(domain) === "workgroup") {
-    return username;
-  }
-  if (domain) {
-    return `${domain}\\${username}`;
-  }
-  return username;
 }
 
 export function shouldUseHiddenWindowsTaskLauncher(env: GatewayServiceEnv): boolean {
@@ -328,7 +219,11 @@ async function readTaskLaunchers(
 
 export async function readScheduledTaskCommand(
   env: GatewayServiceEnv,
-  options?: GatewayServiceReadOptions & { onLauncherContent?: (content: string) => void },
+  options?: GatewayServiceReadOptions & {
+    onLauncherContent?: (content: string) => void;
+    /** Inventory reads a Task's profile without admitting it as the caller's selected service. */
+    profileScope?: "registered";
+  },
 ): Promise<GatewayServiceCommandConfig | null> {
   return readWindowsTaskCommand({ kind: "scheduled-task", env }, options);
 }
@@ -351,20 +246,53 @@ async function readWindowsTaskCommand(
   target:
     | { kind: "scheduled-task"; env: GatewayServiceEnv }
     | { kind: "startup-entry"; path: string },
-  options?: GatewayServiceReadOptions & { onLauncherContent?: (content: string) => void },
+  options?: GatewayServiceReadOptions & {
+    onLauncherContent?: (content: string) => void;
+    profileScope?: "registered";
+  },
 ): Promise<GatewayServiceCommandConfig | null> {
   const env = target.kind === "scheduled-task" ? target.env : {};
   const startupEntryPath = target.kind === "startup-entry" ? target.path : undefined;
   const requireEffective = options?.requireEffective || options?.requireLoaded;
+  const deadline =
+    options?.timeoutMs === undefined ? undefined : performance.now() + options.timeoutMs;
+  const remainingTimeout = () =>
+    deadline === undefined ? undefined : deadline - performance.now();
+  const assertInspectionDeadline = () => {
+    if (deadline !== undefined && performance.now() >= deadline) {
+      throw new ScheduledTaskInspectionError({
+        status: "unknown",
+        detail: "Scheduled Task inspection deadline expired.",
+        timeoutMs: 0,
+        diagnostic: { kind: "timeout", timeoutMs: 0 },
+      });
+    }
+  };
   try {
     const taskName = resolveTaskName(env);
     const registered =
       target.kind === "scheduled-task" && options?.requireLoaded
-        ? probeScheduledTaskState(taskName, options.timeoutMs)
+        ? probeScheduledTaskState(taskName, remainingTimeout())
         : undefined;
     if (registered?.status === "unknown") {
       throw new ScheduledTaskInspectionError(registered);
     }
+    assertInspectionDeadline();
+    const assertCommandProfile = (command: GatewayServiceCommandConfig) => {
+      if (!registered) {
+        return;
+      }
+      const profile = resolveWindowsServiceCommandProfile(command);
+      if (
+        profile.kind === "unavailable" ||
+        (options?.profileScope !== "registered" &&
+          profile.profile !==
+            (normalizeProfileName(resolveEnvironmentValue(env, "OPENCLAW_PROFILE", "win32")) ??
+              "default"))
+      ) {
+        throw new Error("Scheduled Task selector changed during inspection");
+      }
+    };
     const action = registered?.status === "found" ? registered.actions?.[0] : undefined;
     if (
       registered?.status === "found" &&
@@ -411,10 +339,11 @@ async function readWindowsTaskCommand(
       if (!registered) {
         return;
       }
-      const current = probeScheduledTaskState(taskName, options?.timeoutMs);
+      const current = probeScheduledTaskState(taskName, remainingTimeout());
       if (current.status === "unknown") {
         throw new ScheduledTaskInspectionError(current);
       }
+      assertInspectionDeadline();
       if (
         current.status !== registered.status ||
         (registered.status === "found" &&
@@ -439,10 +368,12 @@ async function readWindowsTaskCommand(
         throw new Error("Scheduled Task executable arguments cannot be inspected");
       }
       await assertRegistrationCurrent();
-      return {
+      const command = {
         programArguments: [action.path, ...splitArgsPreservingQuotes(argumentsText)],
         ...(action.workingDirectory ? { workingDirectory: action.workingDirectory } : {}),
       };
+      assertCommandProfile(command);
+      return command;
     }
     if (launchers?.length === 0) {
       await assertRegistrationCurrent();
@@ -516,16 +447,13 @@ async function readWindowsTaskCommand(
       throw new Error("Missing Scheduled Task command");
     }
     await assertRegistrationCurrent({ path: scriptPath, content });
+    assertCommandProfile({ programArguments, environment });
     if (
       (registered || startupEntryPath !== undefined) &&
       ((registered &&
         environment.OPENCLAW_WINDOWS_TASK_NAME &&
         normalizeWindowsTaskIdentity(environment.OPENCLAW_WINDOWS_TASK_NAME) !==
           normalizeWindowsTaskIdentity(taskName)) ||
-        (environment.OPENCLAW_PROFILE && !isValidProfileName(environment.OPENCLAW_PROFILE)) ||
-        (env.OPENCLAW_PROFILE &&
-          (normalizeProfileName(environment.OPENCLAW_PROFILE) ?? "default") !==
-            (normalizeProfileName(env.OPENCLAW_PROFILE) ?? "default")) ||
         (environment.OPENCLAW_TASK_SCRIPT &&
           path.win32.normalize(environment.OPENCLAW_TASK_SCRIPT).toLowerCase() !==
             path.win32.normalize(scriptPath).toLowerCase()))
@@ -560,17 +488,25 @@ async function readWindowsTaskCommand(
     if (!requireEffective) {
       return null;
     }
+    const remaining = deadline === undefined ? undefined : deadline - performance.now();
     if (
       target.kind === "scheduled-task" &&
       hasErrnoCode(error, "ENOENT") &&
-      (await isScheduledTaskDefinitionAbsent(env, options?.timeoutMs).catch(
-        (inspectionError: unknown) => {
-          if (inspectionError instanceof ServiceInspectionError) {
-            throw inspectionError;
-          }
-          return false;
-        },
-      ))
+      (remaining === undefined || remaining > 0) &&
+      (await isScheduledTaskDefinitionAbsent({
+        taskName: resolveTaskName(env),
+        resolveDefinitionPaths: () => [
+          resolveTaskScriptPath(env),
+          ...resolveStartupEntryPaths(env),
+        ],
+        deadline,
+      }).catch((inspectionError: unknown) => {
+        if (inspectionError instanceof ServiceInspectionError) {
+          throw inspectionError;
+        }
+        return false;
+      })) &&
+      (deadline === undefined || performance.now() < deadline)
     ) {
       return null;
     }
@@ -581,35 +517,6 @@ async function readWindowsTaskCommand(
       ? "Startup service command could not be inspected."
       : "Effective Scheduled Task service command could not be inspected.",
   );
-}
-
-async function isScheduledTaskDefinitionAbsent(
-  env: GatewayServiceEnv,
-  timeoutMs?: number,
-): Promise<boolean> {
-  // A missing script can still belong to a registered task or Startup login item.
-  const probe = probeScheduledTaskState(resolveTaskName(env), timeoutMs);
-  if (probe.status === "unknown") {
-    throw new ScheduledTaskInspectionError(probe);
-  }
-  if (probe.status !== "missing") {
-    return false;
-  }
-  for (const pathname of [resolveTaskScriptPath(env), ...resolveStartupEntryPaths(env)]) {
-    try {
-      await fs.lstat(pathname);
-      return false;
-    } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        return false;
-      }
-    }
-  }
-  const current = probeScheduledTaskState(resolveTaskName(env), timeoutMs);
-  if (current.status === "unknown") {
-    throw new ScheduledTaskInspectionError(current);
-  }
-  return current.status === "missing";
 }
 
 export function buildTaskScript({

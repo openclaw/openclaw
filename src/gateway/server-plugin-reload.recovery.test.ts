@@ -97,9 +97,6 @@ vi.mock("../plugins/plugin-lookup-table.js", async (importOriginal) => ({
 }));
 
 // These independent startup tasks do not participate in plugin replacement.
-vi.mock("./server-startup-context-cache-prewarm.js", () => ({
-  scheduleContextCachePrewarm: () => ({ stop() {} }),
-}));
 vi.mock("./server-startup-handler-prewarm.js", () => ({
   scheduleGatewayHandlerPrewarm: () => ({ stop() {} }),
 }));

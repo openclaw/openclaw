@@ -16,6 +16,7 @@ import {
 } from "./session-accessor.sqlite-entry-cache-state.js";
 import {
   createSessionEntryCreationOperation,
+  projectSessionSharingEntry,
   type SessionEntryCacheDatabase,
   type SessionEntryCreationOperation,
   type SessionEntryPlaceholder,
@@ -61,6 +62,7 @@ type PlaceholderReceipt = {
 
 export type SessionEntryReplacementPublication = {
   kind: "session-entry-replacements";
+  pendingArchiveRecovery: boolean;
   previous: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>;
   current: Map<string, SessionSharingEntry>;
   changedKeys: string[];
@@ -296,19 +298,6 @@ export function publishSessionEntryPlaceholderInsertion(
   emitPreparedSessionSharingChange(database, sessionKey, database.agentId, undefined, receipt);
 }
 
-export function projectSessionSharingEntry(entry: SessionEntry): SessionSharingEntry {
-  return {
-    sessionId: entry.sessionId,
-    updatedAt: entry.updatedAt,
-    lifecycleRevision: entry.lifecycleRevision,
-    archivedAt: entry.archivedAt,
-    visibility: entry.visibility,
-    incognito: entry.incognito,
-    createdActor: entry.createdActor ? { ...entry.createdActor } : undefined,
-    sandbox: entry.sandbox,
-  };
-}
-
 /** The existing entry writer advances retained facts before any commit observer can reenter. */
 export function retainPreparedSessionSharingFacts(params: {
   databaseIdentity: string;
@@ -403,7 +392,7 @@ function retainedSharingReads(database: SessionEntryCacheDatabase, sessionKey: s
     : undefined;
 }
 // Process-held stores cannot be reopened in a worker. Their existing writer publishes
-// only sharing fields, bounded by live entries and the native database's lifetime.
+// content-free metadata, bounded by live entries and the native database's lifetime.
 const incognitoSharingEntries = resolveGlobalSingleton(
   Symbol.for("openclaw.incognitoSessionSharingEntries"),
   () =>
@@ -667,6 +656,13 @@ export function retainSessionEntryWorkerPublication(params: {
         const sharingEntry = replacement?.current.get(sessionKey);
         const placeholder =
           initialization?.sessionKey === sessionKey ? initialization.placeholder : undefined;
+        const creationSource = creation?.source;
+        const ownsCreation =
+          creation?.active &&
+          creationSource?.kind === "file" &&
+          creationSource.databaseIdentity === params.databaseIdentity &&
+          creationSource.agentId === params.agentId &&
+          creation.sessionKey === sessionKey;
         for (const read of preparedSharingReads.get(`${identityKey}\0${sessionKey}`) ?? []) {
           publishRetainedSessionGeneration(
             read,
@@ -686,21 +682,14 @@ export function retainSessionEntryWorkerPublication(params: {
         }
         const change: SessionRowChange = {
           agentId: params.agentId,
-          storePath: params.storePath,
+          storePath: ownsCreation ? creationSource.path : params.storePath,
           sessionKey,
           factsInvalidated: true,
           ...(receipt && !unknown ? { scope: "session-entry" as const } : {}),
         };
         if (receipt) {
           // A COMMIT receipt can survive unknown settlement without retaining creation custody.
-          const ownedPlaceholder =
-            !unknown &&
-            placeholder &&
-            creation?.active &&
-            creation.source.kind === "file" &&
-            creation.source.databaseIdentity === params.databaseIdentity &&
-            creation.source.agentId === params.agentId &&
-            creation.sessionKey === sessionKey;
+          const ownedPlaceholder = !unknown && placeholder && ownsCreation;
           preparedSharingChanges.changes.set(
             change,
             ownedPlaceholder

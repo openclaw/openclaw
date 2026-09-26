@@ -40,6 +40,7 @@ import {
 } from "./process-reaper.js";
 import type { CompleteAcpRuntime } from "./runtime-proxy.js";
 import { AcpxRuntime } from "./runtime.js";
+import { adoptAcpxStateDirectory } from "./session-owner-migration.js";
 import {
   ACPX_GATEWAY_INSTANCE_KEY,
   ACPX_GATEWAY_INSTANCE_MAX_ENTRIES,
@@ -359,8 +360,25 @@ export function createAcpxRuntimeService(
         resolveAcpxPluginConfig({
           rawConfig: params.pluginConfig,
           workspaceDir: ctx.workspaceDir,
+          stateDir: ctx.stateDir,
         }),
       );
+      const adoption = await measureAcpxStartup(ctx, "state.adopt", () =>
+        adoptAcpxStateDirectory({
+          rawConfig: params.pluginConfig,
+          workspaceDir: ctx.workspaceDir,
+          stateDir: basePluginConfig.stateDir,
+          openKeyedStore,
+          assertCurrent: params.assertCurrent,
+        }),
+      );
+      basePluginConfig.stateDir = adoption.stateDir;
+      for (const change of adoption.changes) {
+        ctx.logger.info(change);
+      }
+      for (const warning of adoption.warnings) {
+        ctx.logger.warn(warning);
+      }
       const pluginConfig = await measureAcpxStartup(ctx, "config.prepare-codex-auth", () =>
         prepareAcpxCodexAuthConfig({
           pluginConfig: basePluginConfig,

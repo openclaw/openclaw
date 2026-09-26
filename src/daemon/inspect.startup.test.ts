@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as terminalNote from "../../packages/terminal-core/src/note.js";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { maybeScanExtraGatewayServices } from "../commands/doctor-gateway-services.js";
 import { createDoctorPrompter } from "../commands/doctor-prompter.js";
 import * as doctorServicePolicy from "../commands/doctor-service-repair-policy.js";
@@ -109,20 +108,33 @@ describe("Windows Startup service inventory", () => {
     },
   );
 
-  it("keeps same-label Startup files as separate managed bindings using their captured profile", async () => {
-    const cmd = await startup("cmd", "Recovery alias");
-    const vbs = await startup("9.4", "Recovery alias");
-    const bindings = await discoverManagedGatewayBindings(environment());
-    expect(bindings).toHaveLength(2);
-    expect(bindings.map((binding) => binding.windowsStartupEntry)).toEqual(
-      expect.arrayContaining([cmd.startupPath, vbs.startupPath]),
-    );
-    for (const binding of bindings) {
-      expect(binding.profile).toBe("rescue");
-      expect(binding.scope).toBe("user");
-      expect(binding.env.OPENCLAW_WINDOWS_TASK_NAME).toBeUndefined();
-    }
-  });
+  it.each([false, true])(
+    "keeps same-label Startup files bound to their captured profile (argv override=%s)",
+    async (override) => {
+      const cmd = await startup("cmd", "Recovery alias");
+      const vbs = await startup("9.4", "Recovery alias");
+      if (override) {
+        for (const { scriptPath } of [cmd, vbs]) {
+          const script = await fs.readFile(scriptPath, "utf8");
+          await fs.writeFile(
+            scriptPath,
+            script.replace(" gateway --port", " --profile actual gateway --port"),
+          );
+        }
+      }
+      const bindings = await discoverManagedGatewayBindings(environment());
+      expect(bindings).toHaveLength(2);
+      expect(bindings.map((binding) => binding.windowsStartupEntry)).toEqual(
+        expect.arrayContaining([cmd.startupPath, vbs.startupPath]),
+      );
+      for (const binding of bindings) {
+        expect(binding.profile).toBe(override ? "actual" : "rescue");
+        expect(binding.env.OPENCLAW_PROFILE).toBe(override ? "actual" : "rescue");
+        expect(binding.scope).toBe("user");
+        expect(binding.env.OPENCLAW_WINDOWS_TASK_NAME).toBeUndefined();
+      }
+    },
+  );
 
   it("keeps Startup runtime unknown when another verified Gateway owns the port", async () => {
     const { startupPath, scriptPath } = await startup("9.4");
@@ -189,104 +201,87 @@ describe("Windows Startup service inventory", () => {
     },
   );
 
-  it("bounds exact Startup native process inspection by the caller's deadline", async () => {
-    const { startupPath } = await startup("9.4");
-    let now = 0;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
-    vi.mocked(spawnSync).mockImplementation((_command, _args, options) => {
-      const timeout = options?.timeout ?? Infinity;
-      now += Math.min(timeout, 250);
-      return {
-        pid: 0,
-        output: [null, "", ""],
-        stdout: JSON.stringify([
-          {
-            ProcessId: 4242,
-            CommandLine:
-              '"C:/Node/node.exe" "C:/Applications/openclaw/dist/index.js" gateway --port 19789',
-          },
-        ]),
-        stderr: "",
-        status: timeout < 250 ? null : 0,
-        signal: timeout < 250 ? "SIGTERM" : null,
-        ...(timeout < 250
-          ? { error: Object.assign(new Error("Native probe timed out"), { code: "ETIMEDOUT" }) }
-          : {}),
-      };
-    });
-    const state = await readGatewayServiceState(resolveGatewayService(), {
-      env: environment(),
-      windowsStartupEntry: startupPath,
-      timeoutMs: 200,
-    });
-    expect(now).toBe(200);
-    expect(state.running).toBe(false);
-    expect(state.runtime).toMatchObject({
-      status: "unknown",
-      inspectionFailure: { timeoutMs: 200 },
-    });
-    expect(state.runtime?.pid).toBeUndefined();
-    expect(taskProbe.probeScheduledTaskState).not.toHaveBeenCalled();
-  });
-
-  it("aborts and joins exact Startup port inspection when the remaining budget expires", async () => {
-    const { startupPath } = await startup("9.4");
-    let now = 0;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
-    vi.spyOn(taskProcesses, "readWindowsProcessSnapshot").mockImplementation(() => {
-      now = 40;
-      return [{ ProcessId: 9999, CommandLine: "unrelated.exe" }];
-    });
-    vi.spyOn(probeHosts, "resolveGatewayServiceProbeHosts").mockResolvedValue(["127.0.0.1"]);
-    const entered = createDeferred();
-    let canceled = false;
-    let joined = false;
-    vi.spyOn(portsInspection, "inspectPortUsage").mockImplementation(async (_port, options) => {
-      entered.resolve();
-      try {
-        await new Promise<void>((resolve, reject) => {
-          const completed = setTimeout(() => {
-            now = 290;
-            resolve();
-          }, 250);
-          options?.signal?.addEventListener(
-            "abort",
-            () => {
-              clearTimeout(completed);
-              now = 200;
-              canceled = true;
-              reject(new Error("Port inspection aborted", { cause: options?.signal?.reason }));
+  it.each([200, 0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "bounds exact Startup native process inspection by the caller's deadline (%s)",
+    async (timeoutMs) => {
+      const { startupPath } = await startup("9.4");
+      let now = 10_000;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      vi.mocked(spawnSync).mockImplementation((_command, _args, options) => {
+        const timeout = options?.timeout ?? Infinity;
+        now += Math.min(timeout, 250);
+        return {
+          pid: 0,
+          output: [null, "", ""],
+          stdout: JSON.stringify([
+            {
+              ProcessId: 4242,
+              CommandLine:
+                '"C:/Node/node.exe" "C:/Applications/openclaw/dist/index.js" gateway --port 19789',
             },
-            { once: true },
-          );
-        });
-        return { port: 19789, status: "free", listeners: [], hints: [] };
-      } finally {
-        joined = true;
-      }
-    });
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      const pending = readGatewayServiceState(resolveGatewayService(), {
+          ]),
+          stderr: "",
+          status: timeout < 250 ? null : 0,
+          signal: timeout < 250 ? "SIGTERM" : null,
+          ...(timeout < 250
+            ? { error: Object.assign(new Error("Native probe timed out"), { code: "ETIMEDOUT" }) }
+            : {}),
+        };
+      });
+      const state = await readGatewayServiceState(resolveGatewayService(), {
+        env: environment(),
+        windowsStartupEntry: startupPath,
+        timeoutMs,
+      });
+      expect(now).toBe(10_000 + (timeoutMs === 200 ? 200 : 0));
+      expect(spawnSync).toHaveBeenCalledTimes(timeoutMs === 200 ? 1 : 0);
+      expect(state.running).toBe(false);
+      expect(state.runtime).toMatchObject({
+        status: "unknown",
+        inspectionFailure: { timeoutMs },
+      });
+      expect(state.runtime?.pid).toBeUndefined();
+      expect(taskProbe.probeScheduledTaskState).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "accepts exact Startup port absence only before its remaining deadline (late=%s)",
+    async (late) => {
+      const { startupPath } = await startup("9.4");
+      let now = 10_000;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const nativeBudgets: number[] = [];
+      vi.mocked(spawnSync).mockImplementation((_command, args, options) => {
+        nativeBudgets.push(options?.timeout ?? Infinity);
+        const portRead = args?.join(" ").includes("Get-NetTCPConnection");
+        now += portRead ? (late ? 170 : 50) : 40;
+        return {
+          pid: 1234,
+          output: [null, "", ""],
+          stdout: portRead
+            ? "0\r\n"
+            : JSON.stringify([{ ProcessId: 9999, CommandLine: "unrelated.exe" }]),
+          stderr: "",
+          status: 0,
+          signal: null,
+        };
+      });
+      const state = await readGatewayServiceState(resolveGatewayService(), {
         env: environment(),
         windowsStartupEntry: startupPath,
         timeoutMs: 200,
       });
-      await entered.promise;
-      await vi.advanceTimersByTimeAsync(250);
-      const state = await pending;
-      expect(canceled).toBe(true);
-      expect(joined).toBe(true);
+      expect(nativeBudgets).toEqual([200, 160]);
       expect(state.running).toBe(false);
-      expect(state.runtime).toMatchObject({
-        status: "unknown",
-        inspectionFailure: { timeoutMs: 200 },
-      });
+      expect(state.runtime?.status).toBe(late ? "unknown" : "stopped");
       expect(state.runtime?.pid).toBeUndefined();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+      if (late) {
+        expect(state.runtime?.inspectionFailure).toMatchObject({ timeoutMs: 200 });
+      }
+      expect(taskProbe.probeScheduledTaskState).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["launcher", "script"] as const)(
     "rejects a changed Startup %s after runtime inspection",

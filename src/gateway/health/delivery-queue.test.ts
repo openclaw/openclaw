@@ -45,7 +45,7 @@ describe("buildDeliveryQueueHealthSummary", () => {
   beforeEach(() => {
     countOutbound.mockReset().mockResolvedValue([]);
     countIngressFailed.mockReset().mockResolvedValue([]);
-    countIngressPressure.mockReset().mockReturnValue([]);
+    countIngressPressure.mockReset().mockResolvedValue([]);
   });
 
   it.each([
@@ -69,9 +69,7 @@ describe("buildDeliveryQueueHealthSummary", () => {
       name: "dead letters when the ingress pressure read fails",
       arrange: () => {
         countIngressFailed.mockResolvedValue(ingressFailed);
-        countIngressPressure.mockImplementation(() => {
-          throw new Error("ingress pressure read unavailable");
-        });
+        countIngressPressure.mockRejectedValue(new Error("ingress pressure read unavailable"));
       },
       expected: { failed: [], ingressFailed },
     },
@@ -79,7 +77,7 @@ describe("buildDeliveryQueueHealthSummary", () => {
       name: "ingress pressure when the dead-letter read fails",
       arrange: () => {
         countIngressFailed.mockRejectedValue(new Error("ingress failed read unavailable"));
-        countIngressPressure.mockReturnValue(ingressPressure);
+        countIngressPressure.mockResolvedValue(ingressPressure);
       },
       expected: { failed: [], ingressPressure },
     },

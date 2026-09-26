@@ -295,8 +295,8 @@ export class ComposedGatewayHarness {
     return gate;
   }
 
-  settleRun(runId: string): void {
-    this.placementLifecycle.settleRun(runId);
+  async settleRun(runId: string): Promise<void> {
+    await this.placementLifecycle.settleRun(runId);
     for (const [claimId, source] of this.turnSources) {
       if (source.operationalRunInstance.runId === runId) {
         source.dispose();
@@ -407,7 +407,7 @@ export class ComposedGatewayHarness {
     ) {
       throw new Error("fault placement has no active worker claim to reclaim");
     }
-    this.settleRun(staleClaim.runId);
+    await this.settleRun(staleClaim.runId);
     this.placementLifecycle.reclaimPlacement(placement, staleClaim.owner.ownerEpoch);
     const attached = this.store.get(ENVIRONMENT_ID);
     if (!attached || attached.state !== "attached") {

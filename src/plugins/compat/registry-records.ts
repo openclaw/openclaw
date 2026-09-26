@@ -99,7 +99,6 @@ export const PLUGIN_COMPAT_RECORDS = [
     tests: [
       "src/infra/sqlite-worker-task-runtime.test.ts",
       "src/infra/sqlite-worker-managed-task-link.test.ts",
-      "extensions/webhooks/index.test.ts",
     ],
     releaseNote:
       "Plugins can opt into worker-backed task and flow reads plus managed-flow writes and child linkage through tasks.async while synchronous methods remain available for external compatibility. Cold registry and configuration preparation remains synchronous.",

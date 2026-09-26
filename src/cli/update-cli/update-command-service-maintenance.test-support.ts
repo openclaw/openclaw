@@ -28,6 +28,84 @@ const mocks = vi.hoisted(() => ({
 
 export { mocks };
 
+type NativeOfflineCase = {
+  platform: NodeJS.Platform;
+  label: string;
+  runtime: "running" | "stopped" | "unknown";
+  loaded: boolean;
+  offline: boolean;
+  enabled?: boolean;
+  phase?: "inspect" | "prepare";
+  state?: number | string;
+};
+
+export const nativeOfflineCases: NativeOfflineCase[] = [
+  {
+    platform: "linux",
+    label: "terminal inactive",
+    runtime: "stopped",
+    loaded: true,
+    offline: true,
+  },
+  {
+    platform: "linux",
+    label: "restart transition",
+    runtime: "unknown",
+    loaded: true,
+    offline: false,
+  },
+  { platform: "linux", label: "running", runtime: "running", loaded: true, offline: false },
+  { platform: "darwin", label: "unloaded", runtime: "stopped", loaded: false, offline: true },
+  {
+    platform: "darwin",
+    label: "loaded enabled",
+    runtime: "stopped",
+    loaded: true,
+    enabled: true,
+    offline: false,
+  },
+  {
+    platform: "darwin",
+    label: "loaded disabled",
+    runtime: "stopped",
+    loaded: true,
+    enabled: false,
+    offline: false,
+  },
+  {
+    platform: "darwin",
+    label: "loaded disabled preparation",
+    runtime: "stopped",
+    loaded: true,
+    enabled: false,
+    offline: false,
+    phase: "prepare",
+  },
+  {
+    platform: "darwin",
+    label: "enabled unknown",
+    runtime: "stopped",
+    loaded: true,
+    offline: false,
+  },
+  ...[
+    { label: "disabled", state: 1, offline: true },
+    { label: "ready", state: 3, offline: true },
+    { label: "queued", state: 2, offline: false },
+    { label: "running", state: 4, offline: false },
+    { label: "unknown", state: 0, offline: false },
+    { label: "malformed", state: "3 trailing output", offline: false },
+  ].map<NativeOfflineCase>((task) => ({
+    platform: "win32",
+    runtime:
+      task.state === 1 || task.state === 3 ? "stopped" : task.state === 4 ? "running" : "unknown",
+    loaded: true,
+    label: task.label,
+    state: task.state,
+    offline: task.offline,
+  })),
+];
+
 vi.mock("./update-command-service-drain.js", () => ({
   withGatewayMaintenanceDrain: mocks.drain,
 }));

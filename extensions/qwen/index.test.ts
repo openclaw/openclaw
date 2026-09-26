@@ -1,8 +1,11 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
+import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 // Qwen tests cover index plugin behavior.
 import {
+  createQueuedWizardPrompter,
+  createRuntimeEnv,
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -50,6 +53,77 @@ describe("qwen provider plugin", () => {
     );
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    {
+      id: "standard-api-key-cn",
+      label: "Standard API Key for China (pay-as-you-go)",
+      prompt: "Enter Qwen Cloud API key (China standard endpoint)",
+      title: "Qwen Cloud Standard (China)",
+      endpoint: "dashscope.aliyuncs.com/compatible-mode/v1",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    },
+    {
+      id: "standard-api-key",
+      label: "Standard API Key for Global/Intl (pay-as-you-go)",
+      prompt: "Enter Qwen Cloud API key (Global/Intl standard endpoint)",
+      title: "Qwen Cloud Standard (Global/Intl)",
+      endpoint: "dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    },
+    {
+      id: "api-key-cn",
+      label: "Coding Plan API Key for China (subscription)",
+      prompt: "Enter Qwen Cloud Coding Plan API key (China)",
+      title: "Qwen Cloud Coding Plan (China)",
+      endpoint: "coding.dashscope.aliyuncs.com",
+      baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+    },
+    {
+      id: "api-key",
+      label: "Coding Plan API Key for Global/Intl (subscription)",
+      prompt: "Enter Qwen Cloud Coding Plan API key (Global/Intl)",
+      title: "Qwen Cloud Coding Plan (Global/Intl)",
+      endpoint: "coding-intl.dashscope.aliyuncs.com",
+      baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+    },
+  ])("preserves the $id setup flow and regional endpoint", async (fixture) => {
+    const provider = await registerQwenProvider();
+    const method = provider.auth.find((entry) => entry.id === fixture.id);
+    if (!method) {
+      throw new Error(`missing Qwen auth method ${fixture.id}`);
+    }
+    const { prompter, text, note } = createQueuedWizardPrompter({
+      textValues: ["qwen-fixture-key"],
+    });
+    const result = await method.run({
+      config: {},
+      env: {},
+      workspaceDir: "/tmp/qwen-auth-fixture",
+      prompter,
+      runtime: createRuntimeEnv(),
+      secretInputMode: "plaintext",
+      isRemote: false,
+      openUrl: vi.fn<ProviderAuthContext["openUrl"]>(),
+      oauth: {
+        createVpsAwareHandlers: vi.fn<ProviderAuthContext["oauth"]["createVpsAwareHandlers"]>(),
+      },
+    });
+    expect(method.label).toBe(fixture.label);
+    expect(text).toHaveBeenCalledWith(expect.objectContaining({ message: fixture.prompt }));
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(`Endpoint: ${fixture.endpoint}`),
+      fixture.title,
+    );
+    expect(result.configPatch?.models?.providers?.qwen?.baseUrl).toBe(fixture.baseUrl);
+    expect(result.defaultModel).toBe("qwen/qwen3.5-plus");
+    expect(result.profiles).toEqual([
+      {
+        profileId: "qwen:default",
+        credential: { type: "api_key", provider: "qwen", key: "qwen-fixture-key" },
+      },
+    ]);
+  });
 
   it("keeps Standard-only models out of Coding Plan normalized catalogs", async () => {
     const provider = await registerQwenProvider();

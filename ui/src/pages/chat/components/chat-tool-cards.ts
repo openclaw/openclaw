@@ -1,3 +1,4 @@
+import type { ProgressCardStep } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
@@ -39,12 +40,6 @@ import {
 } from "./chat-tool-content.ts";
 import { renderToolOutcomeSummary } from "./chat-tool-outcome-summary.ts";
 import { renderToolPreview } from "./widget-card.ts";
-
-export {
-  renderToolPreview,
-  WIDGET_PROMPT_EVENT,
-  type WidgetPromptEventDetail,
-} from "./widget-card.ts";
 
 export function renderBrowserTabPreviews(
   groups: readonly MessageGroup[],
@@ -137,31 +132,31 @@ const TOOL_ROW_VERB_KEYS: Partial<Record<ToolCallView["kind"], string>> = {
 };
 
 const MUTATION_VERB_KEYS = {
-  update: {
-    running: "chat.toolCards.verbs.editing",
-    succeeded: "chat.toolCards.verbs.edited",
-    fallback: "chat.toolCards.verbs.edit",
-  },
-  add: {
-    running: "chat.toolCards.verbs.creating",
-    succeeded: "chat.toolCards.verbs.created",
-    fallback: "chat.toolCards.verbs.create",
-  },
-  delete: {
-    running: "chat.toolCards.verbs.deleting",
-    succeeded: "chat.toolCards.verbs.deleted",
-    fallback: "chat.toolCards.verbs.delete",
-  },
-  mixed: {
-    running: "chat.toolCards.verbs.changing",
-    succeeded: "chat.toolCards.verbs.changed",
-    fallback: "chat.toolCards.verbs.change",
-  },
-  write: {
-    running: "chat.toolCards.verbs.writing",
-    succeeded: "chat.toolCards.verbs.wrote",
-    fallback: "chat.toolCards.verbs.write",
-  },
+  update: [
+    "chat.toolCards.verbs.editing",
+    "chat.toolCards.verbs.edited",
+    "chat.toolCards.verbs.edit",
+  ],
+  add: [
+    "chat.toolCards.verbs.creating",
+    "chat.toolCards.verbs.created",
+    "chat.toolCards.verbs.create",
+  ],
+  delete: [
+    "chat.toolCards.verbs.deleting",
+    "chat.toolCards.verbs.deleted",
+    "chat.toolCards.verbs.delete",
+  ],
+  mixed: [
+    "chat.toolCards.verbs.changing",
+    "chat.toolCards.verbs.changed",
+    "chat.toolCards.verbs.change",
+  ],
+  write: [
+    "chat.toolCards.verbs.writing",
+    "chat.toolCards.verbs.wrote",
+    "chat.toolCards.verbs.write",
+  ],
 } as const;
 
 function resolveMutationVerbKind(view: ToolCallView): keyof typeof MUTATION_VERB_KEYS | undefined {
@@ -178,14 +173,8 @@ function resolveMutationVerbKind(view: ToolCallView): keyof typeof MUTATION_VERB
 function resolveToolRowVerb(view: ToolCallView, outcome: ToolCardOutcome): string | undefined {
   const mutation = resolveMutationVerbKind(view);
   if (mutation) {
-    const keys = MUTATION_VERB_KEYS[mutation];
-    const key =
-      outcome === "running"
-        ? keys.running
-        : outcome === "succeeded"
-          ? keys.succeeded
-          : keys.fallback;
-    return t(key);
+    const [running, succeeded, fallback] = MUTATION_VERB_KEYS[mutation];
+    return t(outcome === "running" ? running : outcome === "succeeded" ? succeeded : fallback);
   }
   const key = TOOL_ROW_VERB_KEYS[view.kind];
   return key ? t(key) : undefined;
@@ -298,12 +287,7 @@ function renderToolRowContent(
   `;
 }
 
-type ProgressReceiptStep = {
-  step: string;
-  status: "pending" | "in_progress" | "completed";
-};
-
-function progressReceiptSteps(value: unknown): ProgressReceiptStep[] {
+function progressReceiptSteps(value: unknown): ProgressCardStep[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -395,15 +379,14 @@ function resolveCollapsedToolSummaryParts(params: {
   };
 }
 
-function resolveToolRowText(card: ToolCard, runActive?: boolean): string {
-  const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
+function resolveToolRowText(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome): string {
   if (view.title) {
     return view.title;
   }
   if (view.kind === "command" && view.command) {
     return `$ ${commandPreview(view.command)}`;
   }
-  const verb = resolveToolRowVerb(view, resolveToolCardOutcome(card, runActive));
+  const verb = resolveToolRowVerb(view, outcome);
   if (verb && view.target) {
     return `${verb} ${view.target}`;
   }
@@ -535,7 +518,7 @@ export function renderToolCard(
                   class="chat-tool-row__toggle"
                   type="button"
                   aria-expanded=${String(expanded)}
-                  aria-label=${resolveToolRowText(card, opts.runActive)}
+                  aria-label=${resolveToolRowText(card, view, outcome)}
                   @click=${() => opts.onToggleExpanded(card.id)}
                 ></button>
                 ${rowContent}

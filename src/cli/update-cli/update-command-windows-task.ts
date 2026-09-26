@@ -28,7 +28,7 @@ export type WindowsTaskAutoStartRecovery = {
     assertCurrent?: () => void,
   ) => Promise<void>;
   handoff: (guard: () => Promise<void>) => void;
-  complete: (restartSafe?: boolean) => Promise<void>;
+  complete: (restartSafe?: boolean, options?: { preserveState?: true }) => Promise<void>;
   interrupted: () => boolean;
 };
 
@@ -111,20 +111,30 @@ export function createWindowsTaskAutoStartRecovery(params: {
       });
     return restorePromise;
   };
-  const complete = (restartSafe = true) => {
+  const complete = (restartSafe = true, options?: { preserveState?: true }) => {
     if (settlement) {
       // The settling owner reports native failure once; retained cleanup handles
       // still drain it without replacing that already-reported outcome.
       return settlement.catch(() => undefined);
     }
-    const recordInterruption = interrupted && (restoreAllowed || restorationFailed);
+    const recordInterruption =
+      !options?.preserveState && interrupted && (restoreAllowed || restorationFailed);
     closed = true;
     restoreAllowed = false;
     settlement = (async () => {
       let failure: Error | undefined;
       try {
-        await restorePromise?.catch(() => undefined);
-        if (!restartSafe && restorationAttempted && (await suspensionPromise.catch(() => false))) {
+        if (options?.preserveState) {
+          await restorePromise;
+        } else {
+          await restorePromise?.catch(() => undefined);
+        }
+        if (
+          !options?.preserveState &&
+          !restartSafe &&
+          restorationAttempted &&
+          (await suspensionPromise.catch(() => false))
+        ) {
           await suspendScheduledTaskAutoStartForUpdate(params.serviceEnv, {
             assertCurrent: params.assertCurrent,
             beforeMutation: async () => {

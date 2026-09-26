@@ -2,6 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
   findServiceOwnershipRefusal,
   ServiceInspectionError,
@@ -69,6 +70,9 @@ export function createServiceRuntimeInspectionFailure(
 ): GatewayServiceRuntime & {
   inspectionFailure: NonNullable<GatewayServiceRuntime["inspectionFailure"]>;
 } {
+  if (hasCommandProcessCleanupError(error)) {
+    throw error;
+  }
   const refusal = findServiceOwnershipRefusal(error);
   if (refusal) {
     throw refusal;

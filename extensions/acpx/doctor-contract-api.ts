@@ -225,6 +225,10 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     label: "ACP session owners",
     doctorOnly: true,
     phase: "after-session-repair",
+    async collectBackupResources(input) {
+      return (await import("./src/session-owner-migration.js")).acpxSessionOwnerMigration
+        .collectBackupResources!(input);
+    },
     async detectLegacyState(input) {
       return (
         await import("./src/session-owner-migration.js")

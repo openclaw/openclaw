@@ -44,7 +44,7 @@ it("keeps archived rows cold at hydration and across broad refreshes", async () 
     const archived = 8;
     const placements = createWorkerSessionPlacementStore();
     for (let index = 0; index < live + archived; index++) {
-      placements.startDispatch({
+      await placements.startDispatch({
         agentId: "main",
         sessionKey: `agent:main:row-${index}`,
         sessionId: `row-${index}`,

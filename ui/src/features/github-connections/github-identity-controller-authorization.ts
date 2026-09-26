@@ -64,7 +64,6 @@ export class GitHubDeviceAuthorizationController {
     const operation: AuthorizationOperation = {
       owner,
       controller: new AbortController(),
-      requestId: start.requestId,
       start,
       displayExpiresAtMs: Date.now() + start.expiresInMs,
     };
@@ -103,7 +102,6 @@ export class GitHubDeviceAuthorizationController {
         target.kind === "personal" ? {} : { scope: target.scope, agentId: target.agentId },
         { signal: operation.controller.signal },
       );
-      operation.requestId = result.requestId;
       operation.start = result;
       operation.displayExpiresAtMs = Date.now() + result.expiresInMs;
       if (!this.isCurrent(operation)) {
@@ -139,20 +137,20 @@ export class GitHubDeviceAuthorizationController {
       this.state = { phase: "cancelling" };
       this.host.requestUpdate();
     }
-    if (operation.requestId) {
+    if (operation.start?.requestId) {
       await this.finishCancellation(operation);
     }
   }
 
   private async finishCancellation(operation: AuthorizationOperation) {
-    if (!operation.requestId || operation.cancelInFlight || !this.isCurrent(operation)) {
+    if (!operation.start?.requestId || operation.cancelInFlight || !this.isCurrent(operation)) {
       return;
     }
     operation.cancelInFlight = true;
     try {
       const result = await operation.owner.client.request<{ cancelled: boolean }>(
         githubAuthorizationMethod(operation.owner, "cancel"),
-        { requestId: operation.requestId },
+        { requestId: operation.start.requestId },
       );
       if (!this.isCurrent(operation)) {
         return;
@@ -203,7 +201,7 @@ export class GitHubDeviceAuthorizationController {
     const request = () =>
       operation.owner.client.request<AuthorizationPollResult>(
         githubAuthorizationMethod(operation.owner, "poll"),
-        { requestId: operation.requestId },
+        { requestId: operation.start?.requestId },
         { signal: operation.controller.signal },
       );
     if (operation.owner.target.kind === "personal") {
@@ -235,7 +233,7 @@ export class GitHubDeviceAuthorizationController {
   }
 
   private async poll(operation: AuthorizationOperation) {
-    if (!operation.requestId || !operation.start || !this.isCurrent(operation)) {
+    if (!operation.start?.requestId || !this.isCurrent(operation)) {
       return;
     }
     this.present(

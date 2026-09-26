@@ -151,7 +151,10 @@ describe("findExtraGatewayServices (win32)", () => {
         expect.objectContaining({ label: "\\Custom Service", marker: "openclaw", legacy: false }),
       ]);
       const managed = await listManagedOpenClawGatewayServices(nativeEnv);
-      expect(managed).toEqual({ services: kind === "gateway" ? result.services : [], errors: [] });
+      expect(managed).toEqual({
+        services: kind === "gateway" ? [{ ...result.services[0], windowsProfile: "default" }] : [],
+        errors: [],
+      });
     },
   );
 

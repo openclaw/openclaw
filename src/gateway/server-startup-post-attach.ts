@@ -36,7 +36,6 @@ import type { GatewayClient, GatewayContextResolver } from "./server-methods/sha
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
-import { scheduleContextCachePrewarm } from "./server-startup-context-cache-prewarm.js";
 import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
 import {
@@ -999,7 +998,6 @@ export async function startGatewayPostAttachRuntime(
           // work can create sessions that the recovery scan must leave alone.
           params.unlockStartupMethods();
           const newGatewayLifetimeSidecars = [
-            scheduleContextCachePrewarm(params),
             scheduleGatewayHandlerPrewarm(params),
             ...(mainSessionRecoverySidecar ? [mainSessionRecoverySidecar] : []),
           ];

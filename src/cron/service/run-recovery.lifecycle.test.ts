@@ -10,6 +10,7 @@ import {
   isCronJobActive,
   markCronJobActive,
 } from "../active-jobs.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
@@ -21,7 +22,6 @@ import {
 } from "../store/run-receipt-store.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { locked } from "./locked.js";
 import { start, stop } from "./ops-lifecycle.js";
@@ -206,7 +206,7 @@ describe.each([
         if (mode === "manual-removed") {
           expect(finished).toHaveLength(1);
           expect(
-            readCronTaskRunHistoryPage({ storeKey: cronStoreKey(storePath), jobId: job.id })
+            readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
               .entries,
           ).toHaveLength(1);
           expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();

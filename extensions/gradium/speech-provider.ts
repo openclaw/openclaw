@@ -1,4 +1,3 @@
-// Gradium provider module implements model/runtime integration.
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -124,11 +123,10 @@ export function buildGradiumSpeechProvider(): SpeechProviderPlugin {
         voiceCompatible: wantsVoiceNote,
       };
     },
-    synthesizeTelephony: async (req) => {
-      const outputFormat = "ulaw_8000";
-      const sampleRate = 8_000;
-      const audioBuffer = await synthesizeGradium(req, outputFormat);
-      return { audioBuffer, outputFormat, sampleRate };
-    },
+    synthesizeTelephony: async (req) => ({
+      audioBuffer: await synthesizeGradium(req, "ulaw_8000"),
+      outputFormat: "ulaw_8000",
+      sampleRate: 8_000,
+    }),
   };
 }

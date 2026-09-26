@@ -698,6 +698,7 @@ describe("createApplicationGateway connection phase", () => {
   it("discards the gapped frame after recovery synchronously replaces its client", () => {
     const { gateway, current } = createStore();
     const listener = vi.fn();
+    gateway.subscribeEventLog(() => {});
     gateway.subscribeEvents(listener);
     gateway.start();
     const stale = current();
@@ -748,6 +749,7 @@ describe("createApplicationGateway connection phase", () => {
 
   it("fans active events out once without binding subscribers to the transport", () => {
     const { gateway, current } = createStore();
+    gateway.subscribeEventLog(() => {});
     const first = vi.fn();
     const second = vi.fn();
     gateway.subscribeEvents(first);
@@ -776,6 +778,7 @@ describe("createApplicationGateway connection phase", () => {
   it("keeps event subscriptions across reconnects and a stopped gateway", () => {
     const { gateway, current } = createStore();
     const listener = vi.fn();
+    gateway.subscribeEventLog(() => {});
     gateway.subscribeEvents(listener);
     gateway.start();
     const first = current();
@@ -833,6 +836,7 @@ describe("createApplicationGateway connection phase", () => {
 
   it("isolates a failing subscriber from later event subscribers", () => {
     const { gateway, current } = createStore();
+    gateway.subscribeEventLog(() => {});
     const failure = new Error("subscriber failed");
     const reportError = vi.spyOn(console, "error").mockImplementation(() => {});
     const failing = vi.fn(() => {
@@ -904,6 +908,7 @@ describe("createApplicationGateway connection phase", () => {
   it("ignores queued events after the gateway is stopped", () => {
     const { gateway, current } = createStore();
     const listener = vi.fn();
+    gateway.subscribeEventLog(() => {});
     gateway.subscribeEvents(listener);
     gateway.start();
     const stale = current();
@@ -917,6 +922,7 @@ describe("createApplicationGateway connection phase", () => {
 
   it("ignores presence and event-log callbacks from superseded clients", () => {
     const { gateway, current } = createStore();
+    gateway.subscribeEventLog(() => {});
     gateway.start();
     current().opts.onHello?.(HELLO);
     const stale = current();

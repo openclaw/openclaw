@@ -2671,10 +2671,9 @@ describe("buildOpenAIProvider", () => {
       },
     });
 
-    expect(result.payload.tools).toEqual([
-      { type: "function", name: "read" },
-      { type: "web_search" },
-    ]);
+    expect(JSON.stringify(result.payload.tools)).toBe(
+      '[{"type":"function","name":"read"},{"type":"web_search"}]',
+    );
   });
 
   it("authorizes native OpenAI web search through the code mode wrapper chain", async () => {

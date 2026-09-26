@@ -13,7 +13,6 @@ import {
   resolveTaskName,
   resolveTaskScriptPath,
   resolveTaskLauncherScriptPath,
-  resolveTaskUser,
 } from "./schtasks-layout.js";
 import { buildScheduledTaskXml } from "./schtasks-xml.js";
 import {
@@ -24,6 +23,7 @@ import type {
   GatewayServiceExpectedCommand,
   ServiceDefinitionDrift,
 } from "./service-audit-types.js";
+import { resolveTaskUser } from "./service-process-env.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 
 function elementKey(node: ReturnType<DOMParser["parseFromString"]>["documentElement"]): string {

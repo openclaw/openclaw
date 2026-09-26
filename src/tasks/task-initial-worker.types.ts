@@ -16,6 +16,8 @@ import type {
   TaskNotificationDeliveryUpdate,
 } from "./task-notification.operation.js";
 import type { TaskCreateInput, TaskCreateResult } from "./task-registry-create.kernel.js";
+import type { TaskRetentionWriteResult } from "./task-registry-retention-receipt.js";
+import type { TaskRetentionInput } from "./task-registry-retention.operation.js";
 import type {
   TaskRecordTransitionReceipt,
   TaskWorkerTransitionInput,
@@ -27,6 +29,7 @@ import type {
 } from "./task-registry.types.js";
 
 export type TaskInitialWorkerOperations = {
+  "tasks.applyRetention": { input: TaskRetentionInput; output: TaskRetentionWriteResult };
   "tasks.transitionRunRow": {
     input: Extract<TaskWorkerTransitionInput, { kind: "state" | "delivery" }>;
     output: TaskRecordTransitionReceipt | null;

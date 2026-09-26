@@ -25,6 +25,7 @@ import {
   updateStateSchemaVersionsMatch,
   type UpdateStateSchemaVersion,
 } from "../../infra/update-candidate-state.js";
+import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
@@ -38,7 +39,9 @@ import {
   readUpdateConfigSnapshot,
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
+import { restoreFailedUpdateDatabases } from "./update-command-database-backup.js";
 import { readPackageUpdateIdentity } from "./update-command-package.js";
+import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import type {
   UpdateServiceDefinitionRecovery,
   OriginalManagedServiceRuntime,
@@ -63,6 +66,7 @@ export async function rollbackFailedUpdate(params: {
   result: UpdateRunResult;
   previousRoot: string;
   packageTransaction?: PackageUpdateTransaction;
+  databaseBackup?: UpdateDatabaseBackup;
   rollbackBlockedReason?: "state-migrated-no-rollback" | "rollback-state-unverified";
   schemaVersions?: UpdateStateSchemaVersion[];
   candidateSchemaVersions?: OpenClawSchemaVersions;
@@ -70,6 +74,7 @@ export async function rollbackFailedUpdate(params: {
   previousVerified?: boolean;
   originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   allowGatewayRestart?: boolean;
+  onGatewayStartAttempted?: () => void;
   configSnapshot: ConfigFileSnapshot;
   activationConfig?: UpdateConfigSnapshot;
   opts: UpdateCommandOptions;
@@ -201,6 +206,9 @@ export async function rollbackFailedUpdate(params: {
       const kind = entry.path === sharedPath ? "state" : "agent";
       const supported = params.previousSchemaVersions?.[kind];
       if (supported === undefined || version > supported) {
+        if (params.databaseBackup && run && packageTransaction) {
+          return false;
+        }
         throw new Error(
           `Automatic rollback refused: newly created ${kind} database ${entry.path} uses schema ${version}; retained previous package support is ${supported ?? "unknown"}. Keep the update installed.`,
         );
@@ -299,7 +307,29 @@ export async function rollbackFailedUpdate(params: {
       return failed("rollback-state-unverified");
     }
     if (!(await stateUnchanged())) {
-      return failed("state-migrated-no-rollback");
+      // Compatible databases stay in place: update ledger writes alone must
+      // not force snapshot restoration or prevent package-only rollback.
+      if (!params.databaseBackup || !run || !packageTransaction) {
+        return failed("state-migrated-no-rollback");
+      }
+      let restored: boolean;
+      try {
+        restored = await restoreFailedUpdateDatabases({
+          backup: params.databaseBackup,
+          result,
+          runId: run.runId,
+          env,
+          assertCurrent,
+        });
+      } catch (cause) {
+        // A partial restore must not reopen the ledger through ordinary failure reporting.
+        throw new UpdateCommandPendingRecoveryFailure(result, formatErrorMessage(cause), {
+          cause,
+        });
+      }
+      if (!restored || !(await stateUnchanged())) {
+        return failed("state-migrated-no-rollback");
+      }
     }
     await packageTransaction?.assertRollbackSafe?.();
     assertCurrent();
@@ -481,6 +511,9 @@ export async function rollbackFailedUpdate(params: {
         }
       : stopped;
     failureReason = "service-revalidation-failed";
+    if (stopped.windowsTaskAutoStartRecovery) {
+      params.onGatewayStartAttempted?.();
+    }
     await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
       stopped,
       true,
@@ -533,6 +566,7 @@ export async function rollbackFailedUpdate(params: {
     let verificationFailure: string | undefined;
     let verifiedAtMs: number | undefined;
     const restartOutcome = await maybeRestartService({
+      onGatewayStartAttempted: params.onGatewayStartAttempted,
       shouldRestart: true,
       result,
       opts,
@@ -588,7 +622,10 @@ export async function rollbackFailedUpdate(params: {
       ...(verifiedAtMs === undefined ? {} : { verifiedAtMs }),
     };
   } catch (error) {
-    if (hasCommandProcessCleanupError(error)) {
+    if (
+      error instanceof UpdateCommandPendingRecoveryFailure ||
+      hasCommandProcessCleanupError(error)
+    ) {
       throw error;
     }
     const detail = formatErrorMessage(error);

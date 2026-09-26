@@ -1,4 +1,3 @@
-// Gradium plugin module implements tts behavior.
 import { GRADIUM_API_HOSTNAME, normalizeGradiumBaseUrl } from "./shared.js";
 
 const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;

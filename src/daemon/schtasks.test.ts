@@ -527,6 +527,7 @@ describe("readScheduledTaskCommand", () => {
     "action changed",
     "saved name changed",
     "saved profile changed",
+    "saved profile changed from implicit default",
     "unrecognized vbs",
   ] as const)("rejects strict registered command inspection when %s", async (kind) => {
     const scriptPath = "C:\\Services\\Backup\\gateway.cmd";
@@ -573,7 +574,7 @@ describe("readScheduledTaskCommand", () => {
             : [
                 "@echo off",
                 `set "OPENCLAW_WINDOWS_TASK_NAME=${kind === "saved name changed" ? "Other Task" : "OpenClaw Gateway Backup"}"`,
-                `set "OPENCLAW_PROFILE=${kind === "saved profile changed" ? "other" : "default"}"`,
+                `set "OPENCLAW_PROFILE=${kind === "saved profile changed" || kind === "saved profile changed from implicit default" ? "other" : "default"}"`,
                 "node gateway.js",
               ].join("\r\n"),
         ),
@@ -583,7 +584,8 @@ describe("readScheduledTaskCommand", () => {
         readScheduledTaskCommand(
           {
             USERPROFILE: "C:\\Users\\test",
-            OPENCLAW_PROFILE: "default",
+            OPENCLAW_PROFILE:
+              kind === "saved profile changed from implicit default" ? undefined : "default",
             OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway Backup",
           },
           { requireEffective: true, requireLoaded: true },

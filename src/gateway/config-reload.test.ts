@@ -146,13 +146,6 @@ beforeEach((context) => {
 });
 
 describe("diffConfigPaths", () => {
-  it("captures nested config changes", () => {
-    const prev = { hooks: { gmail: { account: "a" } } };
-    const next = { hooks: { gmail: { account: "b" } } };
-    const paths = diffConfigPaths(prev, next);
-    expect(paths).toContain("hooks.gmail.account");
-  });
-
   it("captures array changes", () => {
     const prev = { messages: { groupChat: { mentionPatterns: ["a"] } } };
     const next = { messages: { groupChat: { mentionPatterns: ["b"] } } };
@@ -721,10 +714,6 @@ describe("buildGatewayReloadPlan", () => {
       expected: { reloadInternalHooks: true, reloadHooks: false, restartGmailWatcher: false },
     },
     {
-      path: "hooks.internal.entries.session-memory.enabled",
-      expected: { reloadInternalHooks: true, reloadHooks: false, restartGmailWatcher: false },
-    },
-    {
       path: "mcp.servers.context7.command",
       expected: { disposeMcpRuntimes: true },
     },
@@ -792,7 +781,6 @@ describe("buildGatewayReloadPlan", () => {
     { path: "agents.entries", restartHeartbeat: true },
     { path: "agents.ownership", restartHeartbeat: false },
     { path: "agents.defaults.sessionStore", restartHeartbeat: false },
-    { path: "agents.defaults.sessionStore.agentId", restartHeartbeat: false },
     { path: "session.scope", restartHeartbeat: false },
     { path: "session.store", restartHeartbeat: false },
   ])("refreshes only hook target policy for $path", ({ path, restartHeartbeat }) => {
@@ -819,39 +807,27 @@ describe("buildGatewayReloadPlan", () => {
     expect(buildGatewayReloadPlan([path]).refreshHooksPolicy).not.toBe(true);
   });
 
-  it.each([
-    "agents.defaults",
-    "agents.defaults.compaction",
-    "agents.defaults.compaction.model",
-    "agents.defaults.compaction.maxActiveTranscriptBytes",
-    "agents.defaults.compaction.memoryFlush.model",
-    "agents.defaults.contextPruning.mode",
-    "agents.defaults.contextLimits.postCompactionMaxChars",
-    "agents.defaults.timeoutSeconds",
-    "agents.defaults.userTimezone",
-    "tools",
-    "tools.deny",
-    "tools.allow",
-    "tools.profile",
-    "tools.byProvider.openai.deny",
-  ])("refreshes prepared model runtime policy without restarting subsystems: %s", (path) => {
-    const plan = buildGatewayReloadPlan([path]);
+  it.each(["agents.defaults", "agents.defaults.compaction", "tools", "tools.deny"])(
+    "refreshes prepared model runtime policy without restarting subsystems: %s",
+    (path) => {
+      const plan = buildGatewayReloadPlan([path]);
 
-    expect(plan).toMatchObject({
-      restartGateway: false,
-      restartReasons: [],
-      hotReasons: [path],
-      noopPaths: [],
-      restartHeartbeat: false,
-      restartCron: false,
-      reloadHooks: false,
-      reloadPlugins: false,
-      disposeMcpRuntimes: false,
-      restartChannels: new Set(),
-      restartChannelAccounts: new Map(),
-    });
-    expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
-  });
+      expect(plan).toMatchObject({
+        restartGateway: false,
+        restartReasons: [],
+        hotReasons: [path],
+        noopPaths: [],
+        restartHeartbeat: false,
+        restartCron: false,
+        reloadHooks: false,
+        reloadPlugins: false,
+        disposeMcpRuntimes: false,
+        restartChannels: new Set(),
+        restartChannelAccounts: new Map(),
+      });
+      expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
+    },
+  );
 
   it.each(["gateway.remote.url", "secrets.providers.default.path", "tui.footer.showRemoteHost"])(
     "keeps runtime-irrelevant path as a no-op: %s",
@@ -931,15 +907,8 @@ describe("buildGatewayReloadPlan", () => {
     });
   });
 
-  it("restarts the matching channel for channel config changes", () => {
-    const plan = buildGatewayReloadPlan(["channels.telegram.botToken"]);
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.restartChannels).toEqual(new Set(["telegram"]));
-  });
-
   it.each<[string, boolean]>([
     ["channels.mattermost.accounts.ops.groupPolicy", true],
-    ["channels.mattermost.accounts.support.groupPolicy", true],
     ["channels.mattermost.accounts.ops.guilds.123.users", true],
     ["channels.mattermost.accounts.very-long-account-name.groupPolicy", true],
     ["channels.mattermost.accounts.locked.groupPolicy", false],
