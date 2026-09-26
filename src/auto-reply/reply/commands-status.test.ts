@@ -1351,33 +1351,36 @@ describe("buildStatusReply subagent summary", () => {
       ],
     });
 
-    await withTempHome(async () => {
-      const text = await buildStatusText({
-        cfg: {
-          ...baseCfg,
-          agents: {
-            defaults: {
-              agentRuntime: { id: "codex" },
+    await withTempHome(
+      async () => {
+        const text = await buildStatusText({
+          cfg: {
+            ...baseCfg,
+            agents: {
+              defaults: {
+                agentRuntime: { id: "codex" },
+              },
             },
           },
-        },
-        sessionEntry: {
-          sessionId: "sess-status-codex-no-profile",
-          updatedAt: 0,
-        },
-        ...createStatusSessionParams(),
-        provider: "openai",
-        model: "gpt-5.5",
-        contextTokens: 32_000,
-        ...createStatusDisplayParams(),
-      });
+          sessionEntry: {
+            sessionId: "sess-status-codex-no-profile",
+            updatedAt: 0,
+          },
+          ...createStatusSessionParams(),
+          provider: "openai",
+          model: "gpt-5.5",
+          contextTokens: 32_000,
+          ...createStatusDisplayParams(),
+        });
 
-      expect(normalizeTestText(text)).toContain("Usage: 5h 84% left");
-      const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
-        ([params]) => params?.providers?.includes("openai"),
-      );
-      expect(providerUsageCall?.[0]?.auth).toEqual(expectedCodexRuntimeUsageAuth);
-    });
+        expect(normalizeTestText(text)).toContain("Usage: 5h 84% left");
+        const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
+          ([params]) => params?.providers?.includes("openai"),
+        );
+        expect(providerUsageCall?.[0]?.auth).toEqual(expectedCodexRuntimeUsageAuth);
+      },
+      { env: { OPENAI_API_KEY: undefined, OPENAI_OAUTH_TOKEN: undefined } },
+    );
   });
 
   it("does not forward stale non-OpenAI profile overrides to Codex usage", async () => {

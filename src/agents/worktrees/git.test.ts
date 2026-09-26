@@ -507,6 +507,7 @@ describe("Git checkout discovery", () => {
     expect(worktrees).toContainEqual({
       path: await fs.realpath(linked),
       lockedReason: "held by test",
+      branch: "refs/heads/linked",
     });
   });
 });
