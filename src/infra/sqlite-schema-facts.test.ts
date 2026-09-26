@@ -56,6 +56,7 @@ describe("admitted SQLite schema facts", () => {
         ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END, name`,
         "UPDATE original SET id = CASE WHEN id IS NULL THEN 0 ELSE id END",
         "/* BEGIN; END */ SELECT '; ROLLBACK; END' AS [END], 1 AS `COMMIT`, 2 AS \"RELEASE\" -- COMMIT",
+        `${"/* ** END; /* nested opener */ ".repeat(100)} SELECT 1`,
       ];
       const observation = observeSqliteReadSql(StatementSync.prototype);
       try {

@@ -105,7 +105,7 @@ function changesSchema(sql: string): boolean {
 }
 
 const transactionControlPrefix =
-  /^(?:\s|;|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*(BEGIN|SAVEPOINT|COMMIT|END|RELEASE|ROLLBACK)\b/i;
+  /^(?:\s|;|--[^\n]*(?:\n|$)|\/\*(?:[^*]|\*(?!\/))*\*\/)*(BEGIN|SAVEPOINT|COMMIT|END|RELEASE|ROLLBACK)\b/i;
 
 function batchTransactionControl(sql: string): string | undefined {
   let control: string | undefined;
