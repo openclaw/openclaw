@@ -16,6 +16,7 @@ import {
   hasVerifiedControlUiLoopbackAlias,
   issueControlUiBrowserHandoff,
   resolveControlUiHandoffTarget,
+  retargetControlUiHandoffUrl,
   waitForControlUiDocument,
   type ControlUiHandoffTarget,
 } from "./control-ui-handoff.js";
@@ -119,20 +120,6 @@ function isConnectedControlUi(entry: SystemPresence): boolean {
     entry.mode === GATEWAY_CLIENT_MODES.WEBCHAT &&
     entry.reason !== "disconnect"
   );
-}
-
-function retargetBrowserHandoffUrl(
-  browserUrl: string,
-  links: ControlUiHandoffTarget["links"],
-): string {
-  const issued = new URL(browserUrl);
-  const visible = new URL(links.httpUrl);
-  const fragment = new URLSearchParams(issued.hash.slice(1));
-  fragment.set("gatewayUrl", links.wsUrl);
-  visible.pathname = issued.pathname;
-  visible.search = issued.search;
-  visible.hash = fragment.toString();
-  return visible.toString();
 }
 
 export function resolveConnectedControlUiPresenceKeys(
@@ -341,7 +328,7 @@ export async function runBrowserHatchHandoff(
           tlsEnabled: target.tlsConfig?.enabled === true,
         })
       : target.links;
-    const visibleUrl = retargetBrowserHandoffUrl(browserUrl, visibleLinks);
+    const visibleUrl = retargetControlUiHandoffUrl(browserUrl, visibleLinks);
     await params.prompter.note(
       `${t("wizard.guided.browserHandoffCopy", { url: visibleUrl })}${sshHint}`,
       t("wizard.guided.browserHandoffTitle"),

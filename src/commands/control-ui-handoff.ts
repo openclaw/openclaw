@@ -3,6 +3,7 @@ import type { PeerCertificate } from "node:tls";
 import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveGatewayPort } from "../config/config.js";
+import { resolveControlUiLinkLocation } from "../config/control-ui-link-base.js";
 import type { GatewayTlsConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayInteractiveSurfaceAuth } from "../gateway/auth-surface-resolution.js";
@@ -78,6 +79,21 @@ export async function resolveControlUiHandoffTarget(params: {
           tlsEnabled,
         });
   const configuredHost = new URL(configuredLinks.wsUrl).hostname;
+  // Public-origin variant of the handoff destination. `links` keeps the destination
+  // that launched the command, because same-host consumers (the desktop app, Quick
+  // Chat, a local script) must keep working when the configured public route is
+  // unreachable from this host. Callers that transport the link opt into this variant
+  // through a separate export, and only the browser destination changes: local
+  // probing keeps using `probeUrl`/`documentUrl` below.
+  const publicLocation = resolveControlUiLinkLocation(config);
+  const browserHandoffLinks = publicLocation
+    ? {
+        httpUrl: `${publicLocation.origin}${publicLocation.basePath}/`,
+        wsUrl: `${publicLocation.origin
+          .replace(/^https:/u, "wss:")
+          .replace(/^http:/u, "ws:")}${publicLocation.basePath}`,
+      }
+    : links;
   const loopbackAliasHost =
     browserBind === "loopback" &&
     (bind === "tailnet" || bind === "custom") &&
@@ -105,6 +121,7 @@ export async function resolveControlUiHandoffTarget(params: {
     basePath,
     bind,
     links,
+    browserHandoffLinks,
     authMode,
     gatewayAuthHandoff,
     includeTokenInUrl,
@@ -157,6 +174,26 @@ export async function issueControlUiBrowserHandoff({
     browserUrl: `${httpUrl}#${fragment.toString()}`,
     expiresAtMs: issued.expiresAtMs,
   };
+}
+
+/**
+ * Re-address an issued handoff URL onto another destination while keeping its
+ * one-time grant. Consumers that must hand the link to a different origin (a
+ * public origin, or an advertised remote display) use this instead of minting a
+ * second grant.
+ */
+export function retargetControlUiHandoffUrl(
+  browserUrl: string,
+  links: ControlUiHandoffTarget["links"],
+): string {
+  const issued = new URL(browserUrl);
+  const visible = new URL(links.httpUrl);
+  const fragment = new URLSearchParams(issued.hash.slice(1));
+  fragment.set("gatewayUrl", links.wsUrl);
+  visible.pathname = issued.pathname;
+  visible.search = issued.search;
+  visible.hash = fragment.toString();
+  return visible.toString();
 }
 
 type ControlUiDocumentReadiness =

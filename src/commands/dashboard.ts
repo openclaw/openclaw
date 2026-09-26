@@ -7,6 +7,7 @@ import {
   hasVerifiedControlUiLoopbackAlias,
   issueControlUiBrowserHandoff,
   resolveControlUiHandoffTarget,
+  retargetControlUiHandoffUrl,
   waitForControlUiDocument,
 } from "./control-ui-handoff.js";
 import { ensureGatewayReadyForOperation } from "./gateway-readiness.js";
@@ -91,7 +92,14 @@ async function dashboardJsonCommand(runtime: RuntimeEnv): Promise<void> {
       dashboardJsonFailure(runtime, document.reason);
       return;
     }
+    // Same-host consumers (including the desktop app) keep the local destination on
+    // `browserUrl`; a caller that must transport the link opts into the public origin
+    // through the separate `publicBrowserUrl` export, which re-uses the same grant.
     const browserHandoff = await issueControlUiBrowserHandoff(target.links);
+    const publicBrowserUrl =
+      target.browserHandoffLinks === target.links
+        ? undefined
+        : retargetControlUiHandoffUrl(browserHandoff.browserUrl, target.browserHandoffLinks);
 
     writeRuntimeJson(
       runtime,
@@ -103,6 +111,7 @@ async function dashboardJsonCommand(runtime: RuntimeEnv): Promise<void> {
         port: target.port,
         tokenIncluded: target.includeTokenInUrl,
         browserUrl: browserHandoff.browserUrl,
+        ...(publicBrowserUrl ? { publicBrowserUrl } : {}),
         browserBootstrapExpiresAtMs: browserHandoff.expiresAtMs,
         ...(target.gatewayAuthHandoff
           ? { [gatewayPasswordJsonKey]: target.gatewayAuthHandoff }
@@ -178,6 +187,8 @@ export async function dashboardCommand(
   }
   let browserUrl: string;
   try {
+    // Opening a tab here happens on this host, so the local endpoint stays the
+    // destination. Transported links use the separate `publicBrowserUrl` export.
     browserUrl = (await issueControlUiBrowserHandoff(target.links)).browserUrl;
   } catch (error) {
     runtime.error(
