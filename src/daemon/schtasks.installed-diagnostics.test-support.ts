@@ -16,6 +16,7 @@ import {
   recordCapacityBoundary,
   requiredCellSpace,
 } from "./schtasks.installed-package.test-support.js";
+import { readRelatedProcessDiagnostics } from "./schtasks.integration-observation.test-support.js";
 
 export const doctorReportSchema = z.object({
   checksRun: z.number().int().positive(),
@@ -56,6 +57,7 @@ export async function readInstalledUpdateProgress({
         : value;
     // Retain only the facts needed to distinguish update progress from failed native verification.
     return {
+      runId: record.runId,
       phase: record.phase,
       status: record.status,
       createdAtMs: record.createdAtMs,
@@ -170,6 +172,34 @@ export async function runInstalledPublishedUpdate(params: {
   const startedAt = Date.now();
   const stopObservation = new AbortController();
   const completed = new Set<string>();
+  let observedRunId: string | undefined;
+  const terminalProcesses: ReturnType<typeof captureTerminalProcesses>[] = [];
+  function captureTerminalProcesses(runId: string) {
+    const capturedAtMs = Date.now();
+    const safeText = (value: string) => redactSupportString(value, task, { maxLength: 2_000 });
+    try {
+      const capture = readRelatedProcessDiagnostics([task.profile, packageRoot(task.installRoot)]);
+      return {
+        runId,
+        capturedAtMs,
+        ok: capture.ok,
+        truncated: capture.truncated,
+        ...(capture.error ? { unavailable: safeText(capture.error) } : {}),
+        processes: capture.processes.map((process) => ({
+          pid: process.ProcessId,
+          parentPid: process.ParentProcessId,
+          createdAt: process.CreationDate,
+          userModeTime100ns: process.UserModeTime,
+          kernelModeTime100ns: process.KernelModeTime,
+          readOperationCount: process.ReadOperationCount,
+          writeOperationCount: process.WriteOperationCount,
+          commandLine: process.CommandLine ? safeText(process.CommandLine) : null,
+        })),
+      };
+    } catch {
+      return { runId, capturedAtMs, unavailable: "Process observation could not be read" };
+    }
+  }
   let observationFailure: Error | undefined;
   const observation = (async () => {
     while (!stopObservation.signal.aborted) {
@@ -187,6 +217,19 @@ export async function runInstalledPublishedUpdate(params: {
       }
       if ("unavailable" in progress || progress.createdAtMs < startedAt) {
         continue;
+      }
+      observedRunId ??= progress.runId;
+      if (progress.runId !== observedRunId) {
+        continue;
+      }
+      if (
+        progress.phase === "finished" &&
+        progress.status !== "running" &&
+        terminalProcesses.length < 2
+      ) {
+        terminalProcesses.push(captureTerminalProcesses(progress.runId));
+        // Diagnostics wait for an ordinary proof write; they are not durable update progress.
+        observations.updateTerminalProcesses = terminalProcesses;
       }
       const newSteps = progress.steps.filter((step) => {
         if (step.status !== "completed" || step.endedAtMs === undefined) {

@@ -28,6 +28,11 @@ export type ScheduledTaskPrincipal = {
 
 export type WindowsProcessDiagnostic = {
   CommandLine?: string | null;
+  CreationDate?: string | null;
+  UserModeTime?: number | string;
+  KernelModeTime?: number | string;
+  ReadOperationCount?: number | string;
+  WriteOperationCount?: number | string;
   ParentProcessId?: number;
   ProcessId?: number;
 };
@@ -125,7 +130,7 @@ export function readRelatedProcessDiagnostics(needles: string[]): {
 } {
   const script = [
     "$ErrorActionPreference='Stop'",
-    "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
+    "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,UserModeTime,KernelModeTime,ReadOperationCount,WriteOperationCount,@{Name='CreationDate';Expression={if ($_.CreationDate) {$_.CreationDate.ToUniversalTime().ToString('o')}}} | ConvertTo-Json -Compress",
   ].join("; ");
   const result = spawnSync(
     getWindowsPowerShellExePath(),

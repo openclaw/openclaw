@@ -166,11 +166,32 @@ it("keeps an expected nonzero exit successful without retaining its raw output",
     root,
     records,
     1,
+    undefined,
+    { commandBudget: "published-update" },
   );
   expect(output).toBe("expected findings");
   expect(records).toHaveLength(1);
   expect(records[0]?.code).toBe(1);
   expect(records[0]).not.toHaveProperty("failureOutput");
+  const settlement = records[0]?.settlement;
+  expect(settlement).toMatchObject({
+    startedAtMs: expect.any(Number),
+    observedAtMs: expect.any(Number),
+    exitAtMs: expect.any(Number),
+    closeAtMs: expect.any(Number),
+    stdout: { lastDataAtMs: expect.any(Number), closeAtMs: expect.any(Number) },
+    stderr: { closeAtMs: expect.any(Number) },
+  });
+  expect(settlement?.stdout.lastDataAtMs).toBeGreaterThanOrEqual(settlement!.startedAtMs);
+  expect(settlement?.exitAtMs).toBeLessThanOrEqual(settlement!.closeAtMs!);
+  if (process.platform === "win32") {
+    expect(settlement).toMatchObject({
+      launcherReadyAtMs: expect.any(Number),
+      commandSpawnedAtMs: expect.any(Number),
+      commandPid: expect.any(Number),
+    });
+    expect(settlement?.commandPid).not.toBe(records[0]?.launcherPid);
+  }
 });
 
 it("retains safe native and RPC facts before an exit-zero status fails semantic validation", async () => {

@@ -22,6 +22,7 @@ import {
   resolveInstalledCellBodyTimeoutMs,
   keys,
 } from "./schtasks.installed-package.test-support.js";
+import * as nativeObservation from "./schtasks.integration-observation.test-support.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 const candidateCheckNames = [
@@ -497,6 +498,110 @@ describe("published installed update progress", () => {
     await expect(fixture.pending).resolves.toEqual(success);
     expect(fixture.recordProgress.mock.calls.map(([phase]) => phase)).toEqual(["command:update"]);
   });
+
+  it("bounds terminal process snapshots to the current run without reporting new progress", async () => {
+    const terminal = {
+      ...recordedRun([completedStep]),
+      phase: "finished" as const,
+      status: "succeeded" as const,
+      finishedAtMs: invokedAt + 3,
+    };
+    const reader = vi
+      .spyOn(updateRunReader, "listUpdateRunsAsync")
+      .mockResolvedValue([{ ...terminal, createdAtMs: invokedAt - 1 }]);
+    const census = vi.spyOn(nativeObservation, "readRelatedProcessDiagnostics").mockReturnValue({
+      ok: true,
+      error: null,
+      truncated: false,
+      processes: [
+        {
+          ProcessId: 1234,
+          ParentProcessId: 1200,
+          CreationDate: "2026-09-26T19:40:00.0000000Z",
+          CommandLine:
+            'node openclaw.mjs update --token "synthetic-hidden-credential" ' + "x".repeat(3000),
+        },
+      ],
+    });
+    const fixture = startUpdate();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(census).not.toHaveBeenCalled();
+    expect(fixture.recordProgress).not.toHaveBeenCalled();
+    reader.mockResolvedValue([recordedRun([completedStep])]);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(fixture.recordProgress).toHaveBeenCalledTimes(1);
+    reader.mockResolvedValue([terminal]);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(census).toHaveBeenCalledTimes(1);
+    expect(fixture.recordProgress).toHaveBeenCalledTimes(1);
+    reader.mockResolvedValue([
+      {
+        ...terminal,
+        runId: "different-run",
+        steps: [{ ...completedStep, endedAtMs: invokedAt + 60_000 }],
+      },
+    ]);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(census).toHaveBeenCalledTimes(1);
+    reader.mockResolvedValue([terminal]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(census).toHaveBeenCalledTimes(2);
+    expect(census).toHaveBeenCalledWith([
+      "synthetic-update",
+      installedPackage.packageRoot(installedTask().installRoot),
+    ]);
+    expect(fixture.recordProgress).toHaveBeenCalledTimes(1);
+    expect(fixture.observations.updateTerminalProcesses).toEqual([
+      expect.objectContaining({
+        runId: terminal.runId,
+        capturedAtMs: invokedAt + 45_000,
+        processes: [
+          expect.objectContaining({
+            pid: 1234,
+            parentPid: 1200,
+            createdAt: "2026-09-26T19:40:00.0000000Z",
+          }),
+        ],
+      }),
+      expect.objectContaining({ runId: terminal.runId, capturedAtMs: invokedAt + 75_000 }),
+    ]);
+    const retained = JSON.stringify(fixture.observations.updateTerminalProcesses);
+    expect(retained).not.toContain("synthetic-hidden-credential");
+    expect(retained.length).toBeLessThan(5000);
+    fixture.command.resolve(JSON.stringify(success));
+    await expect(fixture.pending).resolves.toEqual(success);
+    expect(fixture.recordProgress.mock.calls.map(([phase]) => phase)).toEqual([
+      "published-update:completed-step",
+      "command:update",
+    ]);
+  });
+
+  it.each(["returned", "thrown"] as const)(
+    "keeps a %s process observation failure diagnostic without failing the updater",
+    async (failure) => {
+      vi.spyOn(updateRunReader, "listUpdateRunsAsync").mockResolvedValue([
+        { ...recordedRun([]), phase: "finished", status: "succeeded", finishedAtMs: invokedAt + 3 },
+      ]);
+      vi.spyOn(nativeObservation, "readRelatedProcessDiagnostics").mockImplementation(() => {
+        const error = "observation failed token=synthetic-hidden-credential";
+        if (failure === "thrown") {
+          throw new Error(error);
+        }
+        return { ok: false, error, processes: [], truncated: false };
+      });
+      const fixture = startUpdate();
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(fixture.observations.updateTerminalProcesses).toEqual([
+        expect.objectContaining({ unavailable: expect.any(String) }),
+        expect.objectContaining({ unavailable: expect.any(String) }),
+      ]);
+      expect(JSON.stringify(fixture.observations)).not.toContain("synthetic-hidden-credential");
+      expect(fixture.recordProgress).not.toHaveBeenCalled();
+      fixture.command.resolve(JSON.stringify(success));
+      await expect(fixture.pending).resolves.toEqual(success);
+      expect(fixture.recordProgress.mock.calls.map(([phase]) => phase)).toEqual(["command:update"]);
+    },
+  );
 
   it("joins an outstanding ledger read before command completion and stops future observation", async () => {
     const read = createDeferredCore<UpdateRunRecord[]>();
