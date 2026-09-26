@@ -73,7 +73,6 @@ it.each([
   async ({ method, change }) => {
     const cron = new CronService({
       scheduler: createTestGatewayScheduler(),
-      nowMs: () => Date.now(),
       storePath: "/synthetic/cron",
       cronEnabled: false,
       defaultAgentId: "main",
