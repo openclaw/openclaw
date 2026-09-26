@@ -46,11 +46,10 @@ async function withSessionDiagnosticContext(
   }
   const [kind, cronJobId, ...rest] = parsed.rest.split(":");
   const runIndex = rest.indexOf("run");
-  const context: SessionDiagnosticContext = {
-    ...(kind === "cron" && cronJobId
+  const context: SessionDiagnosticContext =
+    kind === "cron" && cronJobId
       ? { cronJobId, cronRunId: runIndex >= 0 ? rest[runIndex + 1] : undefined }
-      : {}),
-  };
+      : {};
   const sessionId = params.activeSessionId?.trim();
   let identityChanged = false;
   const unsubscribe = onSessionIdentityMutation((mutation) => {
@@ -130,7 +129,7 @@ export function logWithSessionDiagnosticContext(
   const generation = logGeneration;
   const isCurrent = () => areDiagnosticsEnabledForProcess() && generation === logGeneration;
   if (!isCurrent() || !diag.isEnabled(params.level)) {
-    return;
+    return undefined;
   }
   return withSessionDiagnosticContext(
     params,
