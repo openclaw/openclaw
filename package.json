@@ -1693,6 +1693,7 @@
     "android:version:check": "node --import ./scripts/tsx.mjs scripts/android-sync-versioning.ts --check",
     "android:version:pin": "node --import ./scripts/tsx.mjs scripts/android-pin-version.ts",
     "android:version:sync": "node --import ./scripts/tsx.mjs scripts/android-sync-versioning.ts --write",
+    "anthropic:proof:session-catalog-boundary": "node --import ./scripts/tsx.mjs scripts/proof-anthropic-session-catalog-boundary.mjs .",
     "audit:seams": "node --import ./scripts/tsx.mjs scripts/audit-seams.mts",
     "bench:plugins:invocation": "node --import ./scripts/tsx.mjs scripts/bench-plugin-invocation.ts",
     "bench:usage-refresh-memory": "node --import ./scripts/tsx.mjs scripts/bench-usage-refresh-memory.ts",

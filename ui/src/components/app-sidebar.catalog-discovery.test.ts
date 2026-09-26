@@ -3,6 +3,7 @@
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionsCatalogListParamsSchema } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import type { SessionCatalog } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { ApplicationGatewaySnapshot } from "../app/context.ts";
 import {
@@ -21,6 +22,7 @@ import {
 } from "../test-helpers/gateway-client.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import "./app-sidebar.ts";
+import { mergeSessionCatalogPage } from "./app-sidebar-session-catalog-state.ts";
 
 async function settle(sidebar: SidebarLifecycleState) {
   await vi.advanceTimersByTimeAsync(0);
@@ -292,6 +294,69 @@ describe("AppSidebar hidden catalog discovery", () => {
       });
     },
   );
+
+  it("retains a partial error from a usable incoming catalog page", () => {
+    const current: SessionCatalog = {
+      id: "claude",
+      label: "Claude",
+      capabilities: { continueSession: true, archive: true },
+      hosts: [
+        {
+          hostId: "gateway:local",
+          label: "Local Claude",
+          kind: "gateway",
+          connected: true,
+          sessions: [
+            {
+              threadId: "newest",
+              name: "Newest",
+              status: "idle",
+              archived: false,
+              canContinue: true,
+              canArchive: true,
+            },
+          ],
+          nextCursor: "page-2",
+        },
+      ],
+    };
+    const page: SessionCatalog = {
+      ...current,
+      hosts: [
+        {
+          ...current.hosts[0]!,
+          sessions: [
+            {
+              threadId: "older",
+              name: "Older",
+              status: "idle",
+              archived: false,
+              canContinue: true,
+              canArchive: true,
+            },
+          ],
+          nextCursor: "page-3",
+          error: { code: "LOCAL_CATALOG_PARTIAL", message: "One metadata file was skipped" },
+        },
+      ],
+    };
+
+    const merged = mergeSessionCatalogPage({
+      current,
+      page,
+      cursors: { "gateway:local": "page-2" },
+    });
+
+    expect(merged.catalog.hosts[0]).toMatchObject({
+      sessions: [
+        expect.objectContaining({ threadId: "newest" }),
+        expect.objectContaining({ threadId: "older" }),
+      ],
+      nextCursor: "page-3",
+      error: page.hosts[0]!.error,
+    });
+    expect(merged.advancedHostIds).toEqual(["gateway:local"]);
+  });
 
   it.each(["request", "catalog", "host", "missing host", "missing catalog"] as const)(
     "preserves discovery progress and retries a %s page failure",

@@ -2,9 +2,9 @@ import fs, { type FSWatcher } from "node:fs";
 import path from "node:path";
 
 export type DirtyDirectoryWatch = {
-  /** Direct-child names changed since the previous take, or "all" when coverage is uncertain. */
+  /** Changed child names or watched root-relative directory paths, or "all" when uncertain. */
   takeDirty(): "all" | Set<string>;
-  /** Linux only: maintain one non-recursive watcher per named child directory. */
+  /** Linux only: maintain one non-recursive watcher per root-relative child directory path. */
   observeChildDirectories(names: Iterable<string>): void;
   close(): void;
 };
@@ -114,6 +114,16 @@ export function createDirtyDirectoryWatch(root: string): DirtyDirectoryWatch {
       }
       for (const name of wanted) {
         if (!children.has(name)) {
+          const directory = path.resolve(root, name);
+          const relative = path.relative(path.resolve(root), directory);
+          if (
+            !relative ||
+            relative === ".." ||
+            relative.startsWith(`..${path.sep}`) ||
+            path.isAbsolute(relative)
+          ) {
+            continue;
+          }
           const watcher = attach(name);
           if (!rootWatch) {
             break;
