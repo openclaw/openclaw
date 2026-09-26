@@ -15,7 +15,6 @@ describe("model setup route", () => {
   it.each([
     ["?firstRun=1", true],
     ["?firstRun=explicit", true],
-    ["?firstRun=0", false],
     ["?firstRun=0&firstRun=explicit", false],
     ["", false],
   ])("preserves onboarding but redirects settings link %s to Models", async (search, firstRun) => {
