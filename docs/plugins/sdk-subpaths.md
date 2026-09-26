@@ -596,8 +596,8 @@ database maintenance close intentionally invalidates capture admission; it does
 not substitute for capture finalization and draining. Doctor and migration
 maintenance owners drain their own capture work before releasing their execution
 claims. A shared session ends only when its last claim closes; the surrounding
-runtime retains its own claim. Explicit capture finalization still targets the
-whole selected session. For inspection, use
+runtime retains its own claim. Async capture finalization targets the whole
+selected session. For inspection, use
 `createDebugProxyCaptureReaderAsync({ env })`: construction does not open a
 database, and its async `getSessionEvents` and `readBlob` methods read existing
 state without creating a missing database, returning `[]` or `null` when absent.
@@ -605,11 +605,14 @@ state without creating a missing database, returning `[]` or `null` when absent.
 Synchronous capture writers, initialization/finalization, and store
 constructors/accessors remain deprecated compatibility APIs for shipped plugins.
 Migrate their callers and lifecycle cleanup together; removal requires a breaking
-Plugin SDK release. Mixing legacy synchronous
-writes with async commands does not establish one global order: synchronous
-writes may interleave between async commands. Synchronous
-`finalizeDebugProxyCapture` cannot drain an owner that used async capture; use
-the async finalizer even when that owner also served legacy calls.
+Plugin SDK release. Mixing legacy synchronous writes with async commands does
+not establish one global order: synchronous writes may interleave between async
+commands. `finalizeDebugProxyCapture` synchronously settles the session's legacy
+capture readers and writes and releases their stores. If the host also uses
+async capture, its claims and fetch capture remain active until their async
+lifecycle cleanup completes. Later legacy capture calls stay inactive until
+explicit initialization. Use `await finalizeDebugProxyCaptureAsync(settings)`
+when the caller owns shutdown of the whole mixed session.
 
 ## Related
 

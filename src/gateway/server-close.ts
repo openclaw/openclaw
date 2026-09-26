@@ -668,8 +668,8 @@ async function closeGatewayResources(
           await cleanupWork.runWhenIdle(() => {});
           // Releasing agent leases still writes shared state; keep its owner alive until then.
           await closeOpenClawAgentDatabasesAsync();
+          await finalizeActiveDebugProxyCaptures().catch(recordResourceCleanupFailure);
           if (mediaCleanupStopResult !== undefined) {
-            await finalizeActiveDebugProxyCaptures().catch(recordResourceCleanupFailure);
             await closePluginStateDatabaseAsync();
           }
           try {

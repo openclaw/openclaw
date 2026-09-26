@@ -250,7 +250,7 @@ function captureInstalledFetch(
   owner: CaptureOwner,
   params: HttpCaptureParams | HttpCaptureErrorParams,
 ) {
-  return runOwnedCapture(owner, owner.usedAsync, (execution) =>
+  return runOwnedCapture(owner, owner.asynchronous, (execution) =>
     "response" in params
       ? captureOwnedHttpExchange(params, owner, execution)
       : captureOwnedHttpError(params, owner, execution),

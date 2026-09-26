@@ -461,6 +461,7 @@ describe("scripts/test-extension.mts", () => {
           "mattermost",
           "memory-core",
           "msteams",
+          "openai",
           "qa-lab",
           "telegram",
           "voice-call",
@@ -470,6 +471,7 @@ describe("scripts/test-extension.mts", () => {
         ],
         roots: [
           ...[
+            "openai",
             "matrix",
             "telegram",
             "mattermost",

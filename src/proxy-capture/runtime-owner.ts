@@ -91,7 +91,7 @@ export type CaptureOwner = {
   asyncLease?: ReturnType<typeof createDebugProxyCaptureStoreForContext>;
   asyncStore?: AsyncDebugProxyCaptureStore;
   state: CaptureStateContext;
-  usedAsync: boolean;
+  readonly asynchronous: boolean;
   writes: Set<Promise<unknown>>;
   finishing?: Promise<void>;
   closing?: Promise<void>;
@@ -107,9 +107,10 @@ type CaptureSession = {
   runtime: ReturnType<typeof resolveRuntimeDeps>;
   state: CaptureStateContext;
   errors: unknown[];
-  claims: Map<OpenClawDatabaseMaintenanceScope | undefined, CaptureOwner>;
+  claims: Set<CaptureOwner>;
   admission: { current?: CaptureSession };
   closing: boolean;
+  syncClosed: boolean;
   usedAsync: boolean;
   finishing?: Promise<void>;
   writes: Promise<void>;
@@ -212,9 +213,6 @@ function finishCaptureOwner(owner: CaptureOwner): void {
   if (!owner.active) {
     return;
   }
-  if (owner.usedAsync) {
-    throw new Error("Capture has asynchronous work; use finalizeDebugProxyCaptureAsync().");
-  }
   sealCaptureOwner(owner);
   const lastClaim = releaseCaptureClaim(owner);
   try {
@@ -269,15 +267,26 @@ export function resolveCaptureOwner(
       runtime,
       state: captureStateContext(),
       errors: [],
-      claims: new Map(),
+      claims: new Set(),
       admission: {},
       closing: false,
+      syncClosed: false,
       usedAsync: false,
       writes: Promise.resolve(),
     };
     session.admission.current = session;
   }
-  let owner = session.claims.get(maintenanceScope);
+  const asynchronous = options.asynchronous === true;
+  if (!asynchronous) {
+    if (options.initialize) {
+      session.syncClosed = false;
+    } else if (session.syncClosed) {
+      return undefined;
+    }
+  }
+  let owner = [...session.claims].find(
+    (claim) => claim.maintenanceScope === maintenanceScope && claim.asynchronous === asynchronous,
+  );
   if (!owner) {
     const unregister: Array<() => void> = [];
     // The session retains its route; each new claim captures only its caller's
@@ -319,7 +328,7 @@ export function resolveCaptureOwner(
         return this.syncStore;
       },
       state,
-      usedAsync: false,
+      asynchronous,
       writes: new Set(),
       active: true,
       pending: new Set(),
@@ -339,7 +348,7 @@ export function resolveCaptureOwner(
       );
     }
     unregister.push(registerActiveDebugProxyCapture(() => closeCaptureOwnerAsync(retainedOwner)));
-    session.claims.set(maintenanceScope, owner);
+    session.claims.add(owner);
     registry.owners.set(key, session);
     maintenanceScope?.own(retainedOwner, "shared-resources", () =>
       closeCaptureOwnerAsync(retainedOwner),
@@ -349,7 +358,6 @@ export function resolveCaptureOwner(
     return undefined;
   }
   if (options.asynchronous) {
-    owner.usedAsync = true;
     session.usedAsync = true;
   }
   if (options.explicit) {
@@ -419,8 +427,8 @@ export function resolveCaptureOwnerForTransport(
   }
 }
 
-// Finalization closes the session and restores the fetch patch before closing
-// the cached store, preventing later normal requests from being captured.
+// Legacy finalization settles legacy work synchronously. Worker-backed claims
+// retain their lifecycle owner and end the shared session when they also close.
 /** @deprecated Use finalizeDebugProxyCaptureAsync to drain asynchronous capture work. */
 export function finalizeDebugProxyCapture(
   resolved?: DebugProxySettings,
@@ -432,15 +440,15 @@ export function finalizeDebugProxyCapture(
   }
   const runtime = resolveRuntimeDeps(deps);
   const session = captureOwners.get(runtime.getStore)?.owners.get(captureOwnerKey(settings));
-  const owners = [...(session?.claims.values() ?? [])];
-  if (owners.some((owner) => owner.usedAsync)) {
-    throw new Error("Capture has asynchronous work; use finalizeDebugProxyCaptureAsync().");
-  }
   if (!session) {
     return;
   }
-  session.closing = true;
-  uninstallDebugProxyGlobalFetchPatch(session.runtime, session.admission);
+  const owners = [...session.claims].filter((owner) => !owner.asynchronous);
+  session.syncClosed = true;
+  if (owners.length === session.claims.size) {
+    session.closing = true;
+    uninstallDebugProxyGlobalFetchPatch(session.runtime, session.admission);
+  }
   const errors: unknown[] = [];
   for (const owner of owners) {
     try {
@@ -450,7 +458,7 @@ export function finalizeDebugProxyCapture(
     }
   }
   try {
-    if (runtime.closeStore) {
+    if (owners.length > 0 && runtime.closeStore) {
       runtime.closeStore();
     } else {
       for (const store of new Set(owners.map((owner) => owner.syncStore))) {
@@ -490,10 +498,9 @@ function forgetCaptureOwner(owner: CaptureOwner): void {
 
 function releaseCaptureClaim(owner: CaptureOwner): boolean {
   const session = owner.session;
-  if (session.claims.get(owner.maintenanceScope) !== owner) {
+  if (!session.claims.delete(owner)) {
     return false;
   }
-  session.claims.delete(owner.maintenanceScope);
   if (session.claims.size > 0) {
     return false;
   }
@@ -506,7 +513,6 @@ function releaseCaptureClaim(owner: CaptureOwner): boolean {
 
 /** Observe callback-owned work without converting its rejection into success. */
 export function observeCaptureWrite<T>(owner: CaptureOwner, operation: Promise<T>): Promise<T> {
-  owner.usedAsync = true;
   owner.writes.add(operation);
   void operation.then(
     () => owner.writes.delete(operation),
@@ -519,7 +525,6 @@ export function observeCaptureWrite<T>(owner: CaptureOwner, operation: Promise<T
 }
 
 function ensureAsyncCaptureLease(owner: CaptureOwner) {
-  owner.usedAsync = true;
   const context = currentStateContext(owner);
   if (!owner.asyncLease) {
     const lease = createDebugProxyCaptureStoreForContext(context);
@@ -685,10 +690,13 @@ function closeCaptureOwnerAsync(owner: CaptureOwner): Promise<void> {
       }
     }
     try {
-      if (owner.session.claims.size === 0 && owner.runtime.closeStore) {
-        owner.runtime.closeStore();
-      } else if (owner.session.claims.size === 0) {
-        owner.syncStore?.close?.();
+      const store = owner.syncStore;
+      if (store && ![...owner.session.claims].some((claim) => claim.syncStore === store)) {
+        if (owner.runtime.closeStore) {
+          owner.runtime.closeStore();
+        } else {
+          store.close?.();
+        }
       }
     } catch (error) {
       errors.push(error);

@@ -17,6 +17,7 @@ import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-sta
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
 import { proxyCaptureNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import { observeCaptureWrite, resolveCaptureOwner, resolveRuntimeDeps } from "./runtime-owner.js";
+import { registerMixedCaptureLifecycleTests } from "./runtime.compat.test-support.js";
 import {
   captureHttpExchange,
   captureWsEvent,
@@ -776,6 +777,8 @@ describe("capture admission generation", () => {
 });
 
 describe("async capture lifecycle", () => {
+  registerMixedCaptureLifecycleTests({ stateRoot, captureSettings, pendingResponse });
+
   it.skipIf(process.platform === "win32").each([
     ["SIGINT", 130],
     ["SIGTERM", 143],
