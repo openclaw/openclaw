@@ -10,7 +10,9 @@ import {
   type MarkdownLinkSpan,
   renderMarkdownIRChunksWithinLimit,
   renderMarkdownWithMarkers,
+  sliceMarkdownIR,
 } from "openclaw/plugin-sdk/text-chunking";
+import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
 const SLACK_ANGLE_TOKEN_RE = /<[^>\n]+>/g;
@@ -530,15 +532,42 @@ export function markdownToSlackMrkdwnChunks(
   const renderOptions = buildSlackRenderOptions();
   const normalizedLimit =
     limit === Number.POSITIVE_INFINITY ? limit : resolveIntegerOption(limit, 1, { min: 1 });
+  const renderChunk = (chunk: MarkdownIR) => {
+    const rendered = renderMarkdownWithMarkers(chunk, renderOptions, SLACK_FORMAT_PROFILE);
+    // Protection only adds a prefix, so an oversized probe cannot become a fit.
+    return rendered.length > normalizedLimit
+      ? rendered
+      : protectSlackAssistantTranscriptRoleHeaders(rendered);
+  };
   return renderMarkdownIRChunksWithinLimit({
     ir,
     limit: normalizedLimit,
-    renderChunk: (chunk) => {
-      const rendered = renderMarkdownWithMarkers(chunk, renderOptions, SLACK_FORMAT_PROFILE);
-      // Protection only adds a prefix, so an oversized probe cannot become a fit.
-      return rendered.length > normalizedLimit
-        ? rendered
-        : protectSlackAssistantTranscriptRoleHeaders(rendered);
+    renderChunk,
+    protectedRanges: (chunk) => {
+      const ranges: { start: number; end: number }[] = [];
+      // Native Slack tokens are plain text in Markdown IR, unlike Markdown links.
+      for (const match of chunk.text.matchAll(new RegExp(SLACK_ANGLE_TOKEN_RE, "g"))) {
+        if (!isAllowedSlackAngleToken(match[0])) {
+          continue;
+        }
+        const start = findGraphemeChunkEnd(chunk.text, 0, match.index, match.index, false);
+        let end = match.index + match[0].length;
+        // Include adjacent marks/prepend characters instead of cutting a grapheme at `<` or `>`.
+        while (
+          end < chunk.text.length &&
+          end - start <= normalizedLimit &&
+          findGraphemeChunkEnd(chunk.text, 0, end, end, false) !== end
+        ) {
+          end += 1;
+        }
+        if (end - start > normalizedLimit) {
+          continue;
+        }
+        if (renderChunk(sliceMarkdownIR(chunk, start, end)).length <= normalizedLimit) {
+          ranges.push({ start, end });
+        }
+      }
+      return ranges;
     },
     measureRendered: (rendered) => rendered.length,
   }).map(({ rendered }) =>

@@ -558,6 +558,14 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
   </Accordion>
 </AccordionGroup>
 
+`renderMarkdownIRChunksWithinLimit` in `plugin-sdk/text-chunking` accepts an optional
+`protectedRanges` callback for native transport tokens that Markdown treats as text.
+Return sorted, disjoint ranges in the supplied IR slice, with boundaries between
+complete graphemes. Each range must render within the full transport limit on its own,
+including formatting and safety prefixes. The chunker preserves those ranges during
+both the initial split and rendered-size adjustment; leave oversized tokens unprotected
+to retain normal fallback splitting.
+
 ## Related
 
 - [Plugin SDK overview](/plugins/sdk-overview)

@@ -23,6 +23,8 @@ export type RenderMarkdownIRChunksWithinLimitOptions<TRendered> = {
   measureRendered: (rendered: TRendered) => number;
   /** Renders a candidate IR slice for measuring and final output. */
   renderChunk: (ir: MarkdownIR) => TRendered;
+  /** Sorted, disjoint ranges in each slice that must stay whole. Each must fit the full rendered limit. */
+  protectedRanges?: (ir: MarkdownIR) => readonly { start: number; end: number }[];
   /** Re-annotate transcript-role headers promoted by a new message boundary. */
   assistantTranscriptRoleMessageBoundaries?: boolean;
 };
@@ -34,7 +36,7 @@ type RenderedCandidate<TRendered> = {
 
 type RenderResolver<TRendered> = Pick<
   RenderMarkdownIRChunksWithinLimitOptions<TRendered>,
-  "measureRendered" | "renderChunk"
+  "measureRendered" | "renderChunk" | "protectedRanges"
 >;
 
 function prepareChunkForMessageBoundary<TRendered>(
@@ -74,11 +76,16 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
   const renderResolver: RenderResolver<TRendered> = {
     measureRendered: options.measureRendered,
     renderChunk: (chunk) => options.renderChunk(prepareChunkForMessageBoundary(options, chunk)),
+    protectedRanges: options.protectedRanges,
   };
   // Treat the pending worklist as a stack so each dequeue/enqueue stays O(1).
   // The initial reverse keeps the final order stable while avoiding shift/unshift
   // moving every remaining chunk for long messages.
-  const pending = splitMarkdownIRPreserveWhitespace(options.ir, normalizedLimit).toReversed();
+  const pending = splitMarkdownIRPreserveWhitespace(
+    options.ir,
+    normalizedLimit,
+    options.protectedRanges?.(options.ir),
+  ).toReversed();
   const finalized: RenderedCandidate<TRendered>[] = [];
 
   while (pending.length > 0) {
@@ -127,7 +134,11 @@ function splitMarkdownIRByRenderedLimit<TRendered>(
     return [chunk];
   }
 
-  const split = splitMarkdownIRPreserveWhitespace(chunk, splitLimit);
+  const split = splitMarkdownIRPreserveWhitespace(
+    chunk,
+    splitLimit,
+    options.protectedRanges?.(chunk),
+  );
   const firstChunk = split[0];
   if (firstChunk && options.measureRendered(options.renderChunk(firstChunk)) <= renderedLimit) {
     return split;
@@ -145,11 +156,21 @@ function findLargestChunkTextLengthWithinRenderedLimit<TRendered>(
   options: RenderResolver<TRendered>,
 ): number {
   const currentTextLength = chunk.text.length;
+  const protectedRanges = options.protectedRanges?.(chunk) ?? [];
 
   // Rendered length is not guaranteed to be monotonic after escaping/link or
   // file-reference rewriting, so test exact candidates from longest to shortest.
   for (let candidateLength = currentTextLength - 1; candidateLength >= 1; candidateLength -= 1) {
-    const safeCandidateLength = findGraphemeChunkEnd(chunk.text, 0, candidateLength);
+    let safeCandidateLength = findGraphemeChunkEnd(chunk.text, 0, candidateLength);
+    const protectedRange = protectedRanges.find(
+      (range) => range.start < safeCandidateLength && safeCandidateLength < range.end,
+    );
+    if (protectedRange) {
+      safeCandidateLength = protectedRange.start;
+      if (safeCandidateLength === 0) {
+        return 0;
+      }
+    }
     const candidate = sliceMarkdownIR(chunk, 0, safeCandidateLength);
     const rendered = options.renderChunk(candidate);
     if (options.measureRendered(rendered) <= renderedLimit) {
@@ -242,7 +263,11 @@ function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: n
   return maxEnd;
 }
 
-function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): MarkdownIR[] {
+function splitMarkdownIRPreserveWhitespace(
+  ir: MarkdownIR,
+  limit: number,
+  protectedRanges: readonly SourceRange[] = [],
+): MarkdownIR[] {
   if (!ir.text) {
     return [];
   }
@@ -256,6 +281,7 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
     .filter((span) => span.style === "code" || span.style === "code_block")
     .toSorted((left, right) => left.start - right.start);
   let codeIndex = 0;
+  let protectedIndex = 0;
   const ranges: SourceRange[] = [];
   let cursor = 0;
   while (cursor < ir.text.length) {
@@ -288,7 +314,16 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
         preferredEnd = codeEnd;
       }
     }
-    const end = findGraphemeChunkEnd(ir.text, cursor, maxEnd, preferredEnd);
+    let end = findGraphemeChunkEnd(ir.text, cursor, maxEnd, preferredEnd);
+    let protectedRange = protectedRanges[protectedIndex];
+    while (protectedRange && protectedRange.end <= end) {
+      protectedRange = protectedRanges[++protectedIndex];
+    }
+    if (protectedRange && protectedRange.start < end && end < protectedRange.end) {
+      // The caller has measured this whole range against the full transport budget.
+      // A smaller intermediate split budget must not fragment it.
+      end = protectedRange.start > cursor ? protectedRange.start : protectedRange.end;
+    }
     ranges.push({ start: cursor, end });
     cursor = end;
   }

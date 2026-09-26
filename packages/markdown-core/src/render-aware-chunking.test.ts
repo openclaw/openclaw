@@ -36,6 +36,27 @@ function renderStringChunks(
 }
 
 describe("renderMarkdownIRChunksWithinLimit", () => {
+  it.each(["aaaa", "&&"])(
+    "preserves caller-owned ranges through raw and rendered cuts (%s)",
+    (prefix) => {
+      const text = `${prefix}TOKENtail`;
+      const chunks = renderMarkdownIRChunksWithinLimit({
+        ir: { text, styles: [], links: [] },
+        limit: 7,
+        protectedRanges: (chunk) => {
+          const start = chunk.text.indexOf("TOKEN");
+          return start < 0 ? [] : [{ start, end: start + 5 }];
+        },
+        renderChunk: (chunk) => chunk.text.replaceAll("&", "&amp;"),
+        measureRendered: (rendered) => rendered.length,
+      });
+
+      expect(chunks.map((chunk) => chunk.source.text).join("")).toBe(text);
+      expect(chunks.some((chunk) => chunk.rendered.includes("TOKEN"))).toBe(true);
+      expect(chunks.every((chunk) => chunk.rendered.length <= 7)).toBe(true);
+    },
+  );
+
   it("prefers word boundaries when escaping shrinks the render budget", () => {
     const ir = markdownToIR("alpha <<");
     const chunks = renderStringChunks(ir, 8);

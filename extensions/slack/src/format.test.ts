@@ -236,6 +236,62 @@ describe("normalizeSlackOutboundText", () => {
     ).toStrictEqual([]);
   });
 
+  it.each(["", " "])("keeps native links whole after prose separated by %j", (separator) => {
+    const link = `<https://example.com/${"x".repeat(50)}|chart>`;
+    const prefix = "p".repeat(100);
+    const chunks = markdownToSlackMrkdwnChunks(`${prefix}${separator}${link}`, 128);
+
+    expect(chunks).toEqual([`${prefix}${separator}`, link]);
+  });
+
+  it.each(["", "**"])("keeps native links whole when escaping shrinks the budget (%j)", (style) => {
+    const link = `<https://example.com/${"x".repeat(20)}|chart>`;
+    const chunks = markdownToSlackMrkdwnChunks(`${style}${"&".repeat(8)}${link}${style}`, 64);
+    const marker = style ? "*" : "";
+
+    expect(chunks).toEqual([`${marker}${"&amp;".repeat(8)}${marker}`, `${marker}${link}${marker}`]);
+    expect(chunks.every((chunk) => chunk.length <= 64)).toBe(true);
+  });
+
+  it("preserves multiple native tokens and their label whitespace", () => {
+    const link = "<https://example.com|a useful chart>";
+    const input = `${"p".repeat(30)}${link}<@U123>${link}`;
+    const chunks = markdownToSlackMrkdwnChunks(input, 50);
+
+    expect(chunks.join("")).toBe(input);
+    expect(chunks.filter((chunk) => chunk.includes(link))).toHaveLength(2);
+    expect(chunks.some((chunk) => chunk.includes("<@U123>"))).toBe(true);
+    expect(chunks.every((chunk) => chunk.length <= 50)).toBe(true);
+  });
+
+  it("retains bounded fallback splitting for native tokens larger than the full budget", () => {
+    const link = `<https://example.com/${"x".repeat(100)}|chart>`;
+    const chunks = markdownToSlackMrkdwnChunks(link, 64);
+
+    expect(chunks.join("")).toBe(escapeSlackMrkdwn(link));
+    expect(chunks.every((chunk) => chunk.length <= 64)).toBe(true);
+  });
+
+  it.each(["<https://example.com|chart>\u0301", "\u0600<https://example.com|chart>"])(
+    "keeps graphemes adjacent to protected native tokens whole (%s)",
+    (token) => {
+      expect(markdownToSlackMrkdwnChunks(`p${token}tail`, token.length)).toEqual([
+        "p",
+        token,
+        "tail",
+      ]);
+    },
+  );
+
+  it("retains grapheme-safe fallback when a token and its combining mark exceed the limit", () => {
+    const link = "<https://example.com|chart>";
+    const chunks = markdownToSlackMrkdwnChunks(`${link}\u0301`, link.length);
+
+    expect(chunks.join("")).toBe(`${escapeSlackMrkdwn(link)}\u0301`);
+    expect(chunks.some((chunk) => chunk.startsWith("\u0301"))).toBe(false);
+    expect(chunks.every((chunk) => chunk.length <= link.length)).toBe(true);
+  });
+
   it("includes transcript protection when a native token exactly fills the chunk budget", () => {
     expect(markdownToSlackMrkdwnChunks("<@U|user[t]>", 12)).toEqual(["&lt;@U|user[", "t]&gt;"]);
   });
