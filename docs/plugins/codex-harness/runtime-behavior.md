@@ -146,6 +146,9 @@ the run: OpenClaw waits for a valid native outcome instead of inventing missing
 items, tool arguments, or completion states. The existing
 `agents.defaults.timeoutSeconds` limit is an elapsed execution budget per
 attempt: progress does not reset it, and `0` means unlimited execution.
+The initial `model/list` lookup uses the smaller of the remaining attempt budget
+and `appServer.requestTimeoutMs`, including when Codex fetches an uncached model
+catalog online.
 OpenClaw still bounds its own requests, dynamic tools, cancellation, and local
 settlement. See [Timeouts](/plugins/codex-harness-reference#timeouts) for those
 budgets, Stop and replay behavior, and Doctor migration of retired idle settings.

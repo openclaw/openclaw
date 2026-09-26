@@ -847,6 +847,72 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     expect(fake.methods).toEqual(["model/list"]);
   });
 
+  it.each([
+    { replyAfterMs: 6_000, succeeds: true },
+    { replyAfterMs: 9_000, succeeds: false },
+  ])(
+    "bounds a $replyAfterMs ms model catalog response by the configured request deadline",
+    async ({ replyAfterMs, succeeds }) => {
+      const catalogRequested = createDeferred<number | string>();
+      const harness = createClientHarness({
+        onWrite: (line, send) => {
+          const request = JSON.parse(line) as { id: number | string; method: string };
+          if (request.method === "model/list") {
+            catalogRequested.resolve(request.id);
+            return;
+          }
+          const results: Record<string, unknown> = {
+            "config/read": { config: {}, layers: [] },
+            "configRequirements/read": { requirements: null },
+            "thread/start": threadStartResult("gpt-5.4"),
+            "mcpServerStatus/list": { data: [], nextCursor: null },
+            "turn/start": completedTurnResult(),
+          };
+          send({ id: request.id, result: results[request.method] });
+        },
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      const run = runBoundedCodexAppServerTurn({
+        ...boundedTurnDefaults(),
+        timeoutMs: 20_000,
+        options: {
+          clientFactory: async () => harness.client,
+          pluginConfig: { appServer: { requestTimeoutMs: 8_000 } },
+        },
+        isolation: "configured-transport",
+      });
+      const outcome = run.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        const catalogRequestId = await catalogRequested.promise;
+        await vi.advanceTimersByTimeAsync(replyAfterMs);
+        harness.send({
+          id: catalogRequestId,
+          result: { data: [codexModel()], nextCursor: null },
+        });
+        if (succeeds) {
+          expect(await outcome).toMatchObject({
+            value: { text: "The message was sent successfully." },
+          });
+        } else {
+          expect(await outcome).toMatchObject({
+            error: { message: expect.stringContaining("model/list timed out") },
+          });
+        }
+        const methods = harness.writes.map(
+          (line) => (JSON.parse(line) as { method: string }).method,
+        );
+        expect(methods.includes("turn/start")).toBe(succeeds);
+      } finally {
+        vi.useRealTimers();
+        harness.client.close();
+        await outcome;
+      }
+    },
+  );
+
   it.each([false, true])(
     "attests ring-zero and totals response usage (missing final usage: %s)",
     async (missingFinalUsage) => {
