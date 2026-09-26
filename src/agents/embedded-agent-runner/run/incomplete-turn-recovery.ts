@@ -34,6 +34,8 @@ const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
+const TOOL_USE_WITHOUT_CALL_RETRY_INSTRUCTION =
+  "The previous assistant turn stopped for tool use but contained no tool call, so nothing ran. Continue from the current state: call the tool you need through the tool interface instead of writing the call as text, or produce the visible answer now. Do not restart from scratch.";
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
 
@@ -197,6 +199,20 @@ function readSettledToolCalls(
         ]
       : [];
   });
+}
+
+// A tool-use stop with no structured call executed nothing. Its text is a failed
+// call rather than an answer, so continuing is as replay-safe as an empty turn.
+function isToolUseStopWithoutToolCall(
+  attempt: IncompleteTurnAttempt,
+  assistant: EmbeddedRunAttemptResult["currentAttemptAssistant"] | null,
+): boolean {
+  return (
+    assistant?.stopReason === "toolUse" &&
+    readSettledToolCalls(assistant).length === 0 &&
+    attempt.toolMetas.length === 0 &&
+    attempt.itemLifecycle.startedCount === 0
+  );
 }
 
 /** Proves settlement and intentional termination for the exact current-turn tool-call batch. */
@@ -384,11 +400,12 @@ export function resolveEmptyResponseRetryInstruction(params: {
   }
 
   const assistantState = classifyAssistantTurn(params);
-  if (!assistantState.emptyResponse) {
+  const assistant = assistantState.assistant ?? null;
+  const toolUseWithoutCall = isToolUseStopWithoutToolCall(params.attempt, assistant);
+  if (!assistantState.emptyResponse && !toolUseWithoutCall) {
     return null;
   }
 
-  const assistant = assistantState.assistant ?? null;
   if (
     assistant?.stopReason === "stop" &&
     isOllamaIncompleteTurnProvider(params.provider) &&
@@ -404,7 +421,9 @@ export function resolveEmptyResponseRetryInstruction(params: {
     // provider allowlist above.
     isZeroUsageEmptyStopAssistantTurn(assistant)
   ) {
-    return EMPTY_RESPONSE_RETRY_INSTRUCTION;
+    return toolUseWithoutCall
+      ? TOOL_USE_WITHOUT_CALL_RETRY_INSTRUCTION
+      : EMPTY_RESPONSE_RETRY_INSTRUCTION;
   }
 
   return null;
