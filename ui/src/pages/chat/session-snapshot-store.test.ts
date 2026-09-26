@@ -156,7 +156,7 @@ describe("persistent chat session snapshots", () => {
     for (const sessionKey of privateKeys) {
       expect(memory.get(sessionKey)?.snapshot).toEqual(snapshot(sessionKey));
       expect(await readRawRecord(sessionKey)).toBeUndefined();
-      expect(await readRawMetadata(sessionKey)).toBeUndefined();
+      expect(await readRawRecord(sessionKey, CHAT_SNAPSHOT_METADATA_STORE_NAME)).toBeUndefined();
       expect(writer.readSavedAt(sessionKey)).toBeNull();
       expect(reader.readSavedAt(sessionKey)).toBeNull();
       expect(await reader.read(sessionKey)).toBeNull();
@@ -226,8 +226,8 @@ describe("persistent chat session snapshots", () => {
     await reader.loadSavedAtIndex();
     expect(await readStoredChatSnapshotRecord(privateKey)).toBeUndefined();
     expect(await readRawRecord(privateKey)).toBeUndefined();
-    expect(await readRawMetadata(privateKey)).toBeUndefined();
-    expect(await readRawMetadata(orphanedKey)).toBeUndefined();
+    expect(await readRawRecord(privateKey, CHAT_SNAPSHOT_METADATA_STORE_NAME)).toBeUndefined();
+    expect(await readRawRecord(orphanedKey, CHAT_SNAPSHOT_METADATA_STORE_NAME)).toBeUndefined();
     expect(reader.readSavedAt(privateKey)).toBeNull();
     expect(reader.readSavedAt(orphanedKey)).toBeNull();
     expect(await reader.read(ordinaryKey)).toEqual(snapshot(ordinaryKey));
