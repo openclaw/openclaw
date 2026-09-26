@@ -312,6 +312,8 @@ process exit, even after its JavaScript module cache entry is removed. Cleanup
 records `retained-by-loaded-module` once for that capture lifetime instead of
 trying to unlink a loaded Windows image. Unchanged native package identities
 continue to share the retained payload across reloads.
+Native-load attempts also retain their capture when initialization throws:
+the native image can remain mapped after the initialization error.
 
 Before runtime plugin loading, startup attempts receipt-aware cleanup under
 exclusive maintenance ownership. It can reclaim a retired, unlocked instance

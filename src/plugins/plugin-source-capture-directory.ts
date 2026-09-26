@@ -3,7 +3,6 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../config/state-dir.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
@@ -41,11 +40,30 @@ const {
   ownedRoots,
   nativeReferences,
   retiringNativeRoots,
-  loadedModules,
+  nativeLoadPaths,
   retainedRoots,
   sweeps,
   warningBackoff,
 } = resolveGlobalSingleton(Symbol.for("openclaw.pluginSourceCaptureInstances"), () => {
+  const observedNativePaths = new Set<string>();
+  const loadAddon = process.dlopen.bind(process);
+  // Node keeps main-thread addons loaded: https://github.com/nodejs/node/blob/v24.8.0/src/env.cc#L1050
+  // Windows mapped-image unlink fails (access denied becomes EPERM):
+  // https://github.com/libuv/libuv/blob/v1.51.0/src/win/fs.c#L1172
+  // https://github.com/libuv/libuv/blob/v1.51.0/src/win/error.c#L158
+  // Record before initialization: it can throw or reenter cleanup with the image already mapped.
+  // Full diagnostic reports race Windows DbgHelp across workers; cleanup consumes load facts only.
+  process.dlopen = (...args) => {
+    try {
+      const file = fs.realpathSync.native(args[1]);
+      observedNativePaths.add(
+        process.platform === "win32" ? normalizeWindowsPathPreservingCase(file) : file,
+      );
+    } catch {
+      // Observation must not replace the native loader's return or original error.
+    }
+    return loadAddon(...args);
+  };
   process.once("exit", () => {
     // Explicit exits cannot await generation disposal. These native leases belong
     // only to this exiting process; worker overrides remain with their parent.
@@ -65,7 +83,7 @@ const {
     ownedRoots: new Set<string>(),
     nativeReferences: new Map<string, number>(),
     retiringNativeRoots: new Set<string>(),
-    loadedModules: new Set<string>(),
+    nativeLoadPaths: observedNativePaths,
     retainedRoots: new Set<string>(),
     sweeps: new Map<string, Promise<void>>(),
     warningBackoff: new Map<string, { next: number; delay: number }>(),
@@ -99,37 +117,9 @@ function warn(error: unknown) {
   process.emitWarning(`Plugin source capture cleanup: ${String(error)}`);
 }
 
-function observeLoadedModules(): ReadonlySet<string> {
-  // Node keeps main-thread addons loaded: https://github.com/nodejs/node/blob/v24.8.0/src/env.cc#L1050
-  // Windows mapped-image unlink fails (access denied becomes EPERM):
-  // https://github.com/libuv/libuv/blob/v1.51.0/src/win/fs.c#L1172
-  // https://github.com/libuv/libuv/blob/v1.51.0/src/win/error.c#L158
-  // The native map also covers direct dlopen and modules already evicted from require.cache.
-  const report: unknown = process.report?.getReport();
-  const sharedObjects = isRecord(report) ? report.sharedObjects : undefined;
-  if (Array.isArray(sharedObjects)) {
-    for (const file of sharedObjects) {
-      if (typeof file === "string") {
-        loadedModules.add(
-          process.platform === "win32" ? normalizeWindowsPathPreservingCase(file) : file,
-        );
-      }
-    }
-  }
-  return loadedModules;
-}
-
 /** Physical module lifetime outlives registration and CommonJS cache eviction. */
-export function retainLoadedPluginSourceCapture(
-  directory: string,
-  prepared?: ReadonlySet<string>,
-): boolean {
-  const containsLoadedModule = () =>
-    [...(prepared ?? loadedModules)].some((file) => isPathInside(directory, file));
-  if (!prepared && !containsLoadedModule()) {
-    observeLoadedModules();
-  }
-  if (!containsLoadedModule()) {
+export function retainLoadedPluginSourceCapture(directory: string): boolean {
+  if (![...nativeLoadPaths].some((file) => isPathInside(directory, file))) {
     return false;
   }
   const retained = [...ownedRoots].find((root) => isPathInside(root, directory)) ?? directory;
@@ -179,7 +169,6 @@ async function reclaimInstances(
   }
   const cutoff = Date.now() - CAPTURE_GRACE_MS;
   let legacyAllowed: boolean | undefined;
-  let preparedModules: ReadonlySet<string> | undefined;
   for (const entry of entries) {
     if (!entry.isDirectory() || (legacy && !isLegacyPluginSourceCaptureName(entry.name))) {
       continue;
@@ -196,10 +185,7 @@ async function reclaimInstances(
       }
       const canonical = await fsPromises.realpath(directory);
       // Opening/closing a second native connection can disturb this process's POSIX locks.
-      if (
-        ownedRoots.has(canonical) ||
-        retainLoadedPluginSourceCapture(canonical, (preparedModules ??= observeLoadedModules()))
-      ) {
+      if (ownedRoots.has(canonical) || retainLoadedPluginSourceCapture(canonical)) {
         continue;
       }
       const leasePath = path.join(canonical, LEASE_FILE);
