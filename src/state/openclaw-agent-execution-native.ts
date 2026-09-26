@@ -273,17 +273,9 @@ export function createAgentDatabaseNativeGeneration(
           assertPreparationJournal?.(
             isRecord(facts) ? facts.agentDeletionJournalPresent : undefined,
           );
-          assertCallerCurrent?.();
           nativeIdentity ??= receivedIdentity;
         }
         return false;
-      };
-      const prepareGrant = (request: SqliteWorkerAdmissionRequest) => {
-        assertCurrent();
-        assertCallerCurrent?.();
-        if (request.stage === "open") {
-          registration?.begin();
-        }
       };
       return source.createAdmission({
         attachment: {
@@ -297,7 +289,11 @@ export function createAgentDatabaseNativeGeneration(
             return;
           }
           source.assertCurrent();
-          prepareGrant(request);
+          assertCurrent();
+          assertCallerCurrent?.();
+          if (request.stage === "open") {
+            registration?.begin();
+          }
           if (request.stage === "prepare" && nativeIdentity && isRecord(request.facts)) {
             receiveValidation?.(nativeIdentity.physicalIdentity, request.facts.validation);
             receiveValidation = undefined;
@@ -400,7 +396,7 @@ export function createAgentDatabaseNativeGeneration(
         await runSqliteWorkerStoreOperation(
           store,
           (scope) => scope.execute({ type: "database.prepareWrite", input: undefined }),
-          context,
+          undefined,
           assertCurrent,
           admission(source, registration, assertCallerCurrent),
         );
@@ -415,7 +411,7 @@ export function createAgentDatabaseNativeGeneration(
     return runSqliteWorkerStoreOperation(
       store,
       operation,
-      context,
+      undefined,
       assertCurrent,
       admission(source, undefined, assertCallerCurrent),
     );
@@ -446,8 +442,7 @@ export function createAgentDatabaseNativeGeneration(
   return {
     failed: () =>
       openingFailed || Boolean(openedStore && !isSqliteWorkerStoreAvailable(openedStore)),
-    run: (source, operation, assertCallerCurrent, createIfMissing) =>
-      run(source, operation, assertCallerCurrent, createIfMissing),
+    run,
     close() {
       retiring = true;
       closing ??= (async () => {

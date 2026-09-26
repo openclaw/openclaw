@@ -33,7 +33,11 @@ import {
   observeOpenClawDatabaseMaintenanceResource,
 } from "./openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "./openclaw-state-db-cache.js";
-import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import {
+  captureOpenClawStateReadContext,
+  captureOpenClawStateWorkerContext,
+} from "./openclaw-state-worker-context.js";
 
 export type OpenClawAgentDatabaseExecution = {
   readonly agentId: string;
@@ -104,7 +108,6 @@ export function captureOpenClawAgentDatabaseExecution(
   if (!supportsOpenClawAgentDatabaseExecution(options)) {
     throw new Error("This agent database scope still requires its existing native owner");
   }
-  const context = captureOpenClawStateWorkerContext({ env: options.env });
   const existing = executions.get(pathname);
   const expectedCreationIdentity = constraints.expectedCreationIdentity
     ? Object.freeze({ ...constraints.expectedCreationIdentity })
@@ -134,13 +137,15 @@ export function captureOpenClawAgentDatabaseExecution(
         `OpenClaw agent database ${pathname} is already open for agent ${existing.agentId}; requested agent ${agentId}.`,
       );
     }
-    if (existing.sharedDatabaseKey !== context.admission.identity.key) {
+    const state = captureOpenClawStateReadContext(resolveOpenClawStateSqlitePath(options.env));
+    if (existing.sharedDatabaseKey !== state.admission.identity.key) {
       throw new Error(
         "Agent database execution belongs to another shared-state database; drain its existing resources before changing the state directory.",
       );
     }
     return existing.borrow(constraints.expectedIdentity, expectedCreationIdentity);
   }
+  const context = captureOpenClawStateWorkerContext({ env: options.env });
   const executionOptions = { agentId, path: pathname, env: context.environment };
   let retired = false;
   let borrowers = 0;
@@ -232,8 +237,6 @@ export function captureOpenClawAgentDatabaseExecution(
     createIfMissing = false,
     creatingTarget?: DatabasePathIdentity,
   ): Promise<T | undefined> {
-    assertCurrent();
-    assertCallerCurrent?.();
     const pending = agentDatabaseLifecycle.pending.get(pathname);
     if (pending) {
       if (creatingTarget && !fileIdentity) {
@@ -383,25 +386,30 @@ export function captureOpenClawAgentDatabaseExecution(
       const assertReferenceCurrent = () => {
         assertCurrent();
         assertObservedFileCurrent();
-        if (expectedIdentity) {
+        if (
+          fileIdentity &&
+          expectedIdentity &&
+          (fileIdentity.physicalIdentity !== expectedIdentity.physicalIdentity ||
+            (fileIdentity.birthtime !== undefined &&
+              expectedIdentity.birthtime !== undefined &&
+              fileIdentity.birthtime !== expectedIdentity.birthtime))
+        ) {
+          throw new Error("Agent database borrower belongs to another physical file");
+        }
+        const identity = fileIdentity ?? expectedIdentity;
+        if (identity) {
           assertExistingDatabaseIdentity(
             pathname,
-            `file:${expectedIdentity.physicalIdentity}`,
-            expectedIdentity.birthtime,
+            `file:${identity.physicalIdentity}`,
+            fileIdentity?.birthtime ?? expectedIdentity?.birthtime,
           );
         }
-        if (fileIdentity) {
-          assertExistingDatabaseIdentity(
-            pathname,
-            `file:${fileIdentity.physicalIdentity}`,
-            fileIdentity.birthtime,
-          );
-          if (
-            creatingTarget &&
-            readDatabasePathIdentitySync(pathname).canonicalPath !== creatingTarget.canonicalPath
-          ) {
-            throw new Error("Agent creation changed its originally observed target");
-          }
+        if (
+          fileIdentity &&
+          creatingTarget &&
+          readDatabasePathIdentitySync(pathname).canonicalPath !== creatingTarget.canonicalPath
+        ) {
+          throw new Error("Agent creation changed its originally observed target");
         }
       };
       const assertBorrowed = () => {

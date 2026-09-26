@@ -77,6 +77,40 @@ it.each(["missing", "schema-missing"] as const)(
       await expect(execution.runExisting(source(), async () => "retained")).resolves.toBe(
         "retained",
       );
+      const unrelatedInitialization = vi.fn(() => {
+        throw new Error("A warm borrower must not recapture initialization configuration");
+      });
+      const warm = captureOpenClawAgentDatabaseExecution({
+        ...options,
+        env: Object.defineProperty({ ...options.env }, "UNRELATED_INITIALIZATION", {
+          enumerable: true,
+          get: unrelatedInitialization,
+        }),
+      });
+      try {
+        await expect(warm.runExisting(source(), async () => "warm")).resolves.toBe("warm");
+        expect(unrelatedInitialization).not.toHaveBeenCalled();
+      } finally {
+        await warm.release();
+      }
+      const stale = captureOpenClawAgentDatabaseExecution(options, {
+        expectedIdentity: {
+          kind: "file",
+          physicalIdentity: physical.key.slice("file:".length),
+          nativeLocation: physical.canonicalPath,
+          birthtime: (fs.statSync(options.path, { bigint: true }).birthtimeNs + 1n).toString(),
+        },
+      });
+      const operation = vi.fn(async () => "must not enter with stale identity");
+      try {
+        expect(() => stale.assertCurrent()).toThrow(/identity|physical file/);
+        await expect(stale.runExisting(source(), operation)).rejects.toThrow(
+          /identity|physical file/,
+        );
+        expect(operation).not.toHaveBeenCalled();
+      } finally {
+        await stale.release();
+      }
     } finally {
       await execution.release();
     }
