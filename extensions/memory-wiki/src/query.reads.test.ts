@@ -207,7 +207,7 @@ describe("wiki query page reads", () => {
   it.each(["exact", "basename", "search"] as const)(
     "rejects a page swapped outside the vault during %s reads",
     async (route) => {
-      const { rootDir, config, targetPath, relativePath } = await createReadVault();
+      const { config, targetPath, relativePath } = await createReadVault();
       const outside = await createReadVault();
       const canonicalTarget = await fs.realpath(targetPath);
       await fs.writeFile(

@@ -137,7 +137,7 @@ export function registerMemoryCli(
         .option("--agent <id>", "Agent id (default: configured default agent)")
         .option("--limit <n>", "Max results", "5")
         .action(async (query, opts) => {
-          let operationFailed = false;
+          let failure: { error: unknown } | undefined;
           try {
             const agentId = resolveCliAgentId(opts.agent);
             const limit = parsePositiveIntegerOption(opts.limit, "--limit");
@@ -156,17 +156,16 @@ export function registerMemoryCli(
               score: r.score,
             }));
             defaultRuntime.writeJson(output);
-          } catch (err) {
-            operationFailed = true;
-            throw err;
-          } finally {
-            try {
-              await embeddings.close?.();
-            } catch (err) {
-              if (!operationFailed) {
-                throw err;
-              }
-            }
+          } catch (error) {
+            failure = { error };
+          }
+          try {
+            await embeddings.close?.();
+          } catch (error) {
+            failure ??= { error };
+          }
+          if (failure) {
+            throw failure.error;
           }
         });
 

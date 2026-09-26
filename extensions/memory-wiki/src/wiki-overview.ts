@@ -90,21 +90,21 @@ export function projectMemoryWikiOverviewItem(
   const updatedAt = normalizeOptionalString(page.updatedAt);
   const sourceType = normalizeOptionalString(page.sourceType);
   const snippet = extractSnippet(body);
-  return {
-    pagePath: page.relativePath,
-    title: page.title,
-    kind: page.kind,
-    ...(page.id ? { id: page.id } : {}),
-    ...(updatedAt ? { updatedAt } : {}),
-    ...(sourceType ? { sourceType } : {}),
-    claimCount: page.claims.length,
-    questionCount: page.questions.length,
-    contradictionCount: page.contradictions.length,
-    claims: page.claims.map((claim) => claim.text).slice(0, 3),
-    questions: page.questions.slice(0, 3),
-    contradictions: page.contradictions.slice(0, 3),
-    ...(snippet ? { snippet } : {}),
-  };
+  return Object.assign(
+    { pagePath: page.relativePath, title: page.title, kind: page.kind },
+    page.id ? { id: page.id } : {},
+    updatedAt ? { updatedAt } : {},
+    sourceType ? { sourceType } : {},
+    {
+      claimCount: page.claims.length,
+      questionCount: page.questions.length,
+      contradictionCount: page.contradictions.length,
+      claims: page.claims.map((claim) => claim.text).slice(0, 3),
+      questions: page.questions.slice(0, 3),
+      contradictions: page.contradictions.slice(0, 3),
+    },
+    snippet ? { snippet } : {},
+  );
 }
 
 export function buildMemoryWikiOverview(
@@ -138,16 +138,18 @@ export function buildMemoryWikiOverview(
     if (clusterItems.length === 0) {
       return null;
     }
-    return {
-      key: kind,
-      label: OVERVIEW_KIND_LABELS[kind],
-      itemCount: clusterItems.length,
-      claimCount: clusterItems.reduce((sum, item) => sum + item.claimCount, 0),
-      questionCount: clusterItems.reduce((sum, item) => sum + item.questionCount, 0),
-      contradictionCount: clusterItems.reduce((sum, item) => sum + item.contradictionCount, 0),
-      ...(clusterItems[0]?.updatedAt ? { updatedAt: clusterItems[0].updatedAt } : {}),
-      items: clusterItems,
-    } satisfies MemoryWikiOverviewCluster;
+    return Object.assign(
+      {
+        key: kind,
+        label: OVERVIEW_KIND_LABELS[kind],
+        itemCount: clusterItems.length,
+        claimCount: clusterItems.reduce((sum, item) => sum + item.claimCount, 0),
+        questionCount: clusterItems.reduce((sum, item) => sum + item.questionCount, 0),
+        contradictionCount: clusterItems.reduce((sum, item) => sum + item.contradictionCount, 0),
+      },
+      clusterItems[0]?.updatedAt ? { updatedAt: clusterItems[0].updatedAt } : {},
+      { items: clusterItems },
+    ) satisfies MemoryWikiOverviewCluster;
   }).filter((entry): entry is MemoryWikiOverviewCluster => entry !== null);
 
   return {

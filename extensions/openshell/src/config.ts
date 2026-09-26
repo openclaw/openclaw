@@ -98,6 +98,24 @@ function isManagedOpenShellRemotePath(value: string): boolean {
   );
 }
 
+function normalizeOpenShellRemotePath(
+  value: string | undefined,
+  fallback: string,
+  fieldName = "remote path",
+): string {
+  const candidate = value ?? fallback;
+  const normalized = path.posix.normalize(candidate.trim() || fallback);
+  if (!normalized.startsWith("/")) {
+    throw new Error(`OpenShell ${fieldName} must be absolute: ${candidate}`);
+  }
+  if (!isManagedOpenShellRemotePath(normalized)) {
+    throw new Error(
+      `OpenShell ${fieldName} must stay under ${OPEN_SHELL_MANAGED_REMOTE_ROOTS.join(" or ")}: ${candidate}`,
+    );
+  }
+  return normalized;
+}
+
 export function createOpenShellPluginConfigSchema(): OpenClawPluginConfigSchema {
   return buildPluginConfigSchema(OpenShellPluginConfigSchema, {
     safeParse(value) {
@@ -136,11 +154,15 @@ export function resolveOpenShellPluginConfig(value: unknown): ResolvedOpenShellP
     providers: [...new Set(cfg.providers ?? [])],
     gpu: cfg.gpu ?? false,
     autoProviders: cfg.autoProviders ?? true,
-    remoteWorkspaceDir: path.posix.normalize(
-      cfg.remoteWorkspaceDir ?? DEFAULT_REMOTE_WORKSPACE_DIR,
+    remoteWorkspaceDir: normalizeOpenShellRemotePath(
+      cfg.remoteWorkspaceDir,
+      DEFAULT_REMOTE_WORKSPACE_DIR,
+      "remoteWorkspaceDir",
     ),
-    remoteAgentWorkspaceDir: path.posix.normalize(
-      cfg.remoteAgentWorkspaceDir ?? DEFAULT_REMOTE_AGENT_WORKSPACE_DIR,
+    remoteAgentWorkspaceDir: normalizeOpenShellRemotePath(
+      cfg.remoteAgentWorkspaceDir,
+      DEFAULT_REMOTE_AGENT_WORKSPACE_DIR,
+      "remoteAgentWorkspaceDir",
     ),
     timeoutMs:
       typeof cfg.timeoutSeconds === "number"

@@ -14,7 +14,7 @@ describe("runObsidianAction", () => {
     { action: OBSIDIAN_ACTIONS[3], value: undefined, argv: ["daily"] },
   ])(
     "builds the official $action.command argv and bounds the request",
-    async ({ action, value, argv }) => {
+    async ({ action, value, argv: expectedArgv }) => {
       const config = resolveMemoryWikiConfig(
         {
           obsidian: {
@@ -47,7 +47,7 @@ describe("runObsidianAction", () => {
       expect(calls).toEqual([
         {
           command: "/usr/local/bin/obsidian",
-          argv: ["vault=OpenClaw Wiki", ...argv],
+          argv: ["vault=OpenClaw Wiki", ...expectedArgv],
           options: { logOutput: false, timeoutMs: 10_000 },
         },
       ]);
