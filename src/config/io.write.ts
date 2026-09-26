@@ -77,6 +77,7 @@ import {
 import { resolvePersistCandidateForWrite } from "./io.write-prepare.js";
 import {
   assertBaseSnapshotStillCurrent,
+  captureConfigRootWriteTarget,
   createGuardedConfigFileSystem,
   formatConfigArtifactTimestamp,
   resolveConfigSizeBaselineBytes,
@@ -95,6 +96,7 @@ import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectRawWithPlugins } from "./validation.js";
 import { rejectConfigNonFiniteNumbers } from "./value-tree.js";
+import { composeConfigWriteAssertions } from "./write-authority.js";
 import { captureConfigWriteLockGuard } from "./write-lock.js";
 
 export async function writeConfigFileFromContext(
@@ -123,6 +125,14 @@ export async function writeConfigFileFromContext(
   }
   options.assertConfigPathForWrite?.();
   assertConfigWriteAllowedInCurrentMode({ configPath, env: deps.env });
+  const { path: publicationPath, pathProof } = captureConfigRootWriteTarget(configPath, deps.fs);
+  options = {
+    ...options,
+    assertConfigPathForWrite: composeConfigWriteAssertions(
+      options.assertConfigPathForWrite,
+      pathProof.assertCurrent,
+    ),
+  };
   const unsetPaths = resolveManagedUnsetPathsForWrite(options.unsetPaths);
   const snapshotRead = options.baseSnapshot
     ? {
@@ -479,13 +489,17 @@ export async function writeConfigFileFromContext(
       warn: (message) => deps.logger.warn(message),
       skipOutputLogs: options.skipOutputLogs,
     });
+    // Publish against the real directory while retaining the operator's config
+    // path for selection, audit records, and the captured alias identity.
+    const publicationSnapshot = { ...snapshot, path: publicationPath };
     const guardedFs = createGuardedConfigFileSystem(
-      configPath,
+      publicationPath,
       deps.fs,
       options.assertConfigPathForWrite,
       {
-        snapshot,
+        snapshot: publicationSnapshot,
         includeGraph: { hashes: includeFileHashes, targets: includeFileTargets },
+        targetPathProof: pathProof,
         onRootRemoved: () => {
           publication.phase = "removed";
         },
@@ -497,14 +511,14 @@ export async function writeConfigFileFromContext(
     // The writer owns compensation identity; callers supply the still-live enclosing owner.
     restoreFile = (assertCurrent) =>
       rollbackConfigFileWriteIfUnchanged({
-        configPath,
-        previousSnapshot: snapshot,
+        configPath: publicationPath,
+        previousSnapshot: publicationSnapshot,
         committedHash: publication.phase === "removed" ? hashConfigRaw(null) : nextHash,
         fsModule: deps.fs,
         ...guardedFs.captureRollbackProof(assertCurrent),
       });
     await using preparedFile = await prepareConfigFileWrite({
-      configPath,
+      configPath: publicationPath,
       content: json,
       previousRaw: snapshot.raw,
       fsModule: guardedFs.fileSystem,
@@ -649,6 +663,7 @@ export async function writeConfigFileFromContext(
       }
       try {
         writeOptions.assertConfigPathForWrite?.();
+        pathProof.assertCurrent();
       } catch {
         // Lost path provenance forbids auditing, but does not replace the original failure.
         throw error;
