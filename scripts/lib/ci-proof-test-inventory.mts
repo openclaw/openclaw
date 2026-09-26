@@ -1,3 +1,5 @@
+import { statSync } from "node:fs";
+import { resolve } from "node:path";
 import { stateStartupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
 
 // Complete process/lifecycle proofs stay outside PR CI. Main retains runtime
@@ -124,7 +126,7 @@ export function isReleaseOnlyRuntimeTestFile(file: string): boolean {
 
 // Complete integration proofs run hourly on main and in full release validation.
 // PRs opt in when an edited test or its source owner resolves to the proof.
-export const PR_EXEMPT_RUNTIME_TEST_FILES = [
+const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "extensions/acpx/src/runtime-mcp.process.test.ts",
   "extensions/acpx/src/runtime-owner.process.test.ts",
   "extensions/codex/src/node-exec-server.test.ts",
@@ -323,6 +325,12 @@ export const PR_EXEMPT_RUNTIME_TEST_FILES = [
 ] as const;
 
 const prExemptRuntimeTestFiles = new Set<string>(PR_EXEMPT_RUNTIME_TEST_FILES);
+
+export function listPrExemptRuntimeTestFiles(cwd = process.cwd()): string[] {
+  return PR_EXEMPT_RUNTIME_TEST_FILES.filter((file) =>
+    statSync(resolve(cwd, file), { throwIfNoEntry: false })?.isFile(),
+  );
+}
 
 export function isPrExemptRuntimeTestFile(file: string): boolean {
   return prExemptRuntimeTestFiles.has(file);

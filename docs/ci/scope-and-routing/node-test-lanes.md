@@ -70,6 +70,10 @@ unresolved inputs alone do not enable the inventory. Reduced groups retain
 distinct timing identities and the original configs, prerequisites, process
 isolation, worker limits, cases, and assertions. This tier is separate from the
 older release-only inventories, whose decisions remain unchanged.
+The inventory owner enumerates only audited paths that are files in the selected
+checkout. Deleted paths need no runnable owner; every live entry still requires
+exactly one hourly and release owner. New and renamed paths keep ordinary PR
+coverage until separately audited for this tier.
 Hourly GitHub-hosted plans reuse the measured serial tooling packer for the
 retained subset. Complete file estimates use the hosted cost scale; Blacksmith
 process observations stay with Blacksmith. Packing preserves each child group,

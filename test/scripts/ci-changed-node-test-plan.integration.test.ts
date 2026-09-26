@@ -14,7 +14,7 @@ import {
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import {
   isReleaseOnlyRuntimeTestFile,
-  PR_EXEMPT_RUNTIME_TEST_FILES,
+  listPrExemptRuntimeTestFiles,
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
@@ -35,7 +35,8 @@ function selectedFiles(shards: ReturnType<typeof createChangedNodeTestShards>) {
 }
 
 it("retains every PR-exempt file in hourly and release plans with its canonical owner", () => {
-  expect(PR_EXEMPT_RUNTIME_TEST_FILES.length).toBeGreaterThan(0);
+  const prExemptFiles = listPrExemptRuntimeTestFiles();
+  expect(prExemptFiles.length).toBeGreaterThan(0);
   const common = {
     runnerBackend: "github",
     includeReleaseOnlyPluginShards: false,
@@ -75,7 +76,7 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
     ...fallbackGroups(retainedExtensions),
   ];
   const releaseGroups = fallbackGroups([...release, ...retainedExtensions]);
-  for (const file of PR_EXEMPT_RUNTIME_TEST_FILES) {
+  for (const file of prExemptFiles) {
     const rawConfig = expectDefined(buildVitestRunPlans([file])[0]?.config, file);
     const config = resolveCanonicalNodeTestConfig(file, rawConfig) ?? rawConfig;
     const owners = (groups: typeof prGroups) =>
@@ -98,7 +99,7 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
 it("opts in a PR-exempt process proof for test and opaque subject edits even on broad fallback", () => {
   const target = "test/scripts/upgrade-survivor-plugin-registry.test.ts";
   const source = "scripts/e2e/upgrade-survivor-docker.sh";
-  expect(PR_EXEMPT_RUNTIME_TEST_FILES).toContain(target);
+  expect(listPrExemptRuntimeTestFiles()).toContain(target);
   const options = {
     runnerBackend: "github",
     includeReleaseOnlyRuntimeTests: false,

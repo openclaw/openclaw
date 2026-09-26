@@ -59,7 +59,7 @@ import { isPolicyTestOwnedPath, resolvePolicyTestTargets } from "./ci-policy-tes
 import {
   isCiProofTestFile,
   isPrExemptRuntimeTestFile,
-  PR_EXEMPT_RUNTIME_TEST_FILES,
+  listPrExemptRuntimeTestFiles,
 } from "./ci-proof-test-inventory.mts";
 import { resolveExtensionTestConfig } from "./extension-test-plan.mts";
 import { buildPluginSdkEntrySources, publicPluginSdkEntrypoints } from "./plugin-sdk-entries.mts";
@@ -581,7 +581,7 @@ export function createPrExemptExtensionTestShards(
 ): ChangedNodeTestShard[] {
   const cwd = options.cwd ?? process.cwd();
   const targets = new Set<string>(
-    PR_EXEMPT_RUNTIME_TEST_FILES.filter(
+    listPrExemptRuntimeTestFiles(cwd).filter(
       (file) => file.startsWith("extensions/") && !isPluginControlUiPath(file),
     ),
   );
