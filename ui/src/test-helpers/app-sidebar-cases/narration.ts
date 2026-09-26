@@ -168,12 +168,9 @@ describe("AppSidebar live narration", () => {
     expect(sessions.subscribeMessages).toHaveBeenCalledTimes(6);
     expect(sessions.unsubscribeMessages).not.toHaveBeenCalled();
 
+    const settled: GatewaySessionRow = { ...rows[1]!, hasActiveRun: false, status: "done" };
     sessions.publishList({
-      result: sessionsResult(
-        reordered.map((row) =>
-          row.key === keys[1] ? { ...row, hasActiveRun: false, status: "done" } : row,
-        ),
-      ),
+      result: sessionsResult(reordered.map((row) => (row.key === settled.key ? settled : row))),
       agentId: "main",
     });
     await sidebar.updateComplete;
