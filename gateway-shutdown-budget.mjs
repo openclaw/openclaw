@@ -29,11 +29,13 @@ const GATEWAY_SUPERVISOR_EXIT_MARGIN_SHARE = 0.25;
  * 5 seconds is the drain the shipped LaunchAgent template already yields: its 20 second
  * `ExitTimeOut` funds the 5 second margin and the 10 second reserve outright and leaves
  * active work the remaining 5. Holding that as a floor keeps the reserve whole, the full
- * 10 seconds, for every stop budget of 15 seconds or more, which is every `ExitTimeOut`
- * of 20 seconds or more once the probe that reads it is subtracted: that probe is up to
- * three `launchctl print` calls at `LAUNCHCTL_PRINT_TIMEOUT_MS` (2 seconds) each, so its
- * cost is bounded near 6 seconds, not the low milliseconds one measured host might
- * suggest. Which allowance pays that cost turns on a 5 second threshold. At or under 5
+ * 10 seconds, for every stop budget of 15 seconds or more, and 15000 is exactly the
+ * smallest budget that does. An `ExitTimeOut` of 20 seconds clears that bar only when
+ * the probe that reads it costs nothing; every real cost comes off the reserve first.
+ * That probe is up to three `launchctl print` calls at `LAUNCHCTL_PRINT_TIMEOUT_MS`
+ * (2 seconds) each, so its cost is bounded near 6 seconds, not the low milliseconds one
+ * measured host might suggest. Which allowance pays that cost turns on a 5 second
+ * threshold. At or under 5
  * seconds of probe cost the reserve absorbs all of it and this floor is untouched, so a
  * 20 second deadline resolves `10000 - cost` of reserve against a flat 5 second drain and
  * gives up exactly what the probe cost (13ms measured here, so 9987). Over 5 seconds the
