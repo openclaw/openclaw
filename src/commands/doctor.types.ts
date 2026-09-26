@@ -5,6 +5,7 @@ export type DoctorOptions = {
   nonInteractive?: boolean;
   deep?: boolean;
   repair?: boolean;
+  externallyManaged?: boolean;
   force?: boolean;
   generateGatewayToken?: boolean;
   allowExec?: boolean;

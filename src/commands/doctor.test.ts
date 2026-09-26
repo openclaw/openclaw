@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   promptYesNo: vi.fn(),
   readSourceConfigBestEffort: vi.fn(),
   reconcileGithubIssue: vi.fn(),
+  runExternallyManagedDoctorRepair: vi.fn(),
   runPostUpgradeProbes: vi.fn(),
   runDoctorStateSqliteCompact: vi.fn(),
   runDoctorSessionSqlite: vi.fn(),
@@ -25,6 +26,10 @@ vi.mock("../config/io.runtime.js", () => ({
 
 vi.mock("./doctor-post-upgrade.js", () => ({
   runPostUpgradeProbes: mocks.runPostUpgradeProbes,
+}));
+
+vi.mock("./doctor-externally-managed-repair.js", () => ({
+  runExternallyManagedDoctorRepair: mocks.runExternallyManagedDoctorRepair,
 }));
 
 vi.mock("./doctor-session-sqlite.js", () => ({
@@ -180,6 +185,49 @@ describe("doctorCommand", () => {
     expect(runtime.writeJson).toHaveBeenCalledWith(report, 2);
     expect(runtime.log).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps externally managed repair diagnostics inside its JSON report", async () => {
+    const report = {
+      schemaVersion: 1,
+      mode: "externally-managed",
+      ok: true,
+      config: { path: "/managed/openclaw.json", status: "unchanged", sha256: "abc123" },
+      service: { status: "externally-managed" },
+      applied: [],
+      skipped: [],
+      remaining: [],
+    };
+    mocks.runExternallyManagedDoctorRepair.mockImplementationOnce(
+      async ({ runtime: repairRuntime }: { runtime: ReturnType<typeof createDoctorRuntime> }) => {
+        repairRuntime.log("maintenance acquired");
+        repairRuntime.error("recoverable detail");
+        return report;
+      },
+    );
+    const runtime = createDoctorRuntime();
+
+    await expect(
+      doctorCommand(runtime, {
+        externallyManaged: true,
+        json: true,
+        nonInteractive: true,
+        repair: true,
+      }),
+    ).rejects.toThrow("exit:0");
+
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      {
+        ...report,
+        diagnostics: [
+          { level: "info", message: "maintenance acquired" },
+          { level: "error", message: "recoverable detail" },
+        ],
+      },
+      2,
+    );
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it.each(["stable", "beta", "extended-stable", undefined])(

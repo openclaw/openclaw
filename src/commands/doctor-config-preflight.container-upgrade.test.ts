@@ -28,6 +28,8 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import * as configFlow from "./doctor-config-flow.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import { runExternallyManagedDoctorRepair } from "./doctor-externally-managed-repair.js";
+import * as migrationBackup from "./doctor-migration-backup.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
 const { mocks } = await import("../flows/doctor-health.test-support.js");
@@ -106,6 +108,65 @@ function seedSchema19Agent(stateDir: string, unsafe = false): string {
 }
 
 describe("container image replacement Doctor repair and startup readiness", () => {
+  it("repairs offline state without changing externally managed config", async () => {
+    await withContainerState(async (stateDir) => {
+      const configPath = path.join(stateDir, "openclaw.json");
+      const configBefore = fs.readFileSync(configPath);
+      seedSchema19Agent(stateDir);
+
+      const report = await runExternallyManagedDoctorRepair({
+        options: {
+          repair: true,
+          externallyManaged: true,
+          nonInteractive: true,
+          json: true,
+        },
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      });
+
+      expect(report.ok, report.remaining.map((entry) => entry.message).join("\n")).toBe(true);
+      expect(report.mode).toBe("externally-managed");
+      expect(report.config.status).toBe("unchanged");
+      expect(report.service.status).toBe("externally-managed");
+      expect(report.skipped.map((entry) => entry.scope)).toEqual(["config", "service"]);
+      expect(fs.readFileSync(configPath)).toEqual(configBefore);
+      await runStartupConfigPreflight({ gateway: true });
+    });
+  });
+
+  it("does not migrate a pending database when its backup fails", async () => {
+    await withContainerState(async (stateDir) => {
+      const databasePath = seedSchema19Agent(stateDir);
+      vi.spyOn(migrationBackup, "backupDoctorMigrationDatabases").mockResolvedValue({
+        changes: [],
+        warnings: ["Could not verify the pre-migration backup."],
+      });
+
+      const report = await runExternallyManagedDoctorRepair({
+        options: {
+          repair: true,
+          externallyManaged: true,
+          nonInteractive: true,
+          json: true,
+        },
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      });
+
+      expect(report.ok).toBe(false);
+      expect(report.remaining).toContainEqual({
+        stepId: "database-backup",
+        message: "Could not verify the pre-migration backup.",
+      });
+      // Backup failure must leave the released schema untouched for a later retry.
+      const database = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
+      } finally {
+        database.close();
+      }
+    });
+  });
+
   it("preserves schema 19 at startup, then backs it up and repairs it through Doctor", async () => {
     await withContainerState(async (stateDir) => {
       const databasePath = seedSchema19Agent(stateDir);

@@ -60,6 +60,11 @@ export function registerMaintenanceCommands(
     .option("--repair", "Apply recommended repairs without prompting", false)
     .option("--fix", "Apply recommended repairs (alias for --repair)", false)
     .option(
+      "--externally-managed",
+      "Repair offline runtime state without changing deployment-owned config or services",
+      false,
+    )
+    .option(
       "--force",
       "Allow aggressive repair choices (with --fix, preserves service definitions)",
       false,
@@ -127,8 +132,30 @@ export function registerMaintenanceCommands(
           opts.json === true || (opts.lint === true && !process.stdout.isTTY),
         );
       }
+      if (opts.externallyManaged === true && !(opts.repair === true || opts.fix === true)) {
+        return exitDoctorError(
+          "doctor --externally-managed requires --fix or --repair.",
+          opts.json === true,
+        );
+      }
+      if (opts.externallyManaged === true && opts.nonInteractive !== true) {
+        return exitDoctorError(
+          "doctor --externally-managed requires --non-interactive because the deployment controller owns repair approval.",
+          opts.json === true,
+        );
+      }
+      if (
+        opts.externallyManaged === true &&
+        (opts.force === true || opts.yes === true || opts.generateGatewayToken === true)
+      ) {
+        return exitDoctorError(
+          "doctor --externally-managed cannot be combined with --force, --yes, or --generate-gateway-token.",
+          opts.json === true,
+        );
+      }
       const jsonImpliesLint =
         opts.json === true &&
+        opts.externallyManaged !== true &&
         opts.lint !== true &&
         opts.postUpgrade !== true &&
         typeof opts.stateSqlite !== "string" &&
@@ -208,6 +235,7 @@ export function registerMaintenanceCommands(
               workspaceSuggestions: opts.workspaceSuggestions,
               yes: Boolean(opts.yes),
               repair: Boolean(opts.repair) || Boolean(opts.fix),
+              externallyManaged: Boolean(opts.externallyManaged),
               force: Boolean(opts.force),
               nonInteractive: Boolean(opts.nonInteractive),
               generateGatewayToken: Boolean(opts.generateGatewayToken),

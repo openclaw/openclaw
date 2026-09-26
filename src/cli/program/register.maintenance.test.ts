@@ -172,6 +172,54 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(disabledOptions.workspaceSuggestions).toBe(false);
   });
 
+  it("forwards the externally managed repair posture without selecting lint", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli([
+      "doctor",
+      "--fix",
+      "--externally-managed",
+      "--non-interactive",
+      "--json",
+    ]);
+
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    const [, options] = commandCall(doctorCommand);
+    expect(options).toMatchObject({
+      repair: true,
+      externallyManaged: true,
+      nonInteractive: true,
+      json: true,
+    });
+  });
+
+  it.each([
+    {
+      label: "without repair",
+      args: ["--externally-managed", "--non-interactive"],
+      message: "doctor --externally-managed requires --fix or --repair.",
+    },
+    {
+      label: "without non-interactive approval",
+      args: ["--externally-managed", "--fix"],
+      message:
+        "doctor --externally-managed requires --non-interactive because the deployment controller owns repair approval.",
+    },
+    {
+      label: "with force",
+      args: ["--externally-managed", "--fix", "--non-interactive", "--force"],
+      message:
+        "doctor --externally-managed cannot be combined with --force, --yes, or --generate-gateway-token.",
+    },
+  ])("rejects externally managed repair $label", async ({ args, message }) => {
+    await runMaintenanceCli(["doctor", ...args]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(message);
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
   it("exits with code 1 when doctor fails", async () => {
     doctorCommand.mockRejectedValue(new Error("doctor failed"));
 

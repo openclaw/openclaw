@@ -20,16 +20,38 @@ can continue; rerun Doctor after resolving the reported cause.
 
 Doctor supports these postures:
 
-| Posture                   | Command                                   | Behavior                                                                              |
-| ------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------- |
-| Guided checks             | `openclaw doctor`                         | Interactive health flow; can copy legacy config and apply automatic state migrations. |
-| Advisory JSON             | `openclaw doctor --json`                  | Read-only findings; exits successfully after producing a report.                      |
-| Repair                    | `openclaw doctor --fix`                   | Applies supported repairs, using prompts unless non-interactive repair is safe.       |
-| Lint                      | `openclaw doctor --lint [--json]`         | Read-only findings with threshold-based exit codes for CI gates.                      |
-| Shared SQLite maintenance | `openclaw doctor --state-sqlite compact`  | Explicitly checkpoints, compacts, and verifies the canonical shared state DB.         |
-| Session SQLite tools      | `openclaw doctor --session-sqlite <mode>` | Inspects or maintains SQLite sessions and explicitly imports legacy history.          |
+| Posture                   | Command                                                        | Behavior                                                                                             |
+| ------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Guided checks             | `openclaw doctor`                                              | Interactive health flow; can copy legacy config and apply automatic state migrations.                |
+| Advisory JSON             | `openclaw doctor --json`                                       | Read-only findings; exits successfully after producing a report.                                     |
+| Repair                    | `openclaw doctor --fix`                                        | Applies supported repairs, using prompts unless non-interactive repair is safe.                      |
+| Externally managed repair | `openclaw doctor --fix --externally-managed --non-interactive` | Repairs offline runtime state while leaving deployment-owned config and service lifecycle unchanged. |
+| Lint                      | `openclaw doctor --lint [--json]`                              | Read-only findings with threshold-based exit codes for CI gates.                                     |
+| Shared SQLite maintenance | `openclaw doctor --state-sqlite compact`                       | Explicitly checkpoints, compacts, and verifies the canonical shared state DB.                        |
+| Session SQLite tools      | `openclaw doctor --session-sqlite <mode>`                      | Inspects or maintains SQLite sessions and explicitly imports legacy history.                         |
 
 Use `openclaw doctor --json` when an operator or script wants the advisory Doctor report as JSON. It exits successfully after producing a report; inspect `ok` and `findings` for health state. Use explicit `openclaw doctor --lint --json` when CI should exit nonzero for findings at the selected severity threshold. Prefer `--fix` when a human operator wants Doctor to edit config or state.
+
+### Externally managed repair
+
+Use the externally managed posture when a deployment controller owns both
+`openclaw.json` and the Gateway process lifecycle:
+
+```bash
+openclaw doctor --fix --externally-managed --non-interactive --json
+```
+
+Stop the Gateway before running the command. Doctor acquires the normal state and
+database maintenance owners, backs up databases before schema changes, repairs
+supported legacy state and sessions, and verifies that the config bytes did not
+change. It never installs, stops, starts, or rewrites a Gateway service. The JSON
+report separates `applied`, `skipped`, and `remaining` work; a nonempty
+`remaining` list exits nonzero. Update the deployment config source for any
+remaining config finding, redeploy it, then rerun repair.
+
+This posture requires `--fix` (or `--repair`) and `--non-interactive`. It rejects
+`--force`, `--yes`, and `--generate-gateway-token` because those options can
+authorize work outside the state-only deployment handoff.
 
 For read-only diagnosis, use `--lint` or bare `--json`. Ordinary `doctor`, including `doctor --non-interactive`, can copy legacy config and migrate state even without `--fix`. `--non-interactive` suppresses prompts, not writes.
 
@@ -229,6 +251,7 @@ openclaw channels status --probe
 | `--no-workspace-suggestions`    | Disable workspace memory/search suggestions.                                                                                                                                                                                                          |
 | `--yes`                         | Accept defaults and enter repair maintenance without prompting.                                                                                                                                                                                       |
 | `--repair` / `--fix`            | Apply recommended repairs while coordinating maintenance with the matching managed Gateway (`--fix` is an alias). Refresh outdated Linux policy and reconcile eligible running-service installation drift; preserve stopped launchers and stop state. |
+| `--externally-managed`          | With `--fix --non-interactive`, repair offline runtime state without changing deployment-owned config or Gateway service lifecycle. Add `--json` for the structured convergence report.                                                               |
 | `--force`                       | Allow aggressive repair choices. Alone, remains guided; with `--fix`, `--repair`, or `--yes`, uses the same policy-refresh and installation-drift rules.                                                                                              |
 | `--non-interactive`             | Run without prompts; safe automatic migrations still apply. Combine with `--fix`, `--repair`, or `--yes` to enter repair maintenance.                                                                                                                 |
 | `--generate-gateway-token`      | Generate and configure a gateway token.                                                                                                                                                                                                               |
