@@ -19,7 +19,7 @@ suite.define(() => {
     { overflow: true, width: 1280 },
     { overflow: true, width: 390 },
   ])(
-    "keeps sidebar insets symmetric with overflow=$overflow at $width px",
+    "keeps sidebar rows and controls clear of scrolling with overflow=$overflow at $width px",
     async ({ overflow, width }) => {
       const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
       const context = await suite.newBrowserContext({
@@ -108,6 +108,67 @@ suite.define(() => {
           expect(geometry.maskImage.match(/linear-gradient/g)).toHaveLength(2);
           expect(geometry.maskPosition.split(", ").at(-1)?.split(" ")[0]).toBe("100%");
           expect(geometry.maskSize.split(", ")).toContain("12px 100%");
+        }
+
+        if (overflow && width === 1280) {
+          const scroller = page.locator(".sidebar-shell__body");
+          const navigation = page.getByRole("separator", { name: "Resize sidebar" });
+          const shellNav = page.locator(".shell-nav");
+          const navWidth = await shellNav.evaluate(
+            (element) => element.getBoundingClientRect().width,
+          );
+          const bounds = await scroller.boundingBox();
+          expect(bounds).not.toBeNull();
+          const thumbX = bounds!.x + bounds!.width - geometry.scrollbarWidth / 2;
+          const thumbY = bounds!.y + 24;
+          await page.mouse.move(thumbX, thumbY);
+          await page.mouse.down();
+          await page.mouse.move(thumbX, thumbY + 100, { steps: 5 });
+          if (captureProof) {
+            await page.screenshot({
+              path: path.join(suite.artifactDir, "sidebar-scrollbar-drag.png"),
+              animations: "disabled",
+            });
+            console.log(
+              "Sidebar scrollbar drag",
+              await scroller.evaluate((element) => ({
+                scrollTop: element.scrollTop,
+                resizeDragging: document
+                  .querySelector(".sidebar-resizer")
+                  ?.classList.contains("dragging"),
+              })),
+            );
+          }
+          expect(
+            await navigation.evaluate((element) => element.classList.contains("dragging")),
+          ).toBe(false);
+          await page.mouse.up();
+          await expect
+            .poll(() => scroller.evaluate((element) => element.scrollTop))
+            .toBeGreaterThan(0);
+          expect(await shellNav.evaluate((element) => element.getBoundingClientRect().width)).toBe(
+            navWidth,
+          );
+
+          await page.mouse.down();
+          await page.mouse.move(thumbX, thumbY, { steps: 5 });
+          await page.mouse.up();
+          await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBe(0);
+
+          const handle = await navigation.boundingBox();
+          expect(handle).not.toBeNull();
+          const handleX = handle!.x + handle!.width / 2;
+          const handleY = handle!.y + handle!.height / 2;
+          await page.mouse.move(handleX, handleY);
+          await page.mouse.down();
+          await page.mouse.move(handleX + 50, handleY, { steps: 5 });
+          await page.mouse.up();
+          await expect
+            .poll(() => shellNav.evaluate((element) => element.getBoundingClientRect().width))
+            .toBe(navWidth + 50);
+          await navigation.focus();
+          await page.keyboard.press("Home");
+          await expect.poll(() => navigation.getAttribute("aria-valuetext")).toBe("240 pixels");
         }
 
         const rtlMaskPosition = await active.evaluate((row) => {

@@ -29,20 +29,14 @@ class ResizableDivider extends OpenClawLitElement {
 
   static override styles = css`
     :host {
+      /* Keep the grab area inside its layout track so neighboring native
+         scrollbars retain their pointer events and cursor. */
       width: var(--resize-handle-size, 6px);
       cursor: col-resize;
       flex-shrink: 0;
       position: relative;
       touch-action: none;
       user-select: none;
-    }
-    :host::before {
-      content: "";
-      position: absolute;
-      top: 0;
-      left: -4px;
-      right: -4px;
-      bottom: 0;
     }
     /* The visible divider is a centered hairline, not the whole gutter:
        filling the host paints a fat bar that stacks with neighboring pane
@@ -74,12 +68,6 @@ class ResizableDivider extends OpenClawLitElement {
       width: auto;
       height: var(--resize-handle-size, 6px);
       cursor: row-resize;
-    }
-    :host([orientation="horizontal"])::before {
-      top: -4px;
-      left: 0;
-      right: 0;
-      bottom: -4px;
     }
     :host([orientation="horizontal"])::after {
       top: var(--resize-handle-line-block, 50%);

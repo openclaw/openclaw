@@ -1072,6 +1072,13 @@ openclaw-settings-save-indicator:empty {
   display: none;
 }
 
+/* Unlike in-flow splitters, the navigation handle shares the nav grid cell.
+   Reserve its track so it cannot cover the sidebar's native scrollbar. */
+.shell:not(.shell--mobile-nav):has(> .sidebar-resizer) > .shell-nav {
+  --sidebar-resize-reserve: var(--resize-handle-size);
+  padding-inline-end: var(--sidebar-resize-reserve);
+}
+
 /* The shell owns the resting boundary. The wider resize target takes over
    that same edge during interaction, avoiding a doubled divider. */
 .sidebar-resizer {
@@ -1112,7 +1119,8 @@ openclaw-settings-save-indicator:empty {
   --sidebar-lead: 20px;
   --sidebar-row-gap: 8px;
   --sidebar-text-offset: calc(var(--sidebar-inset) + var(--sidebar-lead) + var(--sidebar-row-gap));
-  --sidebar-pad-x: 10px;
+  /* Fund the resize track from both gutters, preserving narrow roster labels. */
+  --sidebar-pad-x: calc(10px - var(--sidebar-resize-reserve, 0px) / 2);
   --sidebar-session-link-padding-block: 4px;
   --sidebar-session-row-floor: 30px;
   --sidebar-title-line-height: calc(18px * var(--control-ui-text-scale));
