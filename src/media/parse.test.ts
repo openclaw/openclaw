@@ -63,6 +63,7 @@ describe("splitMediaFromOutput", () => {
     ["/tmp/album.v1/photo.png copy.png", "MEDIA:/tmp/album.v1/photo.png copy.png"],
     ["./screenshots/image.png", "MEDIA:./screenshots/image.png"],
     ["media/inbound/image.png", "MEDIA:media/inbound/image.png"],
+    ["media://inbound/image.png", "MEDIA:media://inbound/image.png"],
     ["./screenshot.png", " MEDIA:./screenshot.png"],
     ["./screenshot.png", "  MEDIA:./screenshot.png"],
     ["./screenshot.png", "   MEDIA:./screenshot.png"],
@@ -94,6 +95,16 @@ describe("splitMediaFromOutput", () => {
     ["/tmp/render,final.png", "MEDIA:/tmp/render,final.png"],
   ] as const)("accepts supported media path variant: %s", (expectedPath, input) => {
     expectAcceptedMediaPathCase(expectedPath, input);
+  });
+
+  it.each([
+    "media://outbound/image.png",
+    "media://inbound/nested%2Fimage.png",
+    "media://inbound/%00.png",
+    "media://inbound/image.png?token=value",
+    "media://inbound/",
+  ])("does not extract an invalid inbound URI: %s", (source) => {
+    expectRejectedRemoteMediaUrlCase(`MEDIA:${source}`);
   });
 
   it.each([",", '"', "'", "\\", ")", "}", "]", "`"])(

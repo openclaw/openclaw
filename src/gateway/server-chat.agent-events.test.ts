@@ -2209,16 +2209,15 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
-  it("withholds MEDIA directives from assistant chat events", () => {
+  it.each([
+    ["relative", ["./attachment-catalog-tiny/demo.jpg", "./attachment-catalog-tiny/demo.mp3"]],
+    ["inbound", ["media://inbound/demo.jpg", "media://inbound/demo.mp3"]],
+  ])("withholds %s MEDIA directives from assistant chat events", (_kind, sources) => {
     const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
       createHarness({ now: 1_000 }),
-      [
-        "Prepared the batch.",
-        "MEDIA:./attachment-catalog-tiny/demo.jpg",
-        "MEDIA:./attachment-catalog-tiny/demo.mp3",
-      ].join("\n"),
+      ["Prepared the batch.", ...sources.map((source) => `MEDIA:${source}`)].join("\n"),
       "text",
-      ["./attachment-catalog-tiny/demo.jpg", "./attachment-catalog-tiny/demo.mp3"],
+      sources,
     );
     const chatCalls = chatBroadcastCalls(broadcast);
     expect(chatCalls).toHaveLength(1);

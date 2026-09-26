@@ -18,6 +18,8 @@ import {
 } from "vitest";
 import { consumePendingToolMediaIntoReply } from "../../agents/embedded-agent-subscribe.handlers.messages.replies.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
@@ -196,6 +198,61 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
   async function expectOutboundMediaMissing(stateDir: string): Promise<void> {
     await expectPathMissing(path.join(stateDir, "media", "outbound"));
   }
+
+  it.each(["directive", "structured"])(
+    "publishes a canonical inbound image from a %s reply",
+    async (kind) => {
+      const { cfg } = createMediaTestContext({ allowRead: true });
+      const saved = await saveMediaBuffer(
+        PNG_BYTES,
+        "image/png",
+        "inbound",
+        undefined,
+        "photo.png",
+      );
+      const source = `media://inbound/${saved.id}`;
+      const caption = "Here it is again.";
+      const payload = await normalizeReplyMedia({
+        cfg,
+        payloads: [
+          kind === "directive"
+            ? parseReplyDirectives(`[[reply_to_current]] ${caption}\nMEDIA:${source}`)
+            : { text: caption, replyToCurrent: true, mediaUrls: [source] },
+        ],
+      });
+
+      expect(payload?.text).toBe(caption);
+      expect(payload?.replyToCurrent).toBe(true);
+      const normalizedPath = requireString(payload?.mediaUrls?.[0], "normalized media path");
+      expect(await fs.readFile(normalizedPath)).toEqual(PNG_BYTES);
+      const blocks = await createManagedImageBlocks({ cfg, mediaUrls: payload?.mediaUrls });
+      expect(blocks).toEqual([
+        expect.objectContaining({
+          type: "image",
+          mimeType: "image/png",
+          sizeBytes: PNG_BYTES.length,
+        }),
+      ]);
+    },
+  );
+
+  it("does not give inbound URIs broader sandbox access than their stored paths", async () => {
+    const { cfg, stateDir, workspaceDir } = createMediaTestContext({ allowRead: true });
+    const saved = await saveMediaBuffer(PNG_BYTES, "image/png", "inbound", undefined, "photo.png");
+    const normalize = createReplyMediaPathNormalizer({
+      cfg,
+      sessionKey: TEST_SESSION_KEY,
+      workspaceDir,
+      sandboxRoot: path.join(stateDir, "sandbox"),
+    });
+
+    for (const source of [saved.path, `media://inbound/${saved.id}`]) {
+      const payload = await normalize({ mediaUrls: [source] });
+      expect(payload.mediaUrls).toBeUndefined();
+      expect(payload.text).toContain("Delivery failed");
+    }
+    await expectOutboundMediaMissing(stateDir);
+  });
 
   it("stages Codex-home image paths before Gateway managed-image display", async () => {
     const { stateDir, cfg, sourcePath, payload } = await normalizeCodexHomeImage({
