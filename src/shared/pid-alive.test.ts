@@ -101,6 +101,18 @@ describe("isPidAlive", () => {
     expect(readFileSyncSpy).toHaveBeenCalledWith("/proc/42/status", "utf8");
     expect(killSpy).toHaveBeenCalledWith(42, 0);
   });
+
+  it("applies Linux zombie detection to android Termux procfs", async () => {
+    vi.spyOn(process, "kill").mockImplementation(() => true);
+    mockProcReads({
+      "/proc/42/status": "Name:\tnode\nState:\tZ\nThreads:\t1\n",
+    });
+
+    await withMockedPlatform("android", async () => {
+      expect(isPidAlive(42)).toBe(false);
+      expect(isPidDefinitelyDead(42)).toBe(true);
+    });
+  });
 });
 
 describe("isPidDefinitelyDead", () => {
@@ -304,6 +316,29 @@ describe("process start times", () => {
     return withMockedPlatform("aix", async () => {
       expect(getProcessStartTime(process.pid)).toBeNull();
       expect(getFileLockProcessStartTime(process.pid)).toBeNull();
+    });
+  });
+
+  it("reads android Termux proc stat start times like Linux", async () => {
+    mockProcReads({
+      [`/proc/${process.pid}/stat`]: `${process.pid} (node) S 1 ${process.pid} ${process.pid} 0 -1 4194304 12345 0 0 0 100 50 0 0 20 0 8 0 98765 123456789 5000 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0`,
+    });
+
+    await withMockedPlatform("android", async () => {
+      expect(getProcessStartTime(process.pid)).toBe(98765);
+    });
+  });
+
+  it("acquires an android Termux file-lock owner identity for the cron durable fence", async () => {
+    mockProcReads({
+      [`/proc/${process.pid}/stat`]: `${process.pid} (node) S 1 ${process.pid} ${process.pid} 0 -1 4194304 12345 0 0 0 100 50 0 0 20 0 8 0 22222 123456789 5000 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0`,
+    });
+
+    await withMockedPlatform("android", async () => {
+      // A fresh module keeps the self identity cache from leaking across platforms.
+      vi.resetModules();
+      const { getFileLockProcessStartTime: readIdentity } = await import("./pid-alive.js");
+      expect(readIdentity(process.pid)).toBe(22222);
     });
   });
 
