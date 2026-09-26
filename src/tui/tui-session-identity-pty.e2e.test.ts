@@ -324,7 +324,9 @@ it("hides a stale approval when startup restores the remembered session", async 
     );
     const rows = await waitForSynchronizedFrameRows(
       fixture.run,
-      (frame) => frame.some((row) => row.includes("session picker-target")),
+      (frame) =>
+        frame.some((row) => row.includes("session picker-target")) &&
+        frame.some((row) => row.includes("local ready")),
       STARTUP_TIMEOUT_MS,
     );
 
@@ -851,11 +853,17 @@ it("persists the selected session before returning from Ctrl+D exit with empty i
   try {
     await emptyFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
     await emptyFixture.run.write("/session agent:main:mode-target\r", { delay: false });
-    await emptyFixture.run.waitForOutput("session mode-target");
+    await waitForSynchronizedFrameRows(
+      emptyFixture.run,
+      (frame) => frame.some((row) => row.trim() === "session agent:main:mode-target"),
+      5_000,
+    );
     await emptyFixture.run.write("\u0004", { delay: false });
-    const returned = await emptyFixture.waitForLogEntry((entry) => entry.method === "returned");
-    expect(returned.payload).toEqual({ rememberedSessionKey: "agent:main:mode-target" });
     expect((await emptyFixture.run.waitForExit()).exitCode).toBe(0);
+    const returned = (await readFixtureLog(emptyFixture.logPath)).find(
+      (entry) => entry.method === "returned",
+    );
+    expect(returned?.payload).toEqual({ rememberedSessionKey: "agent:main:mode-target" });
   } finally {
     await emptyFixture.cleanup();
   }
