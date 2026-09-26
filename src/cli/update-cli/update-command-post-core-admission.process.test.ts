@@ -325,13 +325,19 @@ it.skipIf(process.platform === "win32")(
         const faultPath = state.path("fail-response-publication");
         await fs.promises.writeFile(faultPath, "EIO\n");
         let retainedResultPath: string | undefined;
+        let stateAfterChild: ReturnType<typeof snapshot> | undefined;
         const unpublishedTransport = vi
           .spyOn(processRunner, "runUtf8CommandWithTimeout")
-          .mockImplementation((argv, options) => {
-            if (argv.includes("--post-core") && typeof options !== "number") {
+          .mockImplementation(async (argv, options) => {
+            const postCore = argv.includes("--post-core") && typeof options !== "number";
+            if (postCore) {
               retainedResultPath = options.env?.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
             }
-            return runChild(argv, options);
+            const result = await runChild(argv, options);
+            if (postCore) {
+              stateAfterChild = snapshot();
+            }
+            return result;
           });
         const unpublishedStartedAt = performance.now();
         try {
@@ -348,19 +354,22 @@ it.skipIf(process.platform === "win32")(
           ).toMatchObject({
             status: "ok",
           });
-          const { run: afterUnpublishedRun, ...afterUnpublishedState } = snapshot();
-          expect(afterUnpublishedState).toEqual(beforeUnpublishedState);
-          // Real resume refreshes its candidate evidence before response publication.
-          expect(afterUnpublishedRun).toEqual({
-            ...beforeUnpublishedRun,
-            updatedAtMs: expect.any(Number),
-            steps: beforeUnpublishedRun.steps.map((step) =>
-              step.step === "finalize:installed-candidate"
-                ? { ...step, endedAtMs: expect.any(Number) }
-                : step,
-            ),
+          assert(stateAfterChild, "The real post-core child must finish before parent settlement");
+          expect(stateAfterChild.config).toEqual(beforeUnpublishedState.config);
+          expect(stateAfterChild.journal).toEqual(beforeUnpublishedState.journal);
+          // Resume can refresh index metadata; the parent must preserve the child's exact state.
+          expect(snapshot()).toEqual(stateAfterChild);
+          expect(stateAfterChild.run).toMatchObject({
+            runId,
+            status: "running",
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                step: "finalize:installed-candidate",
+                status: "completed",
+              }),
+            ]),
           });
-          expect(afterUnpublishedRun?.updatedAtMs).toBeGreaterThan(
+          expect(stateAfterChild.run?.updatedAtMs).toBeGreaterThan(
             beforeUnpublishedRun.updatedAtMs,
           );
           fence.assertCurrent();
