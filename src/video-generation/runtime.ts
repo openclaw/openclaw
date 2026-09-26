@@ -181,7 +181,9 @@ async function runVideoGeneration(
     capability: "video",
     getProvider: (providerId) => getProvider(providerId, params.cfg),
     onFailure: (attempt) => {
-      logger.debug(`video-generation candidate failed: ${attempt.provider}/${attempt.model}`);
+      logger.warn(
+        `video-generation candidate failed: ${attempt.provider}/${attempt.model}: ${attempt.error}`,
+      );
     },
     async prepareCandidate(candidate, provider) {
       const timeoutMs = resolveMediaProviderRequestTimeoutMs({

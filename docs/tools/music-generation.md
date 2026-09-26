@@ -267,6 +267,7 @@ For `music_generate`, OpenClaw tries providers in this order:
 
 If a provider fails, the next candidate is tried automatically. If all
 fail, the error includes details from each attempt.
+Each failed candidate logs its provider, model, and error at `warn`.
 For reference-image requests, candidates that cannot use images or accept
 the supplied reference count are skipped.
 

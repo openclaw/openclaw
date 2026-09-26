@@ -277,6 +277,8 @@ The first skip reason in a request logs at `warn` so operators see when
 their primary provider was passed over; subsequent skips log at `debug` to
 keep long fallback chains quiet. If every candidate is skipped, the
 aggregated error includes the skip reason for each.
+If a candidate fails during generation, its provider, model, and error log at
+`warn` before the next candidate is tried.
 
 ## Actions
 

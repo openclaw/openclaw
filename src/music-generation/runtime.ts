@@ -38,7 +38,7 @@ type MusicGenerationRuntimeDeps = {
   getProvider?: typeof getMusicGenerationProvider;
   listProviders?: typeof listMusicGenerationProviders;
   getProviderEnvVars?: typeof getProviderEnvVarsCore;
-  log?: Pick<typeof log, "debug">;
+  log?: Pick<typeof log, "debug" | "warn">;
 };
 
 /** List runtime-visible music generation providers for a config snapshot. */
@@ -110,7 +110,9 @@ async function runMusicGeneration(
     getProvider: (providerId) => getProvider(providerId, params.cfg),
     includeSkipFailureDetails: true,
     onFailure: (attempt) => {
-      logger.debug(`music-generation candidate failed: ${attempt.provider}/${attempt.model}`);
+      logger.warn(
+        `music-generation candidate failed: ${attempt.provider}/${attempt.model}: ${attempt.error}`,
+      );
     },
     prepareCandidate(candidate, provider) {
       const referenceImageError = resolveReferenceImageCapabilityError({

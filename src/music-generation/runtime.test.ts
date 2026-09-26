@@ -9,6 +9,7 @@ type MusicGenerationRuntimeDeps = NonNullable<Parameters<typeof generateMusic>[1
 
 let providers: MusicGenerationProvider[] = [];
 let listedConfigs: Array<OpenClawConfig | undefined> = [];
+let warnings: string[] = [];
 
 const runtimeDeps: MusicGenerationRuntimeDeps = {
   getProvider: (providerId) => providers.find((provider) => provider.id === providerId),
@@ -18,6 +19,7 @@ const runtimeDeps: MusicGenerationRuntimeDeps = {
   },
   log: {
     debug: () => {},
+    warn: (message) => warnings.push(message),
   },
 };
 
@@ -57,6 +59,7 @@ describe("music-generation runtime", () => {
   beforeEach(() => {
     providers = [];
     listedConfigs = [];
+    warnings = [];
   });
 
   it("generates tracks through the active music-generation provider", async () => {
@@ -218,6 +221,9 @@ describe("music-generation runtime", () => {
         error: "Google music generation response missing audio data",
       },
     ]);
+    expect(warnings).toContain(
+      "music-generation candidate failed: google/lyria-3-clip-preview: Google music generation response missing audio data",
+    );
   });
 
   it("falls through when a music provider returns an empty buffer", async () => {
