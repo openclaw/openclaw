@@ -138,6 +138,7 @@ type SpawnAcpContext = {
   agentThreadId?: string | number;
   currentMessagingTarget?: string;
   currentChannelId?: string;
+  currentThreadTs?: string | number;
   currentMessageId?: string | number;
   /** Group chat ID for channels that distinguish group vs. topic (e.g. Telegram). */
   agentGroupId?: string;

@@ -136,3 +136,62 @@ export function resolveRequesterOriginForChild(params: {
     threadId: params.requesterThreadId,
   });
 }
+
+/**
+ * Raw requester conversation fields visible to a spawn path.
+ *
+ * CLI runtimes (e.g. claude-cli) issue loopback tool calls with no `agentTo`:
+ * they identify the current conversation through the
+ * `currentMessagingTarget`/`currentChannelId` and `currentThreadTs` fields.
+ * Regular channel turns instead populate `agentTo`/`agentThreadId`. Delivery
+ * already resolves the target with the wider precedence below; thread binding
+ * must use the same resolution, otherwise a CLI turn cannot bind a thread even
+ * though completion/progress delivery already knows where to send.
+ */
+export type SpawnRequesterConversationSource = {
+  /** Explicit per-turn messaging target; wins when present. */
+  currentMessagingTarget?: string;
+  /** Current channel conversation id supplied to CLI loopback tools. */
+  currentChannelId?: string;
+  /** Explicit recipient resolved by regular channel turns. */
+  agentTo?: string;
+  /** Current thread timestamp/root supplied to CLI loopback tools. */
+  currentThreadTs?: string | number;
+  /** Explicit thread id resolved by regular channel turns. */
+  agentThreadId?: string | number;
+};
+
+function normalizeNonEmptySpawnConversationValue(
+  value: string | number | undefined,
+): string | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : undefined;
+  }
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+/**
+ * Resolves the requester conversation target/thread for spawn thread binding
+ * using the same precedence delivery uses: the explicit current messaging
+ * target, then the current channel id, then the channel-turn `agentTo`; and
+ * `currentThreadTs` before `agentThreadId`. When the CLI fields are absent the
+ * result is exactly `{ to: agentTo, threadId: agentThreadId }`, so regular
+ * channel turns and the existing explicit-`agentTo` policy path are unchanged.
+ */
+export function resolveSpawnRequesterConversationTarget(source: SpawnRequesterConversationSource): {
+  to?: string;
+  threadId?: string;
+} {
+  const to =
+    normalizeNonEmptySpawnConversationValue(source.currentMessagingTarget) ??
+    normalizeNonEmptySpawnConversationValue(source.currentChannelId) ??
+    normalizeNonEmptySpawnConversationValue(source.agentTo);
+  const threadId =
+    normalizeNonEmptySpawnConversationValue(source.currentThreadTs) ??
+    normalizeNonEmptySpawnConversationValue(source.agentThreadId);
+  return {
+    ...(to ? { to } : {}),
+    ...(threadId ? { threadId } : {}),
+  };
+}

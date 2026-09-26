@@ -55,6 +55,8 @@ export type SpawnSubagentContext = SpawnedToolContext & {
   agentThreadId?: string | number;
   currentMessagingTarget?: string;
   currentChannelId?: string;
+  /** Current thread timestamp/root for CLI runtimes without `agentThreadId`. */
+  currentThreadTs?: string | number;
   currentMessageId?: string | number;
   requesterAgentIdOverride?: string;
   requesterRunId?: string;

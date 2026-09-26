@@ -406,4 +406,64 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     expect(registeredRun?.requesterOrigin?.accountId).toBe("sut");
     expect(registeredRun?.requesterOrigin?.to).toBe("room:!parent:example");
   });
+
+  it("binds a CLI-runtime thread spawn from currentChannelId when agentTo is absent", async () => {
+    // claude-cli loopback tool calls identify the conversation via
+    // currentChannelId/currentThreadTs and never set agentTo. Thread binding
+    // previously read agentTo alone and failed even though delivery already used
+    // currentChannelId (issue #158945).
+    const bindCalls: Array<Record<string, unknown>> = [];
+    currentSessionBindingService = {
+      getCapabilities: () => ({
+        adapterAvailable: true,
+        bindSupported: true,
+        placements: ["child"],
+      }),
+      bind: async (request) => {
+        bindCalls.push(request as unknown as Record<string, unknown>);
+        return {
+          targetSessionKey: request.targetSessionKey,
+          targetKind: request.targetKind,
+          status: "active",
+          conversation: {
+            channel: request.conversation.channel,
+            accountId: request.conversation.accountId,
+            conversationId: "$thread-root",
+            parentConversationId: request.conversation.conversationId,
+          },
+        };
+      },
+      listBySession: () => [],
+    };
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "reply with a marker",
+        thread: true,
+        mode: "session",
+        context: "isolated",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "matrix",
+        agentAccountId: "default",
+        agentTo: undefined,
+        agentThreadId: undefined,
+        currentMessagingTarget: undefined,
+        currentChannelId: "room:parent",
+        currentThreadTs: undefined,
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(bindCalls).toHaveLength(1);
+    const bindingConversation = bindCalls[0]?.conversation as
+      | { channel?: string; accountId?: string; conversationId?: string }
+      | undefined;
+    expect(bindingConversation?.channel).toBe("matrix");
+    expect(bindingConversation?.conversationId).toBe("parent");
+    const registeredRun = firstRegisteredSubagentRun();
+    expect(registeredRun?.requesterOrigin?.channel).toBe("matrix");
+    expect(registeredRun?.requesterOrigin?.to).toBe("room:parent");
+  });
 });
