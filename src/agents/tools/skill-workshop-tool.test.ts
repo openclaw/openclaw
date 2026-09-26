@@ -81,6 +81,8 @@ describe("skill_workshop tool", () => {
     }
 
     expect(schema).toContain("patch = targeted");
+    expect(schema).toContain("does not count as using the skill for foreground repair");
+    expect(schema).toContain("foreground repair still requires a genuine run-usage receipt");
     expect(schema).toContain("read = existing live skill");
     expect(schema).toContain("create = stage a pending proposal");
     expect(schema).toContain("update = stage a full-body rewrite");
@@ -273,6 +275,12 @@ describe("skill_workshop tool", () => {
     });
 
     expect(disabled.description).toContain("Foreground repair is disabled.");
+    expect(disabled.description).toContain(
+      "Read and prepare_patch establish content and exact-span prerequisites only",
+    );
+    expect(disabled.description).toContain(
+      "For planned authoring, use update with the complete skill body",
+    );
     expect(enabled.description).toContain("stays pending for review");
     expect(enabled.description).not.toContain("Experience capture");
   });
@@ -804,7 +812,7 @@ describe("skill_workshop tool", () => {
       }
 
       await expect(tool.execute("repair-unused", patchArgs)).rejects.toThrow(
-        "was not used in this run",
+        "Workshop read and prepare_patch only establish content or exact-span prerequisites",
       );
       recordRunSkillUsage({
         runId,
@@ -841,6 +849,55 @@ describe("skill_workshop tool", () => {
       consumeRunSkillUsage(runId);
     },
   );
+
+  it("does not treat a prepared patch as foreground repair usage", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-prepared-repair-");
+    const runId = "prepared-repair";
+    const skillName = "large-weather-planner";
+    const oldString = "Run the legacy deployment preflight.";
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+      agentId: "main",
+      origin: { agentId: "main", runId },
+      modelContextWindowTokens: 8_192,
+    });
+    const created = await tool.execute("prepared-repair-create", {
+      action: "create",
+      name: skillName,
+      description: "Plan around the weather forecast",
+      proposal_content: `# Large Weather Planner\n\n${"A detailed operational line.\n".repeat(600)}${oldString}\n${"A later operational line.\n".repeat(600)}`,
+    });
+    await tool.execute("prepared-repair-apply", {
+      action: "apply",
+      proposal_id: (created.details as { id: string }).id,
+    });
+
+    const read = await tool.execute("prepared-repair-read", {
+      action: "read",
+      skill_name: skillName,
+    });
+    expect(read.details).toMatchObject({ skillKey: skillName, contentIncluded: false });
+
+    await tool.execute("prepared-repair-prepare", {
+      action: "prepare_patch",
+      skill_name: skillName,
+      old_string: oldString,
+    });
+    await expect(
+      tool.execute("prepared-repair-patch", {
+        action: "patch",
+        skill_name: skillName,
+        old_string: oldString,
+        new_string: "Run openclaw doctor and resolve every reported blocker.",
+      }),
+    ).rejects.toThrow(
+      "Workshop read and prepare_patch only establish content or exact-span prerequisites",
+    );
+    await expect(fs.readFile(workshopSkillPath(skillName, "SKILL.md"), "utf8")).resolves.toContain(
+      oldString,
+    );
+  });
 
   it("matches an aliased used-skill receipt by canonical file", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-repair-alias-");

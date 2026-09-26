@@ -45,7 +45,7 @@ export function buildSkillWorkshopToolSchema(proposalRevision = false) {
       action: stringEnum(proposalRevision ? ["inspect", "revise"] : [...SKILL_WORKSHOP_ACTIONS], {
         description: proposalRevision
           ? "inspect = read the exact operator-reviewed proposal; revise = update only that proposal with the run-bound expected revision hash."
-          : "create = stage a pending proposal for a new skill; read = existing live skill when complete content fits; prepare_patch = authorize one exact non-empty span and return bounded context, with only one prepared span active per skill; patch = targeted find-and-replace after read or prepare_patch; update = stage a full-body rewrite; history = read historical collection review records (current runs use automation history); restore_collection = restore a retained backup from the previous collection reviewer; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
+          : "create = stage a pending proposal for a new skill; read = existing live skill when complete content fits; prepare_patch = authorize one exact non-empty span and return bounded context for patching, but does not count as using the skill for foreground repair; patch = targeted find-and-replace after read or prepare_patch, and foreground repair still requires a genuine run-usage receipt; update = stage a full-body rewrite for planned authoring; history = read historical collection review records (current runs use automation history); restore_collection = restore a retained backup from the previous collection reviewer; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
       }),
       proposal_id: Type.Optional(
         Type.String({
@@ -94,7 +94,7 @@ export function buildSkillWorkshopToolSchema(proposalRevision = false) {
       old_string: Type.Optional(
         Type.String({
           description:
-            "For action=prepare_patch or action=patch: the exact current skill text to replace. Must match exactly once. For patch only, an empty string appends new_string after a complete read.",
+            "For action=prepare_patch or action=patch: the exact current skill text to replace. Must match exactly once. For patch only, an empty string appends new_string after a complete read. Reading or preparing a patch does not make the skill eligible for autonomous foreground repair.",
         }),
       ),
       new_string: Type.Optional(
