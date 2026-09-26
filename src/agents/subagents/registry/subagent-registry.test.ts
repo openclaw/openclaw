@@ -81,6 +81,7 @@ import {
   registerRestartDrainCompletionSettlementTest,
   registerProvisionalKillCompletionSettlementTest,
   registerReplacedGenerationTaskSettlementTest,
+  registerRestoredRollbackPublicationTest,
   registerRestoredRunDeadlineSettlementTests,
   registerRestoredRunningTaskSettlementTest,
   registerRestoredTaskSettlementTest,
@@ -1479,83 +1480,10 @@ describe("subagent registry seam flow", () => {
     expect(mod.getSubagentRunByRunId("gateway-terminal-stale")).toBeUndefined();
   });
 
-  it("holds a restored FIFO slot until an accepted collector is confirmed stopped", async () => {
-    vi.useRealTimers();
-    const now = Date.now();
-    mockSingleCollectorConcurrency();
-    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
-      runs: Map<string, unknown>;
-    }) => {
-      params.runs.set(
-        "run-restored-stop-one",
-        makeQueuedRun({ runId: "run-restored-stop-one", groupId: "restore-stop", createdAt: now }),
-      );
-      params.runs.set(
-        "run-restored-stop-two",
-        makeQueuedRun({
-          runId: "run-restored-stop-two",
-          groupId: "restore-stop",
-          createdAt: now + 1,
-        }),
-      );
-      return 2;
-    }) as never);
-    mocks.entries = {
-      "agent:main:subagent:run-restored-stop-one": {
-        sessionId: "one",
-        lifecycleRevision: "revision-one",
-        updatedAt: now,
-      },
-      "agent:main:subagent:run-restored-stop-two": { sessionId: "two", updatedAt: now },
-    };
-    mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
-      throw new Error("sqlite unavailable after Gateway acceptance");
-    });
-    let agentCalls = 0;
-    let releaseAbort: (() => void) | undefined;
-    const deleteReleases: Array<() => void> = [];
-    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        agentCalls += 1;
-        return { runId: `gateway-restored-${agentCalls}` };
-      }
-      if (request.method === "chat.abort") {
-        return await new Promise<Record<string, unknown>>((resolve) => {
-          releaseAbort = () => resolve({});
-        });
-      }
-      if (request.method === "sessions.delete") {
-        return await new Promise<Record<string, unknown>>((resolve) => {
-          deleteReleases.push(() => resolve({}));
-        });
-      }
-      return request.method === "agent.wait" ? { status: "pending" } : {};
-    });
-
-    hydrateAndActivateRegistry();
-    await waitForFast(() => expect(releaseAbort).toBeTypeOf("function"));
-    expect(agentCalls).toBe(1);
-
-    releaseAbort?.();
-    await waitForFast(() => expect(deleteReleases).toHaveLength(1));
-    expect(agentCalls).toBe(1);
-    await waitForFast(() =>
-      expect(mocks.callGateway).toHaveBeenCalledWith(
-        expect.objectContaining({
-          method: "sessions.delete",
-          params: expect.objectContaining({
-            key: "agent:main:subagent:run-restored-stop-one",
-            expectedSessionId: "one",
-            expectedLifecycleRevision: "revision-one",
-          }),
-        }),
-      ),
-    );
-    deleteReleases[0]?.();
-    await waitForFast(() => expect(deleteReleases).toHaveLength(2));
-    expect(agentCalls).toBe(1);
-    deleteReleases[1]?.();
-    await waitForFast(() => expect(agentCalls).toBe(2));
+  registerRestoredRollbackPublicationTest({
+    mocks,
+    hydrateAndActivateRegistry,
+    mockSingleCollectorConcurrency,
   });
 
   it("holds a restored FIFO slot while an indeterminate launch session is deleted", async () => {

@@ -3,17 +3,19 @@ import os from "node:os";
 // persistence, registry registration, and lifecycle event emission.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ThinkLevel } from "../../../auto-reply/thinking.shared.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
+import type { RegisterSubagentRunOptions } from "../registry/subagent-registry.types.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import {
   createConfigOverride,
   expectPersistedRuntimeModel,
+  inheritedSpawnCases,
   installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
   supportedSpawnModelChoice,
@@ -48,6 +50,7 @@ const hoisted = vi.hoisted(() => ({
 
 let resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+let closeSwarmScheduler: typeof import("../swarm/swarm-scheduler.js").closeSwarmScheduler;
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
@@ -73,103 +76,6 @@ function expectNoChildSpawnSideEffects(): void {
   expect(hoisted.emitSessionLifecycleEventMock).not.toHaveBeenCalled();
 }
 
-type InheritedSpawnPreferenceCase = {
-  name: string;
-  task: string;
-  requesterState: Readonly<Record<string, unknown>>;
-  preferenceKey: "thinkingLevel" | "fastMode";
-  expected: string | boolean;
-  agentDefaults?: Readonly<Record<string, unknown>>;
-  requesterAgent?: Readonly<Record<string, unknown>>;
-  collect?: boolean;
-  requesterRunId?: string;
-  requesterThinkingLevel?: ThinkLevel;
-  thinkingOverride?: string;
-};
-
-const inheritedSpawnPreferenceCases: readonly InheritedSpawnPreferenceCase[] = [
-  {
-    name: "inherits requester thinking level when no spawn or subagent default is configured",
-    task: "inherit thinking",
-    requesterState: { thinkingLevel: "high" },
-    preferenceKey: "thinkingLevel",
-    expected: "high",
-  },
-  {
-    name: "inherits active-turn Ultra instead of the stored session thinking level",
-    task: "inherit active thinking",
-    requesterState: { thinkingLevel: "medium" },
-    requesterThinkingLevel: "ultra",
-    preferenceKey: "thinkingLevel",
-    expected: "ultra",
-  },
-  {
-    name: "inherits active-turn off instead of a stored Ultra override",
-    task: "inherit active thinking off",
-    requesterState: { thinkingLevel: "ultra" },
-    requesterThinkingLevel: "off",
-    preferenceKey: "thinkingLevel",
-    expected: "off",
-  },
-  {
-    name: "keeps explicit child thinking ahead of active-turn Ultra",
-    task: "override active thinking",
-    requesterState: { thinkingLevel: "medium" },
-    requesterThinkingLevel: "ultra",
-    thinkingOverride: "low",
-    preferenceKey: "thinkingLevel",
-    expected: "low",
-  },
-  {
-    name: "inherits requester fast mode for collector children",
-    task: "inherit fast mode",
-    requesterState: { fastMode: "auto" },
-    preferenceKey: "fastMode",
-    expected: "auto",
-    collect: true,
-    requesterRunId: "parent-run",
-  },
-  {
-    name: "inherits requester fast mode for ordinary children with default Swarm config",
-    task: "inherit ordinary fast mode",
-    requesterState: { fastMode: true },
-    preferenceKey: "fastMode",
-    expected: true,
-  },
-  {
-    name: "persists inherited requester thinking off",
-    task: "inherit thinking off",
-    requesterState: { thinkingLevel: "off" },
-    preferenceKey: "thinkingLevel",
-    expected: "off",
-  },
-  {
-    name: "inherits requester agent thinkingDefault when the caller session has no stored thinking",
-    task: "inherit agent thinking default",
-    requesterState: {},
-    requesterAgent: { thinkingDefault: "high" },
-    preferenceKey: "thinkingLevel",
-    expected: "high",
-  },
-  {
-    name: "inherits global thinkingDefault when caller session and agent have no stored thinking",
-    task: "inherit global thinking default",
-    requesterState: {},
-    agentDefaults: { thinkingDefault: "medium" },
-    preferenceKey: "thinkingLevel",
-    expected: "medium",
-  },
-  {
-    name: "applies requester-agent subagent thinking before active-turn thinking",
-    task: "requester policy thinking",
-    requesterState: { thinkingLevel: "high" },
-    requesterAgent: { subagents: { thinking: "medium" } },
-    requesterThinkingLevel: "ultra",
-    preferenceKey: "thinkingLevel",
-    expected: "medium",
-  },
-];
-
 describe("spawnSubagentDirect seam flow", () => {
   beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
@@ -192,6 +98,7 @@ describe("spawnSubagentDirect seam flow", () => {
       resolveSandboxRuntimeStatus: hoisted.resolveSandboxRuntimeStatusMock,
       sessionStorePath: "/tmp/subagent-spawn-session-store.json",
     }));
+    ({ closeSwarmScheduler } = await import("../swarm/swarm-scheduler.js"));
   });
 
   beforeEach(() => {
@@ -770,6 +677,104 @@ describe("spawnSubagentDirect seam flow", () => {
       first.runId,
       expect.any(String),
     );
+  });
+
+  it("retains the collector slot through publication and retrying rollback termination", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    hoisted.configOverride = createConfigOverride({
+      tools: { swarm: { enabled: true, maxConcurrent: 1 } },
+    });
+    hoisted.startQueuedSubagentRunMock.mockReturnValueOnce(false).mockReturnValue(true);
+    const publication = createDeferred();
+    const waitEntered = createDeferred();
+    const retryEntered = createDeferred();
+    const allowDeletion = createDeferred();
+    const secondDispatched = createDeferred();
+    let publicationPending = true;
+    let agentCalls = 0;
+    let deleteCalls = 0;
+    hoisted.registerSubagentRunMock.mockImplementationOnce(
+      (record: { runId: string }, options?: RegisterSubagentRunOptions) => {
+        if (!options?.retainOwnership) {
+          throw new Error("Expected retained collector registration");
+        }
+        options.retainOwnership({
+          canLaunch: () => true,
+          canAcceptLaunch: () => true,
+          canCleanupSession: () => !publicationPending,
+          canRetireReservation: () => true,
+          waitForClaim: () => undefined,
+          waitForRetirementPublication: () => {
+            if (!publicationPending) {
+              return undefined;
+            }
+            waitEntered.resolve();
+            return publication.promise;
+          },
+          settleFailedLaunch: async (error) => {
+            hoisted.settleFailedQueuedSubagentLaunchMock(record.runId, error);
+          },
+        });
+      },
+    );
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent") {
+        agentCalls += 1;
+        if (agentCalls === 2) {
+          secondDispatched.resolve();
+        }
+        return { runId: `gateway-${agentCalls}` };
+      }
+      if (request.method === "chat.abort") {
+        throw new Error("abort unavailable");
+      }
+      if (request.method === "sessions.delete") {
+        deleteCalls += 1;
+        if (deleteCalls === 1) {
+          throw new Error("transient guarded deletion failure");
+        }
+        retryEntered.resolve();
+        await allowDeletion.promise;
+      }
+      return {};
+    });
+    try {
+      const first = await spawnSubagentDirect(
+        { task: "publication-first", collect: true, groupId: "publication-rollback" },
+        { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+      );
+      const second = await spawnSubagentDirect(
+        { task: "publication-second", collect: true, groupId: "publication-rollback" },
+        { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+      );
+      await waitEntered.promise;
+      expect(agentCalls).toBe(1);
+      expect(deleteCalls).toBe(0);
+      publicationPending = false;
+      publication.resolve();
+      expect(
+        await Promise.race([
+          retryEntered.promise.then(() => "cleanup retry"),
+          secondDispatched.promise.then(() => "next dispatch"),
+        ]),
+      ).toBe("cleanup retry");
+      expect(agentCalls).toBe(1);
+      expect(hoisted.settleFailedQueuedSubagentLaunchMock).not.toHaveBeenCalled();
+      allowDeletion.resolve();
+      await secondDispatched.promise;
+      await vi.waitFor(() =>
+        expect(hoisted.startQueuedSubagentRunMock).toHaveBeenCalledWith(second.runId, "gateway-2"),
+      );
+      expect(hoisted.settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledWith(
+        first.runId,
+        expect.any(String),
+      );
+    } finally {
+      publicationPending = false;
+      publication.resolve();
+      allowDeletion.resolve();
+      await closeSwarmScheduler();
+    }
   });
 
   it("holds the collector slot while an indeterminate launch session is deleted", async () => {
@@ -1687,13 +1692,7 @@ describe("spawnSubagentDirect seam flow", () => {
     );
   });
 
-  it.each([
-    { label: "default", mode: undefined },
-    { label: "read-only", mode: "read-only" },
-    { label: "guarded", mode: "guarded" },
-    { label: "workspace", mode: "workspace" },
-    { label: "full", mode: "full" },
-  ] as const)(
+  it.each(inheritedSpawnCases.permissionModes)(
     "inherits the parent's $label permission mode in a hidden child",
     async ({ mode }) => {
       const sessionRoot = resolveUserPath("/tmp/workspace-main");
@@ -1724,7 +1723,7 @@ describe("spawnSubagentDirect seam flow", () => {
     },
   );
 
-  it.each(inheritedSpawnPreferenceCases)(
+  it.each(inheritedSpawnCases.preferences)(
     "$name",
     async ({
       task,
