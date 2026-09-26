@@ -60,14 +60,9 @@ export function isEmbeddedRunHandleSupersedable(
 
 export function canSteerEmbeddedRunDuringCompaction(
   sessionId: string,
-  handle: CompactionProbe &
-    Pick<EmbeddedAgentQueueHandle, "messageInjection" | "messageInjectionV2">,
+  handle: CompactionProbe & Pick<EmbeddedAgentQueueHandle, "messageInjectionV2">,
 ): boolean {
   const compacting = isEmbeddedRunHandleCompacting(sessionId, handle);
-  // Modern injection capabilities can admit automatic compaction; an unreadable
-  // probe or a legacy manual-compaction handle must leave the input queued.
-  return (
-    compacting !== undefined &&
-    (!compacting || handle.messageInjectionV2?.version === 2 || Boolean(handle.messageInjection))
-  );
+  // Only guarded V2 injection can revalidate final dispatch during compaction.
+  return compacting !== undefined && (!compacting || handle.messageInjectionV2?.version === 2);
 }

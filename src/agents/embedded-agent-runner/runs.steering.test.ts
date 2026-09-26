@@ -646,6 +646,13 @@ describe("embedded-agent active-run steering", () => {
       }),
     );
     setActiveEmbeddedRun("session-compacting", createEmbeddedRunHandle({ isCompacting: true }));
+    setActiveEmbeddedRun(
+      "session-compacting-v1",
+      createEmbeddedRunHandle({
+        isCompacting: true,
+        messageInjection: { isAvailable: () => true, queueMessage: legacyQueue },
+      }),
+    );
 
     expect(queueEmbeddedAgentMessageWithOutcome("session-not-streaming", "continue")).toMatchObject(
       { queued: false, reason: "not_streaming" },
@@ -660,6 +667,10 @@ describe("embedded-agent active-run steering", () => {
       queued: false,
       reason: "compacting",
     });
+    expect(queueEmbeddedAgentMessageWithOutcome("session-compacting-v1", "continue")).toMatchObject(
+      { queued: false, reason: "compacting" },
+    );
+    expect(legacyQueue).not.toHaveBeenCalled();
   });
 
   it("returns runtime rejection details when async queue delivery fails", async () => {
