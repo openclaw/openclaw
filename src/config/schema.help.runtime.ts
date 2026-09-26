@@ -178,7 +178,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.subagents.tools":
     "Allow/deny tool policy applied to spawned subagent runtimes. Keep this narrower than parent scope. Parent-owned tools such as progress_card are always denied, including through allow/alsoAllow.",
   "tools.subagents.messaging":
-    'Operator grant for peer session messaging between spawned subagents. "off" (default) keeps sessions_send denied; "peers" re-enables sessions_send scoped to the subagent\'s own agent sessions (parent, siblings, descendants). Channel message and conversations_* tools stay denied, and cross-agent sends stay denied.',
+    'Operator grant for peer session messaging between spawned subagents. "off" (default) keeps sessions_send denied; "peers" re-enables sessions_send for native agent:*:subagent:* children with visibility clamped to the child\'s own agent. Channel message, conversations_* tools, and cross-agent sends stay denied.',
   "tools.sandbox":
     "Tool policy wrapper for sandboxed agent executions so sandbox runs can have distinct capability boundaries. Use this to enforce stronger safety in sandbox contexts.",
   "tools.sandbox.tools":

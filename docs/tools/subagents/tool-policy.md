@@ -51,12 +51,13 @@ An operator can grant spawned sub-agents a bounded peer-messaging surface:
 
 With `messaging: "peers"`, native `sessions_spawn` subagent children (hidden
 `agent:*:subagent:*` sessions) receive `sessions_send` again, but the grant is
-clamped to the child's own agent sessions (parent, siblings, and descendants).
-Visible dashboard children and ACP children keep the hard deny. Cross-agent
-sends stay denied, and `message` plus the
-`conversations_*` tools stay hard-denied, so channel delivery remains
-parent-owned. The grant is re-evaluated from config on every turn: setting
-`messaging: "off"` (the default) removes the tool again on the next turn.
+clamped to the child's own agent (`tools.sessions.visibility=agent`): it can
+address the parent, siblings, descendants, and other sessions belonging to the
+same agent, but not cross-agent sessions. Visible dashboard children and ACP
+children keep the hard deny. `message` and the `conversations_*` tools also stay
+hard-denied, so channel delivery remains parent-owned. The grant is re-evaluated
+from config on every turn: setting `messaging: "off"` (the default) removes the
+tool again on the next turn.
 
 This is an explicit operator decision because it widens the child's direct
 session surface. Keep it `"off"` unless a multi-lane protocol such as
