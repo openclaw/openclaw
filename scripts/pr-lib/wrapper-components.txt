@@ -520,6 +520,7 @@ src/config/zod-schema.logging.ts
 src/config/zod-schema.mcp-server.ts
 src/config/zod-schema.memory-search.ts
 src/config/zod-schema.messages.ts
+src/config/zod-schema.model-compat.ts
 src/config/zod-schema.node-host.ts
 src/config/zod-schema.proxy.ts
 src/config/zod-schema.root-shape.ts

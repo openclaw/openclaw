@@ -333,6 +333,7 @@ export function resolveOpenAICompletionsCompat(
       configured?.requiresReasoningContentOnAssistantMessages ??
       defaults.requiresReasoningContentOnAssistantMessages,
     thinkingFormat: configured?.thinkingFormat ?? defaults.thinkingFormat,
+    dropCumulativeTextDeltaReplays: configured?.dropCumulativeTextDeltaReplays ?? false,
     openRouterRouting: configured?.openRouterRouting,
     vercelGatewayRouting: configured?.vercelGatewayRouting ?? {},
     zaiToolStream: configured?.zaiToolStream ?? false,

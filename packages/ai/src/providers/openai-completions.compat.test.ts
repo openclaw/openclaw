@@ -162,6 +162,7 @@ const defaultResolvedCompat = {
   sessionAffinity: "none",
   supportsPromptCacheKey: false,
   supportsLongCacheRetention: true,
+  dropCumulativeTextDeltaReplays: false,
   visibleReasoningDetailTypes: [],
   requiresNonEmptyUserOrAssistantMessage: false,
 } satisfies ResolvedOpenAICompletionsCompat;
