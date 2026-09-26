@@ -10,6 +10,7 @@ describe("database-worker test routing registry", () => {
   });
 
   it.each([
+    "src/agents/git-coauthor-attribution.test.ts",
     "src/wizard/setup.inference-recovery.integration.test.ts",
     "src/channels/message-access/discord-native-acp-owner.test.ts",
     "src/auto-reply/reply/commands-acp.owner.test.ts",

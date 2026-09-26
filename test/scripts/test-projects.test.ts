@@ -2676,6 +2676,7 @@ describe("scripts/test-projects changed-target routing", () => {
   );
 
   it.each([
+    "src/agents/git-coauthor-attribution.test.ts",
     "src/agents/command/session-store.test.ts",
     "src/state/openclaw-state-db.test.ts",
     "src/worker/worker.runtime.test.ts",
@@ -2800,6 +2801,7 @@ describe("scripts/test-projects changed-target routing", () => {
       "test/vitest/vitest.unit-fast.config.ts",
       "src/agents/embedded-agent-runner/run/model-setup.selected-model.test.ts",
     ],
+    ["test/vitest/vitest.unit-fast.config.ts", "src/agents/git-coauthor-attribution.test.ts"],
     [
       "test/vitest/vitest.unit-fast.config.ts",
       "test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts",

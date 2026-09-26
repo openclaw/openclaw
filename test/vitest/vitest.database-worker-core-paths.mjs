@@ -100,6 +100,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/bash-tools.test.ts",
   "src/agents/code-mode.bridge.host-denial.test.ts",
   "src/agents/command/session-store.test.ts",
+  // Fixture teardown may recover an exited reclamation worker through the host broker.
+  "src/agents/git-coauthor-attribution.test.ts",
   "src/agents/core-coding-tools.exec-workdir.test.ts",
   "src/agents/sessions/agent-session-tool-result-redaction.test.ts",
   "src/agents/subagents/registry/subagent-registry-sweeper-recovery.test.ts",
@@ -807,6 +809,7 @@ const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);
 
 // Preserve watch admission for consumers previously inferred into fast lanes.
 export const databaseWorkerCoreFormerFastKinds = new Map([
+  ["src/agents/git-coauthor-attribution.test.ts", "unitFast"],
   ["test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts", "unitFast"],
   ["src/infra/outbound/bound-delivery-router.test.ts", "unitFast"],
   ["src/agents/harness/agent-end-side-effects.no-verbatim-capture.test.ts", "unitFast"],

@@ -5521,6 +5521,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }
       expect(actual.toSorted()).toEqual(expected.toSorted());
       expect(new Set(actual).size).toBe(actual.length);
+      // Native cleanup fallback needs the host broker, never a reused fast thread.
+      const coauthor = "src/agents/git-coauthor-attribution.test.ts";
+      const coauthorGroups = plan
+        .flatMap((job) => job.groups)
+        .filter((group) => group.includePatterns?.includes(coauthor));
+      expect(coauthorGroups).toHaveLength(1);
+      expect(coauthorGroups[0]?.configs).toEqual(["test/vitest/vitest.infra.config.ts"]);
+      expect(actual).toContain(coauthor);
       expect(plan.length).toBeLessThanOrEqual(90);
       const config = createInfraVitestConfig({});
       expect(config.test?.fileParallelism).toBe(sharedVitestConfig.test.fileParallelism);
@@ -5654,6 +5662,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(infra.test?.setupFiles).toEqual(support.test?.setupFiles);
     const admitted = new Set(listMatchedTestFiles(infra));
     for (const file of [
+      "src/agents/git-coauthor-attribution.test.ts",
       "src/agents/subagents/registry/subagent-registry.session-failure.test.ts",
       "src/plugin-sdk/session-transcript-runtime.test.ts",
       "src/agents/sessions/sdk.auth-migration.test.ts",
