@@ -7,8 +7,12 @@ use std::{
     rc::Rc,
 };
 
-use crate::model::web_urls::{WebAuth, control_base_url};
+use crate::model::{
+    web_presentation::WebPresentation,
+    web_urls::{WebAuth, control_base_url},
+};
 use async_channel::Sender;
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -157,9 +161,81 @@ struct Events {
     queue: Rc<RefCell<Vec<WebViewEvent>>>,
     history_dirty: Rc<Cell<bool>>,
     wake: Sender<()>,
+    ready: Rc<Cell<bool>>,
+    opening: Rc<RefCell<Option<Opening>>>,
+    presentation: Rc<RefCell<WebPresentation>>,
+    document_committed: Rc<Cell<bool>>,
+    document_requested: Rc<Cell<bool>>,
+    presentation_requested: Rc<Cell<bool>>,
+    viewport: Rc<Cell<(f64, f64)>>,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    mask: Rc<RefCell<native::PresentationMask>>,
+}
+
+struct Opening {
+    started: std::time::Instant,
+    warm: bool,
+    surface: &'static str,
 }
 
 impl Events {
+    fn set_ready(&self, ready: bool) {
+        if self.ready.replace(ready) != ready {
+            log::debug!("webview_pool ready={ready}");
+            let _ = self.wake.try_send(());
+        }
+    }
+
+    fn revealed(&self) {
+        if let Some(opening) = self.opening.borrow_mut().take() {
+            log::info!(
+                "webview_open surface={} warm={} reveal_ms={:.2}",
+                opening.surface,
+                opening.warm,
+                opening.started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    }
+
+    fn mask(&self) {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Err(error) = self.mask.borrow().hide() {
+            self.push(WebViewEvent::Error(error));
+        }
+        let _ = self.wake.try_send(());
+    }
+
+    fn document_navigation(&self, url: &str) {
+        self.document_committed.set(false);
+        self.presentation.borrow_mut().navigate_document(url);
+        self.mask();
+    }
+
+    fn document_committed(&self, url: &str) {
+        self.document_navigation(url);
+        self.document_committed.set(true);
+        self.document_requested.set(true);
+    }
+
+    fn viewport_matches(&self, width: f64, height: f64) -> bool {
+        let expected = self.viewport.get();
+        (expected.0 - width).abs() < 1.0 && (expected.1 - height).abs() < 1.0
+    }
+
+    fn presentation(&self, document: &str, generation: u64, url: &str, ready: bool) {
+        if self
+            .presentation
+            .borrow_mut()
+            .update(document, generation, url, ready)
+        {
+            if !ready {
+                self.mask();
+            }
+            log::debug!("webview_presentation generation={generation} ready={ready}");
+            let _ = self.wake.try_send(());
+        }
+    }
+
     fn push(&self, event: WebViewEvent) {
         self.queue.borrow_mut().push(event);
         let _ = self.wake.try_send(());
@@ -188,17 +264,36 @@ struct SurfaceState {
     retired: bool,
 }
 
+impl Drop for SurfaceState {
+    fn drop(&mut self) {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(view) = &self.view {
+            native::detach(view);
+        }
+    }
+}
+
 pub struct WebViewSurface(Rc<RefCell<SurfaceState>>);
 
 impl WebViewSurface {
     pub fn new(spec: WebViewSpec, store: WebViewStore, wake: Sender<()>) -> Self {
-        Self(Rc::new(RefCell::new(SurfaceState {
+        let measure = !spec.background;
+        let surface = Self(Rc::new(RefCell::new(SurfaceState {
             spec,
             store,
             events: Events {
                 queue: Rc::default(),
                 history_dirty: Rc::default(),
                 wake,
+                ready: Rc::default(),
+                opening: Rc::default(),
+                presentation: Rc::default(),
+                document_committed: Rc::default(),
+                document_requested: Rc::default(),
+                presentation_requested: Rc::default(),
+                viewport: Rc::default(),
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                mask: Rc::default(),
             },
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             view: None,
@@ -211,7 +306,54 @@ impl WebViewSurface {
             error: None,
             creating: false,
             retired: false,
-        })))
+        })));
+        if measure {
+            surface.begin_open(false);
+        }
+        surface
+    }
+
+    pub fn is_ready(&self) -> bool {
+        let state = self.0.borrow();
+        !state.retired
+            && state.error.is_none()
+            && state.events.ready.get()
+            && state.events.presentation.borrow().ready
+    }
+
+    fn begin_open(&self, warm: bool) {
+        let state = self.0.borrow();
+        let surface = if state.spec.auth.is_none() {
+            "reading"
+        } else if state.spec.url.contains("/apps/panel") {
+            "panel"
+        } else {
+            "settings"
+        };
+        *state.events.opening.borrow_mut() = Some(Opening {
+            started: std::time::Instant::now(),
+            warm,
+            surface,
+        });
+        log::debug!("webview_open surface={surface} warm={warm} requested");
+    }
+
+    pub fn adopt(&self, url: &str, background: bool) -> Result<(), String> {
+        let started = std::time::Instant::now();
+        {
+            let mut state = self.0.borrow_mut();
+            state.events.queue.borrow_mut().clear();
+            state.spec.background = background;
+            state.present = true;
+        }
+        self.navigate(url)?;
+        if !background {
+            self.begin_open(true);
+            if let Some(opening) = self.0.borrow().events.opening.borrow_mut().as_mut() {
+                opening.started = started;
+            }
+        }
+        Ok(())
     }
 
     /// The owner calls this for every retained surface before rendering its active selection.
@@ -239,6 +381,20 @@ impl WebViewSurface {
     pub fn drain_events(&self) -> Vec<WebViewEvent> {
         let state = self.0.borrow();
         let mut events = std::mem::take(&mut *state.events.queue.borrow_mut());
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(view) = &state.view {
+            if state.events.document_committed.get()
+                && state.events.document_requested.replace(false)
+            {
+                let navigation = state.events.presentation.borrow().navigation;
+                let _ = view.evaluate_script(&format!(
+                    "window.__OPENCLAW_GPUI_DOCUMENT__?.({navigation});"
+                ));
+            }
+            if state.events.presentation_requested.replace(false) {
+                native::request_presentation(view);
+            }
+        }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if (state.events.history_dirty.replace(false)
             || events
@@ -292,7 +448,24 @@ impl WebViewSurface {
         state.error = None;
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(view) = &state.view {
-            native::navigate(view, &state.spec)?;
+            if state.spec.auth.is_some() && state.events.ready.get() {
+                {
+                    let presentation = state.events.presentation.borrow();
+                    if presentation.ready && presentation.url == url {
+                        return Ok(());
+                    }
+                }
+                state.events.presentation.borrow_mut().navigate_route(url);
+                state.events.mask();
+                native::navigate_control(view, &state.spec)?;
+            } else if url != "about:blank"
+                || !state.events.ready.get()
+                || !view.url().is_ok_and(|current| current == "about:blank")
+            {
+                state.events.document_navigation(url);
+                state.events.set_ready(false);
+                native::navigate(view, &state.spec)?;
+            }
         }
         Ok(())
     }
@@ -342,6 +515,8 @@ impl WebViewSurface {
 
     pub fn retire(&self) -> Option<WebViewRetirement> {
         let mut state = self.0.borrow_mut();
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        let visible = state.visible;
         state.present = false;
         state.retired = true;
         #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -349,7 +524,7 @@ impl WebViewSurface {
         drop(state);
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
-            view.map(native::retire)
+            view.map(|view| native::retire(view, visible))
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
@@ -383,9 +558,26 @@ impl WebViewSurface {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             let state = self.0.borrow();
-            if let Some(view) = &state.view
-                && native::command(view, command).is_err()
+            let Some(view) = &state.view else {
+                return;
+            };
+            if matches!(command, Command::Back | Command::Forward) {
+                let (back, forward) = native::history(view);
+                if matches!(command, Command::Back) && !back
+                    || matches!(command, Command::Forward) && !forward
+                {
+                    return;
+                }
+            }
+            if matches!(command, Command::Reload) {
+                state.events.document_navigation(&state.spec.url);
+            } else if matches!(command, Command::Back | Command::Forward)
+                && state.spec.auth.is_some()
             {
+                state.events.mask();
+                state.events.presentation.borrow_mut().navigate_history();
+            }
+            if native::command(view, command).is_err() {
                 state
                     .events
                     .push(WebViewEvent::Error("Could not control the webview".into()));
@@ -399,10 +591,36 @@ impl WebViewSurface {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             if let Some(error) = self.0.borrow().error.clone() {
+                if self.0.borrow().spec.background {
+                    return div().into_any_element();
+                }
                 return div().size_full().p_4().child(error).into_any_element();
             }
+            use gpui_kit::component::{Sizable, StyledExt, spinner::Spinner};
+            let palette = super::theme::Palette::for_dark(self.0.borrow().dark.unwrap_or(false));
+            let background = self.0.borrow().spec.background;
+            let blank = self.0.borrow().spec.auth.is_none()
+                && self.0.borrow().events.presentation.borrow().url == "about:blank";
+            // The native view can mask itself from an IPC callback before GPUI's
+            // next render; this placeholder is always ready beneath its layer.
+            let placeholder = div()
+                .size_full()
+                .v_flex()
+                .items_center()
+                .justify_center()
+                .gap_3()
+                .bg(palette.bg)
+                .text_color(palette.muted)
+                .when(!blank, |el| {
+                    el.child(Spinner::new().small().color(palette.muted))
+                })
+                .child(if blank {
+                    "Open a link or enter a URL above."
+                } else {
+                    "Loading…"
+                });
             let state = self.0.clone();
-            canvas(
+            let surface = canvas(
                 |_, _, _| (),
                 move |bounds, _, window, cx| {
                     // Platform construction/cookie completion can pump the native
@@ -430,6 +648,7 @@ impl WebViewSurface {
                         state.creating = false;
                         match result {
                             Ok(view) if !state.retired => {
+                                state.events.mask.borrow_mut().attach(&view);
                                 if let Some(dark) = state.dark {
                                     native::set_dark(&view, dark);
                                 }
@@ -437,9 +656,13 @@ impl WebViewSurface {
                                 // while construction was pumping the native event loop.
                                 state.visible = false;
                                 state.view = Some(view);
+                                let _ = state.events.wake.try_send(());
                             }
-                            Ok(_) => {}
+                            Ok(view) => {
+                                native::retire(view, false);
+                            }
                             Err(error) => {
+                                log::warn!("webview_create failed: {error}");
                                 state.events.push(WebViewEvent::Error(error.clone()));
                                 state.error = Some(error);
                             }
@@ -452,8 +675,12 @@ impl WebViewSurface {
                     {
                         state.bounds = Some(bounds);
                         state.scale_factor = Some(window.scale_factor());
+                        state.events.viewport.set((bounds.width, bounds.height));
+                        state.events.presentation.borrow_mut().ready = false;
+                        state.events.mask();
                         if let Some(view) = &state.view {
-                            let _ = view.set_bounds(native::rect(bounds));
+                            native::set_bounds(view, bounds);
+                            native::request_presentation(view);
                         }
                     }
                     use gpui_kit::component::{GlobalState, Root, WindowExt};
@@ -468,15 +695,42 @@ impl WebViewSurface {
                     let visible = !native_overlay
                         && surface_visible(
                             state.present,
-                            state.spec.background,
+                            background || state.spec.background,
                             bounds,
                             &state.overlays,
                         );
-                    state.set_visible(visible);
+                    let presentation = state.events.presentation.borrow();
+                    let ready = presentation.ready;
+                    let revealable = presentation.revealable();
+                    drop(presentation);
+                    if let Some(view) = &state.view
+                        && let Err(error) = native::present(
+                            view,
+                            visible || state.spec.background,
+                            visible && revealable,
+                        )
+                    {
+                        state.events.push(WebViewEvent::Error(error.clone()));
+                        state.error = Some(error);
+                        return;
+                    }
+                    state.visible = visible && revealable;
+                    if visible && ready {
+                        state.events.revealed();
+                    }
                 },
             )
-            .size_full()
-            .into_any_element()
+            .size_full();
+            if background {
+                surface.into_any_element()
+            } else {
+                div()
+                    .relative()
+                    .size_full()
+                    .child(placeholder)
+                    .child(div().absolute().inset_0().size_full().child(surface))
+                    .into_any_element()
+            }
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
@@ -501,8 +755,15 @@ impl SurfaceState {
             return;
         }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
-        if let Some(view) = &self.view {
-            let _ = view.set_visible(visible);
+        if let Some(view) = &self.view
+            && let Err(error) = native::present(
+                view,
+                visible,
+                visible && self.events.presentation.borrow().revealable(),
+            )
+        {
+            self.events.push(WebViewEvent::Error(error.clone()));
+            self.error = Some(error);
         }
         self.visible = visible;
     }

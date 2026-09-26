@@ -1,6 +1,15 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 export const NATIVE_HISTORY_STATE_EVENT = "openclaw:native-history-state";
+export const NATIVE_PRESENTATION_REQUEST_EVENT = "openclaw:native-presentation-request";
+
+export type NativePresentationState = {
+  generation: number;
+  phase: "loading" | "ready";
+  pathname: string;
+  search: string;
+  hash: string;
+};
 
 export type NativeHistoryState = {
   canGoBack: boolean;
@@ -13,10 +22,13 @@ type NativeEmbedHost = {
   navigationChrome?: "host";
 };
 
+type NativePanelBridge = { postMessage(message: unknown): void };
+
 type NativeWebChromeWindow = Window & {
   __OPENCLAW_NATIVE_EMBED__?: unknown;
   __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
   __OPENCLAW_NATIVE_HISTORY__?: NativeHistoryState;
+  __OPENCLAW_NATIVE_PANEL__?: NativePanelBridge;
 };
 
 // Hosts listen from document start so they can enable the shared chrome before
@@ -27,6 +39,11 @@ if (typeof window !== "undefined") {
 
 export function isNativeWebChromeHost(): boolean {
   return (window as NativeWebChromeWindow)["__OPENCLAW_NATIVE_WEB_CHROME__"] === true;
+}
+
+export function nativePanelBridge(): NativePanelBridge | null {
+  const bridge = (window as NativeWebChromeWindow)["__OPENCLAW_NATIVE_PANEL__"];
+  return typeof bridge?.postMessage === "function" ? bridge : null;
 }
 
 export function nativeEmbedHost(): NativeEmbedHost | null {

@@ -64,6 +64,7 @@ import { createApplicationGateway } from "./gateway-store.ts";
 import { startLinkReaderRouting } from "./link-reader-routing.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
+import { nativePanelBridge } from "./native-web-chrome.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { isBrowserPanelAvailable } from "./panel-availability.ts";
 import { createApplicationPlacementStartup } from "./session-placement-startup.ts";
@@ -560,10 +561,10 @@ export function bootstrapApplication(): ApplicationRuntime {
       // Native bridge parsers and listeners stay out of browser startup.
       // SAFETY: WebKit supplies the optional handler map; the native initializer checks each callable.
       const nativeWindow = window as Window & { webkit?: { messageHandlers?: unknown } };
-      if (nativeWindow.webkit?.messageHandlers) {
+      if (nativeWindow.webkit?.messageHandlers || nativePanelBridge()) {
         steps.unshift(async () => {
           const { startNativeCapabilities } = await import("./native-startup.runtime.ts");
-          return startNativeCapabilities(gateway, startupLifecycle, (capabilities) => {
+          return startNativeCapabilities(context, startupLifecycle, (capabilities) => {
             nativeDeviceSettings = capabilities.deviceSettings;
             nativeNotifications = capabilities.notifications;
           });

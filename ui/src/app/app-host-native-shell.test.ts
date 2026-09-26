@@ -565,12 +565,22 @@ describe("OpenClaw native shell", () => {
       { path: "/dashboard/main/tasks/review", routeId: "dashboard" },
       { path: "/settings/agents/main/overview", routeId: "agents" },
       { path: "/settings/memory/dreams", routeId: "memory" },
-    ].flatMap(({ path, routeId, search }) =>
-      ["", "/gateway"].map((basePath) => ({ path, routeId, search, basePath })),
+      {
+        path: "/settings/profile",
+        routeId: "profile",
+        hash: "#settings-profile-identity",
+      },
+      {
+        path: "/apps/panel",
+        routeId: "panel-embed",
+        search: "?agent=main&session=agent%3Amain%3Atest&slot=tasks&taskId=review",
+      },
+    ].flatMap(({ path, routeId, search, hash }) =>
+      ["", "/gateway"].map((basePath) => ({ path, routeId, search, hash, basePath })),
     ),
   )(
     "preserves native destination $basePath$path and acknowledges it",
-    ({ path, routeId, search, basePath }) => {
+    ({ path, routeId, search, hash, basePath }) => {
       const navigate = vi.fn();
       const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
       shell.runtime = {
@@ -578,7 +588,7 @@ describe("OpenClaw native shell", () => {
       };
       const event = new CustomEvent("openclaw:native-navigate", {
         cancelable: true,
-        detail: { path, search },
+        detail: { path, search, hash },
       });
 
       shell.handleNativeNavigate(event);
@@ -587,6 +597,7 @@ describe("OpenClaw native shell", () => {
       expect(navigate).toHaveBeenCalledExactlyOnceWith(routeId, {
         pathname: `${basePath}${path}`,
         ...(search ? { search } : {}),
+        ...(hash ? { hash } : {}),
       });
     },
   );

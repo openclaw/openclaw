@@ -450,6 +450,8 @@ impl Render for AppView {
         };
         div()
             .id("openclaw-app")
+            .role(Role::Group)
+            .aria_label("OpenClaw")
             .track_focus(&self.focus_handle)
             .size_full()
             .v_flex()
@@ -641,7 +643,7 @@ impl Render for AppView {
                     ),
             )
             .when(!self.show_connect_form, |el| {
-                el.children(
+                el.children(self.warm_web_elements()).children(
                     self.current_dock()
                         .and_then(|dock| dock.catalog.as_ref())
                         .map(|surface| {

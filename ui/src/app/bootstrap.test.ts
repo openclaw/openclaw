@@ -55,14 +55,24 @@ describe("normalizeLegacyTerminalViewLocation", () => {
 });
 
 describe("bootstrapApplication", () => {
-  it.each([false, true])(
-    "owns native health reporting across startup and stop (early stop: %s)",
-    async (stopEarly) => {
+  it.each(
+    ["gateways", "panel"].flatMap((bridge) =>
+      [false, true].map((stopEarly) => ({ bridge, stopEarly })),
+    ),
+  )(
+    "owns $bridge health reporting across startup and stop (early stop: $stopEarly)",
+    async ({ bridge, stopEarly }) => {
       const previousUrl = window.location.href;
       const previousSettings = loadSettings();
       window.history.replaceState({}, "", "/focus/terminal");
       const postMessage = vi.fn();
-      vi.stubGlobal("webkit", { messageHandlers: { openclawGateways: { postMessage } } });
+      vi.stubGlobal(
+        "webkit",
+        bridge === "gateways"
+          ? { messageHandlers: { openclawGateways: { postMessage } } }
+          : undefined,
+      );
+      vi.stubGlobal("__OPENCLAW_NATIVE_PANEL__", bridge === "panel" ? { postMessage } : undefined);
       const changed = vi.fn();
       window.addEventListener("openclaw:native-gateway-health-changed", changed);
       const runtime = bootstrapApplication();
@@ -80,8 +90,14 @@ describe("bootstrapApplication", () => {
         await starting;
         expect(startGateway).toHaveBeenCalledTimes(stopEarly ? 0 : 1);
         expect(changed).toHaveBeenCalledTimes(stopEarly ? 0 : 1);
-        // The shared Linux bridge must not receive a Mac-only action.
-        expect(postMessage).not.toHaveBeenCalled();
+        // Gateway actions stay silent; panel hosts receive their presentation state.
+        if (bridge === "panel" && !stopEarly) {
+          expect(postMessage).toHaveBeenCalledWith(
+            expect.objectContaining({ type: "openclaw-presentation-state", phase: "loading" }),
+          );
+        } else {
+          expect(postMessage).not.toHaveBeenCalled();
+        }
         runtime.stop();
         if (!stopEarly) {
           expect(Reflect.get(window, "__OPENCLAW_NATIVE_GATEWAY_HEALTH__")).toMatchObject({

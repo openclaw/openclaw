@@ -551,14 +551,45 @@ owns whether it is granted.
 
 ### Webview architecture and platforms
 
-`ui/webview_surface.rs` owns one lazily created direct wry child webview per
-surface, attached to GPUI's window handle. Paint synchronizes its logical bounds
+`ui/web_state.rs` owns a bounded webview pool for each connected window: one
+hidden Control UI spare in that Gateway's existing store and one hidden blank
+spare in the reading store. Warming starts after the connected window paints.
+The Control UI spare loads Appearance with the normal authentication bootstrap;
+its native command listener and Gateway connection must both be ready before
+adoption. Settings, pages and panels navigate the adopted document through the
+Control UI's native router bridge, preserving its connection. Adoption schedules
+a replacement after the next frame. A fast open before readiness uses a normal
+cold surface. Gateway switches, sign-out, profile removal and window closure
+retire both spares and cancel pending replenishment. Warm views never activate
+the app, become visible, or take focus, including in background proof mode.
+
+`ui/webview_surface.rs` owns each direct wry child webview, attached to GPUI's
+window handle. Paint synchronizes its logical bounds
 with pixel alignment at the window's scale factor. Inactive surfaces are hidden
 and retained. GPUI overlays hide intersecting surfaces; component menus, dialogs,
 sheets and notifications conservatively hide all native webviews when their
 precise bounds are unavailable. Callback events use a bounded wake channel into
 GPUI rather than polling. Native appearance updates WebKit/WebView2's preferred
 color scheme without changing the system setting.
+
+Each visible surface keeps a theme-matched native loading placeholder until its
+document is ready. The Control UI reports typed, generation-scoped presentation
+state after the shell, route, and shared loading surfaces settle; empty and
+error states are revealable. Navigation masks the previous document before the
+next route renders. Two drawable web frames precede reveal. Reading documents
+wait for load, fonts and two drawable frames; a blank reading tab keeps a native
+empty state instead of showing a white page. Third-party applications' later
+asynchronous updates remain owned by those sites.
+
+On macOS, a transparent native container lets WebKit finish rendering without
+displaying intermediate frames or intercepting clicks. Its bounds stay fixed
+during loading. The patched wry constructor respects hidden/unfocused webviews;
+`gateway_windows.rs` retains the `OPENCLAW_GPUI_BACKGROUND` window-activation
+switch. Native webviews keep their original WebKit class and observation state.
+
+`webview_open` diagnostics record request-to-reveal timing. Fully occluded windows
+may have drawing paused by macOS; background frame proof uses an unobscured
+window without activating it.
 
 | Platform | Support and storage |
 | --- | --- |
