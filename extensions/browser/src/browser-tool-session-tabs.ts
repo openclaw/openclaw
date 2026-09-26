@@ -44,7 +44,13 @@ export function stripBrowserOpenInternalMetadata(value: unknown): unknown {
   if (!record) {
     return value;
   }
-  const { ownership: _ownership, resolvedProfile: _resolvedProfile, ...agentVisible } = record;
+  const {
+    ownership: _ownership,
+    resolvedProfile: _resolvedProfile,
+    wsUrl: _wsUrl,
+    wsLookup: _wsLookup,
+    ...agentVisible
+  } = record;
   return agentVisible;
 }
 
