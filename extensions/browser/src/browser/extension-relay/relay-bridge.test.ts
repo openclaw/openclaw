@@ -131,6 +131,7 @@ describe("ExtensionRelayBridge", () => {
         extension.socket.send = (raw) => FakeSocket.prototype.send.call(extension.socket, raw);
         await vi.advanceTimersByTimeAsync(43_000);
         expect(bridge.extensionConnected).toBe(false);
+        expect(vi.getTimerCount()).toBe(0);
       }
       expect(client.frames().find((frame) => frame.id === 2)).toMatchObject({
         error: {

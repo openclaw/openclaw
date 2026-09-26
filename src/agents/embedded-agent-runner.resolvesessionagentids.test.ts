@@ -30,27 +30,26 @@ describe("resolveSessionAgentIdStrict", () => {
   );
 });
 
-describe("session owner resolution", () => {
+describe.each([
+  { name: "resolveSessionAgentIds", resolve: resolvePairedSessionAgentIds },
+  {
+    name: "resolveSessionAgentIdStrict",
+    resolve: (params: Parameters<typeof resolveSessionAgentIdStrict>[0]) => ({
+      sessionAgentId: resolveSessionAgentIdStrict(params),
+    }),
+  },
+])("$name", ({ resolve: resolveSessionAgentIds }) => {
   const cfg = {
     agents: {
       entries: { main: {}, beta: {} },
     },
   } as OpenClawConfig;
 
-  function fixedStoreConfig(agentId: string): OpenClawConfig {
-    return {
-      session: { store: "/tmp/shared.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId } },
-        entries: { main: {}, beta: {} },
-      },
-    };
-  }
-
   it("treats an explicitly undefined agentId as omitted", () => {
     const config = { agents: { entries: { main: {} } } } as OpenClawConfig;
-    expect(resolveSessionAgentIdStrict({ config, agentId: undefined })).toBe("main");
+    expect(resolveSessionAgentIds({ config, agentId: undefined })).toEqual(
+      resolveSessionAgentIds({ config }),
+    );
   });
 
   it.each(["", "   ", "!!!"])("rejects invalid explicit agent id %j", (agentId) => {
@@ -66,7 +65,7 @@ describe("session owner resolution", () => {
   });
 
   it("requires an owner when sessionKey is missing", () => {
-    expect(() => resolveSessionAgentIdStrict({ config: cfg })).toThrow(AgentSelectionRequiredError);
+    expect(() => resolveSessionAgentIds({ config: cfg })).toThrow(AgentSelectionRequiredError);
   });
 
   it.each([
@@ -77,7 +76,7 @@ describe("session owner resolution", () => {
       expected: "beta",
     },
   ])("preserves ownerless fallback for %j", ({ config, expected }) => {
-    expect(resolveSessionAgentIdStrict({ config })).toBe(expected);
+    expect(resolveSessionAgentIds({ config }).sessionAgentId).toBe(expected);
   });
 
   it("uses the retained migration owner only while it remains configured", () => {
@@ -85,84 +84,126 @@ describe("session owner resolution", () => {
       agents: { ownership: "explicit", entries: { main: {}, beta: {} } },
     };
     setRetainedLegacyDefaultAgentId(config, "beta");
-    expect(resolveSessionAgentIdStrict({ config })).toBe("beta");
+    expect(resolveSessionAgentIds({ config }).sessionAgentId).toBe("beta");
     setRetainedLegacyDefaultAgentId(config, "retired");
-    expect(() => resolveSessionAgentIdStrict({ config })).toThrow(AgentSelectionRequiredError);
+    expect(() => resolveSessionAgentIds({ config })).toThrow(AgentSelectionRequiredError);
   });
 
   it("requires an owner when sessionKey is non-agent", () => {
     expect(() =>
-      resolveSessionAgentIdStrict({ sessionKey: "quietchat:slash:123", config: cfg }),
+      resolveSessionAgentIds({ sessionKey: "quietchat:slash:123", config: cfg }),
     ).toThrow(AgentSelectionRequiredError);
   });
 
   it("requires an owner for global sessions", () => {
-    expect(() => resolveSessionAgentIdStrict({ sessionKey: "global", config: cfg })).toThrow(
+    expect(() => resolveSessionAgentIds({ sessionKey: "global", config: cfg })).toThrow(
       AgentSelectionRequiredError,
     );
   });
 
   it("uses a configured persisted owner for a fixed-store global session", () => {
     expect(
-      resolveSessionAgentIdStrict({
+      resolveSessionAgentIds({
         sessionKey: "global",
-        config: fixedStoreConfig("beta"),
-      }),
+        config: {
+          session: { store: "/tmp/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "beta" } },
+            entries: { main: {}, beta: {} },
+          },
+        },
+      }).sessionAgentId,
     ).toBe("beta");
   });
 
   it("rejects a retired fixed-store owner for a global session", () => {
     expect(() =>
-      resolveSessionAgentIdStrict({
+      resolveSessionAgentIds({
         sessionKey: "global",
-        config: fixedStoreConfig("retired"),
+        config: {
+          session: { store: "/tmp/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "retired" } },
+            entries: { main: {}, beta: {} },
+          },
+        },
       }),
     ).toThrow(AgentSelectionRequiredError);
   });
 
   it("rejects an explicit agent that conflicts with a configured fixed-store owner", () => {
     expect(() =>
-      resolveSessionAgentIdStrict({
+      resolveSessionAgentIds({
         agentId: "main",
         sessionKey: "global",
-        config: fixedStoreConfig("beta"),
+        config: {
+          session: { store: "/tmp/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "beta" } },
+            entries: { main: {}, beta: {} },
+          },
+        },
       }),
     ).toThrow(AgentSelectionRequiredError);
   });
 
   it("rejects a fallback agent that conflicts with a configured fixed-store owner", () => {
     expect(() =>
-      resolveSessionAgentIdStrict({
+      resolveSessionAgentIds({
         fallbackAgentId: "main",
         sessionKey: "global",
-        config: fixedStoreConfig("beta"),
+        config: {
+          session: { store: "/tmp/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "beta" } },
+            entries: { main: {}, beta: {} },
+          },
+        },
       }),
     ).toThrow(AgentSelectionRequiredError);
   });
 
   it("rejects an explicit agent when the unscoped fixed-store owner retired", () => {
     expect(() =>
-      resolveSessionAgentIdStrict({
+      resolveSessionAgentIds({
         agentId: "beta",
         sessionKey: "global",
-        config: fixedStoreConfig("retired"),
+        config: {
+          session: { store: "/tmp/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "retired" } },
+            entries: { main: {}, beta: {} },
+          },
+        },
       }),
     ).toThrow(AgentSelectionRequiredError);
   });
 
   it("keeps an agent-scoped key available when the fixed-store owner retired", () => {
     expect(
-      resolveSessionAgentIdStrict({
+      resolveSessionAgentIds({
         agentId: "beta",
         sessionKey: "agent:beta:main",
-        config: fixedStoreConfig("retired"),
-      }),
+        config: {
+          session: { store: "/tmp/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "retired" } },
+            entries: { main: {}, beta: {} },
+          },
+        },
+      }).sessionAgentId,
     ).toBe("beta");
   });
 
   it("rejects an explicit agent that conflicts with an agent-scoped key", () => {
     expect(() =>
-      resolveSessionAgentIdStrict({
+      resolveSessionAgentIds({
         agentId: "main",
         sessionKey: "agent:beta:main",
         config: cfg,
@@ -173,7 +214,7 @@ describe("session owner resolution", () => {
   it("keeps the agent id for provider-qualified agent sessions", () => {
     // Channel-qualified agent session keys still carry the owning agent in the
     // second segment.
-    const sessionAgentId = resolveSessionAgentIdStrict({
+    const { sessionAgentId } = resolveSessionAgentIds({
       sessionKey: "agent:beta:quietchat:channel:c1",
       config: cfg,
     });
@@ -181,15 +222,23 @@ describe("session owner resolution", () => {
   });
 
   it("uses the agent id from agent session keys", () => {
-    const sessionAgentId = resolveSessionAgentIdStrict({
+    const { sessionAgentId } = resolveSessionAgentIds({
       sessionKey: "agent:main:main",
       config: cfg,
     });
     expect(sessionAgentId).toBe("main");
   });
 
+  it("uses explicit agentId when sessionKey is missing", () => {
+    const { sessionAgentId } = resolveSessionAgentIds({
+      agentId: "main",
+      config: cfg,
+    });
+    expect(sessionAgentId).toBe("main");
+  });
+
   it("prefers explicit agentId over non-agent session keys", () => {
-    const sessionAgentId = resolveSessionAgentIdStrict({
+    const { sessionAgentId } = resolveSessionAgentIds({
       sessionKey: "quietchat:slash:123",
       agentId: "main",
       config: cfg,
@@ -198,7 +247,7 @@ describe("session owner resolution", () => {
   });
 
   it("uses fallbackAgentId for unscoped channel session keys", () => {
-    const sessionAgentId = resolveSessionAgentIdStrict({
+    const { sessionAgentId } = resolveSessionAgentIds({
       sessionKey: "feishu:direct:ou_user1",
       fallbackAgentId: "main",
       config: cfg,
@@ -207,7 +256,7 @@ describe("session owner resolution", () => {
   });
 
   it("prefers session-key agent over fallbackAgentId", () => {
-    const sessionAgentId = resolveSessionAgentIdStrict({
+    const { sessionAgentId } = resolveSessionAgentIds({
       sessionKey: "agent:beta:feishu:direct:ou_user1",
       fallbackAgentId: "main",
       config: cfg,
@@ -216,7 +265,7 @@ describe("session owner resolution", () => {
   });
 
   it("prefers explicit agentId over fallbackAgentId", () => {
-    const sessionAgentId = resolveSessionAgentIdStrict({
+    const { sessionAgentId } = resolveSessionAgentIds({
       sessionKey: "feishu:direct:ou_user1",
       agentId: "beta",
       fallbackAgentId: "main",
