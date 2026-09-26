@@ -48,10 +48,7 @@ export function createSessionHistoryWorkerReaders(
       await runRequest(
         () => ({ kind: "session-pending-archives", ...input }),
         JSON.stringify(input).length * 2,
-        (value) => {
-          assertResultKind(value, "session-pending-archives", "pending archives");
-          return value.pending;
-        },
+        (value) => readResult(value, "session-pending-archives", "pending archives").pending,
         signal,
       ),
     findTranscriptEvent: async (request) =>
@@ -260,10 +257,7 @@ export function createSessionHistoryWorkerReaders(
       await runRequest(
         () => ({ kind: "session-diagnostic-text", ...input }),
         JSON.stringify(input).length * 2,
-        (value) => {
-          assertResultKind(value, "session-diagnostic-text", "diagnostic text");
-          return value.text;
-        },
+        (value) => readResult(value, "session-diagnostic-text", "diagnostic text").text,
       ),
     readEntries: async (scope) =>
       await runRequest(
