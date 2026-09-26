@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as dispatch from "../../auto-reply/dispatch.js";
@@ -25,7 +26,7 @@ import * as profileReader from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import * as sessionUtils from "../session-utils.js";
+import * as sessionStores from "../session-utils-store.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import type { GatewayClient } from "./types.js";
@@ -47,6 +48,7 @@ it.each<{
   replaceDuringPersistence?: boolean;
   pendingReplacement?: boolean;
   switchStoreAfterAck?: boolean;
+  configDuringAdmission?: "unrelated" | "model" | "security" | "routing";
 }>([
   {
     name: "raw global only",
@@ -151,6 +153,15 @@ it.each<{
     allowed: true,
     writeDuringAdmission: "unrelated",
   },
+  ...(["unrelated", "model", "security", "routing"] as const).map((configDuringAdmission) => ({
+    name: `${configDuringAdmission} config changes during admission read`,
+    raw: true,
+    literal: false,
+    shared: false,
+    key: "global",
+    allowed: configDuringAdmission === "unrelated",
+    configDuringAdmission,
+  })),
   {
     name: "database replacement after recorder target resolution",
     raw: true,
@@ -333,17 +344,50 @@ it.each<{
             return prepared;
           })
       : undefined;
+    let configReloaded = false;
+    const readQualifiedEntry = sessionStores.withQualifiedGatewaySessionEntry;
+    const reloadDuringRead = scenario.configDuringAdmission
+      ? vi.spyOn(sessionStores, "withQualifiedGatewaySessionEntry").mockImplementation((params) =>
+          readQualifiedEntry({
+            ...params,
+            consume: (...args) => {
+              if (!configReloaded) {
+                const changedConfig: OpenClawConfig =
+                  scenario.configDuringAdmission === "unrelated"
+                    ? { ...cfg, logging: { level: "debug" }, ui: { seamColor: "#123456" } }
+                    : scenario.configDuringAdmission === "model"
+                      ? {
+                          ...cfg,
+                          agents: {
+                            ...cfg.agents,
+                            defaults: {
+                              ...cfg.agents?.defaults,
+                              model: "anthropic/claude-sonnet-4-6",
+                            },
+                          },
+                        }
+                      : scenario.configDuringAdmission === "security"
+                        ? { ...cfg, tools: { ...cfg.tools, fs: { workspaceOnly: true } } }
+                        : { ...cfg, session: { ...cfg.session, mainKey: "changed-main" } };
+                setRuntimeConfigSnapshot(changedConfig, changedConfig);
+                configReloaded = true;
+              }
+              return params.consume(...args);
+            },
+          }),
+        )
+      : undefined;
     let databaseReplaced = false;
-    const loadSessionEntry = sessionUtils.loadSessionEntry;
+    const readSessionEntry = sessionStores.withGatewaySessionEntry;
     const replaceAfterSelection = scenario.replaceDatabase
-      ? vi.spyOn(sessionUtils, "loadSessionEntry").mockImplementation((...args) => {
-          const loaded = loadSessionEntry(...args);
+      ? vi.spyOn(sessionStores, "withGatewaySessionEntry").mockImplementation(async (...args) => {
+          const loaded = await readSessionEntry(...args);
           if (!databaseReplaced) {
-            const source = loaded.readSource;
-            if (!source) {
+            const source = isRecord(loaded) ? loaded.capturedReadSource : undefined;
+            if (!isRecord(source) || typeof source.path !== "string") {
               throw new Error("Expected the selected physical database before replacement");
             }
-            closeOpenClawAgentDatabaseByPath(source.path);
+            await closeOpenClawAgentDatabaseByPathAsync(source.path);
             if (scenario.replaceDatabase === "copy") {
               fs.renameSync(source.path, originalPath);
               fs.copyFileSync(originalPath, source.path);
@@ -442,6 +486,9 @@ it.each<{
             message: expect.stringContaining("ambiguous stored identity"),
           }),
         );
+      }
+      if (scenario.configDuringAdmission) {
+        expect(configReloaded).toBe(true);
       }
       if (!scenario.allowed) {
         expect(respond).toHaveBeenCalledWith(
@@ -659,6 +706,7 @@ it.each<{
         vi.mocked(preparedProfile.release).mockRestore();
       }
       holdProfile?.mockRestore();
+      reloadDuringRead?.mockRestore();
       replaceAfterSelection?.mockRestore();
       holdDispatch.mockRestore();
       observeDispatch.mockRestore();

@@ -30,6 +30,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { sessionChangeAffectsStoredRow } from "../sessions/session-row-facts.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import {
   resolveSessionStoreIdentity,
@@ -465,16 +466,14 @@ export async function withGatewaySessionStoreTarget<T>(
   }
   const reads = [...(legacy?.reads ?? []), ...(normal?.reads ?? [])];
   let changed = false;
-  const stop = sessionChanges.subscribe((change) => {
+  const stop = sessionChanges.subscribeFacts((change) => {
     if (
-      "all" in change
-        ? change.scope !== "runtime"
-        : change.scope !== "runtime" &&
-          reads.some(
-            (read) =>
-              (!change.agentId || read.agentId === change.agentId) &&
-              read.options.exactKeys?.includes(change.sessionKey),
-          )
+      reads.some((read) =>
+        sessionChangeAffectsStoredRow(change, {
+          agentId: read.agentId,
+          sessionKeys: read.options.exactKeys ?? [],
+        }),
+      )
     ) {
       changed = true;
     }

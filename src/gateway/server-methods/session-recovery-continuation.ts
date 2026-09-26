@@ -1,4 +1,3 @@
-import { asOptionalRecord } from "@openclaw/normalization-core";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
@@ -7,7 +6,6 @@ import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
-import { GatewaySessionFactsChangedDuringReadError } from "../session-utils-store-errors.js";
 import { handleTrustedInternalChatSend } from "./chat-send-handler.js";
 import { withSessionMutationCommitGuard } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -104,28 +102,6 @@ export async function launchSessionRecoveryContinuation(params: {
         : undefined,
     );
   } catch (error) {
-    const cached = params.context.dedupe.get(`chat:${params.idempotencyKey}`);
-    const cachedPayload = asOptionalRecord(cached?.payload);
-    const cachedStarted =
-      cached?.ok === true &&
-      cachedPayload?.runId === params.idempotencyKey &&
-      (cachedPayload.status === "started" || cachedPayload.status === "ok");
-    if (
-      error instanceof GatewaySessionFactsChangedDuringReadError &&
-      (params.context.chatAbortControllers.has(params.idempotencyKey) || cachedStarted)
-    ) {
-      params.commitGuard?.();
-      if (params.hasCurrentClientAuthority?.() === false) {
-        return {
-          status: "rejected",
-          error: errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "Gateway caller authority is no longer active.",
-          ),
-        };
-      }
-      return { status: "started", runId: params.idempotencyKey };
-    }
     outcome = {
       status: "rejected",
       error:

@@ -17,7 +17,7 @@ import { resolveGatewaySessionStoreTarget } from "./session-utils-store-lookup.j
 
 it("admits prepared facts for an authorized session that does not exist yet", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = rolePolicyConfig();
+    let cfg = rolePolicyConfig();
     const client = roleClient("write", "new-session-owner");
     const scope = { agentId: "main", sessionKey: "agent:main:new-worker-session" };
     const result = await resolveSessionMutationAuthorizationAsync({
@@ -42,11 +42,65 @@ it("admits prepared facts for an authorized session that does not exist yet", as
           entry: undefined,
           members: [],
         },
-        effect,
+        () => {
+          cfg = { ...cfg, logging: { level: "debug" } };
+          result.authorization!.assertCurrent();
+          effect();
+        },
         () => {},
       ),
     ).not.toThrow();
     expect(effect).toHaveBeenCalledOnce();
+  });
+});
+
+it("allows unrelated config reloads while worker authorization reads are pending", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    let cfg = rolePolicyConfig();
+    const client = roleClient("write", "reload-owner");
+    const scope = { agentId: "main", sessionKey: "agent:main:reload-sharing" };
+    replaceSessionEntrySync(scope, {
+      sessionId: "reload-current",
+      updatedAt: 1,
+      createdActor: {
+        type: "human",
+        source: "profile",
+        id: client.authenticatedUserProfile!.profileId,
+      },
+    });
+    const read = historyLane.pool.run.bind(historyLane.pool);
+    let reloads = 0;
+    const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+      const reply = await read(...args);
+      if (
+        reply.ok &&
+        typeof reply.value === "object" &&
+        reply.value !== null &&
+        "kind" in reply.value &&
+        reply.value.kind === "session-exact-entries"
+      ) {
+        reloads += 1;
+        cfg = { ...cfg, logging: { level: reloads % 2 ? "debug" : "info" } };
+      }
+      return reply;
+    });
+    try {
+      const result = await resolveSessionMutationAuthorizationAsync({
+        client,
+        method: "chat.send",
+        requestParams: scope,
+        context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
+      });
+      expect(result.error).toBeNull();
+      expect(reloads).toBeGreaterThan(0);
+      const initialReloads = reloads;
+      const effect = vi.fn(() => result.authorization!.assertCurrent());
+      await result.authorization!.withCurrent!(effect);
+      expect(reloads).toBeGreaterThan(initialReloads);
+      expect(effect).toHaveBeenCalledOnce();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
@@ -123,8 +177,8 @@ it.each(["before-read", "before-consume"] as const)(
   },
 );
 
-it.each(["membership", "owner", "routing"] as const)(
-  "rejects %s invalidation within the consuming frame",
+it.each(["membership", "owner", "routing", "policy", "unrelated-config"] as const)(
+  "rechecks %s changes within the consuming frame",
   async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       let cfg = rolePolicyConfig();
@@ -156,10 +210,31 @@ it.each(["membership", "owner", "routing"] as const)(
           removeSessionMemberSync(scope, client.authenticatedUserProfile!.profileId);
         } else if (change === "owner") {
           closing = closeOpenClawAgentDatabasesAsync();
+        } else if (change === "policy") {
+          const roles = cfg.gateway!.roles!;
+          cfg = {
+            ...cfg,
+            gateway: {
+              ...cfg.gateway,
+              roles: {
+                ...roles,
+                definitions: {
+                  ...roles.definitions,
+                  view: { ...roles.definitions.view!, agents: [] },
+                },
+              },
+            },
+          };
+        } else if (change === "unrelated-config") {
+          cfg = { ...cfg, logging: { level: "debug" } };
         } else {
           cfg = { ...cfg, session: { store: "replacement/sessions.json" } };
         }
-        expect(() => authorization.assertCurrent()).toThrow();
+        if (change === "unrelated-config") {
+          expect(() => authorization.assertCurrent()).not.toThrow();
+        } else {
+          expect(() => authorization.assertCurrent()).toThrow();
+        }
         checked = true;
       });
       if (change === "owner") {

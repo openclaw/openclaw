@@ -190,6 +190,55 @@ async function createFixture(
 }
 
 describe("model chat and native model ownership", () => {
+  it("keeps native ownership through unrelated runtime, auth and display publications", async () => {
+    const nativeOwner = vi.fn<NonNullable<AgentHarness["resolveSessionRuntimeOwnership"]>>(
+      ({ assertCurrent, sessionKey }) => {
+        for (const scope of [
+          "agent-runs",
+          "subagent-runs",
+          "profiles",
+          "catalog",
+          "config",
+          "runtime",
+          "acp",
+          "worker-placements",
+          "worker-environments",
+        ]) {
+          sessionChanges.emit({ all: true, scope });
+          assertCurrent();
+        }
+        sessionChanges.emit({ sessionKey: sessionKey!, agentId: "main" });
+        sessionChanges.emit({
+          sessionKey: sessionKey!,
+          agentId: "main",
+          scope: "runtime",
+        });
+        sessionChanges.emit({
+          sessionKey: "agent:main:other",
+          storePath: fixture.target.storePath,
+        });
+        sessionChanges.emit({ all: true, scope: { agentId: "other" } });
+        assertCurrent();
+        return { model: "native", auth: "native" };
+      },
+    );
+    const fixture = await createFixture({}, nativeOwner);
+    const setup = await fixture.resolve();
+    await expect(setup.nativeSessionRuntime!.assertCurrent()).resolves.toBeUndefined();
+    expect(nativeOwner).toHaveBeenCalledTimes(2);
+    expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+  });
+
+  it("rejects store topology changes during native ownership resolution", async () => {
+    const fixture = await createFixture({}, ({ assertCurrent }) => {
+      sessionChanges.emit({ all: true, scope: "stores" });
+      assertCurrent();
+      return { model: "native", auth: "native" };
+    });
+    await expect(fixture.resolve()).rejects.toMatchObject({ name: "AgentHarnessPreflightError" });
+    expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+  });
+
   it("retries one benign session-row race before native model dispatch", async () => {
     const nativeOwner = vi.fn(() => ({ model: "native" as const, auth: "native" as const }));
     const fixture = await createFixture({}, nativeOwner);

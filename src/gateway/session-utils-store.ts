@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -48,6 +47,7 @@ import { listGatewayAgentsBasic } from "./agent-list.js";
 import type { GatewayAgentOwnership } from "./agent-list.js";
 import { resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
 import { GatewaySessionFactsChangedDuringReadError } from "./session-utils-store-errors.js";
 import {
@@ -230,12 +230,10 @@ export async function withGatewaySessionEntry<T>(
     assertSourceCurrent: () => void,
   ) => T,
   cfg: OpenClawConfig = getRuntimeConfig(),
-  assertConfigCurrent: () => void = () => {
-    if (!isDeepStrictEqual(cfg, getRuntimeConfig())) {
-      throw new Error("Session routing changed during consumption");
-    }
-  },
+  assertConfigCurrent?: () => void,
 ): Promise<T> {
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg);
+  const assertConfig = assertConfigCurrent ?? (() => assertRoutingCurrent(getRuntimeConfig()));
   const read = () =>
     withGatewaySessionStoreTarget(
       { cfg, key: sessionKey, ...opts },
@@ -257,7 +255,7 @@ export async function withGatewaySessionEntry<T>(
           membership,
           () => {
             assertSourceCurrent();
-            assertConfigCurrent();
+            assertConfig();
           },
         );
       },
@@ -305,8 +303,7 @@ export async function withQualifiedGatewaySessionEntry<T>(params: {
         );
       },
     });
-  // Session creation can publish both its row and admitted run while a retry reads.
-  // Reopen the same qualified source after each bounded publication.
+  // Reopen the same qualified source after bounded stored-row publications.
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await read();

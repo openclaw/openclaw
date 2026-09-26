@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -57,6 +56,7 @@ import {
   resolveSessionSharingTarget,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
+import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import {
   createSessionListEntryFilter,
   prepareProjectedSessionSharing,
@@ -579,6 +579,9 @@ export function resolveSessionMutationAuthorization(params: {
               withCurrent: async <T>(consume: () => T): Promise<T> => {
                 const expected = authorizedTargets[0]!;
                 const cfg = params.context.getRuntimeConfig();
+                const assertRoutingCurrent = captureSessionMutationRouting(cfg, () =>
+                  targetChanged(expected.sessionKey),
+                );
                 return withSessionSharingTarget(
                   { cfg, sessionKey: expected.sessionKey, agentId: expected.agentId },
                   (read) => {
@@ -586,9 +589,7 @@ export function resolveSessionMutationAuthorization(params: {
                       ...read,
                       assertCurrent: () => {
                         read.assertCurrent();
-                        if (!isDeepStrictEqual(cfg, params.context.getRuntimeConfig())) {
-                          throw targetChanged(expected.sessionKey);
-                        }
+                        assertRoutingCurrent(params.context.getRuntimeConfig());
                       },
                     };
                     return consumeSharing(prepared, () => {
@@ -617,15 +618,16 @@ export function resolveSessionMutationAuthorization(params: {
                   targetChanged: () => targetChanged(expected.sessionKey),
                 });
                 const cfg = params.context.getRuntimeConfig();
+                const assertRoutingCurrent = captureSessionMutationRouting(cfg, () =>
+                  targetChanged(expected.sessionKey),
+                );
                 return consumeSharing(
                   {
                     target,
                     members: facts.members,
                     assertCurrent: () => {
                       assertSourceCurrent();
-                      if (!isDeepStrictEqual(cfg, params.context.getRuntimeConfig())) {
-                        throw targetChanged(expected.sessionKey);
-                      }
+                      assertRoutingCurrent(params.context.getRuntimeConfig());
                     },
                   },
                   () => {

@@ -5,6 +5,7 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../../infra/agent-e
 import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
 import { resolveSessionPinnedHarnessId } from "../../../sessions/agent-harness-session-key.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
+import { sessionChangeAffectsStoredRow } from "../../../sessions/session-row-facts.js";
 import { isIncognitoSessionKey } from "../../../shared/incognito-session-key.js";
 import {
   assertOperatorModelAllowed,
@@ -67,14 +68,11 @@ async function prepareNativeSessionRuntime(
   const readOwnership = async () => {
     let changed = false;
     const stop = sessionChanges.subscribeFacts((change) => {
-      if ("all" in change) {
-        if (change.scope !== "runtime") {
-          changed = true;
-        }
-      } else if (
-        change.scope !== "runtime" &&
-        change.sessionKey === admission.sessionKey &&
-        (!change.agentId || change.agentId === sessionAgentId)
+      if (
+        sessionChangeAffectsStoredRow(change, {
+          agentId: sessionAgentId,
+          sessionKeys: [admission.sessionKey],
+        })
       ) {
         changed = true;
       }

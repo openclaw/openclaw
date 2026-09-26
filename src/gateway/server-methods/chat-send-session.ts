@@ -7,6 +7,7 @@ import {
   readAgentRuntimeRestrictionErrorDetails,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveAgentEntry } from "../../agents/agent-scope-config.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -33,6 +34,7 @@ import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
 import { GatewaySessionFactsChangedDuringReadError } from "../session-utils-store-errors.js";
 import {
   withGatewaySessionEntry,
@@ -53,6 +55,41 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { resolveSessionNativeRuntimeRestriction } from "./sessions-patch-model-selection.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+// These inputs prepare model/runtime selection, native restrictions, command/retry
+// semantics, and creator defaults. Sharing authorization rechecks live policy;
+// unrelated logging and UI publications do not invalidate a prepared send.
+function chatSendPreparationConfig(cfg: OpenClawConfig, agentId: string) {
+  const defaults = cfg.agents?.defaults;
+  const agent = resolveAgentEntry(cfg, agentId);
+  return {
+    defaultModel: defaults?.model,
+    agentModel: agent?.model,
+    defaultModels: defaults?.models,
+    agentModels: agent?.models,
+    defaultModelPolicy: defaults?.modelPolicy,
+    agentModelPolicy: agent?.modelPolicy,
+    runtime: agent?.runtime,
+    models: cfg.models,
+    auth: cfg.auth,
+    plugins: cfg.plugins,
+    workspace: agent?.workspace ?? defaults?.workspace,
+    agentDir: agent?.agentDir,
+    timeoutSeconds: defaults?.timeoutSeconds,
+    defaultSandbox: defaults?.sandbox,
+    agentSandbox: agent?.sandbox,
+    tools: cfg.tools,
+    agentTools: agent?.tools,
+    channels: cfg.channels,
+    roles: cfg.gateway?.roles,
+    nodeCommands: cfg.gateway?.nodes?.commands,
+    commands: cfg.commands,
+    sendPolicy: cfg.session?.sendPolicy,
+    reset: cfg.session?.reset,
+    resetByType: cfg.session?.resetByType,
+    resetByChannel: cfg.session?.resetByChannel,
+  };
+}
 
 async function withFreshChatSendSessionRead<T>(read: () => Promise<T>): Promise<T> {
   try {
@@ -136,6 +173,20 @@ async function loadChatSendSessionContext(params: {
       ? resolveAgentMainSessionKey({ cfg: runtimeConfig, agentId: requestedAgentId })
       : rawSessionKey;
   const sessionLoadOptions = { agentId: requestedAgentId };
+  const assertRoutingCurrent = captureSessionMutationRouting(runtimeConfig);
+  const preparationConfig = chatSendPreparationConfig(runtimeConfig, requestedAgentId);
+  const assertConfigCurrent = () => {
+    const currentConfig = context.getRuntimeConfig();
+    assertRoutingCurrent(currentConfig);
+    if (
+      !isDeepStrictEqual(
+        preparationConfig,
+        chatSendPreparationConfig(currentConfig, requestedAgentId),
+      )
+    ) {
+      throw new Error("Session preparation changed; retry.");
+    }
+  };
   const sessionLoadStartedAtMs = performance.now();
   const sessionLoadResult = await measureDiagnosticsTimelineSpan(
     "gateway.chat_send.load_session",
@@ -148,11 +199,7 @@ async function loadChatSendSessionContext(params: {
               sessionLoadOptions,
               (entry) => entry,
               runtimeConfig,
-              () => {
-                if (!isDeepStrictEqual(runtimeConfig, context.getRuntimeConfig())) {
-                  throw new Error("Session routing changed during preparation");
-                }
-              },
+              assertConfigCurrent,
             ),
           ),
     {
@@ -164,9 +211,7 @@ async function loadChatSendSessionContext(params: {
       },
     },
   );
-  if (!isDeepStrictEqual(runtimeConfig, context.getRuntimeConfig())) {
-    throw new Error("Session routing changed during preparation");
-  }
+  assertConfigCurrent();
   const sessionLoadMs = roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs);
   const { cfg, agentId, storePath, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
   const expectedSessionRoutingContract = normalizeOptionalChatText(
@@ -355,13 +400,21 @@ export function withCurrentChatSendSession<T>(params: {
   consume: Parameters<typeof withGatewaySessionEntry<T>>[2];
 }) {
   const { session } = params;
+  const assertRoutingCurrent = captureSessionMutationRouting(session.cfg);
+  const preparationConfig = chatSendPreparationConfig(session.cfg, session.agentId);
   const assertConfigCurrent = () => {
     const currentConfig = params.getRuntimeConfig();
-    if (
-      !isDeepStrictEqual(session.cfg, currentConfig) ||
-      session.sessionRoutingChanged(currentConfig)
-    ) {
+    assertRoutingCurrent(currentConfig);
+    if (session.sessionRoutingChanged(currentConfig)) {
       throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
+    }
+    if (
+      !isDeepStrictEqual(
+        preparationConfig,
+        chatSendPreparationConfig(currentConfig, session.agentId),
+      )
+    ) {
+      throw new Error("Session preparation changed; retry.");
     }
   };
   if (isIncognitoSessionKey(session.sessionKey)) {

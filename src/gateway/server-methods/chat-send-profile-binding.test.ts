@@ -39,6 +39,79 @@ registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
 describe("native profile-bound input admission", () => {
+  it.each([
+    { revokeInCallback: false, scoped: true },
+    { revokeInCallback: true, scoped: true },
+    { revokeInCallback: true, scoped: false },
+  ])(
+    "bounds authority reads and rejects callback revocation ($revokeInCallback, scoped $scoped)",
+    async ({ revokeInCallback, scoped }) => {
+      const fixture = await createBrowserFollowupFixture();
+      const request = normalizeChatSendRequest({ params: fixture.params, client: fixture.client });
+      if (!request.ok) {
+        throw new Error(request.error);
+      }
+      const prepared = await prepareChatSendSession({
+        request: request.value,
+        client: fixture.client,
+        context: fixture.context,
+      });
+      if (!prepared.ok) {
+        throw new Error("session preparation failed");
+      }
+      const session = qualifyChatSendSession(prepared.value);
+      let current = true;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("caller revoked during admission");
+        }
+      };
+      let authorityReads = 0;
+      const withCurrent = async <T>(consume: () => T): Promise<T> => {
+        authorityReads += 1;
+        assertCurrent();
+        return consume();
+      };
+      try {
+        const admitting = admitChatSend({
+          request: request.value,
+          session,
+          client: fixture.client,
+          context: fixture.context,
+          respond: vi.fn(),
+          ...(scoped ? { assertCurrent, withCurrent } : {}),
+          assertCurrentAsync: async () => {
+            await withCurrent(assertCurrent);
+          },
+          ...(revokeInCallback
+            ? {
+                onAdmissionOwned: async () => {
+                  current = false;
+                  return true;
+                },
+              }
+            : {}),
+        });
+        if (revokeInCallback) {
+          await expect(admitting).rejects.toThrow("caller revoked during admission");
+          expect(fixture.context.chatAbortControllers.size).toBe(0);
+          expect(authorityReads).toBeLessThanOrEqual(4);
+        } else {
+          const admitted = await admitting;
+          expect(admitted.ok).toBe(true);
+          if (admitted.ok) {
+            admitted.value.cleanupAdmittedRun();
+          }
+          // Reservation, lifecycle admission completion, and operator retention.
+          // Empty interrupt/callback branches must not acquire extra worker reads.
+          expect(authorityReads).toBeLessThanOrEqual(3);
+        }
+      } finally {
+        session.releaseSessionTarget();
+        await fixture.cleanup();
+      }
+    },
+  );
   it("rejects membership revoked inside retained chat admission before dispatch", async () => {
     const fixture = await createBrowserFollowupFixture({
       createdActor: { type: "human", source: "profile", id: "another-profile" },

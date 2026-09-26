@@ -1,6 +1,6 @@
-import { isDeepStrictEqual } from "node:util";
 import { resolveRequestedSessionAgentInput } from "./session-request-agent.js";
 import { withSessionSharingTarget } from "./session-sharing-policy.js";
+import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { resolveDirectSessionTargets } from "./session-sharing-target-input.js";
 import { resolveSessionMutationAuthorization } from "./session-sharing.js";
 
@@ -18,14 +18,13 @@ export async function resolveSessionMutationAuthorizationAsync(
     return { error: input.error };
   }
   const cfg = params.context.getRuntimeConfig();
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg);
   return withSessionSharingTarget(
     { cfg, sessionKey: target.sessionKey, agentId: input.value },
     (read) => {
       const assertCurrent = () => {
         read.assertCurrent();
-        if (!isDeepStrictEqual(cfg, params.context.getRuntimeConfig())) {
-          throw new Error("Session routing changed during authorization read");
-        }
+        assertRoutingCurrent(params.context.getRuntimeConfig());
       };
       assertCurrent();
       return resolveSessionMutationAuthorization({

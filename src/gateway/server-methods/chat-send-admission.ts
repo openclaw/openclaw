@@ -6,9 +6,7 @@ import {
   isAgentRunDirectAbortReason,
 } from "../../agents/run-termination.js";
 import {
-  interruptReplyRunTarget,
   isReplyRunAbortableForSignal,
-  REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
   type ReplyMessageInjectionTarget,
   type ReplyOperation,
@@ -23,11 +21,7 @@ import {
   isProgressCardRefreshInputProvenance,
   progressCardRefreshRunProjection,
 } from "../../sessions/input-provenance.js";
-import {
-  beginSessionWorkAdmission,
-  interruptSessionWorkAdmissions,
-  isCompetingSessionWorkAdmissionActive,
-} from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
@@ -68,6 +62,7 @@ import {
 import {
   assertChatSendExclusiveAdmission,
   createChatSendWorkAdmission,
+  interruptChatSendWork,
   releaseChatSendCallerAuthority,
 } from "./chat-send-work-admission.js";
 import { normalizeOptionalChatText, normalizeUnknownChatText } from "./chat-text-normalization.js";
@@ -82,7 +77,6 @@ export async function admitChatSend(
     onAdmissionOwned?: () => Promise<boolean>;
   },
 ) {
-  await (params.assertCurrentAsync ? params.assertCurrentAsync() : params.assertCurrent?.());
   const { request, session, respond, context, client } = params;
   const { p, turnKind } = request;
   const progressRefresh = isProgressCardRefreshInputProvenance(request.systemInputProvenance);
@@ -135,6 +129,9 @@ export async function admitChatSend(
     pendingReservation.reserve();
     return { goalReservationConflict: false, goalRetry, retrySettled: false };
   };
+  if (!params.withCurrent && params.assertCurrentAsync) {
+    await params.assertCurrentAsync();
+  }
   const { goalReservationConflict, goalRetry, retrySettled } = params.withCurrent
     ? await params.withCurrent(inspectRetryAndReserve)
     : inspectRetryAndReserve();
@@ -161,7 +158,6 @@ export async function admitChatSend(
   }
   // Keep the run abortable while lifecycle mutation owns the session. Admission
   // must reject an expired/missing reservation instead of reviving evicted work.
-  const clearPendingChatSendReservation = pendingReservation.clear;
   let admittedSessionId = backingSessionId ?? clientRunId;
   let expectedActiveReplyOperation: ReplyOperation | undefined;
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
@@ -431,7 +427,7 @@ export async function admitChatSend(
     });
     await (params.assertCurrentAsync ? params.assertCurrentAsync() : params.assertCurrent?.());
   } catch (err) {
-    clearPendingChatSendReservation();
+    pendingReservation.clear();
     admittedRunAbort?.cleanup();
     gatewayWorkAdmission?.release();
     if (err instanceof ExpectedProfileMismatchError) {
@@ -454,7 +450,7 @@ export async function admitChatSend(
   }
   const retainedRequestConflict = resolveChatSendRequestConflict(params);
   if (retainedRequestConflict) {
-    clearPendingChatSendReservation();
+    pendingReservation.clear();
     admittedRunAbort?.cleanup();
     gatewayWorkAdmission.release();
     respond(false, undefined, retainedRequestConflict);
@@ -474,7 +470,7 @@ export async function admitChatSend(
       requestIdentity: request.requestIdentity,
     });
   }
-  clearPendingChatSendReservation();
+  pendingReservation.clear();
   const activeRunAbort = admittedRunAbort;
   if (reservationSuperseded) {
     gatewayWorkAdmission.release();
@@ -538,6 +534,7 @@ export async function admitChatSend(
     });
     return { ok: false as const };
   }
+  const acquiredGatewayWorkAdmission = gatewayWorkAdmission;
   let releaseGatewayRootContinuation = () => {};
   let releaseCallerAuthority: (() => void) | undefined;
   let capturedOperator: Awaited<ReturnType<typeof retainGatewayOperatorRun>>;
@@ -561,79 +558,83 @@ export async function admitChatSend(
     });
     releaseCallerAuthority = () =>
       releaseChatSendCallerAuthority({ operator: capturedOperator, request, session });
-    await (params.assertCurrentAsync ? params.assertCurrentAsync() : params.assertCurrent?.());
-    activeRunAbort.controller.signal.throwIfAborted();
-    capturedOperator.authority?.assertCurrent();
-    try {
-      session.assertSessionTargetCurrent();
-    } catch (error) {
-      cleanupPreDispatchAdmission();
-      respondChatSendAdmissionError(error, respond);
-      return { ok: false as const };
-    }
-    let interruptionSettled = true;
-    if (runInterruptTarget) {
-      interruptedActiveRun = true;
-      interruptionSettled = (
-        await interruptReplyRunTarget(runInterruptTarget, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS)
-      ).settled;
-    } else if (p.queueMode === "interrupt") {
-      const identities = [sessionKey, backingSessionId, admittedSessionId];
-      // The fallback runs inside the new admission so the lifecycle owner excludes itself.
-      // A captured reply operation never falls through to this identity-scoped path.
-      const fallback = await gatewayWorkAdmission.run(async () => {
-        await (params.assertCurrentAsync ? params.assertCurrentAsync() : params.assertCurrent?.());
-        if (!isCompetingSessionWorkAdmissionActive(storePath, identities)) {
-          return { interrupted: false, settled: true };
+    // Each synchronous segment consumes one current authority read. Only actual
+    // interrupt/admission work creates another boundary that needs a fresh read.
+    const consumeCurrent = async <T>(consume: () => T): Promise<T | undefined> => {
+      if (!params.withCurrent && params.assertCurrentAsync) {
+        await params.assertCurrentAsync();
+      }
+      const consumeAuthorized = () => {
+        params.assertCurrent?.();
+        activeRunAbort.controller.signal.throwIfAborted();
+        capturedOperator.authority?.assertCurrent();
+        if (
+          !assertChatSendSessionTargetOrRespond({
+            session,
+            cleanup: cleanupPreDispatchAdmission,
+            respond,
+          })
+        ) {
+          return undefined;
         }
-        return {
-          interrupted: true,
-          settled: await interruptSessionWorkAdmissions({
-            scope: storePath,
-            identities,
-            timeoutMs: REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-          }),
-        };
-      });
-      interruptedActiveRun = fallback.interrupted;
-      interruptionSettled = fallback.settled;
+        return consume();
+      };
+      return params.withCurrent ? params.withCurrent(consumeAuthorized) : consumeAuthorized();
+    };
+    if (runInterruptTarget || p.queueMode === "interrupt") {
+      const pending = await consumeCurrent(() => ({
+        interruption: interruptChatSendWork({
+          target: runInterruptTarget,
+          admission: acquiredGatewayWorkAdmission,
+          storePath,
+          identities: [sessionKey, backingSessionId, admittedSessionId],
+        }),
+      }));
+      if (!pending) {
+        return { ok: false as const };
+      }
+      const interruption = await pending.interruption;
+      interruptedActiveRun = interruption.interrupted;
+      if (!interruption.settled) {
+        cleanupPreDispatchAdmission();
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "Previous run is still shutting down. Please try again in a moment.",
+            { retryable: true, retryAfterMs: 250 },
+          ),
+        );
+        return { ok: false as const };
+      }
     }
-    await (params.assertCurrentAsync ? params.assertCurrentAsync() : params.assertCurrent?.());
-    if (!interruptionSettled) {
-      cleanupPreDispatchAdmission();
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          "Previous run is still shutting down. Please try again in a moment.",
-          { retryable: true, retryAfterMs: 250 },
-        ),
-      );
+    const pending = await consumeCurrent(() => {
+      // Detached dispatch retains the request root until terminal persistence.
+      releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? (() => {});
+      return {
+        admission: params.onAdmissionOwned
+          ? acquiredGatewayWorkAdmission.run(params.onAdmissionOwned)
+          : undefined,
+      };
+    });
+    if (!pending) {
       return { ok: false as const };
     }
-    // Reserve while the request root is live: detached dispatch retains it until terminal persistence.
-    releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? (() => {});
-    if (params.onAdmissionOwned && !(await gatewayWorkAdmission.run(params.onAdmissionOwned))) {
-      cleanupPreDispatchAdmission();
-      return { ok: false as const };
-    }
-    await (params.assertCurrentAsync ? params.assertCurrentAsync() : params.assertCurrent?.());
-    if (
-      !assertChatSendSessionTargetOrRespond({
-        session,
-        cleanup: cleanupPreDispatchAdmission,
-        respond,
-      })
-    ) {
-      return { ok: false as const };
+    if (pending.admission) {
+      if (!(await pending.admission)) {
+        cleanupPreDispatchAdmission();
+        return { ok: false as const };
+      }
+      if (!(await consumeCurrent(() => true))) {
+        return { ok: false as const };
+      }
     }
   } catch (error) {
     cleanupPreDispatchAdmission();
     throw error;
   }
 
-  const acquiredGatewayWorkAdmission = gatewayWorkAdmission;
   const sessionBinding = activeRunAbort.entry;
   const onSessionPrepared = bindChatSendPreparedSession({
     chatAbortControllers: context.chatAbortControllers,
