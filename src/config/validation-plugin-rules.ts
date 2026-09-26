@@ -30,7 +30,7 @@ import {
   hasChannelDmPolicyDependencyWarningCandidates,
   normalizeBundledChannelId,
 } from "./validation-channel-rules.js";
-import { collectHeartbeatOwnerWarnings } from "./validation-core.js";
+import { collectHeartbeatOwnerWarnings, collectMediaCliEntryWarnings } from "./validation-core.js";
 import {
   formatChannelConfigIssueMessage,
   resolveDeferredChannelConfigWarning,
@@ -141,6 +141,7 @@ export function validatePreparedConfigWithPlugins(
     opts.deferredPluginMigrations?.map(({ pluginId }) => normalizePluginId(pluginId)),
   );
   warnings.push(...collectHeartbeatOwnerWarnings(config));
+  warnings.push(...collectMediaCliEntryWarnings(config));
   const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
 
   let compatPluginIds: ReadonlySet<string> | null = null;
