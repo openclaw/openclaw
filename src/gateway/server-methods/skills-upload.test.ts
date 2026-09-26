@@ -7,6 +7,7 @@ import path from "node:path";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { closeSkillsWatchers } from "../../skills/runtime/refresh.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -265,6 +266,8 @@ describe("skill upload gateway handlers", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
+    // Close real skills.status watchers before retiring their workspace and state roots.
+    await closeSkillsWatchers(true);
     await Promise.all([
       ...tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
       ...testStates.splice(0).map((state) => state.cleanup()),
