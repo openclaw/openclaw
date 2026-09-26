@@ -1,5 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
+import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 
 const text = z.string().min(1).max(4096);
 const nativeProcessIdentityShape = {
@@ -108,21 +109,12 @@ const retiredPayloadSchema = z.strictObject({
 });
 
 export function parseManagedHandoffLeasePayload(value: string) {
-  try {
-    return payloadSchema.parse(JSON.parse(value));
-  } catch {
-    return null;
-  }
+  return safeParseJsonWithSchema(payloadSchema, value);
 }
 
 /** Distinguish an exactly decoded retired record from unreadable prospective data. */
 export function parseRetiredManagedHandoffLeasePayload(value: string) {
-  try {
-    const parsed = retiredPayloadSchema.safeParse(JSON.parse(value));
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
+  return safeParseJsonWithSchema(retiredPayloadSchema, value);
 }
 
 export function isRetiredManagedHandoffLeasePayload(value: string): boolean {

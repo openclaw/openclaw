@@ -110,16 +110,13 @@ function normalizeQuietHours(value: unknown) {
 
 function normalizeCategoryDefaults(value: unknown): WebPushNotificationPreferences["categories"] {
   const source = isRecord(value) ? value : {};
-  const categories = Object.fromEntries(
-    CATEGORY_KEYS.map((key) => [
-      key,
-      typeof source[key] === "boolean"
-        ? source[key]
-        : DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES.categories[key],
-    ]),
-  );
-  // SAFETY: CATEGORY_KEYS exhaustively enumerates every required category boolean.
-  return categories as WebPushNotificationPreferences["categories"];
+  const categories = { ...DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES.categories };
+  for (const key of CATEGORY_KEYS) {
+    if (typeof source[key] === "boolean") {
+      categories[key] = source[key];
+    }
+  }
+  return categories;
 }
 
 export function normalizeWebPushNotificationPreferences(
