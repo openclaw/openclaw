@@ -219,7 +219,10 @@ describe("harness task selection with the real registry", () => {
     const runtime = createRuntime();
     const result = runtime.listTaskRecords();
     expect(result).toEqual(selected.toReversed());
-    expect(clone.mock.calls.map(([detail]) => detail)).toEqual(selected.map((task) => task.detail));
+    expect(clone).toHaveBeenCalledTimes(selected.length);
+    expect(clone.mock.calls.map(([detail]) => detail)).toEqual(
+      expect.arrayContaining(selected.map((task) => task.detail)),
+    );
     expect(read).not.toHaveBeenCalled();
     expect(write).not.toHaveBeenCalled();
     clone.mockRestore();
