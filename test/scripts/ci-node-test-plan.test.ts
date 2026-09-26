@@ -3334,6 +3334,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ] as const) {
         // Capacity belongs to the workload even when timing changes reorder rows.
         const groups = plan.flatMap((shard) => shard.groups);
+        const twoWorkerCommands = new Set<(typeof groups)[number]>();
         for (const group of groups.filter((entry) =>
           entry.configs.includes("test/vitest/vitest.commands.config.ts"),
         )) {
@@ -3360,6 +3361,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
               ),
               `${group.shard_name}: measured two-worker generation`,
             ).toBeGreaterThan(0);
+            twoWorkerCommands.add(group);
           }
           const job = plan.find((entry) => entry.groups.includes(group))!;
           const jobWorkers =
@@ -3430,13 +3432,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
               for (const sibling of job.groups.filter(
                 (entry) => entry !== group && usesParallelPacking(job),
               )) {
-                expect(effectiveWorkers(sibling), sibling.shard_name).toBe(
-                  /^agentic-gateway-methods(?:-hosted-\d+)?$/u.test(sibling.shard_name)
+                const expectedWorkers = twoWorkerCommands.has(sibling)
+                  ? 2
+                  : /^agentic-gateway-methods(?:-hosted-\d+)?$/u.test(sibling.shard_name)
                     ? 4
                     : sibling.fallbackMaxWorkers === 2
                       ? 8
-                      : 2,
-                );
+                      : 2;
+                expect(effectiveWorkers(sibling), sibling.shard_name).toBe(expectedWorkers);
               }
             }
           }
