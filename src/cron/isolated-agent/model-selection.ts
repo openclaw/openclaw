@@ -1,3 +1,4 @@
+import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
@@ -138,6 +139,8 @@ async function resolveCronThinkingCatalog(params: {
   if (!needsThinkHydration(catalog, params.provider, params.model, params.agentRuntime)) {
     return catalog;
   }
+  // The carried row hydration would replace names the turn's actual transport route.
+  const carried = findModelInCatalog(catalog, params.provider, params.model);
   // Thinking capability is a per-model fact; never materialize the full live catalog on cron turns.
   return normalizeThinkingCatalogProviders(
     await loadProviderScopedThinkingCatalog({
@@ -148,6 +151,7 @@ async function resolveCronThinkingCatalog(params: {
       agentId: params.owner.agentId,
       agentDir: params.owner.agentDir,
       workspaceDir: params.owner.workspaceDir,
+      ...(carried ? { effectiveRoute: { api: carried.api, baseUrl: carried.baseUrl } } : {}),
     }),
   );
 }

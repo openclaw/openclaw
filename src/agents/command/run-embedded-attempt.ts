@@ -425,6 +425,12 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           ) {
             const { loadProviderScopedThinkingCatalog } =
               await import("../model-catalog.runtime.js");
+            // The carried row hydration would replace names the turn's actual transport route.
+            const carriedCandidate = findModelInCatalog(
+              candidateThinkingCatalog ?? [],
+              providerOverride,
+              modelOverride,
+            );
             const runtimeCatalog = normalizeThinkingCatalogProviders(
               await loadProviderScopedThinkingCatalog({
                 config: cfg,
@@ -433,6 +439,14 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
                 agentRuntime: candidateRuntime,
                 agentId: sessionAgentId,
                 workspaceDir,
+                ...(carriedCandidate
+                  ? {
+                      effectiveRoute: {
+                        api: carriedCandidate.api,
+                        baseUrl: carriedCandidate.baseUrl,
+                      },
+                    }
+                  : {}),
               }),
             );
             if (findModelInCatalog(runtimeCatalog, providerOverride, modelOverride)) {

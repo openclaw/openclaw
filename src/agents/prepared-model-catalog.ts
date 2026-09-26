@@ -1,5 +1,9 @@
 /** Lifecycle-owned model catalog access. */
 import { getRuntimeConfig } from "../config/config.js";
+import {
+  findConfiguredProviderModel,
+  resolveMergedModelProviderConfig,
+} from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   listAgentIds,
@@ -399,10 +403,22 @@ export async function loadProviderScopedThinkingCatalog(params: {
   workspaceDir?: string;
   /** Input preparation must resolve modalities for this route, independently of reasoning. */
   requiredInputRoute?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
+  /**
+   * Transport route the admitted turn is actually using, sourced from its prepared or
+   * carried catalog row. Authored config cannot reconstruct this route when the provider
+   * has no configured api/baseUrl, so replaced-config recovery trusts it over config.
+   * Structurally typed: carried rows (ThinkingCatalogEntry) serialize api as plain string.
+   */
+  effectiveRoute?: { api?: string; baseUrl?: string };
 }): Promise<ModelCatalogEntry[]> {
   const request = { ...params, readOnly: true };
-  const publishedOwner = getPreparedModelCatalogOwnerSnapshot(request);
-  const owner = (await resolveReadOnlyPublishedModelCatalogOwner(request, "exact"))?.snapshot;
+  // "published" tolerates a runtime-config replacement that lands during this
+  // read-only lookup; "exact" fails the whole turn for a catalog the published
+  // owner still serves correctly. See PreparedModelCatalogConfigReplacedError.
+  const owner = (await resolveReadOnlyPublishedModelCatalogOwner(request, "published"))?.snapshot;
+  // A replaced-config owner's facts are only safe on the caller's transport route.
+  const ownerConfigReplaced =
+    owner !== undefined && !preparedModelRuntimeConfigsMatch(owner.config, params.config);
   let snapshot: ModelCatalogSnapshot;
   if (owner?.loadNativeModelCatalog && params.agentRuntime && params.agentRuntime !== "openclaw") {
     snapshot = await owner.loadNativeModelCatalog({
@@ -411,9 +427,11 @@ export async function loadProviderScopedThinkingCatalog(params: {
       runtime: params.agentRuntime,
     });
   } else {
+    // The resolved owner is always a published lifecycle owner, so completed
+    // inventory facts stay attached even when the accepted config generation
+    // differs from the caller's.
     const catalog = owner
-      ? (publishedOwner ? await materializeRequestedModelCatalog(owner, true, undefined) : owner)
-          .modelCatalog
+      ? (await materializeRequestedModelCatalog(owner, true, undefined)).modelCatalog
       : { entries: [], routeVariants: [] };
     const agentId = params.agentId ?? resolveAmbientOwnerAgentId(params.config);
     const { augmentModelCatalogWithAgentHarness } = await import("./harness/model-catalog.js");
@@ -446,6 +464,34 @@ export async function loadProviderScopedThinkingCatalog(params: {
     }
   }
   entries = normalizeThinkingCatalogProviders(entries);
+  if (ownerConfigReplaced) {
+    // Keep thinking facts on the active turn's model route: a hot reload may have
+    // changed the provider's api or baseUrl, and applying the replaced owner's row
+    // to the caller's route could suppress supported thinking or send unsupported
+    // parameters. An unconfigured caller route stays unconstrained, because
+    // modelTransportRoutesMatch falls back to the entry's own fields. Dropping the
+    // entry retains caller-configured facts: authored model rows early-return
+    // upstream of this function (applyModelDefaults fills their reasoning/input),
+    // and hydration callers keep their existing catalog when no row resolves here.
+    // The caller's carried catalog row names the turn's actual transport; authored config
+    // fills each field the row omits, so a partial row never widens the match to a
+    // wildcard that would discard the captured config's route.
+    const providerConfig = resolveMergedModelProviderConfig(params.config, params.provider);
+    const configuredModel = findConfiguredProviderModel(
+      providerConfig,
+      params.provider,
+      params.model,
+    );
+    const callerRoute = {
+      api: params.effectiveRoute?.api ?? configuredModel?.api ?? providerConfig?.api,
+      baseUrl:
+        params.effectiveRoute?.baseUrl ?? configuredModel?.baseUrl ?? providerConfig?.baseUrl,
+    };
+    const recovered = findModelInCatalog(entries, params.provider, params.model);
+    if (recovered && !modelTransportRoutesMatch(recovered, callerRoute)) {
+      entries = entries.filter((candidate) => candidate !== recovered);
+    }
+  }
   if (params.requiredInputRoute !== undefined) {
     const entry = findModelInCatalog(entries, params.provider, params.model);
     if (

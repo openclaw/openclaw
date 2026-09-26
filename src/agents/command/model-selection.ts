@@ -561,6 +561,8 @@ export async function resolveEmbeddedModelSelection(params: {
   ) {
     // Thinking capability is a per-model fact; never materialize the full live catalog here.
     const { loadProviderScopedThinkingCatalog } = await import("../model-catalog.runtime.js");
+    // The carried row hydration would replace names the turn's actual transport route.
+    const carriedModel = findModelInCatalog(catalogForThinking, provider, model);
     const runtimeCatalog = normalizeThinkingCatalogProviders(
       await loadProviderScopedThinkingCatalog({
         config: params.cfg,
@@ -569,6 +571,9 @@ export async function resolveEmbeddedModelSelection(params: {
         agentRuntime: thinkingRuntime,
         ...(params.sessionAgentId ? { agentId: params.sessionAgentId } : {}),
         ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+        ...(carriedModel
+          ? { effectiveRoute: { api: carriedModel.api, baseUrl: carriedModel.baseUrl } }
+          : {}),
       }),
     );
     const refreshedModel = findModelInCatalog(runtimeCatalog, provider, model);

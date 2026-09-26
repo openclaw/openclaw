@@ -573,12 +573,15 @@ export async function createModelSelectionState(params: {
     let catalog = visibilityPolicy.catalog;
     if (needsThinkHydration(catalog, selection.provider, selection.model, agentRuntime)) {
       const { loadProviderScopedThinkingCatalog } = await modelCatalogRuntimeLoader.load();
+      // The carried row hydration would replace names the turn's actual transport route.
+      const carried = findSelectedCatalogEntry({ ...selection, catalog });
       const preparedCatalog = await loadProviderScopedThinkingCatalog({
         config: cfg,
         agentId: params.agentId,
         provider: selection.provider,
         model: selection.model,
         agentRuntime,
+        ...(carried ? { effectiveRoute: { api: carried.api, baseUrl: carried.baseUrl } } : {}),
       });
       // An empty refresh cannot replace the admitted owner with a configuration-only row.
       if (findSelectedCatalogEntry({ catalog: preparedCatalog, ...selection })) {

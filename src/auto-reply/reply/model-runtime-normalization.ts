@@ -224,6 +224,8 @@ export async function prepareModelSelectionRuntime(params: {
     model: params.model,
     agentRuntime,
     workspaceDir: params.workspaceDir,
+    // The carried row hydration would replace names the turn's actual transport route.
+    ...(selected ? { effectiveRoute: { api: selected.api, baseUrl: selected.baseUrl } } : {}),
   });
   const resolved = findSelectedCatalogEntry({ ...params, catalog });
   return {

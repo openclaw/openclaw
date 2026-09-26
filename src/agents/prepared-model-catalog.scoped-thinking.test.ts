@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import { setPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
 import type {
@@ -187,14 +186,120 @@ describe("loadProviderScopedThinkingCatalog", () => {
     expect(scopedCatalogMock).not.toHaveBeenCalled();
   });
 
-  it("rejects an owner whose configuration was replaced", async () => {
+  it("serves the published catalog when the configuration was replaced mid-read", async () => {
     const config = { skills: { entries: { marker: { enabled: true } } } };
     const replaced = { skills: { entries: { marker: { enabled: false } } } };
     publishedSnapshotMock.mockReturnValue(owner(replaced, [{ ...entry, reasoning: true }]));
     const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
     await expect(
       loadProviderScopedThinkingCatalog({ config, provider: entry.provider, model: entry.id }),
-    ).rejects.toBeInstanceOf(PreparedModelCatalogConfigReplacedError);
+    ).resolves.toEqual([{ ...entry, reasoning: true }]);
+    expect(scopedCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it("retains completed capability facts when the accepted config was replaced", async () => {
+    const config = { skills: { entries: { marker: { enabled: true } } } };
+    const replaced = { skills: { entries: { marker: { enabled: false } } } };
+    const completedEntry: ModelCatalogEntry = {
+      ...entry,
+      reasoning: true,
+      input: ["text", "image"],
+    };
+    const completed: ModelCatalogSnapshot = {
+      entries: [completedEntry],
+      routeVariants: [completedEntry],
+    };
+    setPreparedModelFullCatalogAuth(completed, {
+      providerAuthLabels: new Map(),
+      authStore: { version: 1, profiles: {} },
+      authModes: {},
+    });
+    const loadFullModelCatalog = vi.fn(async () => completed);
+    // Static rows omit reasoning and image facts; only completed inventory has them.
+    publishedSnapshotMock.mockReturnValue({
+      ...owner(replaced, [entry]),
+      readFullModelCatalog: () => completed,
+      loadFullModelCatalog,
+    });
+    const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
+    await expect(
+      loadProviderScopedThinkingCatalog({
+        config,
+        provider: entry.provider,
+        model: entry.id,
+        requiredInputRoute: { api: entry.api, baseUrl: entry.baseUrl },
+      }),
+    ).resolves.toEqual([completedEntry]);
+    expect(loadFullModelCatalog).not.toHaveBeenCalled();
+    expect(scopedCatalogMock).not.toHaveBeenCalled();
+    expect(acquireSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "omits facts served for another route", routeBaseUrl: "https://route-a.invalid/v1" },
+    { name: "keeps facts on the caller's route", routeBaseUrl: entry.baseUrl },
+  ])("$name when the replaced config constrains the model route", async ({ routeBaseUrl }) => {
+    const config = {
+      skills: { entries: { marker: { enabled: true } } },
+      models: { providers: { acme: { baseUrl: routeBaseUrl as string, models: [] } } },
+    };
+    const replaced = { skills: { entries: { marker: { enabled: false } } } };
+    publishedSnapshotMock.mockReturnValue(owner(replaced, [{ ...entry, reasoning: true }]));
+    const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
+    await expect(
+      loadProviderScopedThinkingCatalog({ config, provider: entry.provider, model: entry.id }),
+    ).resolves.toEqual(routeBaseUrl === entry.baseUrl ? [{ ...entry, reasoning: true }] : []);
+    expect(scopedCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "omits facts served off the turn's route",
+      publishedBaseUrl: "https://route-b.invalid/v1",
+    },
+    { name: "keeps facts on the turn's route", publishedBaseUrl: entry.baseUrl },
+  ])(
+    "$name when the caller's route came from its catalog, not authored config",
+    async ({ publishedBaseUrl }) => {
+      // Config A authors no provider route: the turn's transport was supplied by its
+      // earlier catalog row, so only the caller-passed effectiveRoute can constrain it.
+      const config = { skills: { entries: { marker: { enabled: true } } } };
+      const replaced = { skills: { entries: { marker: { enabled: false } } } };
+      const publishedEntry = { ...entry, baseUrl: publishedBaseUrl as string, reasoning: true };
+      publishedSnapshotMock.mockReturnValue(owner(replaced, [publishedEntry]));
+      const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
+      await expect(
+        loadProviderScopedThinkingCatalog({
+          config,
+          provider: entry.provider,
+          model: entry.id,
+          effectiveRoute: { api: entry.api, baseUrl: entry.baseUrl },
+        }),
+      ).resolves.toEqual(publishedBaseUrl === entry.baseUrl ? [publishedEntry] : []);
+      expect(scopedCatalogMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("fills missing carried-route fields from the captured config", async () => {
+    // A partial carried row must not widen the match to a wildcard: the authored
+    // baseUrl still constrains the recovered facts when the row omits it.
+    const config = {
+      models: {
+        providers: { [entry.provider]: { baseUrl: "https://route-a.invalid/v1", models: [] } },
+      },
+    } as OpenClawConfig;
+    const replaced = { skills: { entries: { marker: { enabled: false } } } };
+    const publishedEntry = { ...entry, baseUrl: "https://route-b.invalid/v1", reasoning: true };
+    publishedSnapshotMock.mockReturnValue(owner(replaced, [publishedEntry]));
+    const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
+    await expect(
+      loadProviderScopedThinkingCatalog({
+        config,
+        provider: entry.provider,
+        model: entry.id,
+        effectiveRoute: { api: entry.api },
+      }),
+    ).resolves.toEqual([]);
     expect(scopedCatalogMock).not.toHaveBeenCalled();
   });
 

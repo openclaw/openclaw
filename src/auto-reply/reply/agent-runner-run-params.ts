@@ -78,6 +78,8 @@ export async function resolveRunModelHasVision(params: {
     agentDir: run.agentDir,
     workspaceDir: run.workspaceDir,
     requiredInputRoute: route,
+    // The turn's transport is the carried thinking-catalog row, not the authored route.
+    ...(prepared ? { effectiveRoute: { api: prepared.api, baseUrl: prepared.baseUrl } } : {}),
   });
   return modelSupportsInput(findModelInCatalog(catalog, provider, model), "image");
 }
