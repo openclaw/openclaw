@@ -319,6 +319,7 @@ function createQuickChatHarness(): Record<string, any> {
     `${quickchatSource.slice(0, browserBindingsEnd)}
 this.harness = {
   send,
+  prepareSend(payload) { prepareChatSend({gatewayGeneration: 1, ...payload}); },
   handleChatEvent(payload) { handleChatEvent({gatewayGeneration: 1, ...payload}); },
   nextVisibilityOperation,
   requestHide,
@@ -335,6 +336,7 @@ this.harness = {
   pendingCount() { return pendingChatEvents.length; },
   activeRunId() { return activeReply?.runId ?? null; },
   replyText() { return elements.replyText.textContent; },
+  replyError() { return elements.replyError.textContent; },
   readOnly() { return elements.input.readOnly; },
   sendDisabled() { return elements.send.disabled; },
   replyVisible() { return !elements.reply.hidden; },
@@ -1217,11 +1219,25 @@ for (const outcome of ["success", "failure"] as const) {
   });
 }
 
-test("pre-ack overflow preserves the acknowledged run's text and widgets", async () => {
+test("prepared request keeps its pre-ack text and widgets across more than 64 foreign runs", async () => {
   const harness = createQuickChatHarness();
   harness.setGatewayUp();
   harness.setMessage("hello");
   const sending = harness.send(false);
+  harness.prepareSend({ sessionKey: "global", agentId: "work", runId: "right-run" });
+  const foreignRuns = () => {
+    for (let index = 0; index < 65; index += 1) {
+      harness.handleChatEvent({
+        sessionKey: "global",
+        agentId: "work",
+        runId: `foreign-${index}`,
+        state: "delta",
+        deltaText: "foreign",
+        message: { role: "assistant", content: "foreign" },
+      });
+    }
+  };
+  foreignRuns();
   harness.handleChatEvent({
     sessionKey: "global",
     agentId: "work",
@@ -1251,6 +1267,7 @@ test("pre-ack overflow preserves the acknowledged run's text and widgets", async
       ],
     },
   });
+  foreignRuns();
   for (let index = 0; index < 64; index += 1) {
     harness.handleChatEvent({
       sessionKey: "global",
@@ -1294,6 +1311,61 @@ test("pre-ack overflow preserves the acknowledged run's text and widgets", async
   });
   assert.equal(harness.replyText(), `right${"x".repeat(64)}!`);
 });
+
+for (const outcome of ["retained", "evicted", "repaired", "recovered"] as const) {
+  test(`a retry prefix received before preparation is ${outcome} explicitly`, async () => {
+    const harness = createQuickChatHarness();
+    harness.setGatewayUp();
+    harness.setMessage("retry my reply");
+    const sending = harness.send(false);
+    const target = { sessionKey: "global", agentId: "work", runId: "retry-run" };
+    harness.handleChatEvent({
+      ...target,
+      state: "delta",
+      deltaText: "prefix",
+      message: { role: "assistant", content: "prefix" },
+    });
+    if (outcome !== "retained") {
+      for (let index = 0; index < 65; index += 1) {
+        harness.handleChatEvent({
+          ...target,
+          runId: `other-${index}`,
+          state: "delta",
+          deltaText: "foreign",
+          message: { role: "assistant", content: "foreign" },
+        });
+      }
+    }
+    harness.handleChatEvent({ ...target, state: "delta", deltaText: " suffix" });
+    harness.prepareSend(target);
+    harness.handleChatEvent({ ...target, state: "delta", deltaText: " more" });
+    harness.handleChatEvent({
+      ...target,
+      state: "final",
+      ...(outcome === "repaired"
+        ? { message: { role: "assistant", content: "prefix suffix more" } }
+        : {}),
+    });
+    harness.resolveSend({
+      ...target,
+      ...(outcome === "recovered"
+        ? {
+            status: "ok",
+            recoveredMessages: [{ role: "assistant", content: "prefix suffix more" }],
+          }
+        : {}),
+    });
+    await sending;
+    await harness.advanceTime(450);
+    assert.equal(harness.replyText(), outcome === "evicted" ? "" : "prefix suffix more");
+    assert.equal(
+      harness.replyError(),
+      outcome === "evicted" ? "Reply text is incomplete. Open the dashboard to recover it." : "",
+    );
+    assert.equal(harness.readOnly(), false);
+    assert.equal(harness.pendingCount(), 0);
+  });
+}
 
 test("final assistant canvas previews sync into isolated native webviews", async () => {
   const harness = createQuickChatHarness();

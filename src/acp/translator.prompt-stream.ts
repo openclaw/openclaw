@@ -13,6 +13,7 @@ import type { AcpSessionStore } from "@openclaw/acp-core/session";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { mergeChatStreamMessage } from "../../packages/gateway-client/src/chat-stream-message.js";
+import { recoverTerminalReply } from "../../packages/gateway-client/src/run-recovery-text.js";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { normalizeTerminalChatSendAckStatus } from "../shared/chat-send-ack-status.js";
@@ -631,20 +632,40 @@ export class AcpTranslatorPromptStream {
     pending: AcpPendingPrompt,
     result: AcpAgentWaitResult,
   ): Promise<void> {
-    // Claim before the first await so late chat events cannot deliver or settle
-    // the same prompt a second time.
+    const signal =
+      this.sessionStore.getSession(sessionId)?.abortController?.signal ??
+      new AbortController().signal;
+    const reply = await recoverTerminalReply({
+      runId: pending.idempotencyKey,
+      scope: { sessionKey: pending.sessionKey },
+      result,
+      request: (method, params, requestSignal) =>
+        this.gateway.request(method, params, { signal: requestSignal }),
+      signal,
+    }).catch(() => ({ outputText: undefined, unavailable: "recovery-cancelled" }));
+    // A live final or cancellation can win while history is being read.
     if (!this.claimPendingPrompt(pending)) {
       return;
     }
-    const terminalReply = result.terminalReply;
-    if (terminalReply?.disposition === "visible") {
-      const sentText = (pending.sentText ?? "").trimStart();
-      const recoveredText = terminalReply.text.startsWith(sentText)
-        ? terminalReply.text.slice(sentText.length)
-        : "";
-      if (recoveredText) {
-        await this.emitPromptChunk(pending, "agent_message_chunk", recoveredText, false);
-      }
+    const sentText = (pending.sentText ?? "").trimStart();
+    const outputText = reply.outputText;
+    const unavailable =
+      reply.unavailable ??
+      (outputText?.startsWith(sentText) === false ? "reply-rewritten" : undefined);
+    if (unavailable) {
+      const message = `Full reply recovery unavailable (${unavailable}). Check the session history.`;
+      await this.emitPromptChunk(
+        pending,
+        "agent_message_chunk",
+        `[OpenClaw interruption] ${message}`,
+        false,
+      );
+      await this.rejectPendingPrompt(pending, new Error(message), { claimed: true });
+      return;
+    }
+    const recoveredText = outputText?.slice(sentText.length);
+    if (recoveredText) {
+      await this.emitPromptChunk(pending, "agent_message_chunk", recoveredText, false);
     }
     if (result.status !== "error") {
       await this.finishPrompt(sessionId, pending, "end_turn", { claimed: true });

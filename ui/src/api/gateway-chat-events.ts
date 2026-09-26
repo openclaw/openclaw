@@ -1,5 +1,5 @@
 import {
-  mergeChatStreamMessage,
+  GatewayChatStreamProjection,
   type EventFrame,
   type GatewayProtocolRequestOptions,
 } from "@openclaw/gateway-client/browser";
@@ -12,10 +12,7 @@ type RequestClient = {
 
 /** One browser connection reconstructs wire text before its local listeners share it. */
 export class GatewayChatEvents {
-  private readonly messages = new Map<
-    string,
-    { sessionKey: string; agentId: unknown; message: unknown }
-  >();
+  private readonly stream = new GatewayChatStreamProjection();
   private readonly projectedEvents = new WeakMap<EventFrame, EventFrame | null>();
   private generation = 0;
 
@@ -23,7 +20,7 @@ export class GatewayChatEvents {
 
   clear(): void {
     this.generation += 1;
-    this.messages.clear();
+    this.stream.clear();
   }
 
   async request<T>(
@@ -43,13 +40,11 @@ export class GatewayChatEvents {
         (key === "global" && typeof request?.key === "string"
           ? parseAgentSessionKeyParts(request.key)?.agentId
           : undefined);
-      for (const [runId, stream] of this.messages) {
+      this.stream.retire((stream) => {
         const streamAgentId =
           stream.agentId ?? parseAgentSessionKeyParts(stream.sessionKey)?.agentId;
-        if (stream.sessionKey === key && streamAgentId === agentId) {
-          this.messages.delete(runId);
-        }
-      }
+        return stream.sessionKey === key && streamAgentId === agentId;
+      });
     }
     return result;
   }
@@ -68,36 +63,10 @@ export class GatewayChatEvents {
     if (this.projectedEvents.has(event)) {
       return this.projectedEvents.get(event) ?? null;
     }
-    const payload = asNullableRecord(event.payload);
-    if (!payload || typeof payload.runId !== "string" || typeof payload.sessionKey !== "string") {
-      return event;
-    }
-    let projected: EventFrame | null = event;
-    if (payload.state === "delta") {
-      const previous = this.messages.get(payload.runId);
-      const message = mergeChatStreamMessage(
-        previous?.sessionKey === payload.sessionKey && previous.agentId === payload.agentId
-          ? previous.message
-          : undefined,
-        payload,
-      );
-      if (message === undefined) {
-        projected = null;
-        this.reconnect("chat stream baseline missing");
-      } else {
-        this.messages.set(payload.runId, {
-          sessionKey: payload.sessionKey,
-          agentId: payload.agentId,
-          message,
-        });
-        projected = { ...event, payload: { ...payload, message } };
-      }
-    } else if (
-      payload.state === "final" ||
-      payload.state === "error" ||
-      payload.state === "aborted"
-    ) {
-      this.messages.delete(payload.runId);
+    const result = this.stream.project(event);
+    const projected = result.missingBaseline ? null : result.event;
+    if (result.missingBaseline) {
+      this.reconnect("chat stream baseline missing");
     }
     // The protocol owns listener dispatch; each listener sees the same reconstruction.
     this.projectedEvents.set(event, projected);

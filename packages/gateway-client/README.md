@@ -212,15 +212,23 @@ from an exact `chat.history.inFlightRun` match; newer live text always wins over
 an older history response. Assistant-item text re-baselines on its next wire
 snapshot because history contains display text, not raw assistant-item text.
 
-Recovered completion uses the authoritative wait result and the exact terminal
-transcript occurrence, fetching a full message when history truncated it. The
+SDK and ACP recovery share `recoverTerminalReply`: it collects all assistant
+items for the run in transcript order, preserves live item boundaries, and reads
+full messages when history truncated them. It scans at most ten 200-record pages;
+an incomplete scan reports unavailable instead of presenting a partial reply. The
 bounded `terminalReply.text` summary is never used as complete output. Local
 normalized recovery events have no `raw` field. Their `data.recovery.status`
 reports `rebaselined`, `recovered`, or `unavailable`; unavailable full text omits
 `outputText`. A bare wait timeout is not a run terminal. Terminal observations
 have finite retention, and sessionless or unavailable transcript occurrences
 cannot be reconstructed; unknown outcomes remain unsettled with a recovery
-notice. Closing the client or returning a run iterator cancels its recovery work.
+notice. Automatic recovery stops after four consecutive unavailable observations
+(initial probe plus three waits), releases retention protection, and stays stopped
+across reconnects. Confirmed activity resets that budget; late terminal frames can
+still settle the run. Queued replies use exponential backoff with the Gateway
+client's positive 20% jitter and a 25–30 second cap. ACP reports unavailable full
+text explicitly instead of settling with a partial answer. Closing the client or
+returning a run iterator cancels its recovery work.
 
 Reconnect retires old text baselines. Ending the transport event stream also
 releases outstanding-run protection, retaining only bounded replay. Custom

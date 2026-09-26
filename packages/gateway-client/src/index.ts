@@ -2,6 +2,7 @@
 // readiness helpers, event-loop readiness, and timeout utilities.
 export * from "./client.js";
 export * from "./chat-stream-message.js";
+export * from "./run-recovery-text.js";
 export * from "./browser-device-auth.js";
 export * from "./cloudflare-access.js";
 export * from "./connect-auth.js";

@@ -1,5 +1,6 @@
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { createTestAcpEventLedger } from "./event-ledger.test-support.js";
 import { createChatEvent, promptAgent } from "./translator.prompt-harness.test-support.js";
@@ -10,7 +11,12 @@ import {
   createAcpGatewayAgent,
 } from "./translator.test-helpers.js";
 
-async function createReconnectHarness(result: AcpAgentWaitResult) {
+async function createReconnectHarness(
+  result: AcpAgentWaitResult,
+  historyText: string | null = result.terminalReply?.disposition === "visible"
+    ? result.terminalReply.text
+    : "",
+) {
   const sessionId = "session-1";
   const sessionKey = "agent:main:main";
   const sessionStore = createInMemorySessionStore();
@@ -19,9 +25,21 @@ async function createReconnectHarness(result: AcpAgentWaitResult) {
   await eventLedger.startSession({ sessionId, sessionKey, cwd: "/tmp", complete: true });
   const connection = createAcpConnection();
   let runId: string | undefined;
+  const sent = createDeferred<string>();
   const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
     if (method === "chat.send") {
       runId = typeof params?.idempotencyKey === "string" ? params.idempotencyKey : undefined;
+      if (runId) {
+        sent.resolve(runId);
+      }
+    }
+    if (method === "chat.history") {
+      return {
+        messages:
+          historyText === null
+            ? []
+            : [{ role: "assistant", content: historyText, __openclaw: { runId } }],
+      };
     }
     return method === "agent.wait" ? result : {};
   }) as GatewayClient["request"];
@@ -31,14 +49,14 @@ async function createReconnectHarness(result: AcpAgentWaitResult) {
   });
   const promptPromise = promptAgent(agent, sessionId);
   promptPromise.catch(() => {});
-  await vi.waitFor(() => expect(runId).toBeTypeOf("string"));
+  const acceptedRunId = await sent.promise;
 
   return {
     agent,
     connection,
     eventLedger,
     promptPromise,
-    runId: runId as string,
+    runId: acceptedRunId,
     sessionId,
     sessionKey,
   };
@@ -124,6 +142,37 @@ describe("acp translator reconnect settlement", () => {
           event.update.content.text === recovered,
       ),
     ).toBe(true);
+  });
+
+  it("recovers the full reply after a disconnect beyond the terminal summary cap", async () => {
+    const prefix = "A".repeat(5_000);
+    const full = prefix + "B".repeat(1_000);
+    const harness = await createReconnectHarness(
+      {
+        status: "ok",
+        terminalReply: { disposition: "visible", text: full.slice(0, 4_096) },
+      },
+      full,
+    );
+    await streamText(harness, prefix);
+    reconnect(harness);
+    await expect(harness.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+    expect(messageChunks(harness).join("")).toBe(full);
+  });
+
+  it("reports missing authoritative history instead of settling with the terminal summary", async () => {
+    const harness = await createReconnectHarness(
+      {
+        status: "ok",
+        terminalReply: { disposition: "visible", text: "summary" },
+      },
+      null,
+    );
+    reconnect(harness);
+    await expect(harness.promptPromise).rejects.toThrow("Full reply recovery unavailable");
+    expect(messageChunks(harness)).toEqual([
+      "[OpenClaw interruption] Full reply recovery unavailable (reply-not-found). Check the session history.",
+    ]);
   });
 
   it("recovers visible text before rejecting a failed run", async () => {

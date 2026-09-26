@@ -2,6 +2,7 @@
 // of this entry so browser consumers share the wire engine without polyfills.
 export * from "./device-auth.js";
 export * from "./chat-stream-message.js";
+export * from "./chat-stream-projection.js";
 export * from "./browser-device-auth.js";
 export * from "./gateway-origin-scope.js";
 export * from "./connect-auth.js";

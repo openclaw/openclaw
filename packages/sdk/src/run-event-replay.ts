@@ -1,6 +1,6 @@
-import { mergeChatStreamMessage } from "@openclaw/gateway-client";
+import { mergeChatStreamMessage, recoverTerminalReply } from "@openclaw/gateway-client";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import { sleepWithAbort } from "@openclaw/retry";
+import { computeBackoff, sleepWithAbort } from "@openclaw/retry";
 import {
   isTerminalRunEvent,
   projectAssistantRunEvent,
@@ -14,7 +14,6 @@ import {
   readUnsubscribedSession,
   type ReplaySessionScope,
 } from "./replay-scope.js";
-import { recoverTerminalReply } from "./run-recovery-text.js";
 import { resolveSdkRunWaitStatus } from "./run-terminal.js";
 import {
   readGatewayEventConnectionEpoch,
@@ -27,6 +26,14 @@ import type { GatewayEvent, OpenClawEvent } from "./types.js";
 
 const MAX_REPLAY_RUNS = 100;
 const MAX_REPLAY_EVENTS_PER_RUN = 500;
+const MAX_UNAVAILABLE_RECOVERY_OBSERVATIONS = 4;
+
+function recoveryRetryDelay(attempt: number): number {
+  const base = computeBackoff({ initialMs: 1_000, maxMs: 25_000, factor: 2, jitter: 0 }, attempt);
+  // Match Gateway reconnect's positive 20% spread, including its 25–30s cap
+  // interval, without clamping random draws into a synchronized retry spike.
+  return Math.ceil(base * (1 + Math.random() * 0.2));
+}
 
 type ReplayRun = {
   events: OpenClawEvent[];
@@ -36,6 +43,9 @@ type ReplayRun = {
   textReceipt?: GatewayEventReceipt;
   acceptanceReceipt?: GatewayEventReceipt;
   textRevision: number;
+  activityRevision: number;
+  unavailableObservations: number;
+  recoveryExhausted?: boolean;
   observers: number;
   outstanding: boolean;
   settled?: boolean;
@@ -59,7 +69,14 @@ export class SdkRunReplay {
   private run(runId: string): ReplayRun {
     let run = this.replayByRunId.get(runId);
     if (!run) {
-      run = { events: [], textRevision: 0, observers: 0, outstanding: false };
+      run = {
+        events: [],
+        textRevision: 0,
+        activityRevision: 0,
+        unavailableObservations: 0,
+        observers: 0,
+        outstanding: false,
+      };
       this.replayByRunId.set(runId, run);
     }
     return run;
@@ -68,12 +85,12 @@ export class SdkRunReplay {
   observeRun(runId: string): () => void {
     const run = this.run(runId);
     run.observers++;
-    run.outstanding ||= !run.settled;
+    run.outstanding ||= !run.settled && !run.recoveryExhausted;
     if (
       this.recoveryContext?.epoch.current &&
       run.outstanding &&
       run.needsRecovery &&
-      !run.recovery
+      (!run.recovery || run.recovery.signal.aborted)
     ) {
       void this.recoverRun(this.recoveryContext, runId, run);
     }
@@ -82,6 +99,10 @@ export class SdkRunReplay {
       if (run.observers === 0) {
         run.owned = false;
         run.recovery?.abort();
+        if (run.recoveryExhausted) {
+          delete run.chatMessage;
+          delete run.assistant;
+        }
       }
       this.trimReplayRuns();
     };
@@ -102,6 +123,8 @@ export class SdkRunReplay {
     const request = asRecord(params);
     const run = this.run(result.runId);
     run.owned = true;
+    run.unavailableObservations = 0;
+    run.recoveryExhausted = false;
     if (receipt) {
       run.acceptanceReceipt = { epoch: receipt.epoch, order: receipt.order };
     }
@@ -176,6 +199,12 @@ export class SdkRunReplay {
     if (event.type === "run.started") {
       replay.outstanding = true;
       replay.settled = false;
+    }
+    if (event.raw && !replay.settled) {
+      replay.activityRevision++;
+      replay.unavailableObservations = 0;
+      replay.recoveryExhausted = false;
+      replay.outstanding = true;
     }
     if (event.sessionKey || event.agentId || event.sessionId) {
       replay.scope = {
@@ -407,16 +436,16 @@ export class SdkRunReplay {
       run.outstanding;
     let timeoutMs = 0;
     let reportedUnavailable = false;
+    let pendingAttempts = 0;
     try {
       while (current()) {
+        const activityRevision = run.activityRevision;
         const result = asRecord(await context.request("agent.wait", { runId, timeoutMs }, signal));
         if (!current()) {
           return;
         }
         if (!["ok", "error", "timeout", "pending"].includes(String(result.status))) {
-          this.recoveryEvent(runId, run, "raw", {
-            recovery: { status: "unavailable", reason: "invalid-wait-response" },
-          });
+          this.stopUnavailableRecovery(runId, run, "invalid-wait-response");
           return;
         }
         const status = resolveSdkRunWaitStatus(result);
@@ -442,34 +471,41 @@ export class SdkRunReplay {
           });
           return;
         }
-        const active =
-          timeoutMs > 0 && (result.status === "pending" || result.pendingError === true)
+        const pending = result.status === "pending" || result.pendingError === true;
+        const historyActive =
+          timeoutMs > 0 && pending
             ? true
             : await this.rebaselineChat(context, runId, run, signal, current);
         if (!current()) {
           return;
         }
-        if (
-          timeoutMs > 0 &&
-          result.status === "timeout" &&
-          active === false &&
-          !reportedUnavailable
-        ) {
+        const active =
+          pending || historyActive === true || run.activityRevision !== activityRevision;
+        if (active) {
+          run.unavailableObservations = 0;
+        } else if (++run.unavailableObservations >= MAX_UNAVAILABLE_RECOVERY_OBSERVATIONS) {
+          this.stopUnavailableRecovery(runId, run, "recovery-exhausted");
+          return;
+        }
+        if (timeoutMs > 0 && !active && !reportedUnavailable) {
           this.recoveryEvent(runId, run, "raw", {
             recovery: { status: "unavailable", reason: "run-state-unavailable" },
           });
           reportedUnavailable = true;
         }
-        timeoutMs = 30_000;
-        if (result.status === "pending" || result.pendingError === true) {
-          await sleepWithAbort(1_000, signal);
+        if (pending || (timeoutMs > 0 && !active)) {
+          const attempt = pending
+            ? ++pendingAttempts
+            : Math.max(1, run.unavailableObservations - 1);
+          await sleepWithAbort(recoveryRetryDelay(attempt), signal);
+        } else {
+          pendingAttempts = 0;
         }
+        timeoutMs = 30_000;
       }
     } catch {
       if (current()) {
-        this.recoveryEvent(runId, run, "raw", {
-          recovery: { status: "unavailable", reason: "recovery-request-failed" },
-        });
+        this.stopUnavailableRecovery(runId, run, "recovery-request-failed");
       }
     } finally {
       if (run.recovery === recovery) {
@@ -480,6 +516,19 @@ export class SdkRunReplay {
         }
       }
     }
+  }
+
+  private stopUnavailableRecovery(runId: string, run: ReplayRun, reason: string): void {
+    run.outstanding = false;
+    run.owned = false;
+    run.needsRecovery = false;
+    run.recoveryExhausted = true;
+    if (run.observers === 0) {
+      delete run.chatMessage;
+      delete run.assistant;
+    }
+    this.recoveryEvent(runId, run, "raw", { recovery: { status: "unavailable", reason } });
+    this.trimReplayRuns();
   }
 
   private trimReplayRuns(): void {

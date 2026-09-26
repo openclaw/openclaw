@@ -303,6 +303,8 @@ let activeReply = null;
 let replyExpanded = false;
 let disclosureRevision = 0;
 let pendingChatEvents = [];
+let pendingChatTarget = null;
+let pendingChatOverflow = false;
 
 const MAX_PENDING_CHAT_EVENTS = 64;
 
@@ -797,6 +799,7 @@ function startReply(target, identity, runId, prompt, expanded) {
     },
     terminal: false,
     text: null,
+    textIncomplete: false,
     widgets: [],
     activeWidgetKey: null,
     widgetRect: null,
@@ -832,6 +835,7 @@ function applyChatEvent(payload) {
     return;
   }
 
+  activeReply.textIncomplete ||= payload.missingTextBaseline === true;
   updateReplyWidgets(payload?.message);
   const hasTextUpdate =
     typeof payload?.deltaText === "string" || chatMessageText(payload?.message) !== null;
@@ -839,7 +843,10 @@ function applyChatEvent(payload) {
     const nextText = assembleChatDelta(activeReply.text, payload);
     if (nextText !== null) {
       activeReply.text = nextText;
+      activeReply.textIncomplete = false;
       renderReplyText();
+    } else if (payload.deltaText) {
+      activeReply.textIncomplete = true;
     }
   }
 
@@ -856,7 +863,13 @@ function applyChatEvent(payload) {
   stopReplyThinking();
   elements.reply.classList.add("is-terminal");
   if (payload.state === "final") {
-    elements.replyState.textContent = "";
+    if (activeReply.textIncomplete) {
+      elements.reply.classList.add("has-error");
+      elements.replyState.textContent = "Incomplete";
+      elements.replyError.textContent = "Reply text is incomplete. Open the dashboard to recover it.";
+    } else {
+      elements.replyState.textContent = "";
+    }
   } else if (payload.state === "aborted") {
     activeReply.text = `${activeReply.text || ""}${activeReply.text ? "\n\n" : ""}(stopped)`;
     elements.replyState.textContent = "Stopped";
@@ -874,7 +887,7 @@ function applyChatEvent(payload) {
 }
 
 function applyRecoveredReply(result) {
-  if (activeReply?.terminal || result.status !== "ok") return;
+  if ((activeReply?.terminal && !activeReply.textIncomplete) || result.status !== "ok") return;
   if (!Array.isArray(result.recoveredMessages) || result.recoveredMessages.length === 0) {
     throw new Error("The completed reply could not be recovered.");
   }
@@ -886,6 +899,11 @@ function applyRecoveredReply(result) {
       content.push(...message.content.filter((block) => block?.type === "canvas"));
     }
   }
+  if (activeReply?.textIncomplete) {
+    activeReply.terminal = false;
+    elements.reply.classList.remove("has-error");
+    elements.replyError.textContent = "";
+  }
   applyChatEvent({
     gatewayGeneration: result.gatewayGeneration,
     sessionKey: result.sessionKey,
@@ -896,10 +914,26 @@ function applyRecoveredReply(result) {
   });
 }
 
+function prepareChatSend(payload) {
+  if (!sending || payload?.gatewayGeneration !== gatewayGeneration ||
+      typeof payload.runId !== "string" || !payload.runId ||
+      typeof payload.sessionKey !== "string" || !payload.sessionKey) {
+    return;
+  }
+  pendingChatTarget = payload;
+  pendingChatEvents = pendingChatEvents.filter((event) =>
+    event.gatewayGeneration === payload.gatewayGeneration && event.runId === payload.runId &&
+    replyTargetMatches(payload, event));
+}
+
 function handleChatEvent(payload) {
   if (sending) {
     // The Gateway may stream before the chat.send ack reaches invoke; replay only after the native
     // command returns the accepted routing target, then apply the same session/run filters.
+    if (pendingChatTarget && (payload?.gatewayGeneration !== pendingChatTarget.gatewayGeneration ||
+        payload?.runId !== pendingChatTarget.runId || !replyTargetMatches(pendingChatTarget, payload))) {
+      return;
+    }
     const previousIndex = pendingChatEvents.findIndex((event) =>
       event.gatewayGeneration === payload?.gatewayGeneration &&
       event.runId === payload?.runId && event.sessionKey === payload?.sessionKey &&
@@ -912,6 +946,8 @@ function handleChatEvent(payload) {
     const message = payload?.message ?? previous?.message;
     const buffered = {
       ...payload,
+      missingTextBaseline: text === null &&
+        (previous?.missingTextBaseline === true || Boolean(payload?.deltaText)),
       message: text === null ? message : {
         ...message,
         role: message?.role ?? "assistant",
@@ -927,6 +963,7 @@ function handleChatEvent(payload) {
     }
     if (pendingChatEvents.length === MAX_PENDING_CHAT_EVENTS) {
       pendingChatEvents.shift();
+      pendingChatOverflow = true;
     }
     pendingChatEvents.push(buffered);
     return;
@@ -1185,6 +1222,8 @@ async function requestHide() {
   const operationGeneration = nextVisibilityOperation();
   hiding = true;
   pendingChatEvents = [];
+  pendingChatTarget = null;
+  pendingChatOverflow = false;
   closePopover(false, false);
   document.body.classList.remove("shown");
   window.clearTimeout(hideTimer);
@@ -1274,6 +1313,8 @@ async function send(openDashboard) {
   const sendGeneration = gatewayGeneration;
   const sendDisclosureRevision = disclosureRevision;
   pendingChatEvents = [];
+  pendingChatTarget = null;
+  pendingChatOverflow = false;
   sendError = "";
   renderStatus();
   updateSendButton();
@@ -1289,19 +1330,28 @@ async function send(openDashboard) {
     if (result.gatewayGeneration !== sendGeneration || gatewayGeneration !== sendGeneration) {
       throw new Error("Gateway changed before the Quick Chat reply was accepted.");
     }
+    if (pendingChatTarget && (result.runId !== pendingChatTarget.runId ||
+        !replyTargetMatches(pendingChatTarget, result))) {
+      throw new Error("Gateway acknowledged a different Quick Chat reply.");
+    }
     sending = false;
     sendError = "";
     elements.input.value = "";
     if (visibilitySequence !== sendVisibilitySequence || hiding) {
       pendingChatEvents = [];
+      pendingChatTarget = null;
+      pendingChatOverflow = false;
       updateSendButton();
       return;
     }
     accepted = true;
     startReply(result, sentIdentity, result.runId, message,
       sendDisclosureRevision === disclosureRevision ? true : replyExpanded);
+    activeReply.textIncomplete = pendingChatOverflow;
     const bufferedEvents = pendingChatEvents;
     pendingChatEvents = [];
+    pendingChatTarget = null;
+    pendingChatOverflow = false;
     for (const payload of bufferedEvents) {
       applyChatEvent(payload);
     }
@@ -1321,6 +1371,8 @@ async function send(openDashboard) {
   } catch (error) {
     sending = false;
     pendingChatEvents = [];
+    pendingChatTarget = null;
+    pendingChatOverflow = false;
     if (visibilitySequence !== sendVisibilitySequence || hiding) {
       updateSendButton();
       return;
@@ -1452,6 +1504,9 @@ await listen("quickchat:gateway-state", (event) => {
 });
 await listen("quickchat:chat-event", (event) => {
   handleChatEvent(event.payload);
+});
+await listen("quickchat:send-prepared", (event) => {
+  prepareChatSend(event.payload);
 });
 
 const readySequence = visibilitySequence;

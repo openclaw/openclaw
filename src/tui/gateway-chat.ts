@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GatewayChatStreamProjection } from "../../packages/gateway-client/src/chat-stream-projection.js";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import {
@@ -63,7 +64,6 @@ import {
   refreshTuiGatewayModelCatalog,
   type GatewayModelCatalogEntry,
 } from "./gateway-chat-models.js";
-import { GatewayChatStream } from "./gateway-chat-stream.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -170,7 +170,7 @@ type HandoffSessionResolveParams = Required<
 
 export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
-  private readonly chatStream = new GatewayChatStream();
+  private readonly chatStream = new GatewayChatStreamProjection();
   private readonly historyLifetime = new AbortController();
   private readyPromise: Promise<void>;
   private resolveReady?: () => void;
@@ -229,7 +229,7 @@ export class GatewayChatClient implements TuiBackend {
           payload: evt.payload,
           seq: evt.seq,
         });
-        this.onEvent?.(projected);
+        this.onEvent?.(projected.event);
       },
       onClose: (_code, reason) => {
         this.chatStream.clear();

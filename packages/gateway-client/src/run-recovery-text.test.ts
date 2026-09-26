@@ -22,9 +22,9 @@ const recover = (request: RecoveryRequest, terminal: unknown = result) =>
     signal: new AbortController().signal,
   });
 
-describe("SDK terminal transcript recovery", () => {
+describe("shared terminal transcript recovery", () => {
   it("reads the receipt's full occurrence across history pages instead of the capped summary", async () => {
-    const outputText = "complete answer ".repeat(2_000);
+    const outputText = "complete answer ".repeat(2_000).trim();
     const request = vi.fn<RecoveryRequest>(async (method, params) => {
       if (method === "chat.message.get") {
         expect(params).toEqual({
@@ -56,6 +56,77 @@ describe("SDK terminal transcript recovery", () => {
     });
     await expect(recover(request)).resolves.toEqual({ outputText });
     expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    ["First item", "Second item", "First item\n\nSecond item"],
+    ["First item\n", "\nSecond item", "First item\n\nSecond item"],
+    [" First item\n\n", "\nSecond item ", "First item\n\n\nSecond item"],
+  ])(
+    "recovers every run item across pages with live display boundaries",
+    async (first, second, outputText) => {
+      const request = vi.fn<RecoveryRequest>(async (_method, params) => ({
+        sessionId: "session",
+        messages:
+          params.offset === undefined
+            ? [{ role: "assistant", content: second, __openclaw: { ...metadata, runId: "run" } }]
+            : [
+                { role: "assistant", content: "other", __openclaw: { runId: "other" } },
+                { role: "assistant", content: first, __openclaw: { id: "first", runId: "run" } },
+              ],
+        hasMore: params.offset === undefined,
+        nextOffset: 200,
+      }));
+      await expect(recover(request)).resolves.toEqual({ outputText });
+    },
+  );
+
+  it("preserves the assistant text-block separator and display text types", async () => {
+    await expect(
+      recover(async () => ({
+        sessionId: "session",
+        messages: [
+          {
+            role: "assistant",
+            __openclaw: metadata,
+            content: [
+              { type: "text", text: "First" },
+              { type: "thinking", thinking: "hidden" },
+              { type: "output_text", text: "Second" },
+              { type: "input_text", text: "Third" },
+            ],
+          },
+        ],
+      })),
+    ).resolves.toEqual({ outputText: "First\nSecond\nThird" });
+  });
+
+  it("ignores commentary projections that share the final occurrence's identity", async () => {
+    await expect(
+      recover(async () => ({
+        sessionId: "session",
+        messages: [
+          {
+            role: "assistant",
+            content: "Thinking aloud",
+            __openclaw: metadata,
+            openclawStreamFallback: { source: "segment", itemId: "commentary" },
+          },
+          { role: "assistant", content: "Answer", __openclaw: metadata },
+        ],
+      })),
+    ).resolves.toEqual({ outputText: "Answer" });
+  });
+
+  it("does not label a partial history scan as the complete reply", async () => {
+    const request = vi.fn<RecoveryRequest>(async (_method, params) => ({
+      sessionId: "session",
+      messages: [{ role: "assistant", content: "tail", __openclaw: metadata }],
+      hasMore: true,
+      nextOffset: Number(params.offset ?? 0) + 200,
+    }));
+    await expect(recover(request)).resolves.toEqual({ unavailable: "history-limit-reached" });
+    expect(request).toHaveBeenCalledTimes(10);
   });
 
   it.each([

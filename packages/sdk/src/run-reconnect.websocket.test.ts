@@ -75,7 +75,7 @@ describe("SDK run reconciliation over reconnect", () => {
   it.each(["agent-lifecycle", "chat-delta"])(
     "recovers an exact full reply when %s reveals the gap before the lost final",
     async (gapFrame) => {
-      const outputText = "complete answer ".repeat(400);
+      const outputText = "complete answer ".repeat(400).trim();
       const methods: string[] = [];
       gateway.setRequestHandler((socket, request) => {
         methods.push(request.method);
@@ -346,6 +346,7 @@ describe("SDK run reconciliation over reconnect", () => {
       },
     });
     expect(unavailable.value?.raw).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1_000);
     await rearmed.promise;
     await events.return?.();
   });
@@ -377,8 +378,11 @@ describe("SDK run reconciliation over reconnect", () => {
       await expect(events.next()).resolves.toMatchObject({
         value: { raw: { event: "probe.history" } },
       });
-      for (const count of [2, 3]) {
-        await vi.advanceTimersByTimeAsync(1_000);
+      for (const [count, delay] of [
+        [2, 1_000],
+        [3, 2_000],
+      ] as const) {
+        await vi.advanceTimersByTimeAsync(delay);
         await expect(events.next()).resolves.toMatchObject({
           value: { raw: { event: "probe.wait" }, data: { waits: count } },
         });
