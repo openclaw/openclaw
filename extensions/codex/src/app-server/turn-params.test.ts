@@ -1,6 +1,7 @@
 import { resolveThinkingDefault } from "openclaw/plugin-sdk/agent-runtime";
 import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
   createAppServerOptions,
@@ -8,6 +9,7 @@ import {
   resetThreadLifecycleTestFixtures,
 } from "./thread-lifecycle.test-fixtures.js";
 import { buildTurnStartParams } from "./turn-params.js";
+import { createCodexUserInputTestParams } from "./user-input-bridge.test-support.js";
 
 afterEach(() => {
   resetThreadLifecycleTestFixtures();
@@ -47,6 +49,44 @@ describe("buildTurnStartParams active computer context", () => {
       }
     },
   );
+});
+
+describe("buildTurnStartParams user-input fixture", () => {
+  // transport-stdio.sandbox.test.ts drives this same fixture, but only on macOS, so the
+  // host capability it reads has no platform-independent coverage of its own.
+  it("builds a native sandbox turn without a host presence read", () => {
+    const appServer = resolveCodexAppServerRuntimeOptions({
+      env: {},
+      codexConfigToml: null,
+      requirementsToml: null,
+      pluginConfig: {
+        appServer: {
+          command: "codex",
+          args: ["app-server"],
+          sandbox: "workspace-write",
+          approvalPolicy: "on-request",
+          approvalsReviewer: "user",
+        },
+      },
+    });
+    const params = createCodexUserInputTestParams();
+    params.prompt = "Run the deterministic sandbox write probe.";
+
+    const turn = buildTurnStartParams(params, {
+      threadId: "thread-sandbox",
+      cwd: "/repo",
+      appServer,
+      preserveNativeTurnSettings: true,
+    });
+
+    expect(turn.input).toEqual([
+      { type: "text", text: "Run the deterministic sandbox write probe.", text_elements: [] },
+    ]);
+    expect(turn.additionalContext?.openclaw_active_computer).toEqual({
+      kind: "application",
+      value: "Current active computer: active_node=unknown (host presence unavailable)",
+    });
+  });
 });
 
 describe("buildTurnStartParams model thinking defaults", () => {
