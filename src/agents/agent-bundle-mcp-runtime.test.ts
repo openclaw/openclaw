@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -18,6 +19,7 @@ import {
   useAutoCleanupTempDirTracker,
 } from "../../test/helpers/temp-dir.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import type { McpServerRequestContext } from "../plugins/types.mcp-connection.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { startCatalogRecoveryMcpServer } from "./agent-bundle-mcp-catalog-recovery.test-support.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
@@ -46,6 +48,7 @@ import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
 import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
+import { runWithMcpRequestContext } from "./mcp-request-context.js";
 import { fetchMcpAppView, getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
@@ -93,6 +96,70 @@ type ConfiguredMcpServer = NonNullable<
 const LIST_TOOLS_SERVER_LOG_TIMEOUT_MS = 2_000;
 const LIST_TOOLS_TEST_DEADLINE_MS = 4_000;
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
+
+async function startRequestHeaderMcpProofServer(kind: "streamable-http" | "sse") {
+  const requests: Array<{ method?: string; headers: http.IncomingHttpHeaders }> = [];
+  const server = new McpServer({ name: "request-header-proof", version: "1.0.0" });
+  server.registerTool("probe", { description: "Exercise request attribution" }, async () => ({
+    content: [{ type: "text", text: "ok" }],
+  }));
+  const streamable = new StreamableHTTPServerTransport({ sessionIdGenerator: randomUUID });
+  let sse: SSEServerTransport | undefined;
+  if (kind === "streamable-http") {
+    await server.connect(streamable);
+  }
+  const httpServer = http.createServer((request, response) => {
+    void (async () => {
+      if (kind === "sse" && request.method === "GET") {
+        requests.push({ headers: { ...request.headers } });
+        sse = new SSEServerTransport("/messages", response);
+        await server.connect(sse);
+        return;
+      }
+      let body: { method?: string } | undefined;
+      if (request.method === "POST") {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) {
+          chunks.push(Buffer.from(chunk));
+        }
+        body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      }
+      requests.push({ method: body?.method, headers: { ...request.headers } });
+      if (kind === "streamable-http") {
+        await streamable.handleRequest(request, response, body);
+      } else {
+        await expectDefined(sse, "connected SSE transport").handlePostMessage(
+          request,
+          response,
+          body,
+        );
+      }
+    })().catch(() => {
+      if (!response.headersSent) {
+        response.writeHead(500).end();
+      }
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once("error", reject);
+    httpServer.listen(0, "127.0.0.1", resolve);
+  });
+  const address = httpServer.address();
+  if (!address || typeof address === "string") {
+    throw new Error("request header MCP proof server did not bind a loopback port");
+  }
+  return {
+    requests,
+    url: `http://127.0.0.1:${address.port}/mcp`,
+    async close() {
+      await server.close();
+      httpServer.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((error) => (error ? reject(error) : resolve()));
+      });
+    },
+  };
+}
 
 async function startRequesterScopedMcpProofServer(): Promise<{
   url: string;
@@ -3675,6 +3742,159 @@ process.on("SIGINT", shutdown);`,
   });
 });
 
+describe("per-request MCP headers", () => {
+  it.each(["streamable-http", "sse"] as const)(
+    "keeps overlapping turn headers isolated on one retained %s transport",
+    async (transport) => {
+      const registry = createMcpProofPluginRegistry();
+      await withPluginRuntimeRegistryScope(registry.registry, async () => {
+        const proof = await startRequestHeaderMcpProofServer(transport);
+        const discoveryStarted = createDeferred();
+        const releaseDiscovery = createDeferred();
+        const secondAcquired = createDeferred();
+        const callStarted = { first: createDeferred(), second: createDeferred() };
+        const releaseCall = { first: createDeferred(), second: createDeferred() };
+        let holdDiscovery = true;
+        let holdCalls = false;
+        const provider = vi.fn(async (context: McpServerRequestContext) => {
+          if (holdDiscovery) {
+            holdDiscovery = false;
+            discoveryStarted.resolve();
+            await releaseDiscovery.promise;
+          }
+          if (holdCalls) {
+            const turn = context.runId === "first" ? "first" : "second";
+            callStarted[turn].resolve();
+            await releaseCall[turn].promise;
+          }
+          return {
+            traceparent: context.metadata?.traceparent ?? "missing",
+            "x-turn-credential": context.metadata?.credential ?? "missing",
+            Authorization: "Bearer must-not-replace-static-auth",
+          };
+        });
+        registry.apiFor("test-plugin").registerMcpServerRequestHeaderProvider({
+          serverName: "proof",
+          resolve: provider,
+        });
+        const manager = createSessionMcpRuntimeManager({ enableIdleSweepTimer: false });
+        const params = {
+          sessionId: `request-headers-${transport}`,
+          sessionKey: "agent:test:request-headers",
+          workspaceDir: "/workspace",
+          cfg: {
+            mcp: {
+              servers: {
+                proof: {
+                  transport,
+                  url: proof.url,
+                  headers: { Authorization: "Bearer stable-auth" },
+                  supportsParallelToolCalls: true,
+                },
+              },
+            },
+          },
+        };
+        const context = (runId: string) => ({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          runId,
+          metadata: { traceparent: `trace-${runId}`, credential: `credential-${runId}` },
+        });
+        const runtimes: SessionMcpRuntime[] = [];
+        const materialized: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>>[] = [];
+        const acquire = (runId?: string) =>
+          runWithMcpRequestContext(runId ? context(runId) : undefined, async () => {
+            const lease = await manager.acquire(params);
+            runtimes.push(lease.runtime);
+            if (runId === "second") {
+              secondAcquired.resolve();
+            }
+            const tools = await materializeBundleMcpToolsForRun(lease);
+            materialized.push(tools);
+            return tools;
+          });
+        try {
+          const firstPending = acquire("first");
+          await discoveryStarted.promise;
+          const secondPending = acquire("second");
+          await secondAcquired.promise;
+          releaseDiscovery.resolve();
+          const [first, second] = await Promise.all([firstPending, secondPending]);
+          const empty = await acquire();
+          expect(runtimes[1]).toBe(runtimes[0]);
+          expect(runtimes[2]).toBe(runtimes[0]);
+          expect(new Set(runtimes.map((runtime) => runtime.configFingerprint)).size).toBe(1);
+          expect(runtimes[0]?.configFingerprint).toMatch(SHA256_HEX_PATTERN);
+          const discovery = proof.requests.filter(
+            (request) => request.method === "initialize" || request.method === "tools/list",
+          );
+          expect(discovery.map((request) => request.method)).toEqual(["initialize", "tools/list"]);
+          for (const request of discovery) {
+            expect(request.headers.traceparent).toBe("trace-first");
+            expect(request.headers["x-turn-credential"]).toBe("credential-first");
+          }
+          if (transport === "sse") {
+            expect(proof.requests[0]?.headers.traceparent).toBe("trace-first");
+          }
+
+          holdCalls = true;
+          const execute = (tools: typeof first, id: string) =>
+            expectDefined(
+              tools.tools.find((tool) => tool.name.endsWith("probe")),
+              "probe tool",
+            ).execute(id, {});
+          // These executors outlive their materialization scopes. A concurrent caller's
+          // ambient context must not replace their captured attribution.
+          const firstCall = runWithMcpRequestContext(context("unrelated"), () =>
+            execute(first, "one"),
+          );
+          await callStarted.first.promise;
+          const secondCall = execute(second, "two");
+          await callStarted.second.promise;
+          releaseCall.second.resolve();
+          await secondCall;
+          releaseCall.first.resolve();
+          await firstCall;
+          holdCalls = false;
+          const providerCalls = provider.mock.calls.length;
+          await runWithMcpRequestContext(context("unrelated"), () => execute(empty, "empty"));
+          expect(provider).toHaveBeenCalledTimes(providerCalls);
+          const calls = proof.requests.filter((request) => request.method === "tools/call");
+          expect(calls.map((request) => request.headers.traceparent)).toEqual([
+            "trace-second",
+            "trace-first",
+            undefined,
+          ]);
+          expect(calls.map((request) => request.headers["x-turn-credential"])).toEqual([
+            "credential-second",
+            "credential-first",
+            undefined,
+          ]);
+          expect(calls.map((request) => request.headers.authorization)).toEqual([
+            "Bearer stable-auth",
+            "Bearer stable-auth",
+            "Bearer stable-auth",
+          ]);
+          expect(proof.requests.filter((request) => request.method === "initialize")).toHaveLength(
+            1,
+          );
+          expect(proof.requests.filter((request) => request.method === "tools/list")).toHaveLength(
+            1,
+          );
+        } finally {
+          releaseDiscovery.resolve();
+          releaseCall.first.resolve();
+          releaseCall.second.resolve();
+          await Promise.allSettled(materialized.map((tools) => tools.dispose()));
+          await manager.disposeAll();
+          await proof.close();
+        }
+      });
+    },
+  );
+});
+
 describe("requester-scoped MCP connection resolution", () => {
   afterEach(async () => {
     vi.useRealTimers();
@@ -4564,6 +4784,10 @@ describe("requester-scoped MCP connection resolution", () => {
       let token = "test-auth-token";
 
       const resolverApi = resolverRegistry.apiFor("test-plugin");
+      resolverApi.registerMcpServerRequestHeaderProvider({
+        serverName: "user-mail",
+        resolve: (context) => ({ traceparent: `trace-${context.runId}` }),
+      });
       resolverApi.registerMcpServerConnectionResolver({
         serverName: "user-mail",
         resolve: async () => {

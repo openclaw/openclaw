@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { disposeMcpClient } from "./mcp-client-lifecycle.js";
 import { redactMcpDiagnosticError } from "./mcp-error.js";
@@ -9,6 +10,7 @@ import {
   OpenClawSSEClientTransport,
   OpenClawStreamableHTTPClientTransport,
 } from "./mcp-http-transport.js";
+import { getMcpRequestContext, runWithMcpRequestContext } from "./mcp-request-context.js";
 
 function jsonResponse(value: unknown, init?: ResponseInit): Response {
   const headers = new Headers(init?.headers);
@@ -92,6 +94,86 @@ function mcpResultResponse(
 }
 
 describe("OpenClaw MCP HTTP lifecycle adapters", () => {
+  it("keeps notification reconnects unattributed even with an event ID during an active turn", async () => {
+    const reconnected = createDeferred();
+    const contexts: Array<string | undefined> = [];
+    const fetchMock = initializedFetch({
+      onGet: () => {
+        contexts.push(getMcpRequestContext()?.runId);
+        if (contexts.length === 1) {
+          return new Response(
+            'id: notification-1\nretry: 1\nevent: message\ndata: {"jsonrpc":"2.0","method":"notifications/tools/list_changed"}\n\n',
+            {
+              headers: { "content-type": "text/event-stream" },
+            },
+          );
+        }
+        reconnected.resolve();
+        return new Response(null, { status: 405 });
+      },
+    });
+    const transport = new OpenClawStreamableHTTPClientTransport(new URL("http://mcp.invalid/mcp"), {
+      fetch: fetchMock,
+    });
+    const client = new Client({ name: "test", version: "1" });
+    try {
+      await runWithMcpRequestContext({ sessionId: "session", runId: "opening-turn" }, async () => {
+        await client.connect(transport);
+        await withTestTimeout(reconnected.promise, 1_000, "notification stream did not reconnect");
+        expect(getMcpRequestContext()?.runId).toBe("opening-turn");
+      });
+      expect(contexts).toEqual([undefined, undefined]);
+      const reconnect = fetchMock.mock.calls.filter(([, init]) => init?.method === "GET")[1];
+      expect(new Headers(reconnect?.[1]?.headers).get("last-event-id")).toBe("notification-1");
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("retains the calling context for a resumable RPC GET", async () => {
+    let requestId: string | number | undefined;
+    const contexts: Array<string | undefined> = [];
+    const fetchMock = initializedFetch({
+      onGet: () => {
+        contexts.push(getMcpRequestContext()?.runId);
+        return requestId === undefined
+          ? new Response(null, { status: 405 })
+          : mcpResultResponse(
+              requestId,
+              { content: [{ type: "text", text: "resumed" }] },
+              { stream: true },
+            );
+      },
+      onPost: (message) => {
+        if (message.method !== "tools/call") {
+          return new Response(null, { status: 202 });
+        }
+        requestId = message.id;
+        return new Response(
+          'id: rpc-1\nretry: 1\nevent: message\ndata: {"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info","data":"pending"}}\n\n',
+          {
+            headers: { "content-type": "text/event-stream" },
+          },
+        );
+      },
+    });
+    const transport = new OpenClawStreamableHTTPClientTransport(new URL("http://mcp.invalid/mcp"), {
+      fetch: fetchMock,
+    });
+    const client = new Client({ name: "test", version: "1" });
+    try {
+      await client.connect(transport);
+      const result = await runWithMcpRequestContext(
+        { sessionId: "session", runId: "rpc-turn" },
+        () => client.callTool({ name: "probe", arguments: {} }),
+      );
+      expect(result).toMatchObject({ content: [{ text: "resumed" }] });
+      expect(contexts).toEqual([undefined, "rpc-turn"]);
+    } finally {
+      await client.close();
+    }
+  });
+
   it.each([
     "Streamable HTTP error: Error POSTing to endpoint: bearer=body-secret",
     "Error POSTing to endpoint (HTTP 500): bearer=body-secret",

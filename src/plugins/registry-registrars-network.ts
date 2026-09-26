@@ -32,6 +32,7 @@ import type {
   OpenClawPluginHostedMediaResolver,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginMcpServerConnectionResolver,
+  OpenClawPluginMcpServerRequestHeaderProvider,
   PluginRegistrationMode,
 } from "./types.js";
 
@@ -238,6 +239,30 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     );
   };
 
+  const hasMcpServerOwnerConflict = (
+    record: PluginRecord,
+    serverName: string,
+    kind: "connection resolver" | "request header provider",
+  ) => {
+    const owner =
+      registry.mcpServerConnectionResolvers.find(
+        (entry) => entry.resolver.serverName === serverName,
+      ) ??
+      registry.mcpServerRequestHeaderProviders.find(
+        (entry) => entry.provider.serverName === serverName,
+      );
+    if (owner && owner.pluginId !== record.id) {
+      // Both seams share ownership: another plugin must not attach credentials
+      // to an existing owner's endpoint or redirect an existing owner's headers.
+      reportRegistrationError(
+        record,
+        `MCP server ${kind} for "${serverName}" rejected: already registered by plugin "${owner.pluginId}"`,
+      );
+      return true;
+    }
+    return false;
+  };
+
   const registerMcpServerConnectionResolver = (
     record: PluginRecord,
     resolver: OpenClawPluginMcpServerConnectionResolver,
@@ -250,6 +275,9 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       );
       return;
     }
+    if (hasMcpServerOwnerConflict(record, serverName, "connection resolver")) {
+      return;
+    }
     const existingIndex = registry.mcpServerConnectionResolvers.findIndex(
       (entry) => entry.resolver.serverName === serverName,
     );
@@ -260,21 +288,38 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       },
     });
     if (existingIndex >= 0) {
-      const existing = registry.mcpServerConnectionResolvers[existingIndex];
-      // Resolver ownership is an authorization boundary: connection identity
-      // must not depend on plugin load order. First registration wins; a
-      // duplicate from another plugin is rejected, not silently replaced.
-      if (existing && existing.pluginId !== record.id) {
-        reportRegistrationError(
-          record,
-          `MCP server connection resolver for "${serverName}" rejected: already registered by plugin "${existing.pluginId}"`,
-        );
-        return;
-      }
       registry.mcpServerConnectionResolvers[existingIndex] = registration;
       return;
     }
     registry.mcpServerConnectionResolvers.push(registration);
+  };
+
+  const registerMcpServerRequestHeaderProvider = (
+    record: PluginRecord,
+    provider: OpenClawPluginMcpServerRequestHeaderProvider,
+  ) => {
+    const serverName = normalizeOptionalString(provider?.serverName);
+    if (!serverName || typeof provider.resolve !== "function") {
+      reportRegistrationError(
+        record,
+        "MCP server request header provider registration missing serverName or resolve",
+      );
+      return;
+    }
+    if (hasMcpServerOwnerConflict(record, serverName, "request header provider")) {
+      return;
+    }
+    const existingIndex = registry.mcpServerRequestHeaderProviders.findIndex(
+      (entry) => entry.provider.serverName === serverName,
+    );
+    const registration = createRegistration(record, {
+      provider: { serverName, resolve: provider.resolve },
+    });
+    if (existingIndex >= 0) {
+      registry.mcpServerRequestHeaderProviders[existingIndex] = registration;
+      return;
+    }
+    registry.mcpServerRequestHeaderProviders.push(registration);
   };
 
   const registerChannel = (
@@ -372,6 +417,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     registerHttpRoute,
     registerHostedMediaResolver,
     registerMcpServerConnectionResolver,
+    registerMcpServerRequestHeaderProvider,
     registerChannel,
   };
 }

@@ -1,7 +1,10 @@
 // Covers MCP HTTP transport redirects, SSRF guardrails, and auth/TLS handoff.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
+import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
 import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { runWithMcpRequestContext } from "./mcp-request-context.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 
 type StreamableTransportOptions = {
@@ -129,6 +132,86 @@ describe("resolveMcpTransport", () => {
     oauthBearerMock.mockClear();
     streamableTransportConstructorMock.mockClear();
     sseTransportConstructorMock.mockClear();
+  });
+
+  it("refreshes volatile headers on each redirect without changing requestInit or static auth", async () => {
+    const proof = createMcpProofPluginRegistry();
+    let sequence = 0;
+    const resolve = vi.fn(() => ({
+      traceparent: `trace-${++sequence}`,
+      Authorization: "Bearer ignored-provider-token",
+      "mcp-session-id": "ignored-provider-session",
+    }));
+    proof
+      .apiFor("attribution")
+      .registerMcpServerRequestHeaderProvider({ serverName: "probe", resolve });
+    withPluginRuntimeRegistryScope(proof.registry, () =>
+      resolveMcpTransport("probe", {
+        url: "https://mcp.example.com/mcp",
+        transport: "streamable-http",
+        headers: { Authorization: "Bearer static-token" },
+      }),
+    );
+    const options = latestStreamableTransportOptions();
+    expect(options.requestInit).toEqual({ headers: { Authorization: "Bearer static-token" } });
+    runtimeFetchMock
+      .mockResolvedValueOnce(redirectResponse("https://mcp.example.com/next", 307))
+      .mockResolvedValueOnce(redirectResponse("https://elsewhere.example/mcp", 307))
+      .mockResolvedValueOnce(new Response("ok"));
+    await runWithMcpRequestContext({ sessionId: "session", runId: "turn" }, () =>
+      latestStreamableFetch()("https://mcp.example.com/mcp", {
+        method: "POST",
+        headers: { Authorization: "Bearer static-token", "mcp-session-id": "real-session" },
+        body: "{}",
+      }),
+    );
+    const headers = [0, 1, 2].map((index) => new Headers(runtimeFetchCall(index)[1]?.headers));
+    expect(headers.map((entry) => entry.get("traceparent"))).toEqual(["trace-1", "trace-2", null]);
+    expect(headers.map((entry) => entry.get("authorization"))).toEqual([
+      "Bearer static-token",
+      "Bearer static-token",
+      null,
+    ]);
+    expect(headers[0]?.get("mcp-session-id")).toBe("real-session");
+    expect(resolve).toHaveBeenCalledTimes(2);
+  });
+
+  it("attributes initial SSE discovery and POSTs but clears EventSource reconnect context", async () => {
+    const proof = createMcpProofPluginRegistry();
+    proof.apiFor("attribution").registerMcpServerRequestHeaderProvider({
+      serverName: "probe",
+      resolve: (ctx) => ({ "x-turn": ctx.runId }),
+    });
+    withPluginRuntimeRegistryScope(proof.registry, () =>
+      resolveMcpTransport("probe", {
+        url: "https://mcp.example.com/sse",
+        transport: "sse",
+        headers: { Authorization: "Bearer static-token" },
+      }),
+    );
+    runtimeFetchMock.mockImplementation(async () => new Response("ok"));
+    const eventFetch = latestSseEventSourceFetch();
+    await runWithMcpRequestContext({ sessionId: "session", runId: "first" }, () =>
+      eventFetch("https://mcp.example.com/sse"),
+    );
+    // Even reconnects occurring inside a later turn must not adopt that turn.
+    await runWithMcpRequestContext({ sessionId: "session", runId: "second" }, () =>
+      eventFetch("https://mcp.example.com/sse"),
+    );
+    expect(new Headers(runtimeFetchCall(0)[1]?.headers).get("x-turn")).toBe("first");
+    expect(new Headers(runtimeFetchCall(1)[1]?.headers).get("x-turn")).toBeNull();
+    expect(new Headers(runtimeFetchCall(1)[1]?.headers).get("authorization")).toBe(
+      "Bearer static-token",
+    );
+    const call = sseTransportConstructorMock.mock.calls.at(-1) as unknown[];
+    const options = call[1] as StreamableTransportOptions;
+    await runWithMcpRequestContext({ sessionId: "session", runId: "second" }, () =>
+      options.fetch?.("https://mcp.example.com/messages", {
+        method: "POST",
+        headers: options.requestInit?.headers,
+      }),
+    );
+    expect(new Headers(runtimeFetchCall(2)[1]?.headers).get("x-turn")).toBe("second");
   });
 
   it("scrubs custom headers when streamable HTTP follows a cross-origin redirect", async () => {

@@ -30,6 +30,7 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerMemoryCorpusSupplement(adapter)`     | Additive memory search/read corpus                                     |
 | `api.registerHostedMediaResolver(resolver)`       | Resolver for browser-style hosted media URLs                           |
 | `api.registerMcpServerConnectionResolver(...)`    | Per-requester MCP transport (`url`/`headers`) for a static server name |
+| `api.registerMcpServerRequestHeaderProvider(...)` | Per-request HTTP attribution headers without rebuilding the transport  |
 | `api.registerTextTransforms(transforms)`          | Plugin-owned prompt/message compatibility text rewrites                |
 | `api.registerConfigMigration(migrate)`            | Lightweight config migration run before plugin runtime loads           |
 | `api.registerMigrationProvider(provider)`         | Importer for `openclaw migrate`                                        |
@@ -421,10 +422,10 @@ Contract notes:
 - Resolver context carries trusted host identity only (`requesterSenderId`,
   optional `agentAccountId` / `messageChannel`). Future trusted fields (for
   example cron/subagent user context) can be added additively.
-- One plugin owns one server name: a duplicate
-  `registerMcpServerConnectionResolver` for the same `serverName` from another
-  plugin is rejected with an error diagnostic (first registration wins), so
-  connection ownership never depends on plugin load order.
+- One plugin owns one server name across connection resolvers and request header
+  providers. A registration for the same `serverName` from another plugin is
+  rejected with an error diagnostic (first registration wins). The owner may
+  replace its own registrations.
 - Tool names are derived from the full declared server set so partial resolution
   never changes safe server names between requesters or turns. Core does not
   verify that different requester endpoints serve identical tool schemas; a
@@ -462,6 +463,72 @@ Contract notes:
 - Unauthenticated requesters on a shared-thread harness still see the advertised
   scoped tools; calling one returns a clean not-connected tool error for that
   requester. OpenClaw never falls back to another requester's credentials.
+
+### Per-request MCP headers
+
+Use a request header provider for turn attribution, tracing, or short-lived
+turn credentials. Keep stable authentication in static server config or the
+connection resolver above; changing a connection resolver's headers still
+rotates the connection. Request headers do not participate in the declarative
+catalog fingerprint or the connection-rotation digest.
+
+```ts
+import { runWithMcpRequestContext } from "openclaw/plugin-sdk/agent-harness-runtime";
+
+api.registerMcpServerRequestHeaderProvider({
+  serverName: "user-email",
+  resolve: async (ctx) => {
+    // signTurnCredential is your plugin's own signing operation, not an SDK export.
+    const credential = await signTurnCredential(ctx.sessionId, ctx.runId);
+    return {
+      "X-Turn-Credential": credential,
+      ...(ctx.metadata?.traceparent ? { traceparent: ctx.metadata.traceparent } : {}),
+    };
+  },
+});
+
+// Embedded callers scope acquisition and execution to their own turn.
+// runTurn is the embedding application's operation, not an SDK export.
+await runWithMcpRequestContext({ sessionId, sessionKey, runId, metadata: { traceparent } }, () =>
+  runTurn(),
+);
+```
+
+Contract notes:
+
+- Context contains `sessionId`, `runId`, optional `sessionKey`, and optional
+  string-valued `metadata`. Core copies and freezes it when entering the scope.
+  The embedded backend supplies the actual run/session identity and preserves
+  enclosing caller metadata. Caller-supplied attribution does not replace the connection resolver's trusted
+  requester identity.
+- The provider runs at each same-origin HTTP request, including initial discovery
+  and retried requests. HTTP and SSE request/event-source paths use the same
+  provider contract. It is not called for stdio transports.
+- Overlapping turns keep independent contexts on the retained transport.
+  Materialized tool executors retain their acquisition context and open a fresh
+  operation scope when invoked; they never read a shared latest-turn value.
+- `runWithMcpRequestContext` returns a promise and closes its operation scope
+  when the callback settles. Missing context sends no volatile headers and does
+  not call the provider. `runWithMcpRequestContext(undefined, fn)` explicitly
+  clears inherited context.
+- Initial SSE discovery can carry the discovery operation's context. Shared
+  background streams and SSE reconnects send no volatile attribution, even when
+  another turn is active. Retries belonging to an active HTTP operation keep
+  that operation's context; a completed operation leaves no background context.
+- Returned headers may add volatile fields, but cannot overwrite configured
+  headers, authentication, or MCP protocol headers. Headers are scoped to the
+  configured origin, and their values enter the secret redaction registry.
+  Returning `null` sends no volatile headers; resolution is bounded at 10 seconds.
+  A provider failure fails the request
+  without exposing its error or falling back to another turn.
+- Providers share server ownership with connection resolvers. Only the owning
+  plugin may register or replace either seam for a server name.
+- The catalog and transport remain reusable across turn-header changes. Genuine
+  config changes, resolver credential rotation, `tools/list_changed`, and
+  transport-close recovery retain their existing invalidation behavior.
+- This seam applies to OpenClaw-owned MCP HTTP transports. Harness-native MCP
+  clients do not invoke it; use OpenClaw materialized tools when per-request
+  attribution is required.
 
 Memory prompt supplement builders receive optional `agentId`,
 `agentSessionKey`, and `sandboxed` context. Memory corpus supplement `search`

@@ -23,6 +23,7 @@ import {
 } from "./mcp-http-transport.js";
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
 import { operatorMcpOAuthIdentity, requesterMcpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { runWithMcpRequestContext } from "./mcp-request-context.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
@@ -103,6 +104,7 @@ function buildSseEventSourceFetch(
   headers: Record<string, string>,
   baseFetch: FetchLike,
 ): SseEventSourceFetch {
+  let connected = false;
   return (url: string | URL, init?: RequestInit) => {
     // Header names are case-insensitive, but object spreads preserve case
     // variants and can duplicate Authorization on the wire. Normalize before
@@ -114,10 +116,15 @@ function buildSseEventSourceFetch(
     for (const [key, value] of Object.entries(headers)) {
       mergedHeaders[key.toLowerCase()] = value;
     }
-    return baseFetch(url, {
-      ...(init as RequestInit),
-      headers: mergedHeaders,
-    }) as ReturnType<SseEventSourceFetch>;
+    const request = () =>
+      baseFetch(url, {
+        ...(init as RequestInit),
+        headers: mergedHeaders,
+      });
+    // EventSource reconnect belongs to the shared connection, not the opening turn.
+    const result = connected ? runWithMcpRequestContext(undefined, request) : request();
+    connected = true;
+    return result as ReturnType<SseEventSourceFetch>;
   };
 }
 
@@ -172,6 +179,7 @@ export function resolveMcpTransport(
   // The SDK reuses one fetch for OAuth and long-lived SSE/streamable bodies.
   // Per-RPC deadlines belong to client calls, not this transport fetch.
   const baseFetch = buildMcpHttpFetch({
+    serverName,
     sslVerify: resolved.sslVerify,
     clientCert: resolved.clientCert,
     clientKey: resolved.clientKey,

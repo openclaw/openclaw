@@ -10,7 +10,8 @@ import {
 } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { STDIO_DEFAULT_MAX_BUFFER_SIZE } from "@modelcontextprotocol/sdk/shared/stdio.js";
 import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import { isInitializedNotification, type JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import { getMcpRequestContext, runWithMcpRequestContext } from "./mcp-request-context.js";
 
 const STREAM_RETRY_EXHAUSTED_RE = /^Maximum reconnection attempts \(\d+\) exceeded\.$/;
 const SESSION_TERMINATION_TIMEOUT_MS = 5_000;
@@ -323,7 +324,12 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
       if (this.closed) {
         throw new Error("MCP Streamable HTTP transport is closed");
       }
-      const response = limitMcpHttpResponse(await this.cleanupFetch(input, init));
+      const request = () => this.cleanupFetch(input, init);
+      // Unsolicited notification streams are shared; resumptions retain the RPC scope.
+      const background = init?.method === "GET" && !new Headers(init.headers).has("last-event-id");
+      const response = limitMcpHttpResponse(
+        await (background ? runWithMcpRequestContext(undefined, request) : request()),
+      );
       if (init?.method === "GET" && response.status === 404 && this.sessionId !== undefined) {
         this.pendingExpiredNotificationGet = true;
       }
@@ -368,7 +374,15 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
   }
 
   async send(message: JSONRPCMessage, options?: Parameters<Transport["send"]>[1]): Promise<void> {
-    await this.transport.send(message, options);
+    if (isInitializedNotification(message)) {
+      // The SDK starts its shared notification stream from this send. Its parser
+      // and reconnect timers must outlive attribution, even while the turn is active.
+      await runWithMcpRequestContext(getMcpRequestContext(), () =>
+        this.transport.send(message, options),
+      );
+    } else {
+      await this.transport.send(message, options);
+    }
   }
 
   /** Uses a fresh request signal because failed initialization makes the SDK's signal unusable. */

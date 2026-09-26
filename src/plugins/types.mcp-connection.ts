@@ -41,3 +41,31 @@ export type PluginMcpServerConnectionResolverRegistration = {
   source: string;
   rootDir?: string;
 };
+
+/** Immutable context belonging to one MCP request's calling turn. */
+export type McpServerRequestContext = Readonly<{
+  sessionId: string;
+  sessionKey?: string;
+  runId: string;
+  /** Caller-supplied attribution; not a substitute for trusted requester identity. */
+  metadata?: Readonly<Record<string, string>>;
+}>;
+
+/** Volatile headers resolved at the HTTP boundary, independently of connection credentials. */
+export type OpenClawPluginMcpServerRequestHeaderProvider = {
+  /** Server name matching `mcp.servers` / bundle MCP declaration. */
+  serverName: string;
+  /** Called for each attributed request; cannot replace configured auth or protocol headers. */
+  resolve: (
+    ctx: McpServerRequestContext,
+  ) => Record<string, string> | null | Promise<Record<string, string> | null>;
+};
+
+/** Registry entry for a plugin MCP server request header provider. */
+export type PluginMcpServerRequestHeaderProviderRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  provider: OpenClawPluginMcpServerRequestHeaderProvider;
+  source: string;
+  rootDir?: string;
+};

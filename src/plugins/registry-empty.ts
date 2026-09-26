@@ -38,6 +38,7 @@ export const pluginArrays = [
   "hostedMediaResolvers",
   "widgetPresenters",
   "mcpServerConnectionResolvers",
+  "mcpServerRequestHeaderProviders",
   "cliRegistrars",
   "reloads",
   "nodeHostCommands",

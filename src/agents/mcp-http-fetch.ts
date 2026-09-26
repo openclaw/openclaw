@@ -12,6 +12,7 @@ import {
   type PinnedDispatcherPolicy,
 } from "../infra/net/ssrf.js";
 import { loadUndiciRuntimeDeps } from "../infra/net/undici-runtime.js";
+import { withMcpRequestHeaders } from "./mcp-request-headers.js";
 
 /** Default MCP HTTP fetch backed by lazy-loaded undici runtime deps. */
 const fetchWithUndici: FetchLike = async (url, init) =>
@@ -79,9 +80,18 @@ export function buildMcpHttpFetch(params: {
   clientCert?: string;
   clientKey?: string;
   resourceUrl?: string;
+  serverName?: string;
   timeoutMs?: number;
   beforeRequest?: () => void;
 }): FetchLike {
+  const fetchImpl =
+    params.serverName && params.resourceUrl
+      ? withMcpRequestHeaders({
+          serverName: params.serverName,
+          resourceUrl: params.resourceUrl,
+          fetchFn: fetchWithUndiciGuard,
+        })
+      : fetchWithUndiciGuard;
   const needsCustomDispatcher =
     params.sslVerify === false || Boolean(params.clientCert || params.clientKey);
   const scopedOrigin = params.resourceUrl ? new URL(params.resourceUrl).origin : undefined;
@@ -107,7 +117,7 @@ export function buildMcpHttpFetch(params: {
     const guardedFetchOptions = {
       url: request.url,
       init: request.init,
-      fetchImpl: fetchWithUndiciGuard,
+      fetchImpl,
       maxRedirects: MCP_HTTP_MAX_REDIRECTS,
       allowCrossOriginUnsafeRedirectReplay: true,
       auditContext: "mcp-http",

@@ -32,6 +32,7 @@ import {
   setMcpCodeModeGuestResult,
   setMcpCodeModeGuestResultFromAgentResult,
 } from "./mcp-content.js";
+import { getMcpRequestContext, runWithMcpRequestContext } from "./mcp-request-context.js";
 import { isMcpToolAllowed } from "./mcp-tool-filter.js";
 import { buildMcpAppCanvasPayload, fetchMcpAppView } from "./mcp-ui-resource.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
@@ -394,6 +395,7 @@ export async function materializeBundleMcpToolsForRun(params: {
   disposeRuntime?: () => Promise<void>;
 }): Promise<BundleMcpToolRuntime> {
   const runtime = params.runtime;
+  const requestContext = getMcpRequestContext();
   let disposal: Promise<void> | undefined;
   let allowedAppToolsByServer: Map<string, Set<string>> | undefined;
   let releaseLease: (() => void) | undefined;
@@ -427,7 +429,7 @@ export async function materializeBundleMcpToolsForRun(params: {
   try {
     releaseLease = params.releaseLease ?? runtime.acquireLease?.();
     runtime.markUsed();
-    const catalog = await runtime.getCatalog();
+    const catalog = await runWithMcpRequestContext(requestContext, () => runtime.getCatalog());
     const reservedToolNames = params.reservedToolNames
       ? Array.from(params.reservedToolNames)
       : undefined;
@@ -534,6 +536,10 @@ export async function materializeBundleMcpToolsForRun(params: {
             })
         : undefined,
     });
+    for (const tool of tools) {
+      const execute = tool.execute;
+      tool.execute = (...args) => runWithMcpRequestContext(requestContext, () => execute(...args));
+    }
     const appTools = buildAppToolPolicyProjections({
       catalog: materializedCatalog,
       modelTools: tools,

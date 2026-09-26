@@ -61,7 +61,10 @@ import type {
 import type { PluginRuntime } from "./runtime/types.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type { PluginDependencyStatus } from "./status-dependencies.types.js";
-import type { PluginMcpServerConnectionResolverRegistration } from "./types.mcp-connection.js";
+import type {
+  PluginMcpServerConnectionResolverRegistration,
+  PluginMcpServerRequestHeaderProviderRegistration,
+} from "./types.mcp-connection.js";
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 type CliBackendPlugin = import("./types.js").CliBackendPlugin;
 type ImageGenerationProviderPlugin = import("./types.js").ImageGenerationProviderPlugin;
@@ -461,6 +464,7 @@ export type PluginRegistry = {
   hostedMediaResolvers: PluginHostedMediaResolverRegistration[];
   widgetPresenters: PluginWidgetPresenterRegistration[];
   mcpServerConnectionResolvers: PluginMcpServerConnectionResolverRegistration[];
+  mcpServerRequestHeaderProviders: PluginMcpServerRequestHeaderProviderRegistration[];
   cliRegistrars: PluginCliRegistration[];
   reloads: PluginReloadRegistration[];
   nodeHostCommands: PluginNodeHostCommandRegistration[];
