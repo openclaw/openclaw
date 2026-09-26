@@ -1251,6 +1251,59 @@ describe("sessions view", () => {
     expect(avatars[1]?.querySelector(".session-avatar__status")).toBeNull();
   });
 
+  it("snaps selects back to the stored session values after a failed patch", async () => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    const onAssignCategory = vi.fn();
+    const props = () => ({
+      ...buildProps(
+        buildResult({
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 1,
+          category: "Research",
+          thinkingLevel: "medium",
+        }),
+      ),
+      groupBy: "category" as const,
+      knownCategories: ["Research", "Ops"],
+      expandedSessionKey: "agent:main:main",
+      onPatch,
+      onAssignCategory,
+    });
+    render(renderSessions(props()), container);
+    await Promise.resolve();
+
+    const groupSelect = container.querySelector<HTMLSelectElement>(
+      'select[aria-label="Move session to a group"]',
+    );
+    const thinkingSelect = Array.from(container.querySelectorAll(".session-override-field"))
+      .find(
+        (field) =>
+          field.querySelector(".session-override-field__label")?.textContent?.trim() === "Thinking",
+      )
+      ?.querySelector<HTMLSelectElement>("select");
+    if (!groupSelect || !thinkingSelect) {
+      throw new Error("Expected group and thinking selects");
+    }
+    expect(groupSelect.value).toBe("Research");
+    expect(thinkingSelect.value).toBe("medium");
+
+    // The user picks new values; the gateway rejects both patches, so the row
+    // keeps its stored values and the page re-renders with an error.
+    groupSelect.value = "Ops";
+    groupSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    thinkingSelect.value = "";
+    thinkingSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onAssignCategory).toHaveBeenCalledWith("agent:main:main", "Ops");
+    expect(onPatch).toHaveBeenCalledWith("agent:main:main", { thinkingLevel: null });
+    render(renderSessions({ ...props(), error: "patch failed" }), container);
+    await Promise.resolve();
+
+    expect(groupSelect.value).toBe("Research");
+    expect(thinkingSelect.value).toBe("medium");
+  });
+
   it("shows skeleton rows during the initial load", async () => {
     const container = document.createElement("div");
     renderView(buildMultiResult([]), { result: null, loading: true }, container);

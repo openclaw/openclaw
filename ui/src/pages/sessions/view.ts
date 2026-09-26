@@ -4,6 +4,8 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
+import { live } from "lit/directives/live.js";
+import type { SessionsSearchHit } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
@@ -540,6 +542,44 @@ function renderGroupHeaderRow(group: SessionRowGroup, props: SessionsProps) {
   `;
 }
 
+function renderCategoryCell(row: GatewaySessionRow, props: SessionsProps) {
+  const current = normalizeOptionalString(row.category) ?? "";
+  const options = [...props.knownCategories];
+  if (current && !options.includes(current)) {
+    options.push(current);
+  }
+  return html`
+    <td>
+      <select
+        ?disabled=${props.loading || Boolean(props.groupWriteDisabledReason)}
+        title=${props.groupWriteDisabledReason ?? nothing}
+        aria-label=${t("sessionsView.moveToGroup")}
+        class="session-group-select"
+        .value=${live(current)}
+        @change=${(e: Event) => {
+          if (props.groupWriteDisabledReason) {
+            return;
+          }
+          const select = e.target as HTMLSelectElement;
+          if (select.value === NEW_GROUP_OPTION) {
+            // The page prompts for a name and patches; restore until the refresh lands.
+            select.value = current;
+            props.onRequestNewCategory(row.key);
+            return;
+          }
+          props.onAssignCategory(row.key, select.value || null);
+        }}
+      >
+        <option value="" ?selected=${!current}>${t("sessionsView.ungrouped")}</option>
+        ${options.map(
+          (name) => html`<option value=${name} ?selected=${current === name}>${name}</option>`,
+        )}
+        <option value=${NEW_GROUP_OPTION}>${t("sessionsView.newGroup")}</option>
+      </select>
+    </td>
+  `;
+}
+
 function isRowControlTarget(target: EventTarget | null): boolean {
   return (
     target instanceof Element &&
@@ -560,6 +600,7 @@ function renderOverrideSelect(params: {
       <span class="session-override-field__label">${params.label}</span>
       <select
         class="settings-select"
+        .value=${live(params.current)}
         ?disabled=${params.disabled}
         title=${params.disabledReason ?? nothing}
         @change=${(e: Event) => params.onChange((e.target as HTMLSelectElement).value)}
