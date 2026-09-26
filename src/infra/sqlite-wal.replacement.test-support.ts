@@ -49,7 +49,7 @@ if (role === "worker") {
   globalThis.setInterval = (callback, delay, ...args) => {
     if (delay === 30 * 60 * 1000 && typeof callback === "function") {
       assert.equal(periodic, undefined, "Expected exactly one published WAL timer");
-      periodic = () => callback(...args);
+      periodic = () => Reflect.apply(callback, undefined, args);
     }
     return setIntervalNative(callback, delay, ...args);
   };
