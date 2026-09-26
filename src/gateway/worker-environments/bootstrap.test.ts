@@ -507,7 +507,7 @@ describe("bootstrapWorker", () => {
     expect(npmRunner.calls[1]?.options.input).toContain("npm pack");
     expect(npmRunner.calls[1]?.options.input).not.toContain("npm install");
     expect(npmRunner.calls[1]?.options.input).toContain("--registry=https://registry.npmjs.org/");
-    for (const artifact of [
+    for (const artifactPath of [
       "worker.mjs",
       "file-tool-planning.worker.mjs",
       "github-exec-launcher.mjs",
@@ -517,7 +517,7 @@ describe("bootstrapWorker", () => {
       "sqlite-store.worker.mjs",
       "workspace-rsync-receiver.mjs",
     ]) {
-      expect(npmRunner.calls[1]?.options.input).toContain(`package/dist/worker/${artifact}`);
+      expect(npmRunner.calls[1]?.options.input).toContain(`package/dist/worker/${artifactPath}`);
     }
     expect(npmRunner.calls[1]?.options.input).not.toContain("node_modules");
     expect(npmRunner.calls[1]?.argv.at(-1)).toContain(`openclaw@${VERSION}`);
