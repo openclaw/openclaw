@@ -589,6 +589,40 @@ describe("operator role policy", () => {
     });
   });
 
+  it("treats a human creator whose id is not a user profile according to the default role sandbox", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = roleConfig();
+      const guest = cfg.gateway?.roles?.definitions.guest;
+      if (!guest) {
+        throw new Error("missing guest role");
+      }
+      guest.sandbox = "required";
+
+      // A channel sender (e.g. Slack) is stamped with its channel-native id, which is not
+      // a user-profile id. Role resolution for such a creator must not throw and must not
+      // bypass a default-role sandbox requirement: it falls back to the default role (or
+      // the denied role) exactly like a missing assignment.
+      expect(
+        resolveCreatorSandbox(cfg, {
+          actor: { type: "human", source: "channel", id: "U-CHANNEL-SENDER" },
+        }),
+      ).toBe("required");
+      expect(
+        resolveCreatorSandbox(cfg, {
+          actor: { type: "human", source: "unknown", id: "U-UNKNOWN-SENDER" },
+        }),
+      ).toBe("required");
+
+      // Without a sandbox requirement on the default role the run is not stamped.
+      delete guest.sandbox;
+      expect(
+        resolveCreatorSandbox(cfg, {
+          actor: { type: "human", source: "channel", id: "U-CHANNEL-SENDER" },
+        }),
+      ).toBeUndefined();
+    });
+  });
+
   it("keeps owner attribution out of named roles and preserves explicit authority", () => {
     const cfg = roleConfig();
     const owner = identifiedClient(GATEWAY_OWNER_PROFILE_ID);

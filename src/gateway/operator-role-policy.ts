@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
-import { getUserProfileRole } from "../state/user-profiles.js";
+import { getUserProfileRole, UserProfileNotFoundError } from "../state/user-profiles.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import {
   resolveOperatorSessionCreation,
@@ -145,11 +145,26 @@ export function resolveCreatorSandbox(
   creation: { actor?: SessionCreatedActor } | undefined,
 ): "required" | undefined {
   const actor = creation?.actor;
-  return actor?.type === "human" &&
-    actor.id &&
-    resolveOperatorRolePolicyForProfile(actor.id, cfg)?.sandbox === "required"
-    ? "required"
-    : undefined;
+  if (actor?.type !== "human" || !actor.id) {
+    return undefined;
+  }
+  try {
+    return resolveOperatorRolePolicyForProfile(actor.id, cfg)?.sandbox === "required"
+      ? "required"
+      : undefined;
+  } catch (error) {
+    // Channel senders and other human creators carry their channel-native id, not a user
+    // profile id, so the role policy cannot resolve an assignment for them. Treat the
+    // unresolvable creator like a missing assignment so the configured default role (or
+    // the denied role) still decides sandboxing; this must not fail the scheduled run,
+    // and it must not bypass a default-role sandbox requirement.
+    if (error instanceof UserProfileNotFoundError) {
+      return resolveOperatorRolePolicyForAssignment(actor.id, null, cfg)?.sandbox === "required"
+        ? "required"
+        : undefined;
+    }
+    throw error;
+  }
 }
 
 /** Resolves the current named policy from the connection's verified profile identity. */
