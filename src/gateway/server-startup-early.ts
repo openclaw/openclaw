@@ -182,6 +182,7 @@ export async function startGatewayEarlyRuntime(params: {
         return null;
       }
       return startGatewayMaintenanceTimers({
+        scheduler: params.scheduler,
         broadcast: params.broadcast,
         nodeSendToAllSubscribed: params.nodeSendToAllSubscribed,
         getPresenceVersion: params.getPresenceVersion,

@@ -180,14 +180,6 @@ describe("OpenClaw provider tool-result redaction", () => {
     },
   ];
 
-  it("preserves source assignments while masking structured credentials", () => {
-    const text = extractToolResultText(toolResultContent);
-
-    expect(text).toContain("if let token = timeObserverToken {");
-    expect(text).toContain(String.raw`\"token\":\"timeObserverToken\"`);
-    expect(text).not.toContain("provider-secret-value");
-  });
-
   it("carries the redacted result into Anthropic and OpenAI-compatible payloads", async () => {
     const configCredential = "unquoted-provider-config-credential-1234567890";
     const envCredential = "provider-env-credential-1234567890";

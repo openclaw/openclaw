@@ -103,6 +103,7 @@ function createPublicationOwner(projection: SessionRowProjection) {
   return {
     rows: {
       ...rows,
+      track,
       withReadyRows<T>(
         queries: (config: SessionRowReadView["state"]["cfg"]) => readonly Lookup[],
         consume: (read: SessionRowReadView) => T,

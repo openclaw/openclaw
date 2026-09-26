@@ -682,19 +682,31 @@ describe("server-runtime-services", () => {
     services.heartbeatRunner.stop();
   });
 
-  it("stops outbound delivery retry timers with the gateway lifecycle", async () => {
+  it("coalesces late outbound recovery and stops retries with the gateway lifecycle", async () => {
     vi.useFakeTimers();
-    const { services } = activateScheduledServicesForTest();
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const { services } = activateScheduledServicesForTest({ scheduler });
+    try {
+      await vi.dynamicImportSettled();
+      await clock.advanceBy(5_000);
+      expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
 
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
+      await clock.advanceBy(180_000);
+      expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(2);
+      expect(scheduler.nextWakeAtMs).toBe(clock.clock.now() + 5_000);
 
-    services.heartbeatRunner.stop();
-    await vi.advanceTimersByTimeAsync(15_000);
+      services.heartbeatRunner.stop();
+      await services.stopDeliveryRecovery();
+      await clock.advanceBy(15_000);
 
-    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
-    expect(hoisted.heartbeatRunner.stop).toHaveBeenCalledOnce();
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(2);
+      expect(hoisted.heartbeatRunner.stop).toHaveBeenCalledOnce();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      await services.stopDeliveryRecovery();
+      await scheduler.stop();
+    }
   });
 
   it("skips outbound retry ticks while gateway work admission is suspended", async () => {
@@ -853,7 +865,7 @@ function activateScheduledServicesForTest(
   const log = overrides.log ?? createLog();
   const cfgAtStart = overrides.cfgAtStart ?? ({} as never);
   const services = activateGatewayScheduledServices({
-    scheduler: createTestGatewayScheduler(),
+    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
     minimalTestGateway: false,
     cfgAtStart,
     deps: {} as never,

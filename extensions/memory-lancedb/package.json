@@ -39,7 +39,10 @@
       "pluginApi": ">=2026.9.6"
     },
     "build": {
-      "openclawVersion": "2026.9.6"
+      "openclawVersion": "2026.9.6",
+      "workerEntries": [
+        "./lancedb-runtime.ts"
+      ]
     },
     "release": {
       "bundleRuntimeDependencies": false,

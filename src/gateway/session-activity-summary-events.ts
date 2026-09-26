@@ -46,10 +46,11 @@ export async function broadcastSessionActivitySummary(
     );
   };
   if (projection) {
-    const work = Promise.resolve().then(() =>
-      sessionEventPublicationRows(projection).withReadyRows(() => [query], publish, {
-        includeAncestors: true,
-      }),
+    const publications = sessionEventPublicationRows(projection);
+    const work = publications.track(
+      Promise.resolve().then(() =>
+        publications.withReadyRows(() => [query], publish, { includeAncestors: true }),
+      ),
     );
     if (captured && key) {
       const owner = pendingSummaries.get(projection) ?? new Map<string, PendingSummary>();

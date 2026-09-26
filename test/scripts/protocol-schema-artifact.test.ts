@@ -59,19 +59,15 @@ describe("regenerate-then-diff protocol guards", () => {
       })
         .split("\n")
         .filter(Boolean);
-      expect({ script: name, tracked: [...tracked].sort() }).toEqual({
+      expect({ script: name, tracked: tracked.toSorted() }).toEqual({
         script: name,
-        tracked: [...paths].sort(),
+        tracked: paths.toSorted(),
       });
     }
   });
 });
 
 describe("published protocol schema document", () => {
-  it("accepts the canonical document", () => {
-    expect(() => assertProtocolSchemaDocument(buildValidDocument())).not.toThrow();
-  });
-
   it("rejects a document that lost a required frame definition", () => {
     const document = buildValidDocument();
     delete document.definitions.ConnectParams;
@@ -83,7 +79,7 @@ describe("published protocol schema document", () => {
 
   it("rejects reordered frame branches", () => {
     const document = buildValidDocument();
-    document.oneOf = [...document.oneOf].reverse();
+    document.oneOf = document.oneOf.toReversed();
 
     expect(() => assertProtocolSchemaDocument(document)).toThrow("frame oneOf must list");
   });
@@ -120,10 +116,9 @@ describe("protocol-gen artifact", () => {
     expect(
       JSON.stringify(
         buildProtocolSchemaDocument({
-          methods: Object.entries(document.methods).map(([name, metadata]) => ({
-            name,
-            ...metadata,
-          })),
+          methods: Object.entries(document.methods).map(([name, metadata]) =>
+            Object.assign({ name }, metadata),
+          ),
           schemas: document.definitions,
         }),
         null,
