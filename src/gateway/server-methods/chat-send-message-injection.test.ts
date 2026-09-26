@@ -111,7 +111,7 @@ function makeFailClosedEntry() {
   } as never;
 }
 
-function makeStarterParams(params?: { entry?: unknown; loadLatest?: unknown }) {
+function makeStarterParams(params?: { entry?: unknown }) {
   return {
     target: { runId: "run-1" } as ReplyMessageInjectionTarget,
     request: {
@@ -221,26 +221,37 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
 });
 
 describe("createChatSendMessageInjectionStarter admission fence", () => {
-  it("rejects the injection before queueing when the latest persisted entry fail-closes terminal delivery", () => {
-    // A terminal receipt committed after prepareChatSendSession captured its
-    // dispatch snapshot. The fence must revalidate at the injection-start
-    // boundary — before beginReplyMessageInjectionTarget synchronously queues
-    // the steer with the target runtime — so nothing is enqueued and the
-    // inbound falls back to follow-up dispatch (#128971).
-    vi.mocked(loadSessionEntry).mockReturnValueOnce({
-      sessionId: "session-1",
-      status: "running",
-      restartRecoveryDeliveryRunId: "recovery-1",
-      restartRecoveryDeliverySourceRunId: "source-1",
-      restartRecoveryDeliveryReceiptState: "delivered-terminal",
-      updatedAt: 2,
-    } as never);
+  it.each([
+    {
+      name: "rejects the injection before queueing when the latest persisted entry fail-closes terminal delivery",
+      entry: {
+        sessionId: "session-1",
+        status: "running",
+        restartRecoveryDeliveryRunId: "recovery-1",
+        restartRecoveryDeliverySourceRunId: "source-1",
+        restartRecoveryDeliveryReceiptState: "delivered-terminal",
+        updatedAt: 2,
+      },
+    },
+    {
+      name: "rejects the injection before queueing when the latest persisted entry records pending terminal delivery",
+      entry: {
+        sessionId: "session-1",
+        status: "running",
+        restartRecoveryDeliveryRunId: "recovery-1",
+        restartRecoveryDeliverySourceRunId: "source-1",
+        restartRecoveryDeliveryReceiptState: "terminal-pending",
+        restartRecoveryDeliveryToolCallId: "message-call-1",
+        updatedAt: 2,
+      },
+    },
+  ])("$name", ({ entry }) => {
+    // Recheck current durable receipts before the runtime can take the input.
+    vi.mocked(loadSessionEntry).mockReturnValueOnce(entry as never);
     const params = makeStarterParams();
     const begin = createChatSendMessageInjectionStarter(params);
 
-    const attempt = begin();
-
-    expect(attempt).toBeUndefined();
+    expect(begin()).toBeUndefined();
     expect(loadSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({ readConsistency: "latest" }),
     );
@@ -385,38 +396,6 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     expect(attempt).toBeUndefined();
     expect(beginReplyMessageInjectionTarget).not.toHaveBeenCalled();
     expect(params.logGateway.warn).toHaveBeenCalled();
-  });
-});
-
-describe("gateway steer contract after the injection-start fence", () => {
-  it("routes a fail-closed inbound to follow-up dispatch exactly once, with no steer enqueued", () => {
-    // Mock-gateway contract: the pre-ACK path creates the starter, invokes
-    // it synchronously, and hands the inbound to follow-up dispatch whenever
-    // no injection attempt exists. A terminal receipt present at the
-    // injection-start boundary must yield exactly one delivery path — the
-    // follow-up dispatch — and zero runtime queueMessage calls, instead of
-    // the old post-enqueue rejection (steer already queued + fallback
-    // second dispatch = inbound double delivery).
-    vi.mocked(loadSessionEntry).mockReturnValueOnce({
-      sessionId: "session-1",
-      status: "running",
-      restartRecoveryDeliveryRunId: "recovery-1",
-      restartRecoveryDeliverySourceRunId: "source-1",
-      restartRecoveryDeliveryReceiptState: "terminal-pending",
-      restartRecoveryDeliveryToolCallId: "message-call-1",
-      updatedAt: 2,
-    } as never);
-    const dispatchFollowup = vi.fn();
-    const begin = createChatSendMessageInjectionStarter(makeStarterParams());
-
-    const attempt = begin();
-    if (attempt) {
-      throw new Error("unexpected injection attempt for a fail-closed session");
-    }
-    dispatchFollowup();
-
-    expect(beginReplyMessageInjectionTarget).not.toHaveBeenCalled();
-    expect(dispatchFollowup).toHaveBeenCalledOnce();
   });
 });
 
