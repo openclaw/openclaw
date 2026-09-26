@@ -15,7 +15,7 @@ type BaselineFilesystemPolicy = {
   additionalReadwritePaths: readonly string[];
 };
 
-export type BaselineFilesystemPolicyInput = {
+type BaselineFilesystemPolicyInput = {
   restrictToProjectDir?: boolean;
   additionalReadonlyPaths?: readonly string[];
   additionalReadwritePaths?: readonly string[];
