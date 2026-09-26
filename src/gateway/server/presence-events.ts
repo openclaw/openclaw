@@ -52,13 +52,13 @@ export function createPresencePublisher(params: {
     }
   };
   return {
-    publish() {
+    publish: () => {
       if (!stopped) {
         version = params.incrementPresenceVersion();
         schedule();
       }
     },
-    stop() {
+    stop: () => {
       stopped = true;
       clearImmediate(pending);
       pending = undefined;

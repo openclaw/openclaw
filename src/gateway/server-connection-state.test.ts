@@ -470,7 +470,7 @@ describe("gateway connection state", () => {
                 payload: { presence: expected },
               });
               const respond = vi.fn();
-              systemHandlers["system-presence"]!({
+              void systemHandlers["system-presence"]!({
                 req: { type: "req", id: "presence", method: "system-presence" },
                 params: {},
                 client: peer.client,
