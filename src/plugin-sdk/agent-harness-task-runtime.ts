@@ -328,8 +328,10 @@ export function createAgentHarnessTaskRuntime(
     async finalizeTaskRunByRunIdAsync(taskParams) {
       assertRunId(taskParams.runId);
       assertRuntimeCurrent();
-      const { expectedTask, completionCustody, ...terminal } =
-        projectHarnessTaskContentForPersistence(requesterSessionKey, taskParams);
+      const { expectedTask, completionCustody, ...terminal } = projectTaskContentForPersistence(
+        incognito,
+        taskParams,
+      );
       const scoped = { ...terminal, runtime, sessionKey: requesterSessionKey };
       return expectedTask
         ? await transitionTaskAssignmentAsync(
@@ -343,8 +345,10 @@ export function createAgentHarnessTaskRuntime(
     async setDetachedTaskDeliveryStatusByRunIdAsync(taskParams) {
       assertRunId(taskParams.runId);
       assertRuntimeCurrent();
-      const { expectedTask, completionCustody, ...delivery } =
-        projectHarnessTaskContentForPersistence(requesterSessionKey, taskParams);
+      const { expectedTask, completionCustody, ...delivery } = projectTaskContentForPersistence(
+        incognito,
+        taskParams,
+      );
       const scoped = { ...delivery, runtime, sessionKey: requesterSessionKey };
       return expectedTask
         ? await transitionTaskAssignmentAsync(
