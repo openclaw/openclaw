@@ -114,6 +114,17 @@ describe("cron tool", () => {
     return call.params;
   }
 
+  it("tells models to keep cron expressions in local wall-clock time for tz", () => {
+    const tool = createTestCronTool();
+
+    expect(tool.description).toContain("expr is wall time in tz");
+    expect(tool.description).toContain("never pre-convert to UTC");
+    expect(tool.description).toContain("no tz=gateway host local");
+    expect(tool.description).toContain("no tz=UTC");
+    expect(tool.description).toContain('expr:"0 18 * * *"');
+    expect(tool.description).toContain('tz:"Asia/Shanghai"');
+  });
+
   it("supports the promotion creation path: enabled add inherits conversation delivery, then a forced test run", async () => {
     // Promotion flow contract (the guidance itself lives in the system prompt,
     // since the repeat is noticed during ordinary work rather than while

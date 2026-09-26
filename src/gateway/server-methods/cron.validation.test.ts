@@ -6,7 +6,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import {
   bindCronManagementGrant,
   runWithCronCreatorAuthorityCapability,
@@ -44,10 +43,15 @@ import {
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
 } from "../cron-creator-authority-grant.js";
-import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import * as cronCallerScope from "./cron-caller-scope.js";
-import { createCronTestContext, createCronJob } from "./cron.validation.test-support.js";
+import { registerCronListVisibilityTests as reg } from "./cron.validation.list-visibility.test-support.js";
+import {
+  callerClient,
+  callerClientWithCronCreatorAuthority,
+  createCronJob,
+  createCronTestContext,
+} from "./cron.validation.test-support.js";
 import type { GatewayClient } from "./types.js";
 
 const cronLogger = createNoopLogger();
@@ -280,49 +284,6 @@ async function invokeWake(params: Record<string, unknown>, client?: GatewayClien
   return await invokeCron("wake", params, { client });
 }
 
-function callerClient(
-  agentId: string,
-  accountId?: string,
-  sessionKey?: string,
-  currentJobId?: string,
-  currentJobExpiresAtMs = Date.now() + 60_000,
-): GatewayClient {
-  const operationalRunInstance = createOperationalRunInstanceRef("run-cron-validation");
-  return {
-    connect: {} as GatewayClient["connect"],
-    internal: {
-      agentRuntimeIdentity: {
-        kind: "agentRuntime",
-        agentId,
-        sessionKey: sessionKey ?? `agent:${agentId}:main`,
-        operationalRunInstance,
-        delegatedAuthority: {
-          kind: "local",
-          operationalRunInstance,
-          lifecycleGeneration: "test-generation",
-          claimId: "test-claim",
-        },
-        ...(accountId ? { turnSourceAccountId: accountId } : {}),
-        ...(currentJobId
-          ? {
-              cronSelfManagementContext: {
-                jobId: currentJobId,
-                expiresAtMs: currentJobExpiresAtMs,
-              },
-            }
-          : {}),
-      },
-    },
-  };
-}
-
-function callerClientWithCronCreatorAuthority(grant: CronCreatorAuthorityGrant): GatewayClient {
-  const client = callerClient("ops");
-  client.internal!.agentRuntimeIdentity!.cronToolsAllowCapture = "final-executable-surface";
-  client.internal!.agentRuntimeIdentity!.cronCreatorAuthorityGrant = grant;
-  return client;
-}
-
 function telegramDeliveryWithSlackFailure(overrides: Partial<CronDelivery> = {}): CronDelivery {
   return {
     mode: "announce",
@@ -515,6 +476,7 @@ function expectInvalidCronPatternError(respond: ReturnType<typeof vi.fn>): void 
 }
 
 describe("cron method validation", () => {
+  reg({ createCronContext, invokeCron, setRuntimeConfig, loadGatewaySessionEntry });
   it.each(
     (
       [
@@ -902,7 +864,6 @@ describe("cron method validation", () => {
       setDiagnosticsEnabledForProcess(previousDiagnostics);
       vi.restoreAllMocks();
     });
-
     it.each([false, true])(
       "attributes scoped inventory work without leaking hidden job data (failure: %s)",
       async (fails) => {

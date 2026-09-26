@@ -80,6 +80,16 @@ const CronListOutputSchema = Type.Object(
     snapshotRevision: Type.Optional(Type.String()),
     scope: Type.Optional(Type.Union([Type.Literal("caller"), Type.Literal("gateway")])),
     scopeHint: Type.Optional(Type.String()),
+    visibility: Type.Optional(
+      Type.Object(
+        {
+          mode: Type.Union([Type.Literal("caller"), Type.Literal("role")]),
+          restricted: Type.Literal(true),
+          warning: Type.String(),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     deliveryPreviews: Type.Optional(
       Type.Object({}, { additionalProperties: CronDeliveryPreviewSchema }),
     ),
