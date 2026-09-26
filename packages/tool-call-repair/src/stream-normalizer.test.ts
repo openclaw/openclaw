@@ -889,7 +889,7 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     expect(JSON.stringify(events)).not.toContain("SECRET");
   });
 
-  it.each(["[tool:read] {}", "analysis to=read code {}"])(
+  it.each(['[tool:read] {"path":"SECRET"}', 'analysis to=read code {"path":"SECRET"}'])(
     "scrubs a cumulative partial before emitting a visible prefix for %s",
     async (call) => {
       const visible = "Visible\n";

@@ -325,10 +325,9 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
       client.start();
     });
 
-    expect(error.message).toHaveLength(
-      "gateway rejected websocket upgrade (HTTP 503): ".length + 2 * 1024,
+    expect(error.message).toBe(
+      "gateway rejected websocket upgrade (HTTP 503): " + "x".repeat(2 * 1024),
     );
-    expect(error.message).not.toContain(omittedTail);
   });
 
   it("times out while reading a stalled websocket upgrade response body", async () => {

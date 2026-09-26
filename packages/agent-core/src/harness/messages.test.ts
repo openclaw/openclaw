@@ -42,9 +42,6 @@ describe("convertToLlm message ownership", () => {
     expect(converted).not.toBe(messages);
     expect(converted).toHaveLength(messages.length);
     messages.forEach((message, index) => expect(converted[index]).toBe(message));
-    expect(Object.getOwnPropertyDescriptor(converted[0], identity)).toEqual(
-      Object.getOwnPropertyDescriptor(user, identity),
-    );
   });
 
   it.each([false, true])("preserves custom content ownership with carrier=%s", (carrier) => {

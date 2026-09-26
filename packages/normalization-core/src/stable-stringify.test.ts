@@ -73,10 +73,8 @@ describe.each(Object.entries(serializers))("%s", (_name, serialize) => {
     const malformed = { ba: 2, [`b${high}`]: 1 };
     const normalized = { ba: 2, b: 1 };
 
-    expect(serialize(malformed, sanitizeSurrogates)).toBe(
-      serialize(normalized, sanitizeSurrogates),
-    );
     expect(serialize(malformed, sanitizeSurrogates)).toBe('{"b":1,"ba":2}');
+    expect(serialize(normalized, sanitizeSurrogates)).toBe('{"b":1,"ba":2}');
   });
 
   it("serializes cache-trace edge types deterministically", () => {

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { scanXmlishToolCall, utf8ByteLengthWithinLimit } from "./grammar.js";
 
@@ -88,18 +89,12 @@ describe("scanXmlishToolCall", () => {
     const scan = scanXmlishToolCall(raw);
 
     expect(scan.kind).toBe("prefix");
-    if (scan.kind !== "prefix" || !scan.candidate?.payload) {
+    if (scan.kind !== "prefix") {
       return;
     }
+    const payload = expectDefined(scan.candidate?.payload, "incomplete XML payload");
     expect(raw.length).toBeLessThan(256_000);
-    expect(
-      utf8ByteLengthWithinLimit(
-        raw,
-        scan.candidate.payload.start,
-        scan.candidate.payload.end,
-        256_000,
-      ),
-    ).toBeNull();
+    expect(utf8ByteLengthWithinLimit(raw, payload.start, payload.end, 256_000)).toBeNull();
   });
 
   it("excludes a partial function close from the payload cap", () => {
@@ -108,17 +103,11 @@ describe("scanXmlishToolCall", () => {
     const scan = scanXmlishToolCall(prefix);
 
     expect(scan.kind).toBe("prefix");
-    if (scan.kind !== "prefix" || !scan.candidate?.payload) {
+    if (scan.kind !== "prefix") {
       return;
     }
-    expect(
-      utf8ByteLengthWithinLimit(
-        prefix,
-        scan.candidate.payload.start,
-        scan.candidate.payload.end,
-        256_000,
-      ),
-    ).toBe(255_999);
+    const payload = expectDefined(scan.candidate?.payload, "partial-close XML payload");
+    expect(utf8ByteLengthWithinLimit(prefix, payload.start, payload.end, 256_000)).toBe(255_999);
     expect(scanXmlishToolCall(`${prefix}tion>`).kind).toBe("complete");
   });
 

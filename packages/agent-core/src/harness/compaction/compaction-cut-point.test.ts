@@ -112,7 +112,6 @@ describe("findCutPoint", () => {
 
     const result = findCutPoint(entries, 0, entries.length, KEEP_RECENT_TOKENS);
 
-    expect(result.firstKeptEntryIndex).toBeGreaterThan(0);
     expect(result.firstKeptEntryIndex).toBe(3);
   });
 
@@ -132,7 +131,6 @@ describe("findCutPoint", () => {
     expect(estimateTokens(trailing)).toBeGreaterThanOrEqual(KEEP_RECENT_TOKENS);
     const result = findCutPoint(entries, 0, entries.length, KEEP_RECENT_TOKENS);
 
-    expect(result.firstKeptEntryIndex).toBeGreaterThan(0);
     expect(result.firstKeptEntryIndex).toBe(3);
   });
 });

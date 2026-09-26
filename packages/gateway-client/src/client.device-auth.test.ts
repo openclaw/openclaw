@@ -123,16 +123,20 @@ const hello = {
 describe("GatewayClient host token storage", () => {
   it("awaits a stored token before sending its connect request", async () => {
     const loaded = createDeferred<DeviceAuthTokenRecord | null>();
-    const { socket } = connect({ loadDeviceAuthToken: () => loaded.promise });
-    expect(socket.send).not.toHaveBeenCalled();
-    loaded.resolve(storedToken);
-    await vi.advanceTimersByTimeAsync(0);
-    const sent = socket.send.mock.calls[0];
-    assert(sent);
-    expect(JSON.parse(sent[0])).toMatchObject({
-      method: "connect",
-      params: { auth: { deviceToken: storedToken.token }, scopes: storedToken.scopes },
-    });
+    try {
+      const { socket } = connect({ loadDeviceAuthToken: () => loaded.promise });
+      expect(socket.send).not.toHaveBeenCalled();
+      loaded.resolve(storedToken);
+      await vi.advanceTimersByTimeAsync(0);
+      const sent = socket.send.mock.calls[0];
+      assert(sent);
+      expect(JSON.parse(sent[0])).toMatchObject({
+        method: "connect",
+        params: { auth: { deviceToken: storedToken.token }, scopes: storedToken.scopes },
+      });
+    } finally {
+      loaded.resolve(storedToken);
+    }
   });
 
   it("keeps synchronous storage callbacks and their ignored return values compatible", async () => {
@@ -151,44 +155,51 @@ describe("GatewayClient host token storage", () => {
     "settles token persistence before completing %s",
     async (completion) => {
       const stored = createDeferred();
-      let persistedToken: string | undefined;
-      const storeDeviceAuthToken = vi.fn<
-        NonNullable<GatewayClientHostDeps["storeDeviceAuthToken"]>
-      >(async (params) => {
-        await stored.promise;
-        params.signal?.throwIfAborted();
-        params.assertCurrent?.();
-        persistedToken = params.token;
-      });
-      const { client, socket, onHelloOk, onConnectError } = connect({
-        loadDeviceAuthToken: () => storedToken,
-        storeDeviceAuthToken,
-      });
-      socket.respond(hello);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(onHelloOk).not.toHaveBeenCalled();
-      expect(storeDeviceAuthToken).toHaveBeenCalledOnce();
-      const operation = storeDeviceAuthToken.mock.calls[0]?.[0];
-      assert(operation);
-      expect(operation).toMatchObject({ token: hello.auth.deviceToken, scopes: hello.auth.scopes });
-      expect(() => operation.assertCurrent?.()).not.toThrow();
-      if (completion === "closing") {
-        socket.readyState = 2;
-      }
-      const stopped = vi.fn();
-      const stop = completion === "stop" ? client.stopAndWait().then(stopped) : undefined;
-      if (completion === "stop") {
-        expect(operation.signal).toBeUndefined();
-        expect(operation.assertCurrent).toBeUndefined();
+      try {
+        let persistedToken: string | undefined;
+        const storeDeviceAuthToken = vi.fn<
+          NonNullable<GatewayClientHostDeps["storeDeviceAuthToken"]>
+        >(async (params) => {
+          await stored.promise;
+          params.signal?.throwIfAborted();
+          params.assertCurrent?.();
+          persistedToken = params.token;
+        });
+        const { client, socket, onHelloOk, onConnectError } = connect({
+          loadDeviceAuthToken: () => storedToken,
+          storeDeviceAuthToken,
+        });
+        socket.respond(hello);
         await vi.advanceTimersByTimeAsync(0);
-        expect(stopped).not.toHaveBeenCalled();
+        expect(onHelloOk).not.toHaveBeenCalled();
+        expect(storeDeviceAuthToken).toHaveBeenCalledOnce();
+        const operation = storeDeviceAuthToken.mock.calls[0]?.[0];
+        assert(operation);
+        expect(operation).toMatchObject({
+          token: hello.auth.deviceToken,
+          scopes: hello.auth.scopes,
+        });
+        expect(() => operation.assertCurrent?.()).not.toThrow();
+        if (completion === "closing") {
+          socket.readyState = 2;
+        }
+        const stopped = vi.fn();
+        const stop = completion === "stop" ? client.stopAndWait().then(stopped) : undefined;
+        if (completion === "stop") {
+          expect(operation.signal).toBeUndefined();
+          expect(operation.assertCurrent).toBeUndefined();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(stopped).not.toHaveBeenCalled();
+        }
+        stored.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        await stop;
+        expect(persistedToken).toBe(hello.auth.deviceToken);
+        expect(onConnectError).not.toHaveBeenCalled();
+        expect(onHelloOk).toHaveBeenCalledTimes(completion === "ready" ? 1 : 0);
+      } finally {
+        stored.resolve();
       }
-      stored.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-      await stop;
-      expect(persistedToken).toBe(hello.auth.deviceToken);
-      expect(onConnectError).not.toHaveBeenCalled();
-      expect(onHelloOk).toHaveBeenCalledTimes(completion === "ready" ? 1 : 0);
     },
   );
 
@@ -480,24 +491,28 @@ describe("GatewayClient host token storage", () => {
 
   it("finishes close cleanup before loading credentials for the replacement connection", async () => {
     const cleared = createDeferred();
-    const loadDeviceAuthToken = vi.fn(() => storedToken);
-    const clearDeviceAuthToken = vi.fn<NonNullable<GatewayClientHostDeps["clearDeviceAuthToken"]>>(
-      () => cleared.promise,
-    );
-    const { socket } = connect({ loadDeviceAuthToken, clearDeviceAuthToken });
-    socket.close(1008, "device token mismatch");
-    const cleanup = clearDeviceAuthToken.mock.calls[0]?.[0];
-    assert(cleanup);
-    expect(cleanup.expectedToken).toBe(storedToken.token);
-    expect(() => cleanup.assertCurrent?.()).not.toThrow();
-    await vi.advanceTimersByTimeAsync(1_000);
-    const replacement = MockWebSocket.instances[1];
-    assert(replacement);
-    replacement.open();
-    expect(loadDeviceAuthToken).toHaveBeenCalledOnce();
-    cleared.resolve();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(loadDeviceAuthToken).toHaveBeenCalledTimes(2);
-    expect(replacement.send).toHaveBeenCalledOnce();
+    try {
+      const loadDeviceAuthToken = vi.fn(() => storedToken);
+      const clearDeviceAuthToken = vi.fn<
+        NonNullable<GatewayClientHostDeps["clearDeviceAuthToken"]>
+      >(() => cleared.promise);
+      const { socket } = connect({ loadDeviceAuthToken, clearDeviceAuthToken });
+      socket.close(1008, "device token mismatch");
+      const cleanup = clearDeviceAuthToken.mock.calls[0]?.[0];
+      assert(cleanup);
+      expect(cleanup.expectedToken).toBe(storedToken.token);
+      expect(() => cleanup.assertCurrent?.()).not.toThrow();
+      await vi.advanceTimersByTimeAsync(1_000);
+      const replacement = MockWebSocket.instances[1];
+      assert(replacement);
+      replacement.open();
+      expect(loadDeviceAuthToken).toHaveBeenCalledOnce();
+      cleared.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(loadDeviceAuthToken).toHaveBeenCalledTimes(2);
+      expect(replacement.send).toHaveBeenCalledOnce();
+    } finally {
+      cleared.resolve();
+    }
   });
 });

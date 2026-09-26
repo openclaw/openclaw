@@ -91,14 +91,6 @@ describe("estimateTokens image accounting", () => {
 });
 
 describe("findCutPoint with image-heavy recent turns", () => {
-  it("trims image-dominated user turns instead of keeping the whole transcript", () => {
-    const entries = buildTranscript([userImage(10), userImage(20), userImage(30)]);
-
-    const result = findCutPoint(entries, 0, entries.length, 1500);
-
-    expect(result.firstKeptEntryIndex).toBeGreaterThan(0);
-  });
-
   it("matches the cut point of an equivalent text-cost control", () => {
     const equivalentText = "x".repeat(8_056);
     const imageEntries = buildTranscript([userImage(10), userImage(20), userImage(30)]);

@@ -413,7 +413,6 @@ describe("serializeConversation", () => {
     ] as unknown as Message[]);
 
     expect(serialized).toBe("[User]: Alex says deploy.\n\n[User]: Alex says wait.");
-    expect(serialized).not.toContain("sender=");
   });
 
   it("charges the persisted sender suffix that compaction serializes", () => {

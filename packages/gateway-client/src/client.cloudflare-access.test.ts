@@ -7,6 +7,7 @@ import { GatewayClient } from "./client.js";
 import { WebSocketServer } from "./websocket.test-support.js";
 
 const tlsFingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
+const clients: GatewayClient[] = [];
 const websocketServers: WebSocketServer[] = [];
 const httpsServers: Array<ReturnType<typeof createHttpsServer>> = [];
 
@@ -20,6 +21,9 @@ async function listen(server: ReturnType<typeof createHttpsServer>): Promise<num
 }
 
 afterEach(async () => {
+  for (const client of clients.splice(0)) {
+    await client.stopAndWait();
+  }
   for (const server of websocketServers.splice(0).toReversed()) {
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
@@ -53,10 +57,10 @@ test("sends resolved edge auth headers through the WebSocket upgrade", async () 
     edgeAuthHeaders: { "X-Edge-Auth": edgeAuthValue },
     tlsFingerprint,
   });
+  clients.push(client);
   client.start();
 
   await expect(received).resolves.toMatchObject({ "x-edge-auth": edgeAuthValue });
-  await client.stopAndWait();
 });
 
 test("rejects non-empty edge auth headers before a plaintext WebSocket dial", async () => {
@@ -69,12 +73,12 @@ test("rejects non-empty edge auth headers before a plaintext WebSocket dial", as
     edgeAuthHeaders: { "X-Edge-Auth": "test-secret" },
     onConnectError: resolveConnectError,
   });
+  clients.push(client);
   client.start();
 
   await expect(connectError).resolves.toMatchObject({
     message: "edge auth headers require a wss:// Gateway URL",
   });
-  client.stop();
 });
 
 test("does not follow an edge redirect and redacts its Location URL", async () => {
@@ -105,6 +109,7 @@ test("does not follow an edge redirect and redacts its Location URL", async () =
     tlsFingerprint,
     onConnectError: resolveConnectError,
   });
+  clients.push(client);
   client.start();
 
   await expect(connectError).resolves.toMatchObject({
@@ -115,5 +120,4 @@ test("does not follow an edge redirect and redacts its Location URL", async () =
     },
   });
   expect(redirected).toBe(false);
-  await client.stopAndWait();
 });

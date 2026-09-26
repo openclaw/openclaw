@@ -174,6 +174,10 @@ describe("formatAcpErrorChain redaction", () => {
     for (const secret of secrets) {
       expect(out).not.toContain(secret);
     }
+    expect(out).not.toContain("dXNlcjpwYXNzd29yZGFiY2RlZg==");
+    expect(out).not.toContain("abcdefghijklmnopqrstuvwxyz");
+    expect(out).toContain("Authorization: Basic [REDACTED]");
+    expect(out).toContain("[REDACTED_PRIVATE_KEY]");
     expect(out).toContain("backend failed");
   });
 
