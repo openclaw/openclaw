@@ -100,11 +100,46 @@ describe("browser trash", () => {
     const outsideDir = path.join(testRoot, "outside-profile");
     realMkdirSync(browserDir, { recursive: true });
     realMkdirSync(outsideDir, { recursive: true });
+    realWriteFileSync(path.join(outsideDir, "Preferences"), "outside profile");
     const target = path.join(browserDir, "constructor");
     fs.symlinkSync(outsideDir, target, "dir");
 
     await expect(movePathToTrash(target)).rejects.toThrow(
       "Refusing to trash path outside allowed roots",
     );
+    expect(fs.lstatSync(target).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(path.join(outsideDir, "Preferences"), "utf8")).toBe("outside profile");
+    expect(fs.readdirSync(path.join(homeDir, ".Trash"))).toEqual([]);
+  });
+
+  it("trashes an in-root symlink entry without moving its profile data", async () => {
+    const browserDir = path.join(configDir, "browser");
+    const profileDir = path.join(browserDir, "profile");
+    realMkdirSync(profileDir, { recursive: true });
+    realWriteFileSync(path.join(profileDir, "Preferences"), "profile data");
+    const target = path.join(browserDir, "alias");
+    fs.symlinkSync(profileDir, target, "dir");
+
+    const moved = await movePathToTrash(target);
+
+    expect(fs.lstatSync(moved).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(moved)).toBe(profileDir);
+    expect(fs.lstatSync(target, { throwIfNoEntry: false })).toBeUndefined();
+    expect(fs.readFileSync(path.join(profileDir, "Preferences"), "utf8")).toBe("profile data");
+  });
+
+  it("preserves trash support for dangling in-root symlink entries", async () => {
+    const browserDir = path.join(configDir, "browser");
+    realMkdirSync(browserDir, { recursive: true });
+    const target = path.join(browserDir, "dangling");
+    const missingProfile = path.join(browserDir, "missing");
+    fs.symlinkSync(missingProfile, target, "dir");
+
+    const moved = await movePathToTrash(target);
+
+    expect(fs.lstatSync(moved).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(moved)).toBe(missingProfile);
+    expect(fs.lstatSync(target, { throwIfNoEntry: false })).toBeUndefined();
+    expect(fs.existsSync(missingProfile)).toBe(false);
   });
 });
