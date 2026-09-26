@@ -6367,7 +6367,7 @@ class ChatController internal constructor(
           // Only show streaming text for runs we initiated in this controller.
           if (!isPending) return
           val text = parseAssistantDeltaText(payload)
-          if (!text.isNullOrEmpty()) {
+          if (text != null) {
             updateStreamingAssistantText(runId, text)
           }
         }
@@ -6782,7 +6782,7 @@ class ChatController internal constructor(
     when (stream) {
       "assistant" -> {
         val text = data?.get("text")?.asStringOrNull()
-        if (!text.isNullOrEmpty()) {
+        if (text != null) {
           updateStreamingAssistantText(runId, text)
         }
       }
@@ -6953,7 +6953,7 @@ class ChatController internal constructor(
       val obj = item.asObjectOrNull() ?: continue
       if (obj["type"].asStringOrNull() != "text") continue
       val text = obj["text"].asStringOrNull()
-      if (!text.isNullOrEmpty()) {
+      if (text != null) {
         return text
       }
     }

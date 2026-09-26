@@ -1410,7 +1410,7 @@ src/acp/server.ts	2
 src/acp/session-mapper.ts	1
 src/acp/tool-status.ts	1
 src/acp/translator.agent-events.ts	11
-src/acp/translator.prompt-stream.ts	10
+src/acp/translator.prompt-stream.ts	9
 src/acp/translator.replay.ts	1
 src/acp/translator.session-lifecycle.ts	1
 src/acp/translator.session-list.ts	1

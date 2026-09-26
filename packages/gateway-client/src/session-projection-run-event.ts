@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { mergeChatStreamMessage } from "./chat-stream-message.js";
 import {
   reduceSessionProjection,
   type SessionProjectionEvent,
@@ -11,6 +12,8 @@ export type SessionProjectionGatewayRunEvent = {
   state?: unknown;
   yielded?: unknown;
   seq?: unknown;
+  deltaText?: unknown;
+  replace?: unknown;
 } & Partial<Record<"runId" | "message" | "stopReason" | "errorKind" | "errorMessage", unknown>>;
 
 export type SessionProjectionRunTransition = {
@@ -37,7 +40,10 @@ export function reduceSessionProjectionRunEvent(
   ) {
     return null;
   }
-  const message = event.message;
+  const message =
+    event.state === "delta"
+      ? mergeChatStreamMessage(projection.runs[runId]?.message, event)
+      : event.message;
   const messageStopReason = isRecord(message) ? readNonemptyString(message.stopReason) : null;
   const stopReason = readNonemptyString(event.stopReason) ?? messageStopReason;
   const errorKind = readNonemptyString(event.errorKind);

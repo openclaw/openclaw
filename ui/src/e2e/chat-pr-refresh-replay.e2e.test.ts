@@ -98,6 +98,7 @@ describe("PR refresh replay through the Control UI", () => {
         runId,
         state: "delta",
         deltaText: text,
+        message: { role: "assistant", content: [{ type: "text", text }] },
       });
       await expect.poll(async () => (await forceRequests()).length).toBe(initialForces + 1);
       const final = {

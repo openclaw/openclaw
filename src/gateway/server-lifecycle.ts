@@ -516,7 +516,14 @@ export async function prepareGatewayLifecycle(params: {
         removeChatRun,
         agentRunSeq,
         broadcast,
-        nodeSendToSession,
+        nodeSendToSession: (
+          sessionKey,
+          event,
+          payload,
+          opts?: Parameters<typeof nodeSendToSession>[3],
+        ) => {
+          void nodeSendToSession(sessionKey, event, payload, opts);
+        },
         resolveActiveSessionIdForKey: resolveActiveEmbeddedRunSessionId,
         markMainSessionsAbortedForRestart: async (restart) => {
           await shutdownRuntime.markRestartAbortedMainSessions({

@@ -1,14 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
-import { EventHub } from "./event-hub.js";
-import { normalizeGatewayEvent } from "./normalize.js";
+import { SdkRunReplay } from "./run-event-replay.js";
+import { iterateSdkRunEvents } from "./run-event-stream.js";
+import { readSdkRunTimestamp, resolveSdkRunWaitStatus } from "./run-terminal.js";
 import {
-  readSdkRunTimestamp,
-  resolveSdkLifecycleEventType,
-  resolveSdkRunWaitStatus,
-} from "./run-terminal.js";
-import { GatewayClientTransport, isConnectableTransport } from "./transport.js";
+  GatewayClientTransport,
+  isConnectableTransport,
+  observeGatewayReconnects,
+  RUN_SUBMISSION_METHODS,
+} from "./transport.js";
 import type {
   AgentsCreateParams,
   AgentsDeleteParams,
@@ -42,8 +43,6 @@ import type {
 
 // High-level OpenClaw SDK client. Namespaces below translate friendly SDK calls
 // into current Gateway RPC methods and normalize event streams for consumers.
-const MAX_REPLAY_RUNS = 100;
-const MAX_REPLAY_EVENTS_PER_RUN = 500;
 
 /** Connection and transport options for the OpenClaw SDK client. */
 export type OpenClawOptions = {
@@ -138,15 +137,6 @@ function unsupportedGatewayApi(api: string): never {
   throw new Error(`${api} is not supported by the current OpenClaw Gateway yet`);
 }
 
-type ChatProjectionState = "delta" | "final" | "error" | "aborted";
-
-type ChatProjection = {
-  state: ChatProjectionState;
-  payload: Record<string, unknown>;
-};
-
-type RunTerminalSource = { kind: "canonical" } | { kind: "chat"; eventType: OpenClawEvent["type"] };
-
 function requireArtifactQueryScope(api: string, params: ArtifactQuery): ArtifactQuery {
   const record = asRecord(params);
   if (
@@ -167,95 +157,6 @@ function requireToolsEffectiveSessionKey(params: ToolsEffectiveParams): ToolsEff
   return params;
 }
 
-function readChatProjection(event: OpenClawEvent): ChatProjection | undefined {
-  const raw = event.raw;
-  if (event.type !== "raw" || raw?.event !== "chat") {
-    return undefined;
-  }
-  const payload = asRecord(raw.payload);
-  const state = payload.state;
-  return state === "delta" || state === "final" || state === "error" || state === "aborted"
-    ? { state, payload }
-    : undefined;
-}
-
-function readChatProjectionText(payload: Record<string, unknown>): string | undefined {
-  const message = asRecord(payload.message);
-  const content = message.content;
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  const text = content
-    .map((part) => {
-      const record = asRecord(part);
-      return record.type === "text" && typeof record.text === "string" ? record.text : "";
-    })
-    .join("");
-  return text.length > 0 ? text : undefined;
-}
-
-function isAssistantRunEvent(event: OpenClawEvent): boolean {
-  return event.type === "assistant.delta" || event.type === "assistant.message";
-}
-
-function isTerminalRunEvent(event: OpenClawEvent): boolean {
-  return (
-    event.type === "run.completed" ||
-    event.type === "run.failed" ||
-    event.type === "run.cancelled" ||
-    event.type === "run.timed_out"
-  );
-}
-
-function normalizeChatProjectionEvent(
-  event: OpenClawEvent,
-  projection: ChatProjection,
-  previousText: string | undefined,
-): OpenClawEvent {
-  const { payload, state } = projection;
-  const text = readChatProjectionText(payload);
-  if (state === "delta") {
-    const deltaText = typeof payload.deltaText === "string" ? payload.deltaText : undefined;
-    return {
-      ...event,
-      type: "assistant.delta",
-      data:
-        text === undefined
-          ? event.data
-          : {
-              text,
-              delta: previousText !== undefined ? (deltaText ?? text) : text,
-              ...(payload.replace === true ? { replace: true } : {}),
-            },
-    };
-  }
-  const error = readNonEmptyString(payload.errorMessage);
-  const stopReason = readNonEmptyString(payload.stopReason);
-  // Gateway timeout aborts publish this mechanical chat frame before lifecycle.
-  const type =
-    state === "final"
-      ? "run.completed"
-      : state === "aborted"
-        ? resolveSdkLifecycleEventType({ aborted: true, status: "cancelled", stopReason }, "end")
-        : payload.errorKind === "timeout"
-          ? "run.timed_out"
-          : "run.failed";
-  return {
-    ...event,
-    type,
-    data: {
-      phase: state === "error" ? "error" : "end",
-      ...(state === "aborted" ? { aborted: true } : {}),
-      ...(text !== undefined ? { outputText: text } : {}),
-      ...(error ? { error } : {}),
-      ...(stopReason ? { stopReason } : {}),
-    },
-  };
-}
-
 /** Root SDK client with namespaces for agents, sessions, runs, and gateway APIs. */
 export class OpenClaw {
   readonly agents: AgentsNamespace;
@@ -269,8 +170,8 @@ export class OpenClaw {
   readonly environments: EnvironmentsNamespace;
 
   private readonly transport: OpenClawTransport;
-  private readonly normalizedEvents = new EventHub<OpenClawEvent>();
-  private readonly replayByRunId = new Map<string, OpenClawEvent[]>();
+  private readonly replay = new SdkRunReplay();
+  private readonly stopReconnectObserver: () => void;
   private connected = false;
   private closed = false;
   private eventPumpPromise: Promise<void> | null = null;
@@ -286,6 +187,9 @@ export class OpenClaw {
         password: options.password,
         requestTimeoutMs: options.requestTimeoutMs,
       });
+    this.stopReconnectObserver = observeGatewayReconnects(this.transport, (context) => {
+      void this.replay.recover(context);
+    });
     this.agents = new AgentsNamespace(this);
     this.sessions = new SessionsNamespace(this);
     this.runs = new RunsNamespace(this);
@@ -321,13 +225,14 @@ export class OpenClaw {
       return;
     }
     this.closed = true;
+    this.stopReconnectObserver();
+    this.replay.endStream();
     this.closePromise = (async () => {
       try {
         await this.transport.close?.();
         await this.eventPumpPromise?.catch(() => {});
       } finally {
-        this.normalizedEvents.close();
-        this.replayByRunId.clear();
+        this.replay.close();
         this.eventPumpPromise = null;
         this.eventPumpReady = null;
         this.connected = false;
@@ -347,7 +252,14 @@ export class OpenClaw {
   ): Promise<T> {
     await this.connect();
     this.assertOpen();
-    return await this.transport.request<T>(method, params, options);
+    const result = await this.transport.request<T>(method, params, options);
+    if (RUN_SUBMISSION_METHODS.has(method)) {
+      this.replay.noteRunAcceptance(params, result);
+    }
+    if (method === "sessions.messages.unsubscribe") {
+      await this.replay.retireUnsubscribedSession(params, result);
+    }
+    return result;
   }
 
   events(filter?: (event: OpenClawEvent) => boolean): AsyncIterable<OpenClawEvent> {
@@ -358,9 +270,22 @@ export class OpenClaw {
     runId: string,
     filter?: (event: OpenClawEvent) => boolean,
   ): AsyncIterable<OpenClawEvent> {
-    return this.iterateRunEvents(runId, filter);
+    return {
+      [Symbol.asyncIterator]: () => {
+        const controller = new AbortController();
+        const iterator = this.iterateRunEvents(runId, filter, controller.signal);
+        return {
+          next: () => iterator.next(),
+          return: async () => {
+            controller.abort();
+            return await iterator.return(undefined);
+          },
+        };
+      },
+    };
   }
 
+  /** Received wire events, without the cumulative chat projection used by runEvents(). */
   rawEvents(filter?: (event: GatewayEvent) => boolean): AsyncIterable<GatewayEvent> {
     this.assertOpen();
     return this.transport.events(filter);
@@ -377,7 +302,7 @@ export class OpenClaw {
   ): AsyncIterable<OpenClawEvent> {
     await this.connect();
     this.assertOpen();
-    for await (const event of this.normalizedEvents.stream(filter)) {
+    for await (const event of this.replay.events.stream(filter)) {
       yield event;
     }
   }
@@ -385,84 +310,24 @@ export class OpenClaw {
   private async *iterateRunEvents(
     runId: string,
     filter?: (event: OpenClawEvent) => boolean,
-  ): AsyncIterable<OpenClawEvent> {
+    signal?: AbortSignal,
+  ): AsyncGenerator<OpenClawEvent> {
     await this.connect();
     this.assertOpen();
-    const replayEvents = this.replaySnapshot(runId);
-    let hasCanonicalAssistantRunEvent = replayEvents.some(isAssistantRunEvent);
-    let terminalSource: RunTerminalSource | undefined = replayEvents.some(isTerminalRunEvent)
-      ? { kind: "canonical" }
-      : undefined;
-    let previousChatProjectionText: string | undefined;
-    const toRunStreamEvent = (event: OpenClawEvent): OpenClawEvent | undefined => {
-      const chatProjection = readChatProjection(event);
-      if (chatProjection?.state === "delta") {
-        if (hasCanonicalAssistantRunEvent) {
-          return undefined;
-        }
-        const runEvent = normalizeChatProjectionEvent(
-          event,
-          chatProjection,
-          previousChatProjectionText,
-        );
-        const text = readChatProjectionText(chatProjection.payload);
-        if (text !== undefined) {
-          previousChatProjectionText = text;
-        }
-        return runEvent;
-      }
-      if (chatProjection) {
-        if (terminalSource) {
-          return undefined;
-        }
-        const runEvent = normalizeChatProjectionEvent(
-          event,
-          chatProjection,
-          previousChatProjectionText,
-        );
-        terminalSource = { kind: "chat", eventType: runEvent.type };
-        return runEvent;
-      }
-      if (isAssistantRunEvent(event)) {
-        hasCanonicalAssistantRunEvent = true;
-      }
-      if (isTerminalRunEvent(event)) {
-        // Abort broadcasts can arrive chat-first. Collapse matching carriers,
-        // while preserving a later authoritative outcome that differs.
-        const duplicate =
-          terminalSource?.kind === "chat" && terminalSource.eventType === event.type;
-        terminalSource = { kind: "canonical" };
-        if (duplicate) {
-          return undefined;
-        }
-      }
-      return event;
-    };
-    const matches = (event: OpenClawEvent) => event.runId === runId;
-    const liveSource = this.normalizedEvents.stream(matches);
-    // Iterator creation subscribes before replay yields, so live events queue behind the snapshot.
-    const live = liveSource[Symbol.asyncIterator]();
+    if (signal?.aborted) {
+      return;
+    }
+    const release = this.replay.observeRun(runId);
     try {
-      for (const event of replayEvents) {
-        const runEvent = toRunStreamEvent(event);
-        if (!runEvent || (filter && !filter(runEvent))) {
-          continue;
-        }
-        yield runEvent;
-      }
-      while (true) {
-        const next = await live.next();
-        if (next.done) {
-          break;
-        }
-        const runEvent = toRunStreamEvent(next.value);
-        if (!runEvent || (filter && !filter(runEvent))) {
-          continue;
-        }
-        yield runEvent;
-      }
+      yield* iterateSdkRunEvents(
+        runId,
+        this.replay.snapshot(runId),
+        this.replay.events,
+        filter,
+        signal,
+      );
     } finally {
-      await live.return?.();
+      release();
     }
   }
 
@@ -495,9 +360,7 @@ export class OpenClaw {
           if (result.done) {
             break;
           }
-          const normalized = normalizeGatewayEvent(result.value);
-          this.recordReplayEvent(normalized);
-          this.normalizedEvents.publish(normalized);
+          this.replay.publish(result.value);
         }
       } catch (error) {
         pumpError = error;
@@ -512,42 +375,18 @@ export class OpenClaw {
             hasPumpError = true;
           }
         }
+        this.replay.endStream();
       }
       if (hasPumpError) {
-        this.normalizedEvents.close(pumpError);
+        this.replay.events.close(pumpError);
         return;
       }
-      this.normalizedEvents.close();
+      this.replay.events.close();
     })().catch((error: unknown) => {
       markReady();
-      this.normalizedEvents.close(error);
+      this.replay.events.close(error);
     });
     return this.eventPumpReady;
-  }
-
-  private recordReplayEvent(event: OpenClawEvent): void {
-    if (!event.runId) {
-      return;
-    }
-    let events = this.replayByRunId.get(event.runId);
-    if (!events) {
-      if (this.replayByRunId.size >= MAX_REPLAY_RUNS) {
-        const oldestRunId = this.replayByRunId.keys().next().value;
-        if (oldestRunId) {
-          this.replayByRunId.delete(oldestRunId);
-        }
-      }
-      events = [];
-      this.replayByRunId.set(event.runId, events);
-    }
-    events.push(event);
-    if (events.length > MAX_REPLAY_EVENTS_PER_RUN) {
-      events.splice(0, events.length - MAX_REPLAY_EVENTS_PER_RUN);
-    }
-  }
-
-  private replaySnapshot(runId: string): OpenClawEvent[] {
-    return [...(this.replayByRunId.get(runId) ?? [])];
   }
 }
 
@@ -907,4 +746,3 @@ export class EnvironmentsNamespace extends RpcNamespace {
     return unsupportedGatewayApi("oc.environments.delete");
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

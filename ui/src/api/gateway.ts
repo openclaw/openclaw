@@ -52,12 +52,14 @@ import {
 } from "../lib/nodes/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { createBrowserGatewaySocket } from "./gateway-browser-socket.ts";
+import { GatewayChatEvents } from "./gateway-chat-events.ts";
 import { buildGatewayConnectDevice } from "./gateway-connect-device.ts";
 import {
   enrichProtocolMismatchDetails,
   resolveGatewayErrorDetailCode,
 } from "./gateway-connect-errors.ts";
 export type { EventFrame as GatewayEventFrame } from "@openclaw/gateway-client/browser";
+export { GatewayPayloadLimitError } from "./gateway-browser-socket.ts";
 
 export { resolveGatewayErrorDetailCode };
 
@@ -243,6 +245,7 @@ async function deriveLegacyV4RecoveryScope(material: string | undefined): Promis
 
 export class GatewayBrowserClient {
   private readonly client: GatewayProtocolClient<ConnectPlan>;
+  private readonly chatEvents = new GatewayChatEvents((reason) => this.forceReconnect(reason));
   private maxPayloadBytes: number | undefined;
   private scopeUpgradeRuntime: Promise<GatewayScopeUpgrade> | null = null;
   inboundActivitySeq = 0;
@@ -258,20 +261,9 @@ export class GatewayBrowserClient {
   constructor(private opts: GatewayBrowserClientOptions) {
     this.client = new GatewayProtocolClient<ConnectPlan>({
       createSocket: (handlers) => {
+        this.chatEvents.clear();
         this.maxPayloadBytes = undefined;
-        const socket = createBrowserGatewaySocket(this.opts.url, handlers);
-        return {
-          ...socket,
-          send: (data) => {
-            if (
-              this.maxPayloadBytes !== undefined &&
-              new TextEncoder().encode(data).byteLength > this.maxPayloadBytes
-            ) {
-              throw new GatewayPayloadLimitError();
-            }
-            socket.send(data);
-          },
-        };
+        return createBrowserGatewaySocket(this.opts.url, handlers, () => this.maxPayloadBytes);
       },
       createRequestId: generateUUID,
       createRequestError: (error) =>
@@ -295,6 +287,7 @@ export class GatewayBrowserClient {
       },
       resolveClose: (context) => this.resolveClose(context),
       onClose: (context, decision) => {
+        this.chatEvents.clear();
         this.recovery = { ...this.recovery, generation: context.generation + 1, resolved: false };
         this.stopTickWatch();
         this.scopeUpgradeBinding = null;
@@ -312,7 +305,7 @@ export class GatewayBrowserClient {
         }
       },
       onSocketFactoryError: (error) => this.handleSocketFactoryError(error),
-      onEvent: (event) => this.opts.onEvent?.(event),
+      onEvent: (event) => this.chatEvents.dispatch(event, this.opts.onEvent),
       onGap: (info) => this.opts.onGap?.(info),
       onActivity: () => {
         this.inboundActivitySeq += 1;
@@ -349,6 +342,7 @@ export class GatewayBrowserClient {
   }
 
   stop() {
+    this.chatEvents.clear();
     this.stopTickWatch();
     this.recovery = { ...this.recovery, generation: this.recovery.generation + 1, resolved: false };
     this.client.stop();
@@ -666,12 +660,12 @@ export class GatewayBrowserClient {
     });
   }
 
-  async request<T = unknown>(
+  request<T = unknown>(
     method: string,
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
-    return await this.client.request<T>(method, params, options);
+    return this.chatEvents.request<T>(this.client, method, params, options);
   }
 
   async requestScopeUpgrade(options: { onPending?: (requestId: string) => void } = {}) {
@@ -709,7 +703,7 @@ export class GatewayBrowserClient {
   }
 
   addEventListener(listener: GatewayEventListener): () => void {
-    return this.client.addEventListener(listener);
+    return this.client.addEventListener((event) => this.chatEvents.dispatch(event, listener));
   }
 
   /** Drops a stale socket; the shared reconnect supervisor owns recovery. */
@@ -753,14 +747,5 @@ export class GatewayBrowserClient {
     } catch (callbackError) {
       console.error("[gateway] close handler error:", callbackError);
     }
-  }
-}
-
-export class GatewayPayloadLimitError extends Error {
-  constructor() {
-    super(
-      "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
-    );
-    this.name = "GatewayPayloadLimitError";
   }
 }

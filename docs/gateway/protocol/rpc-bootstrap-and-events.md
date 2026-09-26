@@ -63,9 +63,18 @@ count.
 ## Common event families
 
 - `chat`: UI chat updates such as `chat.inject` and other transcript-only chat
-  events. In protocol v4, delta payloads carry `deltaText`; `message` remains
-  the cumulative assistant snapshot. Non-prefix replacements set
-  `replace=true` and use `deltaText` as the replacement text.
+  events. A `state: "delta"` payload carries the append in `deltaText`.
+  The first text frame delivered to a recipient for a run also includes the
+  complete `message` snapshot, including when that recipient attaches mid-run
+  or reconnects. Later append frames omit `message`. A supplied snapshot is
+  authoritative and already includes `deltaText`; do not append the delta twice.
+  Non-prefix replacements set `replace=true` and use `deltaText` as the entire
+  replacement text, including an empty string to clear it. Replacements and
+  canvas or media changes that require a new baseline include a complete snapshot.
+  Clients retain non-text message blocks across ordinary text appends. Final,
+  aborted, and error events retain their existing complete-message and intentional
+  message-omission semantics. Pending appends are concatenated in order; tool and
+  terminal boundaries flush pending text before settlement.
   Failed runs (`state: "error"`) may include `errorDetail` alongside the coarse
   `errorKind` and human-readable `errorMessage`. This closed object has seven
   optional fields: `provider`, `model`, `failoverReason`,
@@ -77,6 +86,14 @@ count.
   Raw bodies, raw previews, and diagnostic hashes are never included in
   `errorDetail`. Runs without provider observations omit it; successful and
   canceled events do not carry it. This is an additive protocol-v4 field.
+- `agent`: assistant text events use `data.delta` for appends. Optional `data.text`
+  is an authoritative snapshot of that assistant item and already includes the
+  delta. The first delivered text event, replacement/item boundaries, and media
+  updates retain snapshots where needed. Honor `data.replace`, including empty
+  replacements, and keep assistant item text separate from the display-projected
+  `chat` stream. Subscribe to one text projection for a display; consuming both
+  streams into one accumulator duplicates output. In-process agent observers
+  retain their cumulative-text contract.
 - `session.message`, `session.operation`, `session.tool`: transcript, in-flight
   session operation, and event-stream updates for a subscribed session.
 - `session.approval`: sanitized pending and terminal approval truth for an

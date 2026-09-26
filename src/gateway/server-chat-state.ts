@@ -81,6 +81,7 @@ export type ChatRunPlanSnapshot = {
 type ChatRunAgentTextState = {
   lastSentAt?: number;
   bufferedEvent?: BufferedAgentEvent;
+  snapshot?: { text: string; itemId?: string };
 };
 
 type ChatRunToolRecipientState = {
@@ -111,6 +112,7 @@ type ChatRunRecord = {
   bufferIsCurrent?: () => boolean;
   /** Retire queued connection snapshots when this buffering generation is cleared. */
   liveTextGroup?: AbortController;
+  liveTextEpoch?: object;
   display?: LiveDisplayState;
   planSnapshot?: ChatRunPlanSnapshot;
   progressSnapshot?: ChatRunProgressSnapshot;
@@ -263,6 +265,7 @@ export function createChatRunState(): ChatRunState {
     delete record.bufferIsCurrent;
     record.liveTextGroup?.abort();
     delete record.liveTextGroup;
+    delete record.liveTextEpoch;
     delete record.display;
     delete record.planSnapshot;
     delete record.progressSnapshot;
@@ -451,7 +454,7 @@ export type SessionMessageSubscriberRegistry = {
   unsubscribeAll: (connId: string) => void;
   get: (sessionKey: string) => ReadonlySet<string>;
   getApprovals: (sessionKey: string) => ReadonlySet<string>;
-  onChange: (listener: (sessionKey: string) => void) => () => void;
+  onChange: (listener: (sessionKey: string, connId: string) => void) => () => void;
 };
 
 type SessionMessageSubscription = (() => void) & { commit: () => void };
@@ -500,7 +503,7 @@ export function createSessionMessageSubscriberRegistry(
   // Replacing a record fences late settlements, including connection/session reuse.
   const connections = new Map<string, Map<string, boolean | ProvisionalSubscriptionState>>();
   const approvalSessionToConnIds = new Map<string, Set<string>>();
-  const changeListeners = new Set<(sessionKey: string) => void>();
+  const changeListeners = new Set<(sessionKey: string, connId: string) => void>();
   const empty = new Set<string>();
   let subscriptionSequence = 0;
 
@@ -513,7 +516,7 @@ export function createSessionMessageSubscriberRegistry(
       sessionToConnIds.set(sessionKey, nextConnIds);
       if (!wasSubscribed) {
         for (const listener of changeListeners) {
-          listener(sessionKey);
+          listener(sessionKey, connId);
         }
       }
       return;
@@ -524,7 +527,7 @@ export function createSessionMessageSubscriberRegistry(
     }
     if (wasSubscribed) {
       for (const listener of changeListeners) {
-        listener(sessionKey);
+        listener(sessionKey, connId);
       }
     }
   };

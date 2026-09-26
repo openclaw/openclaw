@@ -241,7 +241,10 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         expect(broadcast).toHaveBeenLastCalledWith(
           "chat",
           expect.objectContaining({ state: "error" }),
-          expect.objectContaining({ liveText: { group: previewGroup?.signal } }),
+          {
+            liveText: { group: previewGroup?.signal, settle: true },
+            sessionKeys: [target.sessionKey],
+          },
         );
         expect(chatRunState.runs.has(runId)).toBe(false);
         expect(previewGroup?.signal.aborted).toBe(true);

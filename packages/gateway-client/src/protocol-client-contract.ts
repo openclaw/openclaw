@@ -1,7 +1,24 @@
 // Wire-client contract types shared by GatewayProtocolClient and its adapters.
 import type { ErrorShape, EventFrame, HelloOk } from "@openclaw/gateway-protocol";
+import type { GatewayClientMode, GatewayClientName } from "@openclaw/gateway-protocol/client-info";
 import type { GatewayProtocolRequestTiming } from "./pending-request.js";
 import type { GatewayProtocolRequestError } from "./protocol-request.js";
+
+export type GatewayClientCloseInfo = {
+  phase: "pre-hello" | "post-hello";
+  socketOpened: boolean;
+  transportValidated: boolean;
+  connectRequestSent?: boolean;
+  transientPreHelloCleanClose: boolean;
+  connectError?: Error;
+};
+
+export type GatewayClientConnectionMetadata = {
+  clientName?: GatewayClientName;
+  hasDeviceIdentity: boolean;
+  mode?: GatewayClientMode;
+  preauthHandshakeTimeoutMs?: number;
+};
 
 export type GatewayProtocolSocket = {
   isOpen: () => boolean;

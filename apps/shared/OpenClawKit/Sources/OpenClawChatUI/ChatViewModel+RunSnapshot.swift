@@ -61,8 +61,8 @@ extension OpenClawChatViewModel {
             armPendingRunOwner(runId: runId)
         }
         // Chat snapshots concatenate model turns; agent text owns the current item once observed.
-        if self.liveRunStateByRunID[runId]?.hasAgentAssistantText != true, !bufferedText.isEmpty {
-            self.updateStreamingAssistantText(bufferedText)
+        if self.liveRunStateByRunID[runId]?.hasAgentAssistantText != true {
+            self.updateStreamingAssistantText(bufferedText.isEmpty ? nil : bufferedText)
         }
         self.logDiagnostic(
             "chat.ui adopted in-flight run sessionKey=\(self.sessionKey) "

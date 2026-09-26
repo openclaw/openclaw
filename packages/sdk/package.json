@@ -21,6 +21,8 @@
   "dependencies": {
     "@openclaw/gateway-client": "workspace:*",
     "@openclaw/gateway-protocol": "workspace:*",
-    "@openclaw/normalization-core": "workspace:*"
+    "@openclaw/normalization-core": "workspace:*",
+    "@openclaw/retry": "workspace:*",
+    "@openclaw/session-url-contract": "workspace:*"
   }
 }

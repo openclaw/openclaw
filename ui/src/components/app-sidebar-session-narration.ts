@@ -14,11 +14,11 @@ import {
   isSuppressedControlReplyText,
   stripSuppressedControlReplyToken,
 } from "../../../src/gateway/control-reply-text.js";
+import { extractAssistantPhaseText } from "../../../src/shared/chat-message-content.js";
 import { stripInlineDirectiveTagsForDisplay } from "../../../src/utils/directive-tags.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { stripHeartbeatTokenForDisplay } from "../lib/chat/heartbeat-display.ts";
-import { extractText } from "../lib/chat/message-extract.ts";
 import { pickFreshestObserverDigest } from "../lib/observer-digest.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import {
@@ -26,6 +26,7 @@ import {
   isUiGlobalSessionKey,
   normalizeAgentId,
 } from "../lib/sessions/session-key.ts";
+import { stripThinkingTags } from "../lib/strip-thinking-tags.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { deriveSidebarNarrationLine } from "./sidebar-narration-line.ts";
 
@@ -368,7 +369,9 @@ export class SidebarSessionNarrationController {
       return;
     }
     const deltaText = typeof record.deltaText === "string" ? record.deltaText : "";
-    const messageText = message ? extractText(message) : null;
+    const messageText = message
+      ? stripThinkingTags(extractAssistantPhaseText(message) ?? "")
+      : null;
     const consumed = this.consumedStreamLength.get(key) ?? 0;
     // A newly subscribed sidebar can join mid-run. Within one run the server's
     // cumulative snapshot grows monotonically, so length arithmetic decides
@@ -376,7 +379,7 @@ export class SidebarSessionNarrationController {
     if (record.replace === true) {
       // Handle before any truthiness gate: an EMPTY replacement retracts the
       // narration line (streamLength 0 takes publishText's clearing path).
-      const replacement = deltaText || messageText || "";
+      const replacement = messageText ?? deltaText;
       this.publishText(key, {
         streamLength: replacement.length,
         fragment: replacement,
@@ -385,7 +388,7 @@ export class SidebarSessionNarrationController {
       return;
     }
     if (deltaText) {
-      if (messageText) {
+      if (messageText !== null) {
         const appends = consumed > 0 && messageText.length - deltaText.length === consumed;
         this.publishText(key, {
           streamLength: messageText.length,
@@ -404,7 +407,7 @@ export class SidebarSessionNarrationController {
       // silent until a cumulative snapshot or replacement aligns the stream.
       return;
     }
-    if (messageText) {
+    if (messageText !== null) {
       this.publishText(key, {
         streamLength: messageText.length,
         fragment: messageText,
@@ -513,6 +516,9 @@ export class SidebarSessionNarrationController {
       return;
     }
     const record = payload as Record<string, unknown>;
+    if (record.stream !== "tool") {
+      return;
+    }
     const key = this.matchingDesiredKey(record.sessionKey, record.agentId);
     if (!key) {
       return;
@@ -522,51 +528,13 @@ export class SidebarSessionNarrationController {
       return;
     }
     const data = record.data as Record<string, unknown> | undefined;
-    if (record.stream === "tool") {
-      const name = typeof data?.name === "string" ? data.name.trim() : "";
-      if (!name) {
-        return;
-      }
+    const name = typeof data?.name === "string" ? data.name.trim() : "";
+    if (name) {
       this.publishThrottled(key, {
         kind: "line",
         line: t("chat.sidebar.toolActivity", { tool: name }),
       });
-      return;
     }
-    if (record.stream !== "assistant") {
-      return;
-    }
-    const text = typeof data?.text === "string" ? data.text : "";
-    const delta = typeof data?.delta === "string" ? data.delta : "";
-    const consumed = this.consumedStreamLength.get(key) ?? 0;
-    if (data?.replace === true) {
-      const replacement = text || delta;
-      this.publishText(key, {
-        streamLength: replacement.length,
-        fragment: replacement,
-        reset: true,
-      });
-      return;
-    }
-    if (text) {
-      // Same monotonic-length contract as the chat path: append when the
-      // cumulative snapshot grew by exactly this event's delta, else rejoin.
-      if (delta && consumed > 0 && text.length - delta.length === consumed) {
-        this.publishText(key, { streamLength: text.length, fragment: delta, reset: false });
-      } else if (text.length !== consumed) {
-        this.publishText(key, { streamLength: text.length, fragment: text, reset: true });
-      }
-      return;
-    }
-    if (delta && consumed > 0) {
-      this.publishText(key, {
-        streamLength: consumed + delta.length,
-        fragment: delta,
-        reset: false,
-      });
-    }
-    // consumed === 0 with a bare delta: same mid-run-join hazard as the chat
-    // path — suppress until a cumulative snapshot aligns the stream.
   }
 
   private handleObserverEvent(payload: unknown): void {

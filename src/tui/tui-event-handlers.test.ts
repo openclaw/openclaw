@@ -4,6 +4,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import * as failoverClassifier from "../agents/failover/classify-core.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
+import { makeTuiState } from "./tui-event-test-support.js";
 import {
   readTuiSessionProjectionScope,
   reduceTuiSessionProjection,
@@ -61,32 +62,6 @@ function sendingSubmit(runId: string, draftText = "pending"): TuiPendingSubmit {
 
 function acceptedSubmit(runId: string, draftText: string | null = "pending"): TuiPendingSubmit {
   return { phase: "accepted", runId, draftText };
-}
-
-function makeTuiState(overrides: Partial<TuiStateAccess> = {}): TuiStateAccess {
-  return {
-    agentDefaultId: "main",
-    sessionMainKey: "agent:main:main",
-    sessionScope: "global",
-    agents: [],
-    currentAgentId: "main",
-    currentSessionKey: "agent:main:main",
-    currentSessionId: "session-1",
-    activeChatRunId: null,
-    pendingSubmit: null,
-    historyLoaded: true,
-    sessionInfo: { verboseLevel: "on" },
-    initialSessionApplied: true,
-    isConnected: true,
-    autoMessageSent: false,
-    toolsExpanded: false,
-    showThinking: false,
-    connectionStatus: "connected",
-    activityStatus: "idle",
-    statusTimeout: null,
-    lastCtrlCAt: 0,
-    ...overrides,
-  };
 }
 
 type ChatEventOverrides = Partial<ChatEvent> & { stopReason?: unknown };

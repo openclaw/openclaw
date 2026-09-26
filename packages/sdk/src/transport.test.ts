@@ -1,10 +1,15 @@
 // OpenClaw SDK tests cover transport behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { OpenClaw } from "./client.js";
+import { createAgentEvent, createChatEvent } from "./client.test-support.js";
 import { GatewayClientTransport } from "./transport.js";
+import type { GatewayEvent, OpenClawEvent } from "./types.js";
 
 type MockGatewayClientInstance = {
   opts: {
     onConnectError?: (error: Error) => void;
+    onEvent?: (event: GatewayEvent) => void;
+    onClose?: (code: number, reason: string) => void;
     onHelloOk?: (hello: unknown) => void;
     onReconnectPaused?: (info: unknown) => void;
   };
@@ -17,7 +22,9 @@ const gatewayClientMocks = vi.hoisted(() => ({
   instances: [] as MockGatewayClientInstance[],
 }));
 
-vi.mock("@openclaw/gateway-client", () => ({
+vi.mock("@openclaw/gateway-client", async () => ({
+  mergeChatStreamMessage: (await import("../../gateway-client/src/chat-stream-message.js"))
+    .mergeChatStreamMessage,
   GatewayClient: class {
     readonly opts: MockGatewayClientInstance["opts"];
     readonly request = vi.fn();
@@ -35,6 +42,87 @@ describe("GatewayClientTransport", () => {
   beforeEach(() => {
     gatewayClientMocks.instances.length = 0;
   });
+
+  it.each(["chat", "assistant"])(
+    "retires queued %s baselines across a connection boundary",
+    async (stream) => {
+      const transport = new GatewayClientTransport();
+      const oc = new OpenClaw({ transport });
+      let rawIterator: AsyncIterator<GatewayEvent> | undefined;
+      let freshIterator: AsyncIterator<OpenClawEvent> | undefined;
+      let oldIterator: AsyncIterator<OpenClawEvent> | undefined;
+      try {
+        const connecting = oc.connect();
+        const client = gatewayClientMocks.instances[0];
+        if (!client) {
+          throw new Error("Expected the SDK Gateway client");
+        }
+        client.opts.onHelloOk?.({ sessionId: "connection-1" });
+        await connecting;
+
+        // Keep these in the event-pump queue until after close, as socket callbacks can.
+        for (let seq = 1; seq <= 101; seq += 1) {
+          client.opts.onEvent?.(
+            stream === "chat"
+              ? createChatEvent(`old-${seq}`, `session-${seq}`, seq, "delta", "old prefix", seq, {
+                  deltaText: "old prefix",
+                })
+              : createAgentEvent(`old-${seq}`, seq, seq, "assistant", {
+                  text: "old prefix",
+                  delta: "old prefix",
+                }),
+          );
+        }
+        client.opts.onClose?.(1006, "connection lost before terminal events");
+        client.opts.onHelloOk?.({ sessionId: "connection-2" });
+        const freshWire = createChatEvent(
+          "fresh",
+          "session-fresh",
+          1,
+          "delta",
+          "fresh prefix",
+          102,
+          {
+            deltaText: "prefix",
+          },
+        );
+        const freshEvents = oc.rawEvents((event) => event.payload === freshWire.payload);
+        rawIterator = freshEvents[Symbol.asyncIterator]();
+        freshIterator = oc.runEvents("fresh")[Symbol.asyncIterator]();
+        const rawRead = rawIterator.next();
+        const freshRead = freshIterator.next();
+        client.opts.onEvent?.(freshWire);
+        const [raw, fresh] = await Promise.all([rawRead, freshRead]);
+        if (raw.done || fresh.done) {
+          throw new Error("Expected the fresh connection baseline");
+        }
+        expect(fresh.value.data).toEqual({ text: "fresh prefix", delta: "fresh prefix" });
+        expect(fresh.value.raw).toBe(raw.value);
+        expect(raw.value).toEqual(freshWire);
+
+        oldIterator = oc.runEvents("old-1")[Symbol.asyncIterator]();
+        const firstOld = oldIterator.next();
+        client.opts.onEvent?.(createAgentEvent("old-1", 2, 103, "lifecycle", { phase: "start" }));
+        await expect(firstOld).resolves.toMatchObject({
+          value: { type: "run.started", raw: { seq: 2 } },
+        });
+
+        client.opts.onEvent?.(
+          createChatEvent("fresh", "session-fresh", 3, "delta", undefined, 104, {
+            deltaText: " suffix",
+          }),
+        );
+        await expect(freshIterator.next()).resolves.toMatchObject({
+          value: { data: { text: "fresh prefix suffix", delta: " suffix" } },
+        });
+      } finally {
+        await rawIterator?.return?.();
+        await freshIterator?.return?.();
+        await oldIterator?.return?.();
+        await oc.close();
+      }
+    },
+  );
 
   it("rejects a pending connect when the transport closes before hello-ok", async () => {
     const transport = new GatewayClientTransport();

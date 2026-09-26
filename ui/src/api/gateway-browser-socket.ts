@@ -8,6 +8,7 @@ import { gatewayWebSocketTransportUrl } from "../dev-gateway.ts";
 export function createBrowserGatewaySocket(
   url: string,
   handlers: GatewayProtocolSocketHandlers,
+  maxPayloadBytes?: () => number | undefined,
 ): GatewayProtocolSocket {
   const socket = new WebSocket(gatewayWebSocketTransportUrl(url));
   let opening = true;
@@ -56,11 +57,26 @@ export function createBrowserGatewaySocket(
 
   return {
     isOpen: () => socket.readyState === WebSocket.OPEN,
-    send: (data) => socket.send(data),
+    send: (data) => {
+      const limit = maxPayloadBytes?.();
+      if (limit !== undefined && new TextEncoder().encode(data).byteLength > limit) {
+        throw new GatewayPayloadLimitError();
+      }
+      socket.send(data);
+    },
     close: (code, reason) => {
       finishOpening();
       // Browser-initiated closes reject the shared protocol's 1008 policy code.
       socket.close(code === 1008 ? 4008 : code, reason);
     },
   };
+}
+
+export class GatewayPayloadLimitError extends Error {
+  constructor() {
+    super(
+      "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
+    );
+    this.name = "GatewayPayloadLimitError";
+  }
 }

@@ -104,7 +104,7 @@ describe("acp final chat snapshots", () => {
     expect(chunks).toHaveLength(1);
   });
 
-  it("emits only the missing tail when the final snapshot extends prior deltas", async () => {
+  it("streams append-only frames before emitting the final missing tail", async () => {
     const { agent, sessionUpdate, promptPromise, runId } = await createSnapshotHarness();
 
     await agent.handleGatewayEvent({
@@ -120,6 +120,24 @@ describe("acp final chat snapshots", () => {
     } as unknown as EventFrame);
 
     await agent.handleGatewayEvent({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "snapshot-session",
+        runId,
+        state: "delta",
+        deltaText: " wide",
+      },
+    });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "snapshot-session",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: " wide" },
+      },
+    });
+
+    await agent.handleGatewayEvent({
       event: "chat",
       payload: {
         sessionKey: "snapshot-session",
@@ -127,7 +145,7 @@ describe("acp final chat snapshots", () => {
         state: "final",
         stopReason: "max_tokens",
         message: {
-          content: [{ type: "text", text: "Hello world" }],
+          content: [{ type: "text", text: "Hello wide world" }],
         },
       },
     } as unknown as EventFrame);

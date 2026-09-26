@@ -35,6 +35,7 @@ suite.define(() => {
           runId,
           state: "delta",
           deltaText: progress,
+          message: { role: "assistant", content: [{ type: "text", text: progress }] },
         });
         await page.locator(".chat-bubble").getByText(progress, { exact: true }).waitFor();
         await gateway.deferNext("chat.abort");
@@ -69,6 +70,7 @@ suite.define(() => {
             runId: replacementRunId,
             state: "delta",
             deltaText: visibleReply,
+            message: { role: "assistant", content: [{ type: "text", text: visibleReply }] },
           });
         }
         const reply = page.locator(".chat-bubble").getByText(visibleReply, { exact: true });

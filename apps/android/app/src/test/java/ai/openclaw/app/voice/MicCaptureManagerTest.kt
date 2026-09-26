@@ -23,6 +23,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -45,6 +46,40 @@ import java.util.concurrent.atomic.AtomicReference
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class MicCaptureManagerTest {
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun liveSnapshotsPreserveWhitespaceAndClearRewrittenText() =
+    runTest {
+      val manager = createManager(scope = this)
+      manager.onGatewayConnectionChanged(true)
+      manager.submitTranscribedMessage("question")
+      runCurrent()
+      for (text in listOf("hello ", "hello  world\n", "")) {
+        manager.handleGatewayEvent(
+          "chat",
+          """{"runId":"run-1","state":"delta","message":{"role":"assistant","content":[{"type":"text","text":${JsonPrimitive(text)}}]}}""",
+        )
+        val reply = manager.conversation.value.last()
+        assertEquals(VoiceConversationRole.Assistant, reply.role)
+        assertEquals(text, reply.text)
+        assertTrue(reply.isStreaming)
+      }
+      manager.handleGatewayEvent("chat", chatFinalPayload("run-1", ""))
+      runCurrent()
+      assertEquals(
+        "",
+        manager.conversation.value
+          .last()
+          .text,
+      )
+      assertFalse(
+        manager.conversation.value
+          .last()
+          .isStreaming,
+      )
+      assertFalse(manager.isSending.value)
+    }
+
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
   fun transcriptionFinalQueuesGatewayMessage() =

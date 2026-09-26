@@ -38,8 +38,16 @@ extension HelloOk {
 public enum GatewayPush: Sendable {
     /// A full snapshot that arrives on connect (or reconnect).
     case snapshot(HelloOk)
-    /// A server push event frame.
+    /// A server event with live text reconstructed before in-process delivery.
     case event(EventFrame)
     /// A detected sequence gap (`expected...received`) for event frames.
     case seqGap(expected: Int, received: Int)
+
+    public var isTerminalChatEvent: Bool {
+        guard case let .event(frame) = self,
+              frame.event == "chat",
+              let state = frame.payload?.dictionaryValue?["state"]?.stringValue
+        else { return false }
+        return state == "final" || state == "error" || state == "aborted"
+    }
 }

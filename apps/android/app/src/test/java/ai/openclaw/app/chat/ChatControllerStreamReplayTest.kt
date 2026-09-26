@@ -178,6 +178,28 @@ class ChatControllerStreamReplayTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun emptyChatAndAssistantSnapshotsClearPendingOutput() =
+    runTest {
+      withPendingRunReplay {
+        assertTrue(send("run"))
+        for (event in listOf("chat", "agent")) {
+          text("run")
+          assertEquals("Original output", controller.streamingAssistantText.value)
+          val payload =
+            if (event == "chat") {
+              chatDeltaPayload(owner.sessionKey, "run", 2, "", "")
+            } else {
+              """{"sessionKey":"${owner.sessionKey}","runId":"run","stream":"assistant","data":{"text":""}}"""
+            }
+          controller.handleGatewayEvent(event, payload)
+          assertEquals(event, "", controller.streamingAssistantText.value)
+          assertEquals(1, controller.pendingRunCount.value)
+        }
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun followupAdmissionPreservesEmittedOutputAndStopTargetsBothPendingRuns() =
     runTest {
       withPendingRunReplay {

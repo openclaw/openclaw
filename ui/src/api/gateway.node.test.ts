@@ -29,10 +29,16 @@ import {
 } from "../lib/sessions/session-placement-recovery.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { expectSignedPayloadFields } from "./gateway-signature.test-support.ts";
+import {
+  getLatestWebSocket,
+  MockWebSocket,
+  stubWindowGlobals,
+  useNodeFakeTimers,
+  wsInstances,
+} from "./gateway-socket.test-support.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
 
 const realLoadOrCreateDeviceIdentity = nodes.loadOrCreateDeviceIdentity;
-const wsInstances = vi.hoisted((): MockWebSocket[] => []);
 const recoveryMigrationRuntimeMock = vi.hoisted(() => ({
   loaded: vi.fn(),
   migrate: vi.fn(),
@@ -132,66 +138,6 @@ function createDeviceTokenState(request: (method: string) => Promise<unknown>) {
   });
   state.requestGeneration = 1;
   return state;
-}
-
-type HandlerMap = {
-  close: MockWebSocketHandler[];
-  error: MockWebSocketHandler[];
-  message: MockWebSocketHandler[];
-  open: MockWebSocketHandler[];
-};
-
-type MockWebSocketHandler = (ev?: { code?: number; data?: string; reason?: string }) => void;
-
-class MockWebSocket {
-  static OPEN = 1;
-
-  readonly handlers: HandlerMap = {
-    close: [],
-    error: [],
-    message: [],
-    open: [],
-  };
-
-  readonly sent: string[] = [];
-  lastClose: { code?: number; reason?: string } | null = null;
-  readyState = MockWebSocket.OPEN;
-
-  constructor(_url: string) {
-    wsInstances.push(this);
-  }
-
-  addEventListener(type: keyof HandlerMap, handler: MockWebSocketHandler) {
-    this.handlers[type].push(handler);
-  }
-
-  send(data: string) {
-    this.sent.push(data);
-  }
-
-  close(code?: number, reason?: string) {
-    this.lastClose = { code, reason };
-    this.readyState = 3;
-  }
-
-  emitClose(code = 1000, reason = "") {
-    for (const handler of this.handlers.close) {
-      handler({ code, reason });
-    }
-  }
-
-  emitOpen() {
-    for (const handler of this.handlers.open) {
-      handler();
-    }
-  }
-
-  emitMessage(data: unknown) {
-    const payload = typeof data === "string" ? data : JSON.stringify(data);
-    for (const handler of this.handlers.message) {
-      handler({ data: payload });
-    }
-  }
 }
 
 const { GatewayBrowserClient, GatewayRequestError, resolveGatewayErrorDetailCode } =
@@ -301,39 +247,12 @@ function connectTimingPayloads(onConnectTiming: ReturnType<typeof vi.fn>): Conne
   );
 }
 
-function stubWindowGlobals(storage?: ReturnType<typeof createStorageMock>) {
-  vi.stubGlobal("window", {
-    location: { href: "http://127.0.0.1:18789/" },
-    localStorage: storage,
-    setTimeout: (handler: (...args: unknown[]) => void, timeout?: number, ...args: unknown[]) => {
-      // Keep connect debounce behavior testable without paying real 750ms waits per handshake.
-      const effectiveTimeout = timeout === 750 ? 0 : timeout;
-      return globalThis.setTimeout(() => handler(...args), effectiveTimeout);
-    },
-    clearTimeout: (timeoutId: number | undefined) => globalThis.clearTimeout(timeoutId),
-  });
-}
-
-function getLatestWebSocket(): MockWebSocket {
-  const ws = wsInstances.at(-1);
-  if (!ws) {
-    throw new Error("missing websocket instance");
-  }
-  return ws;
-}
-
 function stubInsecureCrypto() {
   // Real insecure contexts keep randomUUID/getRandomValues; only crypto.subtle
   // is gated to secure contexts.
   vi.stubGlobal("crypto", {
     randomUUID: () => "req-insecure",
     getRandomValues: (array: Uint8Array) => array.fill(7),
-  });
-}
-
-function useNodeFakeTimers() {
-  vi.useFakeTimers({
-    toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
 }
 
@@ -1712,7 +1631,7 @@ describe("GatewayBrowserClient", () => {
     }
   });
 
-  it("keeps gap callback errors from blocking event delivery", () => {
+  it("recovers from event gaps even when the gap callback throws", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const onGap = vi.fn(() => {
       throw new Error("gap callback failed");
@@ -1740,17 +1659,16 @@ describe("GatewayBrowserClient", () => {
       ).not.toThrow();
 
       expect(onGap).toHaveBeenCalledWith({ expected: 2, received: 3 });
-      expect(onEvent).toHaveBeenCalledWith(
-        expect.objectContaining({ event: "session.updated", seq: 3 }),
-      );
-      expect(listener).toHaveBeenCalledWith(
-        expect.objectContaining({ event: "session.updated", seq: 3 }),
-      );
+      expect(ws.lastClose).toEqual({ code: 4000, reason: "event sequence gap" });
+      expect(onEvent).not.toHaveBeenCalled();
+      expect(listener).not.toHaveBeenCalled();
       expect(consoleError).toHaveBeenCalledWith("[gateway] gap handler error:", expect.any(Error));
 
       onGap.mockClear();
       ws.emitMessage({ type: "event", event: "session.updated", seq: 4 });
       expect(onGap).not.toHaveBeenCalled();
+      expect(onEvent).not.toHaveBeenCalled();
+      expect(listener).not.toHaveBeenCalled();
     } finally {
       client.stop();
       consoleError.mockRestore();

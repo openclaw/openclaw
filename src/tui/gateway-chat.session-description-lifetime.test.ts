@@ -5,8 +5,7 @@ import {
   validateSessionsListParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { GatewayClientOptions } from "../gateway/client.js";
-import type { GatewayChatClient } from "./gateway-chat.js";
+import { withGatewayChatConnection } from "./gateway-chat.test-support.js";
 import type { TuiSessionDescription, TuiSessionList } from "./tui-backend.js";
 
 const selectedKey = "agent:work:notes";
@@ -49,43 +48,6 @@ function hello(connId: string): HelloOk {
   };
 }
 
-async function withConnection(
-  request: (method: string, params?: unknown) => Promise<unknown>,
-  run: (client: GatewayChatClient, callbacks: GatewayClientOptions) => Promise<void>,
-) {
-  const transport: { options?: GatewayClientOptions } = {};
-  let client: GatewayChatClient | undefined;
-  vi.resetModules();
-  vi.doMock("../gateway/client.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../gateway/client.js")>();
-    return {
-      ...actual,
-      GatewayClient: class {
-        request = request;
-        stopAndWait() {
-          return Promise.resolve();
-        }
-        constructor(options: GatewayClientOptions) {
-          transport.options = options;
-        }
-      },
-    };
-  });
-  try {
-    const { GatewayChatClient: Client } = await import("./gateway-chat.js");
-    client = new Client({ url: "ws://127.0.0.1:18789", token: "test-token" });
-    const callbacks = transport.options;
-    if (!callbacks?.onHelloOk || !callbacks.onClose) {
-      throw new Error("Gateway client did not register its connection lifecycle");
-    }
-    await run(client, callbacks);
-  } finally {
-    await client?.stop();
-    vi.doUnmock("../gateway/client.js");
-    vi.resetModules();
-  }
-}
-
 const heldMethods: Array<"sessions.describe" | "sessions.list"> = [
   "sessions.describe",
   "sessions.list",
@@ -102,7 +64,7 @@ describe("GatewayChatClient session description lifetime", () => {
       }
       return oldListing;
     });
-    await withConnection(request, async (client, callbacks) => {
+    await withGatewayChatConnection(request, async (client, callbacks) => {
       callbacks.onHelloOk?.(hello("old"));
       const description = client.describeSession({ sessionKey: selectedKey });
       const rejected = expect(description).rejects.toMatchObject({ name: "AbortError" });
@@ -148,7 +110,7 @@ describe("GatewayChatClient session description lifetime", () => {
           }
           return response;
         });
-        await withConnection(request, async (client, callbacks) => {
+        await withGatewayChatConnection(request, async (client, callbacks) => {
           callbacks.onHelloOk?.(hello("old"));
           const description = client.describeSession({
             sessionKey: selectedKey,
@@ -188,7 +150,7 @@ describe("GatewayChatClient session description lifetime", () => {
           ? { session: currentDescription.session }
           : currentListing;
       });
-      await withConnection(request, async (client, callbacks) => {
+      await withGatewayChatConnection(request, async (client, callbacks) => {
         callbacks.onHelloOk?.(hello("current"));
 
         await expect(

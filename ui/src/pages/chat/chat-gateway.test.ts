@@ -867,7 +867,7 @@ describe("handleChatGatewayEvent", () => {
 
   it.each([
     {
-      name: "appends gateway deltaText when the cumulative snapshot matches the current prefix",
+      name: "renders the cumulative snapshot without appending its delta again",
       previous: "Live",
       delta: " reply",
       snapshot: "Live reply",
@@ -881,24 +881,12 @@ describe("handleChatGatewayEvent", () => {
       expected: "Live reply",
     },
     {
-      name: "appends gateway deltaText when no full message snapshot is present",
-      previous: "Live",
-      delta: " reply",
-      expected: "Live reply",
-    },
-    {
-      name: "appends an incremental-only delta to the rolled-over cumulative baseline",
+      name: "renders the cumulative snapshot across a rolled-over stream boundary",
       previous: null,
       segments: [{ text: "Live", ts: 1, runId: "run-1", boundaryRunId: "steer-run" }],
       delta: " reply",
+      snapshot: "Live reply",
       expected: "Live reply",
-    },
-    {
-      name: "uses the cumulative snapshot when a missed delta would make append stale",
-      previous: "Hello",
-      delta: "!",
-      snapshot: "Hello world!",
-      expected: "Hello world!",
     },
     {
       name: "uses the cumulative snapshot when a same-length missed replacement changes the prefix",
@@ -908,12 +896,20 @@ describe("handleChatGatewayEvent", () => {
       expected: "CDE",
     },
     {
-      name: "replaces the stream when gateway deltaText marks a replacement",
+      name: "uses an authoritative snapshot even when a replacement delta is also present",
       previous: "Alpha beta",
       delta: "Alpha",
-      snapshot: "ignored snapshot",
+      snapshot: "Authoritative snapshot",
       replace: true,
-      expected: "Alpha",
+      expected: "Authoritative snapshot",
+    },
+    {
+      name: "retracts the stream when a replacement snapshot is empty",
+      previous: "Draft",
+      delta: "",
+      snapshot: "",
+      replace: true,
+      expected: "",
     },
   ])("$name", ({ previous, segments, delta, snapshot, replace, expected }) => {
     const state = createState({
@@ -927,7 +923,7 @@ describe("handleChatGatewayEvent", () => {
       sessionKey: "main",
       state: "delta",
       deltaText: delta,
-      ...(snapshot === undefined ? {} : { message: createTextChatMessage("assistant", snapshot) }),
+      message: createTextChatMessage("assistant", snapshot),
       ...(replace ? { replace: true } : {}),
     };
 
@@ -2720,9 +2716,7 @@ describe("handleChatGatewayEvent", () => {
           ...envelope,
           state: "delta",
           seq: seq++,
-          ...(text === "I"
-            ? { deltaText: text }
-            : { message: createTextChatMessage("assistant", text) }),
+          message: createTextChatMessage("assistant", text),
         });
         expect(state.chatStream).toBe(text);
         expect(state.chatRunId).toBe(envelope.runId);

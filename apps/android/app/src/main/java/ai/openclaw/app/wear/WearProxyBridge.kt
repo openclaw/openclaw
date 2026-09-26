@@ -543,7 +543,8 @@ internal class WearChatStreamProjector {
     }
     val delta = (projected["deltaText"] as? JsonPrimitive)?.contentOrNull.orEmpty()
     val replace = (projected["replace"] as? JsonPrimitive)?.contentOrNull == "true"
-    val fullMessage = projectedWearMessageText(projected["message"])
+    // Bound the live tail after reading the snapshot; message transport truncation keeps its prefix.
+    val fullMessage = wearStreamMessageText((payload as? JsonObject)?.get("message"))
     if (streamKey == null && fullMessage == null && !replace) {
       // Events without a session cannot affect a selected watch transcript.
       return projected
