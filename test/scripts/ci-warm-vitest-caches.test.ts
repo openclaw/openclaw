@@ -70,7 +70,6 @@ describe("protected Vitest cache collection", () => {
         OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER: "1",
         OPENCLAW_NODE_COMPILE_CACHE_WRITER: "1",
         OPENCLAW_VITEST_INCLUDE_FILE: "inherited-selection.json",
-        OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE: "inherited-post-shard-selection.json",
         OPENCLAW_VITEST_WORKER_CACHE: "0",
       })) {
         vi.stubEnv(name, value);
@@ -96,8 +95,7 @@ describe("protected Vitest cache collection", () => {
         files: string[];
       }> = [];
       const recordUi = (args: string[], env: NodeJS.ProcessEnv) => {
-        const includeFile =
-          env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE ?? env.OPENCLAW_VITEST_INCLUDE_FILE;
+        const includeFile = env.OPENCLAW_VITEST_INCLUDE_FILE;
         expect(includeFile).toBeTruthy();
         uiCollections.push({
           args,
@@ -158,7 +156,6 @@ describe("protected Vitest cache collection", () => {
       }
       const [bun, node] = uiCollections;
       expect(bun!.env).toMatchObject(BUN_UI_TEST_ENV);
-      expect(bun!.env.OPENCLAW_VITEST_INCLUDE_FILE).toBeUndefined();
       expect(bun!.env.OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT).toBe(
         join(cacheRoot, "vitest-cache-bun-0"),
       );
@@ -167,7 +164,7 @@ describe("protected Vitest cache collection", () => {
       );
       expect(bun!.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBeUndefined();
       expect(node!.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBeUndefined();
-      expect(existsSync(bun!.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE!)).toBe(false);
+      expect(existsSync(bun!.env.OPENCLAW_VITEST_INCLUDE_FILE!)).toBe(false);
       expect(invocations.at(-1)!.args).toContain("scripts/ci-run-node-test-shard.mts");
       expect(
         invocations.map(({ env }) => [

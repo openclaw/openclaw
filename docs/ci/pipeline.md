@@ -130,9 +130,12 @@ compiler assertions in mixed runtime suites; their cases remain enabled.
 The Node Code Mode executor suite also stays on Node: its warm-worker cleanup
 requires diagnostics-channel delivery to preserve sibling subscribers when a
 callback unsubscribes during publication. Bun can skip the next subscriber.
-The complete fake-timer lane also supports Bun. Control UI retains the GC-sensitive
-`usage-page-details.test.ts` on Node and runs the remaining files on Bun, including
-chat presentation retirement checks.
+The complete fake-timer and Control UI lanes also support Bun, including Usage
+details and chat presentation retirement checks. UI lifetime tests collect inside
+a native callback on Bun, so the resumed promise's microtask does not retain the
+payload being checked. The same lifetime assertions remain enabled on both runtimes.
+The root `ui-isolated` config and its exact file targets also use the shared Bun
+UI policy; mixed target selections retain Node.
 The missing-Docker test also runs on Bun, using an empty executable directory
 instead of an empty `PATH`, which Bun resolves through its default search path.
 Other families retain Node until they pass on the pinned fork within their
@@ -167,15 +170,11 @@ and legacy compatibility targets retain Node.
 Current-runner targets use three native shards and three workers per row,
 including exact-target Full Release Validation dispatches. Historical
 compatibility targets retain their unsharded package command.
-The UI runtime partition is applied after Vitest selects each native shard, so
-files keep their original shard ownership. Compatible PR selections run Bun
-first and record Vitest's original shard inventory. After successful, joined
-completion, a shard with no Node-only files omits that Node process. Missing or
-invalid inventory evidence retains the Node run. Dual validation runs
-the complete UI selection on Node, then excludes only the usage detail file from Bun;
-Its assertions remain required on Node, with no added skips.
-Partitions without browser files retain browser discovery for native sharding
-but omit Chromium version probing and Playwright's speculative browser startup.
+Each native UI shard runs entirely on Bun for PRs. Dual validation runs the
+complete original shard on Node and then Bun, preserving native shard ownership
+and all assertions without a runtime-specific file partition.
+Selections without browser files omit Chromium version probing and Playwright's
+speculative browser startup.
 
 On both runtimes, non-isolated UI projects without cached test results group
 files by environment and options after native sharding. The sequencer targets

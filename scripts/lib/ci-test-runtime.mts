@@ -1,11 +1,9 @@
-import { globSync } from "node:fs";
 import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
 import {
   matchesVitestCliSelection,
   matchesVitestGlob,
   relativizeScopedPatterns,
 } from "../../test/vitest/vitest.pattern-file.ts";
-import { controlUiE2eTestGlobs, controlUiTestGlobs } from "../../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
@@ -28,7 +26,6 @@ export type CiTestRuntimeSelection = {
   runtime: TestRuntime;
   configs?: string[];
   includePatterns?: string[];
-  includeAfterShard?: true;
   env?: Readonly<Record<string, string>>;
 };
 
@@ -43,9 +40,11 @@ export const BUN_UI_TEST_ENV = {
 
 const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
 const gatewayClientConfig = "test/vitest/vitest.gateway-client.config.ts";
+const uiIsolatedConfig = "test/vitest/vitest.ui-isolated.config.ts";
 const bunCompatibleConfigs = new Set([
   "test/vitest/vitest.unit-fast-fake-timers.config.ts",
   gatewayClientConfig,
+  uiIsolatedConfig,
 ]);
 // Measured whole-file admission; the rest of agents-support retains Node.
 const bunCompatibleAgentSupportFiles = ["src/agents/worktrees/service.removal-recovery.test.ts"];
@@ -72,7 +71,7 @@ const nativeCompilerTestFiles = [
 // Keep every case on Node while the canonical inventories own all other membership.
 const runtimePartitions = new Map<
   string,
-  { files: (cwd: string) => string[]; nodeRequired: ReadonlySet<string>; includeAfterShard?: true }
+  { files: (cwd: string) => string[]; nodeRequired: ReadonlySet<string> }
 >([
   [
     "test/vitest/vitest.unit-fast.config.ts",
@@ -105,18 +104,6 @@ const runtimePartitions = new Map<
     {
       files: () => getUnitFastIsolatedTestFiles(),
       nodeRequired: new Set([...nativeCompilerTestFiles, "src/proxy-capture/proxy-server.test.ts"]),
-    },
-  ],
-  [
-    "ui/vitest.config.ts",
-    {
-      files: (cwd) =>
-        globSync(controlUiTestGlobs, { cwd, exclude: controlUiE2eTestGlobs })
-          .map((file) => file.replaceAll("\\", "/"))
-          .toSorted(),
-      // Overview identity replacement still retains its payload under Bun GC.
-      nodeRequired: new Set(["ui/src/pages/usage/usage-page-details.test.ts"]),
-      includeAfterShard: true,
     },
   ],
 ]);
@@ -201,23 +188,23 @@ export function resolveCiTestRuntimeSelections(
 ): CiTestRuntimeSelection[] {
   const node: CiTestRuntimeSelection[] = [{ runtime: "node" }];
   const args = selectionVitestArgs(selection);
-  if (
-    policy === "node" ||
-    selection.env?.OPENCLAW_VITEST_INCLUDE_FILE ||
-    selection.env?.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE ||
-    !args
-  ) {
+  if (policy === "node" || selection.env?.OPENCLAW_VITEST_INCLUDE_FILE || !args) {
     return node;
   }
-  const completeBun = (): CiTestRuntimeSelection[] =>
-    policy === "dual" ? [{ runtime: "node" }, { runtime: "bun" }] : [{ runtime: "bun" }];
-  const uiPartition =
+  const completeBun = (env?: CiTestRuntimeSelection["env"]): CiTestRuntimeSelection[] => [
+    ...(policy === "dual" ? [{ runtime: "node" as const }] : []),
+    { runtime: "bun", ...(env ? { env } : {}) },
+  ];
+  const completeUi =
     selection.configs?.length === 1 &&
     selection.configs[0] === "ui/vitest.config.ts" &&
     !selection.targets?.length &&
     supportsUiRuntime(args);
-  if (!uiPartition && !supportsRuntimePartition(args)) {
+  if (!completeUi && !supportsRuntimePartition(args)) {
     return node;
+  }
+  if (completeUi) {
+    return completeBun(BUN_UI_TEST_ENV);
   }
   if (selection.targets?.length) {
     // Preserve exact target argv and its native owner; broad targets can carry
@@ -229,8 +216,12 @@ export function resolveCiTestRuntimeSelections(
     if (!plans.length) {
       return node;
     }
+    const includesUi = plans.some((plan) => plan.config === uiIsolatedConfig);
+    if (includesUi && !plans.every((plan) => plan.config === uiIsolatedConfig)) {
+      return node;
+    }
     if (plans.every((plan) => bunCompatibleConfigs.has(plan.config))) {
-      return completeBun();
+      return completeBun(includesUi ? BUN_UI_TEST_ENV : undefined);
     }
     if (
       plans.every((plan) => plan.config === agentVitestProjectOwners.support.config) &&
@@ -240,11 +231,7 @@ export function resolveCiTestRuntimeSelections(
     }
     const config = plans[0]!.config;
     const partition = runtimePartitions.get(config);
-    if (
-      !partition ||
-      partition.includeAfterShard ||
-      !plans.every((plan) => plan.config === config)
-    ) {
+    if (!partition || !plans.every((plan) => plan.config === config)) {
       return node;
     }
     const files = new Set(partition.files(cwd));
@@ -275,7 +262,7 @@ export function resolveCiTestRuntimeSelections(
   }
   const config = selection.configs[0]!;
   if (bunCompatibleConfigs.has(config)) {
-    return completeBun();
+    return completeBun(config === uiIsolatedConfig ? BUN_UI_TEST_ENV : undefined);
   }
   if (config === agentVitestProjectOwners.support.config) {
     const owner = agentVitestProjectOwners.support;
@@ -298,7 +285,7 @@ export function resolveCiTestRuntimeSelections(
     return bunFiles.length ? [...node, { runtime: "bun", includePatterns: bunFiles }] : node;
   }
   const partition = runtimePartitions.get(config);
-  if (!partition || (partition.includeAfterShard && !uiPartition)) {
+  if (!partition) {
     return node;
   }
   const inventory = partition.files(cwd);
@@ -327,15 +314,12 @@ export function resolveCiTestRuntimeSelections(
             {
               runtime: "node" as const,
               includePatterns: nodeFiles,
-              ...(partition.includeAfterShard ? { includeAfterShard: true as const } : {}),
             },
           ]
         : []),
     {
       runtime: "bun",
       includePatterns: bunFiles,
-      ...(partition.includeAfterShard ? { includeAfterShard: true } : {}),
-      ...(config === "ui/vitest.config.ts" ? { env: BUN_UI_TEST_ENV } : {}),
     },
   ];
 }

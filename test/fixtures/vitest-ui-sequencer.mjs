@@ -2,13 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { BaseSequencer, createVitest, resolveConfig } from "vitest/node";
 
-const [output, selectionsPath, includeFile] = process.argv.slice(2);
-if (!output || !selectionsPath || !includeFile) {
-  throw new Error("Expected runtime partition report, selections, and include paths");
+const [output] = process.argv.slice(2);
+if (!output) {
+  throw new Error("Expected UI sequencer report path");
 }
-const selections = JSON.parse(fs.readFileSync(selectionsPath, "utf8"));
-delete process.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE;
-fs.writeFileSync(includeFile, "[]");
 const ctx = await createVitest({
   config: path.resolve("ui/vitest.config.ts"),
   watch: false,
@@ -18,9 +15,7 @@ const ctx = await createVitest({
   cache: false,
 });
 try {
-  const emptyDiscoveryAllowed = Boolean(ctx.config.passWithNoTests);
   const specifications = await ctx.globTestSpecifications();
-  process.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE = includeFile;
   const paths = (files) =>
     files.map((file) => path.relative(process.cwd(), file.moduleId).replaceAll("\\", "/")).sort();
   const rows = [];
@@ -28,36 +23,13 @@ try {
     ctx.config.shard = index ? { index, count: 3 } : undefined;
     const native = new BaseSequencer(ctx);
     const original = index ? await native.shard(specifications) : specifications;
-    const selected = {};
-    const receipts = [];
-    for (const [policy, partition] of Object.entries(selections)) {
-      selected[policy] = [];
-      for (const selection of partition) {
-        fs.writeFileSync(
-          includeFile,
-          JSON.stringify(selection.includePatterns ?? paths(specifications)),
-        );
-        const requestId = `${index ?? "all"}-${policy}-${selection.runtime}`;
-        const receiptFile = path.join(path.dirname(output), `${requestId}.json`);
-        process.env.OPENCLAW_VITEST_NATIVE_SHARD_RECEIPT = receiptFile;
-        process.env.OPENCLAW_VITEST_NATIVE_SHARD_REQUEST_ID = requestId;
-        const sequencer = new ctx.config.sequence.sequencer(ctx);
-        const sharded = index ? await sequencer.shard(specifications) : specifications;
-        selected[policy].push({
-          runtime: selection.runtime,
-          files: paths(await sequencer.sort(sharded)),
-        });
-        delete process.env.OPENCLAW_VITEST_NATIVE_SHARD_RECEIPT;
-        delete process.env.OPENCLAW_VITEST_NATIVE_SHARD_REQUEST_ID;
-        receipts.push({ requestId, value: JSON.parse(fs.readFileSync(receiptFile, "utf8")) });
-      }
-    }
-    rows.push({ index, original: paths(original), selected, receipts });
+    const sequencer = new ctx.config.sequence.sequencer(ctx);
+    const sharded = index ? await sequencer.shard(specifications) : specifications;
+    rows.push({ original: paths(original), actual: paths(await sequencer.sort(sharded)) });
   }
 
   // Exercise the registered sequencer with interleaved environment pragmas,
   // without running a second Vitest process or executing synthetic test bodies.
-  delete process.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE;
   const unit = ctx.getProjectByName("unit");
   const schedulingCases = [
     ["default-a", ""],
@@ -93,7 +65,6 @@ try {
     cached: [],
     preserved: [],
     shuffled: [],
-    partitionedShuffled: [],
   };
   for (const populateAll of [false, true]) {
     for (const [index, spec] of schedulingSpecs.entries()) {
@@ -162,9 +133,6 @@ try {
   };
   const originalSeed = ctx.config.sequence.seed;
   ctx.config.sequence.seed = 37;
-  ctx.config.shard = { index: 1, count: 2 };
-  const shuffleShard = await native.shard(schedulingSpecs);
-  const shuffleMembers = shuffleShard.slice(1);
   for (const shuffle of [true, { files: true, tests: false }]) {
     const options = { sequence: { shuffle, seed: 37 }, watch: false, cache: false };
     const [nativeConfig, uiConfig] = await Promise.all([
@@ -179,46 +147,14 @@ try {
       native: names(await new nativeConfig.test.sequence.sequencer(ctx).sort([...schedulingSpecs])),
       actual: names(await new uiConfig.test.sequence.sequencer(ctx).sort([...schedulingSpecs])),
     });
-    process.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE = includeFile;
-    fs.writeFileSync(includeFile, JSON.stringify(paths(shuffleMembers)));
-    const shuffledCtx = await createVitest({
-      ...options,
-      config: path.resolve("ui/vitest.config.ts"),
-      configLoader: "runner",
-      shard: "1/2",
-      reporters: [],
-      api: false,
-    });
-    try {
-      const partitioned = new shuffledCtx.config.sequence.sequencer(shuffledCtx);
-      const sharded = await partitioned.shard(schedulingSpecs);
-      scheduling.partitionedShuffled.push({
-        native: names(
-          await new nativeConfig.test.sequence.sequencer(ctx).sort([...shuffleMembers]),
-        ),
-        actual: names(await partitioned.sort(sharded)),
-        shardNative: paths(shuffleShard),
-        shardActual: paths(sharded),
-      });
-    } finally {
-      await shuffledCtx.close();
-      delete process.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE;
-    }
   }
   ctx.config.sequence.seed = originalSeed;
-  // Exercise the registered pool boundary with no members in this runtime's shard.
-  process.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE = includeFile;
-  fs.writeFileSync(includeFile, "[]");
-  ctx.config.shard = { index: 1, count: 3 };
-  const empty = await ctx.runTestSpecifications(specifications);
   fs.writeFileSync(
     output,
     JSON.stringify({
       discovered: paths(specifications),
       rows,
       scheduling,
-      empty: { modules: empty.testModules.length, errors: empty.unhandledErrors.length },
-      emptyDiscoveryAllowed,
     }),
   );
 } finally {

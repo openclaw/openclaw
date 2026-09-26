@@ -7,11 +7,7 @@ import { playwright } from "@vitest/browser-playwright";
 import { chromium } from "playwright";
 import type { Plugin } from "vite";
 import { defineConfig, defineProject, type ViteUserConfig } from "vitest/config";
-import type { Vitest } from "vitest/node";
-import {
-  filterFilesByPatterns,
-  intersectIncludePatterns,
-} from "../test/vitest/vitest.include-patterns.ts";
+import { intersectIncludePatterns } from "../test/vitest/vitest.include-patterns.ts";
 import {
   loadPatternListFromEnv,
   matchesVitestGlob,
@@ -33,7 +29,7 @@ import {
   uiTimingTestFiles,
 } from "../test/vitest/vitest.ui-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
-import { UiRuntimePartitionSequencer } from "./test/vitest-runtime-sequencer.ts";
+import { UiTestSequencer } from "./test/vitest-runtime-sequencer.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -186,15 +182,9 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
     ["src/**/*.browser.test.ts", "../extensions/*/browser/**/*.browser.test.ts"],
     env,
   );
-  const runtimeFiles = loadPatternListFromEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", env);
-  const excludesBrowserFiles =
-    runtimeFiles !== null &&
-    filterFilesByPatterns(
-      runtimeFiles.map((file) => path.posix.relative("ui", file)),
-      include,
-      nodeDrivenBrowserLayoutTests,
-      matchesVitestGlob,
-    ).length === 0;
+  const excludesBrowserFiles = include.every((pattern) =>
+    nodeDrivenBrowserLayoutTests.includes(pattern),
+  );
   if (!excludesBrowserFiles && chromiumLaunchOptions === null) {
     chromiumLaunchOptions = resolveChromiumLaunchOptions();
   }
@@ -206,7 +196,6 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
     },
   });
   if (excludesBrowserFiles) {
-    // Keep browser discovery for native sharding; only skip its speculative launch.
     delete provider.prewarm;
   }
   return defineProject({
@@ -289,11 +278,9 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
 }
 
 function createUiTestSequencerPlugin(): Plugin {
-  let partitionedShuffle = false;
   return {
     name: "openclaw:ui-test-sequencer",
     config(config) {
-      partitionedShuffle = false;
       const sequence = config.test?.sequence;
       if (sequence?.sequencer) {
         return undefined;
@@ -302,27 +289,9 @@ function createUiTestSequencerPlugin(): Plugin {
         sequence?.shuffle === true ||
         (typeof sequence?.shuffle === "object" && sequence.shuffle.files);
       if (shuffleFiles) {
-        partitionedShuffle = Boolean(process.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE);
         return undefined;
       }
-      return { test: { sequence: { sequencer: UiRuntimePartitionSequencer } } };
-    },
-    configureServer(server) {
-      if (!partitionedShuffle) {
-        return;
-      }
-      // Vitest has now resolved its native random sequencer. Preserve it while
-      // applying runtime membership after native sharding and before shuffling.
-      const sequence = server.config.test?.sequence;
-      if (!sequence || typeof sequence.sequencer !== "function") {
-        throw new Error("Vitest did not resolve the UI file-shuffle sequencer");
-      }
-      const NativeSequencer = sequence.sequencer;
-      sequence.sequencer = class extends UiRuntimePartitionSequencer {
-        constructor(ctx: Vitest) {
-          super(ctx, new NativeSequencer(ctx));
-        }
-      };
+      return { test: { sequence: { sequencer: UiTestSequencer } } };
     },
   };
 }

@@ -27,7 +27,6 @@ const baseEnv: NodeJS.ProcessEnv = {
   OPENCLAW_NODE_COMPILE_CACHE_WRITER: "0",
 };
 delete baseEnv.OPENCLAW_VITEST_INCLUDE_FILE;
-delete baseEnv.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE;
 let exitCode = 0;
 let interrupted = false;
 let completed = false;
@@ -118,8 +117,6 @@ try {
     0,
     { runtime: "bun", cacheSlot: 0 },
   );
-  bunEnv.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE = bunEnv.OPENCLAW_VITEST_INCLUDE_FILE;
-  delete bunEnv.OPENCLAW_VITEST_INCLUDE_FILE;
   await collect(
     process.execPath,
     ["scripts/run-vitest.mjs", "run", "--config", ...ui.configs, ...collectionArgs],
