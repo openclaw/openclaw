@@ -8,7 +8,7 @@ import {
   wrapFetchWithAbortSignal,
 } from "openclaw/plugin-sdk/fetch-runtime";
 import {
-  captureHttpExchange,
+  captureHttpExchangeAsync,
   resolveEffectiveDebugProxyUrl,
 } from "openclaw/plugin-sdk/proxy-capture";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
@@ -46,7 +46,8 @@ function createEnvProxyDiscordRestDispatcher(
 function createDiscordRestFetchWithDispatcher(dispatcher: Dispatcher): typeof fetch {
   return wrapFetchWithAbortSignal(((input: RequestInfo | URL, init?: RequestInit) =>
     fetchWithRuntimeDispatcher(input, { ...init, dispatcher }).then((response) => {
-      captureHttpExchange({
+      // Finalization retains capture failures; observe the Promise returned by the SDK view.
+      void captureHttpExchangeAsync({
         url: resolveRequestUrl(input),
         method: init?.method ?? "GET",
         requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
@@ -54,7 +55,7 @@ function createDiscordRestFetchWithDispatcher(dispatcher: Dispatcher): typeof fe
         response,
         flowId: randomUUID(),
         meta: { subsystem: "discord-rest" },
-      });
+      }).catch(() => {});
       return response;
     })) as typeof fetch);
 }

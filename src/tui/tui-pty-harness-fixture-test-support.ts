@@ -107,7 +107,8 @@ export async function writeTuiPtyFixtureScript(dir: string) {
   const tuiBackendTypeUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui-backend.ts")).href;
   const source = `
       import { appendFileSync, existsSync, watch, watchFile, unwatchFile } from "node:fs";
-      import { dirname } from "node:path";
+      import { dirname, join } from "node:path";
+      import { DatabaseSync } from "node:sqlite";
       import { buildEmbeddedRunPayloads } from ${JSON.stringify(payloadsModuleUrl)};
       import { getReplyPayloadMetadata } from ${JSON.stringify(replyPayloadModuleUrl)};
       import { normalizeReplyPayloadsForDelivery } from ${JSON.stringify(outboundPayloadsModuleUrl)};
@@ -682,6 +683,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           title: "openclaw tui pty fixture",
           ${TUI_PTY_RESET_FIXTURE.options}
         });
+        ${TUI_PTY_STARTUP_SESSION_FIXTURE.returnedState}
       }
 
       main().catch((error) => {

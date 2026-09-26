@@ -70,7 +70,7 @@ interface EventBridgeOptions {
       SessionEvent,
       { type: "subagent.started" | "subagent.completed" | "subagent.failed" }
     >,
-  ) => void;
+  ) => void | Promise<void>;
   onCompactionComplete?: (payload: {
     messagesRemoved?: number;
     success: boolean;
@@ -812,11 +812,12 @@ export function attachEventBridge(
       { type: "subagent.started" | "subagent.completed" | "subagent.failed" }
     >,
   ): void {
-    try {
-      options.onNativeSubagentEvent?.(event);
-    } catch {
-      // Native task mirroring must not corrupt the Copilot turn.
+    if (detached) {
+      return;
     }
+    const invoke = () => options.onNativeSubagentEvent?.(event);
+    // Teardown joins this queue and retries unresolved mirror outcomes before releasing the session.
+    agentEventChain = agentEventChain.then(invoke, invoke).catch(() => undefined);
   }
 
   async function awaitStableCompaction(): Promise<void> {

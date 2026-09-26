@@ -251,16 +251,19 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
           return;
         }
         this.resetRealtimeSessionState();
-        this.runtime.captureWsEvent({
-          url,
-          direction: "local",
-          kind: "ws-open",
-          flowId: this.flowId,
-          meta: {
-            provider: "openai",
-            capability: "realtime-voice",
-          },
-        });
+        // Finalization retains capture failures; observe Promises returned by the host view.
+        void this.runtime
+          .captureWsEventAsync({
+            url,
+            direction: "local",
+            kind: "ws-open",
+            flowId: this.flowId,
+            meta: {
+              provider: "openai",
+              capability: "realtime-voice",
+            },
+          })
+          .catch(() => {});
         this.sendSessionUpdate();
       });
 
@@ -283,17 +286,19 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
             return;
           }
         }
-        this.runtime.captureWsEvent({
-          url,
-          direction: "inbound",
-          kind: "ws-frame",
-          flowId: this.flowId,
-          payload: data,
-          meta: {
-            provider: "openai",
-            capability: "realtime-voice",
-          },
-        });
+        void this.runtime
+          .captureWsEventAsync({
+            url,
+            direction: "inbound",
+            kind: "ws-frame",
+            flowId: this.flowId,
+            payload: data,
+            meta: {
+              provider: "openai",
+              capability: "realtime-voice",
+            },
+          })
+          .catch(() => {});
         try {
           const event = JSON.parse(data.toString()) as RealtimeEvent;
           if (event.type === "error" && !attempt.ready) {
@@ -340,17 +345,19 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
         if (!this.lifecycle.acceptsEvents(lifecycleConnection) || this.ws !== ws) {
           return;
         }
-        this.runtime.captureWsEvent({
-          url,
-          direction: "local",
-          kind: "error",
-          flowId: this.flowId,
-          errorText: coerceErrorMessage(error),
-          meta: {
-            provider: "openai",
-            capability: "realtime-voice",
-          },
-        });
+        void this.runtime
+          .captureWsEventAsync({
+            url,
+            direction: "local",
+            kind: "error",
+            flowId: this.flowId,
+            errorText: coerceErrorMessage(error),
+            meta: {
+              provider: "openai",
+              capability: "realtime-voice",
+            },
+          })
+          .catch(() => {});
         if (!attempt.ready) {
           const startupError = toStringifiedError(error);
           rejectStartup(
@@ -373,7 +380,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
             code,
             reasonBuffer,
           },
-          this.runtime.captureWsEvent,
+          this.runtime.captureWsEventAsync,
         );
         if (!this.lifecycle.isCurrent(lifecycleConnection)) {
           return;
@@ -664,17 +671,19 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
           ? (event as { type: string }).type
           : "unknown";
       const payload = JSON.stringify(event);
-      this.runtime.captureWsEvent({
-        url: this.connectionUrl,
-        direction: "outbound",
-        kind: "ws-frame",
-        flowId: this.flowId,
-        payload,
-        meta: {
-          provider: "openai",
-          capability: "realtime-voice",
-        },
-      });
+      void this.runtime
+        .captureWsEventAsync({
+          url: this.connectionUrl,
+          direction: "outbound",
+          kind: "ws-frame",
+          flowId: this.flowId,
+          payload,
+          meta: {
+            provider: "openai",
+            capability: "realtime-voice",
+          },
+        })
+        .catch(() => {});
       ws.send(payload);
       // Observers report a sent frame, so nested control cannot overtake it.
       this.config.onEvent?.({ direction: "client", type, ...(detail ? { detail } : {}) });

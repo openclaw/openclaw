@@ -172,7 +172,7 @@ enum RemoteGatewayProbe {
             guard !trimmedUrl.isEmpty else {
                 return .failed("Set a gateway URL first")
             }
-            guard self.isValidWsUrl(trimmedUrl) else {
+            guard GatewayRemoteConfig.normalizeGatewayUrl(trimmedUrl) != nil else {
                 return .failed(GatewayRemoteConfig.directGatewayUrlValidationMessage)
             }
         } else {
@@ -242,10 +242,6 @@ enum RemoteGatewayProbe {
         await self.probeGateway(connection: connection, timeoutMs: timeoutMs)
     }
     #endif
-
-    private static func isValidWsUrl(_ raw: String) -> Bool {
-        GatewayRemoteConfig.normalizeGatewayUrl(raw) != nil
-    }
 
     private static func sshCheckCommand(
         target: String,

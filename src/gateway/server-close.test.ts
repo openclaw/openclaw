@@ -42,6 +42,7 @@ import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/ind
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
 import type {
   GatewayCloseParams as GatewayTeardownParams,
@@ -209,7 +210,7 @@ describe("createGatewayCloseHandler", () => {
       },
     );
     const clearSecretsRuntimeSnapshot = vi.fn();
-    const metadata = retainGatewayPluginMetadata();
+    const metadata = retainGatewayPluginMetadata(createTestGatewayScheduler());
     const closing = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
         pluginMetadata: metadata,
@@ -220,21 +221,27 @@ describe("createGatewayCloseHandler", () => {
       await Promise.race([modelEntered.promise, cleanupEntered.promise]);
       expect(cache.retirement).toBeUndefined();
       expect(useDependency()).toBe("available");
-      expect(() => retainGatewayPluginMetadata()).toThrow(/retir|shut/i);
+      expect(() => retainGatewayPluginMetadata(createTestGatewayScheduler())).toThrow(
+        /retir|shut/i,
+      );
       modelReleased.resolve();
       await cleanupEntered.promise;
       expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
       expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
-      expect(() => retainGatewayPluginMetadata()).toThrow(/retir|shut/i);
+      expect(() => retainGatewayPluginMetadata(createTestGatewayScheduler())).toThrow(
+        /retir|shut/i,
+      );
       cleanupReleased.resolve();
       await sharedEntered.promise;
       expect(getPluginCache()).toBe(cache);
       expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
-      expect(() => retainGatewayPluginMetadata()).toThrow(/retir|shut/i);
+      expect(() => retainGatewayPluginMetadata(createTestGatewayScheduler())).toThrow(
+        /retir|shut/i,
+      );
       sharedReleased.resolve();
       await closing;
       expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
-      await retainGatewayPluginMetadata().close();
+      await retainGatewayPluginMetadata(createTestGatewayScheduler()).close();
     } finally {
       modelReleased.resolve();
       unregisterModel();

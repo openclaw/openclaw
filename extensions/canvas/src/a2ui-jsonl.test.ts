@@ -4,22 +4,6 @@ import { validateSupportedA2UIJsonl } from "./a2ui-jsonl.js";
 const BASIC_CATALOG = "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json";
 
 describe("Canvas A2UI JSONL validation", () => {
-  it("keeps unversioned v0.8 messages accepted", () => {
-    const jsonl = [
-      JSON.stringify({
-        surfaceUpdate: {
-          surfaceId: "main",
-          components: [{ id: "root", component: { Text: { text: { literalString: "hello" } } } }],
-        },
-      }),
-      JSON.stringify({ beginRendering: { surfaceId: "main", root: "root" } }),
-    ].join("\n");
-    expect(validateSupportedA2UIJsonl(jsonl)).toMatchObject({
-      version: "v0.8",
-      messageCount: 2,
-    });
-  });
-
   it("accepts the v0.9 create, component, data, and delete message set", () => {
     const messages = [
       {

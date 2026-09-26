@@ -4,11 +4,12 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
+import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { withCliCommandCleanup, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -75,11 +76,17 @@ describe("plugin registration runtime admission", () => {
         revokePluginRecord(builder.registry, record);
 
         await expect(purge()).rejects.toThrow("runtime is no longer active");
-        expect(await queue.listPending()).toEqual(pending);
-        expect(await queue.listClaims()).toEqual(claims);
+        const inspector = createChannelIngressQueue({
+          channelId: record.id,
+          accountId: "default",
+          stateDir,
+          access: "read-only",
+        });
+        expect(await inspector.listPending()).toEqual(pending);
+        expect(await inspector.listClaims()).toEqual(claims);
       } finally {
         await owner.dispose();
-        closeOpenClawStateDatabaseForTest();
+        await closeOpenClawStateDatabaseAsync();
       }
     });
   });

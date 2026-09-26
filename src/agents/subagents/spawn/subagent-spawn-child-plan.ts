@@ -19,8 +19,7 @@ import type {
 import { resolveSubagentModelAndThinkingPlan, splitModelRef } from "./subagent-spawn-plan.js";
 import {
   readRequesterFastMode,
-  readRequesterModel,
-  readRequesterThinkingLevel,
+  readRequesterPreferences,
 } from "./subagent-spawn-requester-prefs.js";
 import {
   normalizeDeliveryContext,
@@ -145,15 +144,21 @@ export async function resolveSubagentChildPlan(params: {
   const targetAgentDir = resolveAgentDir(params.cfg, params.targetAgentId);
   const requesterAgentConfig = resolveAgentConfig(params.cfg, params.requesterAgentId);
   const targetAgentConfig = resolveAgentConfig(params.cfg, params.targetAgentId);
+  const requesterPreferences =
+    params.ctx.requesterThinkingLevel === undefined ||
+    (params.targetAgentId === params.requesterAgentId && !params.ctx.requesterModel)
+      ? await readRequesterPreferences({
+          cfg: params.cfg,
+          requesterInternalKey: params.requesterInternalKey,
+          requesterAgentId: params.requesterAgentId,
+          assertActive: params.ctx.assertActive,
+        })
+      : undefined;
+  params.ctx.assertActive?.();
   // The active turn owns inherited effort; saved preferences may already describe
   // a later turn and cannot represent one-shot overrides.
   const callerThinkingRaw =
-    params.ctx.requesterThinkingLevel ??
-    readRequesterThinkingLevel({
-      cfg: params.cfg,
-      requesterInternalKey: params.requesterInternalKey,
-      requesterAgentId: params.requesterAgentId,
-    });
+    params.ctx.requesterThinkingLevel ?? requesterPreferences?.thinkingLevel;
   const modelPlan = await resolveSubagentModelAndThinkingPlan({
     cfg: params.cfg,
     targetAgentId: params.targetAgentId,
@@ -164,17 +169,13 @@ export async function resolveSubagentChildPlan(params: {
     callerThinkingRaw,
     inheritedModel:
       params.targetAgentId === params.requesterAgentId
-        ? (params.ctx.requesterModel ??
-          readRequesterModel({
-            cfg: params.cfg,
-            requesterInternalKey: params.requesterInternalKey,
-            requesterAgentId: params.requesterAgentId,
-          }))
+        ? (params.ctx.requesterModel ?? requesterPreferences?.model)
         : undefined,
     fastMode: params.request.fastMode,
     workspaceDir: spawnedWorkspaceDir,
     requiresTools: params.request.outputSchema !== undefined,
   });
+  params.ctx.assertActive?.();
   if (modelPlan.status === "error") {
     return {
       ok: false as const,
@@ -187,13 +188,15 @@ export async function resolveSubagentChildPlan(params: {
   }
   const { resolvedModel } = modelPlan;
   if (params.swarmEnabled && params.request.fastMode === undefined) {
-    modelPlan.initialSessionPatch.fastMode = readRequesterFastMode({
+    modelPlan.initialSessionPatch.fastMode = await readRequesterFastMode({
       cfg: params.cfg,
       requesterInternalKey: params.requesterInternalKey,
       requesterAgentId: params.requesterAgentId,
       requesterModel: params.ctx.requesterModel,
       childModel: resolvedModel,
+      assertActive: params.ctx.assertActive,
     });
+    params.ctx.assertActive?.();
   }
   const resolvedLaunchModel = splitModelRef(resolvedModel);
   const launchAuthorization: SubagentLaunchAuthorization | undefined =

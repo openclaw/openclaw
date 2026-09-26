@@ -1,14 +1,6 @@
 import { t } from "../i18n/index.ts";
-import type {
-  ChatAttachment,
-  ChatComposerMemoryFallback,
-  ChatGoalDraftMode,
-  ChatReplyTarget,
-  HumanMention,
-} from "../lib/chat/chat-types.ts";
 import { showToast } from "../lib/toast.ts";
 import { releaseChatAttachmentPayloads } from "../pages/chat/attachment-payload-lifecycle.ts";
-import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
 import type { ApplicationChatAttachmentHandoff } from "./context.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
@@ -20,18 +12,13 @@ const MAX_PENDING_CHAT_ATTACHMENT_ENTRIES = 32;
 // Hidden split panes can remain unmounted indefinitely, so wall-clock expiry
 // would lose valid drafts. Bounded oldest-first eviction owns abandoned cleanup.
 
-type PendingChatAttachmentHandoff = {
+type PendingChatAttachmentHandoff = NonNullable<
+  ReturnType<ApplicationChatAttachmentHandoff["consume"]>
+> & {
   owner: NonNullable<Parameters<ApplicationChatAttachmentHandoff["prepare"]>[0]["owner"]>;
   paneId: string;
   scopeKey: string;
-  attachments: ChatAttachment[];
-  fallbacks: Record<string, ChatComposerMemoryFallback>;
   message: string;
-  draftRevision?: number;
-  goalMode?: ChatGoalDraftMode | null;
-  replyTarget?: ChatReplyTarget | null;
-  mentions?: readonly HumanMention[];
-  newSessionDraft?: NewSessionDraftHandoff;
   preparedAt: number;
   incognito?: boolean;
   isConnectionCurrent: () => boolean;

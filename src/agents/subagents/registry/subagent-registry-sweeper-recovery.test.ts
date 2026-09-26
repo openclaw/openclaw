@@ -16,6 +16,7 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
+import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { reconcileDurableSubagentKillIntent } from "./subagent-registry-sweep-kill.js";
@@ -403,23 +404,62 @@ describe("subagent registry recovery scheduling", () => {
     await sweeper.sweepOnce();
     await vi.advanceTimersByTimeAsync(1_000);
     runtime.current = {} as GatewayRecoveryRuntime;
-    await vi.advanceTimersByTimeAsync(1_000);
+    await sweeper.sweepOnce();
 
     expect(recoverRow).toHaveBeenCalledTimes(3);
     expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
   });
 
-  it("never terminalizes a deferred live owner", async () => {
-    const runtime = { current: {} as GatewayRecoveryRuntime };
+  it("backs off each unresolved row without a sibling sweep resetting its deadline", async () => {
     recoverRow.mockResolvedValue({ status: "deferred" });
-    const { finalizeInterruptedSubagentRun, sweeper } = createHarness(runtime);
-
+    const { entry, runs, finalizeInterruptedSubagentRun, sweeper } = createHarness({});
+    const calls = () =>
+      recoverRow.mock.calls.filter(([params]) => params.runId === entry.runId).length;
     await sweeper.sweepOnce();
-    await vi.advanceTimersByTimeAsync(10_000);
-
-    expect(recoverRow.mock.calls.length).toBeGreaterThan(4);
+    for (const { delay, expected } of [
+      { delay: 1_000, expected: 2 },
+      { delay: 2_000, expected: 3 },
+      { delay: 4_000, expected: 4 },
+      { delay: 8_000, expected: 5 },
+      { delay: 16_000, expected: 6 },
+      { delay: 32_000, expected: 7 },
+      { delay: 60_000, expected: 8 },
+      { delay: 60_000, expected: 9 },
+    ]) {
+      await vi.advanceTimersByTimeAsync(delay);
+      expect(calls()).toBe(expected);
+    }
+    const sibling = { ...run(), runId: "new-sibling", childSessionKey: "agent:main:subagent:new" };
+    runs.set(sibling.runId, sibling);
+    await sweeper.sweepOnce();
+    await vi.advanceTimersByTimeAsync(7_000);
+    expect(calls()).toBe(9);
     expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
   });
+
+  it.each(["session", "registry", "generation"] as const)(
+    "rechecks a changed %s without waiting for the row's backoff",
+    async (change) => {
+      recoverRow.mockResolvedValue({ status: "deferred" });
+      const { entry, sweeper } = createHarness({});
+      await sweeper.sweepOnce();
+      await vi.advanceTimersByTimeAsync(7_000);
+      expect(recoverRow).toHaveBeenCalledTimes(4);
+      recoverRow.mockResolvedValue({ status: "handled" });
+      if (change === "session") {
+        sessionChanges.emit({ sessionKey: entry.childSessionKey, scope: "session-entry" });
+        await vi.advanceTimersByTimeAsync(1_000);
+      } else {
+        if (change === "registry") {
+          entry.execution.status = "interrupted";
+        } else {
+          rotateAgentEventLifecycleGeneration();
+        }
+        await sweeper.sweepOnce();
+      }
+      expect(recoverRow).toHaveBeenCalledTimes(5);
+    },
+  );
 
   it("does not terminalize a durable kill intent while runtime abort is rejected", async () => {
     const runtime = { current: {} as GatewayRecoveryRuntime };

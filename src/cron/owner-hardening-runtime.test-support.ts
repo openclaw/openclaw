@@ -2,6 +2,11 @@
 const currentModuleUrl = import.meta.url;
 
 export const cronOwnerHardeningEntrypoints = {
+  schedulerClock: {
+    currentModuleUrl,
+    sourceWorkerName: "../test-utils/gateway-scheduler-clock",
+    distWorkerPath: "test-utils/gateway-scheduler-clock.js",
+  },
   service: {
     currentModuleUrl,
     sourceWorkerName: "service",

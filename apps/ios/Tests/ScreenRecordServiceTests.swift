@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -123,14 +124,14 @@ private func makeVideoSampleBuffer() throws -> CMSampleBuffer {
 
 @Suite(.serialized) struct ScreenRecordServiceTests {
     @Test func `clamp defaults and bounds`() {
-        #expect(ScreenRecordService._test_clampDurationMs(nil) == 10000)
-        #expect(ScreenRecordService._test_clampDurationMs(0) == 250)
-        #expect(ScreenRecordService._test_clampDurationMs(60001) == 60000)
+        #expect(CaptureRateLimits.clampDurationMs(nil) == 10000)
+        #expect(CaptureRateLimits.clampDurationMs(0) == 250)
+        #expect(CaptureRateLimits.clampDurationMs(60001) == 60000)
 
-        #expect(ScreenRecordService._test_clampFps(nil) == 10)
-        #expect(ScreenRecordService._test_clampFps(0) == 1)
-        #expect(ScreenRecordService._test_clampFps(120) == 30)
-        #expect(ScreenRecordService._test_clampFps(.infinity) == 10)
+        #expect(CaptureRateLimits.clampFps(nil, maxFps: 30) == 10)
+        #expect(CaptureRateLimits.clampFps(0, maxFps: 30) == 1)
+        #expect(CaptureRateLimits.clampFps(120, maxFps: 30) == 30)
+        #expect(CaptureRateLimits.clampFps(.infinity, maxFps: 30) == 10)
     }
 
     @Test @MainActor func `record rejects invalid screen index`() async {

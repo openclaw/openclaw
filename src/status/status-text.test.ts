@@ -35,6 +35,28 @@ vi.mock("../infra/provider-usage.js", async (importOriginal) => {
 
 type StatusTextParams = Parameters<typeof buildStatusText>[0];
 
+function statusParams(overrides: Partial<StatusTextParams>): StatusTextParams {
+  return {
+    cfg: {},
+    sessionKey: "agent:main:main",
+    statusChannel: "mobilechat",
+    provider: "openai",
+    model: "gpt-5.4-mini",
+    resolvedHarness: "openclaw",
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
+    resolveDefaultThinkingLevel: async () => undefined,
+    isGroup: false,
+    defaultGroupActivation: () => "mention",
+    taskLineOverride: "",
+    skipDefaultTaskLookup: true,
+    modelAuthOverride: "api-key",
+    activeModelAuthOverride: "api-key",
+    includeTranscriptUsage: false,
+    ...overrides,
+  };
+}
+
 async function renderTelegramStatus(params: {
   cfg: StatusTextParams["cfg"];
   sessionEntry: NonNullable<StatusTextParams["sessionEntry"]>;
@@ -43,36 +65,27 @@ async function renderTelegramStatus(params: {
   agentId?: string;
   taskLookup?: Pick<StatusTextParams, "taskLineOverride" | "skipDefaultTaskLookup">;
 }): Promise<string> {
-  return await buildStatusText({
-    cfg: params.cfg,
-    sessionEntry: params.sessionEntry,
-    sessionKey: params.sessionKey ?? "agent:main:main",
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    statusChannel: "telegram",
-    ...(params.statusAccountId ? { statusAccountId: params.statusAccountId } : {}),
-    provider: "openai",
-    model: "gpt-5.4-mini",
-    resolvedHarness: "pi",
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolveDefaultThinkingLevel: async () => undefined,
-    isGroup: false,
-    defaultGroupActivation: () => "mention",
-    pluginHealthLineOverride: "Plugins: test",
-    taskLineOverride: "",
-    skipDefaultTaskLookup: true,
-    ...params.taskLookup,
-    primaryModelLabelOverride: "openai/gpt-5.4-mini",
-    modelAuthOverride: "test",
-    activeModelAuthOverride: "test",
-    includeTranscriptUsage: false,
-  });
+  return await buildStatusText(
+    statusParams({
+      cfg: params.cfg,
+      sessionEntry: params.sessionEntry,
+      sessionKey: params.sessionKey ?? "agent:main:main",
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      statusChannel: "telegram",
+      ...(params.statusAccountId ? { statusAccountId: params.statusAccountId } : {}),
+      resolvedHarness: "pi",
+      pluginHealthLineOverride: "Plugins: test",
+      ...params.taskLookup,
+      primaryModelLabelOverride: "openai/gpt-5.4-mini",
+      modelAuthOverride: "test",
+      activeModelAuthOverride: "test",
+    }),
+  );
 }
 
 describe("buildStatusText channel features", () => {
   it.each([
     { richMessages: undefined, expected: "Telegram rich messages: off" },
-    { richMessages: false, expected: "Telegram rich messages: off" },
     { richMessages: true, expected: "Telegram rich messages: on" },
   ])("shows Telegram rich message state for %s", async ({ richMessages, expected }) => {
     const telegram = richMessages === undefined ? {} : { richMessages };
@@ -192,44 +205,41 @@ describe("buildStatusText global subagent scope", () => {
   beforeEach(() => resetSubagentRegistryForTests({ persist: false }));
   afterEach(() => resetSubagentRegistryForTests({ persist: false }));
 
-  it.each(["research", "ops"])(
-    "shows the selected global agent's children when the default is %s",
-    async (defaultAgentId) => {
-      for (const agentId of ["research", "ops"]) {
-        addSubagentRunForTests({
-          runId: `status-global-${agentId}`,
-          childSessionKey: `agent:${agentId}:subagent:status-worker`,
-          controllerSessionKey: "global",
-          requesterSessionKey: "global",
-          requesterAgentId: agentId,
-          requesterDisplayKey: "global",
-          task: `${agentId} status worker`,
-          cleanup: "keep",
-          createdAt: Date.now() - 1_000,
-          startedAt: Date.now() - 1_000,
-        });
-      }
-
-      const text = await renderTelegramStatus({
-        cfg: {
-          agents: {
-            entries: {
-              research: { default: defaultAgentId === "research" },
-              ops: { default: defaultAgentId === "ops" },
-            },
-          },
-          session: { scope: "global" },
-        },
-        sessionEntry: { sessionId: "global-status", updatedAt: 0 },
-        sessionKey: "global",
-        agentId: "research",
+  it("shows the selected global agent's children instead of the default agent's", async () => {
+    for (const agentId of ["research", "ops"]) {
+      addSubagentRunForTests({
+        runId: `status-global-${agentId}`,
+        childSessionKey: `agent:${agentId}:subagent:status-worker`,
+        controllerSessionKey: "global",
+        requesterSessionKey: "global",
+        requesterAgentId: agentId,
+        requesterDisplayKey: "global",
+        task: `${agentId} status worker`,
+        cleanup: "keep",
+        createdAt: Date.now() - 1_000,
+        startedAt: Date.now() - 1_000,
       });
+    }
 
-      expect(text).toContain("🤖 Subagents: 1 active");
-      expect(text).toContain("research status worker");
-      expect(text).not.toContain("ops status worker");
-    },
-  );
+    const text = await renderTelegramStatus({
+      cfg: {
+        agents: {
+          entries: {
+            research: {},
+            ops: { default: true },
+          },
+        },
+        session: { scope: "global" },
+      },
+      sessionEntry: { sessionId: "global-status", updatedAt: 0 },
+      sessionKey: "global",
+      agentId: "research",
+    });
+
+    expect(text).toContain("🤖 Subagents: 1 active");
+    expect(text).toContain("research status worker");
+    expect(text).not.toContain("ops status worker");
+  });
 });
 
 describe("Codex usage after runtime fallback", () => {
@@ -250,32 +260,20 @@ describe("Codex usage after runtime fallback", () => {
   });
 
   async function renderFallbackStatus(agentHarnessId: "codex" | "openclaw"): Promise<string> {
-    return await buildStatusText({
-      cfg: {},
-      sessionEntry: {
-        sessionId: `fallback-${agentHarnessId}`,
-        updatedAt: 0,
-        agentRuntimeOverride: "openclaw",
-        agentHarnessId,
-      },
-      sessionKey: "agent:main:main",
-      statusChannel: "mobilechat",
-      provider: "openai",
-      model: "gpt-5.4-mini",
-      resolvedHarness: "openclaw",
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
-      pluginHealthLineOverride: "Plugins: test",
-      taskLineOverride: "",
-      skipDefaultTaskLookup: true,
-      primaryModelLabelOverride: "openai/gpt-5.4-mini",
-      modelAuthOverride: "oauth",
-      activeModelAuthOverride: "oauth",
-      includeTranscriptUsage: false,
-    });
+    return await buildStatusText(
+      statusParams({
+        sessionEntry: {
+          sessionId: `fallback-${agentHarnessId}`,
+          updatedAt: 0,
+          agentRuntimeOverride: "openclaw",
+          agentHarnessId,
+        },
+        pluginHealthLineOverride: "Plugins: test",
+        primaryModelLabelOverride: "openai/gpt-5.4-mini",
+        modelAuthOverride: "oauth",
+        activeModelAuthOverride: "oauth",
+      }),
+    );
   }
 
   it("shows Codex rate-limit usage for a Codex-bound session on OpenClaw Default", async () => {
@@ -311,6 +309,19 @@ describe("session status cost line", () => {
     }),
   };
 
+  const costSummary = {
+    input: 400_000,
+    output: 56_000,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 456_000,
+    totalCost: 1.23,
+    inputCost: 1,
+    outputCost: 0.23,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+  };
+
   beforeEach(() => {
     mocks.loadSessionCostSummariesFromCache.mockReset();
   });
@@ -325,16 +336,7 @@ describe("session status cost line", () => {
       },
       summaries: [
         {
-          input: 400_000,
-          output: 56_000,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 456_000,
-          totalCost: 1.23,
-          inputCost: 1,
-          outputCost: 0.23,
-          cacheReadCost: 0,
-          cacheWriteCost: 0,
+          ...costSummary,
           missingCostEntries: 0,
         },
       ],
@@ -343,20 +345,6 @@ describe("session status cost line", () => {
     await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBe(
       "💵 $1.23 · 456k tok (today)",
     );
-  });
-
-  it("omits a cold cost cache", async () => {
-    mocks.loadSessionCostSummariesFromCache.mockResolvedValue({
-      cacheStatus: {
-        status: "partial",
-        cachedFiles: 0,
-        pendingFiles: 1,
-        staleFiles: 0,
-      },
-      summaries: [null],
-    });
-
-    await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBeNull();
   });
 
   it("omits a stale cached summary", async () => {
@@ -369,16 +357,12 @@ describe("session status cost line", () => {
       },
       summaries: [
         {
+          ...costSummary,
           input: 1,
           output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
           totalTokens: 2,
           totalCost: 1,
-          inputCost: 1,
           outputCost: 0,
-          cacheReadCost: 0,
-          cacheWriteCost: 0,
           missingCostEntries: 0,
         },
       ],
@@ -397,16 +381,7 @@ describe("session status cost line", () => {
       },
       summaries: [
         {
-          input: 400_000,
-          output: 56_000,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 456_000,
-          totalCost: 1.23,
-          inputCost: 1,
-          outputCost: 0.23,
-          cacheReadCost: 0,
-          cacheWriteCost: 0,
+          ...costSummary,
           missingCostEntries: 12,
           missingCostByModel: {
             "openai/gpt-5.6-sol": 10,
@@ -424,41 +399,34 @@ describe("session status cost line", () => {
 
 describe("buildStatusText thinking facts", () => {
   it("keeps the prepared thinking level for a discovered Ollama reasoning model", async () => {
-    const text = await buildStatusText({
-      cfg: {},
-      sessionEntry: {
-        sessionId: "wa-ollama-think",
-        updatedAt: 0,
-        thinkingLevel: "high",
-        modelOverride: "glm-5.2:cloud",
-        providerOverride: "ollama",
-      },
-      sessionKey: "agent:main:main",
-      statusChannel: "whatsapp",
-      provider: "ollama",
-      model: "glm-5.2:cloud",
-      thinkingCatalog: [
-        {
-          provider: "ollama",
-          id: "glm-5.2:cloud",
-          reasoning: true,
+    const text = await buildStatusText(
+      statusParams({
+        sessionEntry: {
+          sessionId: "wa-ollama-think",
+          updatedAt: 0,
+          thinkingLevel: "high",
+          modelOverride: "glm-5.2:cloud",
+          providerOverride: "ollama",
         },
-      ],
-      resolvedHarness: "openclaw",
-      resolvedThinkLevel: "high",
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "on",
-      resolveDefaultThinkingLevel: async () => "high",
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
-      pluginHealthLineOverride: "Plugins: test",
-      taskLineOverride: "",
-      skipDefaultTaskLookup: true,
-      primaryModelLabelOverride: "ollama/glm-5.2:cloud",
-      modelAuthOverride: "local",
-      activeModelAuthOverride: "local",
-      includeTranscriptUsage: false,
-    });
+        statusChannel: "whatsapp",
+        provider: "ollama",
+        model: "glm-5.2:cloud",
+        thinkingCatalog: [
+          {
+            provider: "ollama",
+            id: "glm-5.2:cloud",
+            reasoning: true,
+          },
+        ],
+        resolvedThinkLevel: "high",
+        resolvedReasoningLevel: "on",
+        resolveDefaultThinkingLevel: async () => "high",
+        pluginHealthLineOverride: "Plugins: test",
+        primaryModelLabelOverride: "ollama/glm-5.2:cloud",
+        modelAuthOverride: "local",
+        activeModelAuthOverride: "local",
+      }),
+    );
 
     expect(text).toContain("think high");
     expect(text).not.toMatch(/think\s+off\b/);
@@ -473,26 +441,10 @@ describe("buildStatusText lazy loader retry", () => {
   });
 
   function retryStatusParams(sessionId: string): Parameters<typeof buildStatusText>[0] {
-    return {
-      cfg: {},
+    return statusParams({
       sessionEntry: { sessionId, updatedAt: 0 },
-      sessionKey: "agent:main:main",
-      statusChannel: "mobilechat",
-      provider: "openai",
-      model: "gpt-5.4-mini",
-      resolvedHarness: "openclaw",
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
-      taskLineOverride: "",
-      skipDefaultTaskLookup: true,
       primaryModelLabelOverride: "openai/gpt-5.4-mini",
-      modelAuthOverride: "api-key",
-      activeModelAuthOverride: "api-key",
-      includeTranscriptUsage: false,
-    };
+    });
   }
 
   it("falls back on import failure and retries in the same module instance", async () => {

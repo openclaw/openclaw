@@ -2,7 +2,6 @@ import {
   CONTROL_UI_BUILD_ID_ATTRIBUTE,
   type ControlUiRootPublicAsset,
 } from "../../../src/gateway/control-ui-root-assets.js";
-// Control UI module implements public assets behavior.
 import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 
@@ -38,14 +37,7 @@ export function inferControlUiPublicAssetPath(
   const resourceBasePath =
     params?.resourceBasePath ??
     (params?.pathname === undefined
-      ? resolveControlUiPaths(currentPathname())[1]
+      ? resolveControlUiPaths(typeof window === "undefined" ? "/" : window.location.pathname)[1]
       : inferBasePathFromPathname(params.pathname));
   return controlUiPublicAssetPath(asset, resourceBasePath);
-}
-
-function currentPathname(): string {
-  if (typeof window === "undefined") {
-    return "/";
-  }
-  return window.location.pathname;
 }

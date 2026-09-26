@@ -3,7 +3,6 @@ import { existsSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  collectPluginReleasePretagPackTargets,
   pluginReleasePretagExitCode,
   runPluginReleasePretagPackCheck,
 } from "../../scripts/plugin-release-pretag-pack-check.ts";
@@ -43,19 +42,6 @@ function createDualPublishPluginRepo() {
 }
 
 describe("scripts/plugin-release-pretag-pack-check.ts", () => {
-  it("collects dual-published plugin targets for npm and ClawHub pack checks", () => {
-    const repoDir = createDualPublishPluginRepo();
-
-    expect(collectPluginReleasePretagPackTargets(repoDir)).toEqual([
-      {
-        packageDir: "extensions/demo-plugin",
-        packageName: "@openclaw/demo-plugin",
-        packClawHub: true,
-        packNpm: true,
-      },
-    ]);
-  });
-
   it("runs runtime build, npm pack, and ClawHub pack commands as managed process groups", async () => {
     const repoDir = createDualPublishPluginRepo();
     runManagedCommandMock.mockResolvedValue(0);

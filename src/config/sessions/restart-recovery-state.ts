@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeRunId } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeDeliveryContext,
@@ -10,6 +10,7 @@ import type {
   HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidence,
   RestartRecoveryTerminalDeliveryEvidenceResult,
+  SessionRestartRecoveryState,
 } from "./restart-recovery-types.js";
 import type { SessionEntry } from "./types.js";
 
@@ -112,20 +113,18 @@ function normalizeHarnessCompletionRecovery(value: unknown): HarnessCompletionRe
 }
 
 function normalizeTerminalDeliveryEvidenceResult(
-  value: unknown,
+  record: unknown,
 ): RestartRecoveryTerminalDeliveryEvidenceResult | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(record)) {
     return undefined;
   }
-  const record = value as Record<string, unknown>;
   const captured = record.captured === true ? (true as const) : undefined;
   const rawPayloads = Array.isArray(record.payloads) ? record.payloads : undefined;
   const payloads: RestartRecoveryTerminalDeliveryEvidenceResult["payloads"] = rawPayloads
-    ? rawPayloads.slice(0, 64).map((item) => {
-        if (!item || typeof item !== "object" || Array.isArray(item)) {
+    ? rawPayloads.slice(0, 64).map((payload) => {
+        if (!isRecord(payload)) {
           return {};
         }
-        const payload = item as Record<string, unknown>;
         const mediaUrls = normalizeStringArray(payload.mediaUrls);
         const visible = typeof payload.visible === "boolean" ? payload.visible : undefined;
         const evidence: { mediaUrls?: string[]; visible?: boolean } = {};
@@ -142,10 +141,7 @@ function normalizeTerminalDeliveryEvidenceResult(
     record.payloadsTruncated === true || (rawPayloads?.length ?? 0) > 64
       ? (true as const)
       : undefined;
-  const rawStatus =
-    record.deliveryStatus && typeof record.deliveryStatus === "object"
-      ? (record.deliveryStatus as Record<string, unknown>)
-      : undefined;
+  const rawStatus = asOptionalObjectRecord(record.deliveryStatus);
   const status =
     rawStatus?.status === "failed" ||
     rawStatus?.status === "partial_failed" ||
@@ -156,11 +152,10 @@ function normalizeTerminalDeliveryEvidenceResult(
   const payloadOutcomes: NonNullable<
     RestartRecoveryTerminalDeliveryEvidenceResult["deliveryStatus"]
   >["payloadOutcomes"] = Array.isArray(rawStatus?.payloadOutcomes)
-    ? rawStatus.payloadOutcomes.slice(0, 64).flatMap((item) => {
-        if (!item || typeof item !== "object" || Array.isArray(item)) {
+    ? rawStatus.payloadOutcomes.slice(0, 64).flatMap((outcome) => {
+        if (!isRecord(outcome)) {
           return [];
         }
-        const outcome = item as Record<string, unknown>;
         const outcomeStatus =
           outcome.status === "failed" ||
           outcome.status === "sent" ||
@@ -204,11 +199,10 @@ function normalizeTerminalDeliveryEvidenceResult(
     : undefined;
   const messagingToolSentTargets: RestartRecoveryTerminalDeliveryEvidenceResult["messagingToolSentTargets"] =
     rawMessagingToolSentTargets
-      ? rawMessagingToolSentTargets.slice(0, 64).flatMap((item) => {
-          if (!item || typeof item !== "object" || Array.isArray(item)) {
+      ? rawMessagingToolSentTargets.slice(0, 64).flatMap((target) => {
+          if (!isRecord(target)) {
             return [];
           }
-          const target = item as Record<string, unknown>;
           const provider = normalizeRunId(target.provider);
           const accountId = normalizeRunId(target.accountId);
           const to = normalizeRunId(target.to);
@@ -343,24 +337,10 @@ export function normalizeRestartRecoveryTerminalRunIds(value: unknown): string[]
   return bounded.length > 0 ? bounded : undefined;
 }
 
-type RestartRecoveryNormalizedField =
-  | "restartRecoveryBeforeAgentReplyState"
-  | "restartRecoveryDeliveryReceiptState"
-  | "restartRecoveryDeliveryToolCallId"
-  | "restartRecoveryDeliveryMediaUrls"
-  | "restartRecoveryDisableMessageTool"
-  | "restartRecoverySuppressTextDelivery"
-  | "restartRecoveryDeliveryRequestFingerprint"
-  | "restartRecoveryDeliveryRunId"
-  | "restartRecoveryDeliverySourceRunId"
-  | "restartRecoveryHarnessCompletion"
-  | "restartRecoveryRequesterAccountId"
-  | "restartRecoveryRequesterSenderId"
-  | "restartRecoverySameChannelThreadRequired"
-  | "restartRecoverySourceIngress"
-  | "restartRecoverySourceReplyDeliveryMode"
-  | "restartRecoveryTerminalDeliveryEvidence"
-  | "restartRecoveryTerminalRunIds";
+type RestartRecoveryNormalizedField = Exclude<
+  keyof SessionRestartRecoveryState,
+  "restartRecoveryDeliveryContext"
+>;
 
 function sameOptionalStringArray(left: unknown, right: string[] | undefined): boolean {
   if (!Array.isArray(left) || !right) {
@@ -424,27 +404,16 @@ export function normalizeRestartRecoveryEntryFields(
       ? entry.restartRecoveryDeliveryReceiptState
       : undefined,
   );
-  assign(
+  for (const key of [
     "restartRecoveryDeliveryToolCallId",
-    normalizeRunId(entry.restartRecoveryDeliveryToolCallId),
-  );
-  assign(
     "restartRecoveryDeliveryRequestFingerprint",
-    normalizeRunId(entry.restartRecoveryDeliveryRequestFingerprint),
-  );
-  assign("restartRecoveryDeliveryRunId", normalizeRunId(entry.restartRecoveryDeliveryRunId));
-  assign(
+    "restartRecoveryDeliveryRunId",
     "restartRecoveryDeliverySourceRunId",
-    normalizeRunId(entry.restartRecoveryDeliverySourceRunId),
-  );
-  assign(
     "restartRecoveryRequesterAccountId",
-    normalizeRunId(entry.restartRecoveryRequesterAccountId),
-  );
-  assign(
     "restartRecoveryRequesterSenderId",
-    normalizeRunId(entry.restartRecoveryRequesterSenderId),
-  );
+  ] as const) {
+    assign(key, normalizeRunId(entry[key]));
+  }
   assign(
     "restartRecoverySameChannelThreadRequired",
     entry.restartRecoverySameChannelThreadRequired === true ? true : undefined,

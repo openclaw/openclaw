@@ -1,7 +1,4 @@
-import type {
-  ChannelPreviewStreamingConfig,
-  ChannelStreamingProgressConfig,
-} from "./types.base.js";
+import type { ChannelPreviewStreamingConfig, SessionThreadBindingsConfig } from "./types.base.js";
 import type {
   ChannelBotInteractionConfig,
   ChannelExecApprovalConfig,
@@ -15,9 +12,7 @@ import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./typ
 import type { TtsConfig } from "./types.tts.js";
 
 export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
-export type DiscordChannelStreamingConfig = Omit<ChannelPreviewStreamingConfig, "progress"> & {
-  progress?: ChannelStreamingProgressConfig;
-};
+export type DiscordChannelStreamingConfig = ChannelPreviewStreamingConfig;
 
 export type DiscordPluralKitConfig = {
   enabled?: boolean;
@@ -234,18 +229,7 @@ export type DiscordAgentComponentsConfig = {
   ttlMs?: number;
 };
 
-export type DiscordThreadBindingsConfig = {
-  /** Enable Discord thread binding features. Overrides session.threadBindings.enabled. */
-  enabled?: boolean;
-  /** Inactivity window in hours. Set 0 to disable. Default: 24. */
-  idleHours?: number;
-  /** Hard max age in hours. Set 0 to disable. Default: 0. */
-  maxAgeHours?: number;
-  /** Allow session spawns to create and bind Discord threads. Default: true. */
-  spawnSessions?: boolean;
-  /** Default context mode for native subagents. Default: fork. */
-  defaultSpawnContext?: "isolated" | "fork";
-};
+export type DiscordThreadBindingsConfig = SessionThreadBindingsConfig;
 
 export type DiscordSlashCommandConfig = {
   /** Reply ephemerally (default: true). */

@@ -511,6 +511,9 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
     each request. Explicit Gemini `cachedContent` handles are not supported on
     this route; use `google-generative-ai` for that feature.
 
+    Interrupted text replies use the normal transient-error retry and failover
+    policy. Malformed completed tool-call arguments remain rejected.
+
   </Accordion>
 
   <Accordion title="Direct Gemini cache reuse">

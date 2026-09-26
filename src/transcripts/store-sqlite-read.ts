@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import type { InferResult } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
+  prepareSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
 } from "../infra/kysely-sync.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
@@ -158,6 +160,93 @@ export function readTranscriptSessionEntries(database: DatabaseSync): Transcript
   }));
 }
 
+const sessionMatchQueries = new WeakMap<
+  DatabaseSync,
+  ReturnType<typeof createTranscriptSessionMatchQueries>
+>();
+
+function createTranscriptSessionMatchQueries(database: DatabaseSync) {
+  const query = meetingTranscriptDb(database)
+    .selectFrom("meeting_transcript_sessions")
+    // Keep native integer validation; export ownership is not matching input.
+    .select([
+      "session_id",
+      "started_at",
+      "selector",
+      "title",
+      "source_json",
+      "metadata_json",
+      "stopped_at",
+      "next_utterance_seq",
+      "created_at_ms",
+      "updated_at_ms",
+    ])
+    .select((eb) =>
+      eb
+        .exists(
+          eb
+            .selectFrom("meeting_transcript_summaries")
+            .select("session_id")
+            .whereRef(
+              "meeting_transcript_summaries.session_id",
+              "=",
+              "meeting_transcript_sessions.session_id",
+            )
+            .whereRef(
+              "meeting_transcript_summaries.session_started_at",
+              "=",
+              "meeting_transcript_sessions.started_at",
+            ),
+        )
+        .as("has_summary"),
+    )
+    .orderBy("started_at", "desc")
+    .limit(2);
+  type Row = InferResult<typeof query>[number];
+  return {
+    canonical: prepareSqliteQuerySync<string, Row>(database, (parameter) =>
+      query.where(
+        "selector",
+        "=",
+        parameter((value) => value),
+      ),
+    ),
+    rawId: prepareSqliteQuerySync<string, Row>(database, (parameter) =>
+      query.where(
+        "session_id",
+        "=",
+        parameter((value) => value),
+      ),
+    ),
+    slug: prepareSqliteQuerySync<string, Row>(database, (parameter) =>
+      query
+        .where(
+          "session_slug",
+          "=",
+          parameter((value) => value),
+        )
+        .where(
+          "session_id",
+          "!=",
+          parameter((value) => value),
+        ),
+    ),
+    dated: prepareSqliteQuerySync<{ sessionId: string; date: string }, Row>(database, (parameter) =>
+      query
+        .where(
+          "session_id",
+          "=",
+          parameter((value) => value.sessionId),
+        )
+        .where(
+          "started_at",
+          "like",
+          parameter((value) => `${value.date}T%`),
+        ),
+    ),
+  };
+}
+
 export function readTranscriptSessionMatches(
   database: DatabaseSync,
   value: string,
@@ -165,48 +254,32 @@ export function readTranscriptSessionMatches(
   qualified: TranscriptSessionMatchEntry[];
   unqualified: TranscriptSessionMatchEntry[];
 } {
-  const query = meetingTranscriptDb(database)
-    .selectFrom("meeting_transcript_sessions")
-    .selectAll()
-    .orderBy("started_at", "desc")
-    .limit(2);
-  const matchedEntry = (row: MeetingTranscriptSessionRow): TranscriptSessionMatchEntry => {
-    const hasSummary = Boolean(
-      executeSqliteQueryTakeFirstSync(
-        database,
-        meetingTranscriptDb(database)
-          .selectFrom("meeting_transcript_summaries")
-          .select("session_id")
-          .where("session_id", "=", row.session_id)
-          .where("session_started_at", "=", row.started_at)
-          .limit(1),
-      ),
-    );
-    return {
+  let queries = sessionMatchQueries.get(database);
+  if (!queries) {
+    queries = createTranscriptSessionMatchQueries(database);
+    sessionMatchQueries.set(database, queries);
+  }
+  const entries = (result: ReturnType<typeof queries.canonical>): TranscriptSessionMatchEntry[] =>
+    result.rows.map((row) => ({
       session: sessionFromRow(row),
       selector: row.selector,
-      hasSummary,
+      hasSummary: Boolean(row.has_summary),
       inputRevision: transcriptSummaryInputRevisionFromRow(row),
-    };
-  };
-  const entries = (selection: typeof query) =>
-    executeSqliteQuerySync(database, selection).rows.map(matchedEntry);
-  const canonical = entries(query.where("selector", "=", value))[0];
+    }));
+  const canonical = entries(queries.canonical(value))[0];
   const date = value.match(/^(\d{4}-\d{2}-\d{2})\//u)?.[1];
   const qualified = canonical
     ? [canonical]
     : date
-      ? entries(
-          query.where("session_id", "=", value.slice(11)).where("started_at", "like", `${date}T%`),
-        )
+      ? entries(queries.dated({ sessionId: value.slice(11), date }))
       : [];
   return {
     qualified,
     unqualified: [
-      ...entries(query.where("session_id", "=", value)),
+      ...entries(queries.rawId(value)),
       // Exclude exact raw IDs so their historical rows cannot fill this bound
       // and hide a different identity when the tool prefers a current capture.
-      ...entries(query.where("session_slug", "=", value).where("session_id", "!=", value)),
+      ...entries(queries.slug(value)),
     ],
   };
 }

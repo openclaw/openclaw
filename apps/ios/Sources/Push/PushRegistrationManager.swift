@@ -96,6 +96,7 @@ actor PushRegistrationManager {
 
         let tokenHashHex = Self.sha256Hex(apnsTokenHex)
         let relayOrigin = relayClient.normalizedBaseURLString
+        let registrationState: PushRelayRegistrationStore.RegistrationState
         if let stored = PushRelayRegistrationStore.loadRegistrationState(),
            stored.installationId == installationId,
            stored.gatewayDeviceId == gatewayIdentity.deviceId,
@@ -107,49 +108,39 @@ actor PushRegistrationManager {
            !Self.isExpired(stored.relayHandleExpiresAtMs)
         {
             GatewayDiagnostics.pushRelay.stage("using cached relay registration")
-            return try Self.encodePayload(
-                RelayGatewayPushRegistrationPayload(
-                    relayHandle: stored.relayHandle,
-                    sendGrant: stored.sendGrant,
-                    gatewayDeviceId: gatewayIdentity.deviceId,
-                    installationId: installationId,
-                    topic: topic,
-                    environment: self.buildConfig.apnsEnvironment.rawValue,
-                    distribution: self.buildConfig.distribution.rawValue,
-                    relayOrigin: relayOrigin,
-                    tokenDebugSuffix: stored.tokenDebugSuffix))
-        }
-
-        GatewayDiagnostics.pushRelay.stage("relay registration cache miss")
-        let response = try await relayClient.register(PushRelayRegistrationInput(
-            installationId: installationId,
-            bundleId: bundleId,
-            appVersion: DeviceInfoHelper.appVersion(),
-            environment: self.buildConfig.apnsEnvironment,
-            relayProfile: self.buildConfig.relayProfile,
-            proofPolicy: self.buildConfig.proofPolicy,
-            distribution: self.buildConfig.distribution,
-            apnsTokenHex: apnsTokenHex,
-            gatewayIdentity: gatewayIdentity))
-        let registrationState = PushRelayRegistrationStore.RegistrationState(
-            relayHandle: response.relayHandle,
-            sendGrant: response.sendGrant,
-            relayOrigin: relayOrigin,
-            gatewayDeviceId: gatewayIdentity.deviceId,
-            relayHandleExpiresAtMs: response.expiresAtMs,
-            tokenDebugSuffix: Self.normalizeTokenSuffix(response.tokenSuffix),
-            lastAPNsTokenHashHex: tokenHashHex,
-            installationId: installationId,
-            lastTransport: self.buildConfig.transport.rawValue,
-            apnsEnvironment: self.buildConfig.apnsEnvironment.rawValue,
-            relayProfile: self.buildConfig.relayProfile.rawValue,
-            proofPolicy: self.buildConfig.proofPolicy.rawValue)
-        _ = PushRelayRegistrationStore.saveRegistrationState(registrationState)
-        GatewayDiagnostics.pushRelay.stage("stored relay registration hasExpiry=\(response.expiresAtMs != nil)")
-        return try Self.encodePayload(
-            RelayGatewayPushRegistrationPayload(
+            registrationState = stored
+        } else {
+            GatewayDiagnostics.pushRelay.stage("relay registration cache miss")
+            let response = try await relayClient.register(PushRelayRegistrationInput(
+                installationId: installationId,
+                bundleId: bundleId,
+                appVersion: DeviceInfoHelper.appVersion(),
+                environment: self.buildConfig.apnsEnvironment,
+                relayProfile: self.buildConfig.relayProfile,
+                proofPolicy: self.buildConfig.proofPolicy,
+                distribution: self.buildConfig.distribution,
+                apnsTokenHex: apnsTokenHex,
+                gatewayIdentity: gatewayIdentity))
+            registrationState = PushRelayRegistrationStore.RegistrationState(
                 relayHandle: response.relayHandle,
                 sendGrant: response.sendGrant,
+                relayOrigin: relayOrigin,
+                gatewayDeviceId: gatewayIdentity.deviceId,
+                relayHandleExpiresAtMs: response.expiresAtMs,
+                tokenDebugSuffix: Self.normalizeTokenSuffix(response.tokenSuffix),
+                lastAPNsTokenHashHex: tokenHashHex,
+                installationId: installationId,
+                lastTransport: self.buildConfig.transport.rawValue,
+                apnsEnvironment: self.buildConfig.apnsEnvironment.rawValue,
+                relayProfile: self.buildConfig.relayProfile.rawValue,
+                proofPolicy: self.buildConfig.proofPolicy.rawValue)
+            _ = PushRelayRegistrationStore.saveRegistrationState(registrationState)
+            GatewayDiagnostics.pushRelay.stage("stored relay registration hasExpiry=\(response.expiresAtMs != nil)")
+        }
+        return try Self.encodePayload(
+            RelayGatewayPushRegistrationPayload(
+                relayHandle: registrationState.relayHandle,
+                sendGrant: registrationState.sendGrant,
                 gatewayDeviceId: gatewayIdentity.deviceId,
                 installationId: installationId,
                 topic: topic,

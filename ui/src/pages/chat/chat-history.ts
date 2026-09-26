@@ -21,7 +21,7 @@ import {
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
-import { readChatSessionSnapshot } from "./session-message-cache.ts";
+import { readChatHistoryCursor } from "./session-message-cache.ts";
 
 type LoadChatHistoryOptions = {
   deferBranches?: boolean;
@@ -92,12 +92,7 @@ export async function loadChatHistory(
       }
     }
   }
-  const deltaCursor = state.chatMessagesBySession
-    ? readChatSessionSnapshot(state.chatMessagesBySession, state, {
-        sessionKey,
-        agentId: requestAgentId,
-      })?.deltaCursor
-    : undefined;
+  const deltaCursor = readChatHistoryCursor(state);
   const requestModeKey = deltaCursor === undefined ? "page" : `cursor:${deltaCursor}`;
   const inputRunIds = readChatInputRunIds(state);
   const requestKeyPrefix = JSON.stringify([

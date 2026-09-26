@@ -13,14 +13,11 @@ describe("parseStrictNonNegativeDecimal", () => {
     expect(parseStrictNonNegativeDecimal(raw, "limit")).toBe(expected);
   });
 
-  it.each(["", "00", "01", "+1", "-1", "1.5", "1e3", "0x10"])(
-    "rejects non-canonical value %j",
-    (raw) => {
-      expect(() => parseStrictNonNegativeDecimal(raw, "limit")).toThrow(
-        "limit must be a non-negative integer",
-      );
-    },
-  );
+  it.each(["", "01", "+1", "-1", "1.5", "1e3", "0x10"])("rejects non-canonical value %j", (raw) => {
+    expect(() => parseStrictNonNegativeDecimal(raw, "limit")).toThrow(
+      "limit must be a non-negative integer",
+    );
+  });
 
   it("distinguishes unsafe canonical integers", () => {
     expect(() => parseStrictNonNegativeDecimal("9007199254740992", "limit")).toThrow(

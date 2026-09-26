@@ -47,7 +47,6 @@ import { renderModelSetup, revealModelSetupFeedback } from "./view.ts";
 import { ModelSetupWizardRunner, type ModelSetupWizardCompletion } from "./wizard-runner.ts";
 
 export type { ModelSetupRouteData } from "./first-run-setup.ts";
-export { resumeFirstRunActivation } from "./first-run-activation-receipt.ts";
 
 export class ModelSetupPage extends OpenClawLightDomElement {
   private readonly actionsDisabled = (): boolean =>
@@ -68,7 +67,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   @property() agentLabel = "";
   @property({ attribute: false }) credentialChoices: readonly string[] = [];
   @property({ attribute: false }) onClose: (() => void) | undefined;
-  @property({ attribute: false }) onConnectChoice: ((authChoice?: string) => void) | undefined;
 
   @state() private pageState: ModelSetupPageState = { phase: "loading" };
   @state() private activationState: ModelSetupActivationState = { phase: "idle" };
@@ -639,7 +637,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
           this.wizardReturnFocus = null;
         }
       },
-      onConnectChoice: this.onConnectChoice,
       page: this.firstRun.visiblePageState(
         this.verifyState.phase === "ok" && this.verifyState.modelTarget !== "utility",
       ),

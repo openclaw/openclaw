@@ -261,7 +261,7 @@ struct CommandCenterTab: View {
             subtitleLineLimit: 1)
         {
             if let headerSidebarAction {
-                OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
+                OpenClawSidebarControlButton(action: headerSidebarAction)
             }
         } accessory: {
             HStack(spacing: 10) {
@@ -520,9 +520,9 @@ struct CommandCenterTab: View {
     }
 
     private var effectiveRecentChatSessions: [OpenClawChatSessionEntry] {
-        Self.sessionChoices(
-            self.dashboardModel.sessions,
-            defaultSessionKey: self.appModel.defaultChatSessionKey)
+        self.dashboardModel.sessions.filter {
+            Self.isRecentChatSession($0.key, defaultSessionKey: self.appModel.defaultChatSessionKey)
+        }
     }
 
     private var sessionControlsAvailable: Bool {
@@ -562,15 +562,6 @@ struct CommandCenterTab: View {
             } catch {
                 self.dashboardModel.reportSessionError(error)
             }
-        }
-    }
-
-    private static func sessionChoices(
-        _ sessions: [OpenClawChatSessionEntry],
-        defaultSessionKey: String) -> [OpenClawChatSessionEntry]
-    {
-        sessions.filter {
-            self.isRecentChatSession($0.key, defaultSessionKey: defaultSessionKey)
         }
     }
 
@@ -677,12 +668,6 @@ struct CommandCenterTab: View {
         return formatter.localizedString(for: date, relativeTo: now)
     }
 
-    fileprivate nonisolated static func isHiddenInternalSession(_ key: String) -> Bool {
-        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
-        return trimmed == "onboarding" || trimmed.hasSuffix(":onboarding")
-    }
-
     nonisolated static func isRecentChatSession(_ key: String, defaultSessionKey: String) -> Bool {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
@@ -694,7 +679,7 @@ struct CommandCenterTab: View {
         {
             return false
         }
-        if self.isHiddenInternalSession(trimmed) { return false }
+        if ChatSessionSidebarModel.isHiddenInternalSession(trimmed) { return false }
         return !self.isAgentDeviceSession(trimmed, defaultSessionKey: defaultSessionKey)
     }
 
@@ -767,27 +752,14 @@ struct CommandSessionsScreen: View {
     @State private var groupDraftText = ""
     @State private var groupPendingDelete: String?
     let headerSidebarAction: OpenClawSidebarHeaderAction?
-    let usesNativeNavigationChrome: Bool
     let openChat: () -> Void
-
-    init(
-        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
-        usesNativeNavigationChrome: Bool = false,
-        openChat: @escaping () -> Void)
-    {
-        self.headerSidebarAction = headerSidebarAction
-        self.usesNativeNavigationChrome = usesNativeNavigationChrome
-        self.openChat = openChat
-    }
 
     var body: some View {
         ZStack {
             OpenClawProBackground()
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    if !self.usesNativeNavigationChrome {
-                        self.header
-                    }
+                    self.header
                     self.sessionsPanel
                 }
                 .padding(.top, 16)
@@ -797,7 +769,7 @@ struct CommandSessionsScreen: View {
         }
         .navigationTitle("Sessions")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(self.usesNativeNavigationChrome ? .visible : .hidden, for: .navigationBar)
+        .toolbar(.hidden, for: .navigationBar)
         .task(id: self.refreshID) {
             await self.refreshSessions()
         }
@@ -851,7 +823,7 @@ struct CommandSessionsScreen: View {
             subtitleFont: OpenClawType.captionMedium)
         {
             if let headerSidebarAction {
-                OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
+                OpenClawSidebarControlButton(action: headerSidebarAction)
             }
         } accessory: {
             EmptyView()
@@ -976,7 +948,7 @@ struct CommandSessionsScreen: View {
     }
 
     private var refreshID: String {
-        "\(self.appModel.commandSessionListMode):\(self.showArchived)"
+        "\(self.appModel.chatViewModelIdentityID):\(self.showArchived)"
     }
 
     @ViewBuilder
@@ -1113,7 +1085,7 @@ struct CommandSessionsScreen: View {
             for: session,
             currentSessionKey: self.appModel.chatSessionKey)
         return Button {
-            self.open(session)
+            self.openSessionKey(session.key)
         } label: {
             CommandSessionRow(item: item)
         }
@@ -1131,10 +1103,6 @@ struct CommandSessionsScreen: View {
                 archivesSession: { !self.showArchived && session.archived != true },
                 performMutation: self.performMutation,
                 fork: { self.forkSession(session) }))
-    }
-
-    private func open(_ session: OpenClawChatSessionEntry) {
-        self.openSessionKey(session.key)
     }
 
     private func openSessionKey(_ key: String) {
@@ -1204,9 +1172,5 @@ struct CommandSessionsScreen: View {
 extension NodeAppModel {
     fileprivate var isCommandSessionListAvailable: Bool {
         self.isLocalChatFixtureEnabled || self.isOperatorGatewayConnected
-    }
-
-    fileprivate var commandSessionListMode: String {
-        self.chatViewModelIdentityID
     }
 }

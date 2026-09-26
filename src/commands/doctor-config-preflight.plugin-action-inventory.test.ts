@@ -143,7 +143,7 @@ module.exports = { stateMigrations: [{
                 ]
               : [];
           if (pending.length > 0) {
-            recordDeferredPluginMigrations({ env, pending });
+            await recordDeferredPluginMigrations({ env, pending });
           }
           const admitted = caller === "deferred-doctor" ? actions.slice(0, 1) : actions;
           let receipt;
