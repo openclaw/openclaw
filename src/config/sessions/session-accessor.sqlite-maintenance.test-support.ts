@@ -277,7 +277,7 @@ export function registerSessionMaintenancePreparationTests() {
     });
   });
 
-  it.each(["caller revocation", "lost preparation reply"] as const)(
+  it.for(["caller revocation", "lost preparation reply"] as const)(
     "joins preparation cleanup after %s without discarding another caller's preparation",
     async (failure, { signal }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
