@@ -475,7 +475,7 @@ private fun SkillListRow(
     title = skill.name,
     subtitle = skillSubtitle(skill),
     modifier = Modifier.clickable(onClickLabel = nativeString("Open skill detail"), onClick = onClick),
-    leading = { ClawTextBadge(text = skillBadge(skill)) },
+    leading = { ClawTextBadge(text = skill.emoji ?: badgeInitials(skill.name, fallback = "S")) },
     trailing = {
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         ClawStatusPill(text = skillStatusText(skill), status = skillStatus(skill))
@@ -811,8 +811,3 @@ private fun skillSourceLabel(skill: GatewaySkillSummary): String =
     "openclaw-extra" -> nativeString("Extra")
     else -> nativeString("Skill")
   }
-
-private fun skillBadge(skill: GatewaySkillSummary): String {
-  skill.emoji?.let { return it }
-  return badgeInitials(skill.name, fallback = "S")
-}

@@ -77,11 +77,7 @@ import {
   resolveReplyAgentScope,
 } from "./get-reply-preprocessing.js";
 import { runPreparedReply } from "./get-reply-run.js";
-import {
-  prepareInternalGetReplyOptions,
-  withExtractedFileImages,
-  type InternalGetReplyOptions,
-} from "./get-reply.types.js";
+import { prepareInternalGetReplyOptions, withExtractedFileImages } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import {
   hasInboundAudio,
@@ -316,7 +312,6 @@ export async function getReplyFromConfig(
   );
   const optsWithSkillFilter =
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
-  const internalOptsWithSkillFilter = optsWithSkillFilter as InternalGetReplyOptions | undefined;
   let extractedFileImages: ExtractedFileImage[] | undefined;
   let enableLocalPathSelfServe: ApplyMediaUnderstandingResult["enableLocalPathSelfServe"];
   const agentCfg = cfg.agents?.defaults;
@@ -430,7 +425,7 @@ export async function getReplyFromConfig(
         // Implicit ACP agents need the live session's ACP meta (per-session cwd
         // from /acp spawn --cwd or /acp cwd) before workspace scaffolding runs.
         const state = await resolveReplySessionPreprocessingState({ ctx: finalized, cfg });
-        assertReplyPreprocessingActive(internalOptsWithSkillFilter?.abortSignal);
+        assertReplyPreprocessingActive(optsWithSkillFilter?.abortSignal);
         return {
           cfg,
           agentId,
@@ -486,7 +481,7 @@ export async function getReplyFromConfig(
         agentId,
         sessionKey: agentSessionKey,
         workspaceDir,
-        abortSignal: internalOptsWithSkillFilter?.abortSignal,
+        abortSignal: optsWithSkillFilter?.abortSignal,
       }),
     );
   }
@@ -499,7 +494,7 @@ export async function getReplyFromConfig(
           resolveReplySessionPreprocessingState({ ctx: finalized, cfg }),
         )
       : undefined;
-  assertReplyPreprocessingActive(internalOptsWithSkillFilter?.abortSignal);
+  assertReplyPreprocessingActive(optsWithSkillFilter?.abortSignal);
   const utilityModelSelectionLocked = isModelSelectionLocked(preprocessingState?.sessionEntry);
 
   if (mediaUnderstandingRequested) {
@@ -539,12 +534,12 @@ export async function getReplyFromConfig(
       applyLinkUnderstandingIfNeeded({
         ctx: finalized,
         cfg,
-        signal: internalOptsWithSkillFilter?.abortSignal,
+        signal: optsWithSkillFilter?.abortSignal,
       }),
     );
   }
   // Cleanup may resolve after cancellation; hooks must stay inside the reply lifetime.
-  assertReplyPreprocessingActive(internalOptsWithSkillFilter?.abortSignal);
+  assertReplyPreprocessingActive(optsWithSkillFilter?.abortSignal);
   emitPreAgentMessageHooks({
     ctx: finalized,
     cfg,
@@ -564,19 +559,18 @@ export async function getReplyFromConfig(
         })
       : await traceGetReplyPhase("reply.init_session_state", () =>
           initSessionState({
-            providerReviewAcknowledgment: internalOptsWithSkillFilter?.providerReviewAcknowledgment,
+            providerReviewAcknowledgment: optsWithSkillFilter?.providerReviewAcknowledgment,
             ctx: finalized,
             cfg,
             commandAuthorized,
-            ...(internalOptsWithSkillFilter?.expectedExistingSessionId
-              ? { expectedExistingSessionId: internalOptsWithSkillFilter.expectedExistingSessionId }
+            ...(optsWithSkillFilter?.expectedExistingSessionId
+              ? { expectedExistingSessionId: optsWithSkillFilter.expectedExistingSessionId }
               : {}),
-            pinExpectedExistingSession:
-              internalOptsWithSkillFilter?.pinExpectedExistingSession === true,
-            newlyCreatedSessionId: internalOptsWithSkillFilter?.newlyCreatedSessionId,
-            requestedSessionId: internalOptsWithSkillFilter?.requestedSessionId,
-            resumeRequestedSession: internalOptsWithSkillFilter?.resumeRequestedSession,
-            signal: internalOptsWithSkillFilter?.abortSignal,
+            pinExpectedExistingSession: optsWithSkillFilter?.pinExpectedExistingSession === true,
+            newlyCreatedSessionId: optsWithSkillFilter?.newlyCreatedSessionId,
+            requestedSessionId: optsWithSkillFilter?.requestedSessionId,
+            resumeRequestedSession: optsWithSkillFilter?.resumeRequestedSession,
+            signal: optsWithSkillFilter?.abortSignal,
           }),
         );
   } catch (error) {
@@ -642,9 +636,7 @@ export async function getReplyFromConfig(
   }
   // Utility-model narration is turn-local decoration. Initialize the durable
   // session first, then keep it completely outside model-locked native runs.
-  const admittedSessionSettings =
-    // SAFETY: Gateway dispatch owns this internal extension and forwards the same options object here.
-    (optsWithCommandQueueOverride as InternalGetReplyOptions | undefined)?.admittedSessionSettings;
+  const admittedSessionSettings = optsWithCommandQueueOverride?.admittedSessionSettings;
   const turnToolOverrides = admittedSessionSettings
     ? admittedSessionSettings.toolOverrides
     : sessionEntry.toolOverrides;
@@ -658,10 +650,9 @@ export async function getReplyFromConfig(
     opts: optsWithSessionSkillOverrides,
     disabled: sessionModelSelectionLocked,
   });
-  const internalResolvedOpts = resolvedOpts as InternalGetReplyOptions | undefined;
   let { abortedLastRun } = sessionState;
   resolverTimingSessionKey = sessionKey ?? resolverTimingSessionKey;
-  internalResolvedOpts?.onSessionPrepared?.({
+  resolvedOpts?.onSessionPrepared?.({
     sessionKey,
     sessionId,
     lifecycleRevision: sessionEntry.lifecycleRevision,
@@ -837,7 +828,7 @@ export async function getReplyFromConfig(
   }
 
   const conversation =
-    internalResolvedOpts?.replyConversation ??
+    resolvedOpts?.replyConversation ??
     prepareReplyConversation({
       ctx: sessionCtx,
       sessionEntry: sessionStore[sessionKey] ?? sessionEntry,
@@ -991,12 +982,11 @@ export async function getReplyFromConfig(
       skillFilter: mergedSkillFilter,
     }),
   );
+  await maybeEmitMissingResetHooks();
   if (inlineActionResult.kind === "reply") {
-    await maybeEmitMissingResetHooks();
     logResolverTiming("completed", "inline_action_reply");
     return inlineActionResult.reply;
   }
-  await maybeEmitMissingResetHooks();
   directives = inlineActionResult.directives;
   cleanedBody = inlineActionResult.cleanedBody;
   const explicitSkillSelections = inlineActionResult.explicitSkillSelections;
@@ -1006,8 +996,8 @@ export async function getReplyFromConfig(
   const runAutoFallbackPrimaryProbe =
     directives.hasModelDirective ||
     (autoFallbackPrimaryProbe &&
-      internalResolvedOpts?.operatorAuthority?.modelPolicy &&
-      !internalResolvedOpts.operatorAuthority.modelPolicy.allows(autoFallbackPrimaryProbe))
+      resolvedOpts?.operatorAuthority?.modelPolicy &&
+      !resolvedOpts.operatorAuthority.modelPolicy.allows(autoFallbackPrimaryProbe))
       ? undefined
       : autoFallbackPrimaryProbe;
   let runProvider = runAutoFallbackPrimaryProbe?.provider ?? provider;
@@ -1039,7 +1029,7 @@ export async function getReplyFromConfig(
         hasResolvedHeartbeatModelOverride,
         isHeartbeat: opts?.isHeartbeat === true,
         preparedModelCatalog,
-        operatorAuthority: internalResolvedOpts?.operatorAuthority,
+        operatorAuthority: resolvedOpts?.operatorAuthority,
       });
     } catch (error) {
       if (
@@ -1097,7 +1087,7 @@ export async function getReplyFromConfig(
         agentId,
         sessionKey,
         workspaceDir: stagingWorkspaceDir,
-        abortSignal: internalOptsWithSkillFilter?.abortSignal,
+        abortSignal: optsWithSkillFilter?.abortSignal,
       }),
     );
     stagedAttachmentPaths = stageResult.staged;

@@ -5561,6 +5561,58 @@ public struct CronDeliveryPreview: Codable, Sendable {
     }
 }
 
+public struct CronHistoryParams: Codable, Sendable {
+    public let id: String
+    public let runid: String?
+    public let runatms: Int?
+    public let cursor: String?
+    public let limit: Int?
+
+    public init(
+        id: String,
+        runid: String? = nil,
+        runatms: Int? = nil,
+        cursor: String? = nil,
+        limit: Int? = nil)
+    {
+        self.id = id
+        self.runid = runid
+        self.runatms = runatms
+        self.cursor = cursor
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case runid = "runId"
+        case runatms = "runAtMs"
+        case cursor
+        case limit
+    }
+}
+
+public struct CronHistoryResult: Codable, Sendable {
+    public let messages: [AnyCodable]
+    public let activity: [ChatHistoryActivity]?
+    public let nextcursor: String?
+
+    public init(
+        messages: [AnyCodable],
+        activity: [ChatHistoryActivity]? = nil,
+        nextcursor: String? = nil)
+    {
+        self.messages = messages
+        self.activity = activity
+        self.nextcursor = nextcursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case messages
+        case activity
+        case nextcursor = "nextCursor"
+    }
+}
+
 public struct CronJobNotFoundErrorDetails: Codable, Sendable {
     public let code: String
     public let jobid: String
@@ -10710,6 +10762,7 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
     public let trending: Bool?
     public let featuredrank: Int?
     public let trendingrank: Int?
+    public let categoryranks: [String: AnyCodable]?
     public let publishedtoclawhub: Bool?
 
     public init(
@@ -10730,6 +10783,7 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
         trending: Bool? = nil,
         featuredrank: Int? = nil,
         trendingrank: Int? = nil,
+        categoryranks: [String: AnyCodable]? = nil,
         publishedtoclawhub: Bool? = nil)
     {
         self.name = name
@@ -10749,6 +10803,7 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
         self.trending = trending
         self.featuredrank = featuredrank
         self.trendingrank = trendingrank
+        self.categoryranks = categoryranks
         self.publishedtoclawhub = publishedtoclawhub
     }
 
@@ -10770,6 +10825,7 @@ public struct PluginDiscoveryCatalogFacts: Codable, Sendable {
         case trending
         case featuredrank = "featuredRank"
         case trendingrank = "trendingRank"
+        case categoryranks = "categoryRanks"
         case publishedtoclawhub = "publishedToClawHub"
     }
 }
@@ -10780,19 +10836,31 @@ public struct PluginDiscoveryCategory: Codable, Sendable {
     public let description: String
     public let icon: String
     public let order: Int
+    public let pinnedpackages: [String]?
 
     public init(
         slug: String,
         label: String,
         description: String,
         icon: String,
-        order: Int)
+        order: Int,
+        pinnedpackages: [String]? = nil)
     {
         self.slug = slug
         self.label = label
         self.description = description
         self.icon = icon
         self.order = order
+        self.pinnedpackages = pinnedpackages
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case slug
+        case label
+        case description
+        case icon
+        case order
+        case pinnedpackages = "pinnedPackages"
     }
 }
 

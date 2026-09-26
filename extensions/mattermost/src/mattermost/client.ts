@@ -1,4 +1,3 @@
-// Mattermost plugin module implements client behavior.
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {

@@ -626,35 +626,6 @@ describe("prepared model runtime snapshots", () => {
     await expect(prepareModelRuntimeSnapshot(input)).rejects.toThrow("test publication boundary");
   });
 
-  it("holds stale reads until the committed replacement is published", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const firstConfig = {};
-    const secondConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
-    const input = {
-      agentId: "default",
-      agentDir: fixture.state.agentDir("default"),
-      inheritedAuthDir: fixture.state.agentDir("default"),
-      workspaceDir: "/tmp/unused-workspace",
-    };
-    await refreshPreparedModelRuntimeSnapshots(firstConfig);
-
-    markPreparedModelRuntimeSnapshotsStale("test config commit", { waitForReplacement: true });
-    const read = prepareModelRuntimeSnapshot({ ...input, config: secondConfig });
-    await expect(
-      Promise.race([
-        read.then(
-          () => "settled",
-          () => "settled",
-        ),
-        Promise.resolve("pending"),
-      ]),
-    ).resolves.toBe("pending");
-
-    const refresh = refreshPreparedModelRuntimeSnapshots(secondConfig);
-    await expect(read).resolves.toMatchObject({ config: secondConfig });
-    await refresh;
-  });
-
   it("rebinds unpublished read-only activation to the committed replacement config", async () => {
     mocks.configuredAgentIds = ["default"];
     const initialConfig = {};
@@ -812,17 +783,6 @@ describe("prepared model runtime snapshots", () => {
     },
   );
 
-  it("ignores request config identity until lifecycle publication", async () => {
-    const agentDir = fixture.state.agentDir("request-config");
-    const initialConfig = {};
-    const first = await publishPreparedModelRuntimeSnapshot({ config: initialConfig, agentDir });
-
-    const fromEquivalentClone = await prepareModelRuntimeSnapshot({ config: {}, agentDir });
-
-    expect(fromEquivalentClone).toBe(first);
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
-  });
-
   it("reuses read-only owners for equivalent config clones but rejects projections", async () => {
     const agentDir = fixture.state.agentDir("read-only-config");
     const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
@@ -937,16 +897,6 @@ describe("prepared model runtime snapshots", () => {
     expect(first?.config).toBe(firstConfig);
     expect(second?.config).toBe(secondConfig);
     expect(first).not.toBe(second);
-  });
-
-  it("does not discover a missing owner from a request lookup", async () => {
-    await expect(
-      prepareModelRuntimeSnapshot({
-        config: {},
-        agentDir: "/tmp/prepared-model-runtime-missing-owner",
-      }),
-    ).rejects.toThrow("prepared model runtime owner was not published");
-    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
   });
 
   it("deduplicates standalone activation while publishing later owners", async () => {

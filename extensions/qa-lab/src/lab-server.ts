@@ -4,10 +4,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  acquireDebugProxyCaptureStore,
-  resolveDebugProxySettings,
-} from "openclaw/plugin-sdk/proxy-capture";
+import { resolveDebugProxySettings } from "openclaw/plugin-sdk/proxy-capture";
 import type { QaRunnerModelOption } from "../runner-contract.js";
 import {
   closeQaHttpServer,
@@ -30,9 +27,10 @@ import {
 } from "./evidence-gallery.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
 import {
+  createQaCaptureLifecycle,
   isCaptureQueryPreset,
   mapCaptureEventForQa,
-  probeTcpReachability,
+  readQaCaptureStartupStatus,
 } from "./lab-server-capture.js";
 import {
   detectContentType,
@@ -295,8 +293,7 @@ export async function startQaLabServer(
 ): Promise<QaLabServerHandle> {
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
   const captureSettings = resolveDebugProxySettings();
-  let captureStoreLease: ReturnType<typeof acquireDebugProxyCaptureStore> | undefined;
-  const getCaptureStore = () => (captureStoreLease ??= acquireDebugProxyCaptureStore()).store;
+  const capture = createQaCaptureLifecycle();
   const state = createQaBusState();
   let latestReport: QaLabLatestReport | null = null;
   let latestScenarioRun: QaLabScenarioRun | null = null;
@@ -581,33 +578,17 @@ export async function startQaLabServer(
         }
         if (req.method === "GET" && url.pathname === "/api/capture/sessions") {
           writeJson(res, 200, {
-            sessions: getCaptureStore().listSessions(50),
+            sessions: await capture.withStore((store) => store.listSessions(50)),
           });
           return;
         }
         if (req.method === "GET" && url.pathname === "/api/capture/startup-status") {
-          const proxyUrl = captureSettings.proxyUrl || "http://127.0.0.1:7799";
-          const gatewayUrl = controlUiUrl || "http://127.0.0.1:18789/";
-          const [proxy, gatewayLocal] = await Promise.all([
-            probeTcpReachability(proxyUrl),
-            probeTcpReachability(gatewayUrl),
-          ]);
           writeJson(res, 200, {
-            status: {
-              proxy: {
-                ...proxy,
-                label: "Proxy",
-              },
-              gateway: {
-                ...gatewayLocal,
-                label: "Gateway",
-              },
-              qaLab: {
-                label: "QA Lab",
-                url: publicBaseUrl,
-                ok: true,
-              },
-            },
+            status: await readQaCaptureStartupStatus({
+              proxyUrl: captureSettings.proxyUrl,
+              gatewayUrl: controlUiUrl,
+              publicBaseUrl,
+            }),
           });
           return;
         }
@@ -615,7 +596,9 @@ export async function startQaLabServer(
           const sessionId = url.searchParams.get("sessionId")?.trim();
           writeJson(res, 200, {
             events: sessionId
-              ? getCaptureStore().getSessionEvents(sessionId, 200).map(mapCaptureEventForQa)
+              ? (await capture.withStore((store) => store.getSessionEvents(sessionId, 200))).map(
+                  mapCaptureEventForQa,
+                )
               : [],
           });
           return;
@@ -627,7 +610,7 @@ export async function startQaLabServer(
             return;
           }
           writeJson(res, 200, {
-            coverage: getCaptureStore().summarizeSessionCoverage(sessionId),
+            coverage: await capture.withStore((store) => store.summarizeSessionCoverage(sessionId)),
           });
           return;
         }
@@ -643,7 +626,7 @@ export async function startQaLabServer(
             return;
           }
           writeJson(res, 200, {
-            rows: getCaptureStore().queryPreset(preset, sessionId),
+            rows: await capture.withStore((store) => store.queryPreset(preset, sessionId)),
           });
           return;
         }
@@ -653,7 +636,7 @@ export async function startQaLabServer(
             writeError(res, 400, "Missing blob id");
             return;
           }
-          const content = getCaptureStore().readBlob(blobId);
+          const content = await capture.withStore((store) => store.readBlob(blobId));
           if (content == null) {
             writeError(res, 404, "Blob not found");
             return;
@@ -667,13 +650,13 @@ export async function startQaLabServer(
             ? body.sessionIds.filter((value): value is string => typeof value === "string")
             : [];
           writeJson(res, 200, {
-            result: getCaptureStore().deleteSessions(sessionIds),
+            result: await capture.withStore((store) => store.deleteSessions(sessionIds)),
           });
           return;
         }
         if (req.method === "POST" && url.pathname === "/api/capture/purge") {
           writeJson(res, 200, {
-            result: getCaptureStore().purgeAll(),
+            result: await capture.withStore((store) => store.purgeAll()),
           });
           return;
         }
@@ -914,11 +897,6 @@ export async function startQaLabServer(
     });
   });
 
-  const releaseCaptureStore = () => {
-    captureStoreLease?.release();
-    captureStoreLease = undefined;
-  };
-
   const stopLabServerResources = async (): Promise<Error | undefined> => {
     runnerModelCatalogAbort?.abort();
     await runnerModelCatalogPromise?.catch(() => undefined);
@@ -930,12 +908,20 @@ export async function startQaLabServer(
     } catch (error) {
       cleanupError = toQaError(error);
     }
-    const results = await Promise.allSettled([
-      serverListening ? closeQaHttpServer(server, state) : undefined,
-      Promise.resolve().then(releaseCaptureStore),
-    ]);
-    const failed = results.find((result) => result.status === "rejected");
-    return cleanupError ?? (failed ? toQaError(failed.reason) : undefined);
+    capture.stopAdmission();
+    try {
+      if (serverListening) {
+        await closeQaHttpServer(server, state);
+      }
+    } catch (error) {
+      cleanupError ??= toQaError(error);
+    }
+    try {
+      await capture.release();
+    } catch (error) {
+      cleanupError ??= toQaError(error);
+    }
+    return cleanupError;
   };
 
   try {

@@ -197,7 +197,7 @@ function normalizeDecisionList(
 export function listApprovalReactionBindings(params: {
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 }): ApprovalReactionDecisionBinding[] {
-  const allowed = new Set(normalizeDecisionList(params.allowedDecisions));
+  const allowed = new Set(params.allowedDecisions);
   return APPROVAL_REACTION_BINDINGS.filter((binding) => allowed.has(binding.decision)).map(
     (binding) => ({
       decision: binding.decision,
@@ -346,10 +346,6 @@ function formatSeverity(value: "info" | "warning" | "critical"): string {
   return value === "critical" ? "Critical" : value === "info" ? "Info" : "Warning";
 }
 
-function buildDecisionText(allowedDecisions: readonly ExecApprovalReplyDecision[]): string {
-  return allowedDecisions.join("|");
-}
-
 function buildManualInstructionSection(params: {
   approvalKind: ChannelApprovalKind;
   approvalId: string;
@@ -364,9 +360,7 @@ function buildManualInstructionSection(params: {
     );
   }
   if (params.allowedDecisions.length > 0) {
-    lines.push(
-      `Reply with: /approve ${params.approvalId} ${buildDecisionText(params.allowedDecisions)}`,
-    );
+    lines.push(`Reply with: /approve ${params.approvalId} ${params.allowedDecisions.join("|")}`);
   }
   return lines;
 }

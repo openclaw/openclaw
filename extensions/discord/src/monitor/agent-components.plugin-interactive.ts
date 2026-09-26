@@ -95,16 +95,19 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
       });
     },
   };
+  const acknowledgeSilently = async () => {
+    try {
+      await respond.acknowledge();
+    } catch {
+      // An expired interaction must not prevent an admitted plugin handler from settling.
+    }
+  };
   const conversationRuntime = await loadConversationRuntime();
   const pluginBindingApproval = conversationRuntime.parsePluginBindingApprovalCustomId(params.data);
   if (pluginBindingApproval) {
     const { buildPluginBindingResolvedText, resolvePluginConversationBindingApproval } =
       conversationRuntime;
-    try {
-      await respond.acknowledge();
-    } catch {
-      // Interaction may have expired; try to continue anyway.
-    }
+    await acknowledgeSilently();
     const resolved = await resolvePluginConversationBindingApproval({
       approvalId: pluginBindingApproval.approvalId,
       decision: pluginBindingApproval.decision,
@@ -160,24 +163,14 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
       },
     },
     respond,
-    onMatched: async () => {
-      try {
-        await respond.acknowledge();
-      } catch {
-        // Interaction may have expired before the plugin handler ran.
-      }
-    },
+    onMatched: acknowledgeSilently,
   });
   if (!dispatched.matched) {
     return "unmatched";
   }
   if (dispatched.handled) {
     if (!responded) {
-      try {
-        await respond.acknowledge();
-      } catch {
-        // Interaction may have expired after the handler finished.
-      }
+      await acknowledgeSilently();
     }
     return "handled";
   }

@@ -22,6 +22,15 @@ import type {
 import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDoctorReport } from "./doctor.js";
 import type { AnnotationItem } from "./screenshot-annotate.js";
+import type {
+  ImportSystemProfileResult as BrowserImportProfileResult,
+  SystemProfileInfo,
+} from "./system-profiles.js";
+
+export type {
+  ImportSystemProfileResult as BrowserImportProfileResult,
+  SystemProfileInfo,
+} from "./system-profiles.js";
 
 export type {
   BrowserStatus,
@@ -85,22 +94,6 @@ export type ProfileStatus = {
   isRemote: boolean;
   missingFromConfig?: boolean;
   reconcileReason?: string | null;
-};
-
-export type SystemProfileInfo = {
-  browser: "chrome" | "brave" | "edge" | "chromium";
-  id: string;
-  name: string;
-  hasCookies: boolean;
-};
-
-export type BrowserImportProfileResult = {
-  ok: true;
-  systemProfile: string;
-  into: string;
-  browser: SystemProfileInfo["browser"];
-  cookies: { total: number; imported: number; failed: number; skipped: number };
-  domains: string[];
 };
 
 /** Result returned when a managed browser profile directory is reset. */

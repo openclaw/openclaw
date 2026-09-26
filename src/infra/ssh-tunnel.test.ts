@@ -102,6 +102,17 @@ describe("startSshPortForward", () => {
     return claim.port;
   }
 
+  function startTunnel(
+    options: Partial<Parameters<typeof startSshPortForward>[0]> & { localPortPreferred: number },
+  ) {
+    return startSshPortForward({
+      target: "me@example.com:2222",
+      remotePort: 18789,
+      timeoutMs: 1000,
+      ...options,
+    });
+  }
+
   afterEach(async () => {
     vi.useRealTimers();
     while (openServers.length > 0) {
@@ -153,10 +164,9 @@ describe("startSshPortForward", () => {
     mocks.resolveSshClient.mockReturnValueOnce(null);
 
     await expect(
-      startSshPortForward({
+      startTunnel({
         target: "me@example.com",
         localPortPreferred: 43210,
-        remotePort: 18789,
         timeoutMs: 250,
       }),
     ).rejects.toThrow("trusted SSH client not found in system directories");
@@ -170,10 +180,8 @@ describe("startSshPortForward", () => {
     mocks.ensurePortAvailable.mockRejectedValueOnce(sentinel);
 
     await expect(
-      startSshPortForward({
-        target: "me@example.com:2222",
+      startTunnel({
         localPortPreferred: 43210,
-        remotePort: 18789,
         timeoutMs: 250,
       }),
     ).rejects.toBe(sentinel);
@@ -204,11 +212,8 @@ describe("startSshPortForward", () => {
     mocks.ensurePortAvailable.mockRejectedValueOnce(new PortInUseError(preferredPort));
     spawnFakeSsh();
 
-    const tunnel = await startSshPortForward({
-      target: "me@example.com:2222",
+    const tunnel = await startTunnel({
       localPortPreferred: preferredPort,
-      remotePort: 18789,
-      timeoutMs: 1000,
     });
 
     expect(tunnel.localPort).not.toBe(preferredPort);
@@ -226,11 +231,8 @@ describe("startSshPortForward", () => {
     "keeps every stop caller pending until the child exits after %s",
     async (exitAfter) => {
       spawnFakeSsh();
-      const tunnel = await startSshPortForward({
-        target: "me@example.com:2222",
+      const tunnel = await startTunnel({
         localPortPreferred: await getClaimedPort(),
-        remotePort: 18789,
-        timeoutMs: 1000,
       });
       const child = mocks.spawn.mock.results[0]?.value as EventEmitter & {
         killed: boolean;
@@ -268,11 +270,8 @@ describe("startSshPortForward", () => {
   it("stops an established tunnel when its owner aborts", async () => {
     spawnFakeSsh();
     const controller = new AbortController();
-    const tunnel = await startSshPortForward({
-      target: "me@example.com:2222",
+    const tunnel = await startTunnel({
       localPortPreferred: await getClaimedPort(),
-      remotePort: 18789,
-      timeoutMs: 1000,
       signal: controller.signal,
     });
     const child = mocks.spawn.mock.results[0]?.value as EventEmitter & { killed: boolean };
@@ -294,11 +293,8 @@ describe("startSshPortForward", () => {
     child.kill = vi.fn(() => true);
     mocks.spawn.mockReturnValue(child);
     const controller = new AbortController();
-    const forwarding = startSshPortForward({
-      target: "me@example.com:2222",
+    const forwarding = startTunnel({
       localPortPreferred: await getClaimedPort(),
-      remotePort: 18789,
-      timeoutMs: 1000,
       signal: controller.signal,
     });
     let settled = false;
@@ -356,10 +352,8 @@ describe("startSshPortForward", () => {
         retryScheduled.resolve();
         return timer;
       });
-      const forwarding = startSshPortForward({
-        target: "me@example.com:2222",
+      const forwarding = startTunnel({
         localPortPreferred: localPort,
-        remotePort: 18789,
         timeoutMs: 500,
         signal: controller.signal,
       });
@@ -417,10 +411,8 @@ describe("startSshPortForward", () => {
       const started = performance.now();
       try {
         await expect(
-          startSshPortForward({
-            target: "me@example.com:2222",
+          startTunnel({
             localPortPreferred: localPort,
-            remotePort: 18789,
             timeoutMs: 250,
             signal: controller.signal,
           }),
@@ -456,10 +448,9 @@ describe("startSshPortForward", () => {
     });
     try {
       await expect(
-        startSshPortForward({
+        startTunnel({
           target: "synthetic.example",
           localPortPreferred: 43210,
-          remotePort: 18789,
           timeoutMs: 250,
         }),
       ).rejects.toThrow(
@@ -481,11 +472,8 @@ describe("startSshPortForward", () => {
       spawnFakeSsh();
       const localPort = await getClaimedPort();
 
-      const tunnel = await startSshPortForward({
-        target: "me@example.com:2222",
+      const tunnel = await startTunnel({
         localPortPreferred: localPort,
-        remotePort: 18789,
-        timeoutMs: 1000,
       });
 
       const child = mocks.spawn.mock.results[0]?.value as EventEmitter & {

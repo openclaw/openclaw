@@ -104,14 +104,11 @@ export function renderSidebarMentionItem(params: {
 
 export function renderSidebarApprovalItem(params: {
   approval: ExecApprovalRequest;
-  context: ApplicationContext | undefined;
+  context: ApplicationContext;
   onNavigate: ApplicationContext["navigate"];
   onDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
 }) {
   const context = params.context;
-  if (!context) {
-    return nothing;
-  }
   const snapshot = context.overlays.snapshot;
   const sessionKey = params.approval.request.sessionKey?.trim();
   const session = sessionKey
@@ -143,16 +140,12 @@ export function renderSidebarApprovalItem(params: {
 }
 
 export function renderSidebarUpdateSurface(params: {
-  context: Pick<ApplicationContext, "gateway" | "overlays"> | undefined;
+  context: Pick<ApplicationContext, "gateway" | "overlays">;
   onDismiss?: () => void;
   onNavigate: () => void;
-  visible: boolean;
   watchUpdateProgress: ((listener: (progress: UpdateProgress) => void) => () => void) | undefined;
 }) {
   const context = params.context;
-  if (!params.visible || !context) {
-    return nothing;
-  }
   const snapshot = context.overlays.snapshot;
   const gateway = context.gateway.snapshot;
   return html`<openclaw-sidebar-update-card

@@ -272,6 +272,18 @@ async function runDoctorHealthFlowWithResult(
       for (const message of deletionJournal.warnings) {
         effectiveRuntime.log(message);
       }
+      if (prompter.shouldRepair && deletionJournal.warnings.length > 0) {
+        const failure = createUpdateFailureFact({
+          check: "agent-deletion-journal",
+          code: "unverified-agent-databases",
+          message: deletionJournal.warnings.join("\n"),
+        });
+        throw new DoctorMaintenanceRefusalError(
+          formatUpdateFailureFact(failure),
+          { kind: "data-at-risk", reason: "incomplete-migration" },
+          { failureFacts: [failure] },
+        );
+      }
 
       // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
       const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");

@@ -491,19 +491,8 @@ export function formatTextWithAttachmentLinks(
   mediaUrls: string[],
 ): string {
   const trimmedText = text?.trim() ?? "";
-  if (!trimmedText && mediaUrls.length === 0) {
-    return "";
-  }
-  const mediaBlock = mediaUrls.length
-    ? mediaUrls.map((url) => `Attachment: ${url}`).join("\n")
-    : "";
-  if (!trimmedText) {
-    return mediaBlock;
-  }
-  if (!mediaBlock) {
-    return trimmedText;
-  }
-  return `${trimmedText}\n\n${mediaBlock}`;
+  const mediaBlock = mediaUrls.map((url) => `Attachment: ${url}`).join("\n");
+  return [trimmedText, mediaBlock].filter(Boolean).join("\n\n");
 }
 
 /** Send a caption with only the first media item, mirroring caption-limited channel transports. */

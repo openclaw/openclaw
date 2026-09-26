@@ -18,6 +18,10 @@ import {
   resolveToolDisplay,
 } from "./tool-display.js";
 
+function detailFor(params: Parameters<typeof resolveToolDisplay>[0]) {
+  return formatToolDetail(resolveToolDisplay(params));
+}
+
 describe("isShellToolDisplayName", () => {
   it("matches shell tools whatever case the backend spells them in", () => {
     // The Claude CLI sends "Bash"; embedded runs send "bash"/"exec".
@@ -70,17 +74,15 @@ describe("tool display details", () => {
   });
 
   it("puts the camera PTZ operation before its node and device", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "nodes",
-        args: {
-          action: "camera_ptz",
-          ptzOperation: "status",
-          node: "Mac",
-          deviceId: "camera-id",
-        },
-      }),
-    );
+    const detail = detailFor({
+      name: "nodes",
+      args: {
+        action: "camera_ptz",
+        ptzOperation: "status",
+        node: "Mac",
+        deviceId: "camera-id",
+      },
+    });
 
     expect(detail).toBe("ptz operation status, node Mac, device id camera-id");
   });
@@ -139,32 +141,28 @@ describe("tool display details", () => {
   });
 
   it("skips zero/false values for optional detail fields", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "sessions_spawn",
-        args: {
-          taskName: "double-message-bug-gpt",
-          label: 0,
-          runTimeoutSeconds: 0,
-        },
-      }),
-    );
+    const detail = detailFor({
+      name: "sessions_spawn",
+      args: {
+        taskName: "double-message-bug-gpt",
+        label: 0,
+        runTimeoutSeconds: 0,
+      },
+    });
 
     expect(detail).toBe("double-message-bug-gpt");
   });
 
   it("includes only truthy boolean details", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "message",
-        args: {
-          action: "react",
-          provider: "discord",
-          to: "chan-1",
-          remove: false,
-        },
-      }),
-    );
+    const detail = detailFor({
+      name: "message",
+      args: {
+        action: "react",
+        provider: "discord",
+        to: "chan-1",
+        remove: false,
+      },
+    });
 
     expect(detail).toContain("provider discord");
     expect(detail).toContain("to chan-1");
@@ -172,16 +170,14 @@ describe("tool display details", () => {
   });
 
   it("keeps positive numbers and true booleans", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "sessions_history",
-        args: {
-          sessionKey: "agent:main:main",
-          limit: 20,
-          includeTools: true,
-        },
-      }),
-    );
+    const detail = detailFor({
+      name: "sessions_history",
+      args: {
+        sessionKey: "agent:main:main",
+        limit: 20,
+        includeTools: true,
+      },
+    });
 
     expect(detail).toContain("session agent:main:main");
     expect(detail).toContain("limit 20");
@@ -189,24 +185,18 @@ describe("tool display details", () => {
   });
 
   it("formats read/write/edit with intent-first file detail", () => {
-    const readDetail = formatToolDetail(
-      resolveToolDisplay({
-        name: "read",
-        args: { file_path: "/tmp/a.txt", offset: 2, limit: 2 },
-      }),
-    );
-    const writeDetail = formatToolDetail(
-      resolveToolDisplay({
-        name: "write",
-        args: { file_path: "/tmp/a.txt", content: "abc" },
-      }),
-    );
-    const editDetail = formatToolDetail(
-      resolveToolDisplay({
-        name: "edit",
-        args: { path: "/tmp/a.txt", newText: "abcd" },
-      }),
-    );
+    const readDetail = detailFor({
+      name: "read",
+      args: { file_path: "/tmp/a.txt", offset: 2, limit: 2 },
+    });
+    const writeDetail = detailFor({
+      name: "write",
+      args: { file_path: "/tmp/a.txt", content: "abc" },
+    });
+    const editDetail = detailFor({
+      name: "edit",
+      args: { path: "/tmp/a.txt", newText: "abcd" },
+    });
 
     expect(readDetail).toBe("lines 2-3 from /tmp/a.txt");
     expect(writeDetail).toBe("to /tmp/a.txt (3 chars)");
@@ -214,84 +204,72 @@ describe("tool display details", () => {
   });
 
   it("formats web_search query with quotes", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "web_search",
-        args: { query: "OpenClaw docs", count: 3 },
-      }),
-    );
+    const detail = detailFor({
+      name: "web_search",
+      args: { query: "OpenClaw docs", count: 3 },
+    });
 
     expect(detail).toBe('for "OpenClaw docs" (top 3)');
   });
 
   it("formats web_search provider query shapes", () => {
     expect(
-      formatToolDetail(
-        resolveToolDisplay({
-          name: "web_search",
-          args: { q: "Codex OAuth API key", max_results: 5 },
-        }),
-      ),
+      detailFor({
+        name: "web_search",
+        args: { q: "Codex OAuth API key", max_results: 5 },
+      }),
     ).toBe('for "Codex OAuth API key" (top 5)');
 
     expect(
-      formatToolDetail(
-        resolveToolDisplay({
-          name: "web_search",
-          args: {
-            search_query: [
-              { q: "latest Kimi model" },
-              { q: "latest Gemini model" },
-              { q: "latest Claude model" },
-              { q: "latest OpenAI model" },
-            ],
-          },
-        }),
-      ),
+      detailFor({
+        name: "web_search",
+        args: {
+          search_query: [
+            { q: "latest Kimi model" },
+            { q: "latest Gemini model" },
+            { q: "latest Claude model" },
+            { q: "latest OpenAI model" },
+          ],
+        },
+      }),
     ).toBe('for "latest Kimi model", "latest Gemini model", "latest Claude model"…');
   });
 
   it("formats Parallel's native objective + search_queries shape", () => {
     expect(
-      formatToolDetail(
-        resolveToolDisplay({
-          name: "web_search",
-          args: {
-            objective: "Find the OpenClaw repository on GitHub",
-            search_queries: ["openclaw github", "openclaw repository"],
-            count: 5,
-          },
-        }),
-      ),
+      detailFor({
+        name: "web_search",
+        args: {
+          objective: "Find the OpenClaw repository on GitHub",
+          search_queries: ["openclaw github", "openclaw repository"],
+          count: 5,
+        },
+      }),
     ).toBe(
       'for "Find the OpenClaw repository on GitHub", "openclaw github", "openclaw repository" (top 5)',
     );
   });
 
   it("summarizes exec commands with context", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: {
-          command:
-            "set -euo pipefail\ngit -C /Users/adityasingh/.openclaw/workspace status --short | head -n 3",
-          workdir: "/Users/adityasingh/.openclaw/workspace",
-        },
-      }),
-    );
+    const detail = detailFor({
+      name: "exec",
+      args: {
+        command:
+          "set -euo pipefail\ngit -C /Users/adityasingh/.openclaw/workspace status --short | head -n 3",
+        workdir: "/Users/adityasingh/.openclaw/workspace",
+      },
+    });
 
     expect(detail).toContain("check git status -> show first 3 lines");
     expect(detail).toContain("(agent)");
   });
 
   it("summarizes bash commands with the same command explainer", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "bash",
-        args: { command: "sed -n '1,80p' extensions/discord/src/draft-stream.ts" },
-        detailMode: "explain",
-      }),
-    );
+    const detail = detailFor({
+      name: "bash",
+      args: { command: "sed -n '1,80p' extensions/discord/src/draft-stream.ts" },
+      detailMode: "explain",
+    });
 
     expect(detail).toBe("print lines 1-80 from extensions/discord/src/draft-stream.ts");
   });
@@ -356,11 +334,7 @@ describe("tool display details", () => {
       "time -- if true; then echo one; echo two; fi",
     ]) {
       expect(splitTopLevelStages(command)).toEqual([command]);
-      expect(
-        formatToolDetail(
-          resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
-        ),
-      ).toBe(command);
+      expect(detailFor({ name: "exec", args: { command }, detailMode: "explain" })).toBe(command);
     }
 
     for (const command of [
@@ -397,11 +371,9 @@ describe("tool display details", () => {
         quoted.slice(0, quoted.lastIndexOf(" && ")),
         "pnpm test",
       ]);
-      expect(
-        formatToolDetail(
-          resolveToolDisplay({ name: "exec", args: { command: quoted }, detailMode: "explain" }),
-        ),
-      ).toBe("print text → run tests");
+      expect(detailFor({ name: "exec", args: { command: quoted }, detailMode: "explain" })).toBe(
+        "print text → run tests",
+      );
     }
 
     for (const command of [
@@ -436,11 +408,7 @@ describe("tool display details", () => {
       ["rg 'search textual data' src/agents", 'search "search textual data" in src/agents'],
       ["rg 'research text in docs' src/agents", 'search "research text in docs" in src/agents'],
     ]) {
-      expect(
-        formatToolDetail(
-          resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
-        ),
-      ).toBe(expected);
+      expect(detailFor({ name: "exec", args: { command }, detailMode: "explain" })).toBe(expected);
     }
   });
 
@@ -459,23 +427,19 @@ describe("tool display details", () => {
       `rg '${"x".repeat(121)}' src`,
       `rg '${" ".repeat(121)}x' src`,
     ]) {
-      expect(
-        formatToolDetail(
-          resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
-        ),
-      ).toBe("search text in src");
+      expect(detailFor({ name: "exec", args: { command }, detailMode: "explain" })).toBe(
+        "search text in src",
+      );
     }
   });
 
   it("sanitizes recursive search patterns inside pipelines", () => {
     expect(
-      formatToolDetail(
-        resolveToolDisplay({
-          name: "exec",
-          args: { command: `printf x | rg 'search "foo" in src' .` },
-          detailMode: "explain",
-        }),
-      ),
+      detailFor({
+        name: "exec",
+        args: { command: `printf x | rg 'search "foo" in src' .` },
+        detailMode: "explain",
+      }),
     ).toBe("print text -> search text in .");
   });
 
@@ -530,49 +494,41 @@ describe("tool display details", () => {
   });
 
   it("omits raw command details in explain mode", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "cd ~/my-project && npm install" },
-        detailMode: "explain",
-      }),
-    );
+    const detail = detailFor({
+      name: "exec",
+      args: { command: "cd ~/my-project && npm install" },
+      detailMode: "explain",
+    });
 
     expect(detail).toBe("install dependencies (in ~/my-project)");
   });
 
   it("uses compact workspace markers for common workspace paths", () => {
     expect(
-      formatToolDetail(
-        resolveToolDisplay({
-          name: "bash",
-          args: { command: "git fetch", workdir: "/Users/peter/mantis-workspace/openclaw" },
-          detailMode: "explain",
-        }),
-      ),
+      detailFor({
+        name: "bash",
+        args: { command: "git fetch", workdir: "/Users/peter/mantis-workspace/openclaw" },
+        detailMode: "explain",
+      }),
     ).toBe("fetch git changes (agent)");
 
     expect(
-      formatToolDetail(
-        resolveToolDisplay({
-          name: "bash",
-          args: { command: "git status", workdir: "/Users/peter/Projects/openclaw" },
-          detailMode: "explain",
-        }),
-      ),
+      detailFor({
+        name: "bash",
+        args: { command: "git status", workdir: "/Users/peter/Projects/openclaw" },
+        detailMode: "explain",
+      }),
     ).toBe("check git status (repo)");
 
     expect(
-      formatToolDetail(
-        resolveToolDisplay({
-          name: "bash",
-          args: {
-            command: "command -v discrawl",
-            workdir: "/root/.openclaw/sandboxes/agent-clawsweeper-sandbox-discor-766423d0",
-          },
-          detailMode: "explain",
-        }),
-      ),
+      detailFor({
+        name: "bash",
+        args: {
+          command: "command -v discrawl",
+          workdir: "/root/.openclaw/sandboxes/agent-clawsweeper-sandbox-discor-766423d0",
+        },
+        detailMode: "explain",
+      }),
     ).toBe("command -v discrawl");
   });
 
@@ -598,12 +554,10 @@ describe("tool display details", () => {
   });
 
   it("moves cd path to context suffix with || separator", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "cd /app || npm install" },
-      }),
-    );
+    const detail = detailFor({
+      name: "exec",
+      args: { command: "cd /app || npm install" },
+    });
 
     // || means npm install runs when cd FAILS — cd should NOT be stripped as preamble.
     // Both stages are summarized; cd is not treated as context prefix.
@@ -611,46 +565,38 @@ describe("tool display details", () => {
   });
 
   it("explicit workdir takes priority over cd path", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "cd /tmp && npm install", workdir: "/app" },
-      }),
-    );
+    const detail = detailFor({
+      name: "exec",
+      args: { command: "cd /tmp && npm install", workdir: "/app" },
+    });
 
     expect(detail).toBe("install dependencies (in /app), `cd /tmp && npm install`");
   });
 
   it("falls back to raw command for unknown binary with cwd", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "mycli deploy --prod", workdir: "/app" },
-      }),
-    );
+    const detail = detailFor({
+      name: "exec",
+      args: { command: "mycli deploy --prod", workdir: "/app" },
+    });
 
     expect(detail).toBe("mycli deploy --prod (in /app)");
   });
 
   it("keeps multi-stage summary when only some stages are generic", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "cargo build && npm test" },
-      }),
-    );
+    const detail = detailFor({
+      name: "exec",
+      args: { command: "cargo build && npm test" },
+    });
 
     // "run cargo build" is generic, but "run tests" is known — keep joined summary
     expect(detail).toMatch(/^run cargo build → run tests/);
   });
 
   it("respects quotes when splitting preamble separators", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: 'export MSG="foo && bar" && echo test' },
-      }),
-    );
+    const detail = detailFor({
+      name: "exec",
+      args: { command: 'export MSG="foo && bar" && echo test' },
+    });
 
     // The && inside quotes must not be treated as a separator —
     // summary line should be "print text", not "run export" (which would happen
@@ -659,33 +605,27 @@ describe("tool display details", () => {
   });
 
   it("recognizes heredoc/inline script exec details", () => {
-    const pyDetail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: {
-          command: "python3 <<PY\nprint('x')\nPY",
-          workdir: "/Users/adityasingh/.openclaw/workspace",
-        },
-      }),
-    );
-    const nodeCheckDetail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: {
-          command: "node --check /tmp/test.js",
-          workdir: "/Users/adityasingh/.openclaw/workspace",
-        },
-      }),
-    );
-    const nodeShortCheckDetail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: {
-          command: "node -c /tmp/test.js",
-          workdir: "/Users/adityasingh/.openclaw/workspace",
-        },
-      }),
-    );
+    const pyDetail = detailFor({
+      name: "exec",
+      args: {
+        command: "python3 <<PY\nprint('x')\nPY",
+        workdir: "/Users/adityasingh/.openclaw/workspace",
+      },
+    });
+    const nodeCheckDetail = detailFor({
+      name: "exec",
+      args: {
+        command: "node --check /tmp/test.js",
+        workdir: "/Users/adityasingh/.openclaw/workspace",
+      },
+    });
+    const nodeShortCheckDetail = detailFor({
+      name: "exec",
+      args: {
+        command: "node -c /tmp/test.js",
+        workdir: "/Users/adityasingh/.openclaw/workspace",
+      },
+    });
 
     expect(pyDetail).toContain("run python3 inline script (heredoc)");
     expect(nodeCheckDetail).toContain("check js syntax for /tmp/test.js");
@@ -693,56 +633,46 @@ describe("tool display details", () => {
   });
 
   it("does not split heredoc body content into exec stages", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: {
-          command: [
-            "python3 <<'PY'",
-            "const slugify = () => 'court-mix';",
-            "if (true) console.log('a') && console.log('b');",
-            "cat <<YAML",
-            "- uses: subosito/flutter-action@v2",
-            "YAML",
-            "PY",
-          ].join("\n"),
-          workdir: "/Users/example/.openclaw/workspace",
-        },
-        detailMode: "explain",
-      }),
-    );
+    const detail = detailFor({
+      name: "exec",
+      args: {
+        command: [
+          "python3 <<'PY'",
+          "const slugify = () => 'court-mix';",
+          "if (true) console.log('a') && console.log('b');",
+          "cat <<YAML",
+          "- uses: subosito/flutter-action@v2",
+          "YAML",
+          "PY",
+        ].join("\n"),
+        workdir: "/Users/example/.openclaw/workspace",
+      },
+      detailMode: "explain",
+    });
 
     expect(detail).toBe("run python3 inline script (heredoc) (agent)");
   });
 
   it("keeps command stages after a heredoc terminator", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: {
-          command: ["python3 <<'PY'", "print('body && not a command')", "PY", "npm test"].join(
-            "\n",
-          ),
-        },
-        detailMode: "explain",
-      }),
-    );
+    const detail = detailFor({
+      name: "exec",
+      args: {
+        command: ["python3 <<'PY'", "print('body && not a command')", "PY", "npm test"].join("\n"),
+      },
+      detailMode: "explain",
+    });
 
     expect(detail).toBe("run python3 inline script (heredoc) → run tests");
   });
 
   it("matches shell-quoted heredoc terminators before keeping later stages", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: {
-          command: ["python3 <<\\PY", "print('body && not a command')", "PY", "npm test"].join(
-            "\n",
-          ),
-        },
-        detailMode: "explain",
-      }),
-    );
+    const detail = detailFor({
+      name: "exec",
+      args: {
+        command: ["python3 <<\\PY", "print('body && not a command')", "PY", "npm test"].join("\n"),
+      },
+      detailMode: "explain",
+    });
 
     expect(detail).toBe("run python3 inline script (heredoc) → run tests");
   });
@@ -798,9 +728,7 @@ describe("tool display details", () => {
       ["npm build", "true", "pnpm test"].join("\n"),
     ]);
 
-    const detail = formatToolDetail(
-      resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
-    );
+    const detail = detailFor({ name: "exec", args: { command }, detailMode: "explain" });
     expect(detail).toContain("run build");
   });
 
@@ -813,9 +741,7 @@ describe("tool display details", () => {
       "npm test && npm build",
     ].join("\n");
 
-    const detail = formatToolDetail(
-      resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
-    );
+    const detail = detailFor({ name: "exec", args: { command }, detailMode: "explain" });
     expect(detail).toBe("show output → run tests → run build");
 
     expect(splitTopLevelStages("echo foo\\ #bar && npm test")).toEqual([
@@ -859,30 +785,26 @@ describe("tool display details", () => {
         ["npm build", "true", "pnpm test"].join("\n"),
       ]);
 
-      const detail = formatToolDetail(
-        resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
-      );
+      const detail = detailFor({ name: "exec", args: { command }, detailMode: "explain" });
       expect(detail).toContain("run build");
     }
   });
 
   it("keeps heredoc body pipes out of top-level stage summaries", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: {
-          command: [
-            "cat > .openclaw/tmp/farm-notices/ventura.txt <<-'EOF'",
-            "\tBuenos dias equipo; se ajusta la orden A1251718:",
-            "\tsc-carwhi(100) && sc-cardoc(100) || sc-carwhi(100)",
-            "\tGracias.",
-            "\tEOF",
-            "./scripts/email_preview_new --to farm@example.com && ./scripts/email_preview_new --to farm2@example.com",
-          ].join("\n"),
-        },
-        detailMode: "explain",
-      }),
-    );
+    const detail = detailFor({
+      name: "exec",
+      args: {
+        command: [
+          "cat > .openclaw/tmp/farm-notices/ventura.txt <<-'EOF'",
+          "\tBuenos dias equipo; se ajusta la orden A1251718:",
+          "\tsc-carwhi(100) && sc-cardoc(100) || sc-carwhi(100)",
+          "\tGracias.",
+          "\tEOF",
+          "./scripts/email_preview_new --to farm@example.com && ./scripts/email_preview_new --to farm2@example.com",
+        ].join("\n"),
+      },
+      detailMode: "explain",
+    });
 
     expect(detail).toBe("show output → run email_preview_new → run email_preview_new");
   });
@@ -930,57 +852,27 @@ describe("tool display details", () => {
     ]);
   });
 
-  it("appends node name to exec detail when node is set", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: {
-          command: "docker pull pihole/pihole:latest",
-          host: "node",
-          node: "raspberrypi",
-        },
-      }),
-    );
-
-    expect(detail).toContain("node: raspberrypi");
-  });
-
   it("includes both cwd and node name in exec detail for known commands", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: {
-          command: "npm install",
-          workdir: "/app",
-          host: "node",
-          node: "raspberrypi",
-        },
-      }),
-    );
+    const detail = detailFor({
+      name: "exec",
+      args: {
+        command: "npm install",
+        workdir: "/app",
+        host: "node",
+        node: "raspberrypi",
+      },
+    });
 
     expect(detail).toContain("(in /app)");
     expect(detail).toContain("node: raspberrypi");
   });
 
-  it("omits node label when node param is absent or empty", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "npm install", host: "gateway" },
-      }),
-    );
-
-    expect(detail).not.toContain("node:");
-  });
-
   it("omits node label when host is not 'node' even if node is set", () => {
     for (const host of ["gateway", "sandbox", "auto"]) {
-      const detail = formatToolDetail(
-        resolveToolDisplay({
-          name: "exec",
-          args: { command: "npm install", host, node: "raspberrypi" },
-        }),
-      );
+      const detail = detailFor({
+        name: "exec",
+        args: { command: "npm install", host, node: "raspberrypi" },
+      });
 
       expect(detail).not.toContain("node:");
     }
@@ -988,38 +880,6 @@ describe("tool display details", () => {
 });
 
 describe("compactRawCommand middle truncation", () => {
-  it("preserves start and end of long commands", () => {
-    // Use an unknown binary so resolveExecDetail returns the compact raw form directly.
-    const longCommand =
-      "/opt/custom/bin/my-processor --input /data/warehouse/2024/q1/transactions/raw/batch_001.csv --output /data/warehouse/2024/q1/transactions/processed/batch_001_clean.csv";
-    const result = resolveExecDetail({ command: longCommand });
-    // Should contain the start of the command
-    expect(result).toContain("/opt/custom/bin/my-processor");
-    // Should contain the end (filename)
-    expect(result).toContain("batch_001_clean.csv");
-    // Should contain the ellipsis for middle truncation
-    expect(result).toContain("…");
-    // Ellipsis should be in the middle, not at the end
-    expect(result).not.toMatch(/…$/);
-  });
-
-  it("does not truncate short commands", () => {
-    // Use an unknown binary so resolveExecDetail returns the compact raw form directly.
-    const result = resolveExecDetail({ command: "/opt/custom/bin/my-tool --version" });
-    expect(result).toBe("/opt/custom/bin/my-tool --version");
-  });
-
-  it("redacts credential-like tails before middle truncation", () => {
-    // The --token flag and its value sit in the middle of a long command.
-    // Without redaction-before-truncation, middle truncation could cut out
-    // the --token flag context but preserve the raw secret at the tail.
-    const longCommand =
-      "/opt/custom/bin/deploy --region us-east-1 --token sk-proj-ABCDEFGHIJKLMNOP1234567890abcdefghij --output /data/results/deploy-output.json";
-    const result = resolveExecDetail({ command: longCommand });
-    // The sk- prefixed token must be redacted (masked) before truncation
-    expect(result).not.toContain("ABCDEFGHIJKLMNOP1234567890abcdefghij");
-  });
-
   it("uses the canonical tool payload redactor before compacting raw commands", () => {
     const longCommand =
       "/opt/custom/bin/deploy --aws-key AKIDABCDEFGHIJKLMNOP1234567890 --output /data/results/deploy-output.json";
@@ -1058,12 +918,10 @@ describe("coerceDisplayValue middle truncation", () => {
       "/usr/local/share/very/deeply/nested/directory/structure/" +
       "a".repeat(150) +
       "/important-file.txt";
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "sessions_spawn",
-        args: { label: longPath },
-      }),
-    );
+    const detail = detailFor({
+      name: "sessions_spawn",
+      args: { label: longPath },
+    });
     // Should contain the start of the path
     expect(detail).toContain("/usr/local/share/");
     // Should contain the end (filename)
@@ -1095,12 +953,10 @@ describe("coerceDisplayValue middle truncation", () => {
       "Deploying with AWS key AKIDABCDEFGHIJKLMNOP1234567890 and " +
       "x".repeat(200) +
       " final-step";
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "sessions_spawn",
-        args: { label: longValue },
-      }),
-    );
+    const detail = detailFor({
+      name: "sessions_spawn",
+      args: { label: longValue },
+    });
 
     expect(detail).not.toContain("AKIDABCDEFGHIJKLMNOP1234567890");
     expect(detail).toContain("AKIDAB…7890");

@@ -26,6 +26,7 @@ import {
   requireMSTeamsSharePointSiteId,
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
+import { normalizeMSTeamsConversationId } from "./inbound.js";
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
 import { buildMSTeamsMessageActivity } from "./message-activity.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
@@ -106,10 +107,6 @@ type MSTeamsSendRetryEvent = {
   classification: ReturnType<typeof classifyMSTeamsSendError>;
 };
 
-function normalizeConversationId(rawId: string): string {
-  return rawId.split(";")[0] ?? rawId;
-}
-
 export function buildConversationReference(
   ref: StoredConversationReference,
 ): MSTeamsConversationReference {
@@ -137,7 +134,7 @@ export function buildConversationReference(
     user: aadObjectId ? { ...user, aadObjectId } : user,
     agent,
     conversation: {
-      id: normalizeConversationId(conversationId),
+      id: normalizeMSTeamsConversationId(conversationId),
       conversationType: ref.conversation?.conversationType,
       tenantId,
     },

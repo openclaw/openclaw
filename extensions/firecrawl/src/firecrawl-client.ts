@@ -239,9 +239,7 @@ async function postFirecrawlJson<T>(
           try {
             const body = await readResponseText(jsonResponse, { maxBytes: 64_000 });
             const payload = JSON.parse(body.text) as unknown;
-            return payload && typeof payload === "object" && !Array.isArray(payload)
-              ? (payload as Record<string, unknown>)
-              : null;
+            return asOptionalRecord(payload) ?? null;
           } catch {
             return null;
           }

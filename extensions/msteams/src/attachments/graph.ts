@@ -3,6 +3,10 @@ import {
   readProviderJsonArrayFieldResponse,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
+import {
+  buildHostnameAllowlistPolicyFromSuffixAllowlist as resolveMediaSsrfPolicy,
+  isHttpsUrlAllowedByHostnameSuffixAllowlist as isUrlAllowed,
+} from "openclaw/plugin-sdk/ssrf-policy";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -22,13 +26,11 @@ import {
   applyAuthorizationHeaderForUrl,
   encodeGraphShareId,
   GRAPH_ROOT,
-  isUrlAllowed,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
   type MSTeamsAttachmentResolveFn,
   normalizeContentType,
   resolveMSTeamsMediaKind,
-  resolveMediaSsrfPolicy,
   resolveAttachmentFetchPolicy,
   resolveRequestUrl,
   safeFetchWithPolicy,
@@ -53,15 +55,6 @@ function createGraphHostedContentFact(item: GraphHostedContent): MSTeamsInboundM
     ...(item.id ? { sourceId: item.id } : {}),
   };
 }
-
-type GraphAttachment = {
-  id?: string | null;
-  contentType?: string | null;
-  contentUrl?: string | null;
-  name?: string | null;
-  thumbnailUrl?: string | null;
-  content?: unknown;
-};
 
 export function buildMSTeamsGraphMessageUrl(params: {
   conversationType?: string | null;
@@ -144,7 +137,7 @@ async function fetchGraphCollection(params: {
   }
 }
 
-function normalizeGraphAttachment(att: GraphAttachment): MSTeamsAttachmentLike {
+function normalizeGraphAttachment(att: MSTeamsAttachmentLike): MSTeamsAttachmentLike {
   let content: unknown = att.content;
   if (typeof content === "string") {
     try {
@@ -295,8 +288,8 @@ export async function downloadMSTeamsGraphMedia(params: {
   const fetchFn = params.fetchFn ?? fetch;
   const sharePointMedia: MSTeamsInboundMedia[] = [];
   const downloadedReferenceUrls = new Set<string>();
-  let messageAttachments: GraphAttachment[] = [];
-  let referenceAttachments: GraphAttachment[] = [];
+  let messageAttachments: MSTeamsAttachmentLike[] = [];
+  let referenceAttachments: MSTeamsAttachmentLike[] = [];
   let messageStatus: number | undefined;
   try {
     const { response: msgRes, release } = await fetchWithSsrFGuard({
@@ -314,7 +307,7 @@ export async function downloadMSTeamsGraphMedia(params: {
       if (msgRes.ok) {
         let msgData: {
           body?: { content?: string; contentType?: string };
-          attachments?: GraphAttachment[];
+          attachments?: MSTeamsAttachmentLike[];
         };
         try {
           msgData = await readProviderJsonResponse<typeof msgData>(

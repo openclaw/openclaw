@@ -120,10 +120,6 @@ export function inheritSessionSelection(
   };
 }
 
-function cloneOptionalSessionEntry(entry: SessionEntry | undefined): SessionEntry | undefined {
-  return entry ? structuredClone(entry) : undefined;
-}
-
 export function resolveProjectionExistingEntry(
   snapshot: SessionPatchProjectionSnapshot,
   target: SessionProjectionTarget,
@@ -136,5 +132,5 @@ export function resolveProjectionExistingEntry(
       freshest = entry;
     }
   }
-  return cloneOptionalSessionEntry(freshest);
+  return freshest ? structuredClone(freshest) : undefined;
 }

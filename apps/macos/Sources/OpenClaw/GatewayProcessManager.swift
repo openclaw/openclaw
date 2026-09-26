@@ -1306,14 +1306,6 @@ extension GatewayProcessManager {
         self.logger.debug("gateway log cleared")
     }
 
-    func setProjectRoot(path: String) {
-        CommandResolver.setProjectRoot(path)
-    }
-
-    func projectRootPath() -> String {
-        CommandResolver.projectRootPath()
-    }
-
     private nonisolated static func readGatewayLog(path: String, limit: Int) -> String {
         guard FileManager().fileExists(atPath: path) else { return "" }
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return "" }

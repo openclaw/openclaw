@@ -1,8 +1,3 @@
-/**
- * Channel media limit resolver.
- *
- * Combines account-scoped channel media limits with agent default limits.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 

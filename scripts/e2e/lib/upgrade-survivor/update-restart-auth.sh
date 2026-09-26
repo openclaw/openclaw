@@ -382,17 +382,26 @@ case "$command" in
       exit 0
     fi
     [ "$unit_name" = openclaw-gateway.service ] || exit 1
-    # The published 2026.8.1 reader omits LoadState; current maintenance requires it.
-    # Keep both exact query contracts and reject unimplemented manager properties.
-    [ "${property/Id,LoadState,/Id,}" = 'Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent' ] || {
-      echo "systemctl shim unsupported user-scope show: $*" >&2
-      exit 1
-    }
+    # Published readers omit LoadState or ControlGroup; retain their exact queries.
+    runtime_properties='Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent'
+    include_control_group=0
+    case "$property" in
+      "$runtime_properties" | "${runtime_properties/Id,/Id,LoadState,}") ;;
+      "${runtime_properties/Id,/Id,LoadState,},ControlGroup") include_control_group=1 ;;
+      *)
+        echo "systemctl shim unsupported user-scope show: $*" >&2
+        exit 1
+        ;;
+    esac
     if [[ "$property" == Id,LoadState,* ]]; then
       load_state="$(node "$manager_script" load-state)"
       printf 'Id=%s\nLoadState=%s\n' "$unit_name" "$load_state"
     fi
     node "$manager_script" runtime
+    # The emulated manager has no native unit cgroup to attest.
+    if [ "$include_control_group" = 1 ]; then
+      printf 'ControlGroup=\n'
+    fi
     exit 0
     ;;
   *)

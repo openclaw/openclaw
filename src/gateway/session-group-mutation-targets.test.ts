@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { expect, test, vi } from "vitest";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -133,29 +132,11 @@ test("discovers groups across more than the handle cap without writable database
     const walSpy = vi.spyOn(sqliteWal, "configureSqliteConnectionPragmas");
 
     try {
-      let targets: Map<string, Array<{ agentId?: string; sessionKey: string }>> | undefined;
-      const startedAt = performance.now();
-      try {
-        targets = new Map((await readSessionGroupMembershipInWorker(config, process.env)).groups);
-      } finally {
-        console.info(
-          JSON.stringify({
-            probe: "session-group-readonly-many-agents",
-            agents: agentIds.length,
-            elapsedMs: Math.round((performance.now() - startedAt) * 100) / 100,
-            integrityScans: integritySpy.mock.calls.length,
-            agentWalConfigurations: walSpy.mock.calls.filter(([, options]) =>
-              options?.databaseLabel?.startsWith("openclaw-agent:"),
-            ).length,
-            leaseClaims: claimSpy.mock.calls.length,
-            leaseReleases: releaseSpy.mock.calls.length,
-            openWriterHandles: listOpenClawAgentDatabasesForTest().length,
-            groupMembers: targets?.get("Shared work")?.length ?? 0,
-          }),
-        );
-      }
+      const targets = new Map(
+        (await readSessionGroupMembershipInWorker(config, process.env)).groups,
+      );
 
-      expect(targets?.get("Shared work")).toEqual(
+      expect(targets.get("Shared work")).toEqual(
         agentIds.map((agentId) => ({ agentId, sessionKey: `agent:${agentId}:main` })),
       );
       expect(integritySpy.mock.calls.length).toBe(0);

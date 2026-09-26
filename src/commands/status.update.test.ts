@@ -17,6 +17,18 @@ function buildUpdate(partial: Partial<UpdateCheckResult>): UpdateCheckResult {
   };
 }
 
+const cleanGit: NonNullable<UpdateCheckResult["git"]> = {
+  root: "/tmp/repo",
+  sha: null,
+  tag: null,
+  branch: "main",
+  upstream: "origin/main",
+  dirty: false,
+  ahead: 0,
+  behind: 0,
+  fetchOk: true,
+};
+
 function nextMajorVersion(version: string): string {
   const [majorPart] = version.split(".");
   const major = Number.parseInt(majorPart ?? "", 10);
@@ -35,15 +47,8 @@ describe("resolveUpdateAvailability", () => {
     const update = buildUpdate({
       installKind: "git",
       git: {
-        root: "/tmp/repo",
-        sha: null,
-        tag: null,
-        branch: "main",
-        upstream: "origin/main",
-        dirty: false,
-        ahead: 0,
+        ...cleanGit,
         behind: 3,
-        fetchOk: true,
       },
     });
     expect(resolveUpdateAvailability(update)).toEqual({
@@ -119,15 +124,10 @@ describe("formatUpdateOneLiner", () => {
     const update = buildUpdate({
       installKind: "git",
       git: {
-        root: "/tmp/repo",
+        ...cleanGit,
         sha: "abc123456789",
-        tag: null,
-        branch: "main",
-        upstream: "origin/main",
         dirty: true,
-        ahead: 0,
         behind: 2,
-        fetchOk: true,
       },
       registry: { latestVersion: VERSION },
       deps: {
@@ -143,19 +143,14 @@ describe("formatUpdateOneLiner", () => {
     );
   });
 
-  it.each([true, null])("renders synced git installs with fetchOk=%s unchanged", (fetchOk) => {
+  it("renders synced git installs without another fetch", () => {
     const update = buildUpdate({
       installKind: "git",
       git: {
-        root: "/tmp/repo",
+        ...cleanGit,
         sha: "abc123456789",
-        tag: null,
-        branch: "main",
-        upstream: "origin/main",
-        dirty: false,
-        ahead: 0,
         behind: 0,
-        fetchOk,
+        fetchOk: null,
       },
       registry: { latestVersion: VERSION },
       deps: {
@@ -171,22 +166,13 @@ describe("formatUpdateOneLiner", () => {
     );
   });
 
-  it.each([
-    { ahead: 0, behind: 0 },
-    { ahead: 3, behind: 2 },
-  ])("labels stale counts as cached with ahead=$ahead and behind=$behind", ({ ahead, behind }) => {
+  it("labels stale zero counts as cached instead of up to date", () => {
     vi.spyOn(Date, "now").mockReturnValue(600_000);
     const update = buildUpdate({
       installKind: "git",
       git: {
-        root: "/tmp/repo",
+        ...cleanGit,
         sha: "abc123456789",
-        tag: null,
-        branch: "main",
-        upstream: "origin/main",
-        dirty: false,
-        ahead,
-        behind,
         fetchOk: null,
         countsCached: true,
         stale: {
@@ -200,7 +186,7 @@ describe("formatUpdateOneLiner", () => {
     });
 
     expect(formatUpdateOneLiner(update)).toBe(
-      `Update: git main · ↔ origin/main · update check stale: last update fetch failed 5m ago (network error) · cached: ahead ${ahead}, behind ${behind} · npm latest ${VERSION}`,
+      `Update: git main · ↔ origin/main · update check stale: last update fetch failed 5m ago (network error) · cached: ahead 0, behind 0 · npm latest ${VERSION}`,
     );
   });
 
@@ -298,13 +284,7 @@ describe("formatUpdateAvailableHint", () => {
     const update = buildUpdate({
       installKind: "git",
       git: {
-        root: "/tmp/repo",
-        sha: null,
-        tag: null,
-        branch: "main",
-        upstream: "origin/main",
-        dirty: false,
-        ahead: 0,
+        ...cleanGit,
         behind: 2,
         fetchOk: cached ? null : true,
         ...(cached ? { countsCached: true as const } : {}),

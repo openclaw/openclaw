@@ -13,18 +13,7 @@ import { applyFinalEffectiveToolPolicy } from "./embedded-agent-runner/effective
 import { splitSdkTools } from "./embedded-agent-runner/tool-split.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 
-// Regression coverage for #76063. The reporter's evidence was a captured
-// outbound provider request body that contained only built-in OpenClaw tools
-// and no `server__*` MCP tool definitions, even though `cfg.mcp.servers`
-// declared healthy stdio servers. The materialize/policy/split units each
-// have their own focused tests, but ClawSweeper noted that the full request-
-// boundary path was uncovered: configured (`cfg.mcp.servers.<name>`) tools
-// must materialize, survive `applyFinalEffectiveToolPolicy`, and reach
-// `splitSdkTools().customTools` (the value passed to the SDK as
-// `customTools`, which is what the provider receives). This test asserts
-// that boundary behavior with a fake session MCP runtime so it can run
-// against current main without booting a real stdio child.
-
+// Regression #76063: configured MCP tools must survive materialization, policy, and SDK splitting.
 function makeConfiguredRuntime(
   params: {
     serverName?: string;
@@ -41,6 +30,14 @@ function makeConfiguredRuntime(
     inputSchema: { type: "object", properties: {} },
     fallbackDescription: `${serverName}.${toolName}`,
   }));
+  const catalog = () => ({
+    version: 1,
+    generatedAt: 0,
+    servers: {
+      [serverName]: { serverName, launchSummary: serverName, toolCount: tools.length },
+    },
+    tools,
+  });
   return {
     sessionId: "session-request-boundary",
     workspaceDir: "/workspace",
@@ -48,30 +45,8 @@ function makeConfiguredRuntime(
     createdAt: 0,
     lastUsedAt: 0,
     markUsed: () => {},
-    getCatalog: async () => ({
-      version: 1,
-      generatedAt: 0,
-      servers: {
-        [serverName]: {
-          serverName,
-          launchSummary: serverName,
-          toolCount: tools.length,
-        },
-      },
-      tools,
-    }),
-    peekCatalog: () => ({
-      version: 1,
-      generatedAt: 0,
-      servers: {
-        [serverName]: {
-          serverName,
-          launchSummary: serverName,
-          toolCount: tools.length,
-        },
-      },
-      tools,
-    }),
+    getCatalog: async () => catalog(),
+    peekCatalog: catalog,
     callTool: async () => ({
       content: [{ type: "text", text: "FROM-CONFIG" }],
       isError: false,
@@ -99,77 +74,23 @@ async function buildConfiguredMcpToolNamesAtRequestBoundary(params: {
 }
 
 describe("configured MCP tools reach the request boundary (#76063)", () => {
-  it("includes server__* tools in customTools under the coding profile", async () => {
-    const names = await buildConfiguredMcpToolNamesAtRequestBoundary({
-      cfg: {
-        tools: { profile: "coding" },
-        mcp: {
-          servers: {
-            userMcp: {
-              command: "node",
-              args: ["user-mcp.mjs"],
-            },
-          },
+  it.each([
+    { name: "coding", tools: { profile: "coding" }, allowed: true },
+    { name: "messaging", tools: { profile: "messaging" }, allowed: true },
+    { name: "minimal", tools: { profile: "minimal" }, allowed: false },
+    { name: "explicit deny", tools: { profile: "coding", deny: ["bundle-mcp"] }, allowed: false },
+  ] satisfies Array<{ name: string; tools: OpenClawConfig["tools"]; allowed: boolean }>)(
+    "applies $name policy to configured server__* tools at the request boundary",
+    async ({ tools, allowed }) => {
+      const names = await buildConfiguredMcpToolNamesAtRequestBoundary({
+        cfg: {
+          tools,
+          mcp: { servers: { userMcp: { command: "node", args: ["user-mcp.mjs"] } } },
         },
-      },
-    });
-
-    expect(names).toEqual(["userMcp__list_inbox", "userMcp__send_reply"]);
-  });
-
-  it("includes server__* tools in customTools under the messaging profile", async () => {
-    const names = await buildConfiguredMcpToolNamesAtRequestBoundary({
-      cfg: {
-        tools: { profile: "messaging" },
-        mcp: {
-          servers: {
-            userMcp: {
-              command: "node",
-              args: ["user-mcp.mjs"],
-            },
-          },
-        },
-      },
-    });
-
-    expect(names).toEqual(["userMcp__list_inbox", "userMcp__send_reply"]);
-  });
-
-  it("removes configured server__* tools from customTools under the minimal profile", async () => {
-    const names = await buildConfiguredMcpToolNamesAtRequestBoundary({
-      cfg: {
-        tools: { profile: "minimal" },
-        mcp: {
-          servers: {
-            userMcp: {
-              command: "node",
-              args: ["user-mcp.mjs"],
-            },
-          },
-        },
-      },
-    });
-
-    expect(names).toEqual([]);
-  });
-
-  it("respects an explicit tools.deny: ['bundle-mcp'] entry under the coding profile", async () => {
-    const names = await buildConfiguredMcpToolNamesAtRequestBoundary({
-      cfg: {
-        tools: { profile: "coding", deny: ["bundle-mcp"] },
-        mcp: {
-          servers: {
-            userMcp: {
-              command: "node",
-              args: ["user-mcp.mjs"],
-            },
-          },
-        },
-      },
-    });
-
-    expect(names).toEqual([]);
-  });
+      });
+      expect(names).toEqual(allowed ? ["userMcp__list_inbox", "userMcp__send_reply"] : []);
+    },
+  );
 
   it("preserves materialize ordering at the request boundary so prompt cache keys stay stable", async () => {
     const runtime = await materializeBundleMcpToolsForRun({

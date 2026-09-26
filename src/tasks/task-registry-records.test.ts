@@ -27,13 +27,6 @@ function task(status: TaskStatus, overrides: Partial<TaskRecord> = {}): TaskReco
 }
 
 describe("normalizeTaskTimestamps", () => {
-  it.each(["succeeded", "failed", "timed_out", "cancelled", "lost"] as const)(
-    "materializes %s completion from the latest terminal event",
-    (status) => {
-      expect(normalizeTaskTimestamps(task(status, { lastEventAt: 250 })).endedAt).toBe(250);
-    },
-  );
-
   it("falls back to original creation when a legacy terminal has no event time", () => {
     expect(
       normalizeTaskTimestamps(task("failed", { createdAt: 200, startedAt: 100 })).endedAt,

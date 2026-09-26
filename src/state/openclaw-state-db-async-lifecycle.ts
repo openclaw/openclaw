@@ -478,9 +478,10 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
   };
   // Keep closure creation off capture's warm branch: V8 otherwise allocates its
   // captured environment even when returning an already retained admission.
-  const captureResolved = (databasePath: string): OpenClawStateDatabaseReadAdmission => {
-    const record = resolve(databasePath);
-    assertOpen(record);
+  const captureRecord = (
+    record: IdentityRecord,
+    databasePath: string,
+  ): OpenClawStateDatabaseReadAdmission => {
     const previous = record.admissions.get(databasePath);
     if (previous) {
       return previous;
@@ -503,6 +504,11 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     record.admissions.set(databasePath, admission);
     return admission;
   };
+  const captureResolved = (databasePath: string): OpenClawStateDatabaseReadAdmission => {
+    const record = resolve(databasePath);
+    assertOpen(record);
+    return captureRecord(record, databasePath);
+  };
 
   return {
     identity(pathname: string): DatabasePathIdentity | undefined {
@@ -511,7 +517,10 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     knownIdentity(this: void, pathname: string): DatabasePathIdentity | undefined {
       return known(pathname)?.identity;
     },
-    publish(pathname: string): DatabasePathIdentity {
+    publish(pathname: string): {
+      identity: DatabasePathIdentity;
+      admission: OpenClawStateDatabaseReadAdmission;
+    } {
       const resolvedPath = path.resolve(pathname);
       const identity = readDatabasePathIdentitySync(resolvedPath);
       const previous = recordsByPath.get(resolvedPath);
@@ -533,7 +542,9 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       }
       bindPath(record, resolvedPath);
       bindPath(record, identity.canonicalPath);
-      return identity;
+      // Private native binding may publish while reads are sealed. Retain its
+      // generation now; every later worker use still checks the seal and lifetime.
+      return { identity, admission: captureRecord(record, resolvedPath) };
     },
     invalidate(pathname?: string): void {
       if (pathname === undefined) {

@@ -18,7 +18,10 @@ import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  createLazyRuntimeMethodBinder,
+  createLazyRuntimeModule,
+} from "openclaw/plugin-sdk/lazy-runtime";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -154,6 +157,7 @@ const loadSlackScopesModule = createLazyRuntimeModule(() => import("./scopes.js"
 const loadSlackOutboundAdapterModule = createLazyRuntimeModule(
   () => import("./outbound-adapter.js"),
 );
+const bindSlackOutbound = createLazyRuntimeMethodBinder(loadSlackOutboundAdapterModule);
 async function resolveSlackHandleAction() {
   return (
     getOptionalSlackRuntime()?.channel?.slack?.handleSlackAction ??
@@ -434,10 +438,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
   preferFinalAssistantVisibleText: true,
   shouldSuppressLocalPayloadPrompt: shouldSuppressLocalSlackExecApprovalPrompt,
   // Core sees this facade, not its lazy owner; forward finalization or question cards stay live.
-  afterDeliverPayload: async (ctx) => {
-    const { slackOutbound } = await loadSlackOutboundAdapterModule();
-    await slackOutbound.afterDeliverPayload!(ctx);
-  },
+  afterDeliverPayload: bindSlackOutbound(({ slackOutbound }) => slackOutbound.afterDeliverPayload!),
   presentationCapabilities: SLACK_PRESENTATION_CAPABILITIES,
   ...createRuntimeOutboundDelegates({
     getRuntime: loadSlackOutboundAdapterModule,
@@ -446,18 +447,9 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
       unavailableMessage: "Slack outbound presentation rendering is unavailable",
     },
   }),
-  sendPayload: async (ctx) => {
-    const { slackOutbound } = await loadSlackOutboundAdapterModule();
-    return await slackOutbound.sendPayload!(ctx);
-  },
-  sendText: async (ctx) => {
-    const { slackOutbound } = await loadSlackOutboundAdapterModule();
-    return await slackOutbound.sendText!(ctx);
-  },
-  sendMedia: async (ctx) => {
-    const { slackOutbound } = await loadSlackOutboundAdapterModule();
-    return await slackOutbound.sendMedia!(ctx);
-  },
+  sendPayload: bindSlackOutbound(({ slackOutbound }) => slackOutbound.sendPayload!),
+  sendText: bindSlackOutbound(({ slackOutbound }) => slackOutbound.sendText!),
+  sendMedia: bindSlackOutbound(({ slackOutbound }) => slackOutbound.sendMedia!),
 };
 
 const slackMessageAdapterBase = createChannelMessageAdapterFromOutbound({

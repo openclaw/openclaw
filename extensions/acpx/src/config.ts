@@ -1,7 +1,3 @@
-/**
- * Resolves ACPX plugin config from raw user configuration. It locates the
- * plugin root, injects optional MCP bridge servers, and applies runtime defaults.
- */
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -177,7 +173,6 @@ function resolveConfiguredMcpServers(params: {
   return resolved;
 }
 
-/** Convert OpenClaw MCP server config into ACPX runtime MCP server entries. */
 export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>): AcpxMcpServer[] {
   return Object.entries(mcpServers).map(([name, server]) => ({
     name,
@@ -190,7 +185,6 @@ export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>): Ac
   }));
 }
 
-/** Validate and normalize raw ACPX plugin config for runtime startup. */
 export function resolveAcpxPluginConfig(params: {
   rawConfig: unknown;
   workspaceDir?: string;

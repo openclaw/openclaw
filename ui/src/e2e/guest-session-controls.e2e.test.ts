@@ -162,10 +162,24 @@ suite.define(() => {
           .poll(() => page.locator(".chat-thread").textContent())
           .toContain("Help me plan my own work.");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        const listCount = (await gateway.getRequests("sessions.list")).length;
         await gateway.deferNext("sessions.list");
+        // Creation must preserve its first turn while an earlier roster read is still pending.
+        await page.evaluate(() => {
+          // SAFETY: The fixture selects the registered application and its session capability.
+          const app = document.querySelector("openclaw-app") as
+            | (HTMLElement & {
+                runtime?: { context: Pick<ApplicationContext, "sessions"> };
+              })
+            | null;
+          if (!app?.runtime) {
+            throw new Error("OpenClaw application runtime is unavailable");
+          }
+          void app.runtime.context.sessions.refreshList({ force: true });
+        });
+        await gateway.waitForRequest("sessions.list", { after: listCount });
         await gateway.deferNext("chat.startup", { sessionKey: key });
         await gateway.deferNext("sessions.describe", { key });
-        const listCount = (await gateway.getRequests("sessions.list")).length;
         await gateway.resolveDeferred("sessions.create", {
           key,
           entry: { sessionId },
@@ -174,7 +188,6 @@ suite.define(() => {
             : { runStarted: false, runError: { message: "Initial turn refused" } }),
         });
         await waitForCommittedChatRoute(page);
-        await gateway.waitForRequest("sessions.list", { after: listCount });
         const initialMessage = pane.locator(".chat-group.user", {
           hasText: "Help me plan my own work.",
         });

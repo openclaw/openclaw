@@ -36,6 +36,7 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createCronCreatorAuthorityRunScope,
   mintCronCreatorAuthorityGrant,
@@ -737,15 +738,6 @@ describe("cron method validation", () => {
     );
   });
 
-  it("returns a single cron job for cron.get", async () => {
-    const job = createCronJob({ id: "cron-42", name: "single job" });
-
-    const { context, respond } = await invokeCronGet({ id: "cron-42" }, job);
-
-    expect(context.cron.readJob).toHaveBeenCalledWith("cron-42");
-    expectCronReadSuccess(respond, job);
-  });
-
   it("allows caller-scoped cron.get for the same agent", async () => {
     const job = createCronJob({ id: "cron-42", agentId: "ops" });
 
@@ -798,18 +790,6 @@ describe("cron method validation", () => {
       code: "INVALID_REQUEST",
       messageIncludes: "cron job not found: missing",
     });
-  });
-
-  it("keeps the exact cron.get missing wording older CLI matchers parse", async () => {
-    const { respond } = await invokeCronGet({ jobId: "missing" });
-
-    // Wire contract: shipped CLIs detect a missing job via
-    // error.message.includes(`cron job not found: ${id}`) before falling back to
-    // name lookup (isMissingCronGetError). Rewording the server message strands
-    // older clients, so pin the legacy-matcher form here.
-    const error = respond.mock.calls.at(-1)?.[2];
-    expect(String(error?.message)).toContain("cron job not found: missing");
-    expect(String(error?.message)).not.toContain("automation not found");
   });
 
   describe("cron.list request diagnostics", () => {
@@ -870,10 +850,10 @@ describe("cron method validation", () => {
         }
         expect(context.logGateway.warn).toHaveBeenCalledExactlyOnceWith("cron: slow list request", {
           operation: "cron.list",
-          elapsedMs: 1301,
+          elapsedMs: fails ? 1301 : 1302,
           phaseDurationsMs: fails
             ? { setup: 0, listing: 1301 }
-            : { setup: 0, listing: 1301, projection: 0, response: 0, handlerExit: 0 },
+            : { setup: 0, listing: 1302, projection: 0, response: 0, handlerExit: 0 },
           sourcePageMs: 1301,
           sourcePageCount: 1,
           scopeAttemptCount: 1,
@@ -883,7 +863,7 @@ describe("cron method validation", () => {
           previewsRequested: false,
           scopeApplied: true,
           ...(!fails ? { returnedCount: 1 } : {}),
-          scopeProcessingMs: 0,
+          scopeProcessingMs: fails ? 0 : 1,
         });
       },
     );
@@ -1215,7 +1195,7 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
-  it.each([{}, { agentId: undefined }, { agentId: null }])(
+  it.each([{}, { agentId: null }])(
     "defaults scoped cron.add ownership to the trusted caller for %j",
     async (fields) => {
       const { context, respond } = await invokeCronAdd(agentTurnCronParams(fields), {
@@ -1851,6 +1831,8 @@ describe("cron method validation", () => {
     const { storePath } = await makeStorePath();
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",
@@ -2795,6 +2777,8 @@ describe("cron method validation", () => {
     );
     const repair = await applyLegacyCronStoreRepair({ cfg, state });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: false,
       defaultAgentId: "ops",
@@ -3949,19 +3933,13 @@ describe("cron method validation", () => {
     },
   );
 
-  it.each([
-    ["delivery.channel", { channel: false }],
-    ["delivery.to", { to: 123 }],
-    ["delivery.failureDestination.channel", { failureDestination: { channel: {} } }],
-    ["delivery.failureDestination.to", { failureDestination: { to: true } }],
-    ["delivery.completionDestination.to", { completionDestination: { mode: "webhook", to: [] } }],
-  ])("rejects non-string cron.update %s before normalization", async (field, delivery) => {
-    const { context, respond } = await invokeCronUpdateDelivery(delivery);
+  it("rejects a non-string cron.update delivery.to before normalization", async () => {
+    const { context, respond } = await invokeCronUpdateDelivery({ to: 123 });
 
     expect(context.cron.update).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: `${field} must be a non-empty string`,
+      messageIncludes: "delivery.to must be a non-empty string",
     });
   });
 

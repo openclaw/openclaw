@@ -2,11 +2,10 @@ import { Buffer } from "node:buffer";
 import { lookup } from "node:dns/promises";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import {
-  buildHostnameAllowlistPolicyFromSuffixAllowlist,
-  isHttpsUrlAllowedByHostnameSuffixAllowlist,
+  buildHostnameAllowlistPolicyFromSuffixAllowlist as resolveMediaSsrfPolicy,
+  isHttpsUrlAllowedByHostnameSuffixAllowlist as isUrlAllowed,
   isPrivateIpAddress,
   normalizeHostnameSuffixAllowlist,
-  type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-policy";
 import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -95,7 +94,6 @@ const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
 ] as const;
 
 export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
-export { isRecord };
 
 /**
  * Host suffixes for SharePoint/OneDrive shared links that must be fetched via
@@ -276,13 +274,8 @@ export function isAdvertisedFileAttachment(attachment: MSTeamsAttachmentLike): b
   );
 }
 
-function isHtmlAttachment(att: MSTeamsAttachmentLike): boolean {
-  const contentType = normalizeContentType(att.contentType) ?? "";
-  return contentType.startsWith("text/html");
-}
-
 export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | undefined {
-  if (!isHtmlAttachment(att)) {
+  if (!normalizeContentType(att.contentType)?.startsWith("text/html")) {
     return undefined;
   }
   if (typeof att.content === "string") {
@@ -367,14 +360,6 @@ export function safeHostForUrl(url: string): string {
   }
 }
 
-function resolveAllowedHosts(input?: string[]): string[] {
-  return normalizeHostnameSuffixAllowlist(input, DEFAULT_MEDIA_HOST_ALLOWLIST);
-}
-
-function resolveAuthAllowedHosts(input?: string[]): string[] {
-  return normalizeHostnameSuffixAllowlist(input, DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST);
-}
-
 export type MSTeamsAttachmentFetchPolicy = {
   allowHosts: string[];
   authAllowHosts: string[];
@@ -436,13 +421,12 @@ export function resolveAttachmentFetchPolicy(params?: {
   authAllowHosts?: string[];
 }): MSTeamsAttachmentFetchPolicy {
   return {
-    allowHosts: resolveAllowedHosts(params?.allowHosts),
-    authAllowHosts: resolveAuthAllowedHosts(params?.authAllowHosts),
+    allowHosts: normalizeHostnameSuffixAllowlist(params?.allowHosts, DEFAULT_MEDIA_HOST_ALLOWLIST),
+    authAllowHosts: normalizeHostnameSuffixAllowlist(
+      params?.authAllowHosts,
+      DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST,
+    ),
   };
-}
-
-export function isUrlAllowed(url: string, allowlist: string[]): boolean {
-  return isHttpsUrlAllowedByHostnameSuffixAllowlist(url, allowlist);
 }
 
 export function applyAuthorizationHeaderForUrl(params: {
@@ -462,20 +446,6 @@ export function applyAuthorizationHeaderForUrl(params: {
   params.headers.delete("Authorization");
 }
 
-export function resolveMediaSsrfPolicy(allowHosts: string[]): SsrFPolicy | undefined {
-  return buildHostnameAllowlistPolicyFromSuffixAllowlist(allowHosts);
-}
-
-/**
- * Returns true if the given IPv4 or IPv6 address is in a private, loopback,
- * or link-local range that must never be reached from media downloads.
- *
- * Delegates to the SDK's `isPrivateIpAddress` which handles IPv4-mapped IPv6,
- * expanded notation, NAT64, 6to4, Teredo, octal IPv4, and fails closed on
- * parse errors.
- */
-const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress;
-
 /**
  * Resolve a hostname via DNS and reject private/reserved IPs.
  * Throws if the resolved IP is private or resolution fails.
@@ -491,7 +461,7 @@ async function resolveAndValidateIP(
   } catch {
     throw new Error(`DNS resolution failed for "${hostname}"`);
   }
-  if (isPrivateOrReservedIP(resolved.address)) {
+  if (isPrivateIpAddress(resolved.address)) {
     throw new Error(`Hostname "${hostname}" resolves to private/reserved IP (${resolved.address})`);
   }
   return resolved.address;

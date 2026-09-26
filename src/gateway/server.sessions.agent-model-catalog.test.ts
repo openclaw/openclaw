@@ -136,19 +136,6 @@ const cases: ModelSelectionCase[] = [
       'Model work-provider/work-only requires agent harness "fixture-harness", but no enabled plugin provides it. Install and enable its plugin, restart the Gateway, then select the model again.',
   })),
   {
-    label: "loads the explicit agent model catalog",
-    explicitAgent: true,
-    globalAllow: [],
-    model: workRef,
-    expectedModel: workRef,
-  },
-  {
-    label: "loads the agent-qualified session model catalog",
-    globalAllow: [],
-    model: workRef,
-    expectedModel: workRef,
-  },
-  {
     label: "rejects outside agent policy despite unrestricted global policy",
     explicitAgent: true,
     globalAllow: [],

@@ -85,18 +85,22 @@ describe("GitHub publication selection admission", () => {
   installGitHubPublicationTestHarness();
   afterEach(() => vi.unstubAllGlobals());
 
-  it.each(
-    ["options", "publish", "status", "confirm"].flatMap((method) =>
-      [
-        { sessionKey: "agent:main:main", agentId: "research" },
-        { sessionKey: "agent:main:main", agentId: "main" },
-        { sessionKey: "global", agentId: "---" },
-        { sessionKey: "global", agentId: "retired" },
-        { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "ops" },
-        { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "retired" },
-      ].map(({ sessionKey, agentId, fixedOwner }) => ({ method, sessionKey, agentId, fixedOwner })),
-    ),
-  )(
+  it.each([
+    ...[
+      { sessionKey: "agent:main:main", agentId: "research" },
+      { sessionKey: "agent:main:main", agentId: "main" },
+      { sessionKey: "global", agentId: "---" },
+      { sessionKey: "global", agentId: "retired" },
+      { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "ops" },
+      { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "retired" },
+    ].map((owner) => Object.assign({}, owner, { method: "publish" })),
+    ...["options", "status", "confirm"].map((method) => ({
+      method,
+      sessionKey: "agent:main:main",
+      agentId: "research",
+      fixedOwner: undefined,
+    })),
+  ])(
     "rejects explicit publication owner $agentId for $sessionKey at $method admission (fixed owner: $fixedOwner)",
     async ({ method, sessionKey, agentId, fixedOwner }) => {
       const fixture = await createPersonalPublicationFixture();

@@ -1,8 +1,9 @@
 // Session checkout diff collection and session-start baseline filtering.
 import crypto from "node:crypto";
-import { constants as fsConstants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
+import { root as openFsRoot, type Root } from "@openclaw/fs-safe/root";
 import type {
   SessionDiffFile,
   SessionsDiffResult,
@@ -415,19 +416,11 @@ type BaselineCandidate = Pick<SessionDiffFile, "oldPath" | "path" | "status" | "
 
 type BaselineHashBudget = { remaining: number };
 
-function sameMutationFingerprint(left: BigIntStats, right: BigIntStats): boolean {
-  return (
-    left.ctimeNs === right.ctimeNs &&
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mode === right.mode &&
-    left.mtimeNs === right.mtimeNs &&
-    left.nlink === right.nlink &&
-    left.size === right.size
-  );
-}
-
-function hashBaselineDescriptor(candidate: BaselineCandidate, content: string): string {
+function hashBaselineDescriptor(
+  candidate: BaselineCandidate,
+  content: string,
+  bytes?: Buffer,
+): string {
   return crypto
     .createHash("sha256")
     .update(
@@ -439,13 +432,14 @@ function hashBaselineDescriptor(candidate: BaselineCandidate, content: string): 
         content,
       ].join("\0"),
     )
+    .update(bytes ?? "")
     .digest("hex");
 }
 
 async function fingerprintBaselineCandidate(params: {
   budget: BaselineHashBudget;
   candidate: BaselineCandidate;
-  realRoot: string;
+  directory: Root | undefined;
   root: string;
 }): Promise<string | undefined> {
   const { candidate } = params;
@@ -461,7 +455,7 @@ async function fingerprintBaselineCandidate(params: {
   ) {
     return undefined;
   }
-  const initial = await fs.lstat(absolutePath, { bigint: true }).catch(() => undefined);
+  const initial = await fs.lstat(absolutePath).catch(() => undefined);
   if (!initial) {
     return undefined;
   }
@@ -471,64 +465,23 @@ async function fingerprintBaselineCandidate(params: {
       ? undefined
       : hashBaselineDescriptor(candidate, `symlink:${target}`);
   }
-  if (
-    !initial.isFile() ||
-    initial.nlink !== 1n ||
-    initial.size > BigInt(MAX_BASELINE_FILE_BYTES) ||
-    initial.size > BigInt(params.budget.remaining)
-  ) {
-    return undefined;
-  }
-  const resolved = await fs.realpath(absolutePath).catch(() => undefined);
-  if (
-    !resolved ||
-    (resolved !== params.realRoot && !resolved.startsWith(params.realRoot + nodePath.sep))
-  ) {
-    return undefined;
-  }
-  const handle = await fs
-    .open(absolutePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+  const opened = await params.directory
+    ?.open(`.${nodePath.sep}${relativePath}`)
     .catch(() => undefined);
-  if (!handle) {
+  if (!opened) {
     return undefined;
   }
-  params.budget.remaining -= Number(initial.size);
-  try {
-    const opened = await handle.stat({ bigint: true });
-    if (!opened.isFile() || opened.nlink !== 1n || !sameMutationFingerprint(initial, opened)) {
-      return undefined;
-    }
-    const digest = crypto.createHash("sha256");
-    digest.update(
-      [
-        candidate.path,
-        candidate.oldPath ?? "",
-        candidate.status,
-        candidate.untracked === true ? "untracked" : "tracked",
-        opened.mode.toString(),
-        opened.size.toString(),
-      ].join("\0"),
-    );
-    const buffer = Buffer.allocUnsafe(64 * 1024);
-    let offset = 0;
-    while (offset < Number(opened.size)) {
-      const { bytesRead } = await handle.read(
-        buffer,
-        0,
-        Math.min(buffer.length, Number(opened.size) - offset),
-        offset,
-      );
-      if (bytesRead === 0) {
-        return undefined;
-      }
-      digest.update(buffer.subarray(0, bytesRead));
-      offset += bytesRead;
-    }
-    const final = await handle.stat({ bigint: true });
-    return sameMutationFingerprint(opened, final) ? digest.digest("hex") : undefined;
-  } finally {
-    await handle.close().catch(() => undefined);
+  await using file = opened;
+  const { mode, size } = file.stat;
+  if (size > MAX_BASELINE_FILE_BYTES || size > params.budget.remaining) {
+    return undefined;
   }
+  params.budget.remaining -= size;
+  const buffer = Buffer.allocUnsafe(size);
+  if ((await readFileWindowFully(file.handle, buffer, 0)) !== size) {
+    return undefined;
+  }
+  return hashBaselineDescriptor(candidate, `${mode}\0${size}`, buffer);
 }
 
 async function gitOutForBaseline(cwd: string, args: string[]): Promise<string | null> {
@@ -595,14 +548,17 @@ async function fingerprintBaselineCandidates(params: {
   candidates: BaselineCandidate[];
   root: string;
 }): Promise<{ files: SessionDiffBaseline["files"]; truncated: boolean }> {
-  const realRoot = await fs.realpath(params.root).catch(() => params.root);
+  const directory = await openFsRoot(params.root, {
+    hardlinks: "reject",
+    symlinks: "follow-parents-within-root",
+  }).catch(() => undefined);
   const budget: BaselineHashBudget = { remaining: MAX_BASELINE_TOTAL_BYTES };
   const files: SessionDiffBaseline["files"] = [];
   for (const candidate of params.candidates) {
     const fingerprint = await fingerprintBaselineCandidate({
       budget,
       candidate,
-      realRoot,
+      directory,
       root: params.root,
     });
     if (fingerprint) {

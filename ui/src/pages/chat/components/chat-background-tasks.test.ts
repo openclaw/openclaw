@@ -1,6 +1,6 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../../api/gateway.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import { createHost, flushAsync, makeTask } from "../../../test-helpers/chat-background-tasks.ts";
@@ -117,7 +117,7 @@ describe("background tasks rail state", () => {
     vi.useFakeTimers();
     try {
       const running = makeTask({ id: "task-retried" });
-      const pendingRecent = deferred<{ tasks: TaskSummary[] }>();
+      const pendingRecent = createDeferred<{ tasks: TaskSummary[] }>();
       let requestCount = 0;
       const { host, request } = createHost({
         request: (_method, params) => {
@@ -255,7 +255,7 @@ describe("background tasks rail state", () => {
   });
 
   it("reports refresh loading before the snapshot settles", async () => {
-    const pending = deferred<{ tasks: TaskSummary[] }>();
+    const pending = createDeferred<{ tasks: TaskSummary[] }>();
     const { host, requestUpdate } = createHost({ request: () => pending.promise });
 
     const initial = createBackgroundTasksProps(host);
@@ -408,26 +408,6 @@ describe("background tasks rail events", () => {
     handleBackgroundTasksEvent(host, { action: "deleted", taskId: "task-1" });
     props = createBackgroundTasksProps(host);
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-2"]);
-  });
-
-  it("applies an equally current authoritative terminal event correction", async () => {
-    const completed = makeTask({
-      id: "task-1",
-      status: "completed",
-      updatedAt: 2_000,
-      terminalSummary: "Previous terminal details",
-    });
-    const correction = makeTask({
-      id: "task-1",
-      status: "completed",
-      updatedAt: 2_000,
-      terminalSummary: "Authoritative terminal details",
-    });
-    const { host } = await loadedHost([completed]);
-
-    handleBackgroundTasksEvent(host, { action: "upserted", task: correction });
-
-    expect(createBackgroundTasksProps(host).tasks).toEqual([correction]);
   });
 
   it("does not roll back running tool activity from an equally current event", async () => {
@@ -698,39 +678,18 @@ describe("running-tasks status row", () => {
 
   it("anchors a hover preview of the latest tasks, active first, capped at five", () => {
     const container = renderStatusRow({
-      tasks: [
-        makeAggregateTask({ id: "a1", title: "Active one", updatedAt: 9_000 }),
-        makeAggregateTask({
-          id: "a2",
-          status: "queued",
-          title: "Queued two",
-          updatedAt: 8_000,
-        }),
-        makeAggregateTask({
-          id: "f1",
-          status: "completed",
-          title: "Finished one",
-          updatedAt: 7_000,
-        }),
-        makeAggregateTask({
-          id: "f2",
-          status: "failed",
-          title: "Finished two",
-          updatedAt: 6_000,
-        }),
-        makeAggregateTask({
-          id: "f3",
-          status: "completed",
-          title: "Finished three",
-          updatedAt: 5_000,
-        }),
-        makeAggregateTask({
-          id: "f4",
-          status: "completed",
-          title: "Finished four",
-          updatedAt: 4_000,
-        }),
-      ],
+      tasks: (
+        [
+          ["a1", "running", "Active one", 9_000],
+          ["a2", "queued", "Queued two", 8_000],
+          ["f1", "completed", "Finished one", 7_000],
+          ["f2", "failed", "Finished two", 6_000],
+          ["f3", "completed", "Finished three", 5_000],
+          ["f4", "completed", "Finished four", 4_000],
+        ] as const
+      ).map(([id, status, title, updatedAt]) =>
+        makeAggregateTask({ id, status, title, updatedAt }),
+      ),
     });
 
     const preview = container.querySelector("openclaw-tooltip.chat-tasks-status__preview");

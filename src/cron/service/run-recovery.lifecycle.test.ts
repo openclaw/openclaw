@@ -5,6 +5,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
+import {
   advanceCronActiveJobGeneration,
   clearCronJobActive,
   isCronJobActive,
@@ -33,21 +37,26 @@ import { MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-recovery-lifecycle-" });
 
-describe.each([
-  "stopped",
-  "retired",
-  "rescheduled",
-  "manual",
-  "manual-future",
-  "manual-delayed-force",
-  "manual-replaced",
-  "manual-write-failure",
-  "manual-write-failure-live",
-  "manual-removed",
-] as const)("one-shot recovery when %s", (mode) => {
-  it.each(["ok", "error", "skipped"] as const)(
-    "does not replay a run that finishes as %s after stopping",
-    async (status) => {
+describe("one-shot recovery", () => {
+  it.each([
+    { mode: "stopped", status: "ok" },
+    { mode: "stopped", status: "error" },
+    { mode: "retired", status: "ok" },
+    { mode: "retired", status: "error" },
+    { mode: "rescheduled", status: "ok" },
+    { mode: "manual", status: "ok" },
+    { mode: "manual", status: "error" },
+    { mode: "manual", status: "skipped" },
+    { mode: "manual-future", status: "ok" },
+    { mode: "manual-delayed-force", status: "ok" },
+    { mode: "manual-delayed-force", status: "error" },
+    { mode: "manual-replaced", status: "ok" },
+    { mode: "manual-write-failure", status: "ok" },
+    { mode: "manual-write-failure-live", status: "error" },
+    { mode: "manual-removed", status: "skipped" },
+  ] as const)(
+    "does not replay a $mode run that finishes as $status after stopping",
+    async ({ mode, status }) => {
       const { storePath } = await makeStorePath();
       const nowMs = Date.now();
       const atMs = nowMs + (mode === "manual-future" ? 60_000 : 0);
@@ -81,12 +90,13 @@ describe.each([
       });
       const onEvent = vi.fn();
       const sendCronFailureAlert = vi.fn(async () => undefined);
-      const freshState = () =>
+      const freshState = (clock = createGatewaySchedulerClock(nowMs)) =>
         createCronServiceState({
           storePath,
           cronEnabled: true,
           log: logger,
-          nowMs: Date.now,
+          scheduler: createTestGatewayScheduler(clock.clock),
+          nowMs: clock.clock.now,
           enqueueSystemEvent: vi.fn(),
           requestHeartbeat: vi.fn(),
           runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
@@ -220,21 +230,15 @@ describe.each([
           ]);
         }
         for (let restart = 0; restart < 3; restart += 1) {
-          const next = freshState();
+          const clock = createGatewaySchedulerClock(nowMs);
+          const next = freshState(clock);
           try {
             await start(next);
             if (mode === "manual-delayed-force") {
-              await vi.advanceTimersByTimeAsync(MIN_REFIRE_GAP_MS);
-              await vi.waitFor(
-                async () => {
-                  expect(runCommandJob).toHaveBeenCalledTimes(2);
-                  expect(
-                    (await loadCronStore(storePath)).jobs[0]?.state.runningAtMs,
-                  ).toBeUndefined();
-                  expect(next.activeTimerTicks).toBe(0);
-                },
-                { interval: 0 },
-              );
+              await clock.advanceBy(MIN_REFIRE_GAP_MS);
+              expect(runCommandJob).toHaveBeenCalledTimes(2);
+              expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBeUndefined();
+              expect(next.activeTimerTicks).toBe(0);
             }
             // A force run reserved before the slot borrows it; once due, its
             // distinct scheduled occurrence still runs exactly once.

@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -12,26 +13,18 @@ import {
 it.each(["none", "newer", "failed-before-list", "failed-after-list"])(
   "reconciles created placement without retiring a newer model claim (%s)",
   async (claim) => {
-    let resolveList: (result: SessionsListResult) => void = () => undefined;
-    const pendingList = new Promise<SessionsListResult>((resolve) => {
-      resolveList = resolve;
-    });
+    const pendingList = createDeferred<SessionsListResult>();
     const key = "agent:main:created-in-background";
-    let rejectPatch: (error: Error) => void = () => undefined;
-    let resolvePatch: (result: unknown) => void = () => undefined;
-    const pendingPatch = new Promise<unknown>((resolve, reject) => {
-      resolvePatch = resolve;
-      rejectPatch = reject;
-    });
+    const pendingPatch = createDeferred<unknown>();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.create") {
         return { key };
       }
       if (method === "sessions.list") {
-        return await pendingList;
+        return await pendingList.promise;
       }
       if (method === "sessions.patch") {
-        return await pendingPatch;
+        return await pendingPatch.promise;
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -58,12 +51,12 @@ it.each(["none", "newer", "failed-before-list", "failed-after-list"])(
             .catch((error: unknown) => error)
         : null;
     if (claim === "failed-before-list") {
-      rejectPatch(new Error("model rejected"));
+      pendingPatch.reject(new Error("model rejected"));
       expect(await patch).toEqual(new Error("model rejected"));
       expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-5.6-sol");
     }
 
-    resolveList(
+    pendingList.resolve(
       sessionsResult(
         [
           {
@@ -82,7 +75,7 @@ it.each(["none", "newer", "failed-before-list", "failed-after-list"])(
     await waitForFast(() => expect(sessions.isPreparedWorkSession(key)).toBe(false));
     if (claim === "failed-after-list") {
       expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-5-mini");
-      rejectPatch(new Error("model rejected"));
+      pendingPatch.reject(new Error("model rejected"));
       expect(await patch).toEqual(new Error("model rejected"));
     }
     expect(created).toHaveBeenCalledOnce();
@@ -91,7 +84,7 @@ it.each(["none", "newer", "failed-before-list", "failed-after-list"])(
       claim === "newer" ? "openai/gpt-5.6-sol" : undefined,
     );
     if (claim === "newer") {
-      resolvePatch({ ok: true, key, entry: {} });
+      pendingPatch.resolve({ ok: true, key, entry: {} });
       await patch;
       expect(sessions.state.modelOverrides[key]).toBeUndefined();
     }
@@ -110,18 +103,9 @@ it.each([
     settleWithEvent: false,
   },
 ])("claims created placement through background reconciliation ($label)", async (testCase) => {
-  let resolveList: (result: SessionsListResult) => void = () => undefined;
-  const pendingList = new Promise<SessionsListResult>((resolve) => {
-    resolveList = resolve;
-  });
-  let resolveAppendList: (result: SessionsListResult) => void = () => undefined;
-  const pendingAppendList = new Promise<SessionsListResult>((resolve) => {
-    resolveAppendList = resolve;
-  });
-  let resolveCanonicalList: (result: SessionsListResult) => void = () => undefined;
-  const pendingCanonicalList = new Promise<SessionsListResult>((resolve) => {
-    resolveCanonicalList = resolve;
-  });
+  const pendingList = createDeferred<SessionsListResult>();
+  const pendingAppendList = createDeferred<SessionsListResult>();
+  const pendingCanonicalList = createDeferred<SessionsListResult>();
   let listCalls = 0;
   const key = "agent:main:created-in-background";
   const request = vi.fn(async (method: string) => {
@@ -143,12 +127,12 @@ it.each([
         return sessionsResult([{ key: "agent:main:main", kind: "direct", updatedAt: 1 }], 1);
       }
       if (listCalls === 2) {
-        return await pendingList;
+        return await pendingList.promise;
       }
       if (listCalls === 3 && !testCase.settleWithEvent) {
-        return await pendingAppendList;
+        return await pendingAppendList.promise;
       }
-      return await pendingCanonicalList;
+      return await pendingCanonicalList.promise;
     }
     if (method === "sessions.patch") {
       throw new Error("thinking rejected");
@@ -188,7 +172,7 @@ it.each([
   expect(sessions.think(key)).toBe("medium");
   expect(stateChanged).toHaveBeenCalledOnce();
 
-  resolveList(
+  pendingList.resolve(
     sessionsResult(
       [
         {
@@ -223,13 +207,13 @@ it.each([
     expect(sessions.think(key)).toBeUndefined();
   } else {
     const appendRefresh = sessions.refresh({ append: true, offset: 1, force: true });
-    resolveAppendList(sessionsResult([], 3));
+    pendingAppendList.resolve(sessionsResult([], 3));
     await appendRefresh;
     expect(sessions.think(key)).toBe("medium");
   }
   const canonicalRefresh = sessions.refresh({ force: true });
   const canonicalThinkingLevel = testCase.settleWithEvent ? "medium" : "high";
-  resolveCanonicalList(
+  pendingCanonicalList.resolve(
     sessionsResult(
       [{ key, kind: "direct", thinkingLevel: canonicalThinkingLevel, updatedAt: 3 }],
       3,

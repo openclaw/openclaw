@@ -55,15 +55,11 @@ import { renderSessionActivityView } from "./session-activity-view.ts";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
 import { renderActivity } from "./view.ts";
 
-function selectorKey(selector: RunInspectorSelector | null): string | null {
-  return selector ? `${selector.kind}:${selector.id}` : null;
-}
-
 function inspectorRequestKey(route: ActivityRouteData | undefined): string | null {
   if (route?.mode !== "run" || !route.selector) {
     return null;
   }
-  return `${selectorKey(route.selector)}:${route.decisionCursor ?? ""}`;
+  return `${route.selector.kind}:${route.selector.id}:${route.decisionCursor ?? ""}`;
 }
 
 function isExpiredDecisionCursorError(error: unknown): boolean {
@@ -424,31 +420,7 @@ class ActivityPage extends OpenClawLightDomElement {
     }
   }
 
-  private loadMoreExecutions() {
-    const route = this.routeData;
-    const snapshot = this.context.gateway.snapshot;
-    const inspectorState = this.runInspector;
-    if (
-      route?.mode !== "run" ||
-      route.selector?.kind !== "run" ||
-      snapshot.phase !== "connected" ||
-      !snapshot.client ||
-      inspectorState.status !== "ready" ||
-      inspectorState.executionPageStatus === "loading" ||
-      inspectorState.result.identity.state !== "ambiguous" ||
-      !inspectorState.result.nextExecutionCursor
-    ) {
-      return;
-    }
-    void this.loadRunInspector(
-      this.context.gateway,
-      snapshot.client,
-      route.selector,
-      inspectorState,
-    );
-  }
-
-  private loadMoreDecisions() {
+  private loadMoreInspectorPage(kind: "executions" | "decisions") {
     const route = this.routeData;
     const gateway = this.context.gateway;
     const snapshot = gateway.snapshot;
@@ -458,20 +430,22 @@ class ActivityPage extends OpenClawLightDomElement {
       !route.selector ||
       snapshot.phase !== "connected" ||
       !snapshot.client ||
-      inspectorState.status !== "ready" ||
-      inspectorState.decisionPageStatus === "loading" ||
-      inspectorState.result.identity.state !== "present" ||
-      !inspectorState.result.nextDecisionCursor
+      inspectorState.status !== "ready"
     ) {
       return;
     }
-    void this.loadRunInspector(
-      gateway,
-      snapshot.client,
-      route.selector,
-      inspectorState,
-      "decisions",
-    );
+    const available =
+      kind === "executions"
+        ? route.selector.kind === "run" &&
+          inspectorState.executionPageStatus !== "loading" &&
+          inspectorState.result.identity.state === "ambiguous" &&
+          inspectorState.result.nextExecutionCursor
+        : inspectorState.decisionPageStatus !== "loading" &&
+          inspectorState.result.identity.state === "present" &&
+          inspectorState.result.nextDecisionCursor;
+    if (available) {
+      void this.loadRunInspector(gateway, snapshot.client, route.selector, inspectorState, kind);
+    }
   }
 
   private restartRunInspector() {
@@ -569,8 +543,8 @@ class ActivityPage extends OpenClawLightDomElement {
         ${renderRunInspector({
           basePath: this.context.basePath,
           state: this.runInspector,
-          onLoadMoreExecutions: () => this.loadMoreExecutions(),
-          onLoadMoreDecisions: () => this.loadMoreDecisions(),
+          onLoadMoreExecutions: () => this.loadMoreInspectorPage("executions"),
+          onLoadMoreDecisions: () => this.loadMoreInspectorPage("decisions"),
           selectorId: route.selectorId,
           selector: route.selector,
           onRestart: () => this.restartRunInspector(),

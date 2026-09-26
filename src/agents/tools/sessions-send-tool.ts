@@ -1,8 +1,3 @@
-/**
- * sessions_send built-in tool.
- *
- * Sends messages to visible sessions, starts embedded runs, and optionally announces replies.
- */
 import crypto from "node:crypto";
 import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
@@ -50,11 +45,7 @@ import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
-import {
-  type AgentWaitResult,
-  isTerminalAgentWaitTimeout,
-  waitForAgentRunReply,
-} from "../run-wait.js";
+import { isTerminalAgentWaitTimeout, waitForAgentRunReply } from "../run-wait.js";
 import { isSubagentSessionFromEntry } from "../subagents/spawn/subagent-depth-policy.js";
 import {
   describeSessionsSendTool,
@@ -184,12 +175,6 @@ async function createConfiguredAgentMainSession(params: {
   }
 }
 
-function isPendingErrorAgentWaitTimeout(result: AgentWaitResult): boolean {
-  return (
-    result.pendingError === true && typeof result.error === "string" && result.error.trim() !== ""
-  );
-}
-
 export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgentTool {
   const requesterOrigin = normalizeDeliveryContext(opts?.requesterOrigin);
   return {
@@ -257,7 +242,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       }
 
       const sessionKeyParam = readToolStringParam(params, "sessionKey");
-      const labelParam = normalizeOptionalString(readToolStringParam(params, "label"));
+      const labelParam = readToolStringParam(params, "label");
       const labelAgentIdInput = readToolStringParam(params, "agentId");
       const normalizedLabelAgentId =
         labelAgentIdInput === undefined ? null : normalizeAgentIdStrict(labelAgentIdInput);
@@ -412,7 +397,6 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       if (!visibleSession.ok) {
         return sendFailure(visibleSession.status, visibleSession.error, unresolvedDisplayKey);
       }
-      // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
       const resolvedKeyAgentId = parseAgentSessionKey(resolvedKey)?.agentId;
@@ -941,6 +925,15 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           }
           runId = start.runId;
           const watchField = registerWatchIfRequested(acceptedTargetSessionKey);
+          const accepted = (acceptedDelivery: typeof delayedDelivery) =>
+            jsonResult({
+              runId,
+              status: "accepted",
+              sessionKey: displayKey,
+              targetDisposition: start.targetDisposition,
+              delivery: acceptedDelivery,
+              ...watchField,
+            });
           const startReplyFlow = ({
             reply,
             notifyRequesterOnWaitFailure = false,
@@ -961,14 +954,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             });
           if (timeoutSeconds === 0) {
             startReplyFlow({ notifyRequesterOnWaitFailure: true });
-            return jsonResult({
-              runId,
-              status: "accepted",
-              sessionKey: displayKey,
-              targetDisposition: start.targetDisposition,
-              delivery,
-              ...watchField,
-            });
+            return accepted(delivery);
           }
 
           const result = completion
@@ -976,19 +962,12 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             : await waitForAgentRunReply({ runId, timeoutMs, callGateway: gatewayCall });
           if (!result) {
             startReplyFlow({ notifyRequesterOnWaitFailure: true });
-            return jsonResult({
-              runId,
-              status: "accepted",
-              sessionKey: displayKey,
-              targetDisposition: start.targetDisposition,
-              delivery: delayedDelivery,
-              ...watchField,
-            });
+            return accepted(delayedDelivery);
           }
           completion?.close();
 
           if (result.status === "timeout") {
-            if (isPendingErrorAgentWaitTimeout(result)) {
+            if (result.pendingError === true && result.error?.trim()) {
               startReplyFlow({ notifyRequesterOnWaitFailure: targetIsSubagent });
               return jsonResult({
                 runId,
@@ -1002,14 +981,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             }
             if (!isTerminalAgentWaitTimeout(result)) {
               startReplyFlow({ notifyRequesterOnWaitFailure: true });
-              return jsonResult({
-                runId,
-                status: "accepted",
-                sessionKey: displayKey,
-                targetDisposition: start.targetDisposition,
-                delivery: delayedDelivery,
-                ...watchField,
-              });
+              return accepted(delayedDelivery);
             }
           }
           if (result.status === "timeout" || result.status === "error") {

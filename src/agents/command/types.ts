@@ -5,8 +5,12 @@ import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../../auto-reply/get-reply-options.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { ImageContent as LlmImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -103,6 +107,14 @@ export type AgentCommandOpts = {
   accountId?: string;
   /** Context for embedded run routing (channel/account/thread). */
   runContext?: AgentRunContext;
+  /** Client capabilities captured by trusted Gateway ingress. */
+  clientCaps?: string[];
+  /** Exact Control UI destination captured by trusted Gateway ingress. */
+  gatewayUiCommandTarget?: GatewayUiCommandTarget;
+  /** Tool bindings admitted by the originating Gateway request. */
+  toolBindings?: Readonly<Record<string, unknown>>;
+  /** Follow-up task action sink admitted by the originating Gateway client. */
+  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
   /** Internal trusted exec approval follow-up elevated defaults. */
@@ -243,6 +255,10 @@ export type AgentCommandOpts = {
 };
 
 type AgentCommandGatewayOnlyKey =
+  | "clientCaps"
+  | "gatewayUiCommandTarget"
+  | "toolBindings"
+  | "taskSuggestionDeliveryMode"
   | "runtimeContextFragments"
   | "mainRestartRecoveryOwnerLease"
   | "mainRestartRecoveryAdmitted"

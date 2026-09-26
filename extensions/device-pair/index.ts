@@ -1,4 +1,3 @@
-// Device Pair plugin entrypoint registers its OpenClaw integration.
 import { rm } from "node:fs/promises";
 import { isIP } from "node:net";
 import os from "node:os";
@@ -147,16 +146,6 @@ function isLoopbackHost(host: string): boolean {
   return normalized === "::1" || normalized === "0:0:0:0:0:0:0:1";
 }
 
-function resolveScheme(
-  cfg: OpenClawPluginApi["config"],
-  opts?: { forceSecure?: boolean },
-): "ws" | "wss" {
-  if (opts?.forceSecure) {
-    return "wss";
-  }
-  return cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
-}
-
 function parseIPv4Octets(address: string): [number, number, number, number] | null {
   const parts = address.split(".");
   if (parts.length !== 4) {
@@ -287,10 +276,6 @@ function pickMatchingIPv4(predicate: (address: string) => boolean): string | nul
   return null;
 }
 
-function pickTailnetIPv4(): string | null {
-  return pickMatchingIPv4(isTailnetIPv4);
-}
-
 async function resolveTailnetHost(): Promise<string | null> {
   const { resolveTailnetHostWithRunner, runPluginCommandWithTimeout } =
     await loadDevicePairApiModule();
@@ -307,7 +292,7 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
     await loadDevicePairApiModule();
   const cfg = api.config;
   const pluginCfg = (api.pluginConfig ?? {}) as DevicePairPluginConfig;
-  const scheme = resolveScheme(cfg);
+  const scheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
   const port = resolveGatewayPort(cfg);
 
   const configuredPublicUrl = normalizeOptionalString(pluginCfg.publicUrl);
@@ -344,7 +329,7 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
     customBindHost: cfg.gateway?.customBindHost,
     scheme,
     port,
-    pickTailnetHost: pickTailnetIPv4,
+    pickTailnetHost: () => pickMatchingIPv4(isTailnetIPv4),
     pickLanHost: () => advertisedLanHost,
   });
   if (bindResult) {
@@ -370,9 +355,7 @@ async function resolveMobilePairingGatewayUrl(api: OpenClawPluginApi): Promise<R
 }
 
 function encodeSetupCode(payload: SetupPayload): string {
-  const json = JSON.stringify(payload);
-  const base64 = Buffer.from(json, "utf8").toString("base64");
-  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
 }
 
 function buildPairingFlowLines(stepTwo: string): string[] {

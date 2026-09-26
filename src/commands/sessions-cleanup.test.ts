@@ -89,6 +89,41 @@ function gatewayCleanupResult(storePath: string) {
   } as const;
 }
 
+type CleanupPreview = Awaited<
+  ReturnType<typeof import("../config/sessions/cleanup-service.js").runSessionsCleanup>
+>["previewResults"][number];
+
+function cleanupPreview(
+  summary: Partial<CleanupPreview["summary"]>,
+  entries: Partial<Omit<CleanupPreview, "summary">> = {},
+) {
+  return {
+    summary: {
+      agentId: "main",
+      storePath: "/resolved/sessions.json",
+      mode: "warn",
+      dryRun: true,
+      beforeCount: 1,
+      afterCount: 0,
+      missing: 0,
+      dmScopeRetired: 0,
+      modelRunPruned: 0,
+      pruned: 0,
+      capped: 0,
+      diskBudget: null,
+      wouldMutate: true,
+      ...summary,
+    },
+    beforeStore: {},
+    missingKeys: new Set<string>(),
+    staleKeys: new Set<string>(),
+    cappedKeys: new Set<string>(),
+    dmScopeRetiredKeys: new Set<string>(),
+    modelRunPrunedKeys: new Set<string>(),
+    ...entries,
+  };
+}
+
 describe("sessionsCleanupCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -114,6 +149,7 @@ describe("sessionsCleanupCommand", () => {
     await sessionsCleanupCommand({ store: "", enforce: true }, runtime);
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.runSessionsCleanup).toHaveBeenCalledOnce();
     expect(mocks.resolveCommandSessionStoreTargets).toHaveBeenCalledWith(
       expect.objectContaining({ opts: expect.objectContaining({ store: "" }) }),
     );
@@ -221,14 +257,6 @@ describe("sessionsCleanupCommand", () => {
     expect(mocks.callGateway).toHaveBeenCalledOnce();
     expect(mocks.runSessionsCleanup).not.toHaveBeenCalled();
     expect(mocks.runLocalSessionsCleanup).not.toHaveBeenCalled();
-  });
-
-  it("keeps explicit offline store cleanup local", async () => {
-    const { runtime } = makeRuntime();
-    await sessionsCleanupCommand({ store: "/explicit/sessions.sqlite", enforce: true }, runtime);
-
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(mocks.runSessionsCleanup).toHaveBeenCalledOnce();
   });
 
   it("delegates non-store enforcing cleanup through the Gateway writer when reachable", async () => {
@@ -345,38 +373,21 @@ describe("sessionsCleanupCommand", () => {
     mocks.runSessionsCleanup.mockResolvedValue({
       mode: "warn",
       previewResults: [
-        {
-          summary: {
-            agentId: "main",
-            storePath: "/resolved/sessions.json",
-            mode: "warn",
-            dryRun: true,
-            beforeCount: 2,
-            afterCount: 1,
-            missing: 0,
-            dmScopeRetired: 0,
-            modelRunPruned: 0,
-            pruned: 1,
-            capped: 0,
-            diskBudget: {
-              totalBytesBefore: 1000,
-              totalBytesAfter: 700,
-              removedFiles: 1,
-              removedEntries: 1,
-              freedBytes: 300,
-              maxBytes: 900,
-              highWaterBytes: 700,
-              overBudget: true,
-            },
-            wouldMutate: true,
+        cleanupPreview({
+          beforeCount: 2,
+          afterCount: 1,
+          pruned: 1,
+          diskBudget: {
+            totalBytesBefore: 1000,
+            totalBytesAfter: 700,
+            removedFiles: 1,
+            removedEntries: 1,
+            freedBytes: 300,
+            maxBytes: 900,
+            highWaterBytes: 700,
+            overBudget: true,
           },
-          beforeStore: {},
-          missingKeys: new Set<string>(),
-          staleKeys: new Set<string>(),
-          cappedKeys: new Set<string>(),
-          dmScopeRetiredKeys: new Set<string>(),
-          modelRunPrunedKeys: new Set<string>(),
-        },
+        }),
       ],
       appliedSummaries: [],
     });
@@ -420,80 +431,14 @@ describe("sessionsCleanupCommand", () => {
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
-  it("counts missing transcript entries when --fix-missing is enabled in dry-run", async () => {
-    mocks.runSessionsCleanup.mockResolvedValue({
-      mode: "warn",
-      previewResults: [
-        {
-          summary: {
-            agentId: "main",
-            storePath: "/resolved/sessions.json",
-            mode: "warn",
-            dryRun: true,
-            beforeCount: 1,
-            afterCount: 0,
-            missing: 1,
-            dmScopeRetired: 0,
-            modelRunPruned: 0,
-            pruned: 0,
-            capped: 0,
-            diskBudget: null,
-            wouldMutate: true,
-          },
-          beforeStore: {},
-          missingKeys: new Set(["missing"]),
-          staleKeys: new Set<string>(),
-          cappedKeys: new Set<string>(),
-          dmScopeRetiredKeys: new Set<string>(),
-          modelRunPrunedKeys: new Set<string>(),
-        },
-      ],
-      appliedSummaries: [],
-    });
-
-    const { runtime, logs } = makeRuntime();
-    await sessionsCleanupCommand(
-      {
-        json: true,
-        dryRun: true,
-        fixMissing: true,
-      },
-      runtime,
-    );
-
-    expect(logs).toHaveLength(1);
-    expect(JSON.parse(logs[0] ?? "{}")).toEqual({
-      agentId: "main",
-      storePath: "/resolved/openclaw-agent.sqlite",
-      mode: "warn",
-      dryRun: true,
-      beforeCount: 1,
-      afterCount: 0,
-      missing: 1,
-      dmScopeRetired: 0,
-      modelRunPruned: 0,
-      pruned: 0,
-      capped: 0,
-      diskBudget: null,
-      wouldMutate: true,
-    });
-  });
-
   it("renders a dry-run action table with keep/archive/prune actions", async () => {
     mocks.runSessionsCleanup.mockResolvedValue({
       mode: "warn",
       previewResults: [
-        {
-          summary: {
-            agentId: "main",
-            storePath: "/resolved/sessions.json",
-            mode: "warn",
-            dryRun: true,
+        cleanupPreview(
+          {
             beforeCount: 4,
             afterCount: 3,
-            missing: 0,
-            dmScopeRetired: 0,
-            modelRunPruned: 0,
             archived: 1,
             capArchived: 1,
             pruned: 1,
@@ -504,23 +449,19 @@ describe("sessionsCleanupCommand", () => {
               freedBytes: 128,
               olderThanMs: 604800000,
             },
-            diskBudget: null,
-            wouldMutate: true,
           },
-          beforeStore: {
-            ageArchived: { sessionId: "age-archived", updatedAt: 0, model: "test:opus" },
-            stale: { sessionId: "stale", updatedAt: 1, model: "test:opus" },
-            fresh: { sessionId: "fresh", updatedAt: 2, model: "test:opus" },
-            capArchived: { sessionId: "cap-archived", updatedAt: 0, model: "test:opus" },
+          {
+            beforeStore: {
+              ageArchived: { sessionId: "age-archived", updatedAt: 0, model: "test:opus" },
+              stale: { sessionId: "stale", updatedAt: 1, model: "test:opus" },
+              fresh: { sessionId: "fresh", updatedAt: 2, model: "test:opus" },
+              capArchived: { sessionId: "cap-archived", updatedAt: 0, model: "test:opus" },
+            },
+            staleKeys: new Set(["stale"]),
+            ageArchivedKeys: new Set(["ageArchived"]),
+            capArchivedKeys: new Set(["capArchived"]),
           },
-          missingKeys: new Set<string>(),
-          staleKeys: new Set(["stale"]),
-          ageArchivedKeys: new Set(["ageArchived"]),
-          capArchivedKeys: new Set(["capArchived"]),
-          cappedKeys: new Set<string>(),
-          dmScopeRetiredKeys: new Set<string>(),
-          modelRunPrunedKeys: new Set<string>(),
-        },
+        ),
       ],
       appliedSummaries: [],
     });
@@ -584,16 +525,10 @@ describe("sessionsCleanupCommand", () => {
     mocks.runSessionsCleanup.mockResolvedValue({
       mode: "warn",
       previewResults: [
-        {
-          summary: {
-            agentId: "main",
-            storePath: "/resolved/sessions.json",
-            mode: "warn",
-            dryRun: true,
+        cleanupPreview(
+          {
             beforeCount: 7,
             afterCount: 3,
-            missing: 0,
-            dmScopeRetired: 0,
             pruned: 3,
             capped: 1,
             unreferencedArtifacts: {
@@ -602,57 +537,54 @@ describe("sessionsCleanupCommand", () => {
               freedBytes: 0,
               olderThanMs: 604800000,
             },
-            diskBudget: null,
-            wouldMutate: true,
           },
-          beforeStore: {
-            cronKept: {
-              sessionId: "cron-kept",
-              updatedAt: 4,
-              model: "test:opus",
-              label: "Cron: daily-commit",
+          {
+            beforeStore: {
+              cronKept: {
+                sessionId: "cron-kept",
+                updatedAt: 4,
+                model: "test:opus",
+                label: "Cron: daily-commit",
+              },
+              cronPruned: {
+                sessionId: "cron-pruned",
+                updatedAt: 3,
+                model: "test:opus",
+                label: "Cron: daily-commit",
+              },
+              directKept: {
+                sessionId: "direct-kept",
+                updatedAt: 2,
+                model: "test:opus",
+              },
+              directCapped: {
+                sessionId: "direct-capped",
+                updatedAt: 1,
+                model: "test:opus",
+              },
+              literalUnlabeled: {
+                sessionId: "literal-unlabeled",
+                updatedAt: 1,
+                model: "test:opus",
+                label: "Unlabeled",
+              },
+              unsafePruned: {
+                sessionId: "unsafe-pruned",
+                updatedAt: 1,
+                model: "test:opus",
+                label: "\u001b[31mAlert\nInjected",
+              },
+              malformedLabelPruned: {
+                sessionId: "malformed-label-pruned",
+                updatedAt: 1,
+                model: "test:opus",
+                label: {} as unknown as string,
+              },
             },
-            cronPruned: {
-              sessionId: "cron-pruned",
-              updatedAt: 3,
-              model: "test:opus",
-              label: "Cron: daily-commit",
-            },
-            directKept: {
-              sessionId: "direct-kept",
-              updatedAt: 2,
-              model: "test:opus",
-            },
-            directCapped: {
-              sessionId: "direct-capped",
-              updatedAt: 1,
-              model: "test:opus",
-            },
-            literalUnlabeled: {
-              sessionId: "literal-unlabeled",
-              updatedAt: 1,
-              model: "test:opus",
-              label: "Unlabeled",
-            },
-            unsafePruned: {
-              sessionId: "unsafe-pruned",
-              updatedAt: 1,
-              model: "test:opus",
-              label: "\u001b[31mAlert\nInjected",
-            },
-            malformedLabelPruned: {
-              sessionId: "malformed-label-pruned",
-              updatedAt: 1,
-              model: "test:opus",
-              label: {} as unknown as string,
-            },
+            staleKeys: new Set(["cronPruned", "unsafePruned", "malformedLabelPruned"]),
+            cappedKeys: new Set(["directCapped"]),
           },
-          missingKeys: new Set<string>(),
-          staleKeys: new Set(["cronPruned", "unsafePruned", "malformedLabelPruned"]),
-          cappedKeys: new Set(["directCapped"]),
-          dmScopeRetiredKeys: new Set<string>(),
-          modelRunPrunedKeys: new Set<string>(),
-        },
+        ),
       ],
       appliedSummaries: [],
     });
@@ -681,47 +613,34 @@ describe("sessionsCleanupCommand", () => {
     mocks.runSessionsCleanup.mockResolvedValue({
       mode: "warn",
       previewResults: [
-        {
-          summary: {
-            agentId: "main",
-            storePath: "/resolved/sessions.json",
-            mode: "warn",
-            dryRun: true,
+        cleanupPreview(
+          {
             beforeCount: 2,
             afterCount: 2,
-            missing: 0,
-            dmScopeRetired: 0,
-            pruned: 0,
-            capped: 0,
             unreferencedArtifacts: {
               scannedFiles: 0,
               removedFiles: 0,
               freedBytes: 0,
               olderThanMs: 604800000,
             },
-            diskBudget: null,
-            wouldMutate: true,
           },
-          beforeStore: {
-            emojiKept: {
-              sessionId: "emoji-kept",
-              updatedAt: 2,
-              model: "test:opus",
-              label: "🔥修复",
-            },
-            plainKept: {
-              sessionId: "plain-kept",
-              updatedAt: 1,
-              model: "test:opus",
-              label: "plain",
+          {
+            beforeStore: {
+              emojiKept: {
+                sessionId: "emoji-kept",
+                updatedAt: 2,
+                model: "test:opus",
+                label: "🔥修复",
+              },
+              plainKept: {
+                sessionId: "plain-kept",
+                updatedAt: 1,
+                model: "test:opus",
+                label: "plain",
+              },
             },
           },
-          missingKeys: new Set<string>(),
-          staleKeys: new Set<string>(),
-          cappedKeys: new Set<string>(),
-          dmScopeRetiredKeys: new Set<string>(),
-          modelRunPrunedKeys: new Set<string>(),
-        },
+        ),
       ],
       appliedSummaries: [],
     });
@@ -754,52 +673,25 @@ describe("sessionsCleanupCommand", () => {
     mocks.runSessionsCleanup.mockResolvedValue({
       mode: "warn",
       previewResults: [
-        {
-          summary: {
-            agentId: "main",
+        cleanupPreview(
+          {
             storePath: "/resolved/main-sessions.json",
-            mode: "warn",
-            dryRun: true,
-            beforeCount: 1,
-            afterCount: 0,
-            missing: 0,
-            dmScopeRetired: 0,
-            modelRunPruned: 0,
             pruned: 1,
-            capped: 0,
-            diskBudget: null,
-            wouldMutate: true,
           },
-          beforeStore: {},
-          missingKeys: new Set<string>(),
-          staleKeys: new Set(["stale"]),
-          cappedKeys: new Set<string>(),
-          dmScopeRetiredKeys: new Set<string>(),
-          modelRunPrunedKeys: new Set<string>(),
-        },
-        {
-          summary: {
+          {
+            staleKeys: new Set(["stale"]),
+          },
+        ),
+        cleanupPreview(
+          {
             agentId: "work",
             storePath: "/resolved/work-sessions.json",
-            mode: "warn",
-            dryRun: true,
-            beforeCount: 1,
-            afterCount: 0,
-            missing: 0,
-            dmScopeRetired: 0,
-            modelRunPruned: 0,
             pruned: 1,
-            capped: 0,
-            diskBudget: null,
-            wouldMutate: true,
           },
-          beforeStore: {},
-          missingKeys: new Set<string>(),
-          staleKeys: new Set(["stale"]),
-          cappedKeys: new Set<string>(),
-          dmScopeRetiredKeys: new Set<string>(),
-          modelRunPrunedKeys: new Set<string>(),
-        },
+          {
+            staleKeys: new Set(["stale"]),
+          },
+        ),
       ],
       appliedSummaries: [],
     });

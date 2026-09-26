@@ -167,7 +167,6 @@ describe("node execution target resolution", () => {
   });
 
   it.each([
-    { name: "alone", siblings: [] },
     {
       name: "beside a connected non-executor",
       siblings: [

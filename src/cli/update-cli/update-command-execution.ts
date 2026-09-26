@@ -12,7 +12,6 @@ import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalizat
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
-import { isFailedUpdateStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -40,6 +39,8 @@ import {
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import {
+  admitSourceUpdateArtifacts,
+  assertGitCandidateSteps,
   assertReadableGitTarget,
   recordInspectedGitTarget,
 } from "./update-command-git-admission.js";
@@ -77,7 +78,7 @@ import { GatewayServiceUpdateOwnershipError } from "./update-command-service-pla
 import {
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
-  shouldBlockMutableUpdateFromGatewayServiceEnv,
+  mutableUpdateGatewayServiceBlock,
   UpdateCommandAbort,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
@@ -275,7 +276,11 @@ export async function executeMutableUpdate(
           preManagedServiceStop.stopped ||
           preManagedServiceStop.serviceUpdateVerdict?.kind === "owned" ||
           preManagedServiceStop.blockMessage ||
-          shouldBlockMutableUpdateFromGatewayServiceEnv({ preManagedServiceStop }) ||
+          (await mutableUpdateGatewayServiceBlock({
+            preManagedServiceStop,
+            root: params.managedServiceRoot ? params.root : mutationRoot,
+            runId: opts.run?.runId,
+          })) ||
           !preManagedServiceStop.inspected ||
           !preManagedServiceStop.running ||
           !params.shouldRestart
@@ -335,21 +340,17 @@ export async function executeMutableUpdate(
       });
     }
 
-    const inspectionFailure = {
-      failureFacts: collectServiceInspectionFailureFacts(
-        preManagedServiceStop?.serviceUpdateVerdict,
-      ),
-    };
-    if (shouldBlockMutableUpdateFromGatewayServiceEnv({ preManagedServiceStop })) {
+    const serviceEnvBlock = await mutableUpdateGatewayServiceBlock({
+      preManagedServiceStop,
+      root: params.root,
+      runId: opts.run?.runId,
+    });
+    if (serviceEnvBlock) {
       params.stop();
       throw new UpdatePreMutationError(
         "managed-service-preflight",
-        [
-          `${params.updateInstallKind === "git" ? "Git updates" : "Package updates"} cannot run from inside the gateway service process.`,
-          "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
-          `Run \`${formatCliCommand("openclaw update")}\` from a terminal outside the gateway service.`,
-        ].join("\n"),
-        inspectionFailure,
+        formatUpdateAncestryBlockMessage(serviceEnvBlock.message),
+        serviceEnvBlock,
       );
     }
 
@@ -358,7 +359,11 @@ export async function executeMutableUpdate(
       throw new UpdatePreMutationError(
         "managed-service-preflight",
         formatUpdateAncestryBlockMessage(preManagedServiceStop.blockMessage),
-        inspectionFailure,
+        {
+          failureFacts:
+            preManagedServiceStop.blockFailureFacts ??
+            collectServiceInspectionFailureFacts(preManagedServiceStop.serviceUpdateVerdict),
+        },
       );
     }
   };
@@ -456,6 +461,10 @@ export async function executeMutableUpdate(
   };
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
     assertExecutionCurrent();
+    if (params.switchToGit && !opts.run?.sourceArtifactLock) {
+      await admitSourceUpdateArtifacts(resolveGitInstallDir(), opts.run);
+      assertExecutionCurrent();
+    }
     const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
     const snapshot = await readUpdateCandidateSource(env, params.legacyConfigPlan, {
       configValidation,
@@ -606,8 +615,12 @@ export async function executeMutableUpdate(
         ? await params.stagedPackage.run(packageUpdate)
         : await runPackageInstallUpdate(packageUpdate);
     } else {
+      const sourceRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
+      const sourceRuntimePrepared = await admitSourceUpdateArtifacts(sourceRoot, opts.run);
+      assertExecutionCurrent();
       result = await updateGitInstall({
         ...installOptions,
+        sourceRuntimePrepared,
         switchToGit: params.switchToGit,
         timeoutMs: params.timeoutMs,
         channel: params.channel,
@@ -636,15 +649,7 @@ export async function executeMutableUpdate(
         },
         jsonMode: Boolean(opts.json),
         validateCandidate: async (candidateRoot) => {
-          const steps = await validateCandidate(candidateRoot);
-          const failed = steps.find(isFailedUpdateStep);
-          if (failed) {
-            throw new UpdatePreMutationError(
-              failed.name,
-              failed.stderrTail ?? "Update checks failed.",
-              { failureFacts: failed.failureFacts },
-            );
-          }
+          assertGitCandidateSteps(await validateCandidate(candidateRoot));
         },
         beforeGitMutation: async (target) => {
           assertReadableGitTarget(target);

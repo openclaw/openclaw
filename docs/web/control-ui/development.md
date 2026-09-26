@@ -154,6 +154,11 @@ render; virtualizer and sidebar geometry changes retain their explicit sync path
 Rail labels are shared across mounted markers, so offscreen history does not add
 translation work on each stream update.
 
+Sidebar narration releases its session interests while hidden. Failed releases
+retain their original subscription handles for the next sidebar synchronization
+or disconnect cleanup, including subscriptions that finish acquiring after hiding.
+The shared connection coordinator settles each release independently of other viewers.
+
 ## Talk live smoke test
 
 Maintainers can exercise the browser Talk paths end to end from the repository

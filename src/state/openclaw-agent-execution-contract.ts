@@ -14,6 +14,10 @@ import type {
 } from "../config/sessions/session-history-archive-pruning.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { SqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
+import type {
+  SqliteWalPeriodicRequest,
+  SqliteWalPeriodicResult,
+} from "../infra/sqlite-wal-write-admission.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type {
   SqliteWorkerAdmissionFactory,
@@ -50,6 +54,7 @@ export type AgentDatabaseExecutionOpen = {
 };
 
 export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
+  "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
   "trajectory.events.append": { input: SqliteTrajectoryRuntimeAppend; output: void };
   "session.archives.preparePublication": {
     input: {
@@ -69,7 +74,9 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
   "database.prepareWrite": { input: undefined; output: void };
   "session.entry.read": { input: { sessionKey: string }; output: SessionEntry | undefined };
   "session.entries.replace": {
-    input: SessionEntryReplacementCommit;
+    input: SessionEntryReplacementCommit & {
+      initializeTranscript?: { sessionKey: string; sessionId: string; cwd?: string };
+    };
     output: SessionEntryReplacementCommitted;
   };
   "session.providerReview.compare": {

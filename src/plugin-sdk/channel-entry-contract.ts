@@ -426,23 +426,20 @@ function loadBundledEntryModuleSync(
   const profile = shouldProfilePluginLoader();
   const loadStartMs = profile ? performance.now() : 0;
   let sourceLoaderReadyMs = 0;
-  if (canTryNodeRequireBuiltModule(modulePath)) {
-    const native = tryNativeRequireJavaScriptModule(modulePath, {
-      aliasMap: buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url),
-      fallbackOnMissingDependency: true,
-    });
-    if (native.ok) {
-      loaded = native.moduleExport;
-    } else {
-      const moduleLoader = getSourceModuleLoader(modulePath, options);
-      sourceLoaderReadyMs = profile ? performance.now() : 0;
-      loaded = moduleLoader(toSafeImportPath(modulePath));
-    }
+  const native = canTryNodeRequireBuiltModule(modulePath)
+    ? tryNativeRequireJavaScriptModule(modulePath, {
+        aliasMap: buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url),
+        fallbackOnMissingDependency: true,
+      })
+    : undefined;
+  if (native?.ok) {
+    loaded = native.moduleExport;
   } else {
     const moduleLoader = getSourceModuleLoader(modulePath, options);
     sourceLoaderReadyMs = profile ? performance.now() : 0;
     loaded = moduleLoader(toSafeImportPath(modulePath));
   }
+
   if (profile) {
     const endMs = performance.now();
     // Split source-loader creation from graph loading while preserving canonical elapsedMs.

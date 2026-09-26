@@ -92,7 +92,6 @@ const webhookStats = {
   received: 0,
   processed: 0,
   errors: 0,
-  lastReceived: 0,
 };
 
 const DEFAULT_STUCK_SESSION_WARN_MS = 120_000;
@@ -378,17 +377,13 @@ function isIdleQueuedRecoverableSessionStall(params: {
   activity: DiagnosticSessionActivitySnapshot;
   staleMs: number;
 }): boolean {
-  const hasEmbeddedOwner =
-    params.activity.activeWorkKind === "embedded_run" ||
-    params.activity.hasActiveEmbeddedRun === true;
   // Also detect orphaned activity (model_call or tool_call left behind
   // without an active embedded owner) so recovery can pump the stale queue.
-  const hasOrphanedActivity =
-    params.activity.activeWorkKind !== undefined && params.activity.hasActiveEmbeddedRun !== true;
   return (
     params.state.state === "idle" &&
     params.state.queueDepth > 0 &&
-    (hasEmbeddedOwner || hasOrphanedActivity) &&
+    (params.activity.activeWorkKind !== undefined ||
+      params.activity.hasActiveEmbeddedRun === true) &&
     (params.activity.lastProgressAgeMs ?? 0) > params.staleMs
   );
 }
@@ -403,7 +398,6 @@ export function logWebhookReceived(params: DiagnosticLogParams<"webhook.received
     return;
   }
   webhookStats.received += 1;
-  webhookStats.lastReceived = Date.now();
   if (diag.isEnabled("debug")) {
     diag.debug(
       `webhook received: channel=${params.channel} type=${params.updateType ?? "unknown"} chatId=${
@@ -1043,7 +1037,6 @@ function resetDiagnosticStateForTest(): void {
   webhookStats.received = 0;
   webhookStats.processed = 0;
   webhookStats.errors = 0;
-  webhookStats.lastReceived = 0;
   resetDiagnosticMemoryForTest();
   resetDiagnosticPhasesForTest();
   resetDiagnosticStabilityRecorderForTest();

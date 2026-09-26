@@ -15,28 +15,6 @@ struct ExecApprovalPromptRequest: Codable {
     var sessionKey: String?
     var allowedDecisions: [ExecApprovalDecision]?
 
-    init(
-        command: String,
-        cwd: String? = nil,
-        host: String? = nil,
-        security: String? = nil,
-        ask: String? = nil,
-        agentId: String? = nil,
-        resolvedPath: String? = nil,
-        sessionKey: String? = nil,
-        allowedDecisions: [ExecApprovalDecision]? = nil)
-    {
-        self.command = command
-        self.cwd = cwd
-        self.host = host
-        self.security = security
-        self.ask = ask
-        self.agentId = agentId
-        self.resolvedPath = resolvedPath
-        self.sessionKey = sessionKey
-        self.allowedDecisions = allowedDecisions
-    }
-
     private enum CodingKeys: String, CodingKey {
         case command
         case cwd
@@ -49,6 +27,21 @@ struct ExecApprovalPromptRequest: Codable {
         case allowedDecisions
     }
 
+    static func allowedDecisions(
+        forAsk ask: String?,
+        allowAlwaysEligible: Bool = true) -> [ExecApprovalDecision]
+    {
+        // Older payloads did not carry ask/allowedDecisions. Preserve their durable
+        // approval option; explicit ask=always and allowedDecisions payloads are the
+        // policy-carrying shapes that remove it.
+        guard allowAlwaysEligible else { return [.allowOnce, .deny] }
+        return ask == ExecAsk.always.rawValue
+            ? [.allowOnce, .deny]
+            : [.allowOnce, .allowAlways, .deny]
+    }
+}
+
+extension ExecApprovalPromptRequest {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.command = try container.decode(String.self, forKey: .command)
@@ -63,19 +56,6 @@ struct ExecApprovalPromptRequest: Codable {
             [DecodedExecApprovalDecision].self,
             forKey: .allowedDecisions)) ?? []
         self.allowedDecisions = decodedDecisions.compactMap(\.decision)
-    }
-
-    static func allowedDecisions(
-        forAsk ask: String?,
-        allowAlwaysEligible: Bool = true) -> [ExecApprovalDecision]
-    {
-        // Older payloads did not carry ask/allowedDecisions. Preserve their durable
-        // approval option; explicit ask=always and allowedDecisions payloads are the
-        // policy-carrying shapes that remove it.
-        guard allowAlwaysEligible else { return [.allowOnce, .deny] }
-        return ask == ExecAsk.always.rawValue
-            ? [.allowOnce, .deny]
-            : [.allowOnce, .allowAlways, .deny]
     }
 }
 

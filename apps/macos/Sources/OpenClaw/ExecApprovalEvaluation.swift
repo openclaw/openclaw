@@ -336,11 +336,4 @@ enum ExecApprovalEvaluator {
             return trustedBinsByName[executableName]?.contains(resolvedPath) == true
         }
     }
-
-    static func _testIsSkillAutoAllowed(
-        _ resolutions: [ExecCommandResolution],
-        trustedBinsByName: [String: Set<String>]) -> Bool
-    {
-        self.isSkillAutoAllowed(resolutions, trustedBinsByName: trustedBinsByName)
-    }
 }

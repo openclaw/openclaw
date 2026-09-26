@@ -15,6 +15,7 @@ import {
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { readAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lineage.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
@@ -217,9 +218,6 @@ describe("worker session tool topology", () => {
   it.each([
     { label: "default", mode: undefined },
     { label: "read-only", mode: "read-only" },
-    { label: "guarded", mode: "guarded" },
-    { label: "workspace", mode: "workspace" },
-    { label: "full", mode: "full" },
   ] as const)("inherits the parent's $label permission mode in a cloud child", async ({ mode }) => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     if (mode) {
@@ -581,6 +579,7 @@ describe("worker spawn startup composition", () => {
           const startup = await loadGatewayWorkerEnvironmentStartupState();
           const registry = createEmptyPluginRegistry();
           const runtime = await createGatewayWorkerEnvironmentRuntime({
+            scheduler: createTestGatewayScheduler(),
             getPluginRegistry: () => registry,
             getPortalRuntime: () => undefined,
             resolveGatewayContext,

@@ -97,11 +97,7 @@ export function buildWorkspaceSkillCommandSpecs(
 ): SkillCommandSpec[] {
   const loadOptions = { ...resolveCommandSkillLoadOptions(opts), gatewayOnly: opts?.gatewayOnly };
   const eligible = opts?.entries
-    ? filterWorkspaceSkills(opts.entries, {
-        config: opts?.config,
-        skillFilter: loadOptions.skillFilter,
-        eligibility: opts?.eligibility,
-      })
+    ? filterWorkspaceSkills(opts.entries, loadOptions)
     : loadVisibleSkills(workspaceDir, loadOptions);
   return assembleWorkspaceSkillCommandSpecs(workspaceDir, eligible, opts);
 }
@@ -116,10 +112,7 @@ export async function prepareWorkspaceSkillCommandSpecs(
 ): Promise<SkillCommandSpec[]> {
   const eligible = await prepareWorkspaceSkills(
     workspaceDir,
-    {
-      ...resolveCommandSkillLoadOptions(opts),
-      eligibility: opts.eligibility,
-    },
+    resolveCommandSkillLoadOptions(opts),
     assertCurrent,
   );
   assertCurrent?.();

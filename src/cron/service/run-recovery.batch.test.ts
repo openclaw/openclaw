@@ -4,6 +4,7 @@ import { tryBeginGatewayIndependentRootWorkAdmission } from "../../process/gatew
 import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { captureTaskDeliveryWork } from "../../tasks/task-registry-delivery.test-support.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import * as cronStore from "../store.js";
@@ -37,6 +38,7 @@ async function seedInterruptedBatch() {
   const onEvent = vi.fn();
   const runner = vi.fn(async () => ({ status: "ok" as const }));
   const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
     defaultAgentId: "alpha",

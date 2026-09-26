@@ -600,6 +600,23 @@ serveOwnedWorkerTasks(
     }
   },
   {
+    transferList(reply) {
+      if (!reply.ok) {
+        return [];
+      }
+      const value = reply.value;
+      if (
+        typeof value !== "object" ||
+        value === null ||
+        !("kind" in value) ||
+        value.kind !== "artifacts" ||
+        value.result.kind !== "download-response"
+      ) {
+        return [];
+      }
+      const body = value.result.response?.body;
+      return body ? [body.buffer] : [];
+    },
     closeResource: (key) => {
       const parsed: unknown = key === undefined ? undefined : JSON.parse(key);
       if (

@@ -2235,7 +2235,7 @@ describe("ci workflow guards", () => {
         expect(selected, phase).toEqual(expected);
         if (jobName === "ios-build") {
           for (const name of [
-            "Select Xcode 27",
+            "Select Xcode",
             "Setup Node environment",
             "Install Watch Rust toolchain",
             "Install iOS Swift tooling",

@@ -1,8 +1,3 @@
-/**
- * Loaded channel plugin registry view.
- *
- * Normalizes and sorts active plugin runtime state for channel registry callers.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ActiveChannelPluginRuntimeShape,
@@ -17,38 +12,14 @@ import { CHAT_CHANNEL_ORDER } from "../registry.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
-/**
- * Loaded channel plugin shape after id/meta normalization.
- */
-type LoadedChannelPlugin = ChannelPlugin & {
-  meta: NonNullable<ChannelPlugin["meta"]>;
-};
-
-/**
- * Loaded channel registry entry with a normalized plugin payload.
- */
-type LoadedChannelPluginEntry = ActivePluginChannelRegistration & {
-  plugin: LoadedChannelPlugin;
-};
-
 type ChannelPluginView = {
   snapshot: ActivePluginChannelRegistrySnapshot;
-  sorted: LoadedChannelPlugin[];
-  byId: Map<string, LoadedChannelPlugin>;
-  entriesById: Map<string, LoadedChannelPluginEntry>;
+  sorted: ActiveChannelPluginRuntimeShape[];
+  byId: Map<string, ActiveChannelPluginRuntimeShape>;
+  entriesById: Map<string, ActivePluginChannelRegistration>;
 };
 
 let cachedChannelPluginView: ChannelPluginView | undefined;
-
-function coerceLoadedChannelPlugin(
-  plugin: ActiveChannelPluginRuntimeShape | null | undefined,
-): LoadedChannelPlugin | null {
-  const id = normalizeOptionalString(plugin?.id) ?? "";
-  if (!plugin || !id) {
-    return null;
-  }
-  return plugin;
-}
 
 function resolveChannelPlugins(registry?: ActivePluginChannelRegistry): ChannelPluginView {
   const snapshot = getActivePluginChannelRegistrySnapshotFromState();
@@ -59,16 +30,13 @@ function resolveChannelPlugins(registry?: ActivePluginChannelRegistry): ChannelP
   const selectedRegistry = registry ?? snapshot.registry;
 
   const seen = new Set<string>();
-  const byId = new Map<string, LoadedChannelPlugin>();
-  const entriesById = new Map<string, LoadedChannelPluginEntry>();
+  const byId = new Map<string, ActiveChannelPluginRuntimeShape>();
+  const entriesById = new Map<string, ActivePluginChannelRegistration>();
   if (selectedRegistry && Array.isArray(selectedRegistry.channels)) {
     for (const entry of selectedRegistry.channels) {
-      const plugin = coerceLoadedChannelPlugin(entry?.plugin);
-      if (!plugin) {
-        continue;
-      }
-      const id = normalizeOptionalString(plugin.id) ?? "";
-      if (!id || seen.has(id)) {
+      const plugin = entry?.plugin;
+      const id = normalizeOptionalString(plugin?.id);
+      if (!plugin || !id || seen.has(id)) {
         continue;
       }
       // Channel registration is first-wins. Keep its implementation and
@@ -105,10 +73,7 @@ function resolveChannelPlugins(registry?: ActivePluginChannelRegistry): ChannelP
   return view;
 }
 
-/**
- * Lists loaded channel plugins in deterministic display/runtime order.
- */
-export function listLoadedChannelPlugins(): LoadedChannelPlugin[] {
+export function listLoadedChannelPlugins(): ActiveChannelPluginRuntimeShape[] {
   return resolveChannelPlugins().sorted.slice();
 }
 
@@ -119,10 +84,9 @@ export function listLoadedChannelPluginsForRegistry(
   return resolveChannelPlugins(registry).sorted.slice();
 }
 
-/**
- * Returns a loaded channel plugin by normalized id.
- */
-export function getLoadedChannelPluginById(id: string): LoadedChannelPlugin | undefined {
+export function getLoadedChannelPluginById(
+  id: string,
+): ActiveChannelPluginRuntimeShape | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {
     return undefined;
@@ -135,13 +99,10 @@ export function getLoadedChannelPluginForRead(id: ChannelId): ChannelPlugin | un
   return getLoadedChannelPluginById(id);
 }
 
-/**
- * Returns the loaded channel registry entry by normalized plugin id.
- */
 export function getLoadedChannelPluginEntryById(
   id: string,
   registry?: ActivePluginChannelRegistry,
-): LoadedChannelPluginEntry | undefined {
+): ActivePluginChannelRegistration | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {
     return undefined;

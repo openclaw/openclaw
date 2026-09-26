@@ -1,8 +1,3 @@
-/**
- * Native channel approval delivery types.
- *
- * Describes approval request targets, surfaces, capabilities, and plugin adapters.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals-core.js";

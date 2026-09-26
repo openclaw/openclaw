@@ -23,12 +23,14 @@ import { withUpdateCommandTerminalResult } from "../cli/update-cli/update-comman
 import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-command-windows-task.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import { defaultRuntime } from "../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { resolveEnvironmentValue } from "./process-env.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
 import {
   adoptCandidateManagedServiceStop,
   stopSupervisedPredecessorGateway,
@@ -484,10 +486,31 @@ async function finalizeInput(
 }
 
 void (async () => {
+  const errors: unknown[] = [];
   try {
     await finalizeMigratedUpdate();
-  } finally {
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    await finalizeActiveDebugProxyCaptures();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
     await closeOpenClawStateDatabaseAsync();
+  } catch (error) {
+    errors.push(error);
+  }
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw createSqliteLifecycleAggregateError(
+      errors,
+      "Update finalization and resource cleanup failed.",
+      errors[0],
+    );
   }
 })().catch((error: unknown) => {
   process.stderr.write(`${formatUpdateFinalizationError(error)}\n`);

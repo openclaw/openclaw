@@ -87,26 +87,20 @@ export function createMSTeamsReplyDispatcher(params: {
    */
   const TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
 
-  // Forward references: sendTypingIndicator is built before the stream
-  // controller exists, but the keepalive tick needs to check stream state so
-  // we don't overlay "..." typing on the visible streaming card, and we want
-  // to suppress typing pulses entirely once the user pressed Stop (otherwise
-  // typing keeps pulsing for the rest of the agent run, fighting the cancel
-  // signal). Both refs are wired once the stream controller is constructed
-  // below.
-  const streamActiveRef: { current: () => boolean } = { current: () => false };
-  const streamCanceledRef: { current: () => boolean } = { current: () => false };
-
-  const rawSendTypingIndicator = async () => {
+  const sendTypingIndicator = async () => {
+    // Stream previews and Stop suppress typing; between segments, typing keeps
+    // the Bot Framework turn context alive for later tool replies.
+    if (!isTypingSupported || streamController.isStreamActive() || streamController.wasCanceled()) {
+      return;
+    }
     await withRevokedProxyFallback({
       run: async () => {
         await params.context.sendActivity({ type: "typing" });
       },
       onRevoked: async () => {
-        const baseRef = buildConversationReference(params.conversationRef);
         await sendMSTeamsActivityWithReference(
           params.app,
-          baseRef,
+          buildConversationReference(params.conversationRef),
           { type: "typing" },
           { serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(msteamsCfg) },
         );
@@ -116,28 +110,6 @@ export function createMSTeamsReplyDispatcher(params: {
       },
     });
   };
-
-  const sendTypingIndicator = isTypingSupported
-    ? async () => {
-        // While the streaming card is actively being updated the user
-        // already sees a live indicator in the stream — don't overlay a
-        // plain "..." typing on top of it. Between segments (tool chain)
-        // the stream is finalized, so typing indicators are appropriate
-        // and they are what keep the TurnContext alive. See #59731.
-        if (streamActiveRef.current()) {
-          return;
-        }
-        // Once the user pressed Stop (or Teams ended the stream), suppress
-        // typing pulses too — otherwise the bot keeps pulsing "typing..." in
-        // Teams for the rest of the agent run, fighting the user's explicit
-        // cancel. The agent can't currently be canceled, but it's about to
-        // wind down on its own; in the meantime we honor the cancel visually.
-        if (streamCanceledRef.current()) {
-          return;
-        }
-        await rawSendTypingIndicator();
-      }
-    : async () => {};
 
   const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg: params.cfg,
@@ -189,9 +161,6 @@ export function createMSTeamsReplyDispatcher(params: {
     // conversation.id scopes per-chat.
     progressSeed: `${params.accountId ?? "default"}:${params.conversationRef.conversation?.id ?? ""}`,
   });
-  // Wire the forward-declared gates used by sendTypingIndicator.
-  streamActiveRef.current = () => streamController.isStreamActive();
-  streamCanceledRef.current = () => streamController.wasCanceled();
 
   // Resolve block-streaming preference from the canonical nested config
   // (`streaming.mode = "block"` or `streaming.block.enabled = true`); legacy

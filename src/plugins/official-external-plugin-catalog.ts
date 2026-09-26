@@ -561,6 +561,10 @@ export function isExternallyDistributedPlugin(plugin: {
   packageName?: string;
   packageBuild?: { bundledDist?: boolean };
 }): boolean {
+  // Staged publication metadata must not transfer bundled repair ownership.
+  if (plugin.packageBuild?.bundledDist === true) {
+    return false;
+  }
   const entry = getOfficialExternalPluginCatalogEntryForPackage(plugin.packageName);
   return (
     plugin.packageBuild?.bundledDist === false ||

@@ -1,8 +1,3 @@
-/**
- * Stateful binding target driver registry.
- *
- * Stores lifecycle drivers for binding targets that carry mutable external session state.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type {

@@ -239,8 +239,10 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     expect(captureOffset).toBeGreaterThan(0);
     const captureRoot = filename.slice(0, captureOffset);
     expect(path.basename(captureRoot)).toMatch(/^openclaw-model-catalog-/);
-    const initialFootprint = readCatalogCaptureFootprint(captureRoot);
+    const nativeArtifacts = [path.join(path.dirname(filename), "payload.bin")];
+    const initialFootprint = readCatalogCaptureFootprint(captureRoot, nativeArtifacts);
     expect(initialFootprint.captures).toHaveLength(1);
+    expect(initialFootprint.references).toEqual([expect.objectContaining({ bytes: 1024 * 1024 })]);
     expect(initialFootprint.bytes).toBeGreaterThanOrEqual(1024 * 1024);
     for (revision = 1; revision <= 3; revision++) {
       const nativeProvider = revision === 3 ? UNSEEN_NATIVE_PROVIDER : PROVIDER_ID;
@@ -307,7 +309,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
       held = undefined;
       await publication;
       // A stable registration count alone cannot detect growth inside a live capture.
-      const footprint = readCatalogCaptureFootprint(captureRoot);
+      const footprint = readCatalogCaptureFootprint(captureRoot, nativeArtifacts);
       expect(footprint).toEqual(initialFootprint);
       console.info("Catalog expiry capture footprint", JSON.stringify({ revision, ...footprint }));
       const published = snapshots[0]!.readFullModelCatalog!()!;

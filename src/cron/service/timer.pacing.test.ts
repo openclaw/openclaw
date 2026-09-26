@@ -1,5 +1,6 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   clearCronJobActive,
   markCronJobActive,
@@ -20,6 +21,7 @@ const STARTED_AT = ENDED_AT - 1_000;
 
 function makeState() {
   return createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath: "/tmp/cron-pacing-timer/jobs.json",
     cronEnabled: true,
     log: createNoopLogger(),

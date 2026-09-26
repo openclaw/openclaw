@@ -86,6 +86,7 @@ import {
 } from "../secrets/runtime.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { isRecord } from "../utils.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
 import {
@@ -195,6 +196,7 @@ function createGatewayReloadHandlers(
   const { requestRecoveryRestart, ...handlerParams } = params;
   let state = createDefaultGatewayReloadState();
   return createGatewayReloadHandlersImpl({
+    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
     getPluginRegistry: requireActivePluginChannelRegistry,
     deps: {} as never,
     broadcast: vi.fn(),
@@ -229,6 +231,7 @@ function createGatewayReloadHandlers(
 function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
   let state = createDefaultGatewayReloadState();
   return startManagedGatewayConfigReloaderImpl({
+    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
     getPluginRegistry: requireActivePluginChannelRegistry,
     minimalTestGateway: false,
     initialPluginInstallRecords: {},
@@ -1797,6 +1800,8 @@ describe("gateway hot reload model state", () => {
       const releaseReview = createDeferred();
       const releaseReconciliation = createDeferred();
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath: path.join(fixtureDir, "jobs.json"),
         cronEnabled: true,
         log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -1941,6 +1946,7 @@ describe("gateway hot reload model state", () => {
       hoisted.runtimeConfig.value = config;
       setRuntimeConfigSnapshot(config, config);
 
+      const scheduler = createTestGatewayScheduler();
       try {
         const actualCron =
           await vi.importActual<typeof import("./server-cron.js")>("./server-cron.js");
@@ -1953,6 +1959,7 @@ describe("gateway hot reload model state", () => {
         const buildInitialCron =
           initialOwner === "lazy" ? createLazyGatewayCronState : actualCron.buildGatewayCronService;
         const initialCronState = buildInitialCron({
+          scheduler,
           cfg: config,
           deps: {} as never,
           broadcast: vi.fn(),
@@ -1981,6 +1988,7 @@ describe("gateway hot reload model state", () => {
         }
 
         const handlers = createGatewayReloadHandlers({
+          scheduler,
           getState: () => {
             if (!state) {
               throw new Error("expected gateway state");
@@ -2010,6 +2018,7 @@ describe("gateway hot reload model state", () => {
         hoisted.buildGatewayCronService.mockImplementation(previousCronFactory);
         await writeFile(releasePath, "release").catch(() => {});
         await state?.cronState.cron.stopAndDrain?.();
+        await scheduler.stop();
         spawn.mockRestore();
         vi.unstubAllEnvs();
       }
@@ -2398,6 +2407,7 @@ describe("gateway hot reload model state", () => {
       const { buildGatewayCronService } =
         await vi.importActual<typeof import("./server-cron.js")>("./server-cron.js");
       const cronState = buildGatewayCronService({
+        scheduler: createTestGatewayScheduler("fake-timers"),
         cfg: initialConfig,
         deps: {} as never,
         env: { ...process.env, OPENCLAW_STATE_DIR: fixtureDir, OPENCLAW_SKIP_CRON: "0" },

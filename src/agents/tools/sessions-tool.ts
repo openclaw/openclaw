@@ -44,7 +44,6 @@ import {
   resolveSessionToolAccess,
   runSessionToolActionWithConflictReceipt,
 } from "./sessions-access.js";
-/** Session self-service tool. */
 import { listSessionCloudProfiles } from "./sessions-cloud-profiles.js";
 import { resolveSessionToolContext } from "./sessions-helpers.js";
 import { resolveSessionReference, shouldResolveSessionIdInput } from "./sessions-resolution.js";
@@ -396,9 +395,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         }
         // Archive returns the exact row generation. Carry it into the locked
         // delete so a concurrent reset cannot delete a replacement session.
-        const expectedSessionId = normalizeOptionalString(
-          readToolStringParam(params, "expectedSessionId"),
-        );
+        const expectedSessionId = readToolStringParam(params, "expectedSessionId");
         if (!expectedSessionId) {
           throw new ToolInputError("Session lifecycle action requires a durable session identity");
         }
@@ -455,15 +452,13 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       }
       if (action === "assign_owner") {
         const ownerType = readToolStringParam(params, "ownerType", { required: true });
-        const ownerId = normalizeOptionalString(
-          readToolStringParam(params, "ownerId", { required: true }),
-        );
+        const ownerId = readToolStringParam(params, "ownerId", { required: true });
         if ((ownerType !== "human" && ownerType !== "agent") || !ownerId) {
           throw new ToolInputError("assign_owner requires ownerType and ownerId");
         }
         const { agentId, key, requesterAgentId, requesterSessionKey } = await resolvePatchTarget(
           opts,
-          normalizeOptionalString(readToolStringParam(params, "sessionKey")),
+          readToolStringParam(params, "sessionKey"),
           gatewayRequest,
         );
         const agentScope = parseAgentSessionKey(key) ? {} : { agentId };
@@ -533,12 +528,12 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       }
       const { agentId, cfg, isRequesterSession, key } = await resolvePatchTarget(
         opts,
-        normalizeOptionalString(readToolStringParam(params, "sessionKey")),
+        readToolStringParam(params, "sessionKey"),
         gatewayRequest,
       );
       const archived = values.archived;
       const expectedSessionId =
-        normalizeOptionalString(readToolStringParam(params, "expectedSessionId")) ??
+        readToolStringParam(params, "expectedSessionId") ??
         (typeof archived === "boolean" && isRequesterSession
           ? normalizeOptionalString(opts.agentSessionId)
           : undefined);

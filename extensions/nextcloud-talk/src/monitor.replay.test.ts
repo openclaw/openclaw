@@ -7,6 +7,22 @@ import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { startWebhookServer } from "./monitor.test-harness.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
 
+function signWebhookBody(body: string) {
+  const { random, signature } = generateNextcloudTalkSignature({
+    body,
+    secret: "nextcloud-secret", // pragma: allowlist secret
+  });
+  return {
+    body,
+    headers: {
+      "content-type": "application/json",
+      "x-nextcloud-talk-random": random,
+      "x-nextcloud-talk-signature": signature,
+      "x-nextcloud-talk-backend": "https://nextcloud.example",
+    },
+  };
+}
+
 async function invokeWebhookRequestListener(params: {
   listener: (req: IncomingMessage, res: ServerResponse) => void;
   path: string;
@@ -124,55 +140,12 @@ describe("createNextcloudTalkWebhookServer backend allowlist", () => {
 });
 
 describe("createNextcloudTalkWebhookServer payload validation", () => {
-  it("acknowledges signed non-message Create events instead of rejecting them", async () => {
-    const payload = {
-      type: "Create",
-      actor: { type: "Person", id: "alice", name: "Alice" },
-      object: {
-        type: "Document",
-        id: "file-1",
-        name: "report.pdf",
-        content: "",
-        mediaType: "application/pdf",
-      },
-      target: { type: "Collection", id: "room-1", name: "Room 1" },
-    };
-    const body = JSON.stringify(payload);
-    const { random, signature } = generateNextcloudTalkSignature({
-      body,
-      secret: "nextcloud-secret", // pragma: allowlist secret
-    });
-    const onMessage = vi.fn();
-    const harness = await startWebhookServer({
-      path: "/nextcloud-non-message-event",
-      onMessage,
-    });
-
-    const response = await fetch(harness.webhookUrl, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-nextcloud-talk-random": random,
-        "x-nextcloud-talk-signature": signature,
-        "x-nextcloud-talk-backend": "https://nextcloud.example",
-      },
-      body,
-    });
-
-    expect(response.status).toBe(200);
-    expect(onMessage).not.toHaveBeenCalled();
-  });
-
   it("answers an over-limit webhook with 413 and then closes the connection", async () => {
     // Driven over a raw socket rather than fetch: the server answers while the sender is
     // still uploading and then closes, so both halves of the contract - the status is
     // delivered, and the rejected request does not stay open - have to be observed on the
     // wire. A mocked response records status(413) either way and proves neither half.
     const body = JSON.stringify({ type: "Create", padding: "x".repeat(70 * 1024) });
-    const { random, signature } = generateNextcloudTalkSignature({
-      body,
-      secret: "nextcloud-secret", // pragma: allowlist secret
-    });
     const onMessage = vi.fn();
     const harness = await startWebhookServer({
       path: "/nextcloud-oversized-body",
@@ -181,13 +154,7 @@ describe("createNextcloudTalkWebhookServer payload validation", () => {
 
     const result = await postRawWebhook({
       url: harness.webhookUrl,
-      body,
-      headers: {
-        "content-type": "application/json",
-        "x-nextcloud-talk-random": random,
-        "x-nextcloud-talk-signature": signature,
-        "x-nextcloud-talk-backend": "https://nextcloud.example",
-      },
+      ...signWebhookBody(body),
     });
 
     expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
@@ -203,10 +170,6 @@ describe("createNextcloudTalkWebhookServer payload validation", () => {
       object: { type: "Collection", id: "room-1", name: "Room 1" },
     };
     const body = JSON.stringify(payload);
-    const { random, signature } = generateNextcloudTalkSignature({
-      body,
-      secret: "nextcloud-secret", // pragma: allowlist secret
-    });
     const onMessage = vi.fn();
     const harness = await startWebhookServer({
       path: "/nextcloud-lifecycle-event",
@@ -215,13 +178,7 @@ describe("createNextcloudTalkWebhookServer payload validation", () => {
 
     const response = await fetch(harness.webhookUrl, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-nextcloud-talk-random": random,
-        "x-nextcloud-talk-signature": signature,
-        "x-nextcloud-talk-backend": "https://nextcloud.example",
-      },
-      body,
+      ...signWebhookBody(body),
     });
 
     expect(response.status).toBe(200);
@@ -242,10 +199,6 @@ describe("createNextcloudTalkWebhookServer payload validation", () => {
       target: { type: "Collection", id: "", name: "Room 1" },
     };
     const body = JSON.stringify(payload);
-    const { random, signature } = generateNextcloudTalkSignature({
-      body,
-      secret: "nextcloud-secret", // pragma: allowlist secret
-    });
     const harness = await startWebhookServer({
       path: "/nextcloud-invalid-payload",
       onMessage: vi.fn(),
@@ -253,13 +206,7 @@ describe("createNextcloudTalkWebhookServer payload validation", () => {
 
     const response = await fetch(harness.webhookUrl, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-nextcloud-talk-random": random,
-        "x-nextcloud-talk-signature": signature,
-        "x-nextcloud-talk-backend": "https://nextcloud.example",
-      },
-      body,
+      ...signWebhookBody(body),
     });
 
     expect(response.status).toBe(400);

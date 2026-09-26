@@ -192,6 +192,9 @@ export async function withRetainedUpdateRuntime<T>(
                 candidateRoot,
                 onProgress: () => {
                   signal.throwIfAborted();
+                },
+                assertCurrent: () => {
+                  signal.throwIfAborted();
                   assertCurrent();
                 },
               }),

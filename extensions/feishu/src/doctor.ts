@@ -23,6 +23,7 @@ import {
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
+import { collectFeishuWebhookNotes } from "./webhook-route.js";
 
 const FEISHU_STATE_DIR = "feishu";
 const BACKUP_PREFIX = "feishu-state-repair";
@@ -886,28 +887,22 @@ function formatRepairChange(report: FeishuDoctorRepairReport): string {
   ].join("\n");
 }
 
-function hasConfiguredFeishuChannel(cfg: OpenClawConfig): boolean {
-  return Boolean(cfg.channels?.feishu);
-}
-
 async function runFeishuDoctorSequence(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   shouldRepair: boolean;
 }): Promise<ChannelDoctorSequenceResult> {
-  if (!hasConfiguredFeishuChannel(params.cfg)) {
-    return { changeNotes: [], warningNotes: [] };
-  }
-
-  const inspection = inspectFeishuDoctorState({ cfg: params.cfg, env: params.env });
-  if (inspection.findings.length === 0) {
-    return { changeNotes: [], warningNotes: [] };
+  const notes = collectFeishuWebhookNotes(params);
+  const inspection = params.cfg.channels?.feishu ? inspectFeishuDoctorState(params) : undefined;
+  if (!inspection || inspection.findings.length === 0) {
+    return { changeNotes: [], ...notes };
   }
 
   if (!params.shouldRepair) {
     return {
       changeNotes: [],
-      warningNotes: [formatPreviewWarning(inspection)],
+      ...notes,
+      warningNotes: [...notes.warningNotes, formatPreviewWarning(inspection)],
     };
   }
 
@@ -918,14 +913,14 @@ async function runFeishuDoctorSequence(params: {
   });
   return {
     changeNotes: [formatRepairChange(report)],
-    warningNotes: report.warnings,
+    ...notes,
+    warningNotes: [...notes.warningNotes, ...report.warnings],
   };
 }
 
 export const feishuDoctor: ChannelDoctorAdapter = {
   legacyConfigRules,
   normalizeCompatibilityConfig,
-  runConfigSequence: async ({ cfg, env, shouldRepair }) =>
-    await runFeishuDoctorSequence({ cfg, env, shouldRepair }),
+  runConfigSequence: runFeishuDoctorSequence,
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -11,6 +11,7 @@ import {
   type GatewayPluginMetadataOwner,
 } from "../../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import "./agent.base.test-utils.js";
 import "./agent.media-and-routing.test-utils.js";
 import "./agent.events-and-subagents.test-utils.js";
@@ -28,7 +29,7 @@ resetAgentTaskRegistryForTests();
 beforeAll(() => {
   // Handler cases share the real startup inventory; no case changes plugin
   // installation, so admission can consume prepared metadata like a live Gateway.
-  metadataOwner = retainGatewayPluginMetadata();
+  metadataOwner = retainGatewayPluginMetadata(createTestGatewayScheduler());
   const snapshot = metadataOwner.runBootstrap(() =>
     loadPluginMetadataSnapshot({ config: {}, allowCurrent: false }),
   );

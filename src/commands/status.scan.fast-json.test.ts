@@ -84,20 +84,6 @@ afterEach(() => {
 });
 
 describe("scanStatusJsonFast", () => {
-  it("does not preload configured channel plugins for the lean JSON path", async () => {
-    mocks.hasConfiguredChannels.mockReturnValue(true);
-
-    await scanStatusJsonFast(createStatusGatewayProbeBudget(), {} as never);
-
-    expect(mocks.getStatusCommandSecretTargetIds).toHaveBeenCalledWith(
-      createStatusMemorySearchConfig(),
-      process.env,
-    );
-    expect(mocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
-    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
-    expect(loggingStateRef.forceConsoleToStderr).toBe(false);
-  });
-
   it("carries invalid config diagnostics through the lean JSON scan", async () => {
     const config = createStatusMemorySearchConfig();
     const configDiagnostics = {

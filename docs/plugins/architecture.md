@@ -214,8 +214,8 @@ modules share the host's code identity; each inventory still owns its registered
 callbacks and cleanup. Replacing that compiled code requires a build and Gateway
 restart. Conditional package aliases retain their package metadata, and native
 Node conditions select the target from that captured metadata. Legacy packages
-without an exports map also prefetch their existing main or index entry as raw
-bytes; this can read a large native entry, but does not execute unselected code.
+without an exports map also admit their existing main or index entry without
+executing unselected code. Native entries reuse the recorded admission below.
 The selected package's remaining body is captured before execution.
 Dependency links retain existing nested installation locations. Dependencies installed
 beside a package remain siblings in the capture, including optional platform packages
@@ -223,6 +223,27 @@ whose native assets are read through relative filesystem paths. Other ancestor
 dependencies link at the captured package root. Capture does not add `node_modules` beside
 individual source files, so native-addon loaders can still locate their package
 root and its build assets.
+
+Native artifacts are admitted with their complete companion directory, so a
+binary's real path retains its sibling files. Installer-owned directories use
+hardlinks or an existing retained-directory reference; files inspected by plugin
+safety checks keep independent copies. Mutable source trees retain one private
+directory snapshot per admitted identity, preserving old binary and companion
+bytes through in-place edits. Files in this namespace are prepared at admission;
+module execution remains on demand. Registrations share admission facts without
+sharing their runtime authority.
+When file symlinks are unavailable, a generation can use hardlinks only if its
+directory preserves every captured companion and the selected host SDK. Otherwise
+that plugin reports a load error asking for file symlink support; the update
+continues with the existing plugin-failure warning behavior.
+The existing installed-index SQLite payload records directory membership, device,
+inode, mode, size, mtime, and ctime identities, SHA-256 digests, and the initial
+generation receipt. Unchanged warm startup reuses those facts. Added, removed, or
+changed companions require admission again; ctime-only uncertainty is resolved
+with a bounded rehash. Legacy reload receipts keep their framed raw-byte value,
+so a changed receipt still requires streaming its native payloads.
+Identity reuse cannot detect an edit that preserves every recorded identity field.
+Source code outside an admitted native namespace is captured and verified separately.
 
 Each captured generation links the selected host `openclaw` package so Workers
 and child processes started from its modules can resolve the host SDK. This link
@@ -285,9 +306,23 @@ custody, including explicit exits and CLI-handled signals. Forced termination
 still relies on startup reclamation. Snapshot
 cleanup owns SQLite staging files, while plugin cleanup owns this capture subtree.
 Reclamation removes captured
-payload before its coordinator so a partial deletion remains retryable.
+payload before its coordinator so a partial deletion remains retryable. A native
+library mapped in the current process retains its capture and coordinator through
+process exit, even after its JavaScript module cache entry is removed. Cleanup
+records `retained-by-loaded-module` once for that capture lifetime instead of
+trying to unlink a loaded Windows image. Unchanged native package identities
+continue to share the retained payload across reloads.
+Native-load attempts also retain their capture when initialization throws:
+the native image can remain mapped after the initialization error.
 
-Startup and hourly cleanup inspect this owned subtree. An instance becomes
+Before runtime plugin loading, startup attempts receipt-aware cleanup under
+exclusive maintenance ownership. It can reclaim a retired, unlocked instance
+immediately, including unpublished native payloads retained until the previous
+process exited. Published native payloads still referenced by the installed index
+remain available. Busy maintenance or cleanup failures produce a warning and
+startup continues; observational reads leave captures untouched.
+
+Hourly cleanup also inspects this owned subtree. An instance becomes
 eligible after one hour, but age alone never authorizes removal: cleanup must
 also acquire its native coordinator, proving that no producer retains custody.
 Process exit releases the native lock even after a forced termination. PID
@@ -306,6 +341,9 @@ system-temporary instance and reports a warning. Normal disposal still removes
 that instance; automatic cleanup does not scan unrelated system-temporary roots.
 There is no total disk quota, and an active instance may legitimately exceed the
 one-hour cleanup grace period.
+If its payload directory is removed while the instance still holds custody, the
+next capture recreates that directory under the same lease. This does not restore
+previously deleted captured files or recreate a missing coordinator directory.
 
 Startup and hourly cleanup also reclaim tokenless `openclaw-plugin-build-*` and
 `openclaw-model-catalog-*` roots in the selected state's temporary directory and
@@ -351,8 +389,12 @@ their own environment retain an isolated catalog worker for that environment.
 Provider-discovery entries use the exact selected runtime instance's captured
 source when it is already loaded, so discovery does not create a second copy of
 the same plugin package. Standalone discovery keeps its own setup lifetime.
-Each worker retains one plugin registration context, shared by agents with the
-same configuration, environment, plugin inventory, and loader workspace. Agent
+Each worker retains the current plugin registration context for each loader
+workspace, shared by agents with matching configuration, environment, and plugin
+inventory. Alternating unchanged workspaces reuse their captured source; replacing
+one workspace does not evict another. Node retains native ESM module graphs until
+worker retirement even after their capture files are removed, so actual source or
+configuration revisions can still retain module memory during that lifetime. Agent
 credentials and configured model facts travel with each request; catalog jobs do
 not rebuild the agent workspace. Discovery reuses the registrations already
 acquired by that context. Replacement releases them after admitted work settles.

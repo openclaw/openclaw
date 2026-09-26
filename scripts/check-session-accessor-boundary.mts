@@ -76,7 +76,7 @@ const materializingSessionEntryAccessorNames = new Set([
 // Shipped beta.5 official plugins import these deprecated helpers during
 // doctor migrations. Remove this ratchet with the compatibility bridge once
 // beta.5 is outside the supported upgrade window; do not add runtime callers.
-export const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([
+const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([
   "loadSessionStore",
   "resolveSessionFilePath",
   "resolveSessionStoreEntry",
@@ -98,7 +98,7 @@ const gatewaySessionServerMethodFiles = [
   "src/gateway/server-methods/sessions-subscriptions.ts",
 ];
 
-export const migratedSessionAccessorFiles = new Set([
+const migratedSessionAccessorFiles = new Set([
   "packages/memory-host-sdk/src/host/session-files.ts",
   "src/acp/control-plane/manager.background-task.ts",
   "src/acp/control-plane/manager.core.ts",
@@ -153,7 +153,7 @@ export const migratedSessionAccessorFiles = new Set([
   "src/tui/embedded-backend.ts",
 ]);
 
-export const migratedBundledPluginSessionAccessorFiles = new Set([
+const migratedBundledPluginSessionAccessorFiles = new Set([
   "extensions/codex/src/conversation-binding.ts",
   "extensions/discord/src/monitor/native-command-model-picker-ui.ts",
   "extensions/discord/src/monitor/native-command-model-picker-apply.ts",
@@ -174,11 +174,11 @@ export const migratedBundledPluginSessionAccessorFiles = new Set([
   "extensions/whatsapp/src/auto-reply/monitor/group-activation.ts",
 ]);
 
-export const migratedEmbeddedAgentSessionTargetFiles = new Set([
+const migratedEmbeddedAgentSessionTargetFiles = new Set([
   "extensions/voice-call/src/response-generator.ts",
 ]);
 
-export const migratedSessionAccessorWriteFiles = new Set([
+const migratedSessionAccessorWriteFiles = new Set([
   "src/acp/runtime/session-meta.ts",
   "src/agents/auth-profiles/session-override.ts",
   "src/agents/command/attempt-execution.shared.ts",
@@ -228,7 +228,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/tui/embedded-backend.ts",
 ]);
 
-export const migratedTranscriptWriterFiles = new Set([
+const migratedTranscriptWriterFiles = new Set([
   "src/agents/command/attempt-execution.ts",
   "src/agents/embedded-agent-runner/context-engine-maintenance.ts",
   "src/auto-reply/reply/session-fork.runtime.ts",
@@ -238,11 +238,11 @@ export const migratedTranscriptWriterFiles = new Set([
   "src/sessions/user-turn-transcript.ts",
 ]);
 
-export const migratedSessionCompactManualTrimFiles = new Set([
+const migratedSessionCompactManualTrimFiles = new Set([
   "src/gateway/server-methods/sessions-compact.ts",
 ]);
 
-export const migratedSessionLifecycleCleanupFiles = new Set([
+const migratedSessionLifecycleCleanupFiles = new Set([
   "src/config/sessions/cleanup-service.ts",
   "src/cron/session-reaper.ts",
   "src/infra/heartbeat-runner.ts",
@@ -267,7 +267,7 @@ export const readOnlyGatewaySessionAccessorFiles = new Set([
   "src/gateway/server-session-events.ts",
 ]);
 
-export const migratedMemoryHostSessionCorpusFiles = new Set([
+const migratedMemoryHostSessionCorpusFiles = new Set([
   "packages/memory-host-sdk/src/host/session-files.ts",
   "packages/memory-host-sdk/src/host/session-transcript-corpus.ts",
 ]);

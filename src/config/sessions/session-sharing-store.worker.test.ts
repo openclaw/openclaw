@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { initializeSessionReadContext } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
@@ -225,9 +226,16 @@ it("rechecks the current manager after the membership read yields", async () => 
   });
 });
 
-it("commits worker membership and participant facts before publishing, and rejects stale authority", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const scope = { agentId: "main", sessionKey: "agent:main:worker-writes" };
+it("commits aliased worker membership and participant facts before publishing, and rejects stale authority", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const alias = state.path("member-alias");
+    fs.symlinkSync(path.dirname(database.path), alias, "junction");
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:worker-writes",
+      storePath: path.join(alias, path.basename(database.path)),
+    };
     const entry = {
       sessionId: "worker-writes",
       updatedAt: 1,
@@ -248,7 +256,6 @@ it("commits worker membership and participant facts before publishing, and rejec
         participantLifecycle(event);
       }
     });
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
     const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
     const queries: string[] = [];
     const methods = (["all", "get", "run", "iterate"] as const).map((method) => {
@@ -340,10 +347,14 @@ it("commits worker membership and participant facts before publishing, and rejec
   });
 });
 
-it("rejects the complete category update when a later member changes after preparation", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("rejects the complete aliased category update when a later member changes after preparation", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const alias = state.path("category-alias");
+    fs.symlinkSync(path.dirname(database.path), alias, "junction");
     const scopeAt = (index: number) => ({
       agentId: "main",
+      storePath: path.join(alias, path.basename(database.path)),
       sessionKey: `agent:main:category-revalidation:${String(index).padStart(2, "0")}`,
     });
     const firstScope = scopeAt(0);

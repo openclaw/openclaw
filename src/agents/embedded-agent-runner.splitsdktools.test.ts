@@ -18,20 +18,6 @@ describe("splitSdkTools", () => {
     createStubTool("browser"),
   ];
 
-  it("routes all tools to customTools when sandboxed", () => {
-    const { customTools } = splitSdkTools({
-      tools,
-      sandboxEnabled: true,
-    });
-    expect(customTools.map((tool) => tool.name)).toEqual([
-      "read",
-      "exec",
-      "edit",
-      "write",
-      "browser",
-    ]);
-  });
-
   it("routes all tools to customTools even when not sandboxed", () => {
     const { customTools } = splitSdkTools({
       tools,

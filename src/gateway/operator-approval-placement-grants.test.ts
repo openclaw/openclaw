@@ -167,12 +167,7 @@ function approval(id: string): NewOperatorApproval {
 }
 
 function resolveBinding(
-  databaseOptions: OpenClawStateDatabaseOptions,
-  runtime = createPlacementStandingGrantRuntime({
-    runtimeEpoch: "runtime-1",
-    databaseOptions,
-    now: () => NOW_MS + 2_000,
-  }),
+  runtime: ReturnType<typeof createPlacementStandingGrantRuntime>,
 ): PlacementStandingGrantMintSpec {
   const binding = runtime.resolveBinding({
     pluginId: "codex",
@@ -200,7 +195,16 @@ async function mintGrant(
     databaseOptions,
     now,
   });
-  const binding = resolveBinding(databaseOptions, runtime);
+  const binding = resolveBinding(runtime);
+  await retainAllowedGrant(databaseOptions, runtime, binding);
+  return { binding, runtime };
+}
+
+async function retainAllowedGrant(
+  databaseOptions: OpenClawStateDatabaseOptions,
+  runtime: ReturnType<typeof createPlacementStandingGrantRuntime>,
+  binding: PlacementStandingGrantMintSpec,
+): Promise<void> {
   await insertOperatorApproval({ approval: approval("approval-1"), databaseOptions });
   expect(
     (
@@ -221,7 +225,6 @@ async function mintGrant(
       expiresAtMs: null,
     }),
   ).toBe(true);
-  return { binding, runtime };
 }
 
 describe("placement standing grants", () => {
@@ -240,7 +243,7 @@ describe("placement standing grants", () => {
       databaseOptions,
       now: () => NOW_MS + 2_000,
     });
-    const binding = resolveBinding(databaseOptions, runtime);
+    const binding = resolveBinding(runtime);
     expect(binding).toEqual({
       pluginId: "codex",
       command: "codex.exec-server.stdio.v1",
@@ -255,26 +258,7 @@ describe("placement standing grants", () => {
       placementGeneration: 4,
       cwd: CWD,
     });
-    await insertOperatorApproval({ approval: approval("approval-1"), databaseOptions });
-    expect(
-      (
-        await resolveOperatorApproval({
-          id: "approval-1",
-          decision: "allow-always",
-          resolver: { kind: "device", id: "reviewer-1" },
-          nowMs: NOW_MS + 1_000,
-          databaseOptions,
-        })
-      ).outcome,
-    ).toBe("resolved");
-    expect(
-      runtime.retain({
-        ...binding,
-        approvalId: "approval-1",
-        nowMs: NOW_MS + 1_000,
-        expiresAtMs: null,
-      }),
-    ).toBe(true);
+    await retainAllowedGrant(databaseOptions, runtime, binding);
 
     expect(runtime.validate(binding)).toMatchObject({
       outcome: "consumed",
@@ -305,7 +289,7 @@ describe("placement standing grants", () => {
       databaseOptions,
       now: () => NOW_MS + 2_000,
     });
-    const binding = resolveBinding(databaseOptions, runtime);
+    const binding = resolveBinding(runtime);
     await insertOperatorApproval({ approval: approval("approval-1"), databaseOptions });
     expect(
       runtime.retain({

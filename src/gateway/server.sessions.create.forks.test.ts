@@ -260,6 +260,7 @@ test("sessions.create forks the parent transcript into the new session", async (
   }>("sessions.create", {
     agentId: "main",
     parentSessionKey: "main",
+    key: "agent:main:dashboard:fork-publication",
     fork: true,
   });
 

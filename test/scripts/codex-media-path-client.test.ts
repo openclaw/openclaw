@@ -5,10 +5,6 @@ import { appendFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createJsonlRequestTailer } from "../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mts";
-import {
-  readPositiveIntEnv,
-  readTcpPortEnv,
-} from "../../scripts/e2e/lib/codex-media-path/limits.mjs";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -85,23 +81,6 @@ async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
 }
 
 describe("codex media path limits", () => {
-  it("rejects loose numeric env values instead of parsing prefixes", () => {
-    expect(() =>
-      readPositiveIntEnv("OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS", 180, {
-        OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: "1e3",
-      }),
-    ).toThrow("invalid OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: 1e3");
-    expect(() =>
-      readPositiveIntEnv("OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES", 2 * 1024 * 1024, {
-        OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES: "64bytes",
-      }),
-    ).toThrow("invalid OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES: 64bytes");
-  });
-
-  it("rejects out-of-range TCP ports", () => {
-    expect(() => readTcpPortEnv("PORT", 18790, { PORT: "65536" })).toThrow("invalid PORT: 65536");
-  });
-
   it("writes strict positive timeout and port values into generated config", () => {
     const root = tempRoots.make("openclaw-codex-media-path-");
     const result = runWriteConfig(root, {

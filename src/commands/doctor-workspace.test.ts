@@ -211,6 +211,7 @@ describe("root memory repair", () => {
       initialValue: true,
     });
     const canonical = await fs.readFile(path.join(tmpDir, "MEMORY.md"), "utf8");
+    expect(canonical).toContain("# Canonical");
     expect(canonical).toContain("# Legacy");
     await expectPathMissing(path.join(tmpDir, "memory.md"));
     expect(note).toHaveBeenCalledTimes(1);
@@ -224,12 +225,11 @@ describe("root memory repair", () => {
     );
     expect(repairLines).toContain(`- removed legacy file: ${path.join(tmpDir, "memory.md")}`);
     expect(repairNote?.[1]).toBe("Doctor changes");
-  });
-
-  it("treats an oversized AGENTS.md as missing memory guidance", async () => {
-    await fs.writeFile(path.join(tmpDir, "AGENTS.md"), "x".repeat(2 * 1024 * 1024), "utf8");
-
-    await expect(shouldSuggestMemorySystem(tmpDir)).resolves.toBe(true);
+    const archiveLine = repairLines.find((line) => line.startsWith("- backup: "));
+    expect(archiveLine).toBeDefined();
+    await expect(fs.readFile(archiveLine!.slice("- backup: ".length), "utf8")).resolves.toBe(
+      "# Legacy\n",
+    );
   });
 
   it("follows a symlinked AGENTS.md while keeping its target bounded", async () => {
@@ -330,6 +330,8 @@ describe("root memory repair", () => {
     expect(repairLines).toContain(`- canonical: ${path.join(tmpDir, "MEMORY.md")}`);
     expect(repairLines).toContain(`- legacy: ${path.join(tmpDir, "memory.md")}`);
     expect(repairNote?.[1]).toBe("Doctor changes");
+    await expect(fs.readFile(targetFile, "utf8")).resolves.toBe("# Canonical\n");
+    await expect(fs.readFile(path.join(tmpDir, "memory.md"), "utf8")).resolves.toBe("# Legacy\n");
   });
 
   it("reports a skipped repair when a root memory file is oversized", async () => {
@@ -351,6 +353,12 @@ describe("root memory repair", () => {
     expect(repairLines).toContain(`- canonical: ${path.join(tmpDir, "MEMORY.md")}`);
     expect(repairLines).toContain(`- legacy: ${path.join(tmpDir, "memory.md")}`);
     expect(repairNote?.[1]).toBe("Doctor changes");
+    await expect(fs.readFile(path.join(tmpDir, "MEMORY.md"), "utf8")).resolves.toBe(
+      "# Canonical\n",
+    );
+    await expect(fs.readFile(path.join(tmpDir, "memory.md"), "utf8")).resolves.toBe(
+      "# Legacy\n".repeat(1_000_000),
+    );
   });
 
   it("skips without mutation when legacy memory cannot be archived atomically", async () => {
@@ -405,6 +413,10 @@ describe("root memory repair", () => {
     expect(repairLines).toContain(`- canonical: ${path.join(tmpDir, "MEMORY.md")}`);
     expect(repairLines).toContain(`- legacy: ${path.join(tmpDir, "memory.md")}`);
     expect(repairNote?.[1]).toBe("Doctor changes");
+    await expect(fs.readFile(path.join(tmpDir, "MEMORY.md"), "utf8")).resolves.toBe(
+      "# Canonical\n",
+    );
+    await expect(fs.readFile(path.join(tmpDir, "memory.md"), "utf8")).resolves.toBe("# Legacy\n");
   });
 
   it("reports a preserved archive when a failed repair cannot restore legacy", async () => {

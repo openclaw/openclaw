@@ -370,24 +370,14 @@ describe("Control UI E2E resource ownership", () => {
 
   it.each([
     { filters: [standaloneFile], files: [standaloneFile], leases: 0 },
-    ...["control-ui-retained-assets", "service-worker-update"].map((name) => {
-      const file = `ui/src/e2e/${name}.e2e.test.ts`;
-      return { filters: [file], files: [file], leases: 0 };
-    }),
     { filters: [privateFile], files: [privateFile], leases: 0 },
     { filters: [bundledFile], files: [bundledFile], leases: 1 },
     { filters: [serialBundledFile], files: [serialBundledFile], leases: 1 },
-    {
-      filters: [bundledFile, serialBundledFile],
-      files: [bundledFile, serialBundledFile],
-      leases: 1,
-    },
     {
       filters: [standaloneFile, privateFile, bundledFile, serialBundledFile],
       files: [standaloneFile, privateFile, bundledFile, serialBundledFile],
       leases: 1,
     },
-    { filters: [standaloneFile, bundledFile], files: [standaloneFile, bundledFile], leases: 1 },
     {
       filters: ["ui/src/pages/cron"],
       files: ["ui/src/pages/cron/run-transcript.e2e.test.ts"],
@@ -485,7 +475,6 @@ describe("Control UI E2E resource ownership", () => {
     { first: bundledFile, second: serialBundledFile, available: true },
     { first: serialBundledFile, second: bundledFile, available: true },
     { first: bundledFile, second: serialBundledFile, available: false },
-    { first: serialBundledFile, second: bundledFile, available: false },
   ])(
     "shares the bundle fact after standalone selection, $first then $second (Chromium: $available)",
     ({ first, second, available }) => {

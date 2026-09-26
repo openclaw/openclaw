@@ -236,17 +236,12 @@ export function filterChannelInboundQuoteContext(
   contextVisibility: ContextVisibilityMode | undefined,
   quote: SupplementalContextFacts["quote"] | undefined,
 ): SupplementalContextFacts["quote"] | undefined {
-  return filterChannelInboundSupplementalContext({
-    contextVisibility,
-    supplemental: quote ? { quote } : undefined,
-  })?.quote;
+  return filterSupplementalContext({ mode: contextVisibility, kind: "quote", context: quote });
 }
 
 function definedFields<T extends Record<string, unknown>>(fields: T): Partial<T> {
   return Object.fromEntries(
-    Object.entries(fields).filter(
-      (entry): entry is [string, Exclude<unknown, undefined>] => entry[1] !== undefined,
-    ),
+    Object.entries(fields).filter((entry) => entry[1] !== undefined),
   ) as Partial<T>;
 }
 

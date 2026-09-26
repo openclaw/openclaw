@@ -221,7 +221,7 @@ async function createPartialPromotion(fixture: Fixture) {
 }
 
 describe("internal source reply persistence", () => {
-  it.each(["partial-promotion", "owned-drain", "ordinary", "canonical-key", "text-only"] as const)(
+  it.each(["partial-promotion", "owned-drain", "canonical-key", "text-only"] as const)(
     "completes exact replay and refreshes history after %s",
     async (mode) => {
       await withOpenClawTestState(

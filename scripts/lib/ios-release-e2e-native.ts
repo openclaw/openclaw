@@ -18,9 +18,6 @@ import {
 import { hasUnjoinedWork, runManagedCommand } from "./managed-child-process.mjs";
 
 const DEVICE_TYPE = "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro";
-const XCODE_VERSION = "27.0";
-const XCODE_BUILD = "27A266a";
-const RUNTIME_VERSION = "26.5";
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu;
 
 export async function createNativeDependencies(options: {
@@ -91,8 +88,9 @@ export async function createNativeDependencies(options: {
   }
   options.proof.harnessSha = head;
   const xcodeVersion = await command("xcode-version", "xcodebuild", ["-version"]);
-  if (xcodeVersion !== `Xcode ${XCODE_VERSION}\nBuild version ${XCODE_BUILD}`) {
-    throw new OperationError("xcode-version", "unsupported");
+  const xcode = /^Xcode ([0-9.]+)\r?\nBuild version ([A-Za-z0-9]+)$/u.exec(xcodeVersion);
+  if (!xcode) {
+    throw new OperationError("xcode-version", "failed");
   }
   const binary = process.env.OPENCLAW_CI_SIMSLIM_BINARY;
   if (options.mode === "compare" && (!binary || !path.isAbsolute(binary))) {
@@ -101,22 +99,37 @@ export async function createNativeDependencies(options: {
   if (binary && (await command("simslim-version", binary, ["--version"])) !== "simslim 0.8.0") {
     throw new OperationError("simslim-version", "identity-mismatch");
   }
-  const runtimes = JSON.parse(
+  const runtimes: {
+    runtimes: {
+      isAvailable: boolean;
+      version: string;
+      identifier: string;
+      supportedArchitectures: string[];
+      supportedDeviceTypes: { identifier: string }[];
+    }[];
+  } = JSON.parse(
     await command("simulator-runtime", "xcrun", ["simctl", "list", "runtimes", "--json"]),
   );
-  const runtime = runtimes.runtimes.find(
-    (item: { isAvailable: boolean; version: string; identifier: string }) =>
-      item.isAvailable &&
-      item.version === RUNTIME_VERSION &&
-      item.identifier.startsWith("com.apple.CoreSimulator.SimRuntime.iOS-"),
-  );
+  const runtime = runtimes.runtimes
+    .filter(
+      (item) =>
+        item.isAvailable &&
+        item.identifier.startsWith("com.apple.CoreSimulator.SimRuntime.iOS-") &&
+        item.supportedArchitectures.includes(process.arch) &&
+        item.supportedDeviceTypes.some((device) => device.identifier === DEVICE_TYPE),
+    )
+    .toSorted(
+      (left, right) =>
+        right.version.localeCompare(left.version, "en", { numeric: true }) ||
+        left.identifier.localeCompare(right.identifier),
+    )[0];
   if (!runtime) {
     throw new OperationError("simulator-runtime", "not-found");
   }
   Object.assign(options.proof, {
-    xcode: XCODE_VERSION,
-    xcodeBuild: XCODE_BUILD,
-    runtime: RUNTIME_VERSION,
+    xcode: xcode[1],
+    xcodeBuild: xcode[2],
+    runtime: runtime.version,
     runtimeIdentifier: runtime.identifier,
     deviceType: DEVICE_TYPE,
     simslim: binary ? "0.8.0" : null,

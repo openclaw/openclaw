@@ -551,6 +551,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     disposed = true;
     generations.invalidate();
     disposeRefresh();
+    metadata.dispose();
     catalog.dispose();
     membership.dispose();
     placementFacts.dispose();

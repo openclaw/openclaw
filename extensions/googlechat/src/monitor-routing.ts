@@ -1,4 +1,3 @@
-// Googlechat plugin module implements monitor routing behavior.
 import {
   createFixedWindowRateLimiter,
   WEBHOOK_RATE_LIMIT_DEFAULTS,

@@ -19,7 +19,10 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
 import {
@@ -93,7 +96,8 @@ describe("gateway lifetime sidecars", () => {
 
   test("keeps scheduled secret expiry responsive and joins its accepted sweep on shutdown", async () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: createStateDir() }, async () => {
-      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const clock = createGatewaySchedulerClock(Date.now());
+      const scheduler = createTestGatewayScheduler(clock.clock);
       const owner = createGatewaySidecarStopOwner();
       const sweeps: Promise<number>[] = [];
       const purge = secretStore.purgeExpiredSecretStoreEntries;
@@ -106,7 +110,7 @@ describe("gateway lifetime sidecars", () => {
           return result;
         });
       await attachInitialGatewayLifetimeSidecars({
-        scheduler: createTestGatewayScheduler(),
+        scheduler,
         chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
         gatewayRequestContext: {} as never,
         flushPendingSessionsChangedEvents: vi.fn(),
@@ -114,6 +118,7 @@ describe("gateway lifetime sidecars", () => {
         logWarning: vi.fn(),
         publishSidecars: owner.publish,
       });
+      await clock.wake();
       expect(await Promise.all(sweeps)).toEqual([0]);
       const context = captureOpenClawStateWorkerContext();
       const openIndex = openingMessages.mock.calls.findIndex(([message]) => {
@@ -152,10 +157,11 @@ describe("gateway lifetime sidecars", () => {
             })
           : undefined;
       let stopping: Promise<void> | undefined;
+      let scheduledSweep: void | Promise<void> = undefined;
       try {
         await holder.ready;
         checkpoint.port2.postMessage(null);
-        vi.advanceTimersByTime(60_000);
+        scheduledSweep = clock.advanceBy(60_000);
         await withEnvAsync({ OPENCLAW_STATE_DIR: createStateDir() }, async () => {
           expect(
             await withTestTimeout(hostYielded.promise, 10_000, "Expiry did not yield to the host"),
@@ -166,7 +172,7 @@ describe("gateway lifetime sidecars", () => {
             5_000,
             "Expiry did not reach its shared-state worker",
           );
-          vi.advanceTimersByTime(60_000);
+          await clock.advanceBy(60_000);
           expect(sweeps).toHaveLength(2);
           let stopped = false;
           stopping = owner.stop().then(() => {
@@ -185,9 +191,10 @@ describe("gateway lifetime sidecars", () => {
           holder.release();
           await expect(holder.joined).resolves.toBe(0);
           await stopping;
+          await scheduledSweep;
           expect(await sweeps[1]).toBe(1);
 
-          vi.advanceTimersByTime(60_000);
+          await clock.advanceBy(60_000);
           expect(sweeps).toHaveLength(2);
         });
         expect(countStoredRows(handoff)).toBe(0);
@@ -195,7 +202,7 @@ describe("gateway lifetime sidecars", () => {
         checkpoint.port1.close();
         checkpoint.port2.close();
         holder.release();
-        await Promise.allSettled([...sweeps, holder.joined, stopping]);
+        await Promise.allSettled([...sweeps, holder.joined, stopping, scheduledSweep]);
         await owner.stop();
         observeDispatch?.mockRestore();
         observePurge.mockRestore();
@@ -286,29 +293,67 @@ describe("gateway lifetime sidecars", () => {
     expect(stopped).toHaveBeenCalledOnce();
   });
 
-  test("owns standalone GitHub publication recovery when worker placement is unavailable", async () => {
-    vi.useFakeTimers();
-    const reconcileGitHubPublications = vi.fn(async () => {});
+  test("owns and joins GitHub publication recovery when worker placement is unavailable", async () => {
+    const clock = createGatewaySchedulerClock(Date.now());
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const reconcileGitHubPublications = vi
+      .fn(async () => {})
+      .mockImplementationOnce(async () => {})
+      .mockImplementationOnce(() => {
+        entered.resolve();
+        return release.promise;
+      });
     const owner = createGatewaySidecarStopOwner();
+    const checkpoint = new MessageChannel();
+    const warn = vi.fn();
+    vi.spyOn(secretStore, "purgeExpiredSecretStoreEntries").mockResolvedValue(0);
 
     await attachInitialGatewayLifetimeSidecars({
-      scheduler: createTestGatewayScheduler(),
+      scheduler,
       chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
       gatewayRequestContext: {} as never,
       flushPendingSessionsChangedEvents: vi.fn(),
       minimalTestGateway: false,
-      logWarning: vi.fn(),
+      logWarning: warn,
       reconcileGitHubPublications,
       publishSidecars: owner.publish,
     });
-    vi.runAllTicks();
-    expect(reconcileGitHubPublications).toHaveBeenCalledOnce();
+    let scheduled: void | Promise<void> = undefined;
+    let stopping: Promise<void> | undefined;
+    try {
+      await clock.wake();
+      expect(reconcileGitHubPublications).toHaveBeenCalledOnce();
 
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(reconcileGitHubPublications).toHaveBeenCalledTimes(2);
-    await owner.stop();
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(reconcileGitHubPublications).toHaveBeenCalledTimes(2);
+      scheduled = clock.advanceBy(60_000);
+      await entered.promise;
+      await clock.advanceBy(3 * 60_000);
+      expect(reconcileGitHubPublications).toHaveBeenCalledTimes(2);
+      let stopped = false;
+      stopping = owner.stop().then(() => {
+        stopped = true;
+      });
+      const shutdownYielded = createDeferred();
+      checkpoint.port1.once("message", () => shutdownYielded.resolve());
+      checkpoint.port2.postMessage(null);
+      await shutdownYielded.promise;
+      expect(stopped).toBe(false);
+      release.reject(new Error("synthetic publication recovery failure"));
+      await Promise.all([scheduled, stopping]);
+      expect(stopped).toBe(true);
+      expect(warn).toHaveBeenCalledWith("GitHub publication recovery failed; will retry.");
+
+      await clock.advanceBy(60_000);
+      expect(reconcileGitHubPublications).toHaveBeenCalledTimes(2);
+    } finally {
+      checkpoint.port1.close();
+      checkpoint.port2.close();
+      release.resolve();
+      await Promise.allSettled([scheduled, stopping]);
+      await owner.stop();
+      await scheduler.stop();
+    }
   });
 
   test("attaches and retires authorization lifecycles with the Gateway", async () => {
@@ -360,12 +405,13 @@ describe("gateway lifetime sidecars", () => {
     "owns startup and scheduled handoff expiry when minimalTestGateway=$minimalTestGateway",
     async ({ minimalTestGateway, expectedHandoffRows }) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: createStateDir() }, async () => {
-        vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
-        vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+        const clock = createGatewaySchedulerClock(Date.parse("2026-01-01T00:00:00.000Z"));
+        const scheduler = createTestGatewayScheduler(clock.clock);
+        vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
         const startupHandoff = "github-setup-55555555555555555555555555555555";
         writeStoredSecret(startupHandoff, "temporary-value");
         writeStoredSecret("RETAINED_SECRET", "retained-value");
-        vi.setSystemTime(new Date("2026-01-01T00:11:00.000Z"));
+        clock.setTime(Date.parse("2026-01-01T00:11:00.000Z"));
         const owner = createGatewaySidecarStopOwner();
         const purge = secretStore.purgeExpiredSecretStoreEntries;
         const sweeps: Promise<number>[] = [];
@@ -376,7 +422,7 @@ describe("gateway lifetime sidecars", () => {
         });
 
         await attachInitialGatewayLifetimeSidecars({
-          scheduler: createTestGatewayScheduler(),
+          scheduler,
           chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
           gatewayRequestContext: {} as never,
           flushPendingSessionsChangedEvents: vi.fn(),
@@ -384,13 +430,14 @@ describe("gateway lifetime sidecars", () => {
           logWarning: vi.fn(),
           publishSidecars: owner.publish,
         });
+        await clock.wake();
         await Promise.all(sweeps);
         expect(countStoredRows(startupHandoff)).toBe(expectedHandoffRows);
 
         const scheduledHandoff = "github-setup-77777777777777777777777777777777";
         writeStoredSecret(scheduledHandoff, "scheduled-value");
-        vi.setSystemTime(new Date("2026-01-01T00:22:00.000Z"));
-        await vi.advanceTimersByTimeAsync(60_000);
+        clock.setTime(Date.parse("2026-01-01T00:22:00.000Z"));
+        await clock.advanceBy(60_000);
         await Promise.all(sweeps);
 
         expect(countStoredRows(scheduledHandoff)).toBe(expectedHandoffRows);
@@ -399,7 +446,7 @@ describe("gateway lifetime sidecars", () => {
 
         const stoppedHandoff = "github-setup-66666666666666666666666666666666";
         writeStoredSecret(stoppedHandoff, "post-stop-value");
-        await vi.advanceTimersByTimeAsync(11 * 60_000);
+        await clock.advanceBy(11 * 60_000);
         expect(countStoredRows(stoppedHandoff)).toBe(1);
       });
     },

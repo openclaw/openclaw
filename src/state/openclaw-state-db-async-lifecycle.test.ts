@@ -195,7 +195,7 @@ describe("canonical shared-state resource drainage", () => {
     writeFileSync(pathname, "");
     const original = lifecycle.capture(relative);
     expect(original.databasePath).toBe(pathname);
-    expect(lifecycle.publish(relative)).toEqual(original.identity);
+    expect(lifecycle.publish(relative).identity).toEqual(original.identity);
     expect(lifecycle.identity(relative)).toBe(original.identity);
     expect(lifecycle.knownIdentity(relative)).toBe(original.identity);
     lifecycle.invalidate(relative);

@@ -21,11 +21,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function createRewindHost(response: Promise<{ editorText: string }>) {
+function createRewindHost(
+  response: Promise<{ editorText: string }>,
+  sessionKey = "agent:main:session-a",
+  history: () => ChatHistoryResult | Promise<ChatHistoryResult> = () => ({ messages: [] }),
+) {
   const state = Object.assign(
     makeChatHost({
-      requestHandlers: { "chat.history": { messages: [] } },
-      sessionKey: "agent:main:session-a",
+      requestHandlers: { "chat.history": history },
+      sessionKey,
     }),
     {
       chatHistoryPagination: { hasMore: false as const },
@@ -213,37 +217,22 @@ describe("rewind composer ownership", () => {
     expect(loadChatComposerSnapshot(second, second.sessionKey)?.draft).toBe("selected rewind");
   });
 
-  it.each(
-    ["rewind", "history"].flatMap((stage) =>
-      ["text", "mentions", "attachments", "goal mode", "reply"].map((edit) => ({ stage, edit })),
-    ),
-  )("preserves newer composer $edit while awaiting $stage", async ({ stage, edit }) => {
+  it.each([
+    { stage: "rewind", edit: "text" },
+    { stage: "rewind", edit: "reply" },
+    ...["text", "mentions", "attachments", "goal mode", "reply"].map((edit) => ({
+      stage: "history",
+      edit,
+    })),
+  ])("preserves newer composer $edit while awaiting $stage", async ({ stage, edit }) => {
     const response = createDeferred<{ editorText: string }>();
     const history = createDeferred<ChatHistoryResult>();
     const requestedHistory = createDeferred();
     const canonical = { role: "assistant", content: "retained prefix" };
-    const state = Object.assign(
-      makeChatHost({
-        requestHandlers: {
-          "chat.history": () => {
-            requestedHistory.resolve();
-            return stage === "history" ? history.promise : { messages: [canonical] };
-          },
-        },
-        sessionKey: "main",
-      }),
-      {
-        chatHistoryPagination: { hasMore: false as const },
-        handleChatDraftChange: (next: string, mentions?: ChatState["chatMentions"]): void =>
-          handleChatDraftChange(state, next, mentions),
-      },
-    );
-    Object.assign(state.sessions, {
-      rewind: vi.fn(() => response.promise),
-      refreshReplacement: vi.fn(async () => null),
+    const state = createRewindHost(response.promise, "main", () => {
+      requestedHistory.resolve();
+      return stage === "history" ? history.promise : { messages: [canonical] };
     });
-    vi.spyOn(state.sessions, "listBranches").mockResolvedValue([]);
-    onTestFinished(() => state.sessions.dispose());
     state.chatMessage = edit === "goal mode" ? "" : "@Alex keep this draft";
     state.chatMentions = edit === "goal mode" ? [] : [{ profileId: "alex", start: 0, end: 5 }];
     const pending = rewindChatHistory(
@@ -292,20 +281,10 @@ describe("rewind composer ownership", () => {
   it("lets only the latest rewind replace the composer", async () => {
     const older = createDeferred<{ editorText: string }>();
     const newer = createDeferred<{ editorText: string }>();
-    const state = Object.assign(
-      makeChatHost({ requestHandlers: { "chat.history": { messages: [] } }, sessionKey: "main" }),
-      {
-        chatHistoryPagination: { hasMore: false as const },
-        handleChatDraftChange: (next: string, mentions?: ChatState["chatMentions"]): void =>
-          handleChatDraftChange(state, next, mentions),
-      },
-    );
+    const state = createRewindHost(older.promise, "main");
     Object.assign(state.sessions, {
       rewind: vi.fn().mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise),
-      refreshReplacement: vi.fn(async () => null),
     });
-    vi.spyOn(state.sessions, "listBranches").mockResolvedValue([]);
-    onTestFinished(() => state.sessions.dispose());
     state.chatMessage = "current draft";
     const first = rewindChatHistory(
       state,

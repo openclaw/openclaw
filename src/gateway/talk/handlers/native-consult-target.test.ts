@@ -355,6 +355,32 @@ it("fences an opaque relay record replaced after authorization", async () => {
   );
 });
 
+function registerOwnedEmbeddedRun(runId: string, sessionId: string) {
+  const registration = registerChatAbortController({
+    chatAbortControllers: context.chatAbortControllers,
+    runId,
+    sessionId,
+    sessionKey: "global",
+    agentId: "voice",
+    ownerConnId: client.connId,
+    timeoutMs: 60_000,
+    kind: "chat-send",
+  });
+  const abort = vi.fn();
+  setActiveEmbeddedRun(
+    sessionId,
+    {
+      runId,
+      queueMessage: async () => undefined,
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort,
+    },
+    "global",
+  );
+  return { registration, abort };
+}
+
 it("rechecks RPC sharing authorization after the control runtime import", async () => {
   config.session = { scope: "global" };
   const target = prepareTalkSessionTarget(config, "main");
@@ -364,28 +390,7 @@ it("rechecks RPC sharing authorization after the control runtime import", async 
     updatedAt: 1,
     visibility: "shared",
   });
-  const registration = registerChatAbortController({
-    chatAbortControllers: context.chatAbortControllers,
-    runId: "acl-run",
-    sessionId: "acl-session",
-    sessionKey: "global",
-    agentId: "voice",
-    ownerConnId: client.connId,
-    timeoutMs: 60_000,
-    kind: "chat-send",
-  });
-  const abort = vi.fn();
-  setActiveEmbeddedRun(
-    "acl-session",
-    {
-      runId: "acl-run",
-      queueMessage: async () => undefined,
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort,
-    },
-    "global",
-  );
+  const { registration, abort } = registerOwnedEmbeddedRun("acl-run", "acl-session");
   const authorization = resolveSessionMutationAuthorization({
     client,
     method: "talk.client.steer",
@@ -425,7 +430,6 @@ it("rechecks RPC sharing authorization after the control runtime import", async 
 });
 
 it.each([
-  "removed",
   "replaced",
   "agent",
   "key",
@@ -442,28 +446,7 @@ it.each([
   const voiceScope = { agentId: target.agentId, sessionKey: target.sessionKey };
   const voiceSessionId = createOrResumeClientVoiceSession({ ...voiceScope, origin: "client" });
   registerClientVoiceConsultRun({ ...voiceScope, voiceSessionId, runId });
-  const registration = registerChatAbortController({
-    chatAbortControllers: context.chatAbortControllers,
-    runId,
-    sessionId: "captured-session",
-    sessionKey: "global",
-    agentId: "voice",
-    ownerConnId: client.connId,
-    timeoutMs: 60_000,
-    kind: "chat-send",
-  });
-  const abort = vi.fn();
-  setActiveEmbeddedRun(
-    "captured-session",
-    {
-      runId,
-      queueMessage: async () => undefined,
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort,
-    },
-    "global",
-  );
+  const { registration, abort } = registerOwnedEmbeddedRun(runId, "captured-session");
   const runTarget = resolveOwnedActiveTalkRunTarget({
     context,
     clientConnId: client.connId,
@@ -478,9 +461,7 @@ it.each([
     mode: "cancel",
   });
   const entry = context.chatAbortControllers.get(runId)!;
-  if (change === "removed") {
-    context.chatAbortControllers.delete(runId);
-  } else if (change === "replaced") {
+  if (change === "replaced") {
     context.chatAbortControllers.set(runId, { ...entry });
   } else if (change === "agent") {
     entry.agentId = "primary";

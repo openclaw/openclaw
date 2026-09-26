@@ -69,6 +69,10 @@ Await `listChannelIngressQueueAccountIdsForTests` from
 read-only worker and leaves missing state uncreated. Join asynchronous database
 cleanup before removing a fixture's state directory.
 
+For direct worker fixtures, pair `resolveRuntimeWorkerUrl` from `process-runtime`
+with `resolveRuntimeWorkerThreadExecArgv` from `test-env`. This keeps source and
+built workers on the runtime owner's startup arguments.
+
 ### Available exports
 
 | Export                                                                    | Purpose                                                                                                                                     |

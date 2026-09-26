@@ -8,6 +8,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolvePromptInjectionAllowed } from "./hook-policy-decisions.js";
 import {
   buildPluginAgentTurnPrepareContext,
   isPluginJsonValue,
@@ -60,11 +61,6 @@ function isExpired(entry: unknown, now: number) {
     return true;
   }
   return typeof entry.ttlMs === "number" && entry.ttlMs >= 0 && now - entry.createdAt > entry.ttlMs;
-}
-
-function isPluginPromptInjectionEnabled(cfg: OpenClawConfig, pluginId: string): boolean {
-  const entry = cfg.plugins?.entries?.[pluginId];
-  return entry?.hooks?.allowPromptInjection !== false;
 }
 
 function toPluginNextTurnInjectionRecord(params: {
@@ -200,7 +196,7 @@ async function drainPluginNextTurnInjections(
       for (const [pluginId, entries] of Object.entries(entry.pluginNextTurnInjections)) {
         if (
           !activePluginIds.has(pluginId) ||
-          !isPluginPromptInjectionEnabled(params.cfg, pluginId)
+          !resolvePromptInjectionAllowed(params.cfg.plugins?.entries?.[pluginId]?.hooks)
         ) {
           continue;
         }

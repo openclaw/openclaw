@@ -177,6 +177,37 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     logLevel: "warn",
     plugins: [
       {
+        name: "openclaw:message-command-boundary",
+        resolveId: {
+          filter: [
+            {
+              kind: "include",
+              expr: {
+                kind: "importerId",
+                pattern: /[\\/]src[\\/]cli[\\/]program[\\/]message[\\/]helpers\.ts$/,
+                params: { cleanUrl: false },
+              },
+            },
+          ],
+          handler(id, importer) {
+            // Preserve the broadcast fixture's exact native command substitution.
+            if (
+              importer &&
+              path.normalize(importer) === path.join(root, "src/cli/program/message/helpers.ts") &&
+              id.startsWith(".") &&
+              path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts") ===
+                path.join(root, "src/commands/message.ts")
+            ) {
+              return {
+                id: pathToFileURL(path.join(outDir, "commands/message.js")).href,
+                external: "absolute",
+              };
+            }
+            return null;
+          },
+        },
+      },
+      {
         name: "openclaw:maintenance-service-boundary",
         resolveId: {
           // Keep normalization aliases: the target component can come from either operand.

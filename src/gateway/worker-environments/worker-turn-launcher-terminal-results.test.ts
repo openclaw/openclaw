@@ -23,6 +23,7 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../tasks/task-status-access.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { NodeWorkerWorkspaceTransferError } from "../../worker/node-workspace-transfer-protocol.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
@@ -124,6 +125,7 @@ describe("worker turn launcher terminal results", () => {
       const getConfig = () => ({ session: { store: sessionTarget.storePath } });
       const liveEvents = createWorkerLiveEventReceiver();
       const service = createWorkerEnvironmentService({
+        scheduler: createTestGatewayScheduler(),
         store: {
           ...(await createWorkerEnvironmentStore({ database })),
           get: () => environment,

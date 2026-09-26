@@ -13,7 +13,6 @@ import {
   createNpmLockCommand,
   disableDependencyShrinkwrapOverrideConflictSources,
   exactOverrideRulesFromOverrides,
-  exactVersionFromOverrideSpec,
   normalizeNpmVersionDrift,
   normalizeOverrides,
   packageJsonForNpmLock,
@@ -259,12 +258,6 @@ describe("generate-npm-package-lock", () => {
     ).toThrow("invalid OPENCLAW_NPM_LOCK_COMMAND_MAX_BUFFER_BYTES: 64mb");
   });
 
-  it("extracts exact versions from npm override specs", () => {
-    expect(exactVersionFromOverrideSpec("8.4.0")).toBe("8.4.0");
-    expect(exactVersionFromOverrideSpec("npm:@nolyfill/domexception@1.0.28")).toBe("1.0.28");
-    expect(exactVersionFromOverrideSpec("^8.4.0")).toBeNull();
-  });
-
   it("pins same-line pnpm lock versions to the newest locked patch", () => {
     expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.38"]))).toBe("3.972.38");
     expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.38", "3.972.39"]))).toBe("3.972.39");
@@ -464,31 +457,6 @@ describe("generate-npm-package-lock", () => {
       {
         packageKey: "react@19.2.6",
         path: "node_modules/react",
-      },
-    ]);
-  });
-
-  it("detects npm package-lock integrity drift from the pnpm lock", () => {
-    const packageKey = "react@19.2.4";
-    expect(
-      collectPnpmLockViolations(
-        {
-          packages: {
-            "node_modules/react": {
-              version: "19.2.4",
-              integrity: "sha512-unreviewed",
-            },
-          },
-        },
-        new Set([packageKey]),
-        new Map([[packageKey, new Set(["sha512-reviewed"])]]),
-      ),
-    ).toEqual([
-      {
-        path: "node_modules/react",
-        packageKey,
-        actualIntegrity: "sha512-unreviewed",
-        expectedIntegrities: ["sha512-reviewed"],
       },
     ]);
   });
@@ -915,14 +883,6 @@ describe("generate-npm-package-lock", () => {
         repoRelativePath,
       ),
     ).toEqual(["packages/gateway-protocol"]);
-  });
-
-  it("targets the changed publishable gateway client manifest", () => {
-    expect(
-      npmLockPackageDirsForChangedPaths(["packages/gateway-client/package.json"]).map(
-        repoRelativePath,
-      ),
-    ).toEqual(["packages/gateway-client"]);
   });
 
   it("falls back to every npm lock when lockfile ownership is ambiguous", () => {

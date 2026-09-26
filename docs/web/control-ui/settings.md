@@ -231,7 +231,12 @@ editor with plugin configuration and editable **Permissions** controls; Back ret
 to the overview.
 Existing `#configuration` links still open the editor. Local controls and the
 installed README remain available when optional ClawHub metadata cannot load.
-The catalog shows featured plugins and category shelves. Search queries
+The catalog shows featured plugins and category shelves. Within each category,
+ClawHub's selected priorities appear first, followed by remaining plugins in
+download order. **View all** preserves that order. Computer use groups interactive
+desktop and browser control. Other and uncategorized plugins remain available
+through search and installed-plugin management instead of homepage sections.
+Search queries
 [ClawHub](https://clawhub.ai/plugins) without leaving the page. Catalog detail
 links use `/plugins/<catalog-id>`; installed-only links use
 `/settings/plugins/<plugin-id>`. Both show the same overview and actions.

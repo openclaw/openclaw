@@ -176,6 +176,28 @@ async function waitForMSTeamsTestState(assertion: () => void | Promise<void>): P
   await vi.waitFor(assertion, { interval: 1 });
 }
 
+function runProvider(
+  abort: AbortController,
+  cfg = createConfig(0),
+  overrides: Partial<Parameters<typeof monitorMSTeamsProvider>[0]> = {},
+) {
+  return monitorMSTeamsProvider({
+    cfg,
+    runtime: createRuntime(),
+    abortSignal: abort.signal,
+    ...createStores(),
+    ...overrides,
+  });
+}
+
+async function resolveSdkApp() {
+  const result = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
+  if (!result) {
+    throw new Error("expected loadMSTeamsSdkWithAuth result");
+  }
+  return (await result).app;
+}
+
 async function resolveStartedServer(): Promise<Server> {
   await waitForMSTeamsTestState(() => {
     expect(keepHttpServerTaskAliveMock).toHaveBeenCalled();
@@ -233,14 +255,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
 
   it("stays active until aborted", async () => {
     const abort = new AbortController();
-    const stores = createStores();
-    const task = monitorMSTeamsProvider({
-      cfg: createConfig(0),
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      conversationStore: stores.conversationStore,
-      pollStore: stores.pollStore,
-    });
+    const task = runProvider(abort);
 
     let taskSettled = false;
     void task.then(
@@ -270,12 +285,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     updateMSTeamsConfig(cfg, { mediaMaxMb: 12 });
     cfg.agents = { defaults: { mediaMaxMb: 3 } };
 
-    const task = monitorMSTeamsProvider({
-      cfg,
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      ...createStores(),
-    });
+    const task = runProvider(abort, cfg);
 
     await waitForMSTeamsTestState(() => {
       expect(createMSTeamsActivityHandler).toHaveBeenCalledTimes(1);
@@ -291,12 +301,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     const cfg = createConfig(0);
     cfg.agents = { defaults: { mediaMaxMb: 3 } };
 
-    const task = monitorMSTeamsProvider({
-      cfg,
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      ...createStores(),
-    });
+    const task = runProvider(abort, cfg);
 
     await waitForMSTeamsTestState(() => {
       expect(createMSTeamsActivityHandler).toHaveBeenCalledTimes(1);
@@ -345,13 +350,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
 
   it("rejects requests without Bearer token before SDK route", async () => {
     const abort = new AbortController();
-    const task = monitorMSTeamsProvider({
-      cfg: createConfig(0),
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore: createStores().pollStore,
-    });
+    const task = runProvider(abort);
 
     const server = await resolveStartedServer();
     const unauthorized = await fetch(resolveServerUrl(server, "/api/messages"), {
@@ -372,13 +371,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
 
   it("keeps oversized webhook parse failures JSON-shaped", async () => {
     const abort = new AbortController();
-    const task = monitorMSTeamsProvider({
-      cfg: createConfig(0),
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore: createStores().pollStore,
-    });
+    const task = runProvider(abort);
 
     const server = await resolveStartedServer();
     const response = await fetch(resolveServerUrl(server, "/api/messages"), {
@@ -403,13 +396,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     updateMSTeamsConfig(cfg, {
       webhook: { port: 0, path: "/teams/events" },
     });
-    const task = monitorMSTeamsProvider({
-      cfg,
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore: createStores().pollStore,
-    });
+    const task = runProvider(abort, cfg);
 
     const server = await resolveStartedServer();
     expect(loadMSTeamsSdkWithAuth.mock.calls[0]?.[1]).toMatchObject({
@@ -444,13 +431,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
         sso: { enabled: true, connectionName: "graph" },
       });
 
-      const task = monitorMSTeamsProvider({
-        cfg,
-        runtime: createRuntime(),
-        abortSignal: abort.signal,
-        conversationStore: createStores().conversationStore,
-        pollStore: createStores().pollStore,
-      });
+      const task = runProvider(abort, cfg);
 
       try {
         await waitForMSTeamsTestState(() => {
@@ -461,12 +442,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
           oauthDefaultConnectionName: "graph",
         });
 
-        const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-        if (!sdkResultPromise) {
-          throw new Error("expected loadMSTeamsSdkWithAuth result");
-        }
-        const sdkResult = await sdkResultPromise;
-        const app = sdkResult.app;
+        const app = await resolveSdkApp();
         expect(app.event).toHaveBeenCalledWith("signin", expect.any(Function));
 
         const event = createSigninEvent(name);
@@ -533,23 +509,13 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
     isSigninInvokeAuthorized.mockResolvedValueOnce(false);
 
-    const task = monitorMSTeamsProvider({
-      cfg,
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore: createStores().pollStore,
-    });
+    const task = runProvider(abort, cfg);
 
     await waitForMSTeamsTestState(() => {
       expect(createMSTeamsActivityHandler).toHaveBeenCalled();
     });
 
-    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-    if (!sdkResultPromise) {
-      throw new Error("expected loadMSTeamsSdkWithAuth result");
-    }
-    const app = (await sdkResultPromise).app;
+    const app = await resolveSdkApp();
     const signinHandler = app.event.mock.calls.find(
       (call: [string, unknown]) => call[0] === "signin",
     )?.[1];
@@ -592,24 +558,14 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       });
       isSigninInvokeAuthorized.mockResolvedValueOnce(!enabled);
 
-      const task = monitorMSTeamsProvider({
-        cfg,
-        runtime: createRuntime(),
-        abortSignal: abort.signal,
-        conversationStore: createStores().conversationStore,
-        pollStore: createStores().pollStore,
-      });
+      const task = runProvider(abort, cfg);
 
       try {
         await waitForMSTeamsTestState(() => {
           expect(createMSTeamsActivityHandler).toHaveBeenCalled();
         });
 
-        const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-        if (!sdkResultPromise) {
-          throw new Error("expected loadMSTeamsSdkWithAuth result");
-        }
-        const app = (await sdkResultPromise).app;
+        const app = await resolveSdkApp();
         const result = await app.process(createSigninEvent(name, "29:blocked"));
 
         expect(result).toEqual({ status: 200, body: {} });
@@ -626,23 +582,13 @@ describe("monitorMSTeamsProvider lifecycle", () => {
 
   it("falls through non-feedback message.submit invokes to activity dispatch", async () => {
     const abort = new AbortController();
-    const task = monitorMSTeamsProvider({
-      cfg: createConfig(0),
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore: createStores().pollStore,
-    });
+    const task = runProvider(abort);
 
     await waitForMSTeamsTestState(() => {
       expect(createMSTeamsActivityHandler).toHaveBeenCalled();
     });
 
-    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-    if (!sdkResultPromise) {
-      throw new Error("expected loadMSTeamsSdkWithAuth result");
-    }
-    const app = (await sdkResultPromise).app;
+    const app = await resolveSdkApp();
     const messageSubmitHandler = app.on.mock.calls.find(
       (call: [string, unknown]) => call[0] === "message.submit",
     )?.[1];
@@ -694,23 +640,13 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     runMSTeamsFileConsentInvokeHandler.mockReturnValueOnce(uploadWork);
 
     const abort = new AbortController();
-    const task = monitorMSTeamsProvider({
-      cfg: createConfig(0),
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore: createStores().pollStore,
-    });
+    const task = runProvider(abort);
 
     await waitForMSTeamsTestState(() => {
       expect(createMSTeamsActivityHandler).toHaveBeenCalled();
     });
 
-    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-    if (!sdkResultPromise) {
-      throw new Error("expected loadMSTeamsSdkWithAuth result");
-    }
-    const app = (await sdkResultPromise).app;
+    const app = await resolveSdkApp();
     const fileConsentHandler = app.on.mock.calls.find(
       (call: [string, unknown]) => call[0] === "file.consent.accept",
     )?.[1];
@@ -731,23 +667,13 @@ describe("monitorMSTeamsProvider lifecycle", () => {
 
   it("acks non-poll card actions after durable admission, before agent dispatch settles", async () => {
     const abort = new AbortController();
-    const task = monitorMSTeamsProvider({
-      cfg: createConfig(0),
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore: createStores().pollStore,
-    });
+    const task = runProvider(abort);
 
     await waitForMSTeamsTestState(() => {
       expect(createMSTeamsActivityHandler).toHaveBeenCalled();
     });
 
-    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-    if (!sdkResultPromise) {
-      throw new Error("expected loadMSTeamsSdkWithAuth result");
-    }
-    const app = (await sdkResultPromise).app;
+    const app = await resolveSdkApp();
     const cardActionHandler = app.on.mock.calls.find(
       (call: [string, unknown]) => call[0] === "card.action",
     )?.[1];
@@ -816,23 +742,13 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     };
     isCardActionInvokeAuthorized.mockResolvedValueOnce(false);
 
-    const task = monitorMSTeamsProvider({
-      cfg,
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore,
-    });
+    const task = runProvider(abort, cfg, { pollStore });
 
     await waitForMSTeamsTestState(() => {
       expect(createMSTeamsActivityHandler).toHaveBeenCalled();
     });
 
-    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-    if (!sdkResultPromise) {
-      throw new Error("expected loadMSTeamsSdkWithAuth result");
-    }
-    const app = (await sdkResultPromise).app;
+    const app = await resolveSdkApp();
     const cardActionHandler = app.on.mock.calls.find(
       (call: [string, unknown]) => call[0] === "card.action",
     )?.[1];
@@ -876,23 +792,13 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       recordVote: vi.fn(async () => null),
     };
 
-    const task = monitorMSTeamsProvider({
-      cfg,
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore,
-    });
+    const task = runProvider(abort, cfg, { pollStore });
 
     await waitForMSTeamsTestState(() => {
       expect(createMSTeamsActivityHandler).toHaveBeenCalled();
     });
 
-    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-    if (!sdkResultPromise) {
-      throw new Error("expected loadMSTeamsSdkWithAuth result");
-    }
-    const app = (await sdkResultPromise).app;
+    const app = await resolveSdkApp();
     const cardActionHandler = app.on.mock.calls.find(
       (call: [string, unknown]) => call[0] === "card.action",
     )?.[1];
@@ -945,13 +851,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       unresolved: [],
     });
 
-    const task = monitorMSTeamsProvider({
-      cfg,
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore: createStores().pollStore,
-    });
+    const task = runProvider(abort, cfg);
 
     await waitForMSTeamsTestState(() => {
       expect(createMSTeamsActivityHandler).toHaveBeenCalled();
@@ -1002,13 +902,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       groupAllowFrom: ["Bob"],
     });
 
-    const task = monitorMSTeamsProvider({
-      cfg,
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore: createStores().pollStore,
-    });
+    const task = runProvider(abort, cfg);
 
     await waitForMSTeamsTestState(() => {
       expect(createMSTeamsActivityHandler).toHaveBeenCalled();
@@ -1055,13 +949,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       },
     });
 
-    const task = monitorMSTeamsProvider({
-      cfg,
-      runtime,
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore: createStores().pollStore,
-    });
+    const task = runProvider(abort, cfg, { runtime });
 
     await waitForMSTeamsTestState(() => {
       expect(createMSTeamsActivityHandler).toHaveBeenCalled();

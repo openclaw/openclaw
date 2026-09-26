@@ -266,19 +266,12 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     try {
       while (true) {
         const outcome = await withAdmission(async (assertCurrent, validation) => {
-          try {
+          suspended = false;
+          assertAgentDatabaseOpenAuthority(steps, () => {
             assertCurrent();
             assertOpenClawAgentDatabaseAdmissionCurrent(options, pending, check?.database);
-          } catch (error) {
-            // Revocation takes precedence over repairable integrity damage.
-            failure = {
-              error: new Error(error instanceof Error ? error.message : String(error), {
-                cause: error,
-              }),
-            };
-          }
+          });
           pending.validation = validation;
-          suspended = false;
           const step = failure ? steps.throw(failure.error) : steps.next();
           if (!step.done) {
             suspended = true;

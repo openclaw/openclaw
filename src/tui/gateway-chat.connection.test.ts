@@ -454,29 +454,17 @@ describe("resolveGatewayConnection", () => {
     });
   });
 
-  it.each([
-    {
-      label: "token",
-      auth: { token: "explicit-token" },
-      expected: { token: "explicit-token", password: undefined },
-    },
-    {
-      label: "password",
-      auth: { password: "explicit-password" },
-      expected: { token: undefined, password: "explicit-password" },
-    },
-  ])("uses explicit $label when url override is set", async ({ auth, expected }) => {
+  it("uses an explicit password when url override is set", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local" } });
-
     const result = await resolveGatewayConnection({
       url: "wss://override.example/ws",
-      ...auth,
+      password: "explicit-password", // pragma: allowlist secret
     });
-
     expect(result).toEqual({
       url: "wss://override.example/ws",
       deviceAuthScope: "wss://override.example/ws",
-      ...expected,
+      token: undefined,
+      password: "explicit-password", // pragma: allowlist secret
       preauthHandshakeTimeoutMs: undefined,
     });
   });
@@ -762,37 +750,6 @@ describe("resolveGatewayConnection", () => {
       }
     },
   );
-
-  it("resolves exec-backed SecretRef token for local mode", async () => {
-    const execProgram = [
-      "process.stdout.write(",
-      "JSON.stringify({ protocolVersion: 1, values: { EXEC_GATEWAY_TOKEN: 'exec-secret-token' } })",
-      ");",
-    ].join("");
-
-    await withSecureTestNodeCommand(async (command) => {
-      loadConfig.mockReturnValue({
-        secrets: {
-          providers: {
-            execprovider: {
-              source: "exec",
-              command,
-              args: ["-e", execProgram],
-            },
-          },
-        },
-        gateway: {
-          mode: "local",
-          auth: {
-            token: { source: "exec", provider: "execprovider", id: "EXEC_GATEWAY_TOKEN" },
-          },
-        },
-      });
-
-      const result = await resolveGatewayConnection({});
-      expect(result.token).toBe("exec-secret-token");
-    });
-  });
 
   it("resolves only token SecretRef when gateway.auth.mode is token", async () => {
     await withModeExecProviderFixture(

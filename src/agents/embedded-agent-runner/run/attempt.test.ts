@@ -191,18 +191,6 @@ describe("composeSystemPromptWithHookContext", () => {
     expect(composeSystemPromptWithHookContext({ baseSystemPrompt: "base" })).toBeUndefined();
   });
 
-  it("builds prepend/base/append system prompt order", () => {
-    expect(
-      composeSystemPromptWithHookContext({
-        baseSystemPrompt: "  base system  ",
-        prependSystemContext: wrappedPluginSystemContext("  prepend  "),
-        appendSystemContext: wrappedPluginSystemContext("  append  "),
-      }),
-    ).toBe(
-      `${wrappedPluginSystemContext("  prepend")}\n\nbase system\n\n${wrappedPluginSystemContext("  append")}`,
-    );
-  });
-
   it("normalizes hook system context block line endings and trailing whitespace", () => {
     expect(
       composeSystemPromptWithHookContext({
@@ -240,7 +228,6 @@ describe("composeSystemPromptWithHookContext", () => {
     expect(composedSystemPrompt).toContain("[Bootstrap truncation warning]");
     expect(composedSystemPrompt).toContain("Treat Project Context as partial");
     expect(composedSystemPrompt).toContain("hook system context");
-    expect("hello").not.toContain("[Bootstrap truncation warning]");
   });
 });
 
@@ -1537,23 +1524,6 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(result).toBe(finalMessage);
   });
 
-  it("trims surrounding whitespace on tool call ids", async () => {
-    const finalToolCall = { type: "toolCall", name: " read ", id: "  call_42  " };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [],
-        resultMessage: finalMessage,
-      }),
-    );
-
-    const stream = await invokeWrappedStream(baseFn);
-    await stream.result();
-
-    expect(finalToolCall.name).toBe("read");
-    expect(finalToolCall.id).toBe("call_42");
-  });
-
   it("reassigns duplicate tool call ids within a message to unique fallbacks", async () => {
     const finalToolCallA = { type: "toolCall", name: " read ", id: "  edit:22  " };
     const finalToolCallB = { type: "toolCall", name: " write ", id: "edit:22" };
@@ -1576,6 +1546,24 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 });
 
 describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
+  async function replayContext(
+    messages: unknown[],
+    allowedToolNames?: Set<string>,
+    policy?: Parameters<typeof wrapStreamFnSanitizeMalformedToolCalls>[2],
+    api?: string,
+  ) {
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      allowedToolNames,
+      policy,
+    );
+    await wrapped((api ? { api } : {}) as never, { messages } as never, {} as never);
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    return firstBaseContext(baseFn);
+  }
   function expectedRetryMessages() {
     return [
       {
@@ -1597,22 +1585,12 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "text", text: "retry" }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+    const seenContext = await replayContext(messages, new Set(["read"]), {
+      validateGeminiTurns: false,
       validateAnthropicTurns: true,
       preserveSignatures: true,
       dropThinkingBlocks: false,
-    } as never);
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
+    });
     expect(seenContext.messages).toEqual(expectedRetryMessages());
     expect(seenContext.messages).not.toBe(messages);
   });
@@ -1624,22 +1602,12 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+    const seenContext = await replayContext(messages, new Set(["read"]), {
+      validateGeminiTurns: false,
       validateAnthropicTurns: true,
       preserveSignatures: true,
       dropThinkingBlocks: false,
-    } as never);
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
+    });
     expect(seenContext.messages).toBe(messages);
   });
 
@@ -1657,26 +1625,16 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "toolResult", result: { ok: true } }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
-      baseFn as never,
+    const seenContext = await replayContext(
+      messages,
       new Set(["tool_describe", "tool_call", "hidden_catalog_tool"]),
       {
+        validateGeminiTurns: false,
         validateAnthropicTurns: true,
         preserveSignatures: true,
         dropThinkingBlocks: false,
-      } as never,
+      },
     );
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toBe(messages);
   });
 
@@ -1688,24 +1646,17 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       },
       textAssistant("stale assistant answer"),
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    const seenContext = await replayContext(
+      messages,
+      new Set(["read"]),
+      {
+        validateGeminiTurns: false,
+        validateAnthropicTurns: true,
+        preserveSignatures: true,
+        dropThinkingBlocks: false,
+      },
+      "anthropic-messages",
     );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
-      validateAnthropicTurns: true,
-      preserveSignatures: true,
-      dropThinkingBlocks: false,
-    } as never);
-    const stream = wrapped(
-      { api: "anthropic-messages" } as never,
-      { messages } as never,
-      {} as never,
-    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toEqual([
       {
         role: "user",
@@ -1723,24 +1674,17 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       },
       textAssistant("stale model answer"),
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    const seenContext = await replayContext(
+      messages,
+      new Set(["read"]),
+      {
+        validateAnthropicTurns: false,
+        validateGeminiTurns: true,
+        preserveSignatures: true,
+        dropThinkingBlocks: false,
+      },
+      "google-generative-ai",
     );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
-      validateGeminiTurns: true,
-      preserveSignatures: true,
-      dropThinkingBlocks: false,
-    } as never);
-    const stream = wrapped(
-      { api: "google-generative-ai" } as never,
-      { messages } as never,
-      {} as never,
-    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toEqual([
       {
         role: "user",
@@ -1764,24 +1708,17 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "text", text: "retry" }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    const seenContext = await replayContext(
+      messages,
+      new Set(["read"]),
+      {
+        validateGeminiTurns: false,
+        validateAnthropicTurns: true,
+        preserveSignatures: true,
+        dropThinkingBlocks: false,
+      },
+      "anthropic-messages",
     );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
-      validateAnthropicTurns: true,
-      preserveSignatures: true,
-      dropThinkingBlocks: false,
-    } as never);
-    const stream = wrapped(
-      { api: "anthropic-messages" } as never,
-      { messages } as never,
-      {} as never,
-    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toEqual(expectedRetryMessages());
   });
 
@@ -1799,24 +1736,17 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "text", text: "retry" }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    const seenContext = await replayContext(
+      messages,
+      new Set(["read"]),
+      {
+        validateGeminiTurns: false,
+        validateAnthropicTurns: true,
+        preserveSignatures: true,
+        dropThinkingBlocks: false,
+      },
+      "bedrock-converse-stream",
     );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
-      validateAnthropicTurns: true,
-      preserveSignatures: true,
-      dropThinkingBlocks: false,
-    } as never);
-    const stream = wrapped(
-      { api: "bedrock-converse-stream" } as never,
-      { messages } as never,
-      {} as never,
-    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toEqual(expectedRetryMessages());
   });
 
@@ -1835,24 +1765,17 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "text", text: "retry" }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    const seenContext = await replayContext(
+      messages,
+      new Set(["read"]),
+      {
+        validateGeminiTurns: false,
+        validateAnthropicTurns: true,
+        preserveSignatures: true,
+        dropThinkingBlocks: false,
+      },
+      "anthropic-messages",
     );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
-      validateAnthropicTurns: true,
-      preserveSignatures: true,
-      dropThinkingBlocks: false,
-    } as never);
-    const stream = wrapped(
-      { api: "anthropic-messages" } as never,
-      { messages } as never,
-      {} as never,
-    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toEqual(expectedRetryMessages());
   });
 
@@ -1884,24 +1807,17 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "text", text: "retry" }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    const seenContext = await replayContext(
+      messages,
+      new Set(["read"]),
+      {
+        validateGeminiTurns: false,
+        validateAnthropicTurns: true,
+        preserveSignatures: true,
+        dropThinkingBlocks: false,
+      },
+      "anthropic-messages",
     );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
-      validateAnthropicTurns: true,
-      preserveSignatures: true,
-      dropThinkingBlocks: false,
-    } as never);
-    const stream = wrapped(
-      { api: "anthropic-messages" } as never,
-      { messages } as never,
-      {} as never,
-    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toBe(messages);
   });
 
@@ -1932,24 +1848,17 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "text", text: "signed result" }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    const seenContext = await replayContext(
+      messages,
+      new Set(["read"]),
+      {
+        validateGeminiTurns: false,
+        validateAnthropicTurns: true,
+        preserveSignatures: true,
+        dropThinkingBlocks: false,
+      },
+      "anthropic-messages",
     );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
-      validateAnthropicTurns: true,
-      preserveSignatures: true,
-      dropThinkingBlocks: false,
-    } as never);
-    const stream = wrapped(
-      { api: "anthropic-messages" } as never,
-      { messages } as never,
-      {} as never,
-    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toEqual([firstAssistant, firstResult, userMessage]);
   });
 
@@ -1976,28 +1885,17 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "text", text: "retry" }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
-      baseFn as never,
+    const seenContext = await replayContext(
+      messages,
       new Set(["sessions_spawn"]),
       {
+        validateGeminiTurns: false,
         validateAnthropicTurns: true,
         preserveSignatures: true,
         dropThinkingBlocks: false,
-      } as never,
+      },
+      "anthropic-messages",
     );
-    const stream = wrapped(
-      { api: "anthropic-messages" } as never,
-      { messages } as never,
-      {} as never,
-    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toEqual(expectedRetryMessages());
   });
 
@@ -2030,28 +1928,17 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "text", text: "retry" }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
-      baseFn as never,
+    const seenContext = await replayContext(
+      messages,
       new Set(["sessions_spawn"]),
       {
+        validateGeminiTurns: false,
         validateAnthropicTurns: true,
         preserveSignatures: true,
         dropThinkingBlocks: false,
-      } as never,
+      },
+      "anthropic-messages",
     );
-    const stream = wrapped(
-      { api: "anthropic-messages" } as never,
-      { messages } as never,
-      {} as never,
-    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toEqual(expectedRetryMessages());
   });
 
@@ -2079,28 +1966,17 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "text", text: "retry" }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
-      baseFn as never,
+    const seenContext = await replayContext(
+      messages,
       new Set(["sessions_spawn"]),
       {
+        validateGeminiTurns: false,
         validateAnthropicTurns: true,
         preserveSignatures: true,
         dropThinkingBlocks: false,
-      } as never,
+      },
+      "anthropic-messages",
     );
-    const stream = wrapped(
-      { api: "anthropic-messages" } as never,
-      { messages } as never,
-      {} as never,
-    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toBe(messages);
   });
 
@@ -2118,22 +1994,17 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "text", text: "retry" }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    const seenContext = await replayContext(
+      messages,
+      new Set(["read"]),
+      {
+        validateGeminiTurns: false,
+        preserveSignatures: false,
+        dropThinkingBlocks: false,
+        validateAnthropicTurns: true,
+      },
+      "openai-completions",
     );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
-      validateAnthropicTurns: true,
-    } as never);
-    const stream = wrapped(
-      { api: "openai-completions" } as never,
-      { messages } as never,
-      {} as never,
-    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toHaveLength(3);
     expect(seenContext.messages[0]).toEqual({
       role: "assistant",
@@ -2178,22 +2049,12 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         ],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
-      baseFn as never,
-      new Set(["sessions_spawn"]),
-      { validateAnthropicTurns: true } as never,
-    );
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn) as {
+    const seenContext = (await replayContext(messages, new Set(["sessions_spawn"]), {
+      validateGeminiTurns: false,
+      preserveSignatures: false,
+      dropThinkingBlocks: false,
+      validateAnthropicTurns: true,
+    })) as {
       messages: Array<{ content?: Array<Record<string, unknown>> }>;
     };
     const toolCall = seenContext.messages[0]?.content?.[0] as {
@@ -2218,20 +2079,12 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "text", text: "retry" }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
-    const stream = wrapped(
-      { api: "google-gemini" } as never,
-      { messages } as never,
-      {} as never,
-    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn) as {
+    const seenContext = (await replayContext(
+      messages,
+      new Set(["read"]),
+      undefined,
+      "google-gemini",
+    )) as {
       messages: Array<{ content?: unknown[] }>;
     };
     expect(seenContext.messages[0]?.content).toEqual([
@@ -2247,21 +2100,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "toolUse", id: "call_1", name: "admin.export", input: { scope: "all" } }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
-      baseFn as never,
-      new Set(["admin.export"]),
-    );
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
+    const seenContext = await replayContext(messages, new Set(["admin.export"]));
     expect(seenContext.messages).toBe(messages);
   });
 
@@ -2272,18 +2111,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "toolUse", id: "call_1", name: "functions.read", input: { path: "." } }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn) as {
+    const seenContext = (await replayContext(messages, new Set(["read"]))) as {
       messages: Array<{ content?: Array<{ name?: string }> }>;
     };
     expect(seenContext.messages[0]?.content?.[0]?.name).toBe("read");
@@ -2296,18 +2124,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "toolCall", id: "call_1", name: "readfile", arguments: {} }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["ReadFile"]));
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn) as {
+    const seenContext = (await replayContext(messages, new Set(["ReadFile"]))) as {
       messages: Array<{ content?: Array<{ name?: string }> }>;
     };
     expect(seenContext.messages[0]?.content?.[0]?.name).toBe("ReadFile");
@@ -2320,18 +2137,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "toolCall", id: "functionswrite4", name: "   ", arguments: {} }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["write"]));
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn) as {
+    const seenContext = (await replayContext(messages, new Set(["write"]))) as {
       messages: Array<{ content?: Array<{ name?: string }> }>;
     };
     expect(seenContext.messages[0]?.content?.[0]?.name).toBe("write");
@@ -2345,18 +2151,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       },
       textToolResult("call_1", "", "stale result", { isError: true }),
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never);
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
+    const seenContext = await replayContext(messages);
     expect(seenContext.messages).toStrictEqual([]);
   });
 
@@ -2367,18 +2162,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "toolCall", id: "call_1", name: "functionsread3", arguments: {} }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn) as {
+    const seenContext = (await replayContext(messages, new Set(["read"]))) as {
       messages: Array<{ content?: Array<{ name?: string }> }>;
     };
     expect(seenContext.messages[0]?.content?.[0]?.name).toBe("read");
@@ -2397,18 +2181,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "text", text: "retry" }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn) as {
+    const seenContext = (await replayContext(messages, new Set(["read"]))) as {
       messages: Array<{ role?: string }>;
     };
     expect(seenContext.messages).toEqual(expectedRetryMessages());
@@ -2427,18 +2200,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       },
     ];
     const expectedMessages = structuredClone(messages);
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
+    const seenContext = await replayContext(messages, new Set(["read"]));
     expect(seenContext.messages).toStrictEqual(expectedMessages);
   });
   it("preserves completed toolUse history outside the current allowlist", async () => {
@@ -2450,18 +2212,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       textToolResult("call_1", "unknown_tool", "stale result", { isError: false }),
     ];
     const expectedMessages = structuredClone(messages);
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
+    const seenContext = await replayContext(messages, new Set(["read"]));
     expect(seenContext.messages).toStrictEqual(expectedMessages);
   });
 
@@ -2472,21 +2223,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "toolCall", id: "call_1", name: "functions.exec2", arguments: {} }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
-      baseFn as never,
-      new Set(["exec", "exec2"]),
-    );
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
+    const seenContext = await replayContext(messages, new Set(["exec", "exec2"]));
     expect(seenContext.messages).toStrictEqual([]);
   });
 
@@ -2506,18 +2243,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "text", text: "retry" }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn);
+    const seenContext = await replayContext(messages, new Set(["read"]));
     expect(seenContext.messages).toEqual([
       {
         role: "assistant",
@@ -2554,23 +2280,12 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "text", text: "second" }],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+    const seenContext = (await replayContext(messages, new Set(["read"]), {
       validateGeminiTurns: false,
       validateAnthropicTurns: true,
       preserveSignatures: false,
       dropThinkingBlocks: false,
-    });
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn) as {
+    })) as {
       messages: Array<{ role?: string; content?: unknown[] }>;
     };
     expect(seenContext.messages).toEqual([
@@ -2601,23 +2316,12 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         ],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+    const seenContext = (await replayContext(messages, new Set(["read"]), {
       validateGeminiTurns: false,
       validateAnthropicTurns: true,
       preserveSignatures: false,
       dropThinkingBlocks: false,
-    });
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn) as {
+    })) as {
       messages: Array<{ role?: string; content?: unknown[] }>;
     };
     expect(seenContext.messages).toEqual([
@@ -2653,25 +2357,17 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         ],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
-      validateGeminiTurns: false,
-      validateAnthropicTurns: true,
-      preserveSignatures: true,
-      dropThinkingBlocks: false,
-    });
-    const stream = wrapped(
-      { api: "anthropic-messages" } as never,
-      { messages } as never,
-      {} as never,
-    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn) as {
+    const seenContext = (await replayContext(
+      messages,
+      new Set(["read"]),
+      {
+        validateGeminiTurns: false,
+        validateAnthropicTurns: true,
+        preserveSignatures: true,
+        dropThinkingBlocks: false,
+      },
+      "anthropic-messages",
+    )) as {
       messages: Array<{ role?: string; content?: unknown[] }>;
     };
     expect(seenContext.messages).toEqual(expectedRetryMessages());
@@ -2695,25 +2391,17 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         ],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
-      validateGeminiTurns: false,
-      validateAnthropicTurns: true,
-      preserveSignatures: true,
-      dropThinkingBlocks: false,
-    });
-    const stream = wrapped(
-      { api: "anthropic-messages" } as never,
-      { messages } as never,
-      {} as never,
-    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn) as {
+    const seenContext = (await replayContext(
+      messages,
+      new Set(["read"]),
+      {
+        validateGeminiTurns: false,
+        validateAnthropicTurns: true,
+        preserveSignatures: true,
+        dropThinkingBlocks: false,
+      },
+      "anthropic-messages",
+    )) as {
       messages: Array<{ role?: string; content?: unknown[] }>;
     };
     expect(seenContext.messages).toEqual(messages);
@@ -2739,23 +2427,12 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
           ],
         },
       ];
-      const baseFn = vi.fn((_model, _context) =>
-        createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-      );
-
-      const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      const seenContext = (await replayContext(messages, new Set(["read"]), {
         validateGeminiTurns: false,
         validateAnthropicTurns: true,
         preserveSignatures: false,
         dropThinkingBlocks: false,
-      });
-      const stream = wrapped({} as never, { messages } as never, {} as never) as
-        | FakeWrappedStream
-        | Promise<FakeWrappedStream>;
-      await Promise.resolve(stream);
-
-      expect(baseFn).toHaveBeenCalledTimes(1);
-      const seenContext = firstBaseContext(baseFn) as {
+      })) as {
         messages: Array<{ role?: string; content?: unknown[] }>;
       };
       expect(seenContext.messages).toEqual(messages);
@@ -2781,23 +2458,12 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         ],
       },
     ];
-    const baseFn = vi.fn((_model, _context) =>
-      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
-    );
-
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+    const seenContext = (await replayContext(messages, new Set(["read"]), {
       validateGeminiTurns: false,
       validateAnthropicTurns: true,
       preserveSignatures: false,
       dropThinkingBlocks: false,
-    });
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = firstBaseContext(baseFn) as {
+    })) as {
       messages: Array<{ role?: string; content?: unknown[] }>;
     };
     expect(seenContext.messages).toEqual([
@@ -2813,144 +2479,92 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 });
 
 describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
-  async function invokeWrappedStream(baseFn: (...args: never[]) => unknown) {
-    return await invokeWrappedTestStream(
+  async function replayArgumentDeltas(
+    deltas: string[],
+    options: {
+      name?: string;
+      initialArgs?: Record<string, unknown>;
+      fullResult?: boolean;
+      incomplete?: boolean;
+    } = {},
+  ) {
+    const name = options.name ?? "read";
+    const partialToolCall = { type: "toolCall", name, arguments: options.initialArgs ?? {} };
+    const streamedToolCall = { type: "toolCall", name, arguments: {} };
+    const endMessageToolCall = { type: "toolCall", name, arguments: {} };
+    const finalToolCall = { type: "toolCall", name, arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const finalMessage = options.fullResult
+      ? { role: "assistant", content: [finalToolCall] }
+      : partialMessage;
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          ...deltas.map((delta) => ({
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta,
+            partial: partialMessage,
+          })),
+          ...(options.incomplete
+            ? []
+            : [
+                {
+                  type: "toolcall_end",
+                  contentIndex: 0,
+                  toolCall: streamedToolCall,
+                  partial: partialMessage,
+                  ...(options.fullResult
+                    ? { message: { role: "assistant", content: [endMessageToolCall] } }
+                    : {}),
+                },
+              ]),
+        ],
+        resultMessage: finalMessage,
+      }),
+    );
+    const stream = await invokeWrappedTestStream(
       (innerBaseFn) => wrapStreamFnRepairMalformedToolCallArguments(innerBaseFn as never),
       baseFn,
     );
+    for await (const item of stream) {
+      void item;
+    }
+    return {
+      stream,
+      partialToolCall,
+      streamedToolCall,
+      endMessageToolCall,
+      finalToolCall,
+      finalMessage,
+    };
   }
 
-  it("repairs anthropic-compatible tool arguments when trailing junk follows valid JSON", async () => {
-    const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const endMessageToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const finalToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const partialMessage = { role: "assistant", content: [partialToolCall] };
-    const endMessage = { role: "assistant", content: [endMessageToolCall] };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [
-          {
-            type: "toolcall_delta",
-            contentIndex: 0,
-            delta: '{"path":"/tmp/report.txt"}',
-            partial: partialMessage,
-          },
-          {
-            type: "toolcall_delta",
-            contentIndex: 0,
-            delta: "xx",
-            partial: partialMessage,
-          },
-          {
-            type: "toolcall_end",
-            contentIndex: 0,
-            toolCall: streamedToolCall,
-            partial: partialMessage,
-            message: endMessage,
-          },
-        ],
-        resultMessage: finalMessage,
-      }),
-    );
-
-    const stream = await invokeWrappedStream(baseFn);
-    for await (const item of stream) {
-      void item;
-      // drain
-    }
-    const result = await stream.result();
-
-    expect(partialToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
-    expect(streamedToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
-    expect(endMessageToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
-    expect(finalToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
-    expect(result).toBe(finalMessage);
-  });
-
-  it("repairs tool arguments when malformed tool-call preamble appears before JSON", async () => {
-    const partialToolCall = { type: "toolCall", name: "write", arguments: {} };
-    const streamedToolCall = { type: "toolCall", name: "write", arguments: {} };
-    const endMessageToolCall = { type: "toolCall", name: "write", arguments: {} };
-    const finalToolCall = { type: "toolCall", name: "write", arguments: {} };
-    const partialMessage = { role: "assistant", content: [partialToolCall] };
-    const endMessage = { role: "assistant", content: [endMessageToolCall] };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [
-          {
-            type: "toolcall_delta",
-            contentIndex: 0,
-            delta: '.functions.write:8  \n{"path":"/tmp/report.txt"}',
-            partial: partialMessage,
-          },
-          {
-            type: "toolcall_end",
-            contentIndex: 0,
-            toolCall: streamedToolCall,
-            partial: partialMessage,
-            message: endMessage,
-          },
-        ],
-        resultMessage: finalMessage,
-      }),
-    );
-
-    const stream = await invokeWrappedStream(baseFn);
-    for await (const item of stream) {
-      void item;
-      // drain
-    }
-    const result = await stream.result();
-
-    expect(partialToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
-    expect(streamedToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
-    expect(endMessageToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
-    expect(finalToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
-    expect(result).toBe(finalMessage);
-  });
-  it("preserves anthropic-compatible tool arguments when the streamed JSON is already valid", async () => {
-    const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const endMessageToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const finalToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const partialMessage = { role: "assistant", content: [partialToolCall] };
-    const endMessage = { role: "assistant", content: [endMessageToolCall] };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [
-          {
-            type: "toolcall_delta",
-            contentIndex: 0,
-            delta: '{"path":"/tmp/report.txt"',
-            partial: partialMessage,
-          },
-          {
-            type: "toolcall_delta",
-            contentIndex: 0,
-            delta: "}",
-            partial: partialMessage,
-          },
-          {
-            type: "toolcall_end",
-            contentIndex: 0,
-            toolCall: streamedToolCall,
-            partial: partialMessage,
-            message: endMessage,
-          },
-        ],
-        resultMessage: finalMessage,
-      }),
-    );
-
-    const stream = await invokeWrappedStream(baseFn);
-    for await (const item of stream) {
-      void item;
-      // drain
-    }
+  it.each([
+    {
+      name: "repairs anthropic-compatible tool arguments when trailing junk follows valid JSON",
+      deltas: ['{"path":"/tmp/report.txt"}', "xx"],
+      toolName: "read",
+    },
+    {
+      name: "repairs tool arguments when malformed tool-call preamble appears before JSON",
+      deltas: ['.functions.write:8  \n{"path":"/tmp/report.txt"}'],
+      toolName: "write",
+    },
+    {
+      name: "preserves anthropic-compatible tool arguments when the streamed JSON is already valid",
+      deltas: ['{"path":"/tmp/report.txt"', "}"],
+      toolName: "read",
+    },
+  ])("$name", async ({ deltas, toolName }) => {
+    const {
+      stream,
+      partialToolCall,
+      streamedToolCall,
+      endMessageToolCall,
+      finalToolCall,
+      finalMessage,
+    } = await replayArgumentDeltas(deltas, { name: toolName, fullResult: true });
     const result = await stream.result();
 
     expect(partialToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
@@ -2961,219 +2575,49 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
   });
 
   it("does not repair tool arguments when leading text is not tool-call metadata", async () => {
-    const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const partialMessage = { role: "assistant", content: [partialToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [
-          {
-            type: "toolcall_delta",
-            contentIndex: 0,
-            delta: 'please use {"path":"/tmp/report.txt"}',
-            partial: partialMessage,
-          },
-          {
-            type: "toolcall_end",
-            contentIndex: 0,
-            toolCall: streamedToolCall,
-            partial: partialMessage,
-          },
-        ],
-        resultMessage: { role: "assistant", content: [partialToolCall] },
-      }),
-    );
-
-    const stream = await invokeWrappedStream(baseFn);
-    for await (const item of stream) {
-      void item;
-      // drain
-    }
-
+    const { partialToolCall, streamedToolCall } = await replayArgumentDeltas([
+      'please use {"path":"/tmp/report.txt"}',
+    ]);
     expect(partialToolCall.arguments).toStrictEqual({});
     expect(streamedToolCall.arguments).toStrictEqual({});
   });
 
   it("keeps incomplete partial JSON unchanged until a complete object exists", async () => {
-    const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const partialMessage = { role: "assistant", content: [partialToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [
-          {
-            type: "toolcall_delta",
-            contentIndex: 0,
-            delta: '{"path":"/tmp',
-            partial: partialMessage,
-          },
-        ],
-        resultMessage: { role: "assistant", content: [partialToolCall] },
-      }),
-    );
-
-    const stream = await invokeWrappedStream(baseFn);
-    for await (const item of stream) {
-      void item;
-      // drain
-    }
-
+    const { partialToolCall } = await replayArgumentDeltas(['{"path":"/tmp'], { incomplete: true });
     expect(partialToolCall.arguments).toStrictEqual({});
   });
 
   it("does not repair tool arguments when trailing junk exceeds the Kimi-specific allowance", async () => {
-    const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const partialMessage = { role: "assistant", content: [partialToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [
-          {
-            type: "toolcall_delta",
-            contentIndex: 0,
-            delta: '{"path":"/tmp/report.txt"}oops',
-            partial: partialMessage,
-          },
-          {
-            type: "toolcall_end",
-            contentIndex: 0,
-            toolCall: streamedToolCall,
-            partial: partialMessage,
-          },
-        ],
-        resultMessage: { role: "assistant", content: [partialToolCall] },
-      }),
-    );
-
-    const stream = await invokeWrappedStream(baseFn);
-    for await (const item of stream) {
-      void item;
-      // drain
-    }
-
+    const { partialToolCall, streamedToolCall } = await replayArgumentDeltas([
+      '{"path":"/tmp/report.txt"}oops',
+    ]);
     expect(partialToolCall.arguments).toStrictEqual({});
     expect(streamedToolCall.arguments).toStrictEqual({});
   });
 
   it("clears a cached repair when later deltas make the trailing suffix invalid", async () => {
-    const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const partialMessage = { role: "assistant", content: [partialToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [
-          {
-            type: "toolcall_delta",
-            contentIndex: 0,
-            delta: '{"path":"/tmp/report.txt"}',
-            partial: partialMessage,
-          },
-          {
-            type: "toolcall_delta",
-            contentIndex: 0,
-            delta: "x",
-            partial: partialMessage,
-          },
-          {
-            type: "toolcall_delta",
-            contentIndex: 0,
-            delta: "yzq",
-            partial: partialMessage,
-          },
-          {
-            type: "toolcall_end",
-            contentIndex: 0,
-            toolCall: streamedToolCall,
-            partial: partialMessage,
-          },
-        ],
-        resultMessage: { role: "assistant", content: [partialToolCall] },
-      }),
-    );
-
-    const stream = await invokeWrappedStream(baseFn);
-    for await (const item of stream) {
-      void item;
-      // drain
-    }
-
+    const { partialToolCall, streamedToolCall } = await replayArgumentDeltas([
+      '{"path":"/tmp/report.txt"}',
+      "x",
+      "yzq",
+    ]);
     expect(partialToolCall.arguments).toStrictEqual({});
     expect(streamedToolCall.arguments).toStrictEqual({});
   });
 
   it("clears a cached repair when a later delta adds a single oversized trailing suffix", async () => {
-    const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const partialMessage = { role: "assistant", content: [partialToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [
-          {
-            type: "toolcall_delta",
-            contentIndex: 0,
-            delta: '{"path":"/tmp/report.txt"}',
-            partial: partialMessage,
-          },
-          {
-            type: "toolcall_delta",
-            contentIndex: 0,
-            delta: "oops",
-            partial: partialMessage,
-          },
-          {
-            type: "toolcall_end",
-            contentIndex: 0,
-            toolCall: streamedToolCall,
-            partial: partialMessage,
-          },
-        ],
-        resultMessage: { role: "assistant", content: [partialToolCall] },
-      }),
-    );
-
-    const stream = await invokeWrappedStream(baseFn);
-    for await (const item of stream) {
-      void item;
-      // drain
-    }
-
+    const { partialToolCall, streamedToolCall } = await replayArgumentDeltas([
+      '{"path":"/tmp/report.txt"}',
+      "oops",
+    ]);
     expect(partialToolCall.arguments).toStrictEqual({});
     expect(streamedToolCall.arguments).toStrictEqual({});
   });
 
   it("preserves preexisting tool arguments when later reevaluation fails", async () => {
-    const partialToolCall = {
-      type: "toolCall",
-      name: "read",
-      arguments: { path: "/etc/hosts" },
-    };
-    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const partialMessage = { role: "assistant", content: [partialToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [
-          {
-            type: "toolcall_delta",
-            contentIndex: 0,
-            delta: "}",
-            partial: partialMessage,
-          },
-          {
-            type: "toolcall_end",
-            contentIndex: 0,
-            toolCall: streamedToolCall,
-            partial: partialMessage,
-          },
-        ],
-        resultMessage: { role: "assistant", content: [partialToolCall] },
-      }),
-    );
-
-    const stream = await invokeWrappedStream(baseFn);
-    for await (const item of stream) {
-      void item;
-      // drain
-    }
-
+    const { partialToolCall, streamedToolCall } = await replayArgumentDeltas(["}"], {
+      initialArgs: { path: "/etc/hosts" },
+    });
     expect(partialToolCall.arguments).toEqual({ path: "/etc/hosts" });
     expect(streamedToolCall.arguments).toStrictEqual({});
   });

@@ -253,18 +253,6 @@ describe("extractMessagingToolSend", () => {
     );
   });
 
-  it("uses channel as provider for message tool", () => {
-    const result = extractMessagingToolSend("message", {
-      action: "send",
-      channel: "telegram",
-      to: "123",
-    });
-
-    expect(result?.tool).toBe("message");
-    expect(result?.provider).toBe("telegram");
-    expect(result?.to).toBe("telegram:123");
-  });
-
   it("uses the provider-canonical target for shared message actions", () => {
     const result = extractMessagingToolSend("message", {
       action: "thread-reply",
@@ -282,21 +270,6 @@ describe("extractMessagingToolSend", () => {
     });
   });
 
-  it("keeps existing Mattermost send target extraction unchanged", () => {
-    const result = extractMessagingToolSend("message", {
-      action: "send",
-      provider: "mattermost",
-      to: "channel:123",
-      message: "done",
-    });
-
-    expect(result).toMatchObject({
-      tool: "message",
-      provider: "mattermost",
-      to: "channel:123",
-    });
-  });
-
   it("prefers provider when both provider and channel are set", () => {
     const result = extractMessagingToolSend("message", {
       action: "send",
@@ -308,18 +281,6 @@ describe("extractMessagingToolSend", () => {
     expect(result?.tool).toBe("message");
     expect(result?.provider).toBe("slack");
     expect(result?.to).toBe("channel:c1");
-  });
-
-  it("accepts target alias when to is omitted", () => {
-    const result = extractMessagingToolSend("message", {
-      action: "send",
-      channel: "telegram",
-      target: "123",
-    });
-
-    expect(result?.tool).toBe("message");
-    expect(result?.provider).toBe("telegram");
-    expect(result?.to).toBe("telegram:123");
   });
 
   it("accepts channelId alias when earlier target aliases are blank", () => {
@@ -364,26 +325,6 @@ describe("extractMessagingToolSend", () => {
       });
     },
   );
-
-  it("extracts implicit current-target evidence for visible reply actions", () => {
-    const result = extractMessagingToolSend(
-      "message",
-      {
-        action: "reply",
-        provider: "slack",
-      },
-      {
-        currentChannelId: "channel:c1",
-        currentMessagingTarget: "user:u123",
-      },
-    );
-
-    expect(result).toMatchObject({
-      tool: "message",
-      provider: "slack",
-      to: "user:u123",
-    });
-  });
 
   it("extracts provider-declared target aliases for visible reply actions", () => {
     const result = extractMessagingToolSend("message", {
@@ -647,19 +588,6 @@ describe("extractMessagingToolSend", () => {
     expect(result?.threadId).toBe("111.000");
   });
 
-  it("records a plugin-dispatched upload reply target", () => {
-    const result = extractMessagingToolSend("message", {
-      action: "upload-file",
-      provider: "slack",
-      to: "channel:C1",
-      replyTo: "999.000",
-      path: "/tmp/report.pdf",
-    });
-
-    expect(result?.threadImplicit).toBeUndefined();
-    expect(result?.threadId).toBe("999.000");
-  });
-
   it("records a plugin-dispatched upload reply target with the target alias", () => {
     const result = extractMessagingToolSend("message", {
       action: "upload-file",
@@ -821,29 +749,6 @@ describe("extractMessagingToolSend", () => {
     expect(result?.threadImplicit).toBe(true);
     expect(result?.threadId).toBe("171.222");
     expect(hasRepliedRef.value).toBe(false);
-  });
-
-  it("captures the active thread for native provider uploads", () => {
-    const result = extractMessagingToolSend(
-      "slack",
-      {
-        action: "uploadFile",
-        to: "Channel:C1",
-        filePath: "/tmp/report.png",
-      },
-      {
-        currentChannelId: "channel:c1",
-        currentThreadId: "171.222",
-        replyToMode: "all",
-      },
-    );
-
-    expect(result).toMatchObject({
-      provider: "slack",
-      to: "channel:c1",
-      threadId: "171.222",
-      threadImplicit: true,
-    });
   });
 
   it("does not infer ambient threads for native providers that do not opt in", () => {

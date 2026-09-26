@@ -40,7 +40,7 @@ export type ImportSystemProfileResult = {
   systemProfile: string;
   into: string;
   browser: SystemBrowser;
-  cookies: { total: number; imported: number; failed: number; skipped: number };
+  cookies: CookieImportCounts;
   domains: string[];
 };
 

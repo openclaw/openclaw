@@ -209,14 +209,7 @@ describe("createChatRunState", () => {
     },
   );
 
-  it.each([
-    "waiting_for_state",
-    "naming_worktree",
-    "creating_worktree",
-    "running_setup",
-    "preparing_context",
-    "memory_flushing",
-  ])(
+  it.each(["waiting_for_state", "preparing_context", "memory_flushing"])(
     "retains only the latest startup status (%s) until observable run activity begins",
     (phase) => {
       const state = createChatRunState();

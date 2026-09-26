@@ -49,7 +49,7 @@ import { resolveNodeRunner } from "./node-runner.js";
 
 export { resolveNodeRunner } from "./node-runner.js";
 
-export type UpdateCommandOptions = {
+export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"> & {
   /** Doctor's accepted source update targets dev without changing the saved channel. */
   sourceUpdate?: { root: string };
   /** In-process reporting only, after the update owner settles. Never serialized. */
@@ -76,6 +76,7 @@ export type UpdateCommandOptions = {
     requesterAuthority?: UpdateRequesterAuthority;
     /** Live local executor only. A child must independently acquire its owner. */
     executorFence?: UpdateRecoveryFence;
+    sourceArtifactLock?: import("@openclaw/fs-safe/file-lock").FileLockHandle;
   };
   acceptCapabilities?: boolean;
   admission?: "auto" | "installed";
@@ -568,6 +569,7 @@ export async function tryWriteCompletionCache(
   root: string,
   jsonMode: boolean,
   timeoutMs = COMPLETION_CACHE_WRITE_TIMEOUT_MS,
+  nodeRunner = resolveNodeRunner(),
 ): Promise<"completed" | "failed" | "skipped"> {
   const binPath = path.join(root, "openclaw.mjs");
   if (!(await pathExists(binPath))) {
@@ -577,7 +579,7 @@ export async function tryWriteCompletionCache(
   let failure: string;
   try {
     const result = await runCommandWithTimeout(
-      [resolveNodeRunner(), binPath, "completion", "--write-state"],
+      [nodeRunner, binPath, "completion", "--write-state"],
       {
         cwd: root,
         env: { ...process.env, [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1" },

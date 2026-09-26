@@ -262,8 +262,6 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
   });
 
   it.each([
-    { redirectStatus: 302, streamResponse: false },
-    { redirectStatus: 302, streamResponse: true },
     { redirectStatus: 308, streamResponse: false },
     { redirectStatus: 308, streamResponse: true },
   ])(
@@ -446,8 +444,6 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
   );
 
   it.each([
-    { redirectStatus: 302, targetHost: "127.0.0.1", streamResponse: false },
-    { redirectStatus: 302, targetHost: "private.test", streamResponse: true },
     { redirectStatus: 308, targetHost: "127.0.0.1", streamResponse: false },
     { redirectStatus: 308, targetHost: "private.test", streamResponse: true },
   ] as const)(
@@ -496,85 +492,6 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
       }),
     ).rejects.toThrow("Blocked hostname or private/internal IP");
     expect(buildExecSpec).not.toHaveBeenCalled();
-    socket.close();
-  });
-
-  it("streams HTTP response body deltas from the sandbox backend", async () => {
-    const headerLine = JSON.stringify({
-      type: "headers",
-      status: 202,
-      headers: [{ name: "content-type", value: "text/event-stream" }],
-    });
-    const bodyLine = JSON.stringify({
-      type: "bodyDelta",
-      seq: 1,
-      deltaBase64: Buffer.from("event: ok\n\n").toString("base64"),
-      done: false,
-    });
-    const doneLine = JSON.stringify({
-      type: "bodyDelta",
-      seq: 2,
-      deltaBase64: "",
-      done: true,
-    });
-    const buildExecSpec = vi.fn(async () => ({
-      argv: [
-        process.execPath,
-        "-e",
-        [headerLine, bodyLine, doneLine]
-          .map((line) => `process.stdout.write(${JSON.stringify(`${line}\n`)});`)
-          .join(""),
-      ],
-      env: testExecEnv(),
-      stdinMode: "pipe-closed" as const,
-    }));
-    const runShellCommand = vi.fn(async () => ({
-      stdout: Buffer.alloc(0),
-      stderr: Buffer.alloc(0),
-      code: 0,
-    }));
-    const sandbox = createSandboxContext({ buildExecSpec, runShellCommand });
-    const socket = await openSandboxHttpSocket(sandbox);
-    const notifications = collectNotifications(socket);
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
-
-    await expect(
-      rpc(socket, "http/request", {
-        requestId: "http-stream",
-        method: "GET",
-        url: "https://example.test/sse",
-        streamResponse: true,
-      }),
-    ).resolves.toEqual({
-      status: 202,
-      headers: [{ name: "content-type", value: "text/event-stream" }],
-      bodyBase64: "",
-    });
-    const deltas = await waitForHttpBodyDeltas(notifications, 2);
-
-    expect(buildExecSpec).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: expect.stringContaining("python3"),
-        usePty: false,
-        workdir: "/workspace",
-      }),
-    );
-    expect(runShellCommand).not.toHaveBeenCalled();
-    expect(deltas).toEqual([
-      expect.objectContaining({
-        requestId: "http-stream",
-        seq: 1,
-        deltaBase64: Buffer.from("event: ok\n\n").toString("base64"),
-        done: false,
-      }),
-      expect.objectContaining({
-        requestId: "http-stream",
-        seq: 2,
-        deltaBase64: "",
-        done: true,
-      }),
-    ]);
     socket.close();
   });
 

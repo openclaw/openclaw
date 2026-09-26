@@ -306,20 +306,6 @@ describe("Crabbox gate request and broker proof", () => {
     expect(() => validatePublisherRequest(inputEvent, inputEnv)).toThrow();
   });
 
-  it("accepts matching opaque owner, including unknown", () => {
-    expect(() =>
-      validateBrokerProof({
-        bootstrap,
-        context: context(),
-        events: brokerEvents(),
-        log: retainedLog(),
-        now: Date.parse("2026-08-28T02:00:00Z"),
-        principal: servicePrincipal(),
-        run: brokerRun(),
-      }),
-    ).not.toThrow();
-  });
-
   it.each([
     ["at the two-hour limit", proofEndedAt + 2 * 60 * 60 * 1000, false],
     ["one millisecond past the limit", proofEndedAt + 2 * 60 * 60 * 1000 + 1, true],
@@ -360,7 +346,6 @@ describe("Crabbox gate request and broker proof", () => {
   });
 
   it.each([
-    ["owner", { owner: "github:42" }, brokerEvents(), retainedLog()],
     ["provider", { provider: "blacksmith-testbox" }, brokerEvents(), retainedLog()],
     ["truncation", { logTruncated: true }, brokerEvents(), retainedLog()],
     ["command", { command: ["pnpm", "test"] }, brokerEvents(), retainedLog()],

@@ -22,6 +22,7 @@ import {
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import type { ChatAbortDiagnosticReason } from "./chat-abort-diagnostics.js";
 import { notifyChatAbortControllerRemoved } from "./chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import { appendChatCanvasBlocksToMessage } from "./chat-display-projection.canvas.js";
@@ -561,6 +562,7 @@ export function abortChatRunById(
     runId: string;
     sessionKey: string;
     stopReason?: string;
+    diagnosticReason?: ChatAbortDiagnosticReason;
     onAbortCommitted?: () => void;
   },
 ): { aborted: boolean } {
@@ -596,6 +598,7 @@ export function abortChatRunById(
   if (stopReason) {
     active.abortStopReason = stopReason;
   }
+  active.abortDiagnosticReason = params.diagnosticReason;
   // Reserve transcript settlement while this exact producer still has authority.
   try {
     params.onAbortCommitted?.();

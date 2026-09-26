@@ -145,33 +145,43 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
+  // Artifact validation is shared; each manager still exercises successful and rejected activation.
   describe.each(["npm", "pnpm", "bun"] as const)("%s source checkout activation", (manager) => {
-    it.each([
-      { name: "prepared checkout", error: null },
-      { name: "wrong checkout", error: "expected checkout" },
-      { name: "accidental source link", error: "source checkout" },
-      { name: "missing build entry", remove: "dist/entry.js", error: "entry=false" },
-      {
-        name: "missing runtime stamp",
-        remove: "dist/.runtime-postbuildstamp",
-        error: "runtimeStamp=missing",
-      },
-      {
-        name: "stale build identity",
-        stale: "dist/build-info.json",
-        error: "git runtime mismatch",
-      },
-      { name: "stale build stamp", stale: "dist/.buildstamp", error: "git runtime mismatch" },
-      { name: "missing build identity", remove: "dist/build-info.json", error: "build=missing" },
-      { name: "missing built SHA", error: "expected=missing" },
-      { name: "missing UI index", remove: "dist/control-ui/index.html", error: "ui=missing-index" },
-      {
-        name: "incomplete UI",
-        remove: "dist/control-ui/assets/startup.js",
-        error: "ui=incomplete",
-      },
-      { name: "missing launcher", remove: "openclaw.mjs", error: "missing" },
-    ])("verifies $name before finalization", async ({ name: caseName, error, remove, stale }) => {
+    it.each(
+      [
+        { name: "prepared checkout", error: null },
+        { name: "wrong checkout", error: "expected checkout" },
+        { name: "accidental source link", error: "source checkout" },
+        { name: "missing build entry", remove: "dist/entry.js", error: "entry=false" },
+        {
+          name: "missing runtime stamp",
+          remove: "dist/.runtime-postbuildstamp",
+          error: "runtimeStamp=missing",
+        },
+        {
+          name: "stale build identity",
+          stale: "dist/build-info.json",
+          error: "git runtime mismatch",
+        },
+        { name: "stale build stamp", stale: "dist/.buildstamp", error: "git runtime mismatch" },
+        { name: "missing build identity", remove: "dist/build-info.json", error: "build=missing" },
+        { name: "missing built SHA", error: "expected=missing" },
+        {
+          name: "missing UI index",
+          remove: "dist/control-ui/index.html",
+          error: "ui=missing-index",
+        },
+        {
+          name: "incomplete UI",
+          remove: "dist/control-ui/assets/startup.js",
+          error: "ui=incomplete",
+        },
+        { name: "missing launcher", remove: "openclaw.mjs", error: "missing" },
+      ].filter(
+        ({ name }) =>
+          manager === "npm" || name === "prepared checkout" || name === "wrong checkout",
+      ),
+    )("verifies $name before finalization", async ({ name: caseName, error, remove, stale }) => {
       await withTestDir({ prefix: "openclaw-package-update-source-" }, async (base) => {
         const prefix = path.join(base, "prefix");
         const globalRoot =

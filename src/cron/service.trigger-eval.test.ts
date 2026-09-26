@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
@@ -57,6 +58,8 @@ async function createHarness(params: {
   const runIsolatedAgentJob =
     params.runIsolatedAgentJob ?? vi.fn(async () => ({ status: "ok" as const }));
   const deps: CronServiceDeps = {
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     cronEnabled: true,
     cronConfig: { triggers: { enabled: true } },

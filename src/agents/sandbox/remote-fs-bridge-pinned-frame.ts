@@ -12,6 +12,7 @@ import type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
 } from "./backend-handle.types.js";
+import type { PinnedSandboxEntry } from "./fs-bridge-path-safety.js";
 import { relativePathEscapesContainerRoot } from "./path-utils.js";
 import type { RemoteCanonicalPath } from "./remote-fs-bridge-canonical-path.js";
 import {
@@ -99,11 +100,7 @@ export type RemotePinnedTargetParams = {
   signal?: AbortSignal;
 };
 
-export type RemotePinnedTarget = {
-  mountRootPath: string;
-  relativeParentPath: string;
-  basename: string;
-};
+export type RemotePinnedTarget = PinnedSandboxEntry;
 
 /**
  * Resolves the pinned mutation entry for a remote destination. Mount policy

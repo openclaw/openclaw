@@ -1,4 +1,3 @@
-// Control UI view renders agents panels overview screen content.
 import { html, nothing } from "lit";
 import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import type {

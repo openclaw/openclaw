@@ -550,6 +550,8 @@ export {
   CronRemoveParamsSchema,
   CronRunParamsSchema,
   CronRunsParamsSchema,
+  CronHistoryParamsSchema,
+  CronHistoryResultSchema,
   CronScratchGetParamsSchema,
   CronScratchGetResultSchema,
   CronScratchSetParamsSchema,

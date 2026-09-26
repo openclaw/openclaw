@@ -4,6 +4,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { loseFirstCronMutationReply } from "../../../test/helpers/cron/runtime-mutation.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { captureTaskDeliveryWork } from "../../tasks/task-registry-delivery.test-support.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
 import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
@@ -43,6 +44,7 @@ it("publishes a committed repair once after reply loss and leaves the remaining 
   const onEvent = vi.fn<(event: CronEvent) => void>();
   const runner = vi.fn(async () => ({ status: "ok" as const }));
   const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
     defaultAgentId: "alpha",

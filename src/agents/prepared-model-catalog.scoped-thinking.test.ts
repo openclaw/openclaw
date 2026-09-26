@@ -99,34 +99,8 @@ describe("loadProviderScopedThinkingCatalog", () => {
     "keeps missing published %s facts passive",
     async (capability) => {
       const config = {};
-      const missingEntry: ModelCatalogEntry = {
-        provider: "acme",
-        id: "selected",
-        name: "Selected",
-        api: "openai-responses",
-        baseUrl: "https://provider.invalid/v1",
-      };
-      const snapshot: PreparedModelRuntimeSnapshot = {
-        agentDir: "/tmp/model-catalog-passive-test",
-        activeProjectKeys: [],
-        catalogOwner: undefined,
-        config,
-        observationConfig: config,
-        isCurrent: () => true,
-        authModes: {},
-        metadataSnapshot: createPluginMetadataSnapshot({
-          config,
-          manifestRegistry: { plugins: [], diagnostics: [] },
-        }),
-        allowGatewaySubagentBinding: false,
-        modelCatalog: { entries: [missingEntry], routeVariants: [missingEntry] },
-        configuredRuntimeModels: [],
-        findConfiguredRuntimeModel: () => undefined,
-        inlineProviderModels: [],
-        createStores: () => {
-          throw new Error("Passive capability reads must not create stores");
-        },
-      };
+      const missingEntry = entry;
+      const snapshot = owner(config, [missingEntry]);
       publishedSnapshotMock.mockReturnValue(snapshot);
       preparedSnapshotMock.mockResolvedValue(snapshot);
       scopedCatalogMock.mockResolvedValue({

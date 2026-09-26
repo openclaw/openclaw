@@ -83,6 +83,7 @@ function recordToRow(
     created_at: record.createdAt,
     last_active_at: record.lastActiveAt,
     removed_at: record.removedAt ?? null,
+    gc_protection_json: null,
     provisioned_paths_json:
       provisionedPaths === undefined ? null : JSON.stringify(provisionedPaths),
     run_end_cleanup_json:

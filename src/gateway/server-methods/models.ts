@@ -24,6 +24,7 @@ import { resolveChatMetadataReadParams } from "./chat-metadata-handler.js";
 import { projectSessionModelCatalog } from "./chat-metadata-session-projection.js";
 import { buildModelsListResult } from "./models-list-result.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
 export { buildModelsListResult };
 
@@ -38,7 +39,17 @@ export const modelsHandlers: GatewayRequestHandlers = {
     let publicationScope: ChatMetadataReadParams | undefined;
     try {
       const scoped = Boolean(params.sessionKey || params.authProfileId);
-      scope = scoped ? resolveChatMetadataReadParams(options, params) : undefined;
+      const draftAccountSelection =
+        !params.sessionKey && params.authProfileId
+          ? await preparePersonalModelAccountSelection(
+              options,
+              params.authProfileId,
+              SESSION_READ_SCOPE,
+            )
+          : undefined;
+      scope = scoped
+        ? resolveChatMetadataReadParams(options, params, draftAccountSelection)
+        : undefined;
       if (scoped && !scope) {
         return;
       }

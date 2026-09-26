@@ -505,12 +505,22 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
   const headers = normalizeStringMap(value.headers);
   const defaultModel = normalizeOptionalString(value.defaultModel) ?? "";
   const defaultUtilityModel = normalizeOptionalString(value.defaultUtilityModel) ?? "";
+  const recommended = Array.isArray(value.recommendedModels)
+    ? value.recommendedModels.map(normalizeOptionalString)
+    : [];
+  const recommendedModels =
+    recommended.length > 0 &&
+    new Set(recommended).size === recommended.length &&
+    recommended.every((id): id is string => Boolean(id) && models.some((model) => model.id === id))
+      ? recommended
+      : [];
   return {
     ...(baseUrl ? { baseUrl } : {}),
     ...(api ? { api } : {}),
     ...(headers ? { headers } : {}),
     ...(defaultModel ? { defaultModel } : {}),
     ...(defaultUtilityModel ? { defaultUtilityModel } : {}),
+    ...(recommendedModels.length > 0 ? { recommendedModels } : {}),
     models,
   };
 }

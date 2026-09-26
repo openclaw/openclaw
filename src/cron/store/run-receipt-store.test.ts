@@ -17,6 +17,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   advanceCronActiveJobGeneration,
   bindCronJobAdmittedRun,
@@ -77,6 +78,8 @@ it.each(["implicit", "supplied"] as const)(
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     const handle = claim(storePath, job, 1);
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: true,
       log: logger,
@@ -264,6 +267,8 @@ describe("cron run receipt store", () => {
       await saveCronStore(storePath, { version: 1, jobs: [job] });
       const receipt = claim(storePath, job, Date.now());
       const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled: true,
         log: logger,
@@ -422,7 +427,7 @@ describe("cron run receipt store", () => {
       } finally {
         admission.close();
         if (state.timer) {
-          clearTimeout(state.timer);
+          state.timer.cancel();
         }
         finishCronRunReceipt({ handle: receipt, status: "ok", finishedAtMs: Date.now() });
         resetCronActiveJobs();
@@ -520,6 +525,7 @@ describe("cron run receipt store", () => {
         liveReceipt = makeForeignOwner(receipt).handle;
       }
       const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
         storePath,
         cronEnabled: true,
         log: logger,
@@ -744,6 +750,7 @@ describe("cron run receipt store", () => {
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     const foreign = makeForeignOwner(claim(storePath, job, startedAtMs));
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: true,
       log: logger,

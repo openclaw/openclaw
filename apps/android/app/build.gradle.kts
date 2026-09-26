@@ -56,20 +56,18 @@ abstract class ExtractCloudflareSodium : DefaultTask() {
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
 val openClawAndroidApplicationId = "ai.openclaw.app"
 val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
-val openClawMobileCutterInstruction =
-  "Run scripts/mobile-release-version.ts --prepare, capture the iOS release plan, then run --finalize."
 val thirdPartyLicensesDir = rootProject.file("THIRD_PARTY_LICENSES")
 val openClawAndroidVersionProperties =
   Properties().apply {
     if (!openClawAndroidVersionFile.isFile) {
-      error("Missing Android version properties. $openClawMobileCutterInstruction")
+      error("Missing Android version properties. Run `pnpm android:version:sync`.")
     }
     openClawAndroidVersionFile.inputStream().use(::load)
   }
 
 fun requireOpenClawAndroidVersionProperty(name: String): String =
-  openClawAndroidVersionProperties.getProperty(name)?.trim()?.takeIf { it.isNotEmpty() }
-    ?: error("Missing $name in Config/Version.properties. $openClawMobileCutterInstruction")
+  (providers.gradleProperty(name).orNull ?: openClawAndroidVersionProperties.getProperty(name))?.trim()?.takeIf { it.isNotEmpty() }
+    ?: error("Missing $name in Config/Version.properties. Run `pnpm android:version:sync`.")
 
 val openClawAndroidVersionName = requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_NAME")
 val openClawAndroidVersionCode =

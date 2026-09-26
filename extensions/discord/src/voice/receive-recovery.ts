@@ -153,10 +153,6 @@ export function resetVoiceReceiveRecoveryState(state: VoiceReceiveRecoveryState)
   state.lastDecryptFailureAt = 0;
 }
 
-export function finishVoiceDecryptRecovery(state: VoiceReceiveRecoveryState): void {
-  state.decryptRecoveryInFlight = false;
-}
-
 function isDaveReinitializing(session: { reinitializing?: boolean }): boolean {
   return session.reinitializing === true;
 }

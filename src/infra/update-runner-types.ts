@@ -46,6 +46,7 @@ type GitUpdateTarget = {
 };
 
 export type UpdateRunnerOptions = {
+  sourceRuntimePrepared?: boolean;
   channel?: UpdateChannel;
   devTarget?: DevUpdateTarget;
   /** Expose a new checkout only after target admission; subsequent work uses the published path. */

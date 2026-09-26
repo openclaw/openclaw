@@ -87,12 +87,8 @@ function buildTranscriptMutationParams(
   sessionKey: string,
   agentId?: string | null,
 ): { sessionKey: string; agentId?: string } {
-  const normalizedSessionKey = sessionKey.trim();
-  const normalizedAgentId = agentId?.trim();
-  return {
-    sessionKey: normalizedSessionKey,
-    ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
-  };
+  const { key, ...owner } = buildSessionRequestParams(sessionKey, agentId);
+  return { sessionKey: key, ...owner };
 }
 
 export function buildSessionListParams(options: SessionListOptions = {}): SessionsListParams {

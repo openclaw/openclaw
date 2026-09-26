@@ -1,13 +1,60 @@
+import fs from "node:fs";
 import nodePath from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { runGit } from "../agents/worktrees/git.js";
 import type { GitReadOperations } from "../infra/git-read-operations.js";
+import { readGitRefs } from "../infra/git-root.js";
 import {
   gitOutput,
   readCheckoutHead,
   resolveBranchLanding,
 } from "./control-ui-session-prs-landing.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
+
+function readDefaultRef(head: ReturnType<typeof readCheckoutHead>): string | null | undefined {
+  if (!head) {
+    return undefined;
+  }
+  try {
+    const ref = "refs/remotes/origin/HEAD";
+    if (
+      fs.lstatSync(nodePath.join(head.refsBase, ref), { throwIfNoEntry: false })?.isSymbolicLink()
+    ) {
+      return undefined;
+    }
+    const raw = readGitRefs(head.refsBase, [ref]).get(ref);
+    if (raw === null) {
+      return null;
+    }
+    const match = /^ref:\s+(refs\/remotes\/(origin\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*))$/u.exec(
+      raw ?? "",
+    );
+    if (!match) {
+      return undefined;
+    }
+    const target = match[1]!;
+    const short = match[2]!;
+    const aliases = [
+      `refs/${short}`,
+      `refs/tags/${short}`,
+      `refs/heads/${short}`,
+      `refs/remotes/${short}/HEAD`,
+    ];
+    const values = readGitRefs(head.refsBase, [target, ...aliases]);
+    const value = values.get(target);
+    // Symbolic chains and ambiguous names retain Git's resolution/shortening semantics.
+    return (value === null || /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/iu.test(value ?? "")) &&
+      !fs
+        .lstatSync(nodePath.join(head.refsBase, target), { throwIfNoEntry: false })
+        ?.isSymbolicLink() &&
+      !fs.existsSync(nodePath.join(head.refsBase, short)) &&
+      aliases.every((alias) => values.get(alias) === null)
+      ? short
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export async function readCheckoutGitContext(
   root: string,
@@ -25,7 +72,11 @@ export async function readCheckoutGitContext(
   if (!remote) {
     return null;
   }
-  const defaultRef = await gitOutput(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+  const preparedDefaultRef = readDefaultRef(head);
+  const defaultRef =
+    preparedDefaultRef === undefined
+      ? await gitOutput(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+      : preparedDefaultRef;
   const defaultBranch = defaultRef?.replace(/^origin\//, "");
   return {
     ...remote,

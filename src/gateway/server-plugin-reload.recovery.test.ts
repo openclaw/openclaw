@@ -24,6 +24,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { activeSessions } from "../transcripts/capture.js";
 import { clearTranscriptCapturesForTest } from "../transcripts/capture.test-support.js";
 import type { TranscriptStartRequest } from "../transcripts/provider-types.js";
@@ -171,6 +172,8 @@ it.each(["commit", "rollback"] as const)(
     let hookSignal: PluginHookGatewayContext["abortSignal"];
     const schedulers = ["first", "next"].map((name) => {
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath: path.join(makeTrackedTempDir(`reload-cron-${name}`, tempDirs), "jobs.sqlite"),
         cronEnabled: false,
         log: mocks.log,

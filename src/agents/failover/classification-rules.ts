@@ -405,14 +405,12 @@ export function isGenericUnknownStreamErrorMessage(raw: string): boolean {
   return /^\s*an unknown error occurred\.?\s*$/i.test(raw);
 }
 export function isExactUnknownNoDetailsError(raw: string): boolean {
-  return (
-    normalizeOptionalLowercaseString(raw)?.trim() === "unknown error (no error details in response)"
-  );
+  return normalizeOptionalLowercaseString(raw) === "unknown error (no error details in response)";
 }
 export function isClaudeCliAuthError(raw: string, provider?: string): boolean {
   // These upstream phrases overlap generic session/auth wording. Provider identity
   // must come from runner metadata so other CLIs cannot inherit Claude policy.
-  if (normalizeOptionalLowercaseString(provider)?.trim() !== "claude-cli") {
+  if (normalizeOptionalLowercaseString(provider) !== "claude-cli") {
     return false;
   }
   return /\bnot logged in\b\s*·\s*please run \/login\b|\bfailed to authenticate:\s*oauth session expired and could not be refreshed\b/i.test(

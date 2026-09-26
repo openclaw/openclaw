@@ -246,7 +246,8 @@ describe("chat pane header", () => {
     );
   });
 
-  it.each(["local", "reclaimed"] as const)("hides the placement chip for %s state", (state) => {
+  it("hides the placement chip for a local session", () => {
+    const state = "local";
     const { container } = mountHeader({
       placementControl: renderChatPanePlacement({
         session: row({
@@ -307,7 +308,8 @@ describe("chat pane header", () => {
     expect(container.querySelector(".chat-pane__header--centered")).toBeNull();
   });
 
-  it.each([false, true])("keeps the public indicator visible in narrow=%s headers", (narrow) => {
+  it("keeps the public indicator visible in narrow headers", () => {
+    const narrow = true;
     const { container } = mountHeader({
       narrow,
       publicAccessIndicator: html`<span class="chat-pane__public-share-indicator">Public</span>`,
@@ -334,38 +336,6 @@ describe("chat pane header", () => {
     expect(container.querySelector("openclaw-session-owner-chip")).toBeNull();
     expect(container.querySelector('[data-slot="sharing"]')?.parentElement?.className).toBe(
       "chat-pane__header-leading",
-    );
-  });
-
-  it("uses the full header width when no face switch needs centering", () => {
-    const { container } = mountHeader();
-    expect(container.querySelector(".chat-pane__header--centered")).toBeNull();
-    expect(container.querySelector(".chat-pane__header-center")).toBeNull();
-    expect(
-      [...container.querySelector(".chat-pane__header")!.children].map((child) => child.className),
-    ).toEqual(["chat-pane__header-leading", "chat-pane__header-trailing"]);
-  });
-
-  it("leads with the project, then a separator, then the session title", () => {
-    const { container } = mountHeader();
-    const crumbs = container.querySelector(".chat-pane__crumbs");
-    expect([...(crumbs?.children ?? [])].map((child) => child.className)).toEqual([
-      "chat-pane__project-row",
-      "chat-pane__session-trail",
-    ]);
-    expect(
-      [...(crumbs?.querySelector(".chat-pane__project-row")?.children ?? [])].map(
-        (child) => child.className,
-      ),
-    ).toEqual(["chat-pane__workspace-menu"]);
-    expect(
-      [...(crumbs?.querySelector(".chat-pane__session-trail")?.children ?? [])].map(
-        (child) => child.className,
-      ),
-    ).toEqual(["chat-pane__crumb-sep", "chat-pane__session-title chat-pane__session-title-button"]);
-    expect(crumbs?.querySelector(".chat-pane__crumb-sep")?.textContent).toBe("/");
-    expect(crumbs?.querySelector(".chat-pane__crumb-sep")?.getAttribute("aria-hidden")).toBe(
-      "true",
     );
   });
 

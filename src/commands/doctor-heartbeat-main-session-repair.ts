@@ -334,7 +334,7 @@ export async function repairHeartbeatPoisonedMainSession(params: {
   }
   let clearedPointers = 0;
   try {
-    clearedPointers = clearTuiLastSessionPointers({
+    clearedPointers = await clearTuiLastSessionPointers({
       stateDir: params.stateDir,
       sessionKeys: new Set([mainKey]),
     });

@@ -248,11 +248,59 @@ describe("Git candidate activation", () => {
     "does not stop or build an already-current %s checkout",
     async (channel) => {
       await git(remote, "tag", "v2026.9.1");
-      const result = await update({ channel });
-      expect(result).toMatchObject({ status: "skipped", reason: "already-current" });
+      const result = await update({ channel, sourceRuntimePrepared: true });
+      expect(result).toMatchObject({
+        status: "skipped",
+        reason: "already-current",
+        sourceRuntimePrepared: true,
+      });
       expect(stopped).toBe(false);
       expect(events).toEqual([]);
       expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+    },
+  );
+
+  it("carries admitted runtime repair through an already-current result", async () => {
+    const result = await update({ sourceRuntimePrepared: false });
+    expect(result).toMatchObject({
+      status: "skipped",
+      reason: "already-current",
+      sourceRuntimePrepared: false,
+    });
+    expect(events).toEqual([]);
+    expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+    await expectRuntime(root, beforeSha);
+  });
+
+  it.each([false, true])(
+    "does not skip an incomplete installed runtime (buildFails=%s)",
+    async (buildFails) => {
+      await fs.rm(path.join(root, "dist", ".runtime-postbuildstamp"));
+      if (buildFails) {
+        await advanceRemote();
+        const execute = runCommand;
+        runCommand = (argv, options) =>
+          argv[0] === "pnpm" && argv[1] === "build"
+            ? Promise.resolve({ code: 1, stdout: "", stderr: "synthetic build failure" })
+            : execute(argv, options);
+      }
+
+      const result = await update();
+
+      if (buildFails) {
+        expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
+        expect(stopped).toBe(false);
+        expect(events).toEqual([]);
+        await expect(
+          fs.stat(path.join(root, "dist", ".runtime-postbuildstamp")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        expect(result).toMatchObject({ status: "ok", after: { sha: beforeSha } });
+        expect(events).toEqual(["build", "validate", "stop", "migrate"]);
+        await expectRuntime(root, beforeSha);
+      }
+      expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+      await expectNoRuntimeStagingPaths();
     },
   );
 

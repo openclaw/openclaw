@@ -2,17 +2,15 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
-import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
-import { mergeProcessEnv } from "../infra/process-env.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
-import { captureStateDatabaseCoordinatorRuntime } from "../infra/state-database-coordinator.js";
-import {
-  getOpenClawDatabaseMaintenanceScope,
-  isStateDatabaseReadAdmissionInvalidatedError,
-} from "./openclaw-state-db-async-lifecycle.js";
+import { isStateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import { captureOpenClawStateDatabaseReadAdmission } from "./openclaw-state-db-cache.js";
-import { captureOpenClawStateSchemaReadAdmission } from "./openclaw-state-db-schema-policy.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import {
+  captureOpenClawStateReadContextWithAdmission,
+  captureOpenClawStateReadWorkerContextWithAdmission,
+  captureOpenClawStateWorkerContextWithAdmission,
+} from "./openclaw-state-worker-context.capture.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 export type OpenClawStateReadContext = Pick<
@@ -24,34 +22,20 @@ export type OpenClawStateReadContext = Pick<
 export function captureOpenClawStateReadContext(
   pathname = resolveOpenClawStateSqlitePath(),
 ): OpenClawStateReadContext {
-  const schema = captureOpenClawStateSchemaReadAdmission(pathname);
-  const capturedAdmission = captureOpenClawStateDatabaseReadAdmission(pathname);
-  let admission = capturedAdmission;
-  let runInCapturedSchemaScope: OpenClawStateWorkerContext["runInCapturedSchemaScope"];
-  if (schema) {
-    const inCapturedScope = AsyncLocalStorage.snapshot();
-    admission = {
-      databasePath: capturedAdmission.databasePath,
-      get identity() {
-        return capturedAdmission.identity;
-      },
-      assertCurrent() {
-        capturedAdmission.assertCurrent();
-        schema.assertCurrent();
-      },
-    };
-    runInCapturedSchemaScope = (operation) =>
-      inCapturedScope(() => {
-        admission.assertCurrent();
-        return operation();
-      });
-  }
-  return {
-    maintenanceScope: getOpenClawDatabaseMaintenanceScope(),
-    admission,
-    existingSchemaPath: schema?.path,
-    runInCapturedSchemaScope,
-  };
+  return captureOpenClawStateReadContextWithAdmission(
+    pathname,
+    captureOpenClawStateDatabaseReadAdmission,
+  );
+}
+
+/** Read-only workers need resolved runtime facts, not the initialization environment. */
+export function captureOpenClawStateReadWorkerContext(
+  options: { path?: string; env?: NodeJS.ProcessEnv } = {},
+): OpenClawStateWorkerContext {
+  return captureOpenClawStateReadWorkerContextWithAdmission(
+    options,
+    captureOpenClawStateDatabaseReadAdmission,
+  );
 }
 
 /** Resident readers retain their source and schema policy without re-admitting each publication. */
@@ -116,34 +100,11 @@ export function prepareOpenClawStateReadSource(input: { path: string; env?: Node
   };
 }
 
-/** Capture host facts before asynchronous work, without opening SQLite. */
 export function captureOpenClawStateWorkerContext(
-  options: {
-    path?: string;
-    env?: NodeJS.ProcessEnv;
-    initializationAgentPaths?: readonly string[];
-  } = {},
+  options: Parameters<typeof captureOpenClawStateWorkerContextWithAdmission>[0] = {},
 ): OpenClawStateWorkerContext {
-  const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
-  const environment: OpenClawStateWorkerContext["environment"] = {
-    OPENCLAW_STATE_DIR: resolveStateDir(env),
-    ...(isGatewayExternallySupervised(env) ? { OPENCLAW_SUPERVISOR_MODE: "external" } : {}),
-  };
-  return {
-    ...captureOpenClawStateReadContext(options.path ?? resolveOpenClawStateSqlitePath(environment)),
-    environment,
-    initializationEnvironment: mergeProcessEnv([
-      env,
-      { OPENCLAW_STATE_DIR: undefined, OPENCLAW_SUPERVISOR_MODE: undefined },
-      environment,
-    ]),
-    ...(options.initializationAgentPaths
-      ? {
-          initializationAgentPaths: options.initializationAgentPaths.map((agentPath) =>
-            path.resolve(agentPath),
-          ),
-        }
-      : {}),
-    coordinatorRuntime: captureStateDatabaseCoordinatorRuntime(),
-  };
+  return captureOpenClawStateWorkerContextWithAdmission(
+    options,
+    captureOpenClawStateDatabaseReadAdmission,
+  );
 }

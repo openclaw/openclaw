@@ -63,9 +63,6 @@ vi.mock("./state-database-coordinator.js", () => ({
 vi.mock("./device-identity-coordinator.js", () => ({
   acquireDeviceIdentityCoordinator: boundary.unexpectedNative,
 }));
-vi.mock("./sqlite-coordinator.js", () => ({
-  createSqliteLifecycleAggregateError: boundary.unexpectedNative,
-}));
 vi.mock("./path-existence.js", () => ({
   pathMayExistSync: (pathname: string) => boundary.legacyPaths.has(pathname),
 }));

@@ -2882,6 +2882,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ],
   ["scripts/lib/managed-child-process.mts", ["managed-child-process", "lint-status"]],
   ["scripts/lib/dist-artifact-ownership.mts", ["dist-artifact-ownership", "lint-status"]],
+  ["scripts/lib/dist-artifact-lock.mts", ["dist-artifact-ownership", "lint-status"]],
   ["scripts/docker-e2e-rerun.mts", ["docker-e2e-helper-cli"]],
   ["scripts/openclaw-postpack.mjs", [TOOLING_VITEST_CONFIG]],
   ["scripts/package-manifest.mjs", ["test/openclaw-prepack.test.ts"]],

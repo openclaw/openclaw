@@ -38,6 +38,7 @@ export type ImportLegacySkillProposalInput = {
 export type ListStoredSkillProposalsInput = {
   agentId?: string;
   kind?: SkillProposalRecord["kind"];
+  status?: SkillProposalRecord["status"];
 };
 
 export function createSkillProposalInDatabase(
@@ -127,6 +128,9 @@ export function listStoredSkillProposalsInDatabase(
   let query = kysely.selectFrom("skill_workshop_proposals").selectAll();
   if (scope.kind) {
     query = query.where("kind", "=", scope.kind);
+  }
+  if (scope.status) {
+    query = query.where("status", "=", scope.status);
   }
   if (scope.agentId) {
     query = query.where("owner_agent_id", "=", scope.agentId);

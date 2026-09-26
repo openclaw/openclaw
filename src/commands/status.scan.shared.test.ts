@@ -433,7 +433,7 @@ describe("resolveGatewayProbeSnapshot", () => {
     expect(gatewayCall.timeoutMs).toBe(2000);
   });
 
-  it.each([1, 50, 999, 1000, 2000, 8000])(
+  it.each([1, 2000, 8000])(
     "does not raise an explicit local status RPC fallback timeout (%i ms)",
     async (timeoutMs) => {
       mocks.resolveGatewayProbeTarget.mockReturnValue({

@@ -1,51 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { createTestSessionCapability } from "./session-capability.test-support.ts";
-
-function sessionsResult(sessions: SessionsListResult["sessions"], ts: number): SessionsListResult {
-  return {
-    ts,
-    path: "(multiple)",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
-  };
-}
-
-function createGatewayHarness(client: GatewayBrowserClient) {
-  const snapshot: {
-    client: GatewayBrowserClient | null;
-    phase: "connected";
-    sessionKey: string;
-    assistantAgentId: string | null;
-    hello: GatewayHelloOk | null;
-  } = {
-    client,
-    phase: "connected" as const,
-    sessionKey: "agent:main:main",
-    assistantAgentId: "main",
-    hello: null,
-  };
-  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
-  return {
-    gateway: {
-      get snapshot() {
-        return snapshot;
-      },
-      subscribe: () => () => undefined,
-      subscribeEvents(listener: (event: GatewayEventFrame) => void) {
-        eventListeners.add(listener);
-        return () => eventListeners.delete(listener);
-      },
-    },
-    emitEvent: (event: GatewayEventFrame) => {
-      for (const listener of eventListeners) {
-        listener(event);
-      }
-    },
-  };
-}
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
 
 describe("session swarm activity", () => {
   it("keeps chronological phase and log annotations across canonical refreshes", async () => {

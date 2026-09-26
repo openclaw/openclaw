@@ -1,7 +1,9 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import type { PreparedWorkerSsh } from "./ssh.js";
@@ -232,9 +234,75 @@ describe("worker workspace rsync transport retry", () => {
 describe("bounded inbound workspace transfer", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+  it.each(["active", "completed"] as const)(
+    "tolerates a disappearing temporary manifest only during an active transfer (%s)",
+    async (transferState) => {
+      const destinationRoot = tempDirs.make("openclaw-rsync-manifest-rename-");
+      const temporaryManifest = path.join(destinationRoot, ".manifest.json.partial");
+      const finalManifest = path.join(destinationRoot, "manifest.json");
+      await fs.writeFile(temporaryManifest, "manifest");
+      const renamed = createDeferred();
+      const transfer = createDeferred<SpawnResult>();
+      const originalLstatSync = fsSync.lstatSync.bind(fsSync);
+      vi.spyOn(fsSync, "lstatSync").mockImplementation((target, options) => {
+        if (String(target) === temporaryManifest) {
+          // Rsync publishes a listed temporary file before the quota walker stats it.
+          fsSync.renameSync(temporaryManifest, finalManifest);
+          renamed.resolve();
+        }
+        return originalLstatSync(target, options);
+      });
+      let transferSignal: AbortSignal | undefined;
+      vi.useFakeTimers();
+      try {
+        const operation = runBoundedInboundRsync({
+          argv: ["rsync"],
+          destinationRoot,
+          entryLimit: 10,
+          totalByteLimit: 100,
+          ownerSignal: new AbortController().signal,
+          runTask: async (_argv, { signal }) => {
+            transferSignal = signal;
+            signal?.addEventListener("abort", () => transfer.reject(signal.reason), { once: true });
+            return transferState === "active" ? await transfer.promise : result();
+          },
+          timeoutMs: 10_000,
+        });
+        const outcome = operation.then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        if (transferState === "active") {
+          await vi.advanceTimersByTimeAsync(25);
+          await renamed.promise;
+          transfer.resolve(result());
+          await expect(outcome).resolves.toEqual({ value: result() });
+        } else {
+          await expect(outcome).resolves.toMatchObject({
+            error: { code: "not-found", cause: { code: "ENOENT", path: temporaryManifest } },
+          });
+        }
+        expect(transferSignal?.aborted).toBe(false);
+        await expect(fs.readFile(finalManifest, "utf8")).resolves.toBe("manifest");
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("aborts and joins a transfer before reporting a failed directory scan", async () => {
+    const destinationRoot = tempDirs.make("openclaw-rsync-scan-");
+    const unreadable = path.join(destinationRoot, "unreadable");
+    await fs.writeFile(unreadable, "manifest");
+    const scanError = Object.assign(new Error("access denied"), { code: "EACCES" });
+    const originalLstatSync = fsSync.lstatSync.bind(fsSync);
+    vi.spyOn(fsSync, "lstatSync").mockImplementation((target, options) => {
+      if (String(target) === unreadable) {
+        throw scanError;
+      }
+      return originalLstatSync(target, options);
+    });
     vi.useFakeTimers();
-    const destinationRoot = path.join(tempDirs.make("openclaw-rsync-scan-"), "missing");
     let transferSignal: AbortSignal | undefined;
     let settled = false;
     try {
@@ -254,7 +322,7 @@ describe("bounded inbound workspace transfer", () => {
         },
         timeoutMs: 10_000,
       });
-      const failed = expect(operation).rejects.not.toThrow("transfer cancelled");
+      const failed = expect(operation).rejects.toBe(scanError);
       await vi.advanceTimersByTimeAsync(25);
       await failed;
       expect(transferSignal?.aborted).toBe(true);
@@ -265,12 +333,13 @@ describe("bounded inbound workspace transfer", () => {
   });
 
   it("aborts an in-flight transfer when the destination crosses quota", async () => {
-    const destinationRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rsync-quota-"));
+    const destinationRoot = tempDirs.make("openclaw-rsync-quota-");
+    await fs.writeFile(path.join(destinationRoot, "oversized"), "over quota");
     let transferSignal: AbortSignal | undefined;
+    vi.useFakeTimers();
     try {
       const runTask = vi.fn(async (_argv: string[], options: CommandOptions) => {
         transferSignal = options.signal;
-        await fs.writeFile(path.join(destinationRoot, "oversized"), "over quota");
         return await new Promise<SpawnResult>((_resolve, reject) => {
           const abort = () => {
             const reason = options.signal?.reason;
@@ -283,7 +352,7 @@ describe("bounded inbound workspace transfer", () => {
         });
       });
 
-      await expect(
+      const failed = expect(
         runBoundedInboundRsync({
           argv: ["rsync"],
           destinationRoot,
@@ -294,9 +363,11 @@ describe("bounded inbound workspace transfer", () => {
           timeoutMs: 10_000,
         }),
       ).rejects.toThrow("inbound transfer exceeds");
+      await vi.advanceTimersByTimeAsync(25);
+      await failed;
       expect(transferSignal?.aborted).toBe(true);
     } finally {
-      await fs.rm(destinationRoot, { recursive: true, force: true });
+      vi.useRealTimers();
     }
   });
 

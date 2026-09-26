@@ -65,6 +65,10 @@ const sourceRuntimeCompletion = vi.hoisted(() =>
   vi.fn<typeof import("./update-cli/update-command-runtime.js").completeSourceUpdateRuntime>(),
 );
 const pluginAvailabilityPreflight = vi.hoisted(() => vi.fn());
+vi.mock("../daemon/service-process-membership.js", () => ({
+  inspectServiceProcessMembershipSync: vi.fn(() => "outside"),
+}));
+
 vi.mock("./update-cli/update-command-plugin-preflight.js", () => ({
   preflightConfiguredNpmPluginTargets: pluginAvailabilityPreflight,
 }));
@@ -77,7 +81,7 @@ const mockedRunDaemonInstall = vi.fn();
 const serviceReadCommand = vi.fn();
 const serviceReadRuntime = vi.fn();
 const serviceFixtureState = { absentServicePort: 0 };
-const mockGetSelfAndAncestorPidsSync = vi.fn(() => new Set<number>([process.pid]));
+const mockGetSelfAndAncestorPidsSync = vi.fn(() => new Set<number>([process.pid, 1]));
 const terminateStaleGatewayPids = vi.fn();
 const inspectPortUsage = vi.fn();
 const probePortUsage = vi.fn();
@@ -160,7 +164,8 @@ vi.mock("../infra/update-candidate-canary.js", () => ({
 }));
 // Runtime retention and publication have real owner/process coverage; CLI
 // orchestration must not copy or rebuild the checkout behind its simulated updater.
-vi.mock("./update-cli/update-command-runtime.js", () => ({
+vi.mock("./update-cli/update-command-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-cli/update-command-runtime.js")>()),
   completeSourceUpdateRuntime: sourceRuntimeCompletion,
 }));
 vi.mock("../infra/update-retained-runtime.js", async (importOriginal) => {
@@ -216,10 +221,15 @@ vi.mock("../state/openclaw-state-ownership.js", async (importOriginal) => ({
   assertOpenClawStateWriteAllowedAtPath: vi.fn(async () => undefined),
 }));
 
-vi.mock("../infra/openclaw-root.js", () => ({
-  resolveOpenClawPackageRoot: vi.fn(),
-  resolveOpenClawPackageRootSync: vi.fn(() => process.cwd()),
-}));
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/openclaw-root.js")>();
+  return {
+    resolveOpenClawPackageRoot: vi.fn(),
+    resolveOpenClawPackageRootSync: vi.fn((options) =>
+      options.moduleUrl ? actual.resolveOpenClawPackageRootSync(options) : process.cwd(),
+    ),
+  };
+});
 
 vi.mock("../daemon/gateway-entrypoint.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../daemon/gateway-entrypoint.js")>();
@@ -354,6 +364,10 @@ vi.mock("../infra/runtime-guard.js", async (importOriginal) => ({
 
 vi.mock("../infra/restart-stale-pids.js", () => ({
   getSelfAndAncestorPidsSync: () => mockGetSelfAndAncestorPidsSync(),
+  inspectSelfAndAncestorPidsSync: () => {
+    const pids = mockGetSelfAndAncestorPidsSync();
+    return { pids, complete: pids.has(1) };
+  },
   terminateStaleGatewayPids: (...args: unknown[]) => terminateStaleGatewayPids(...args),
 }));
 

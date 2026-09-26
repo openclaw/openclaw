@@ -241,10 +241,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     return this.sidebarMenus.dismissTransientMenus();
   }
 
-  protected closeAgentMenu(options?: { restoreFocus?: boolean }): void {
-    this.sidebarMenus.closeAgentMenu(options);
-  }
-
   promoteCreatedSession(sessionKey: string) {
     if (this.sessionProjection.promoteCreatedSession(sessionKey)) {
       this.requestUpdate();
@@ -621,7 +617,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   switchChipAgent(agentId: string) {
-    this.closeAgentMenu();
+    this.sidebarMenus.closeAgentMenu();
     this.expandAgent(agentId);
     // Skills uses the shared agent selection in place; opening chat would
     // discard the discovery page instead of updating its workspace scope.
@@ -631,7 +627,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   askAgentCapabilities(agentId: string) {
-    this.closeAgentMenu();
+    this.sidebarMenus.closeAgentMenu();
     if (!this.connected) {
       return;
     }
@@ -677,10 +673,9 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined {
-    const navigationState = this.getSessionNavigationState();
     return findProjectedSidebarSession({
       sessionKey,
-      navigationState,
+      navigationState: this.getSessionNavigationState(),
       sessionResultsByAgent: this.sessionData.sessionResultsByAgent,
     });
   }

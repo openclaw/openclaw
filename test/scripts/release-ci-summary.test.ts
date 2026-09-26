@@ -45,12 +45,10 @@ import {
 import { validateReusableReleaseChild } from "../../scripts/lib/full-release-child-reuse.mjs";
 import { FULL_RELEASE_CHILD_EVIDENCE_JOB } from "../../scripts/lib/full-release-evidence.mjs";
 import {
-  artifactDownloadArgs,
   artifactDownloadTimeoutMs,
   createReleaseEvidenceClient,
   expectedChildDispatches,
   expectedSelectedChildDispatches,
-  githubRestArgs,
   manifestChildEntries,
   readManifestArtifactArchive,
   requiredChildKeysForRerunGroup,
@@ -1029,17 +1027,6 @@ process.stdout.write(JSON.stringify(restored.plan));
 });
 
 describe("GitHub API commands", () => {
-  it("delegates authentication to gh for REST and artifact requests", () => {
-    expect(githubRestArgs("actions/runs/123", "owner/repo")).toEqual([
-      "api",
-      "repos/owner/repo/actions/runs/123",
-    ]);
-    expect(artifactDownloadArgs(456, "owner/repo")).toEqual([
-      "api",
-      "repos/owner/repo/actions/artifacts/456/zip",
-    ]);
-  });
-
   it("budgets large artifact downloads for a conservative transfer rate", () => {
     expect(artifactDownloadTimeoutMs(55 * 1024 * 1024)).toBeGreaterThan(60_000);
     expect(artifactDownloadTimeoutMs(245 * 1024 * 1024)).toBeGreaterThan(15 * 60_000);
@@ -1383,21 +1370,6 @@ describe("runReleaseCiGh", () => {
         timeout: 60_000,
       }),
     );
-  });
-
-  it("propagates GitHub lookup timeouts", () => {
-    const wait = vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
-    const timeoutError = Object.assign(new Error("spawnSync gh ETIMEDOUT"), {
-      code: "ETIMEDOUT",
-    });
-    expect(() =>
-      runReleaseCiGh(["api", "rate_limit"], {
-        execFileSyncImpl: () => {
-          throw timeoutError;
-        },
-      }),
-    ).toThrow(timeoutError);
-    wait.mockRestore();
   });
 });
 

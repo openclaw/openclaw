@@ -99,6 +99,7 @@ export async function executeBrowserTabAction(context: {
     return jsonResult(result);
   };
   const actionOptions = { input: params, baseUrl, profile, proxyRequest, signal };
+  const clientOptions = { profile, timeoutMs: toolTimeoutMs, signal };
   switch (action) {
     case "tabs":
       return await executeTabsAction({
@@ -113,10 +114,8 @@ export async function executeBrowserTabAction(context: {
       const targetUrl = readTargetUrlParam(params);
       const label = normalizeOptionalString(params.label);
       const opened = await browserOpenTab(proxyRequest ?? baseUrl, targetUrl, {
-        profile,
+        ...clientOptions,
         label,
-        timeoutMs: toolTimeoutMs,
-        signal,
       });
       const closeOpenedTab = async (targetId: string, openedProfile?: string) => {
         if (nodeRoute && !proxyRequest?.isHostFallbackActive()) {
@@ -142,30 +141,14 @@ export async function executeBrowserTabAction(context: {
       const targetId = readStringParam(params, "targetId", {
         required: true,
       });
-      const result = await browserFocusTab(proxyRequest ?? baseUrl, targetId, {
-        profile,
-        timeoutMs: toolTimeoutMs,
-        signal,
-      });
+      const result = await browserFocusTab(proxyRequest ?? baseUrl, targetId, clientOptions);
       return trackedTabResult(result, targetId);
     }
     case "close": {
       const targetId = readStringParam(params, "targetId");
       const result = targetId
-        ? await browserCloseTab(proxyRequest ?? baseUrl, targetId, {
-            profile,
-            timeoutMs: toolTimeoutMs,
-            signal,
-          })
-        : await browserAct(
-            proxyRequest ?? baseUrl,
-            { kind: "close" },
-            {
-              profile,
-              timeoutMs: toolTimeoutMs,
-              signal,
-            },
-          );
+        ? await browserCloseTab(proxyRequest ?? baseUrl, targetId, clientOptions)
+        : await browserAct(proxyRequest ?? baseUrl, { kind: "close" }, clientOptions);
       sessionTabs.untrack(readStringValue(asNullableRecord(result)?.targetId) ?? targetId);
       return jsonResult(result);
     }
@@ -257,21 +240,21 @@ export async function executeBrowserTabAction(context: {
       if (!resolvedResult.ok) {
         throw new Error(resolvedResult.error);
       }
-      const normalizedPaths = resolvedResult.paths;
       const ref = readStringParam(params, "ref");
       const inputRef = readStringParam(params, "inputRef");
       const element = readStringParam(params, "element");
       const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
-      const request = {
-        paths: normalizedPaths,
-        ref,
-        inputRef,
-        element,
-        targetId,
-        timeoutMs,
-      };
       return trackedTabResult(
-        await browserArmFileChooser(proxyRequest ?? baseUrl, { ...request, profile, signal }),
+        await browserArmFileChooser(proxyRequest ?? baseUrl, {
+          paths: resolvedResult.paths,
+          ref,
+          inputRef,
+          element,
+          targetId,
+          timeoutMs,
+          profile,
+          signal,
+        }),
         targetId,
       );
     }

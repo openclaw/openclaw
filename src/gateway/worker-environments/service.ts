@@ -1,9 +1,11 @@
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
+import type { GatewayScheduledJob } from "../../infra/gateway-scheduler.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { WorkerExecutionMode } from "../../plugins/types.js";
+import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
 import { createWorkerEnvironmentBuildPreparation } from "./build-preparation.js";
@@ -50,7 +52,7 @@ const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) 
   new WorkerEnvironmentServiceError(code, message);
 
 export function createWorkerEnvironmentService(options: WorkerEnvironmentServiceOptions) {
-  const { store } = options;
+  const { store, scheduler } = options;
   const warn = (message: string) => options.logger?.warn(message);
   const operations = new KeyedAsyncQueue();
   const providerOperations = new KeyedAsyncQueue();
@@ -72,7 +74,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     ...(options.inferenceStore ? { store: options.inferenceStore } : {}),
   });
   let reconcileInFlight: Promise<void> | undefined;
-  let interval: ReturnType<typeof setInterval> | undefined;
+  let reconciliationJob: GatewayScheduledJob | undefined;
   let unsubscribeSessionIdentityMutation: (() => void) | undefined;
   let unsubscribeTurnClaimClosed = options.placementStore?.registerTurnClaimClosedHandler(
     (claim) => {
@@ -240,6 +242,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const environmentAccess = createWorkerEnvironmentAccess({
     ...options,
     store,
+    getCleanupError: (record) => sessionAttachments.getCleanupError(record),
     prepareCurrentBundle: async () => await prepareInstallation("bundle"),
     now,
     identityResolverFor: providerLifecycle.identityResolverFor,
@@ -302,6 +305,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       if (!current || inState(current, "destroyed", "failed", "orphaned")) {
         return;
       }
+      // Conversation cleanup has one retry owner, including its backoff and parked budget.
+      if (
+        current.destroyRequestedAtMs !== null &&
+        (await store.hasSessionAttachment(environmentId))
+      ) {
+        return;
+      }
       await providerLifecycle.reconcileRecord(current, signal, retainProviderSettlement);
     });
   };
@@ -312,16 +322,14 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     }
     const guard = reconcileEnvironmentGuard;
     if (!guard) {
-      await reconcileEnvironmentCore(environmentId);
-      return;
+      return await reconcileEnvironmentCore(environmentId);
     }
     if (reconcileEnvironmentGuardClosing) {
       return;
     }
     const active = guardedReconcileInFlight.get(environmentId);
     if (active) {
-      await active;
-      return;
+      return await active;
     }
     const operation = guard(environmentId, async (signal, retainProviderSettlement) => {
       await reconcileEnvironmentCore(environmentId, signal, retainProviderSettlement);
@@ -428,7 +436,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   };
 
   const start = () => {
-    if (interval || stopping) {
+    if (reconciliationJob || stopping) {
       return;
     }
     unsubscribeSessionIdentityMutation = onSessionIdentityMutation((mutation) => {
@@ -441,11 +449,18 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     for (const profileId of new Set(store.listForReconcile().map((record) => record.profileId))) {
       providerLifecycle.warmMachineShape(profileId);
     }
-    interval = setInterval(
-      () => void reconcileOnce().catch(() => warn("Worker environment reconcile sweep failed")),
-      options.reconcileIntervalMs ?? 60_000,
-    );
-    interval.unref?.();
+    const everyMs = options.reconcileIntervalMs ?? 60_000;
+    reconciliationJob = scheduler.schedule({
+      id: "worker-environments:reconcile",
+      atMs: scheduler.now() + everyMs,
+      everyMs,
+      run: () => {
+        // The service joins its work; slow inspection must not hold the other maintenance duties.
+        runOutsideAsyncWorkScope(() => {
+          void reconcileOnce().catch(() => warn("Worker environment reconcile sweep failed"));
+        });
+      },
+    });
     void reconcileOnce().catch(() => warn("Worker environment startup reconcile failed"));
   };
 
@@ -457,8 +472,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     providerLifecycle.clearMachineShapeListeners();
     maintenanceAbort.abort();
     options.stopNodeEnrollmentWaits?.();
-    clearInterval(interval);
-    interval = undefined;
+    reconciliationJob?.cancel();
     unsubscribeSessionIdentityMutation?.();
     unsubscribeSessionIdentityMutation = undefined;
     unsubscribeTurnClaimClosed?.();

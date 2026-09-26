@@ -1,0 +1,189 @@
+name: Android Store Release
+
+on:
+  workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+  queue: max
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.21.0"
+
+jobs:
+  release:
+    name: Prepare and upload Android release
+    if: github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: android-store-release
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Prepare trusted Linux Android tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS/$RUNNER_ARCH" = "Linux/X64"
+          for executable in /usr/bin/apt-get /usr/bin/sudo /usr/bin/timeout; do
+            test -x "$executable"
+          done
+          apt_source="/etc/apt/sources.list.d/ubuntu.sources"
+          apt_source_parts="$RUNNER_TEMP/openclaw-android-apt-sourceparts-disabled"
+          test -s "$apt_source"
+          if [[ -e "$apt_source_parts" || -L "$apt_source_parts" ]]; then
+            echo "::error::Task-private APT source-parts path must remain absent"
+            exit 1
+          fi
+          apt_options=(
+            -o "Dir::Etc::sourcelist=$apt_source"
+            -o "Dir::Etc::sourceparts=$apt_source_parts"
+          )
+          /usr/bin/timeout --signal=TERM --kill-after=10s 300s \
+            /usr/bin/sudo env DEBIAN_FRONTEND=noninteractive \
+            /usr/bin/apt-get "${apt_options[@]}" update
+          /usr/bin/timeout --signal=TERM --kill-after=10s 300s \
+            /usr/bin/sudo env DEBIAN_FRONTEND=noninteractive \
+            /usr/bin/apt-get "${apt_options[@]}" install \
+            -y --no-install-recommends imagemagick
+          test -x /usr/bin/convert
+          test -x /usr/bin/identify
+
+          tool_dir="$RUNNER_TEMP/openclaw-android-tools"
+          mkdir -p "$tool_dir"
+          install -m 700 scripts/android-sips-linux.sh "$tool_dir/android-sips-linux.sh"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "true"
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup Android toolchain
+        uses: ./.github/actions/setup-android-toolchain
+        with:
+          cache-mode: off
+          install-screenshot-emulators: "true"
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4 # v1.323.0
+        with:
+          ruby-version: "3.4.10"
+          bundler: "4.0.21"
+          bundler-cache: false
+          working-directory: apps/android
+
+      - name: Install locked Fastlane bundle
+        working-directory: apps/android
+        run: |
+          set -euo pipefail
+          bundle _4.0.21_ install --jobs 4 --retry 3
+          bundle _4.0.21_ check
+          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
+
+      - name: Create apps-signing read token
+        id: apps-signing-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: apps-signing
+          permission-contents: read
+
+      - name: Checkout encrypted Android signing assets
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/apps-signing
+          ref: main
+          path: apps/android/build/release-signing/apps-signing
+          token: ${{ steps.apps-signing-token.outputs.token }}
+          persist-credentials: false
+
+      - name: Materialize Android release signing
+        env:
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+        run: node scripts/android-release-signing.mjs --mode materialize
+
+      - name: Prepare and upload Android release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_PLAY_JSON_KEY_DATA: ${{ secrets.GOOGLE_PLAY_JSON_KEY_DATA }}
+          GOOGLE_PLAY_PACKAGE_NAME: ai.openclaw.app
+          GOOGLE_PLAY_RELEASE_STATUS: completed
+          GOOGLE_PLAY_TRACK: internal
+          GOOGLE_PLAY_VALIDATE_ONLY: "0"
+          SIPS: ${{ runner.temp }}/openclaw-android-tools/android-sips-linux.sh
+          SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW: "true"
+          SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW: "false"
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          pnpm android:release:upload -- \
+            --recovery-dir "$RUNNER_TEMP/android-release-recovery"
+
+      - name: Remove materialized signing files
+        if: always()
+        run: |
+          rm -rf apps/android/build/release-signing \
+            "$RUNNER_TEMP/android-release-recovery/source/apps/android/build/release-signing"
+
+      - name: Retain release plan and notes
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: android-release-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/android-release-recovery/release-notes.json
+            ${{ runner.temp }}/android-release-recovery/android-plan.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retain emulator startup diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: android-release-emulator-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/emulator.log
+            ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/emulator-args.txt
+            ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/process-status.txt
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Retain signed release artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: android-release-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/android-release-recovery/artifacts/*.aab
+            ${{ runner.temp }}/android-release-recovery/artifacts/*.apk
+            ${{ runner.temp }}/android-release-recovery/artifacts/*.sha256
+            ${{ runner.temp }}/android-release-recovery/source/apps/android/build/release-artifacts/*.aab
+            ${{ runner.temp }}/android-release-recovery/source/apps/android/build/release-artifacts/*.apk
+            ${{ runner.temp }}/android-release-recovery/source/apps/android/build/release-artifacts/*.sha256
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 30
