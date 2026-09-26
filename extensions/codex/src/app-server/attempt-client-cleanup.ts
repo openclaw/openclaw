@@ -121,7 +121,7 @@ export async function interruptCodexTurnAndWaitBestEffort(
       await client.request("turn/interrupt", requestParams, { timeoutMs });
       return true;
     }
-    const deadline = Date.now() + timeoutMs;
+    const deadline = performance.now() + timeoutMs;
     const started = createDeferred<boolean>();
     // Codex acknowledges interruption before publishing turn/completed. Register
     // first so an immediate exact-turn terminal cannot race past its owner.
@@ -140,7 +140,7 @@ export async function interruptCodexTurnAndWaitBestEffort(
     const requestInterrupt = async () => {
       try {
         await client.request("turn/interrupt", requestParams, {
-          timeoutMs: Math.max(1, deadline - Date.now()),
+          timeoutMs: Math.max(1, deadline - performance.now()),
           // The client floors RPC timeouts at 100ms. The lifecycle signal owns
           // the exact remaining deadline and cancels RPCs when terminal wins.
           signal: completion.settledSignal,
@@ -163,7 +163,7 @@ export async function interruptCodexTurnAndWaitBestEffort(
         completion.completion.then(() => false),
         started.promise,
       ]);
-      if (activated && completion.state === "pending" && Date.now() < deadline) {
+      if (activated && completion.state === "pending" && performance.now() < deadline) {
         await requestInterrupt();
       }
     }
