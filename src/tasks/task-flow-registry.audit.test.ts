@@ -1,4 +1,5 @@
 // Covers managed task-flow audit summaries and stale-flow classification.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -10,13 +11,12 @@ import {
 } from "./task-executor.js";
 import { listTaskFlowAuditFindings } from "./task-flow-registry.audit.js";
 import type { TaskFlowAuditCode, TaskFlowAuditFinding } from "./task-flow-registry.audit.types.js";
-import {
-  createManagedTaskFlow as createManagedTaskFlowOrNull,
-  requestFlowCancel,
-  setFlowWaiting,
-} from "./task-flow-registry.js";
+import { requestFlowCancel, setFlowWaiting } from "./task-flow-registry.js";
+import { createManagedTaskFlow } from "./task-flow-registry.test-support.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import { tasks } from "./task-registry-state.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import { RETAINED_YIELD_GUIDANCE } from "./task-retained-yield-guidance.js";
 import {
   configureTaskFlowRegistryRuntime,
   resetTaskRegistryForTests,
@@ -25,24 +25,11 @@ import {
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 
-function createManagedTaskFlow(
-  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
-): TaskFlowRecord {
-  const flow = createManagedTaskFlowOrNull(params);
-  if (!flow) {
-    throw new Error("expected managed TaskFlow creation to succeed");
-  }
-  return flow;
-}
-
 function createRunningTaskRun(
   params: Parameters<typeof createRunningTaskRunOrNull>[0],
 ): TaskRecord {
-  const task = createRunningTaskRunOrNull(params);
-  if (!task) {
-    throw new Error("expected running task creation to succeed");
-  }
-  return task;
+  // Audit fixtures intentionally omit the executor helper's synthetic backing metadata.
+  return expectDefined(createRunningTaskRunOrNull(params), "running audit task");
 }
 
 function requireFinding(
@@ -242,6 +229,75 @@ describe("task-flow-registry audit", () => {
       const staleFindings = listTaskFlowAuditFindings({ now: now + 26 * 60_000 });
       expect(requireFinding(staleFindings, "missing_linked_tasks", flow.flowId).flow?.flowId).toBe(
         flow.flowId,
+      );
+    });
+  });
+
+  it("names a mirrored flow only when every linked running task is a retained yield", async () => {
+    await withTaskFlowAuditStateDir(async () => {
+      const yieldedFlow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-audit",
+        goal: "Retained yield",
+        status: "running",
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      const yielded = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: yieldedFlow.flowId,
+        childSessionKey: "agent:main:subagent:yield-flow",
+        runId: "task-flow-yield-owner",
+        task: "Wait after yield",
+        startedAt: 1,
+        lastEventAt: 1,
+      });
+      const yieldedStored = expectDefined(tasks.get(yielded.taskId), "yielded task");
+      yieldedStored.lastToolName = "sessions_yield";
+
+      const mixedFlow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-audit",
+        goal: "Mixed work",
+        status: "running",
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      const mixedYield = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: mixedFlow.flowId,
+        childSessionKey: "agent:main:subagent:mixed-yield",
+        runId: "task-flow-mixed-yield",
+        task: "Yielded sibling",
+        startedAt: 1,
+        lastEventAt: 1,
+      });
+      const mixedLive = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: mixedFlow.flowId,
+        childSessionKey: "agent:main:subagent:mixed-live",
+        runId: "task-flow-mixed-live",
+        task: "Live sibling",
+        startedAt: 1,
+        lastEventAt: 1,
+      });
+      const mixedYieldStored = expectDefined(tasks.get(mixedYield.taskId), "mixed yielded task");
+      const mixedLiveStored = expectDefined(tasks.get(mixedLive.taskId), "mixed live task");
+      mixedYieldStored.lastToolName = "sessions_yield";
+      mixedLiveStored.lastToolName = "read";
+
+      const findings = listTaskFlowAuditFindings({ now: 31 * 60_000 });
+      expect(requireFinding(findings, "stale_running", yieldedFlow.flowId).detail).toBe(
+        RETAINED_YIELD_GUIDANCE,
+      );
+      expect(requireFinding(findings, "stale_running", mixedFlow.flowId).detail).toBe(
+        "running TaskFlow has not advanced recently",
       );
     });
   });

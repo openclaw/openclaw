@@ -1,20 +1,17 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import {
-  emitAgentEvent,
-  resetAgentEventsForTest,
-  rotateAgentEventLifecycleGeneration,
-} from "../infra/agent-events.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
-import {
-  getActiveGatewayRootWorkCount,
-  resetGatewayWorkAdmission,
-} from "../process/gateway-work-admission.js";
+import { emitAgentEvent, rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { peekSystemEvents } from "../infra/system-events.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { retainTaskAgentEventLineage } from "./task-registry-agent-event-lineage.js";
+import {
+  emitTaskToolStart as emitTool,
+  resetTaskAgentEventTestState,
+} from "./task-registry-agent-events.test-support.js";
 import * as taskDelivery from "./task-registry-delivery.js";
 import { captureTaskDeliveryWork } from "./task-registry-delivery.test-support.js";
 import { captureTaskRegistryReadFence } from "./task-registry-listener-state.js";
@@ -30,10 +27,6 @@ import {
 } from "./task-registry.store.js";
 import { loadTaskRegistryStateFromSqliteReadOnly } from "./task-registry.store.sqlite.js";
 import { createTaskFixture, prepareTaskFixtureRead } from "./task-registry.test-support.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "./task-runtime.test-helpers.js";
 
 let deliveries: ReturnType<typeof captureTaskDeliveryWork>;
 beforeEach(() => {
@@ -45,12 +38,7 @@ afterEach(async () => {
     await deliveries.settle();
   } finally {
     deliveries[Symbol.dispose]();
-    vi.restoreAllMocks();
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    resetAgentEventsForTest({ preserveListeners: true });
-    resetGatewayWorkAdmission();
-    resetSystemEventsForTest();
+    resetTaskAgentEventTestState();
   }
 });
 
@@ -62,10 +50,6 @@ async function joinEvents() {
   await deliveries.settle();
   await setImmediate();
   expect(getActiveGatewayRootWorkCount()).toBe(0);
-}
-
-function emitTool(runId: string, name: string) {
-  emitAgentEvent({ runId, stream: "tool", data: { phase: "start", name } });
 }
 
 describe("task agent event lineage", () => {
@@ -87,7 +71,6 @@ describe("task agent event lineage", () => {
           status: "queued",
           startedAt: 1_000,
           notifyPolicy: "silent",
-          deliveryStatus: "not_applicable",
         });
         const replaced = scenario.includes("replacement");
         const terminalQueued = !replaced && scenario !== "during readback without terminal";
@@ -181,7 +164,6 @@ describe("task agent event preparation", () => {
         task: "Prepare before invalidating",
         status: "queued",
         notifyPolicy: "silent",
-        deliveryStatus: "not_applicable",
       });
       const store = await prepareTaskFixtureRead(task);
       const reads = vi.spyOn(store, "loadMutationSnapshotAsync");

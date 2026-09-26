@@ -18,6 +18,7 @@ import {
   markTaskTerminalById,
 } from "../tasks/task-registry.js";
 import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js";
+import { getTaskRegistryStore } from "../tasks/task-registry.store.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   configureTaskFlowRegistryRuntime,
@@ -158,7 +159,7 @@ describe("tasks commands", () => {
   it("keeps audit JSON stable and sorts combined findings before limiting", async () => {
     await withTaskCommandStateDir(async () => {
       const now = Date.now();
-      createTaskRecord({
+      const retained = createTaskRecord({
         runtime: "cli",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -167,6 +168,11 @@ describe("tasks commands", () => {
         task: "Inspect issue backlog",
         startedAt: now - 40 * 60_000,
       });
+      // Restore a retained clue from the store, rather than relying on a built CLI artifact.
+      getTaskRegistryStore().upsertTaskWithDeliveryState({
+        task: { ...retained, lastToolName: "sessions_yield" },
+      });
+      await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
       createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/tasks-command",
@@ -190,6 +196,16 @@ describe("tasks commands", () => {
         };
       };
 
+      expect(payload).toMatchObject({
+        findings: expect.arrayContaining([
+          expect.objectContaining({
+            kind: "task",
+            token: retained.taskId,
+            status: "running",
+            detail: expect.stringContaining("not a confirmed pause"),
+          }),
+        ]),
+      });
       expect(payload.summary.byCode.stale_running).toBe(1);
       expect(payload.summary.taskFlows.byCode.stale_waiting).toBe(1);
       expect(payload.summary.taskFlows.byCode.missing_linked_tasks).toBe(1);

@@ -305,6 +305,8 @@ Task findings:
 | `missing_cleanup`         | warn       | Terminal task with no cleanup timestamp                                                                      |
 | `inconsistent_timestamps` | warn       | Timeline violation (for example ended before started)                                                        |
 
+A running task whose current generation last started `sessions_yield` still counts as `stale_running` after 30 minutes. The detail says that name is not a confirmed pause: a deferred or rejected call can leave it until the result arrives. It tells the operator to review the exact owner and generation, pending inputs, descendants, outstanding continuations, and parent delivery before `openclaw tasks cancel`. Age, a delivered parent update, or a quiet turn does not prove the child finished. A resumed generation does not keep the previous generation's tool name, so live follow-up work stays on the generic stuck text until that generation itself starts `sessions_yield`. The audit does not cancel the task.
+
 TaskFlow findings:
 
 | Finding                   | Severity   | Trigger                                                                       |
@@ -318,6 +320,8 @@ TaskFlow findings:
 | `blocked_task_missing`    | warn       | Blocked flow points at a task id that no longer exists                        |
 | `inconsistent_timestamps` | warn       | Flow timestamps are not in chronological order                                |
 
+A running TaskFlow uses that unverified `sessions_yield` detail when every linked running task last started `sessions_yield`. Mixed or live linked work keeps the generic stale-flow text.
+
 ### tasks maintenance
 
 ```bash
@@ -326,6 +330,8 @@ openclaw tasks maintenance --apply [--json]
 ```
 
 Use this to preview or apply reconciliation, cleanup stamping, and pruning for tasks, TaskFlow state, and stale automation run session registry rows.
+
+A task that last started `sessions_yield` stays running when its backing session is present. Maintenance carries the same unverified-pause note as `tasks audit`. Drain adds `lastTool=sessions_yield unverified` on the restart blocker line. A deferred or rejected yield result clears the name. None of these diagnostics cancel the task or treat parent delivery as a finished child.
 
 Reconciliation is runtime-aware:
 

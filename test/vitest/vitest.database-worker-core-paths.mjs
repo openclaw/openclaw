@@ -469,6 +469,7 @@ export const databaseWorkerCoreTestFiles = [
   "test/skill-usage.codex.integration.test.ts",
   "src/tasks/task-registry.async-restore.test.ts",
   "src/tasks/task-registry-agent-events.test.ts",
+  "src/tasks/task-registry-agent-events.yield-clear.test.ts",
   "src/tasks/task-registry-notification-publication.test.ts",
   "src/tasks/task-registry-agent-events.lineage.test.ts",
   "src/tasks/task-executor.test.ts",

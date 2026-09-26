@@ -478,6 +478,9 @@ export function applyTaskRecordPatch(
   if (Object.hasOwn(patch, "runId") && updated.runId === undefined) {
     delete next.runId;
   }
+  if (Object.hasOwn(patch, "lastToolName") && patch.lastToolName === undefined) {
+    delete next.lastToolName;
+  }
   if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
     const createdAt = next.createdAt ?? now ?? Date.now();
     next.cleanupAfter = resolveTaskCleanupAfter({ ...next, createdAt });

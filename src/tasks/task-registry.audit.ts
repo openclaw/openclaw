@@ -9,6 +9,7 @@ import {
   type TaskAuditSummary,
 } from "./task-registry.audit.shared.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import { isRetainedYieldOwner, RETAINED_YIELD_GUIDANCE } from "./task-retained-yield-guidance.js";
 import { resolveEffectiveTaskCleanupAfter } from "./task-retention.js";
 
 type TaskAuditOptions = {
@@ -158,6 +159,9 @@ function describeTaskAuditCode(
       : timestampIssue === "end_before_start"
         ? "endedAt is earlier than startedAt"
         : `${task.status} task should not already have endedAt`;
+  }
+  if (code === "stale_running" && isRetainedYieldOwner(task)) {
+    return RETAINED_YIELD_GUIDANCE;
   }
   return TASK_AUDIT_DESCRIPTIONS[code];
 }

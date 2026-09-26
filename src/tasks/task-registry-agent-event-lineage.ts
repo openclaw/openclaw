@@ -1,4 +1,7 @@
+import { isDeepStrictEqual } from "node:util";
 import type { OpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
+import { sameTaskAgentEventSource } from "./task-registry-agent-event-source.js";
+import type { TaskAgentEventTarget } from "./task-registry-agent-event-target.js";
 import type { PendingTaskAgentEvent } from "./task-registry-agent-events.types.js";
 import { getTaskRegistryStore, type TaskRegistryStore } from "./task-registry.store.js";
 import type { TaskPersistenceReceipt } from "./task-registry.types.js";
@@ -7,21 +10,27 @@ type ReceiptListener = {
   databaseKey: string;
   store: TaskRegistryStore;
   onCommitted: (previous: TaskPersistenceReceipt, next: TaskPersistenceReceipt) => void;
+  eventOwner?: {
+    source: PendingTaskAgentEvent["source"];
+    backing: TaskAgentEventTarget["backing"];
+  };
 };
 
 const listenersByRun = new Map<string, Set<ReceiptListener>>();
 
-/** Live creation receipts retain facts only until their original owner settles. */
+/** Live consumers retain committed timestamp lineage only while their original owner needs it. */
 export function retainTaskAgentEventLineage(
   admission: OpenClawStateDatabaseReadAdmission,
   runId: string,
   onCommitted: ReceiptListener["onCommitted"],
+  eventOwner?: ReceiptListener["eventOwner"],
 ): () => void {
   admission.assertCurrent();
   const listener = {
     databaseKey: admission.identity.key,
     store: getTaskRegistryStore(),
     onCommitted,
+    eventOwner,
   };
   const listeners = listenersByRun.get(runId) ?? new Set<ReceiptListener>();
   listeners.add(listener);
@@ -50,7 +59,10 @@ export function publishTaskAgentEventLineage(pending: PendingTaskAgentEvent): vo
   for (const listener of listenersByRun.get(previous.runId) ?? []) {
     if (
       listener.databaseKey === pending.context.admission.identity.key &&
-      listener.store === pending.store
+      listener.store === pending.store &&
+      (!listener.eventOwner ||
+        (sameTaskAgentEventSource(listener.eventOwner.source, pending.source) &&
+          isDeepStrictEqual(listener.eventOwner.backing, pending.input.backing)))
     ) {
       listener.onCommitted(previous, next);
     }

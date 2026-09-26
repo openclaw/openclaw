@@ -13,6 +13,7 @@ import {
   compareTaskAuditFindingSortKeys,
   summarizeAuditFindings,
 } from "./task-registry.audit.shared.js";
+import { isRetainedYieldOwner, RETAINED_YIELD_GUIDANCE } from "./task-retained-yield-guidance.js";
 
 export type {
   TaskFlowAuditFinding,
@@ -137,13 +138,20 @@ export function listTaskFlowAuditFindings(
         ? flow.status
         : undefined;
     if (stale && (stale !== "blocked" || flow.endedAt == null)) {
+      const runningTasks =
+        stale === "running"
+          ? linkedTasks.filter((task) => task.status === "running" && task.endedAt == null)
+          : [];
       findings.push(
         createFinding({
           severity: stale === "running" ? "error" : "warn",
           code: `stale_${stale}`,
           flow,
           ageMs,
-          detail: `${stale} TaskFlow has not advanced recently`,
+          detail:
+            runningTasks.length > 0 && runningTasks.every((task) => isRetainedYieldOwner(task))
+              ? RETAINED_YIELD_GUIDANCE
+              : `${stale} TaskFlow has not advanced recently`,
         }),
       );
     }

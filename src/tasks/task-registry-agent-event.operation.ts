@@ -28,6 +28,7 @@ export type TaskAgentEventChange = {
   at: number;
   toolStarts: number;
   refreshError?: boolean;
+  clearLastToolName?: boolean;
   patch: Pick<Partial<TaskRecord>, "status" | "startedAt" | "endedAt" | "lastToolName" | "error">;
 };
 
@@ -43,6 +44,7 @@ export function captureTaskAgentEventChange(
   task: Pick<TaskRecord, "runtime">,
   event: AgentEventPayload,
   projectTerminal: boolean,
+  latestYieldCallId?: string,
 ): TaskAgentEventChange | undefined {
   const change: TaskAgentEventChange = { kind: "progress", at: event.ts, toolStarts: 0, patch: {} };
   if (event.stream === "lifecycle") {
@@ -86,8 +88,70 @@ export function captureTaskAgentEventChange(
       change.toolStarts = 1;
       change.patch.lastToolName = name;
     }
+  } else if (
+    event.stream === "tool" &&
+    event.data.phase === "result" &&
+    readToolEventName(event.data) === "sessions_yield" &&
+    readToolCallId(event.data) === latestYieldCallId &&
+    latestYieldCallId !== undefined &&
+    isUnconfirmedSessionsYieldResult(event.data)
+  ) {
+    // A start records the name before the tool returns. Only a known
+    // non-yield result proves the call never paused. A missing status stays
+    // an unverified clue instead of erasing a confirmed yield.
+    change.clearLastToolName = true;
   }
   return change;
+}
+
+function readToolEventName(data: Record<string, unknown>): string {
+  return typeof data.name === "string" ? data.name.trim() : "";
+}
+
+function readToolCallId(data: Record<string, unknown>): string | undefined {
+  const id = typeof data.toolCallId === "string" ? data.toolCallId.trim() : "";
+  return id || undefined;
+}
+
+function isUnconfirmedSessionsYieldResult(data: Record<string, unknown>): boolean {
+  if (data.isError === true) {
+    return true;
+  }
+  const status = readSessionsYieldStatus(data.result);
+  return status !== undefined && status !== "yielded";
+}
+
+function readSessionsYieldStatus(result: unknown): string | undefined {
+  if (!isRecord(result)) {
+    return undefined;
+  }
+  const details = isRecord(result.details) ? result.details : undefined;
+  const status = details?.status ?? result.status;
+  return typeof status === "string" ? status : undefined;
+}
+
+/** Coalesce a waiting progress batch without letting a yield start outlive its non-yield result. */
+export function mergeQueuedTaskAgentEventProgress(
+  previous: TaskAgentEventChange,
+  next: TaskAgentEventChange,
+): TaskAgentEventChange {
+  const patch = { ...previous.patch, ...next.patch };
+  const latestToolStart = next.patch.lastToolName ?? previous.patch.lastToolName;
+  const clearLastToolName =
+    next.patch.lastToolName === undefined &&
+    (next.clearLastToolName === true
+      ? latestToolStart === undefined || latestToolStart === "sessions_yield"
+      : previous.clearLastToolName === true);
+  if (clearLastToolName && patch.lastToolName === "sessions_yield") {
+    delete patch.lastToolName;
+  }
+  return {
+    ...next,
+    clearLastToolName,
+    toolStarts: previous.toolStarts + next.toolStarts,
+    refreshError: previous.refreshError || next.refreshError,
+    patch,
+  };
 }
 
 export function matchesTaskAgentEventTarget(task: TaskRecord, input: TaskAgentEventInput): boolean {
@@ -114,6 +178,14 @@ export function prepareTaskAgentEventUpdate(current: TaskRecord, input: TaskAgen
   }
   if (change.toolStarts) {
     patch.toolUseCount = (current.toolUseCount ?? 0) + change.toolStarts;
+  }
+  if (
+    change.clearLastToolName &&
+    (current.lastToolName === "sessions_yield" || patch.lastToolName === "sessions_yield")
+  ) {
+    // The start can still be waiting in this same patch. Clear that queued
+    // name too; checking only the stored row would write it back.
+    patch.lastToolName = undefined;
   }
   const lastEventAt = current.lastEventAt ?? current.startedAt ?? current.createdAt;
   if (

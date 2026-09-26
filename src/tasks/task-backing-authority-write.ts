@@ -57,5 +57,8 @@ export function prepareCanonicalTaskActivation(
   delete next.progressSummary;
   delete next.terminalSummary;
   delete next.terminalOutcome;
+  // A tool name belongs to the generation that started it. Keeping sessions_yield
+  // here would describe resumed live work as a retained yield pause.
+  delete next.lastToolName;
   return { current, next };
 }

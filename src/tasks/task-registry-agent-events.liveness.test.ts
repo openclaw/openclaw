@@ -1,33 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
-import { resetSystemEventsForTest } from "../infra/system-events.js";
-import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  emitTaskToolStart as emitTool,
+  resetTaskAgentEventTestState,
+} from "./task-registry-agent-events.test-support.js";
 import { captureTaskRegistryReadFence } from "./task-registry-listener-state.js";
 import { tasks } from "./task-registry-state.js";
 import { getTaskById } from "./task-registry.js";
 import { getTaskRegistryStore, onTaskRegistryChange } from "./task-registry.store.js";
 import { loadTaskRegistryStateFromSqliteReadOnly } from "./task-registry.store.sqlite.js";
 import { createTaskFixture } from "./task-registry.test-support.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "./task-runtime.test-helpers.js";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  resetTaskRegistryForTests({ persist: false });
-  resetTaskFlowRegistryForTests({ persist: false });
-  resetAgentEventsForTest({ preserveListeners: true });
-  resetGatewayWorkAdmission();
-  resetSystemEventsForTest();
-});
-
-function emitTool(runId: string, name: string) {
-  emitAgentEvent({ runId, stream: "tool", data: { phase: "start", name } });
-}
+afterEach(resetTaskAgentEventTestState);
 
 describe("task agent event liveness", () => {
   it.each([

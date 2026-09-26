@@ -1,18 +1,13 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  emitAgentEvent,
-  resetAgentEventsForTest,
-  rotateAgentEventLifecycleGeneration,
-} from "../infra/agent-events.js";
+import { emitAgentEvent, rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerNativeSettlementOwner } from "../infra/sqlite-worker-operation-settlement.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import { peekSystemEvents } from "../infra/system-events.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
-  resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { serializeAgentSchemaInspectionError } from "../state/openclaw-agent-schema-inspection-response.js";
 import {
@@ -24,6 +19,12 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseCoordinator as holdCoordinator } from "../test-utils/state-database-contention.js";
 import { createTaskFlowForTask, readResidentTaskFlow } from "./task-flow-registry.js";
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
+import {
+  captureTaskPublication,
+  joinTaskAgentEvents as joinEvents,
+  emitTaskToolStart as emitTool,
+  resetTaskAgentEventTestState,
+} from "./task-registry-agent-events.test-support.js";
 import { captureTaskDeliveryWork } from "./task-registry-delivery.test-support.js";
 import { captureTaskRegistryReadFence } from "./task-registry-listener-state.js";
 import { updateTask } from "./task-registry-mutation.js";
@@ -44,43 +45,8 @@ import {
 } from "./task-registry.store.js";
 import { loadTaskRegistryStateFromSqliteReadOnly } from "./task-registry.store.sqlite.js";
 import { createTaskFixture } from "./task-registry.test-support.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "./task-runtime.test-helpers.js";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  resetTaskRegistryForTests({ persist: false });
-  resetTaskFlowRegistryForTests({ persist: false });
-  resetAgentEventsForTest({ preserveListeners: true });
-  resetGatewayWorkAdmission();
-  resetSystemEventsForTest();
-});
-
-async function joinEvents() {
-  await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-}
-
-function taskPublication(
-  taskId: string,
-  matches: (task: NonNullable<ReturnType<typeof tasks.get>>) => boolean,
-) {
-  const published = createDeferred();
-  const check = () => {
-    const current = tasks.get(taskId);
-    if (current && matches(current)) {
-      published.resolve();
-    }
-  };
-  const stop = onTaskRegistryChange(check);
-  check();
-  return published.promise.finally(stop);
-}
-
-function emitTool(runId: string, name: string) {
-  emitAgentEvent({ runId, stream: "tool", data: { phase: "start", name } });
-}
+afterEach(resetTaskAgentEventTestState);
 
 describe("task agent event persistence", () => {
   it.each([
@@ -470,7 +436,6 @@ describe("task agent event persistence", () => {
           runId: "committed-recovery",
           task: "Recover the confirmed commit",
           notifyPolicy: "silent",
-          deliveryStatus: "not_applicable",
           detail: { payload: "x".repeat(8 * 1024 * 1024) },
         });
         const flow = createTaskFlowForTask({ task });
@@ -577,7 +542,6 @@ describe("task agent event persistence", () => {
         task: "Bounded events",
         status: "queued",
         notifyPolicy: "silent",
-        deliveryStatus: "not_applicable",
       });
       const store = getTaskRegistryStore();
       const writes = vi.spyOn(store, "runAgentEventMutationAsync");
@@ -595,7 +559,10 @@ describe("task agent event persistence", () => {
           },
         },
       });
-      const terminal = taskPublication(task.taskId, (current) => current.status === "succeeded");
+      using terminal = captureTaskPublication(
+        task.taskId,
+        (current) => current.status === "succeeded",
+      );
       const context = captureOpenClawStateWorkerContext();
       const holder = holdCoordinator(
         context.admission.databasePath,
@@ -633,7 +600,7 @@ describe("task agent event persistence", () => {
         expect(Atomics.load(holder.released, 0)).toBe(0);
         holder.release();
         expect(await holder.joined).toBe(0);
-        await terminal;
+        await terminal.wait();
         await joinEvents();
         expect(writes.mock.calls.length).toBeLessThanOrEqual(3);
         expect(writes.mock.calls.every(([, input]) => JSON.stringify(input).length < 2_000)).toBe(
@@ -664,15 +631,13 @@ describe("task agent event persistence", () => {
         const task = createTaskFixture("cli", {
           runId: `contended-${phase}`,
           task: "Ordered events",
-          status: "running",
           notifyPolicy: "silent",
-          deliveryStatus: "not_applicable",
         });
-        const warmed = taskPublication(task.taskId, (current) => current.toolUseCount === 1);
+        using warmed = captureTaskPublication(task.taskId, (current) => current.toolUseCount === 1);
         emitTool(task.runId!, "warmup");
-        await warmed;
+        await warmed.wait();
         await joinEvents();
-        const terminal = taskPublication(
+        using terminal = captureTaskPublication(
           task.taskId,
           (current) => current.status === (phase === "end" ? "succeeded" : "failed"),
         );
@@ -699,7 +664,7 @@ describe("task agent event persistence", () => {
           });
           expect(await timer).toBe(0);
           expect(await joined).toBe(0);
-          await terminal;
+          await terminal.wait();
           await joinEvents();
           const durable = loadTaskRegistryStateFromSqliteReadOnly().tasks.get(task.taskId);
           expect(durable).toMatchObject({
@@ -725,9 +690,11 @@ describe("task agent event persistence", () => {
         runId: "drained-events",
         task: "Accepted events",
         notifyPolicy: "silent",
-        deliveryStatus: "not_applicable",
       });
-      const terminal = taskPublication(task.taskId, (current) => current.status === "succeeded");
+      using terminal = captureTaskPublication(
+        task.taskId,
+        (current) => current.status === "succeeded",
+      );
       const context = captureOpenClawStateWorkerContext();
       const holder = holdCoordinator(
         context.admission.databasePath,
@@ -746,7 +713,7 @@ describe("task agent event persistence", () => {
         expect(getActiveGatewayRootWorkCount()).toBe(1);
         holder.release();
         await holder.joined;
-        await terminal;
+        await terminal.wait();
         await joinEvents();
         await closeOpenClawStateDatabaseAsync();
         expect(loadTaskRegistryStateFromSqliteReadOnly().tasks.get(task.taskId)).toMatchObject({
@@ -766,7 +733,6 @@ describe("task agent event persistence", () => {
         runId: "committed-with-cleanup-error",
         task: "Durable outcome",
         notifyPolicy: "silent",
-        deliveryStatus: "not_applicable",
       });
       const store = getTaskRegistryStore();
       const mutate = store.runAgentEventMutationAsync.bind(store);
@@ -784,9 +750,12 @@ describe("task agent event persistence", () => {
             }
           );
         });
-      const published = taskPublication(task.taskId, (current) => current.toolUseCount === 1);
+      using published = captureTaskPublication(
+        task.taskId,
+        (current) => current.toolUseCount === 1,
+      );
       emitTool(task.runId!, "committed");
-      await published;
+      await published.wait();
       await joinEvents();
       expect(writes).toHaveBeenCalledOnce();
       expect(warnings).toHaveBeenCalledWith(
@@ -809,7 +778,6 @@ describe("task agent event persistence", () => {
         runId: "failed-native-refresh",
         task: "Retained event",
         notifyPolicy: "silent",
-        deliveryStatus: "not_applicable",
       });
       const store = getTaskRegistryStore();
       const mutate = store.runAgentEventMutationAsync.bind(store);
@@ -822,7 +790,10 @@ describe("task agent event persistence", () => {
           await release.promise;
           return mutate(...args);
         });
-      const published = taskPublication(task.taskId, (current) => current.toolUseCount === 1);
+      using published = captureTaskPublication(
+        task.taskId,
+        (current) => current.toolUseCount === 1,
+      );
       emitTool(task.runId!, "retained");
       await entered.promise;
       try {
@@ -839,7 +810,7 @@ describe("task agent event persistence", () => {
       } finally {
         release.resolve();
       }
-      await published;
+      await published.wait();
       await joinEvents();
       expect(writes).toHaveBeenCalledOnce();
       expect(loadTaskRegistryStateFromSqliteReadOnly().tasks.get(task.taskId)).toMatchObject({
@@ -856,7 +827,6 @@ describe("task agent event persistence", () => {
         runId: "native-consume",
         task: "Queued cancellation",
         notifyPolicy: "silent",
-        deliveryStatus: "not_applicable",
       });
       emitTool(task.runId!, "first");
       emitTool(task.runId!, "second");
@@ -879,7 +849,6 @@ describe("task agent event persistence", () => {
         status: "queued",
         startedAt: 1_000,
         notifyPolicy: "silent",
-        deliveryStatus: "not_applicable",
       });
       const store = getTaskRegistryStore();
       const mutate = store.runAgentEventMutationAsync.bind(store);
@@ -943,7 +912,6 @@ describe("task agent event persistence", () => {
           runId: "retired-event",
           task: "Retired owner",
           notifyPolicy: "silent",
-          deliveryStatus: "not_applicable",
         });
         const store = getTaskRegistryStore();
         const mutate = store.runAgentEventMutationAsync.bind(store);

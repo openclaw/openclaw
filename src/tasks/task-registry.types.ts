@@ -188,7 +188,7 @@ export type TaskRecord = {
   cleanupAfter?: number;
   /** Tool invocations observed on this run's agent-event stream. */
   toolUseCount?: number;
-  /** Name of the most recent tool invocation observed for this run. */
+  /** Name of the most recent tool started by the current generation. Cleared when a successor generation starts. */
   lastToolName?: string;
   error?: string;
   progressSummary?: string;

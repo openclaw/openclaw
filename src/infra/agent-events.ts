@@ -326,10 +326,8 @@ function enrichAgentEvent(
   // emit time, since the run context can be cleared before the terminal persists.
   const sessionId =
     event.stream === "lifecycle" ? (event.sessionId ?? routing?.sessionId) : event.sessionId;
-  const lifecycleGeneration =
-    event.stream === "lifecycle"
-      ? (ownedLifecycleGeneration ?? currentLifecycleGeneration)
-      : ownedLifecycleGeneration;
+  // Even unregistered events keep their emission-time generation if a listener rotates it.
+  const lifecycleGeneration = ownedLifecycleGeneration ?? currentLifecycleGeneration;
   const agentId = event.agentId ?? routing?.agentId;
   const enriched: AgentEventRuntimePayload = {
     ...event,

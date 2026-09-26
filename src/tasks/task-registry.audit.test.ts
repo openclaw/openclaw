@@ -64,6 +64,57 @@ describe("task-registry audit", () => {
       ["stale_running", "stale-running"],
       ["missing_cleanup", "missing-cleanup"],
     ]);
+    expect(findings.find((finding) => finding.task.taskId === "stale-running")?.detail).toBe(
+      "running task appears stuck",
+    );
+  });
+
+  it("names a retained sessions_yield owner without treating delivery as child success", () => {
+    const now = Date.parse("2026-03-30T01:00:00.000Z");
+    const findings = listTaskAuditFindings({
+      now,
+      tasks: [
+        createTask({
+          taskId: "yield-owner",
+          runtime: "subagent",
+          status: "running",
+          deliveryStatus: "delivered",
+          lastToolName: "sessions_yield",
+          startedAt: now - 40 * 60_000,
+          lastEventAt: now - 40 * 60_000,
+        }),
+        createTask({
+          taskId: "delivered-live",
+          runtime: "subagent",
+          status: "running",
+          deliveryStatus: "delivered",
+          lastToolName: "read",
+          startedAt: now - 40 * 60_000,
+          lastEventAt: now - 40 * 60_000,
+        }),
+        createTask({
+          taskId: "fresh-yield",
+          runtime: "subagent",
+          status: "running",
+          lastToolName: "sessions_yield",
+          startedAt: now - 60_000,
+          lastEventAt: now - 60_000,
+        }),
+      ],
+    });
+
+    expect(findings.map((finding) => finding.task.taskId)).toEqual([
+      "yield-owner",
+      "delivered-live",
+    ]);
+    expect(findings.map((finding) => [finding.code, finding.severity, finding.detail])).toEqual([
+      [
+        "stale_running",
+        "error",
+        "last started tool is sessions_yield; that is not a confirmed pause. A deferred or rejected sessions_yield can leave the same name until its result arrives. Review the exact owner and generation, pending inputs, descendants, outstanding continuations, and parent delivery before tasks.cancel. Age, delivery, or a quiet turn does not prove the child finished.",
+      ],
+      ["stale_running", "error", "running task appears stuck"],
+    ]);
   });
 
   it("summarizes findings by severity and code", () => {

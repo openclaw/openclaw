@@ -462,7 +462,10 @@ export function listTasksForFlowId(flowId: string): TaskRecord[] {
   return listTasksFromIndex(tasks, taskIdsByParentFlowId, key);
 }
 
-type TaskFlowTaskState = Pick<TaskRecord, "taskId" | "runtime" | "status" | "error">;
+type TaskFlowTaskState = Pick<
+  TaskRecord,
+  "taskId" | "runtime" | "status" | "error" | "endedAt" | "lastToolName"
+>;
 
 /** Snapshot linked task states in one read without cloning retained task payloads. */
 export function listTaskStatesForFlowIds(
@@ -484,6 +487,8 @@ export function listTaskStatesForFlowIds(
           runtime: task.runtime,
           status: task.status,
           error: task.error,
+          endedAt: task.endedAt,
+          lastToolName: task.lastToolName,
         });
       }
     }

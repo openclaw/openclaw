@@ -37,6 +37,7 @@ import type { TaskAgentEventTarget } from "./task-registry-agent-event-target.js
 import {
   captureTaskAgentEventChange,
   captureTaskAgentEventLineage,
+  mergeQueuedTaskAgentEventProgress,
   readTaskAgentEventCommittedTarget,
   matchesTaskAgentEventTarget,
   prepareTaskAgentEventUpdate,
@@ -57,6 +58,11 @@ import {
   taskRegistryLog,
   tasks,
 } from "./task-registry-state.js";
+import {
+  captureLatestYieldCallId,
+  clearLatestYieldCalls,
+  forgetLatestYieldCall,
+} from "./task-registry-yield-call-tracker.js";
 import { getTaskRegistryStore } from "./task-registry.store.js";
 import { getTaskRunOwner } from "./task-run-owner.js";
 
@@ -75,6 +81,7 @@ registerOpenClawStateDatabaseAsyncResource({
       await Promise.allSettled(drains);
     }
     clearTaskAgentEventLineage(identity?.key);
+    clearLatestYieldCalls(identity?.key);
   },
 });
 
@@ -596,6 +603,11 @@ export function enqueueTaskAgentEvent(
 ): boolean {
   let task = initialTask;
   const source = captureTaskAgentEventSource(event);
+  // An earlier listener can rotate ownership during this event's delivery.
+  // Refuse it before it can retire current calls or queued batches.
+  if (source.lifecycleGeneration !== getAgentRunLifecycleGeneration()) {
+    return false;
+  }
   const entries = pendingByTask.get(task.taskId);
   const store = getTaskRegistryStore();
   const flowStore = getTaskFlowRegistryStore();
@@ -644,27 +656,30 @@ export function enqueueTaskAgentEvent(
   }
   const matching = [...(pendingByTask.get(task.taskId) ?? [])].filter(matches);
   if (matching.some((entry) => entry.input.change.kind === "terminal")) {
+    forgetLatestYieldCall(task.taskId);
     return false;
   }
   const lastAcceptedAt = matching.reduce(
     (at, entry) => Math.max(at, entry.input.change.at),
     task.lastEventAt ?? task.startedAt ?? task.createdAt,
   );
-  const needsPersistence =
-    event.stream === "lifecycle" ||
-    event.stream === "error" ||
-    (event.stream === "tool" && event.data.phase === "start") ||
-    event.ts - lastAcceptedAt >= TASK_ACTIVITY_LIVENESS_WRITE_MS;
-  if (!needsPersistence) {
-    return true;
-  }
   const backing = task.backing;
+  const latestYieldCallId = captureLatestYieldCallId(task, source, event);
   const change = captureTaskAgentEventChange(
     task,
     event,
     !getTaskRunOwner(task) && !(task.runtime === "subagent" && backing?.runtime === "subagent"),
+    latestYieldCallId,
   );
-  if (!change) {
+  const needsPersistence =
+    event.stream === "lifecycle" ||
+    event.stream === "error" ||
+    (event.stream === "tool" && event.data.phase === "start") ||
+    change?.clearLastToolName === true ||
+    event.ts - lastAcceptedAt >= TASK_ACTIVITY_LIVENESS_WRITE_MS;
+  // Ordinary tool results stay inside the liveness window. A non-yield
+  // sessions_yield result has to be admitted or the start clue never clears.
+  if (!needsPersistence || !change) {
     return true;
   }
   if (
@@ -680,12 +695,7 @@ export function enqueueTaskAgentEvent(
     previous !== active &&
     previous.input.change.kind === "progress"
   ) {
-    previous.input.change = {
-      ...change,
-      toolStarts: previous.input.change.toolStarts + change.toolStarts,
-      refreshError: previous.input.change.refreshError || change.refreshError,
-      patch: { ...previous.input.change.patch, ...change.patch },
-    };
+    previous.input.change = mergeQueuedTaskAgentEventProgress(previous.input.change, change);
     return true;
   }
   const context = captureOpenClawStateWorkerContext();
