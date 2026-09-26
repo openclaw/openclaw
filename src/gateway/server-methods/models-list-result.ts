@@ -59,6 +59,7 @@ import { createThinkingCatalogResolver } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { modelCatalogEntryMatchesTask } from "../../model-catalog/decision-compatibility.js";
 import { resolveProviderModelCatalogId } from "../../plugins/provider-model-routes.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -112,6 +113,9 @@ export function createGatewayAgentModelCatalogProjector(params: ModelCatalogDeci
       return (projectedCatalog = Promise.all(
         view.logicalEntries.map(async (entry) => {
           const routeVariants = view.variantsOf(entry) ?? [entry];
+          if (entry.inference?.chat === false) {
+            return view.project(entry, await evaluateEntry(entry, routeVariants)).runtimeEntry;
+          }
           const evaluation = evaluateNative(entry, await evaluateEntry(entry, routeVariants));
           const runtimeId =
             resolveCatalogDecisionRuntime({
@@ -161,15 +165,18 @@ function createPublicModelsListProjector(params: {
           ? Object.assign({}, entry, { alias })
           : entry;
       const capabilityProvider = params.apiKeyCapabilities?.resolveProvider(entry.provider);
-      const selectedRuntime = runtimeChoice
-        ? { id: runtimeChoice, source: "model" as const }
-        : resolveCatalogDecisionRuntime({
-            cfg: params.cfg,
-            agentId: params.agentId,
-            entry,
-            evaluation,
-            pluginRegistry: params.pluginRegistry,
-          });
+      const chat = publicEntry.inference?.chat !== false;
+      const selectedRuntime = !chat
+        ? undefined
+        : runtimeChoice
+          ? { id: runtimeChoice, source: "model" as const }
+          : resolveCatalogDecisionRuntime({
+              cfg: params.cfg,
+              agentId: params.agentId,
+              entry,
+              evaluation,
+              pluginRegistry: params.pluginRegistry,
+            });
       const agentRuntime = selectedRuntime
         ? params.pluginRegistry
           ? withPluginRuntimeRegistryScope(params.pluginRegistry, () =>
@@ -178,7 +185,7 @@ function createPublicModelsListProjector(params: {
           : projectWorkerPlacementAgentRuntime(selectedRuntime)
         : undefined;
       const thinkingProfile =
-        typeof publicEntry.reasoning !== "boolean"
+        !chat || typeof publicEntry.reasoning !== "boolean"
           ? undefined
           : resolveGatewayModelThinkingProfile({
               cfg: params.cfg,
@@ -204,7 +211,9 @@ function createPublicModelsListProjector(params: {
         ...(configuredEntry?.tags.size ? { tags: [...configuredEntry.tags] } : {}),
         ...(agentRuntime ? { agentRuntime } : {}),
         ...thinkingProfile,
-        ...(fastModeState.source === "default" ? {} : { effectiveFastMode: fastModeState.mode }),
+        ...(!chat || fastModeState.source === "default"
+          ? {}
+          : { effectiveFastMode: fastModeState.mode }),
         ...(capabilityProvider && params.apiKeyCapabilities?.providers.has(capabilityProvider)
           ? {
               apiKeySupported: params.apiKeyCapabilities.providers.get(capabilityProvider) === true,
@@ -220,7 +229,10 @@ function createPublicModelsListProjector(params: {
     const projectedAvailability = params.preserveUnknownAvailability
       ? evaluation.availability
       : (evaluation.availability ?? false);
-    const supportsFastMode = params.fastMode(entry, evaluation, preparedEntry.agentRuntime?.id);
+    const supportsFastMode =
+      entry.inference?.chat === false
+        ? undefined
+        : params.fastMode(entry, evaluation, preparedEntry.agentRuntime?.id);
     return Object.assign(
       {},
       preparedEntry,
@@ -366,10 +378,6 @@ export async function prepareModelsListResult(
   if (!metadataSnapshot || !preparedAuthStore) {
     throw new Error("Gateway model catalog owner omitted prepared metadata or auth state");
   }
-  const availableDecisionModels = listDecisionModels({
-    config: cfg,
-    snapshot: metadataSnapshot,
-  });
   const retainedModel =
     params.includeManualSelection && view === "configured" && scope?.sessionEntry
       ? resolveSessionModelRef(cfg, scope.sessionEntry, agentId, {
@@ -437,7 +445,17 @@ export async function prepareModelsListResult(
     catalog,
     provider: params.params.provider,
   });
-  const decisionModels = availableDecisionModels.filter(matchesProvider);
+  const matchesTask = (entry: ModelCatalogEntry) =>
+    modelCatalogEntryMatchesTask(entry, params.params.task);
+  // The legacy decision chooser is inventory, not a conversational override picker.
+  // Preserve that public scope while deriving it from the same acquired canonical catalog.
+  const projectDecisionModels = () => {
+    const decisionModels = listDecisionModels({
+      catalog: catalog.filter(matchesProvider),
+      snapshot: metadataSnapshot,
+    });
+    return decisionModels.length ? { decisionModels } : {};
+  };
   const { routeVariants, providerOutcomes } = projector.snapshot;
   const publicProviderOutcomes = projectProviderCatalogOutcomes(providerOutcomes);
   const visibilityPolicy = createModelVisibilityPolicy({
@@ -557,10 +575,10 @@ export async function prepareModelsListResult(
       isCurrent: () => isCurrent() && inventoryProjector.isCurrent(),
       read: () => ({
         models: entries
-          .filter(({ entry }) => matchesProvider(entry))
+          .filter(({ entry }) => matchesProvider(entry) && matchesTask(entry))
           .map(({ entry, host }) => projectPublic(entry, evaluateNative(entry, host))),
         ...outcomeProjection,
-        ...(decisionModels.length ? { decisionModels } : {}),
+        ...projectDecisionModels(),
       }),
     };
   }
@@ -600,9 +618,10 @@ export async function prepareModelsListResult(
     routeVariants,
     prepareEntry: async (entry, variants) => {
       const key = resolveModelCatalogIdentityKey(entry);
-      const requestedRuntimes = configuredEntriesByKey.get(
-        modelKey(entry.provider, entry.id),
-      )?.pickerRuntimes;
+      const requestedRuntimes =
+        entry.inference?.chat === false
+          ? undefined
+          : configuredEntriesByKey.get(modelKey(entry.provider, entry.id))?.pickerRuntimes;
       const baseRuntime = requestedRuntimes?.length
         ? resolveAgentHarnessPolicy({
             config: cfg,
@@ -656,21 +675,24 @@ export async function prepareModelsListResult(
       const currentCatalog = readCatalog();
       const keyOf = createModelCatalogIdentityKeyResolver();
       return {
-        models: currentCatalog.filter(matchesProvider).map((entry) => {
-          const key = keyOf(entry);
-          const evaluation = evaluations.get(key);
-          if (!evaluation) {
-            throw new Error("Model catalog publication omitted prepared auth evaluation");
-          }
-          const runtimeChoices = runtimeChoiceReaders.get(key)?.();
-          const projected = projectPublic(entry, evaluation);
-          if (runtimeChoices?.length) {
-            projected.runtimeChoices = runtimeChoices;
-          }
-          return projected;
-        }),
+        models: currentCatalog
+          .filter(matchesProvider)
+          .filter(matchesTask)
+          .map((entry) => {
+            const key = keyOf(entry);
+            const evaluation = evaluations.get(key);
+            if (!evaluation) {
+              throw new Error("Model catalog publication omitted prepared auth evaluation");
+            }
+            const runtimeChoices = runtimeChoiceReaders.get(key)?.();
+            const projected = projectPublic(entry, evaluation);
+            if (runtimeChoices?.length) {
+              projected.runtimeChoices = runtimeChoices;
+            }
+            return projected;
+          }),
         ...outcomeProjection,
-        ...(decisionModels.length ? { decisionModels } : {}),
+        ...projectDecisionModels(),
       };
     },
   };

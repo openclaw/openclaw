@@ -34,6 +34,7 @@ function resolveAdditionalConfiguredModelRefs(params: {
     ...Object.keys(defaults?.models ?? {}),
     ...Object.keys(agent?.models ?? {}),
     agent?.utilityModel ?? defaults?.utilityModel,
+    agent?.decisionModel ?? defaults?.decisionModel,
     resolveAgentModelPrimaryValue(defaults?.imageModel),
     ...resolveAgentModelFallbackValues(defaults?.imageModel),
     resolveAgentModelPrimaryValue(defaults?.pdfModel),

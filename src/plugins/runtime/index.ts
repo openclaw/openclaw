@@ -211,6 +211,8 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
     decisions: {
+      evaluateV2: async (...args) =>
+        (await import("../../decisions/runtime.js")).evaluateDecisionV2(...args),
       evaluate: async (...args) =>
         (await import("../../decisions/runtime.js")).evaluateDecision(...args),
     },

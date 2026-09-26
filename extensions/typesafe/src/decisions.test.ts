@@ -1,19 +1,22 @@
-import type { DecisionBatch } from "openclaw/plugin-sdk/decisions";
+import type { DecisionBatchV2, DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { evaluate } from "./client.js";
 import { createDecisionProvider } from "./decisions.js";
 import { EvaluationError } from "./errors.js";
+
 vi.mock("./client.js", () => ({ evaluate: vi.fn() }));
-const batch: DecisionBatch = {
-  state: "synthetic",
+const batch: DecisionBatchV2 = {
+  state: { type: "text", text: "synthetic" },
   questions: {
     b: { type: "boolean", instructions: "truth" },
     c: { type: "choice", criteria: { yes: "yes", no: "no" } },
     s: { type: "score", criteria: ["low", "middle", "high"] },
   },
 };
-const context = () => ({
-  model: "jev-agent-selected",
+const context = (): DecisionProviderContextV2 => ({
+  model: { id: "jev-agent-selected", name: "Jev", provider: "typesafe" },
+  config: { plugins: { entries: { typesafe: { config: { timeoutMs: 2000 } } } } },
+  auth: { mode: "api-key", apiKey: "synthetic-key" },
   agentId: "research",
   signal: new AbortController().signal,
   deadlineMonotonicMs: performance.now() + 500,
@@ -72,10 +75,10 @@ describe("host decision adapter", () => {
   });
   it("rejects cold credentials without dispatch", async () => {
     expect(
-      await createDecisionProvider(() => ({ ...config, apiKey: undefined })).evaluate(
-        batch,
-        context(),
-      ),
+      await createDecisionProvider(() => ({ ...config, apiKey: undefined })).evaluate(batch, {
+        ...context(),
+        auth: { mode: "api-key" },
+      }),
     ).toEqual({ status: "unavailable", reason: "credentials-unavailable" });
     expect(evaluate).not.toHaveBeenCalled();
   });
@@ -112,4 +115,45 @@ describe("host decision adapter", () => {
     });
     await expect(failure).rejects.not.toHaveProperty("cause");
   });
+});
+
+it.each<DecisionBatchV2>([
+  { ...batch, state: { type: "image", dataUri: "data:image/png;base64,AA==" } },
+  { ...batch, state: { type: "list", items: [{ id: "one", content: "text" }] } },
+  { ...batch, questions: { q: { type: "sort" } } },
+  { ...batch, questions: { q: { type: "tags", criteria: { a: "A" } } } },
+])("rejects unsupported V2 capabilities before dispatch", async (input) => {
+  const dispatch = vi.mocked(evaluate);
+  const provider = createDecisionProvider(() => config);
+  expect(await provider.evaluate(input, context())).toEqual({
+    status: "unavailable",
+    reason: "unsupported-input",
+  });
+  expect(dispatch).not.toHaveBeenCalled();
+});
+
+it.each(["off", "on"] as const)(
+  "rejects unsupported reasoning %s before dispatch",
+  async (reasoning) => {
+    const dispatch = vi.mocked(evaluate);
+    const provider = createDecisionProvider(() => config);
+    expect(await provider.evaluate(batch, { ...context(), reasoning })).toEqual({
+      status: "unavailable",
+      reason: "unsupported-input",
+    });
+    expect(dispatch).not.toHaveBeenCalled();
+  },
+);
+
+it("uses prepared auth and nonsecret settings without calling the live secret hook", async () => {
+  const getConfig = vi.fn(() => config);
+  vi.mocked(evaluate).mockRejectedValue(new EvaluationError("synthetic", "transport"));
+  const ctx = context();
+  ctx.config.plugins!.entries!.typesafe!.config = {
+    apiKey: "unprepared-do-not-use",
+    timeoutMs: 2000,
+  };
+  await createDecisionProvider(getConfig).evaluate(batch, ctx);
+  expect(getConfig).not.toHaveBeenCalled();
+  expect(vi.mocked(evaluate).mock.lastCall?.[1].apiKey).toBe("synthetic-key");
 });

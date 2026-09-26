@@ -4,6 +4,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
+import { loadManifestModelCatalogRows } from "./model-catalog-manifest.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
@@ -31,6 +32,16 @@ function createConfiguredModelCatalogSnapshot(params: {
 }): ModelCatalogSnapshot {
   const replace = params.agentFacts.input.config.models?.mode === "replace";
   const keyOf = createModelCatalogIdentityKeyResolver();
+  // Task descriptors must survive static preparation without being materialized as chat Models.
+  const taskEntries = loadManifestModelCatalogRows(
+    params.agentFacts.input.config,
+    params.workspaceFacts.pluginMetadataSnapshot,
+  ).filter((entry) => entry.inference?.chat === false || entry.inference?.decision);
+  const taskByKey = indexFirstByKey(taskEntries, keyOf);
+  const preserveTaskMetadata = (entry: ModelCatalogEntry) => {
+    const declared = taskByKey.get(keyOf(entry));
+    return declared ? overlayCatalogMetadata(declared, entry) : entry;
+  };
   const runtimeEntries = (replace ? [] : params.configuredRuntimeModels).map(({ model }) =>
     modelCatalogRowToEntry(model),
   );
@@ -78,13 +89,17 @@ function createConfiguredModelCatalogSnapshot(params: {
             const model = params.templateModelRegistry.find(provider, modelId);
             return model ? [modelCatalogRowToEntry(model)] : [];
           })),
+      ...taskEntries,
     ],
     keyOf,
+  ).map(preserveTaskMetadata);
+  const staticEntries = dedupeByKey([...runtimeEntries, ...taskEntries], keyOf).map(
+    preserveTaskMetadata,
   );
   return {
     entries: configuredEntries,
     routeVariants: configuredEntries,
-    ...(runtimeEntries.length > 0 ? { staticEntries: runtimeEntries } : {}),
+    ...(staticEntries.length > 0 ? { staticEntries } : {}),
   };
 }
 

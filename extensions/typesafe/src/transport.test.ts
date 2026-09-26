@@ -134,6 +134,37 @@ it.each([
   });
   expect(fetch).toHaveBeenCalledOnce();
 });
+it.each([413, 422])(
+  "classifies HTTP %s as sanitized unsupported input without reading its body",
+  async (status) => {
+    const read = vi.fn();
+    const cancel = vi.fn();
+    const fetch = mockFetch(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>(
+            {
+              pull: read,
+              cancel,
+            },
+            { highWaterMark: 0 },
+          ),
+          { status },
+        ),
+    );
+    const failure = requestEvaluation(request);
+    await expect(failure).rejects.toMatchObject({
+      name: "EvaluationError",
+      message: "TypeSafe rejected the supplied input.",
+      reason: "unsupported-input",
+    });
+    await expect(failure).rejects.not.toHaveProperty("cause");
+    expect(read).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledOnce();
+  },
+);
+
 it("does not expose or consume HTTP error diagnostics", async () => {
   const cancelled = vi.fn();
   mockFetch(async () => new Response(new ReadableStream({ cancel: cancelled }), { status: 401 }));

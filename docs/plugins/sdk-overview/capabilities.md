@@ -122,8 +122,7 @@ The focused `openclaw/plugin-sdk/decisions` entrypoint provides additive V2 data
 types and pure validation/conversion helpers for adapters and saved decision fixtures.
 These helpers do not run a provider, collect evidence, choose a model or issue host
 authority. The existing V1 `api.runtime.decisions.evaluate` and
-`registerDecisionProvider` contracts remain unchanged. V2 execution is a separate
-integration; importing V2 data types does not make a V2 runtime available.
+`registerDecisionProvider` contracts remain unchanged. These pure data helpers are independent of the execution capabilities described below.
 
 `DecisionContentV2` distinguishes text, JSON, image data and stable-ID lists.
 Answers can preserve explicit Boolean decisions separately from P(true), nullable
@@ -155,6 +154,52 @@ provider-defined probability semantics, confidence declarations and Boolean
 criteria requirements have distinct metadata fields; a metadata declaration is
 not proof of successful inference or provider health.
 
+## Richer typed decision evaluation
+
+The decision SDK remains first-class: use `api.runtime.decisions.evaluate` for the
+source-compatible version 1 contract, or `evaluateV2(batch, options)` for explicit
+version 2 evidence and richer results. `api.runtime.llm.complete` is unchanged;
+decisions do not move into conversational completion arguments or results.
+
+```ts
+const outcome = await api.runtime.decisions.evaluateV2(
+  {
+    state: { type: "json", value: { text: "Explicitly supplied evidence" } },
+    questions: {
+      relevant: { type: "boolean", criteria: { true: "Relevant", false: "Not relevant" } },
+    },
+  },
+  { purpose: "example-plugin.relevance", rubricVersion: "1", timeoutMs: 1500, signal },
+);
+```
+
+Both decision versions use the shared internal model authorization and operator
+lifetime. The configured decision purpose has no primary-model fallback. Omitted
+unbound agent selection is global; a host-issued decision capability retains its
+agent. Explicit SDK agent overrides require the existing plugin permission. No
+ambient conversation, files or private session identifiers are added. Model/profile
+overrides and grounding are not parameters; undeclared controls are rejected.
+
+Version 2 distinguishes text, JSON, image and list evidence. A provider must support
+the actual input and operation. Native sort/tags, images and task-specific reasoning
+require a supporting adapter; version 1 providers reject unsupported kinds and
+explicit reasoning controls before dispatch. A decision capability or text-encoded
+output does not make a classifier conversational.
+
+Results preserve abstention, independent estimates, fractional scores, missing
+distributions, per-question errors and reported accounting. Boolean answers and
+P(true) are distinct; either may be absent when unreported, but not both. Generative
+answers do not acquire invented native classifier probabilities. The host never
+normalizes independent estimates or replaces abstention with argmax. Unknown costs
+remain absent, not zero. Partial errors are data, not fabricated negative answers.
+Results do not authorize actions.
+
+Import versioned types from `openclaw/plugin-sdk/decisions`. Version 1 evaluation
+narrows through the same internal execution owner and returns `unsupported-input`
+when richer results cannot be represented without losing information. Caller
+cancellation and closed authority still reject; physical cleanup precedes authority
+release. Decision-provider registration stays a first-class SDK operation.
+
 ## Decision models (contract version 1)
 
 Start with [Decision models](/concepts/decision-models) for model choices,
@@ -162,8 +207,8 @@ configuration, and Choice/Score/Boolean rubric examples. This section defines
 the provider and consumer SDK contract.
 
 `api.registerDecisionProvider({ id, contractVersion: 1, isReady, evaluate })` registers
-an optional decision provider, separate from conversational model providers and
-agent tools. Declare the ID in manifest `contracts.decisionProviders`; duplicate
+an optional typed decision capability, separate from conversational arguments and
+agent tools, but sharing canonical provider identity internally. Declare the ID in manifest `contracts.decisionProviders`; duplicate
 IDs are rejected. Registration and optional `isReady()` must be local, synchronous,
 and network-free. Import types from `openclaw/plugin-sdk/decisions`.
 
@@ -198,6 +243,43 @@ The [ONNX plugin](/plugins/onnx) supplies local classifiers; the
 [TypeSafe AI plugin](/plugins/typesafe) supplies hosted Jev and local System One
 adapters, including Kev. Both plugins require
 separate installation, explicit setup, and role selection.
+
+### Prepared version 2 providers
+
+`registerDecisionProvider` also accepts `DecisionProviderV2`. It remains the
+first-class decision registration API. A version 2 definition contains `id`,
+`contractVersion: 2`, `evaluate(batch, context)`, and a `provider` definition using
+the existing `ProviderPlugin` contract without a second ID. Omit `provider` only
+when this same plugin already registered that canonical identity. A conflicting
+owner or duplicate auth definition is rejected; registration cannot replace
+another plugin's provider.
+
+The host supplies `DecisionProviderContextV2`: canonical model metadata, prepared
+auth, the selected config/agent scope, cancellation, task reasoning, and a monotonic
+deadline. For a both-task provider, `model.headers` retains effective request
+headers produced by normal auth preparation, with protected values unwrapped only
+for the current provider handoff. These private headers are never catalog or
+client-facing metadata. The executor translates the decision wire protocol; it does
+not select credentials or fabricate a conversational model descriptor. Task support comes
+from canonical `modelCatalog` inference metadata, not a separate model list.
+Decision models need not support chat, and both-task models must declare both.
+
+Physical credential scope is declared by canonical provider `authScope` metadata
+and must match the runtime provider declaration. The default `agent` scope uses
+normal profile/account resolution. `plugin` scope preserves protected plugin-global
+credentials in their existing location: it uses the exact live provider's synchronous
+`resolveSyntheticAuth` hook, rejects profile pins, and cannot fall back to agent
+profiles, environment keys, or `models.providers` credentials. Cached or restored
+synthetic bearer facts are not live authority for plugin scope. The existing host
+prepared-secret getter supplies that hook; never resolve cold SecretRefs or move
+them into another credential store during inference. A no-auth marker establishes
+credential eligibility, not service health or verified ONNX artifacts.
+
+A configured `decisionModel` can use the normal `provider/model@profile` syntax
+for an agent-scoped version 2 provider. The selected profile is locked: failure does
+not silently change accounts. Plugin-global providers and version 1 executors reject
+profile pins they cannot honor. Public evaluation options do not gain a profile
+or model override merely because the configured purpose supports a pin.
 
 ### Calling from a third-party plugin
 

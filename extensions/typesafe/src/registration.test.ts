@@ -6,7 +6,7 @@ import { Check } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "../index.js";
 import { evaluate } from "./client.js";
-import { ConfigSchema, runtimeConfig } from "./config.js";
+import { ConfigSchema, runtimeSettings } from "./config.js";
 
 // Registration tests exercise host wiring without dispatching HTTP requests.
 vi.mock("./client.js", () => ({ evaluate: vi.fn() }));
@@ -57,8 +57,18 @@ describe("plugin ownership and configuration", () => {
     plugin.register(api);
     expect(registerTool).not.toHaveBeenCalled();
     expect(manifest.contracts).toEqual({ decisionProviders: ["typesafe"] });
-    expect(manifest.providers).toBeUndefined();
-    expect(manifest.modelCatalog).toBeUndefined();
+    expect(manifest.providers).toEqual(["typesafe"]);
+    expect(manifest.decisionModels).toBeUndefined();
+    expect(manifest.modelCatalog.providers.typesafe.authScope).toBe("plugin");
+    for (const model of manifest.modelCatalog.providers.typesafe.models) {
+      expect(model.inference.chat).toBe(false);
+      expect(model.inference.decision.reasoning).toEqual({ modes: ["auto"] });
+      expect(model.inference.decision.billing).toBeUndefined();
+      expect(model.inference.decision.limits).toBeUndefined();
+      for (const field of ["api", "contextWindow", "maxTokens", "cost"]) {
+        expect(model[field]).toBeUndefined();
+      }
+    }
     expect(manifest.controlUi).toBeUndefined();
     const metadata = JSON.parse(
       fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -67,12 +77,12 @@ describe("plugin ownership and configuration", () => {
     expect(metadata.openclaw.extensions).toEqual(["./index.ts"]);
     expect(manifest.enabledByDefault).toBe(false);
     expect(api.registerDecisionProvider).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ id: "typesafe", contractVersion: 1 }),
+      expect.objectContaining({ id: "typesafe", contractVersion: 2 }),
     );
   });
   it("keeps runtime configuration bounded", () => {
     expect(Check(ConfigSchema, { model: "jev-latest" })).toBe(false);
-    expect(() => runtimeConfig({ timeoutMs: -1 })).toThrow();
+    expect(() => runtimeSettings({ timeoutMs: -1 })).toThrow();
   });
 });
 
@@ -95,15 +105,24 @@ it("executes the registered provider with prepared credentials and preserves can
       usage: { input_tokens: 3, output_tokens: 1 },
     },
   });
-  const batch = { state: "synthetic evidence", questions: { q: { type: "boolean" } } };
+  const batch = {
+    state: { type: "text", text: "synthetic evidence" },
+    questions: { q: { type: "boolean" } },
+  };
   const controller = new AbortController();
   const context = {
-    model: "jev-agent-selected",
+    model: { id: "jev-agent-selected", name: "Jev", provider: "typesafe" },
+    config: {},
+    auth: { mode: "api-key", apiKey: "synthetic-key" },
     agentId: "research",
     signal: controller.signal,
     deadlineMonotonicMs: performance.now() + 1000,
   };
-  expect(provider.isReady()).toBe(true);
+  expect(provider.provider.authScope).toBe("plugin");
+  expect(provider.provider.resolveSyntheticAuth({ provider: "typesafe" }).apiKey).toBe(
+    "synthetic-key",
+  );
+  vi.mocked(getPreparedPluginSecretInput).mockClear();
   await expect(provider.evaluate(batch, context)).resolves.toMatchObject({
     status: "ok",
     result: { answers: { q: { type: "boolean", probabilityTrue: 0.37 } } },
@@ -113,11 +132,16 @@ it("executes the registered provider with prepared credentials and preserves can
   });
   expect(vi.mocked(evaluate).mock.lastCall?.[1].apiKey).toBe("synthetic-key");
   expect(vi.mocked(evaluate).mock.lastCall?.[2]).toBe(controller.signal);
-  // Keep one registered provider across credential rotation, loss, and recovery.
+  expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
+  // The common auth owner calls the live hook; the executor uses only its prepared result.
   for (const key of ["synthetic-rotated", undefined, "synthetic-recovered"]) {
     vi.mocked(getPreparedPluginSecretInput).mockReturnValue({ revision: 2, value: key });
     const calls = vi.mocked(evaluate).mock.calls.length;
-    const outcome = await provider.evaluate(batch, context);
+    const auth = provider.provider.resolveSyntheticAuth({ provider: "typesafe" });
+    const outcome = await provider.evaluate(batch, {
+      ...context,
+      auth: auth ?? { mode: "api-key" },
+    });
     if (key) {
       expect(outcome.status).toBe("ok");
       expect(vi.mocked(evaluate).mock.lastCall?.[1].apiKey).toBe(key);
@@ -131,5 +155,5 @@ it("executes the registered provider with prepared credentials and preserves can
   await expect(provider.evaluate(batch, context)).rejects.toThrow("caller closed");
   expect(evaluate).toHaveBeenCalledTimes(3);
   vi.mocked(getPreparedPluginSecretInput).mockReturnValue({ revision: 2 });
-  expect(provider.isReady()).toBe(false);
+  expect(provider.provider.resolveSyntheticAuth({ provider: "typesafe" })).toBeUndefined();
 });

@@ -10,6 +10,7 @@ import {
 } from "../plugins/provider-runtime.js";
 import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationRegistryScope } from "../plugins/runtime/generation-state.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
@@ -169,6 +170,55 @@ function fixture(
 }
 
 describe("plugin physical credential ownership through common auth", () => {
+  it("does not treat a matching plugin-id scope as prepared credential authority", () => {
+    const f = fixture();
+    f.activate();
+    expect(
+      withPluginRuntimePluginScope(
+        { pluginId: id },
+        () => getPreparedPluginSecretInput(id, "pluginSecretRef"),
+        f.registry,
+      ),
+    ).not.toHaveProperty("value");
+    expect(
+      f.instance.run(() => getPreparedPluginSecretInput(id, "pluginSecretRef")),
+    ).toHaveProperty("value", "resolved-plugin-key");
+  });
+  it("rejects a delayed frame after its exact admitted invocation has settled", async () => {
+    const f = fixture();
+    f.activate();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let later!: Promise<ReturnType<typeof getPreparedPluginSecretInput>>;
+    f.instance.run(() => {
+      later = gate.then(() => getPreparedPluginSecretInput(id, "pluginSecretRef"));
+    });
+    release();
+    expect(await later).not.toHaveProperty("value");
+  });
+  it("does not let a quiesced instance borrow a same-id replacement's current credential", async () => {
+    const old = fixture();
+    old.activate();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const delayed = old.instance.run(async () => {
+      await gate;
+      return getPreparedPluginSecretInput(id, "pluginSecretRef");
+    });
+    old.instance.quiesce();
+    const replacement = fixture();
+    replacement.activate();
+    release();
+    expect(await delayed).not.toHaveProperty("value");
+    expect(
+      replacement.instance.run(() => getPreparedPluginSecretInput(id, "pluginSecretRef")),
+    ).toHaveProperty("value", "resolved-plugin-key");
+  });
+
   it("uses prepared metadata ownership instead of an unrelated ambient declaration", async () => {
     const f = fixture();
     f.activate();

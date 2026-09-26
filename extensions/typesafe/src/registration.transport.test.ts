@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
-import type { DecisionBatch } from "openclaw/plugin-sdk/decisions";
+import type {
+  DecisionBatchV2,
+  DecisionEntry,
+  DecisionProviderContextV2,
+} from "openclaw/plugin-sdk/decisions";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import plugin from "../index.js";
 
@@ -9,8 +14,8 @@ vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   getPreparedPluginSecretInput: vi.fn(),
 }));
 
-const batch: DecisionBatch = {
-  state: { evidence: "synthetic only" },
+const batch: DecisionBatchV2 = {
+  state: { type: "json", value: { evidence: "synthetic only" } },
   questions: {
     q: { type: "boolean", instructions: "Does the evidence satisfy the criterion?" },
     c: { type: "choice", criteria: { keep: "Keep", skip: "Skip" } },
@@ -41,7 +46,7 @@ function registeredProvider() {
     registerDecisionProvider,
   } as unknown as OpenClawPluginApi);
   const provider = registerDecisionProvider.mock.calls[0]?.[0];
-  assert(provider);
+  assert(provider?.contractVersion === 2);
   return provider;
 }
 
@@ -61,7 +66,9 @@ it("runs the registered provider through the HTTP transport and back to host dec
   const provider = registeredProvider();
   await expect(
     provider.evaluate(batch, {
-      model: "jev-agent-selected",
+      model: { id: "jev-agent-selected", name: "Jev", provider: "typesafe" },
+      config: {},
+      auth: { mode: "api-key", apiKey: "synthetic-key" },
       agentId: "research",
       signal: new AbortController().signal,
       deadlineMonotonicMs: performance.now() + 1000,
@@ -84,21 +91,27 @@ it("runs the registered provider through the HTTP transport and back to host dec
   assert(typeof body === "string");
   expect(JSON.parse(body)).toEqual({
     ...batch,
+    state: { evidence: "synthetic only" },
     questions: { ...batch.questions, q: { ...batch.questions.q, type: "noul" } },
     model: "jev-agent-selected",
   });
 });
 
-it("preserves reported probability rounding and a non-argmax vendor choice", async () => {
+it.each([
+  { keep: 0.5, skip: 0.49 },
+  { keep: 0.9, skip: 0.1 },
+])("preserves native estimates and a non-argmax vendor choice", async (probabilities) => {
   const reported = structuredClone(response);
   reported.answers.c.choice = "skip";
-  reported.answers.c.probabilities = { keep: 0.5, skip: 0.49 };
+  reported.answers.c.probabilities = probabilities;
   reported.answers.s.score = 0.607;
   const fetch = vi.fn(async () => new Response(JSON.stringify(reported)));
   vi.stubGlobal("fetch", fetch);
   await expect(
     registeredProvider().evaluate(batch, {
-      model: "jev-agent-selected",
+      model: { id: "jev-agent-selected", name: "Jev", provider: "typesafe" },
+      config: {},
+      auth: { mode: "api-key", apiKey: "synthetic-key" },
       signal: new AbortController().signal,
       deadlineMonotonicMs: performance.now() + 1000,
     }),
@@ -114,14 +127,18 @@ it("does not dispatch when prepared credentials disappear or caller authority is
   vi.stubGlobal("fetch", fetch);
   const provider = registeredProvider();
   const controller = new AbortController();
-  const context = {
-    model: "jev-agent-selected",
+  const context: DecisionProviderContextV2 = {
+    model: { id: "jev-agent-selected", name: "Jev", provider: "typesafe" },
+    config: {},
+    auth: { mode: "api-key", apiKey: "synthetic-key" },
     agentId: "research",
     signal: controller.signal,
     deadlineMonotonicMs: performance.now() + 1000,
   };
   vi.mocked(getPreparedPluginSecretInput).mockReturnValue({ revision: 2 });
-  await expect(provider.evaluate(batch, context)).resolves.toEqual({
+  await expect(
+    provider.evaluate(batch, { ...context, auth: { mode: "api-key" } }),
+  ).resolves.toEqual({
     status: "unavailable",
     reason: "credentials-unavailable",
   });
@@ -130,10 +147,13 @@ it("does not dispatch when prepared credentials disappear or caller authority is
   expect(fetch).not.toHaveBeenCalled();
 });
 
-it.each<DecisionBatch>([
-  { state: null, questions: { s: { type: "score", criteria: Array(11).fill("level") } } },
+it.each<DecisionBatchV2>([
   {
-    state: null,
+    state: { type: "json", value: null },
+    questions: { s: { type: "score", criteria: Array(11).fill("level") } },
+  },
+  {
+    state: { type: "json", value: null },
     questions: {
       c: {
         type: "choice",
@@ -141,13 +161,15 @@ it.each<DecisionBatch>([
       },
     },
   },
-  { ...batch, state: { constructor: "synthetic reserved key" } },
+  { ...batch, state: { type: "json", value: { constructor: "synthetic reserved key" } } },
 ])("rejects unsupported vendor input without dispatch", async (input) => {
   const fetch = vi.fn();
   vi.stubGlobal("fetch", fetch);
   await expect(
     registeredProvider().evaluate(input, {
-      model: "jev-agent-selected",
+      model: { id: "jev-agent-selected", name: "Jev", provider: "typesafe" },
+      config: {},
+      auth: { mode: "api-key", apiKey: "synthetic-key" },
       signal: new AbortController().signal,
       deadlineMonotonicMs: performance.now() + 1000,
     }),
@@ -161,7 +183,9 @@ it("does not dispatch when preparation consumes the native deadline", async () =
   vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(100);
   await expect(
     registeredProvider().evaluate(batch, {
-      model: "jev-agent-selected",
+      model: { id: "jev-agent-selected", name: "Jev", provider: "typesafe" },
+      config: {},
+      auth: { mode: "api-key", apiKey: "synthetic-key" },
       signal: new AbortController().signal,
       deadlineMonotonicMs: 50,
     }),
@@ -192,7 +216,9 @@ it("limits an in-flight request to the budget remaining after preparation", asyn
   );
   const controller = new AbortController();
   const pending = registeredProvider().evaluate(batch, {
-    model: "jev-agent-selected",
+    model: { id: "jev-agent-selected", name: "Jev", provider: "typesafe" },
+    config: {},
+    auth: { mode: "api-key", apiKey: "synthetic-key" },
     signal: controller.signal,
     deadlineMonotonicMs: 50,
   });
@@ -214,7 +240,7 @@ it.each(["inherited array serializer", "hidden serializer", "getter", "hidden ar
   "rejects a %s before executing user code or dispatching the registered provider",
   async (kind) => {
     const hook = vi.fn(() => "synthetic replacement");
-    let state: DecisionBatch["state"];
+    let state: DecisionEntry;
     if (kind === "inherited array serializer") {
       const prototype = Object.create(Array.prototype);
       Object.defineProperty(prototype, "toJSON", { value: hook });
@@ -233,11 +259,13 @@ it.each(["inherited array serializer", "hidden serializer", "getter", "hidden ar
     await expect(
       registeredProvider().evaluate(
         {
-          state,
+          state: { type: "json", value: state },
           questions: { q: { type: "boolean" } },
         },
         {
-          model: "jev-agent-selected",
+          model: { id: "jev-agent-selected", name: "Jev", provider: "typesafe" },
+          config: {},
+          auth: { mode: "api-key", apiKey: "synthetic-key" },
           signal: new AbortController().signal,
           deadlineMonotonicMs: performance.now() + 1000,
         },
@@ -247,3 +275,118 @@ it.each(["inherited array serializer", "hidden serializer", "getter", "hidden ar
     expect(fetch).not.toHaveBeenCalled();
   },
 );
+
+it.each([42, false])(
+  "encodes explicit JSON scalar %s without treating it as ambient evidence",
+  async (value) => {
+    const fetch = vi.fn(
+      async (_url: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify(response)),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const outcome = await registeredProvider().evaluate(
+      { ...batch, state: { type: "json", value } },
+      {
+        model: { id: "jev-latest", name: "Jev", provider: "typesafe" },
+        config: {},
+        auth: { mode: "api-key", apiKey: "synthetic-key" },
+        signal: new AbortController().signal,
+        deadlineMonotonicMs: performance.now() + 1000,
+      },
+    );
+    expect(outcome.status).toBe("ok");
+    const body = fetch.mock.calls[0]?.[1]?.body;
+    assert(typeof body === "string");
+    expect(JSON.parse(body).state).toBe(JSON.stringify(value));
+  },
+);
+
+it.each(["choice", "score"] as const)(
+  "rejects zero-mass %s distributions from the registered transport",
+  async (kind) => {
+    const reported = structuredClone(response);
+    if (kind === "choice") {
+      reported.answers.c.probabilities = { keep: 0, skip: 0 };
+    } else {
+      reported.answers.s.probabilities = { 0: 0, 1: 0 };
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify(reported))),
+    );
+    await expect(
+      registeredProvider().evaluate(batch, {
+        model: { id: "jev-latest", name: "Jev", provider: "typesafe" },
+        config: {},
+        auth: { mode: "api-key", apiKey: "synthetic-key" },
+        signal: new AbortController().signal,
+        deadlineMonotonicMs: performance.now() + 1000,
+      }),
+    ).resolves.toEqual({ status: "unavailable", reason: "invalid-response" });
+  },
+);
+
+it("sends the registered prepared request through guarded loopback HTTP and sanitizes 413/422", async () => {
+  let status = 200;
+  const received: { authorization?: string; url?: string; body: unknown }[] = [];
+  await withServer(
+    (request, serverResponse) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        received.push({
+          authorization: request.headers.authorization,
+          url: request.url,
+          body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+        });
+        serverResponse.writeHead(status, { "content-type": "application/json" });
+        serverResponse.end(
+          status === 200
+            ? JSON.stringify({
+                model: "kev-latest",
+                answers: { q: { type: "noul", noul: 0.37 } },
+                usage: { input_tokens: 3, output_tokens: 1 },
+              })
+            : "synthetic-private-evidence synthetic-prepared-key",
+        );
+      });
+    },
+    async (baseUrl) => {
+      const provider = registeredProvider();
+      const context: DecisionProviderContextV2 = {
+        model: { id: "kev-latest", name: "Kev", provider: "typesafe" },
+        config: { plugins: { entries: { typesafe: { config: { baseUrl } } } } },
+        auth: { mode: "api-key", apiKey: "synthetic-prepared-key" },
+        reasoning: "auto",
+        signal: new AbortController().signal,
+        deadlineMonotonicMs: performance.now() + 1000,
+      };
+      const input: DecisionBatchV2 = {
+        state: { type: "text", text: "synthetic-private-evidence" },
+        questions: { q: { type: "boolean" } },
+      };
+      await expect(provider.evaluate(input, context)).resolves.toMatchObject({
+        status: "ok",
+        result: { model: "kev-latest", answers: { q: { probabilityTrue: 0.37 } } },
+      });
+      for (status of [413, 422]) {
+        await expect(provider.evaluate(input, context)).resolves.toEqual({
+          status: "unavailable",
+          reason: "unsupported-input",
+        });
+      }
+      expect(received).toHaveLength(3);
+      for (const request of received) {
+        expect(request).toEqual({
+          authorization: undefined,
+          url: "/v1/systemone",
+          body: {
+            model: "kev-latest",
+            state: "synthetic-private-evidence",
+            questions: { q: { type: "noul", instructions: null } },
+          },
+        });
+      }
+    },
+  );
+});

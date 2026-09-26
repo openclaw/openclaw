@@ -3,7 +3,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { downloadModel, verifyModel } from "./artifacts.js";
 import { findModel, MODELS } from "./catalog.js";
 import type { WorkerConfig } from "./config.js";
-import { createOnnxProvider } from "./decisions.js";
+import { evaluateClassification } from "./decisions.js";
 import { InferenceWorkerClient } from "./worker-client.js";
 
 type CliContext = Parameters<Parameters<OpenClawPluginApi["registerCli"]>[0]>[0];
@@ -87,9 +87,9 @@ export function registerOnnxCli(
         const warmed = performance.now();
         const timeoutMs = 30_000;
         const signal = AbortSignal.timeout(timeoutMs);
-        const outcome = await createOnnxProvider(client, (message) =>
-          console.error(message),
-        ).evaluate(
+        const outcome = await evaluateClassification(
+          client,
+          (message) => console.error(message),
           {
             state: "I loved the quiet beach holiday and would happily go back.",
             questions: {

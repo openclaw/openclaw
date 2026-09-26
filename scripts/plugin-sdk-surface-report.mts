@@ -402,7 +402,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved canonical resolveConfigPath export for pre-config native browser admission.
       // +14: Decision V2 data (seven types, four codecs, two validators, error class).
       // Peter Steinberger approved this existing-entrypoint scope on 2026-09-26 (#157148).
-      4583,
+      // +4: Decision V2 execution types; completes that exact +18/+6 allowance (#157225).
+      4587,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

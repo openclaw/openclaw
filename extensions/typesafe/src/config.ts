@@ -45,8 +45,10 @@ export function localBaseUrl(value: unknown): string | undefined {
   }
 }
 
-/** Validate runtime settings and recognize materialized credentials without resolving inputs. */
-export function runtimeConfig(config: Record<string, unknown> | undefined): RuntimeConfig {
+/** Validate only nonsecret route settings; executors consume host-prepared auth separately. */
+export function runtimeSettings(
+  config: Record<string, unknown> | undefined,
+): Omit<RuntimeConfig, "apiKey"> {
   const baseUrl = localBaseUrl(config?.baseUrl);
   const timeoutMs = config?.timeoutMs ?? 30000;
   if (
@@ -57,9 +59,5 @@ export function runtimeConfig(config: Record<string, unknown> | undefined): Runt
   ) {
     throw new Error("Invalid TypeSafe configuration; check plugin Settings.");
   }
-  if (baseUrl) {
-    return { baseUrl, timeoutMs };
-  }
-  const key = config?.apiKey;
-  return { apiKey: typeof key === "string" && key.trim() ? key : undefined, timeoutMs };
+  return { ...(baseUrl ? { baseUrl } : {}), timeoutMs };
 }

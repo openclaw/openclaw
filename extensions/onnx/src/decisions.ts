@@ -1,14 +1,16 @@
 import type {
-  DecisionAnswer,
-  DecisionBatch,
-  DecisionEntry,
-  DecisionProviderV1,
+  DecisionAnswerV2,
+  JsonValue,
+  DecisionProviderV2,
+  ProviderDecisionOutcomeV2,
   DecisionQuestion,
 } from "openclaw/plugin-sdk/decisions";
 import { findModel } from "./catalog.js";
 import type { ClassificationInput, ClassificationResult } from "./models/types.js";
 import { UnsupportedInputError } from "./models/types.js";
 import { OnnxWorkerError } from "./protocol.js";
+
+const LOCAL_AUTH_MARKER = "onnx-local";
 
 type Classifier = {
   classify(
@@ -18,7 +20,7 @@ type Classifier = {
   ): Promise<ClassificationResult[]>;
 };
 
-function render(value: DecisionEntry): string {
+function render(value: JsonValue): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
@@ -69,102 +71,154 @@ function probabilities(logits: readonly number[]): number[] {
   return weights.map((value) => value / sum);
 }
 
+/** Private classification entry for the local artifact probe; no role or chat model fabrication. */
+export async function evaluateClassification(
+  client: Classifier,
+  warn: (message: string) => void,
+  batch: { state: JsonValue; questions: Readonly<Record<string, DecisionQuestion>> },
+  context: { model: string; signal: AbortSignal; deadlineMonotonicMs: number },
+): Promise<ProviderDecisionOutcomeV2> {
+  context.signal.throwIfAborted();
+  if (!findModel(context.model)) {
+    return { status: "unavailable", reason: "unsupported-input" };
+  }
+  if (performance.now() >= context.deadlineMonotonicMs) {
+    return { status: "unavailable", reason: "transport" };
+  }
+  try {
+    const entries = Object.entries(batch.questions);
+    if (entries.length === 0 || entries.length > 32) {
+      throw new UnsupportedInputError("Unsupported batch size.");
+    }
+    const text = render(batch.state);
+    const inputs = entries.map(([, question]): ClassificationInput => {
+      const selected = rubric(question);
+      if (selected.labels.length < 2 || selected.labels.length > 64) {
+        throw new UnsupportedInputError("Unsupported label count.");
+      }
+      return {
+        text,
+        task: "decision",
+        ...selected,
+        ...(question.instructions == null ? {} : { instructions: render(question.instructions) }),
+      };
+    });
+    if (performance.now() >= context.deadlineMonotonicMs) {
+      return { status: "unavailable", reason: "transport" };
+    }
+    const results = await client.classify(context.model, inputs, context.signal);
+    context.signal.throwIfAborted();
+    if (results.length !== entries.length) {
+      throw new Error("ONNX returned an incomplete batch.");
+    }
+    const answers = new Map<string, DecisionAnswerV2>();
+    let inputTokens = 0;
+    entries.forEach(([id, question], index) => {
+      const result = results[index]!;
+      const labels = inputs[index]!.labels;
+      if (result.logits.length !== labels.length) {
+        throw new Error("ONNX returned an incomplete distribution.");
+      }
+      const values = probabilities(result.logits);
+      inputTokens += result.inputTokens;
+      if (question.type === "boolean") {
+        answers.set(id, { type: "boolean", probabilityTrue: values[0]! });
+      } else if (question.type === "score") {
+        const score = Math.min(
+          values.length - 1,
+          values.reduce((sum, value, position) => sum + value * position, 0),
+        );
+        answers.set(id, { type: "score", score, probabilities: values });
+      } else {
+        const best = values.indexOf(Math.max(...values));
+        answers.set(id, {
+          type: "choice",
+          choice: labels[best]!,
+          probabilities: Object.fromEntries(
+            labels.map((label, position) => [label, values[position]!]),
+          ),
+        });
+      }
+    });
+    return {
+      status: "ok",
+      result: {
+        model: context.model,
+        answers: Object.fromEntries(answers),
+        usage: { inputTokens },
+      },
+    };
+  } catch (error) {
+    context.signal.throwIfAborted();
+    if (
+      error instanceof UnsupportedInputError ||
+      (error instanceof OnnxWorkerError && error.code === "unsupported-input")
+    ) {
+      return { status: "unavailable", reason: "unsupported-input" };
+    }
+    if (error instanceof OnnxWorkerError) {
+      if (error.code === "model-missing" || error.code === "model-integrity") {
+        warn(
+          `ONNX model ${context.model} is missing or invalid. Run openclaw onnx verify ${context.model}; use download or prepare a local export as listed by openclaw onnx models.`,
+        );
+      } else if (error.code === "dependency-unavailable") {
+        warn(
+          "ONNX Runtime is unavailable. Install the optional ONNX plugin dependencies for this platform.",
+        );
+      }
+      return { status: "unavailable", reason: "transport" };
+    }
+    return { status: "unavailable", reason: "invalid-response" };
+  }
+}
+
 export function createOnnxProvider(
   client: Classifier,
   warn: (message: string) => void,
-): DecisionProviderV1 {
+): DecisionProviderV2 {
   return {
     id: "onnx",
-    contractVersion: 1,
-    async evaluate(batch: DecisionBatch, context) {
+    contractVersion: 2,
+    provider: {
+      label: "ONNX",
+      auth: [],
+      authScope: "plugin",
+      // No credential is needed. This says nothing about local artifact readiness.
+      resolveSyntheticAuth: () => ({
+        apiKey: LOCAL_AUTH_MARKER,
+        mode: "api-key",
+        source: "onnx-local",
+      }),
+    },
+    async evaluate(batch, context) {
       context.signal.throwIfAborted();
-      if (!findModel(context.model)) {
+      if (
+        (batch.state.type !== "text" && batch.state.type !== "json") ||
+        (context.reasoning !== undefined && context.reasoning !== "auto")
+      ) {
         return { status: "unavailable", reason: "unsupported-input" };
       }
-      try {
-        const entries = Object.entries(batch.questions);
-        if (entries.length === 0 || entries.length > 32) {
-          throw new UnsupportedInputError("Unsupported batch size.");
-        }
-        const text = render(batch.state);
-        const inputs = entries.map(([, question]): ClassificationInput => {
-          const selected = rubric(question);
-          if (selected.labels.length < 2 || selected.labels.length > 64) {
-            throw new UnsupportedInputError("Unsupported label count.");
-          }
-          return {
-            text,
-            task: "decision",
-            ...selected,
-            ...(question.instructions == null
-              ? {}
-              : { instructions: render(question.instructions) }),
-          };
-        });
-        const results = await client.classify(context.model, inputs, context.signal);
-        context.signal.throwIfAborted();
-        if (results.length !== entries.length) {
-          throw new Error("ONNX returned an incomplete batch.");
-        }
-        const answers = new Map<string, DecisionAnswer>();
-        let inputTokens = 0;
-        entries.forEach(([id, question], index) => {
-          const result = results[index]!;
-          const labels = inputs[index]!.labels;
-          if (result.logits.length !== labels.length) {
-            throw new Error("ONNX returned an incomplete distribution.");
-          }
-          const values = probabilities(result.logits);
-          inputTokens += result.inputTokens;
-          if (question.type === "boolean") {
-            answers.set(id, { type: "boolean", probabilityTrue: values[0]! });
-          } else if (question.type === "score") {
-            const score = Math.min(
-              values.length - 1,
-              values.reduce((sum, value, position) => sum + value * position, 0),
-            );
-            answers.set(id, { type: "score", score, probabilities: values });
-          } else {
-            const best = values.indexOf(Math.max(...values));
-            answers.set(id, {
-              type: "choice",
-              choice: labels[best]!,
-              probabilities: Object.fromEntries(
-                labels.map((label, position) => [label, values[position]!]),
-              ),
-            });
-          }
-        });
-        return {
-          status: "ok",
-          result: {
-            model: context.model,
-            answers: Object.fromEntries(answers),
-            usage: { inputTokens },
-          },
-        };
-      } catch (error) {
-        context.signal.throwIfAborted();
-        if (
-          error instanceof UnsupportedInputError ||
-          (error instanceof OnnxWorkerError && error.code === "unsupported-input")
-        ) {
+      const questions: Record<string, DecisionQuestion> = Object.create(null);
+      for (const [id, question] of Object.entries(batch.questions)) {
+        if (question.type === "sort" || question.type === "tags") {
           return { status: "unavailable", reason: "unsupported-input" };
         }
-        if (error instanceof OnnxWorkerError) {
-          if (error.code === "model-missing" || error.code === "model-integrity") {
-            warn(
-              `ONNX model ${context.model} is missing or invalid. Run openclaw onnx verify ${context.model}; use download or prepare a local export as listed by openclaw onnx models.`,
-            );
-          } else if (error.code === "dependency-unavailable") {
-            warn(
-              "ONNX Runtime is unavailable. Install the optional ONNX plugin dependencies for this platform.",
-            );
-          }
-          return { status: "unavailable", reason: "transport" };
-        }
-        return { status: "unavailable", reason: "invalid-response" };
+        questions[id] = question;
       }
+      const state = batch.state.type === "text" ? batch.state.text : batch.state.value;
+      return evaluateClassification(
+        client,
+        warn,
+        {
+          state,
+          questions,
+        },
+        {
+          model: context.model.id,
+          signal: context.signal,
+          deadlineMonotonicMs: context.deadlineMonotonicMs,
+        },
+      );
     },
   };
 }

@@ -1,13 +1,19 @@
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listAgentEntries, resolveAgentConfig } from "./agent-scope-config.js";
+import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 
 /** A defined empty agent value disables decisions rather than inheriting the default. */
 export function resolveDecisionModelSetting(config: OpenClawConfig, agentId?: string) {
   const value =
     (agentId ? resolveAgentConfig(config, agentId)?.decisionModel : undefined) ??
     config.agents?.defaults?.decisionModel;
-  return value ? (parseProviderModelRef(value) ?? undefined) : undefined;
+  if (!value) {
+    return undefined;
+  }
+  const selected = splitTrailingAuthProfile(value);
+  const ref = parseProviderModelRef(selected.model);
+  return ref ? { ...ref, ...(selected.profile ? { profileId: selected.profile } : {}) } : undefined;
 }
 
 /** Activation includes explicitly selected providers throughout the configured fleet. */

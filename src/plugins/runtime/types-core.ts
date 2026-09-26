@@ -333,7 +333,7 @@ type RuntimeRunEmbeddedAgent = (
 /** Core runtime helpers exposed to trusted native plugins. */
 export type PluginRuntimeCore = {
   version: string;
-  decisions: import("../../decisions/types.js").DecisionRuntimeV1;
+  decisions: import("../../decisions/types-v2.js").DecisionRuntimeV2;
   config: {
     /** Current process runtime config snapshot. Prefer config passed into the active call path. */
     current: () => DeepReadonly<import("../../config/types.openclaw.js").OpenClawConfig>;

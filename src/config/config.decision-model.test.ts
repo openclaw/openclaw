@@ -7,6 +7,18 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("decision model configuration", () => {
+  it("uses normal explicit profile suffixes while preserving version and quantization model IDs", () => {
+    for (const [value, model, profileId] of [
+      ["openrouter/typesafe/jev@work", "typesafe/jev", "work"],
+      ["local/model@q8_0", "model@q8_0", undefined],
+      ["local/model@20260923@work", "model@20260923", "work"],
+    ] as const) {
+      const cfg = { agents: { defaults: { decisionModel: value } } };
+      const selected = resolveDecisionModelSetting(cfg);
+      expect(selected).toMatchObject({ model });
+      expect(selected?.profileId).toBe(profileId);
+    }
+  });
   it("keeps decision routing independent of chat and utility models and preserves agent disablement", () => {
     const config: OpenClawConfig = {
       agents: {

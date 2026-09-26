@@ -151,7 +151,7 @@ function createModelsListEntryEvaluator(params: {
   runtimeOverride?: string;
   normalizeAuthProvider: (provider: string) => string;
 }): (
-  entry: Pick<ModelCatalogEntry, "provider" | "id" | "api" | "baseUrl">,
+  entry: Pick<ModelCatalogEntry, "provider" | "id" | "api" | "baseUrl" | "inference">,
   routeVariants?: readonly ModelCatalogEntry[],
   runtimeId?: string,
 ) => Promise<ModelAuthAvailabilityEvaluation> {
@@ -185,18 +185,24 @@ function createModelsListEntryEvaluator(params: {
       const pinnedProfileId =
         (sameProvider ? params.pinnedProfileId : undefined) ?? defaultProfileId;
       const requestedRuntimeId =
-        runtimeId ?? (sameProvider && params.profileProvider ? params.runtimeOverride : undefined);
+        entry.inference?.chat === false
+          ? undefined
+          : (runtimeId ??
+            (sameProvider && params.profileProvider ? params.runtimeOverride : undefined));
+      const authOptions = {
+        modelId: identity?.id ?? entry.id,
+        runtimeId: requestedRuntimeId,
+        ...(normalizeProviderId(entry.provider) === "openai"
+          ? {}
+          : { api: entry.api, baseUrl: entry.baseUrl }),
+        ...(preferredProfileId ? { preferredProfileId } : {}),
+        ...(pinnedProfileId ? { pinnedProfileId } : {}),
+        observedRoutes,
+      };
       const resolved = {
-        ...params.authResolver.evaluateRuntimeModelAuth(entry.provider, {
-          modelId: identity?.id ?? entry.id,
-          runtimeId: requestedRuntimeId,
-          ...(normalizeProviderId(entry.provider) === "openai"
-            ? {}
-            : { api: entry.api, baseUrl: entry.baseUrl }),
-          ...(preferredProfileId ? { preferredProfileId } : {}),
-          ...(pinnedProfileId ? { pinnedProfileId } : {}),
-          observedRoutes,
-        }),
+        ...(entry.inference?.chat === false
+          ? params.authResolver.evaluateModelAuth(entry.provider, authOptions)
+          : params.authResolver.evaluateRuntimeModelAuth(entry.provider, authOptions)),
         ...(requestedRuntimeId ? { requestedRuntimeId } : {}),
       };
       const provider = normalizeProviderId(entry.provider);
@@ -422,6 +428,9 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       entry: ModelCatalogEntry,
       variants: readonly ModelCatalogEntry[] = [entry],
     ): Promise<string[] | undefined> {
+      if (entry.inference?.chat === false) {
+        return [];
+      }
       const initial = await evaluateEntry(entry, variants);
       const selected = resolveCatalogDecisionRuntime({
         cfg: params.cfg,
@@ -543,6 +552,9 @@ export function resolveCatalogDecisionRuntime(params: {
   evaluation: ModelAuthAvailabilityEvaluation;
   pluginRegistry?: PluginRegistry;
 }): GatewayAgentRuntime | undefined {
+  if (params.entry.inference?.chat === false) {
+    return undefined;
+  }
   const route = params.evaluation.selectedRoute;
   const context = {
     config: params.cfg,

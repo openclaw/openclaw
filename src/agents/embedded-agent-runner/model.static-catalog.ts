@@ -251,7 +251,7 @@ export function createBundledStaticCatalogModelResolver(params?: {
         }),
       );
       if (row) {
-        return modelFromStaticCatalogRow(row);
+        return row.inference?.chat === false ? undefined : modelFromStaticCatalogRow(row);
       }
     }
     const configured = findNormalizedProviderValue(params?.cfg?.models?.providers, provider);
@@ -301,7 +301,7 @@ export function createBundledStaticCatalogModelResolver(params?: {
           continue;
         }
         for (const row of entry.rows) {
-          if (row.id !== lookup.modelId.trim()) {
+          if (row.inference?.chat === false || row.id !== lookup.modelId.trim()) {
             continue;
           }
           const route = resolveProviderTransport({

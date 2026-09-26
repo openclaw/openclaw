@@ -9,11 +9,12 @@ import type { PluginRegistryState } from "./registry-state.js";
 
 /** Compose domain registrars over one explicit mutable registry state. */
 export function createPluginRegistrars(state: PluginRegistryState) {
+  const providers = createProviderRegistrars(state);
   return {
-    ...createCapabilityRegistrars(state),
+    ...createCapabilityRegistrars(state, providers.registerProvider),
     ...createToolHookRegistrars(state),
     ...createNetworkRegistrars(state),
-    ...createProviderRegistrars(state),
+    ...providers,
     ...createOperationRegistrars(state),
     ...createHostRegistrars(state),
     ...createMemoryRegistrars(state),

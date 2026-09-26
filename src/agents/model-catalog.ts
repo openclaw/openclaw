@@ -8,9 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
-import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
@@ -18,6 +16,11 @@ import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runt
 import { createLazyPromise } from "../shared/lazy-promise.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
+import {
+  loadManifestModelCatalogRows,
+  resolveEligibleManifestCatalogPlugins,
+  resetManifestModelCatalogRowsCache,
+} from "./model-catalog-manifest.js";
 import { normalizeCatalogRouteBaseUrl, overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import { assignProviderModelOrder, compareModelCatalogEntries } from "./model-catalog-order.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
@@ -51,18 +54,13 @@ export type BuildPreparedModelCatalogParams = {
 };
 
 let hasLoggedModelCatalogError = false;
-type ManifestModelCatalogCacheEntry = {
-  snapshot: PluginMetadataSnapshot;
-  rows: ModelCatalogEntry[];
-};
-let manifestModelCatalogCache = new WeakMap<OpenClawConfig, ManifestModelCatalogCacheEntry>();
 const loadModelSuppression = createLazyPromise(() => import("./model-suppression.js"));
 const loadProviderApiKeyResolver = createLazyPromise(
   () => import("./models-config.providers.secrets.js"),
 );
 
 export function resetModelCatalogBuilderCacheForTest() {
-  manifestModelCatalogCache = new WeakMap();
+  resetManifestModelCatalogRowsCache();
   hasLoggedModelCatalogError = false;
 }
 
@@ -155,24 +153,6 @@ function createModelCatalogSnapshot(
   };
 }
 
-function resolveEligibleManifestCatalogPlugins(
-  snapshot: PluginMetadataSnapshot,
-  config: OpenClawConfig,
-): PluginMetadataSnapshot["plugins"] {
-  let normalizedConfig: NormalizedPluginsConfig | undefined;
-  return snapshot.plugins.filter(
-    (plugin) =>
-      plugin.modelCatalog &&
-      isManifestPluginAvailableForControlPlane({
-        snapshot,
-        plugin,
-        config,
-        normalizedConfig:
-          config.plugins && (normalizedConfig ??= normalizePluginsConfig(config.plugins)),
-      }),
-  );
-}
-
 export function loadManifestModelCatalog(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
@@ -218,51 +198,6 @@ export function overlayConfiguredModelCatalog(params: {
     { preserveBaseCompat: true },
   );
   return models;
-}
-
-function loadManifestModelCatalogRows(
-  config: OpenClawConfig,
-  snapshot: PluginMetadataSnapshot,
-  preparedPlan?: ReturnType<typeof planEffectiveModelCatalogRows>,
-): ModelCatalogEntry[] {
-  // Prepared builds also enter here directly; replace must precede cached-row publication.
-  if (config.models?.mode === "replace") {
-    return [];
-  }
-  const cached = manifestModelCatalogCache.get(config);
-  if (cached?.snapshot === snapshot) {
-    return cached.rows;
-  }
-  const plugins = resolveEligibleManifestCatalogPlugins(snapshot, config);
-  const plan =
-    preparedPlan ??
-    planEffectiveModelCatalogRows({
-      registry: { plugins },
-      config,
-    });
-  const providerOrderByKey = new Map<string, number>();
-  for (const plugin of plugins) {
-    for (const [provider, providerCatalog] of Object.entries(
-      plugin.modelCatalog?.providers ?? {},
-    )) {
-      providerCatalog.models.forEach((model, providerOrder) => {
-        const key = buildModelCatalogMergeKey(provider, model.id);
-        if (!providerOrderByKey.has(key)) {
-          providerOrderByKey.set(key, providerOrder);
-        }
-      });
-    }
-  }
-  const rows = plan.rows.map((row) => {
-    const entry = modelCatalogRowToEntry(row);
-    const providerOrder = providerOrderByKey.get(buildModelCatalogMergeKey(row.provider, row.id));
-    if (providerOrder !== undefined) {
-      entry.providerOrder = providerOrder;
-    }
-    return entry;
-  });
-  manifestModelCatalogCache.set(config, { snapshot, rows });
-  return rows;
 }
 
 function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {

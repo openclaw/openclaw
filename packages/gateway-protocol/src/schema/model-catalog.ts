@@ -1,5 +1,7 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { ModelInferenceCapabilitiesSchema } from "../../../model-catalog-core/src/model-inference-capabilities.js";
+import type { ModelInferenceCapabilities } from "../../../model-catalog-core/src/model-inference-capabilities.js";
 import { closedObject } from "./closed-object.js";
 import { ChatAccountSelectionSchema, ModelAuthProfileIdSchema } from "./model-account-selection.js";
 import {
@@ -16,6 +18,10 @@ export const ModelsListParamsSchema = Type.Object(
     sessionKey: Type.Optional(NonEmptyString),
     authProfileId: Type.Optional(ModelAuthProfileIdSchema),
     provider: Type.Optional(NonEmptyString),
+    /** Task projection of the same policy-scoped catalog; legacy callers request chat. */
+    task: Type.Optional(
+      Type.Union([Type.Literal("chat"), Type.Literal("decision"), Type.Literal("all")]),
+    ),
     includeDetails: Type.Optional(Type.Boolean()),
     includeProviderCapabilities: Type.Optional(Type.Boolean()),
     /** Include global default-model previews, independent of agent/session overrides. */
@@ -99,6 +105,11 @@ export const ModelChoiceSchema = closedObject({
   name: NonEmptyString,
   provider: NonEmptyString,
   alias: Type.Optional(NonEmptyString),
+  inference: Type.Optional(
+    Type.Unsafe<ModelInferenceCapabilities>(
+      ModelInferenceCapabilitiesSchema.toJSONSchema({ target: "draft-7" }),
+    ),
+  ),
   tags: Type.Optional(Type.Array(NonEmptyString)),
   ...ModelRuntimeProperties,
   agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
@@ -126,7 +137,7 @@ export const ModelsListResultSchema = closedObject({
       defaultModel: Type.Union([NonEmptyString, Type.Null()]),
     }),
   ),
-  /** Manifest-owned decision choices, separate from conversational model routing. */
+  /** Compatibility projection of the selected canonical decision catalog. */
   decisionModels: Type.Optional(
     Type.Array(
       closedObject({

@@ -345,6 +345,24 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         if (prop === "decisions") {
           return {
+            evaluateV2: async (batch, options) => {
+              assertRuntimeCurrent();
+              const { evaluateDecisionV2InRegistry } = await import("../decisions/runtime.js");
+              assertRuntimeCurrent();
+              const result = await evaluateDecisionV2InRegistry(
+                batch,
+                options,
+                currentDecisionRegistry(),
+                getRuntimeConfig(),
+                {
+                  caller: { kind: "plugin", id: record.id },
+                  pluginIdForPolicy: record.id,
+                },
+              );
+              assertRuntimeCurrent();
+              options.signal.throwIfAborted();
+              return result;
+            },
             evaluate: async (batch, options) => {
               assertRuntimeCurrent();
               const { evaluateDecisionInRegistry } = await import("../decisions/runtime.js");

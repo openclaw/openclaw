@@ -1,7 +1,8 @@
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createPreparedModelCatalogProviderNormalizer } from "../../agents/model-catalog-provider-normalizer.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { listAvailableManifestContractPlugins } from "../../plugins/manifest-contract-eligibility.js";
+import { projectDecisionModelCatalog } from "../../model-catalog/decision-compatibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 
@@ -27,31 +28,16 @@ export function apiKeyProviderCapabilities(params: {
   };
 }
 
-export function listDecisionModels({
-  config,
-  snapshot,
-}: {
-  config: OpenClawConfig;
+/** The compatibility wire derives only from the normal selected catalog. */
+export function listDecisionModels(params: {
+  catalog: readonly ModelCatalogEntry[];
   snapshot: PluginMetadataSnapshot;
-}) {
-  const decisionModels: NonNullable<ModelsListResult["decisionModels"]> = [];
-  if (config.plugins?.enabled !== false) {
-    const seen = new Set<string>();
-    for (const plugin of listAvailableManifestContractPlugins({
-      snapshot,
-      config,
-      contract: "decisionProviders",
-    })) {
-      for (const model of plugin.decisionModels ?? []) {
-        const key = `${model.provider}/${model.id}`;
-        if (!seen.has(key)) {
-          decisionModels.push({ ...model, pluginId: plugin.id });
-          seen.add(key);
-        }
-      }
-    }
-  }
-  return decisionModels;
+}): NonNullable<ModelsListResult["decisionModels"]> {
+  return projectDecisionModelCatalog(params.catalog).flatMap((model) => {
+    const owners = params.snapshot.owners.modelCatalogProviders.get(model.provider);
+    const pluginId = owners?.length === 1 ? owners[0] : undefined;
+    return pluginId ? [{ ...model, pluginId }] : [];
+  });
 }
 
 export function createModelsListProviderFilter(params: {

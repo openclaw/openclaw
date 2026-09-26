@@ -78,6 +78,18 @@ export function getPluginInstanceOwner(
   return pluginInstanceState.records.get(instance);
 }
 
+/** Stable plugin IDs cannot authorize delayed work from a replaced or closed invocation. */
+export function hasCurrentPluginInstanceAuthority(pluginId: string): boolean {
+  const instance = pluginInstanceInvocation.getStore()?.instance;
+  return (
+    instance?.pluginId === pluginId &&
+    instance.hasActiveCall &&
+    instance.acceptingCalls &&
+    !instance.owner?.revoked &&
+    !instance.lifecycle.signal.aborted
+  );
+}
+
 /** Direct SDK registrars retain the same owner as registrations made through api. */
 export function wrapCurrentPluginInstance<T>(value: T, host?: (value: T) => T): T {
   const owner = pluginInstanceInvocation.getStore()?.instance;

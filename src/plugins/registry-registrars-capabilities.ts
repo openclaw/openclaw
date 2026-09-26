@@ -8,7 +8,12 @@ import type { PluginRecord } from "./registry-types.js";
 import { defaultSlotIdForKey } from "./slots.js";
 import type { OpenClawPluginApi, PluginRegistrationMode } from "./types.js";
 
-export function createCapabilityRegistrars(state: PluginRegistryState) {
+export function createCapabilityRegistrars(
+  state: PluginRegistryState,
+  registerProvider: ReturnType<
+    typeof import("./registry-registrars-providers.js").createProviderRegistrars
+  >["registerProvider"],
+) {
   const { registry, reportRegistrationError, reportRegistrationWarning } = state;
 
   const registerDecisionProvider = (
@@ -20,11 +25,18 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
       !id ||
       id !== provider.id ||
       id.includes("/") ||
-      provider.contractVersion !== 1 ||
+      (provider.contractVersion !== 1 && provider.contractVersion !== 2) ||
       typeof provider.evaluate !== "function" ||
-      (provider.isReady !== undefined && typeof provider.isReady !== "function")
+      (provider.contractVersion === 1 &&
+        provider.isReady !== undefined &&
+        typeof provider.isReady !== "function")
     ) {
-      reportRegistrationError(record, "invalid version 1 decision provider contract");
+      reportRegistrationError(
+        record,
+        provider?.contractVersion === 1
+          ? "invalid version 1 decision provider contract"
+          : "invalid versioned decision provider contract",
+      );
       return;
     }
     if (!record.contracts?.decisionProviders?.includes(id)) {
@@ -38,7 +50,45 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `decision provider already registered: ${id}`);
       return;
     }
-    const host = new DecisionProviderHost(provider, record);
+    let canonical = registry.providers.find((entry) => entry.provider.id === id);
+    if (canonical && canonical.pluginId !== record.id) {
+      reportRegistrationError(
+        record,
+        `decision provider identity is owned by another plugin: ${id}`,
+      );
+      return;
+    }
+    if (canonical && provider.contractVersion === 2 && provider.provider) {
+      reportRegistrationError(
+        record,
+        `provider identity is already registered; omit the duplicate provider definition: ${id}`,
+      );
+      return;
+    }
+    if (!canonical) {
+      if (provider.contractVersion === 2 && !provider.provider) {
+        reportRegistrationError(
+          record,
+          `version 2 decisions require a shared provider definition: ${id}`,
+        );
+        return;
+      }
+      registerProvider(
+        record,
+        provider.contractVersion === 2
+          ? { ...provider.provider!, id }
+          : { id, label: id, auth: [] },
+      );
+      canonical = registry.providers.find(
+        (entry) => entry.provider.id === id && entry.pluginId === record.id,
+      );
+      if (!canonical) {
+        return;
+      }
+    }
+    const host = new DecisionProviderHost(provider, record, canonical, (cfg) =>
+      state.registryParams.runtime.modelAuth.isProviderApiKeyConfigured({ provider: id, cfg }),
+    );
     registry.decisionProviders.push({ pluginId: record.id, host });
     record.services.push(`decisions:${id}`);
     getPluginInstance(record)?.lifecycle.onDispose(() => host.stop());

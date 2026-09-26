@@ -80,8 +80,9 @@ any other entries in `plugins.allow`.
 `agents.defaults.decisionModel`; an empty override disables decisions for that
 agent. An unset or empty global role leaves decisions off by default.
 
-Hosted mode reads the host's prepared SecretRef value for each request. It does
-not independently read environment credentials or cache a previous credential.
+Hosted mode supplies the live prepared plugin SecretRef through the common
+provider-auth owner. The executor receives that prepared credential; it does not
+select credentials again, read ambient environment credentials, or cache a previous credential.
 A missing or unavailable credential makes decisions unavailable. Use the normal
 [secret refresh flow](/gateway/secrets) after changing a credential.
 
@@ -167,7 +168,8 @@ stop preparing it.
 
 The endpoint applies to every request from this plugin, including requests
 whose model label names Jev. Model selection does not choose between hosted and
-local endpoints. The `kev-latest` label requires `baseUrl` and is never sent to
+local endpoints. The catalog does not assign hosted pricing or unverified context
+limits to these routes, including Jev labels redirected to a local server. The `kev-latest` label requires `baseUrl` and is never sent to
 the hosted TypeSafe endpoint.
 
 `baseUrl` accepts HTTP or HTTPS on `localhost`, `127.0.0.1`, or `[::1]`, with an
@@ -205,8 +207,16 @@ same validation as hosted results.
 
 Consumers call the provider-neutral
 [decision runtime](/plugins/sdk-overview/capabilities#decision-models-contract-version-1).
-The host supplies the model selected for the owning agent. The adapter translates
-the supported question types:
+The host supplies canonical metadata for the model selected for the owning agent.
+The plugin registers a first-class contract-version-2 decision provider using
+`registerDecisionProvider`; the existing version-1 consumer API remains supported
+by the host. The canonical model catalog declares decision support and
+`chat: false`, not a second set of conversational models.
+
+Version-2 requests accept explicit text or JSON evidence. Images, lists, Sort,
+Tags, and explicit reasoning `off` or `on` are unsupported and rejected before
+dispatch; omitted reasoning or `auto` leaves the server behavior unchanged.
+The adapter translates the supported question types:
 
 | OpenClaw | TypeSafe | Result                                                       |
 | -------- | -------- | ------------------------------------------------------------ |
@@ -221,15 +231,20 @@ its labels, types, and rubric bounds.
 
 Reported probabilities can be rounded, so they may not sum exactly to one. A
 reported label or Score can also differ from a calculation over those estimates.
-OpenClaw preserves the returned values. Normalizing estimates or choosing their
-largest value is an explicit consumer policy. Probabilities and confidence are
+Choice and Score distributions must have positive total probability mass; an
+all-zero map is invalid. OpenClaw preserves the reported values without
+renormalizing them or recomputing the chosen label or Score. Interpreting those
+estimates is an explicit consumer policy. Probabilities and confidence are
 not demonstrated accuracy guarantees or permission to act.
 
 The host owns concurrency, circuit health, deadlines, cancellation, and provider
 lifecycle. Native decisions have a 30-second maximum; shorter consumer or
 plugin timeouts still apply. Requests use the fixed TypeSafe HTTPS endpoint unless
 `baseUrl` selects a local server. Both paths reject
-redirects, and do not retry automatically. Consumers decide what to do with
+redirects, and do not retry automatically. HTTP 413 and 422 return sanitized
+`unsupported-input`; they do not establish an exact tokenizer or context-limit
+cause. Provider error bodies are discarded without exposing submitted evidence
+or credentials. Consumers decide what to do with
 unavailable decisions; caller cancellation must not start fallback work.
 
 ## Agent evaluation tool

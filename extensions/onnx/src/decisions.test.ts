@@ -1,17 +1,21 @@
-import type { DecisionBatch } from "openclaw/plugin-sdk/decisions";
+import fs from "node:fs";
+import type { DecisionBatchV2, DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
 import { describe, expect, it, vi } from "vitest";
+import { MODELS } from "./catalog.js";
 import { createOnnxProvider } from "./decisions.js";
 import { OnnxWorkerError } from "./protocol.js";
 import type { InferenceWorkerClient } from "./worker-client.js";
 
 const model = "gliclass-edge-v3.0";
-const context = () => ({
-  model,
+const context = (): DecisionProviderContextV2 => ({
+  model: { id: model, name: "GLiClass", provider: "onnx" },
+  config: {},
+  auth: { mode: "api-key" },
   signal: new AbortController().signal,
   deadlineMonotonicMs: performance.now() + 1000,
 });
-const batch: DecisionBatch = {
-  state: { message: "A pleasant holiday" },
+const batch: DecisionBatchV2 = {
+  state: { type: "json", value: { message: "A pleasant holiday" } },
   questions: {
     topic: { type: "choice", criteria: { holiday: "travel", finance: null } },
     rating: { type: "score", criteria: ["negative", "neutral", "positive"] },
@@ -88,7 +92,7 @@ describe("ONNX decision contract", () => {
       ],
     ]);
     const result = await createOnnxProvider({ classify }, vi.fn()).evaluate(
-      { state: "text", questions },
+      { state: { type: "text", text: "text" }, questions },
       context(),
     );
     if (result.status !== "ok") {
@@ -136,10 +140,75 @@ describe("ONNX decision contract", () => {
       const classify = vi.fn<InferenceWorkerClient["classify"]>().mockResolvedValue(results);
       await expect(
         createOnnxProvider({ classify }, vi.fn()).evaluate(
-          { state: "text", questions: { one: batch.questions.topic! } },
+          { state: { type: "text", text: "text" }, questions: { one: batch.questions.topic! } },
           context(),
         ),
       ).resolves.toEqual({ status: "unavailable", reason: "invalid-response" });
     },
   );
+});
+
+it.each<DecisionBatchV2>([
+  { ...batch, state: { type: "image", dataUri: "data:image/png;base64,AA==" } },
+  { ...batch, state: { type: "list", items: [{ id: "one", content: "text" }] } },
+  { ...batch, questions: { q: { type: "sort" } } },
+  { ...batch, questions: { q: { type: "tags", criteria: { a: "A" } } } },
+])("rejects unsupported V2 capabilities before dispatch", async (input) => {
+  const dispatch = vi.fn<InferenceWorkerClient["classify"]>();
+  const provider = createOnnxProvider({ classify: dispatch }, vi.fn());
+  expect(await provider.evaluate(input, context())).toEqual({
+    status: "unavailable",
+    reason: "unsupported-input",
+  });
+  expect(dispatch).not.toHaveBeenCalled();
+});
+
+it.each(["off", "on"] as const)(
+  "rejects unsupported reasoning %s before dispatch",
+  async (reasoning) => {
+    const dispatch = vi.fn<InferenceWorkerClient["classify"]>();
+    const provider = createOnnxProvider({ classify: dispatch }, vi.fn());
+    expect(await provider.evaluate(batch, { ...context(), reasoning })).toEqual({
+      status: "unavailable",
+      reason: "unsupported-input",
+    });
+    expect(dispatch).not.toHaveBeenCalled();
+  },
+);
+
+it("does not mistake noauth for artifact readiness or dispatch an expired deadline", async () => {
+  const classify = vi.fn<InferenceWorkerClient["classify"]>();
+  const provider = createOnnxProvider({ classify }, vi.fn());
+  expect(provider.provider?.resolveSyntheticAuth?.({ provider: "onnx" })).toMatchObject({
+    mode: "api-key",
+  });
+  expect(classify).not.toHaveBeenCalled();
+  expect(await provider.evaluate(batch, { ...context(), deadlineMonotonicMs: -1 })).toEqual({
+    status: "unavailable",
+    reason: "transport",
+  });
+  expect(classify).not.toHaveBeenCalled();
+});
+
+it("declares canonical decision-only models without fabricated chat metadata", () => {
+  const manifest = JSON.parse(
+    fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+  );
+  expect(manifest.decisionModels).toBeUndefined();
+  expect(manifest.providers).toEqual(["onnx"]);
+  expect(manifest.contracts.decisionProviders).toEqual(["onnx"]);
+  const provider = manifest.modelCatalog.providers.onnx;
+  expect(provider.authScope).toBe("plugin");
+  expect(provider.models.map((entry: { id: string }) => entry.id)).toEqual(
+    MODELS.map((entry) => entry.id),
+  );
+  for (const entry of provider.models) {
+    expect(entry.inference.chat).toBe(false);
+    expect(entry.inference.decision.reasoning).toEqual({ modes: ["auto"] });
+    expect(entry.inference.decision.limits.maxInputTokens).toBe(512);
+    for (const field of ["api", "contextWindow", "maxTokens", "cost"]) {
+      expect(entry[field]).toBeUndefined();
+    }
+    expect(entry.inference.decision.billing).toBeUndefined();
+  }
 });

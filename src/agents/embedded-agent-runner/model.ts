@@ -179,6 +179,16 @@ export async function resolveModelAsync(
         ? stores.modelRegistry.fork(authStorage)
         : stores.modelRegistry;
     }
+    const declared = preparedModelRuntime?.modelCatalog.entries.find(
+      (entry) => entry.provider === normalizedRef.provider && entry.id === normalizedRef.model,
+    );
+    if (declared?.inference?.chat === false) {
+      return {
+        error: `Model ${normalizedRef.provider}/${normalizedRef.model} does not support chat inference`,
+        authStorage,
+        modelRegistry,
+      };
+    }
     const runtimeHooks = resolveRuntimeHooks(options);
     let staticCatalogResolved = false;
     let staticCatalogModel: StaticCatalogFallbackModel | undefined;

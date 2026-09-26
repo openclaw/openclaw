@@ -2,8 +2,10 @@ import { Check } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import { ModelsListResultSchema } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { AgentHarnessV2 } from "../../agents/harness/types.js";
+import { loadManifestModelCatalog } from "../../agents/model-catalog.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeManifestModelCatalog } from "../../plugins/manifest-decision-catalog.js";
 import type { DecisionProviderCapabilities } from "../../plugins/manifest-types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
@@ -133,13 +135,21 @@ describe("models.list plugin metadata handoff", () => {
           {
             id: "decisions",
             contracts: { decisionProviders: ["fixture"] },
-            decisionModels: [
-              { provider: "fixture", id: "fast", name: "Fast decisions", capabilities },
-            ],
+            modelCatalog: normalizeManifestModelCatalog({
+              modelCatalog: undefined,
+              providers: [],
+              cliBackends: [],
+              decisionProviders: ["fixture"],
+              decisionModels: [
+                { provider: "fixture", id: "fast", name: "Fast decisions", capabilities },
+              ],
+            }),
           },
           ...(chat ? [{ id: "custom", providers: ["custom"] }] : []),
         ],
       });
+      snapshot.entries.push(...loadManifestModelCatalog({ config: cfg, metadataSnapshot }));
+      snapshot.routeVariants = snapshot.entries;
       const projector = createGatewayAgentModelCatalogProjector({
         cfg,
         agentId: "main",

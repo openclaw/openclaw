@@ -1,13 +1,23 @@
-import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { normalizeManifestModelCatalog } from "../plugins/manifest-decision-catalog.js";
 import {
   decisionBatchV1ToV2,
   decisionBatchV2ToV1,
   decisionResultV1ToV2,
   decisionResultV2ToV1,
 } from "./compatibility.js";
-import type { DecisionAnswerV2, DecisionBatchResultV2, DecisionBatchV2 } from "./types-v2.js";
-import type { DecisionAnswer, DecisionBatch, DecisionBatchResult } from "./types.js";
+import type {
+  DecisionAnswerV2,
+  DecisionBatchResultV2,
+  DecisionBatchV2,
+  DecisionRuntimeV2,
+} from "./types-v2.js";
+import type {
+  DecisionAnswer,
+  DecisionBatch,
+  DecisionBatchResult,
+  DecisionRuntimeV1,
+} from "./types.js";
 import { validateDecisionResultV2 } from "./validation-v2.js";
 import {
   DecisionContractError,
@@ -39,6 +49,7 @@ const v2Batch: DecisionBatchV2 = {
 
 describe("explicit decision version conversion", () => {
   it("keeps V1 source-compatible while requiring an actual V2 boolean report", () => {
+    expectTypeOf<DecisionRuntimeV2["evaluate"]>().toEqualTypeOf<DecisionRuntimeV1["evaluate"]>();
     expectTypeOf<DecisionAnswer>().toMatchTypeOf<DecisionAnswerV2>();
     expectTypeOf<{ type: "boolean" }>().not.toMatchTypeOf<DecisionAnswerV2>();
     expectTypeOf<{ type: "boolean"; answer: null }>().toMatchTypeOf<DecisionAnswerV2>();
@@ -51,33 +62,20 @@ describe("explicit decision version conversion", () => {
   });
 
   it("uses provider-defined V1 estimates after real metadata and result conversion", () => {
-    const capabilities = normalizeModelCatalog(
-      {
-        providers: {
-          fixture: {
-            models: [
-              {
-                id: result.model,
-                name: "Fixture",
-                inference: {
-                  chat: false,
-                  decision: {
-                    protocol: "fixture",
-                    input: ["text"],
-                    questions: {
-                      boolean: { probabilities: "boolean", abstention: false },
-                      choice: { probabilities: "provider-defined", abstention: false },
-                      score: { probabilities: "provider-defined", abstention: false },
-                    },
-                  },
-                },
-              },
-            ],
-          },
+    const capabilities = normalizeManifestModelCatalog({
+      modelCatalog: undefined,
+      providers: [],
+      cliBackends: [],
+      decisionProviders: ["fixture"],
+      decisionModels: [
+        {
+          provider: "fixture",
+          id: result.model,
+          name: "Fixture",
+          capabilities: { questionTypes: ["boolean", "choice", "score"] },
         },
-      },
-      { ownedProviders: new Set(["fixture"]) },
-    )?.providers?.fixture?.models[0]?.inference?.decision;
+      ],
+    })?.providers?.fixture?.models[0]?.inference?.decision;
     if (!capabilities) {
       throw new Error("Missing fixture capabilities");
     }

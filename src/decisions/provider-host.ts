@@ -8,19 +8,27 @@ import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../config/types.plugins.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import type { PluginProviderRegistration } from "../plugins/provider-plugin.types.js";
 import type { PluginRecord, PluginRegistry } from "../plugins/registry-types.js";
 import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
+import { decisionBatchV2ToV1, decisionResultV1ToV2 } from "./compatibility.js";
 import type {
-  DecisionBatch,
+  DecisionProviderV2,
+  DecisionBatchV2,
+  DecisionEvaluateOptionsV2,
+  DecisionOutcomeV2,
+  ProviderDecisionOutcomeV2,
+} from "./types-v2.js";
+import type {
   DecisionOutcome,
   DecisionProviderV1,
-  DecisionRuntimeV1,
   ProviderFailureReason,
   UnavailableReason,
 } from "./types.js";
-import { DecisionContractError, validateDecisionResult } from "./validation.js";
+import { validateDecisionResultV2 } from "./validation-v2.js";
+import { DecisionContractError } from "./validation.js";
 
-type Options = Parameters<DecisionRuntimeV1["evaluate"]>[1];
+type Options = DecisionEvaluateOptionsV2;
 const FAILURE_REASONS = new Set<ProviderFailureReason>([
   "credentials-unavailable",
   "authentication",
@@ -66,8 +74,10 @@ export class DecisionProviderHost {
   private outputTokens = 0;
 
   constructor(
-    readonly provider: DecisionProviderV1,
+    readonly provider: DecisionProviderV1 | DecisionProviderV2,
     readonly record: PluginRecord,
+    readonly registration?: PluginProviderRegistration,
+    private readonly readCredentialEligibility?: (config: OpenClawConfig) => boolean,
   ) {}
 
   private generation(config: OpenClawConfig): Health {
@@ -91,8 +101,13 @@ export class DecisionProviderHost {
     return this.health;
   }
 
-  unavailable(reason: UnavailableReason): DecisionOutcome {
-    this.reasons[reason] = (this.reasons[reason] ?? 0) + 1;
+  unavailable(
+    reason: UnavailableReason,
+    recordOutcome = true,
+  ): Extract<DecisionOutcome, { status: "unavailable" }> {
+    if (recordOutcome) {
+      this.reasons[reason] = (this.reasons[reason] ?? 0) + 1;
+    }
     return { status: "unavailable", reason };
   }
 
@@ -157,7 +172,14 @@ export class DecisionProviderHost {
     await Promise.all([...this.pending.values()].map((request) => request.done));
   }
 
-  private ready(): boolean {
+  private ready(config: OpenClawConfig): boolean {
+    if (this.provider.contractVersion === 2) {
+      try {
+        return this.readCredentialEligibility?.(config) ?? false;
+      } catch {
+        return false;
+      }
+    }
     try {
       const available = this.provider.isReady?.() ?? true;
       if (typeof available !== "boolean") {
@@ -177,7 +199,7 @@ export class DecisionProviderHost {
       config.plugins?.enabled !== false &&
       config.plugins?.entries?.[this.record.id]?.enabled !== false;
     const admitted = !this.retired && !this.reloadPause && instance?.acceptingCalls === true;
-    const credentialReady = admitted && instance.run(() => this.ready());
+    const credentialReady = enabled && admitted && instance.run(() => this.ready(config));
     return {
       providerId: this.provider.id,
       pluginId: this.record.id,
@@ -201,16 +223,29 @@ export class DecisionProviderHost {
     };
   }
 
-  async evaluate(
-    batch: DecisionBatch,
+  async evaluateV2(
+    batch: DecisionBatchV2,
     options: Options,
     model: string,
     config: OpenClawConfig,
     registry: PluginRegistry,
     consumerId?: string,
-  ): Promise<DecisionOutcome> {
+    authoredSelection: NonNullable<ReturnType<typeof resolveDecisionModelSetting>> = {
+      provider: this.provider.id,
+      model,
+    },
+  ): Promise<DecisionOutcomeV2> {
     options.signal.throwIfAborted();
-    let submitted: DecisionBatch;
+    // V1 providers cannot honor new modalities or reasoning controls. Reject before dispatch.
+    if (
+      this.provider.contractVersion === 1 &&
+      (options.reasoning !== undefined ||
+        authoredSelection.profileId !== undefined ||
+        !decisionBatchV2ToV1(batch))
+    ) {
+      return this.unavailable("unsupported-input");
+    }
+    let submitted: DecisionBatchV2;
     try {
       submitted = structuredClone(batch);
     } catch {
@@ -222,7 +257,10 @@ export class DecisionProviderHost {
     }
     const health = this.generation(config);
     const readConfig = createRuntimeConfigReader(config);
-    if (!instance.runInRegistry(registry, () => this.ready())) {
+    if (
+      this.provider.contractVersion === 1 &&
+      !instance.runInRegistry(registry, () => this.ready(config))
+    ) {
       return this.unavailable("credentials-unavailable");
     }
     if (health.authFailed || health.openUntil > performance.now() || health.trial) {
@@ -246,19 +284,23 @@ export class DecisionProviderHost {
       settle = resolve;
     });
     this.pending.set(controller, { consumerId, done });
-    const interrupted = (): DecisionOutcome | undefined => {
+    const interrupted = (recordOutcome = true): DecisionOutcome | undefined => {
       options.signal.throwIfAborted();
       if (controller.signal.reason instanceof DecisionConsumerClosedError) {
         throw controller.signal.reason;
       }
-      if (this.retired || controller.signal.reason === "decision-provider-retired") {
-        return this.unavailable("retiring");
+      if (
+        this.retired ||
+        instance.owner?.revoked ||
+        controller.signal.reason === "decision-provider-retired"
+      ) {
+        return this.unavailable("retiring", recordOutcome);
       }
       if (
         controller.signal.reason === "decision-deadline" ||
         performance.now() >= deadlineMonotonicMs
       ) {
-        return this.unavailable("deadline");
+        return this.unavailable("deadline", recordOutcome);
       }
       const currentConfig = readConfig();
       const selection = resolveDecisionModelSetting(currentConfig, options.agentId);
@@ -267,29 +309,83 @@ export class DecisionProviderHost {
         this.health !== health ||
         currentConfig.plugins?.enabled === false ||
         !isDeepStrictEqual(currentConfig.plugins?.entries?.[this.record.id], health.config) ||
-        selection?.provider !== this.provider.id ||
-        selection.model !== model
+        selection?.provider !== authoredSelection.provider ||
+        selection.model !== authoredSelection.model ||
+        selection.profileId !== authoredSelection.profileId
       ) {
-        return this.unavailable("retiring");
+        return this.unavailable("retiring", recordOutcome);
       }
       return undefined;
     };
+    let releaseInvocation: (() => void) | undefined;
     try {
+      // The host already joins this operation in stop(). A retained invocation keeps
+      // physical custody without making its result await that same disposal.
+      const invocation = instance.retainConsumer(undefined, registry);
+      releaseInvocation = () => invocation.release();
       // Await physical settlement. A callback that ignores abort keeps its native lease
       // and is fenced by normal failed-drain recovery, never detached as "disposed".
-      let outcome;
-      let questions: DecisionBatch["questions"];
+      let outcome: ProviderDecisionOutcomeV2;
+      let offered: DecisionBatchV2;
       try {
         // Preserve the offered questions even when the provider mutates its input.
-        questions = structuredClone(submitted.questions);
-        outcome = await instance.runInRegistry(registry, () =>
-          this.provider.evaluate(submitted, {
-            model,
-            ...(options.agentId ? { agentId: options.agentId } : {}),
-            signal,
-            deadlineMonotonicMs,
-          }),
-        );
+        offered = structuredClone(submitted);
+        const provider = this.provider;
+        if (provider.contractVersion === 2) {
+          const registration = this.registration;
+          if (
+            !registration ||
+            registry.providers.every(
+              (entry) =>
+                entry.provider.id !== registration.provider.id ||
+                entry.pluginId !== registration.pluginId,
+            )
+          ) {
+            throw new DecisionContractError();
+          }
+          const { executePreparedDecision } = await import("../agents/decision-inference.js");
+          outcome = await invocation.run(() =>
+            executePreparedDecision({
+              provider,
+              registration,
+              batch: submitted,
+              modelId: model,
+              profileId: authoredSelection.profileId,
+              config,
+              options,
+              signal,
+              deadlineMonotonicMs,
+              assertCurrent: () => {
+                if (!instance.acceptingCalls || instance.owner?.revoked || interrupted(false)) {
+                  throw new Error("Decision provider authority is no longer current.");
+                }
+              },
+            }),
+          );
+        } else {
+          const legacy = decisionBatchV2ToV1(submitted);
+          if (!legacy) {
+            return this.unavailable("unsupported-input");
+          }
+          const legacyOutcome = await invocation.run(() =>
+            provider.evaluate(legacy, {
+              model,
+              ...(options.agentId ? { agentId: options.agentId } : {}),
+              signal,
+              deadlineMonotonicMs,
+            }),
+          );
+          if (legacyOutcome?.status === "ok") {
+            const offeredLegacy = decisionBatchV2ToV1(offered);
+            const result =
+              offeredLegacy && decisionResultV1ToV2(offeredLegacy, legacyOutcome.result);
+            outcome = result
+              ? { status: "ok", result }
+              : { status: "unavailable", reason: "invalid-response" };
+          } else {
+            outcome = legacyOutcome;
+          }
+        }
       } catch {
         const stopped = interrupted();
         if (stopped) {
@@ -308,7 +404,8 @@ export class DecisionProviderHost {
         return stopped;
       }
       if (outcome?.status === "ok") {
-        if (!validateDecisionResult({ questions }, outcome.result)) {
+        const result = outcome.result;
+        if (!validateDecisionResultV2(offered, result)) {
           this.fail(health, "invalid-response");
           return this.unavailable("invalid-response");
         }
@@ -316,11 +413,11 @@ export class DecisionProviderHost {
         health.openUntil = 0;
         health.lastSuccessAt = Date.now();
         this.successCount++;
-        this.inputTokens += outcome.result.usage?.inputTokens ?? 0;
-        this.outputTokens += outcome.result.usage?.outputTokens ?? 0;
+        this.inputTokens += result.usage?.inputTokens ?? 0;
+        this.outputTokens += result.usage?.outputTokens ?? 0;
         return {
           status: "ok",
-          result: structuredClone(outcome.result),
+          result: structuredClone(result),
           provenance: {
             providerId: this.provider.id,
             rubricVersion: options.rubricVersion,
@@ -328,11 +425,15 @@ export class DecisionProviderHost {
           },
         };
       }
-      if (outcome?.status !== "unavailable" || !FAILURE_REASONS.has(outcome.reason)) {
+      if (outcome?.status !== "unavailable") {
         throw new DecisionContractError();
       }
-      this.fail(health, outcome.reason, outcome.retryAfterMs);
-      return this.unavailable(outcome.reason);
+      const { reason, retryAfterMs } = outcome;
+      if (!FAILURE_REASONS.has(reason)) {
+        throw new DecisionContractError();
+      }
+      this.fail(health, reason, retryAfterMs);
+      return this.unavailable(reason);
     } catch (error) {
       options.signal.throwIfAborted();
       if (controller.signal.reason instanceof DecisionConsumerClosedError) {
@@ -344,6 +445,7 @@ export class DecisionProviderHost {
       // A malformed provider envelope must not leak getter/implementation diagnostics.
       throw new DecisionContractError();
     } finally {
+      releaseInvocation?.();
       clearTimeout(timer);
       this.pending.delete(controller);
       if (halfOpen) {
@@ -364,7 +466,10 @@ export class DecisionProviderHost {
       return;
     }
     if (reason === "authentication") {
-      health.authFailed = true;
+      // V2 account/credential state belongs to normal model auth, not a provider-wide latch.
+      if (this.provider.contractVersion === 1) {
+        health.authFailed = true;
+      }
       return;
     }
     if (reason === "unsupported-input" || reason === "credentials-unavailable") {

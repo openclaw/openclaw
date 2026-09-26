@@ -124,6 +124,8 @@ function logicalIdentity(
     name: name ?? id,
     provider: entry.provider,
     ...(entry.alias ? { alias: entry.alias } : {}),
+    // Keep declared chat identity while discarding unverified route/task capabilities.
+    ...(entry.inference ? { inference: { chat: entry.inference.chat } } : {}),
     ...(lifecycleEntry.providerOrder !== undefined
       ? { providerOrder: lifecycleEntry.providerOrder }
       : {}),
@@ -220,6 +222,7 @@ export function projectModelCatalogEntryForRoute(params: {
       ...projected,
       api: route.api,
       baseUrl: route.baseUrl,
+      ...(donor?.inference ? { inference: donor.inference } : {}),
       ...(donor?.contextWindow !== undefined ? { contextWindow: donor.contextWindow } : {}),
       ...(donor?.contextTokens !== undefined ? { contextTokens: donor.contextTokens } : {}),
       ...(donor?.contextWindows !== undefined ? { contextWindows: donor.contextWindows } : {}),

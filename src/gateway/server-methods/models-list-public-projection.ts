@@ -15,6 +15,7 @@ type ModelsListEntry = Pick<
   | "contextWindow"
   | "contextWindowDefault"
   | "contextWindows"
+  | "inference"
   | "id"
   | "input"
   | "name"
@@ -36,6 +37,7 @@ export function buildPublicModelProjection(
     id: entry.id,
     name: entry.name,
     provider: entry.provider,
+    ...(entry.inference ? { inference: entry.inference } : {}),
     ...(entry.alias ? { alias: entry.alias } : {}),
     ...(contextWindow ? { contextWindow } : {}),
     ...(contextTokens ? { contextTokens } : {}),

@@ -252,6 +252,9 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
       host: ModelAuthAvailabilityEvaluation,
       runtimeId?: string,
     ): ModelAuthAvailabilityEvaluation => {
+      if (entry.inference?.chat === false) {
+        return host;
+      }
       const policy = resolveAgentHarnessPolicy({
         provider: entry.provider,
         modelId: entry.id,
@@ -537,15 +540,34 @@ export async function loadPreparedModelCatalogView(
       providerAuthLabels,
     };
   }
-  const view = await acquirePickerModelCatalogView(params);
+  const acquired = await acquirePickerModelCatalogView(params);
+  const view = {
+    snapshot: {
+      ...acquired.snapshot,
+      get refreshFailed() {
+        return acquired.snapshot.refreshFailed;
+      },
+      entries: acquired.snapshot.entries.filter((entry) => entry.inference?.chat !== false),
+      routeVariants: acquired.snapshot.routeVariants.filter(
+        (entry) => entry.inference?.chat !== false,
+      ),
+    },
+  };
   const includeConfiguredProvider = params.includeConfiguredProvider;
   if (!includeConfiguredProvider) {
     return view;
   }
   const { buildConfiguredModelCatalog } = await import("./model-selection-shared.js");
   let catalog = view.snapshot.entries;
-  let configured = buildConfiguredModelCatalog({ cfg: params.config }).filter((entry) =>
-    includeConfiguredProvider(entry.provider),
+  const nonChatKeys = new Set(
+    acquired.snapshot.entries
+      .filter((entry) => entry.inference?.chat === false)
+      .map((entry) => pickerModelKey(entry.provider, entry.id)),
+  );
+  let configured = buildConfiguredModelCatalog({ cfg: params.config }).filter(
+    (entry) =>
+      includeConfiguredProvider(entry.provider) &&
+      !nonChatKeys.has(pickerModelKey(entry.provider, entry.id)),
   );
   if (params.preferredProvider && params.providerScoped && catalog.length > 0) {
     const { loadStaticManifestCatalogRowsForList } =
@@ -664,6 +686,7 @@ async function acquirePickerModelCatalogView(
             provider: row.provider,
             api: row.api,
             baseUrl: row.baseUrl,
+            inference: row.inference,
             contextWindow: row.contextWindow,
             reasoning: row.reasoning,
             input: row.input,

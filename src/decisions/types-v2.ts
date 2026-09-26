@@ -4,6 +4,7 @@ import type {
   DecisionQuestion,
   JsonValue,
   ProviderDecisionOutcome,
+  DecisionRuntimeV1,
 } from "./types.js";
 
 /** Explicit evidence supplied by the caller; the host collects no additional context. */
@@ -109,3 +110,32 @@ export type DecisionOutcomeV2 =
       readonly provenance: Extract<DecisionOutcome, { status: "ok" }>["provenance"];
     }
   | Extract<DecisionOutcome, { status: "unavailable" }>;
+
+export type DecisionEvaluateOptionsV2 = {
+  readonly agentId?: string;
+  readonly purpose: string;
+  readonly rubricVersion: string;
+  readonly timeoutMs: number;
+  readonly signal: AbortSignal;
+  readonly reasoning?: "auto" | "off" | "on";
+};
+
+/** Additive richer decision operation; the original evaluate method stays source-compatible. */
+export interface DecisionRuntimeV2 extends DecisionRuntimeV1 {
+  evaluateV2(
+    batch: DecisionBatchV2,
+    options: DecisionEvaluateOptionsV2,
+  ): Promise<DecisionOutcomeV2>;
+}
+
+/** First-class decision registration backed internally by the normal provider owner. */
+export interface DecisionProviderV2 {
+  readonly id: string;
+  readonly contractVersion: 2;
+  /** Existing normal provider definition; omit only when its same-plugin registration already exists. */
+  readonly provider?: Omit<import("../plugins/provider-plugin.types.js").ProviderPlugin, "id">;
+  evaluate(
+    batch: DecisionBatchV2,
+    context: import("./provider-context.js").DecisionProviderContextV2,
+  ): Promise<ProviderDecisionOutcomeV2>;
+}

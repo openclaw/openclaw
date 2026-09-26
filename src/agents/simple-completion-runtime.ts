@@ -470,7 +470,7 @@ async function prepareSimpleCompletionModelCore(
   };
 }
 
-async function acquirePreparedSimpleCompletionRuntime(
+export async function acquirePreparedSimpleCompletionRuntime(
   params: {
     cfg: OpenClawConfig | undefined;
     agentId?: string;

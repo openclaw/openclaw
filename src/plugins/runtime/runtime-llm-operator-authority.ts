@@ -6,7 +6,7 @@ import type { ModelRef } from "../../agents/model-ref-shared.js";
 import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import { createLlmCompleteError } from "./runtime-llm-error.js";
-import type { LlmCompleteCaller, LlmCompleteParams, LlmCompleteResult } from "./types-core.js";
+import type { LlmCompleteCaller } from "./types-core.js";
 
 type CompletionOperatorSource = {
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -18,13 +18,10 @@ type CompletionOperatorSource = {
 };
 
 /** Keep the original requester through preparation, provider work, and asynchronous cleanup. */
-export function bindLlmOperatorAuthority(
+export function bindLlmOperatorAuthority<Params extends { signal?: AbortSignal }, Result>(
   hostCaller: LlmCompleteCaller | undefined,
-  complete: (
-    params: LlmCompleteParams,
-    source: CompletionOperatorSource,
-  ) => Promise<LlmCompleteResult>,
-): (params: LlmCompleteParams) => Promise<LlmCompleteResult> {
+  complete: (params: Params, source: CompletionOperatorSource) => Promise<Result>,
+): (params: Params) => Promise<Result> {
   return (params) =>
     runWithAsyncWorkResources(async (onAcquired) => {
       // Only the host-issued context-engine capability identifies bounded system maintenance.

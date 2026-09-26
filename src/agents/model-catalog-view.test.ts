@@ -62,6 +62,36 @@ describe("prepared model catalog view", () => {
     });
   });
 
+  it("excludes explicit non-chat rows and their configured fallback from chat pickers", async () => {
+    const typed = { ...row("fixture", "typed"), inference: { chat: false } };
+    mocks.loadSnapshot.mockResolvedValue(snapshot([typed, row("fixture", "chat")]));
+    const view = await loadPreparedModelCatalogView({
+      kind: "picker",
+      config: {
+        models: {
+          providers: {
+            fixture: {
+              baseUrl: "https://fixture.invalid",
+              models: [
+                {
+                  id: "typed",
+                  name: "Typed",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 1024,
+                },
+              ],
+            },
+          },
+        },
+      },
+      includeConfiguredProvider: () => true,
+    });
+    expect(view.snapshot.entries.map((entry) => entry.id)).toEqual(["chat"]);
+    expect(view.snapshot.routeVariants.map((entry) => entry.id)).toEqual(["chat"]);
+  });
+
   it("prepares physical variants with provider-bounded identity discovery", () => {
     const policy = vi
       .spyOn(providerPolicySurface, "resolveDirectBundledProviderPolicySurface")

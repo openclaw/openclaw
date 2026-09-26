@@ -14,6 +14,9 @@ function normalizeStaticCatalogInput(
 
 /** Converts a normalized catalog row into the provider runtime model shape. */
 export function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRuntimeModel {
+  if (row.inference?.chat === false) {
+    throw new Error(`Model ${row.provider}/${row.id} does not support chat inference`);
+  }
   return {
     id: row.id,
     name: row.name || row.id,

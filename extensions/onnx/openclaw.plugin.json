@@ -1,5 +1,8 @@
 {
   "id": "onnx",
+  "nonSecretAuthMarkers": [
+    "onnx-local"
+  ],
   "name": "ONNX",
   "description": "Local typed decisions using pinned ONNX classifiers.",
   "categories": [
@@ -58,139 +61,317 @@
       }
     }
   },
-  "decisionModels": [
-    {
-      "provider": "onnx",
-      "id": "gliclass-edge-v3.0",
-      "name": "GLiClass Edge v3",
-      "capabilities": {
-        "questionTypes": [
-          "boolean",
-          "choice",
-          "score"
-        ],
-        "maxQuestions": 32,
-        "maxChoiceAlternatives": 64,
-        "maxScoreLevels": 64,
-        "maxInputTokens": 512,
-        "inputTokenScope": "encoded-question",
-        "requiresBooleanCriteria": true,
-        "confidence": "none"
-      }
-    },
-    {
-      "provider": "onnx",
-      "id": "gliclass-base-v3.0",
-      "name": "GLiClass Base v3",
-      "capabilities": {
-        "questionTypes": [
-          "boolean",
-          "choice",
-          "score"
-        ],
-        "maxQuestions": 32,
-        "maxChoiceAlternatives": 64,
-        "maxScoreLevels": 64,
-        "maxInputTokens": 512,
-        "inputTokenScope": "encoded-question",
-        "requiresBooleanCriteria": true,
-        "confidence": "none"
-      }
-    },
-    {
-      "provider": "onnx",
-      "id": "gliner2.5-small-v1",
-      "name": "GLiNER 2.5 Small",
-      "capabilities": {
-        "questionTypes": [
-          "boolean",
-          "choice",
-          "score"
-        ],
-        "maxQuestions": 32,
-        "maxChoiceAlternatives": 64,
-        "maxScoreLevels": 64,
-        "maxInputTokens": 512,
-        "inputTokenScope": "encoded-question",
-        "requiresBooleanCriteria": true,
-        "confidence": "none"
-      }
-    },
-    {
-      "provider": "onnx",
-      "id": "gliner2.5-base-v1",
-      "name": "GLiNER 2.5 Base",
-      "capabilities": {
-        "questionTypes": [
-          "boolean",
-          "choice",
-          "score"
-        ],
-        "maxQuestions": 32,
-        "maxChoiceAlternatives": 64,
-        "maxScoreLevels": 64,
-        "maxInputTokens": 512,
-        "inputTokenScope": "encoded-question",
-        "requiresBooleanCriteria": true,
-        "confidence": "none"
-      }
-    },
-    {
-      "provider": "onnx",
-      "id": "deberta-v3-base-zeroshot-v2.0",
-      "name": "DeBERTa Zero-shot v2",
-      "capabilities": {
-        "questionTypes": [
-          "boolean",
-          "choice",
-          "score"
-        ],
-        "maxQuestions": 32,
-        "maxChoiceAlternatives": 64,
-        "maxScoreLevels": 64,
-        "maxInputTokens": 512,
-        "inputTokenScope": "state-plus-each-criterion",
-        "requiresBooleanCriteria": true,
-        "confidence": "none"
-      }
-    },
-    {
-      "provider": "onnx",
-      "id": "gliclass-instruct-edge-v1.0",
-      "name": "GLiClass Instruct Edge (local export)",
-      "capabilities": {
-        "questionTypes": [
-          "boolean",
-          "choice",
-          "score"
-        ],
-        "maxQuestions": 32,
-        "maxChoiceAlternatives": 64,
-        "maxScoreLevels": 64,
-        "maxInputTokens": 512,
-        "inputTokenScope": "encoded-question",
-        "requiresBooleanCriteria": true,
-        "confidence": "none"
-      }
-    },
-    {
-      "provider": "onnx",
-      "id": "gliclass-instruct-base-v1.0",
-      "name": "GLiClass Instruct Base (local export)",
-      "capabilities": {
-        "questionTypes": [
-          "boolean",
-          "choice",
-          "score"
-        ],
-        "maxQuestions": 32,
-        "maxChoiceAlternatives": 64,
-        "maxScoreLevels": 64,
-        "maxInputTokens": 512,
-        "inputTokenScope": "encoded-question",
-        "requiresBooleanCriteria": true,
-        "confidence": "none"
+  "providers": [
+    "onnx"
+  ],
+  "modelCatalog": {
+    "providers": {
+      "onnx": {
+        "authScope": "plugin",
+        "models": [
+          {
+            "id": "gliclass-edge-v3.0",
+            "name": "GLiClass Edge v3",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "onnx-classifier",
+                "confidence": "none",
+                "input": [
+                  "text"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "requiresCriteria": true,
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 64
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 64
+                  }
+                },
+                "limits": {
+                  "maxQuestions": 32,
+                  "maxInputTokens": 512,
+                  "inputTokenScope": "encoded-question"
+                },
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "gliclass-base-v3.0",
+            "name": "GLiClass Base v3",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "onnx-classifier",
+                "confidence": "none",
+                "input": [
+                  "text"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "requiresCriteria": true,
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 64
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 64
+                  }
+                },
+                "limits": {
+                  "maxQuestions": 32,
+                  "maxInputTokens": 512,
+                  "inputTokenScope": "encoded-question"
+                },
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "gliner2.5-small-v1",
+            "name": "GLiNER 2.5 Small",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "onnx-classifier",
+                "confidence": "none",
+                "input": [
+                  "text"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "requiresCriteria": true,
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 64
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 64
+                  }
+                },
+                "limits": {
+                  "maxQuestions": 32,
+                  "maxInputTokens": 512,
+                  "inputTokenScope": "encoded-question"
+                },
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "gliner2.5-base-v1",
+            "name": "GLiNER 2.5 Base",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "onnx-classifier",
+                "confidence": "none",
+                "input": [
+                  "text"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "requiresCriteria": true,
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 64
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 64
+                  }
+                },
+                "limits": {
+                  "maxQuestions": 32,
+                  "maxInputTokens": 512,
+                  "inputTokenScope": "encoded-question"
+                },
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "deberta-v3-base-zeroshot-v2.0",
+            "name": "DeBERTa Zero-shot v2",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "onnx-classifier",
+                "confidence": "none",
+                "input": [
+                  "text"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "requiresCriteria": true,
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 64
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 64
+                  }
+                },
+                "limits": {
+                  "maxQuestions": 32,
+                  "maxInputTokens": 512,
+                  "inputTokenScope": "state-plus-each-criterion"
+                },
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "gliclass-instruct-edge-v1.0",
+            "name": "GLiClass Instruct Edge (local export)",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "onnx-classifier",
+                "confidence": "none",
+                "input": [
+                  "text"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "requiresCriteria": true,
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 64
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 64
+                  }
+                },
+                "limits": {
+                  "maxQuestions": 32,
+                  "maxInputTokens": 512,
+                  "inputTokenScope": "encoded-question"
+                },
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "gliclass-instruct-base-v1.0",
+            "name": "GLiClass Instruct Base (local export)",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "onnx-classifier",
+                "confidence": "none",
+                "input": [
+                  "text"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "requiresCriteria": true,
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 64
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 64
+                  }
+                },
+                "limits": {
+                  "maxQuestions": 32,
+                  "maxInputTokens": 512,
+                  "inputTokenScope": "encoded-question"
+                },
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                }
+              }
+            }
+          }
+        ]
       }
     }
-  ]
+  }
 }

@@ -63,7 +63,12 @@ function nativeOwner(complete: boolean, loggedIn: boolean, isCurrent = () => tru
 }
 
 describe("captured model decisions", () => {
-  afterEach(() => vi.restoreAllMocks());
+  // These fixtures declare whether a host credential exists; process credentials are not evidence.
+  beforeEach(() => vi.stubEnv("OPENAI_API_KEY", ""));
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
 
   it.each([true, false])(
     "preserves provider auth for a non-CLI harness (authenticated=%s)",

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { evaluate } from "./client.js";
-import { runtimeConfig } from "./config.js";
+import { runtimeSettings } from "./config.js";
 import { MAX_JSON_BYTES, parseInput, parseResult } from "./schema.js";
 
 const config = { apiKey: "synthetic-test-credential", timeoutMs: 1000 };
@@ -75,7 +75,8 @@ describe("TypeSafe HTTP evaluation", () => {
     [400, "transport"],
     [401, "authentication"],
     [403, "authentication"],
-    [422, "transport"],
+    [413, "unsupported-input"],
+    [422, "unsupported-input"],
     [429, "rate-limited"],
     [500, "transport"],
   ])("classifies HTTP %s without exposing diagnostics or retrying", async (status, reason) => {
@@ -105,7 +106,7 @@ describe("TypeSafe HTTP evaluation", () => {
     await expect(
       evaluate(
         input,
-        runtimeConfig({ apiKey: { source: "env", provider: "default", id: "TYPESAFE_API_KEY" } }),
+        runtimeSettings({ apiKey: { source: "env", provider: "default", id: "TYPESAFE_API_KEY" } }),
       ),
     ).rejects.toThrow("API key is missing");
     expect(fetch).not.toHaveBeenCalled();

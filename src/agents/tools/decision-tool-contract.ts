@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto";
 import { Type } from "typebox";
+import type {
+  DecisionBatchV2,
+  DecisionOutcomeV2,
+  DecisionEvaluateOptionsV2,
+} from "../../decisions/types-v2.js";
 import type { DecisionBatch, DecisionOutcome } from "../../decisions/types.js";
+import { finiteJson, record } from "../../decisions/validation-common.js";
+import { validateDecisionBatchV2 } from "../../decisions/validation-v2.js";
 import { validateDecisionBatch } from "../../decisions/validation.js";
 import type { DecisionProviderCapabilities } from "../../plugins/manifest-types.js";
 
@@ -14,7 +21,7 @@ const entry = {
 } as const;
 
 /** Provider-neutral request contract. Provider-specific translation stays in the provider plugin. */
-export const DecisionEvaluateInput = Type.Unsafe({
+const DecisionEvaluateInputV1 = {
   type: "object",
   additionalProperties: false,
   required: ["state", "questions"],
@@ -68,7 +75,126 @@ export const DecisionEvaluateInput = Type.Unsafe({
       },
     },
   },
+} as const;
+
+const textContent = {
+  type: "object",
+  additionalProperties: false,
+  required: ["type", "text"],
+  properties: { type: { const: "text" }, text: { type: "string" } },
+};
+const jsonContent = {
+  type: "object",
+  additionalProperties: false,
+  required: ["type", "value"],
+  properties: { type: { const: "json" }, value: {} },
+};
+const imageContent = {
+  type: "object",
+  additionalProperties: false,
+  required: ["type", "dataUri"],
+  properties: {
+    type: { const: "image" },
+    dataUri: {
+      type: "string",
+      description: "Explicit PNG/JPEG/WebP base64 data URI; never a remote URL or file path.",
+    },
+    text: { type: "string" },
+  },
+};
+const listContent = {
+  type: "object",
+  additionalProperties: false,
+  required: ["type", "items"],
+  properties: {
+    type: { const: "list" },
+    items: {
+      type: "array",
+      maxItems: 120,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["id", "content"],
+        properties: { id: { type: "string", minLength: 1 }, content: entry },
+      },
+    },
+  },
+};
+const DecisionEvaluateInputV2 = {
+  type: "object",
+  additionalProperties: false,
+  required: ["contractVersion", "state", "questions"],
+  properties: {
+    contractVersion: { const: 2 },
+    reasoning: { enum: ["auto", "off", "on"] },
+    state: { anyOf: [textContent, jsonContent, imageContent, listContent] },
+    questions: {
+      type: "object",
+      minProperties: 1,
+      additionalProperties: {
+        anyOf: [
+          ...DecisionEvaluateInputV1.properties.questions.additionalProperties.anyOf,
+          {
+            type: "object",
+            additionalProperties: false,
+            required: ["type"],
+            properties: { type: { const: "sort" }, instructions: entry },
+          },
+          {
+            type: "object",
+            additionalProperties: false,
+            required: ["type", "criteria"],
+            properties: {
+              type: { const: "tags" },
+              instructions: entry,
+              criteria: { type: "object", minProperties: 1, additionalProperties: entry },
+            },
+          },
+        ],
+      },
+    },
+  },
+};
+
+export const DecisionEvaluateInput = Type.Unsafe({
+  type: "object",
+  anyOf: [DecisionEvaluateInputV1, DecisionEvaluateInputV2],
 });
+
+export type DecisionToolRequest =
+  | { version: 1; batch: DecisionBatch }
+  | { version: 2; batch: DecisionBatchV2; reasoning?: DecisionEvaluateOptionsV2["reasoning"] };
+
+/** Version selection never executes caller getters or inspects unbounded evidence. */
+export function parseDecisionToolRequest(value: unknown): DecisionToolRequest | null {
+  const shape = finiteJson(value, 7 * 1_048_576, true);
+  if (shape === "oversized") {
+    return null;
+  }
+  if (shape !== "valid" || !record(value)) {
+    throw new Error("Invalid decision_evaluate input; no evidence was sent.");
+  }
+  if (value.contractVersion !== 2) {
+    const batch = parseDecisionEvaluateInput(value);
+    return batch ? { version: 1, batch } : null;
+  }
+  if (
+    Object.keys(value).some(
+      (key) => !["contractVersion", "state", "questions", "reasoning"].includes(key),
+    ) ||
+    (value.reasoning !== undefined &&
+      value.reasoning !== "auto" &&
+      value.reasoning !== "off" &&
+      value.reasoning !== "on")
+  ) {
+    throw new Error("Invalid decision_evaluate version 2 options; no evidence was sent.");
+  }
+  const batch = { state: value.state, questions: value.questions };
+  if (!validateDecisionBatchV2(batch)) {
+    return null;
+  }
+  return { version: 2, batch, ...(value.reasoning ? { reasoning: value.reasoning } : {}) };
+}
 
 export const DecisionEvaluateOutput = Type.Unsafe({
   type: "object",
@@ -83,7 +209,7 @@ export const DecisionEvaluateOutput = Type.Unsafe({
 });
 
 /** Validate before traversing the rubric; null means the shared resource guard rejected it. */
-export function parseDecisionEvaluateInput(value: unknown): DecisionBatch | null {
+function parseDecisionEvaluateInput(value: unknown): DecisionBatch | null {
   try {
     if (!validateDecisionBatch(value)) {
       return null;
@@ -100,9 +226,12 @@ export function parseDecisionEvaluateInput(value: unknown): DecisionBatch | null
 }
 
 /** Identify the complete admitted rubric without including evidence in provenance. */
-export function rubricVersion(batch: DecisionBatch): string {
+export function rubricVersion(
+  batch: Pick<DecisionBatch | DecisionBatchV2, "questions">,
+  version: 1 | 2 = 1,
+): string {
   const canonical = JSON.stringify(canonicalize(batch.questions));
-  return `decision-v1-${createHash("sha256").update(canonical).digest("hex").slice(0, 24)}`;
+  return `decision-v${version}-${createHash("sha256").update(canonical).digest("hex").slice(0, 24)}`;
 }
 
 // Validation bounds recursion before canonicalization and preserves array order.
@@ -180,7 +309,7 @@ const unavailableGuidance: Record<
 
 /** Preserve provider values and provenance; diagnostics contain only bounded local facts. */
 export function decisionToolResult(
-  outcome: DecisionOutcome,
+  outcome: DecisionOutcome | DecisionOutcomeV2,
   capabilities?: DecisionProviderCapabilities,
 ) {
   const details =

@@ -30,3 +30,10 @@ export {
 } from "../decisions/compatibility.js";
 export { validateDecisionBatchV2, validateDecisionResultV2 } from "../decisions/validation-v2.js";
 export { DecisionContractError } from "../decisions/validation.js";
+
+export type {
+  DecisionEvaluateOptionsV2,
+  DecisionRuntimeV2,
+  DecisionProviderV2,
+} from "../decisions/types-v2.js";
+export type { DecisionProviderContextV2 } from "../decisions/provider-context.js";

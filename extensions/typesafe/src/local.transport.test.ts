@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import { lookup } from "node:dns/promises";
 import { createServer } from "node:http";
-import type { DecisionProviderV1 } from "openclaw/plugin-sdk/decisions";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import plugin from "../index.js";
 import { evaluate } from "./client.js";
-import { runtimeConfig } from "./config.js";
+import { runtimeSettings } from "./config.js";
 import type { EvaluationInput } from "./schema.js";
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
@@ -60,74 +59,82 @@ afterEach(() => {
   vi.mocked(lookup).mockReset();
 });
 
-it("runs the registered decision provider locally without reading hosted credentials", async () => {
-  const fetch = vi.fn(
-    async (_url: RequestInfo | URL, _init?: RequestInit) =>
-      new Response(JSON.stringify(localAnswer)),
-  );
-  vi.stubGlobal("fetch", fetch);
-  vi.stubEnv("HTTP_PROXY", "http://proxy.invalid:3128");
-  vi.stubEnv("HTTPS_PROXY", "http://proxy.invalid:3128");
-  vi.stubEnv("ALL_PROXY", "http://proxy.invalid:3128");
-  vi.stubEnv("NO_PROXY", "");
-  const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
-  plugin.register({
-    runtime: {
-      config: {
-        current: () => ({
-          plugins: {
-            entries: { typesafe: { config: { baseUrl, apiKey: "hosted-materialized" } } },
-          },
-        }),
-      },
-    },
-    registerDecisionProvider,
-  } as unknown as OpenClawPluginApi);
-  const provider = registerDecisionProvider.mock.calls[0]?.[0] as DecisionProviderV1;
-  expect(provider.isReady?.()).toBe(true);
-  await expect(
-    provider.evaluate(
-      {
-        ...input,
-        questions: { ...input.questions, b: { ...input.questions.b, type: "boolean" } },
-      },
-      {
-        model: "kev-latest",
-        signal: new AbortController().signal,
-        deadlineMonotonicMs: performance.now() + 1000,
-      },
-    ),
-  ).resolves.toMatchObject({
-    status: "ok",
-    result: {
-      answers: {
-        c: localAnswer.answers.c,
-        s: { type: "score", score: 0.8, probabilities: [0.2, 0.8] },
-        b: { type: "boolean", probabilityTrue: 0.75 },
-      },
-    },
-  });
-  expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
-  expect(fetch).toHaveBeenCalledOnce();
-  for (const [url, init] of fetch.mock.calls) {
-    expect(url).toBe(`${baseUrl}/v1/systemone`);
-    expect(new Headers(init?.headers).has("authorization")).toBe(false);
-    assert(typeof init?.body === "string");
-    expect(JSON.parse(init.body)).toEqual({
-      ...input,
-      model: "kev-latest",
-      questions: {
-        c: { ...input.questions.c, instructions: null },
-        s: {
-          ...input.questions.s,
-          instructions: null,
-          criteria: ["", '{"impact":["widespread",true,2]}'],
+it.each(["kev-latest", "jev-latest"])(
+  "runs %s locally without reading hosted credentials",
+  async (model) => {
+    const fetch = vi.fn(
+      async (_url: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify(localAnswer)),
+    );
+    vi.stubGlobal("fetch", fetch);
+    vi.stubEnv("HTTP_PROXY", "http://proxy.invalid:3128");
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.invalid:3128");
+    vi.stubEnv("ALL_PROXY", "http://proxy.invalid:3128");
+    vi.stubEnv("NO_PROXY", "");
+    const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
+    plugin.register({
+      runtime: {
+        config: {
+          current: () => ({
+            plugins: {
+              entries: { typesafe: { config: { baseUrl, apiKey: "hosted-materialized" } } },
+            },
+          }),
         },
-        b: input.questions.b,
+      },
+      registerDecisionProvider,
+    } as unknown as OpenClawPluginApi);
+    const provider = registerDecisionProvider.mock.calls[0]?.[0];
+    assert(provider?.contractVersion === 2);
+    expect(provider.provider?.resolveSyntheticAuth?.({ provider: "typesafe" })).toMatchObject({
+      mode: "api-key",
+    });
+    await expect(
+      provider.evaluate(
+        {
+          state: { type: "json", value: input.state },
+          questions: { ...input.questions, b: { ...input.questions.b, type: "boolean" } },
+        },
+        {
+          model: { id: model, name: "Selected model", provider: "typesafe" },
+          config: { plugins: { entries: { typesafe: { config: { baseUrl } } } } },
+          auth: { mode: "api-key", apiKey: "hosted-must-not-leak" },
+          signal: new AbortController().signal,
+          deadlineMonotonicMs: performance.now() + 1000,
+        },
+      ),
+    ).resolves.toMatchObject({
+      status: "ok",
+      result: {
+        answers: {
+          c: localAnswer.answers.c,
+          s: { type: "score", score: 0.8, probabilities: [0.2, 0.8] },
+          b: { type: "boolean", probabilityTrue: 0.75 },
+        },
       },
     });
-  }
-});
+    expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledOnce();
+    for (const [url, init] of fetch.mock.calls) {
+      expect(url).toBe(`${baseUrl}/v1/systemone`);
+      expect(new Headers(init?.headers).has("authorization")).toBe(false);
+      assert(typeof init?.body === "string");
+      expect(JSON.parse(init.body)).toEqual({
+        ...input,
+        model,
+        questions: {
+          c: { ...input.questions.c, instructions: null },
+          s: {
+            ...input.questions.s,
+            instructions: null,
+            criteria: ["", '{"impact":["widespread",true,2]}'],
+          },
+          b: input.questions.b,
+        },
+      });
+    }
+  },
+);
 
 it("refuses to send the local Kev selection to hosted inference through registered handlers", async () => {
   const fetch = vi.fn(
@@ -147,12 +154,17 @@ it("refuses to send the local Kev selection to hosted inference through register
     registerDecisionProvider,
   } as unknown as OpenClawPluginApi);
   const provider = registerDecisionProvider.mock.calls[0]?.[0];
-  assert(provider);
+  assert(provider?.contractVersion === 2);
   await expect(
     provider.evaluate(
-      { state: "local-only evidence", questions: { q: { type: "boolean" } } },
       {
-        model: "kev-latest",
+        state: { type: "text", text: "local-only evidence" },
+        questions: { q: { type: "boolean" } },
+      },
+      {
+        model: { id: "kev-latest", name: "Kev", provider: "typesafe" },
+        config: {},
+        auth: { mode: "api-key", apiKey: "synthetic-key" },
         signal: new AbortController().signal,
         deadlineMonotonicMs: performance.now() + 10000,
       },
@@ -167,7 +179,7 @@ it.each([
   "http://[::1]:8009",
   "https://localhost",
 ])("accepts an explicit loopback origin %s", (url) => {
-  expect(runtimeConfig({ baseUrl: url, apiKey: "ignored-secret" })).toEqual({
+  expect(runtimeSettings({ baseUrl: url, apiKey: "ignored-secret" })).toEqual({
     baseUrl: new URL(url).origin,
     timeoutMs: 30000,
   });
@@ -190,7 +202,7 @@ it.each([
   null,
   8009,
 ])("rejects non-origin, non-loopback, or ambiguous endpoint %s", (url) => {
-  expect(() => runtimeConfig({ baseUrl: url })).toThrow("baseUrl");
+  expect(() => runtimeSettings({ baseUrl: url })).toThrow("baseUrl");
 });
 
 it.each([
@@ -213,7 +225,7 @@ it.each([
     "fetch",
     vi.fn(async () => new Response(JSON.stringify(response))),
   );
-  await expect(evaluate(input, runtimeConfig({ baseUrl }))).rejects.toThrow("invalid response");
+  await expect(evaluate(input, runtimeSettings({ baseUrl }))).rejects.toThrow("invalid response");
 });
 
 it("keeps hosted response validation strict and ignores stale keys even on direct local calls", async () => {
@@ -224,7 +236,7 @@ it("keeps hosted response validation strict and ignores stale keys even on direc
   vi.stubGlobal("fetch", fetch);
   await expect(
     evaluate(input, {
-      ...runtimeConfig({ baseUrl }),
+      ...runtimeSettings({ baseUrl }),
       apiKey: "hosted-secret",
     }),
   ).resolves.toHaveProperty("evaluation.model", "kev-latest");
@@ -240,9 +252,9 @@ it("keeps hosted response validation strict and ignores stale keys even on direc
       },
     },
   };
-  await expect(evaluate(hostedInput, runtimeConfig({ apiKey: "hosted-secret" }))).rejects.toThrow(
-    "invalid response",
-  );
+  await expect(
+    evaluate(hostedInput, { ...runtimeSettings({}), apiKey: "hosted-secret" }),
+  ).rejects.toThrow("invalid response");
   expect(fetch.mock.calls[1]?.[0]).toBe("https://api.typesafe.ai/v1/systemone");
   expect(new Headers(fetch.mock.calls[1]?.[1]?.headers).get("authorization")).toBe(
     "Bearer hosted-secret",
@@ -290,7 +302,7 @@ it.each(["127.0.0.1", "localhost", "[::1]"])(
         vi.mocked(lookup).mockRejectedValue(new Error("Synthetic untrusted localhost resolver"));
       }
       await expect(
-        evaluate(input, runtimeConfig({ baseUrl: `http://${hostname}:${address.port}` })),
+        evaluate(input, runtimeSettings({ baseUrl: `http://${hostname}:${address.port}` })),
       ).resolves.toHaveProperty("evaluation.answers.b.noul", 0.75);
       expect(received).toHaveLength(1);
       expect(received[0]).toMatchObject({

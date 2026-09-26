@@ -1,15 +1,16 @@
 /** Loads and normalizes OpenClaw plugin manifests, including contracts and config schemas. */
 import path from "node:path";
-import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import { validatePluginCategories } from "../../packages/plugin-package-contract/src/index.js";
 import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
+import { projectDecisionModelCatalog } from "../model-catalog/decision-compatibility.js";
 import { isRecord } from "../utils.js";
 import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-state-owner-types.js";
 import * as capabilityNormalizers from "./manifest-capability-normalizers.js";
 import { normalizeManifestCommandAliases } from "./manifest-command-aliases.js";
 import { normalizeConfigGroups } from "./manifest-config-groups.js";
+import { normalizeManifestModelCatalog } from "./manifest-decision-catalog.js";
 import * as modelProviderNormalizers from "./manifest-model-provider-normalizers.js";
 import { normalizeManifestPlatforms } from "./manifest-platforms.js";
 import * as setupNormalizers from "./manifest-setup-normalizers.js";
@@ -245,10 +246,14 @@ export function loadPluginManifest(
         ...(stateMigrations !== undefined ? { stateMigrations } : {}),
       } as PluginManifestDoctorContract)
     : undefined;
-  let modelCatalog: ReturnType<typeof normalizeModelCatalog>;
+  let modelCatalog: ReturnType<typeof normalizeManifestModelCatalog>;
   try {
-    modelCatalog = normalizeModelCatalog(raw.modelCatalog, {
-      ownedProviders: new Set([...providers, ...cliBackends]),
+    modelCatalog = normalizeManifestModelCatalog({
+      modelCatalog: raw.modelCatalog,
+      decisionModels: raw.decisionModels,
+      providers,
+      cliBackends,
+      decisionProviders: contracts?.decisionProviders,
     });
   } catch {
     return cacheResult({
@@ -257,6 +262,11 @@ export function loadPluginManifest(
       manifestPath,
     });
   }
+  const decisionModels = projectDecisionModelCatalog(
+    Object.entries(modelCatalog?.providers ?? {}).flatMap(([provider, catalog]) =>
+      catalog.models.map((model) => ({ ...model, provider, name: model.name ?? model.id })),
+    ),
+  );
   const manifestBeforeDashboard = {
     id,
     configSchema,
@@ -365,10 +375,7 @@ export function loadPluginManifest(
       uiHints: setupNormalizers.normalizeConfigUiHints(raw.uiHints),
       configGroups: normalizeConfigGroups(raw.configGroups, configSchema),
       contracts,
-      decisionModels: capabilityNormalizers.normalizeManifestDecisionModels(
-        raw.decisionModels,
-        contracts?.decisionProviders,
-      ),
+      decisionModels: decisionModels.length ? decisionModels : undefined,
       transcriptSources: capabilityNormalizers.normalizeManifestTranscriptSources(
         raw.transcriptSources,
         contracts?.transcriptSourceProviders,

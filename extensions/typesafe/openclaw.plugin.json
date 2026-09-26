@@ -1,5 +1,8 @@
 {
   "id": "typesafe",
+  "nonSecretAuthMarkers": [
+    "typesafe-local"
+  ],
   "name": "TypeSafe AI",
   "description": "Typed decision provider for hosted Jev and local System One models.",
   "categories": [
@@ -29,7 +32,7 @@
   "uiHints": {
     "apiKey": {
       "label": "TypeSafe API credential",
-      "help": "Hosted Jev only. Select a SecretRef in Settings \u2192 Secrets. Ignored for a local baseUrl. Never paste credentials in chat.",
+      "help": "Hosted Jev only. Select a SecretRef in Settings → Secrets. Ignored for a local baseUrl. Never paste credentials in chat.",
       "sensitive": true
     },
     "timeoutMs": {
@@ -99,54 +102,127 @@
     },
     "additionalProperties": false
   },
-  "decisionModels": [
-    {
-      "provider": "typesafe",
-      "id": "jev-latest",
-      "name": "Jev",
-      "capabilities": {
-        "questionTypes": [
-          "boolean",
-          "choice",
-          "score"
-        ],
-        "maxQuestions": 256,
-        "maxChoiceAlternatives": 255,
-        "maxScoreLevels": 10,
-        "confidence": "provider-specific"
-      }
-    },
-    {
-      "provider": "typesafe",
-      "id": "jev-1.13.0",
-      "name": "Jev 1.13.0",
-      "capabilities": {
-        "questionTypes": [
-          "boolean",
-          "choice",
-          "score"
-        ],
-        "maxQuestions": 256,
-        "maxChoiceAlternatives": 255,
-        "maxScoreLevels": 10,
-        "confidence": "provider-specific"
-      }
-    },
-    {
-      "provider": "typesafe",
-      "id": "kev-latest",
-      "name": "Kev (local server)",
-      "capabilities": {
-        "questionTypes": [
-          "boolean",
-          "choice",
-          "score"
-        ],
-        "maxQuestions": 256,
-        "maxChoiceAlternatives": 255,
-        "maxScoreLevels": 10,
-        "confidence": "provider-specific"
+  "providers": [
+    "typesafe"
+  ],
+  "modelCatalog": {
+    "providers": {
+      "typesafe": {
+        "authScope": "plugin",
+        "models": [
+          {
+            "id": "jev-latest",
+            "name": "Jev",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "typesafe-systemone",
+                "confidence": "provider-specific",
+                "input": [
+                  "text"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  }
+                },
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "jev-1.13.0",
+            "name": "Jev 1.13.0",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "typesafe-systemone",
+                "confidence": "provider-specific",
+                "input": [
+                  "text"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  }
+                },
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "kev-latest",
+            "name": "Kev (local server)",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "typesafe-systemone",
+                "confidence": "provider-specific",
+                "input": [
+                  "text"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  }
+                },
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                }
+              }
+            }
+          }
+        ]
       }
     }
-  ]
+  }
 }
