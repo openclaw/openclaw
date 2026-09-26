@@ -1,7 +1,7 @@
 import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
 // Commander registration for debug proxy capture, validation, query, and blob commands.
-import { InvalidArgumentError, type Command } from "commander";
-import type { CaptureQueryPreset } from "../proxy-capture/types.js";
+import { InvalidArgumentError, Option, type Command } from "commander";
+import { CAPTURE_QUERY_PRESETS, type CaptureQueryPreset } from "../proxy-capture/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { collectOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
@@ -136,9 +136,10 @@ export function registerProxyCli(program: Command) {
   proxy
     .command("query")
     .description("Run a built-in query preset against captured traffic")
-    .requiredOption(
-      "--preset <name>",
-      "Query preset: double-sends, retry-storms, cache-busting, ws-duplicate-frames, missing-ack, error-bursts",
+    .addOption(
+      new Option("--preset <name>", "Query preset")
+        .choices(CAPTURE_QUERY_PRESETS)
+        .makeOptionMandatory(),
     )
     .option("--json", "Print machine-readable JSON")
     .option("--session <id>", "Restrict to a capture session id")
