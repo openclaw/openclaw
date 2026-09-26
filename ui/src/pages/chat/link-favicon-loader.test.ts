@@ -17,11 +17,9 @@ function appendPlaceholder(): HTMLImageElement {
 describe("hydrateLinkFavicons", () => {
   it("does nothing without an opt-in fetcher", () => {
     const image = appendPlaceholder();
-    const fetcher = vi.fn();
 
     hydrateLinkFavicons(document.body);
 
-    expect(fetcher).not.toHaveBeenCalled();
     expect(image.hasAttribute("src")).toBe(false);
     expect(image.dataset.linkFaviconState).toBeUndefined();
   });

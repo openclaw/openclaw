@@ -9,7 +9,10 @@ import { t } from "../../i18n/index.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
-import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  parseAgentSessionKey,
+} from "../../lib/sessions/session-key.ts";
 import type { DropIndicator } from "./chat-page-drop-indicator.ts";
 import type { PaneSessionChangeOptions } from "./chat-pane-shared.ts";
 import type { RouteDraftComposerFocus } from "./route-draft-focus-handoff.ts";
@@ -55,6 +58,7 @@ type ChatPagePaneRenderOptions = {
   pane: ChatSplitPane;
   sessionSlots: readonly (string | undefined)[];
   splitMode: boolean;
+  unbound: boolean;
   weight: number;
 };
 
@@ -71,8 +75,25 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
       @focusin=${() => options.onFocusPane(options.pane.id)}
     >
       <div class="chat-pane-cache">
+        ${
+          options.unbound
+            ? html`
+                <div
+                  class="chat-split-view__unbound"
+                  data-unbound-pane-id=${options.pane.id}
+                  tabindex="0"
+                  role="region"
+                  aria-label=${t("chat.splitView.chooseConversation")}
+                >
+                  <strong>${t("chat.splitView.chooseConversation")}</strong>
+                  <p>${t("chat.splitView.missingOwner")}</p>
+                  ${options.onClosePane ? html`<button class="btn" @click=${() => options.onClosePane?.(options.pane.id)}>${t("chat.splitView.closePane")}</button>` : nothing}
+                </div>
+              `
+            : nothing
+        }
         ${options.sessionSlots.map((sessionKey) => {
-          if (sessionKey === undefined) {
+          if (sessionKey === undefined || options.unbound) {
             return nothing;
           }
           const visible =
@@ -125,6 +146,7 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               .chatMessagesBySession=${options.chatMessagesBySession}
               .sessionSnapshotStore=${options.sessionSnapshotStore}
               .sessionKey=${sessionKey}
+              .agentId=${options.splitMode ? parseAgentSessionKey(sessionKey)?.agentId : undefined}
               .routeLoadingSkeleton=${routeData?.routeLoadingSkeleton ?? noChange}
               .presented=${presented}
               .visuallyPresented=${presented}

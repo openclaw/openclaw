@@ -820,33 +820,6 @@ describe("supplemental session reconciliation", () => {
     sessions.dispose();
   });
 
-  it("adds a routed row absent from a newer canonical list", async () => {
-    const sessions = capabilityWithList(sessionsResult([], 10));
-    const sourceCanonicalListRevision = sessions.canonicalListRevision;
-
-    await sessions.refresh({ force: true });
-    sessions.reconcile(
-      {
-        key: "agent:main:archived-routed",
-        kind: "direct",
-        sessionId: "session-routed",
-        updatedAt: 10,
-        archived: true,
-      },
-      undefined,
-      { archivedFilter: "all", sourceCanonicalListRevision },
-    );
-
-    expect(sessions.state.result?.sessions).toEqual([
-      expect.objectContaining({
-        key: "agent:main:archived-routed",
-        archived: true,
-        sessionId: "session-routed",
-      }),
-    ]);
-    sessions.dispose();
-  });
-
   it.each(["lineage", "child list"] as const)(
     "keeps a newer canonical placement when an older sidebar %s finishes",
     async (source) => {

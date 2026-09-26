@@ -30,11 +30,18 @@ let createObjectUrl: ReturnType<typeof vi.fn<(object: Blob | MediaSource) => str
 let revokeObjectUrl: ReturnType<typeof vi.fn<(url: string) => void>>;
 let fetchImage: ReturnType<typeof vi.fn>;
 
-async function renderLightbox() {
+async function renderLightbox({
+  src = "data:image/png;base64,cG5n",
+  imageTitle = "Generated lobster",
+  mediaKind = "image",
+  originalSrc = "",
+} = {}) {
   render(
     html`<openclaw-image-lightbox
-      src="data:image/png;base64,cG5n"
-      .imageTitle=${"Generated lobster"}
+      src=${src}
+      mediaKind=${mediaKind}
+      originalSrc=${originalSrc}
+      .imageTitle=${imageTitle}
     ></openclaw-image-lightbox>`,
     container,
   );
@@ -85,11 +92,15 @@ describe("openclaw-image-lightbox", () => {
   });
 
   it("renders a labelled large image with original and close actions", async () => {
-    const { modal } = await renderLightbox();
+    fetchImage.mockResolvedValueOnce({
+      blob: async () => new Blob(["png"], { type: "image/png;charset=utf-8" }),
+    });
+    const src = "data:image/png;charset=utf-8;base64,cG5n";
+    const { modal } = await renderLightbox({ src });
     const root = modal.shadowRoot;
 
     expect(root?.querySelector<HTMLImageElement>("img")?.alt).toBe("Generated lobster");
-    expect(root?.querySelector<HTMLImageElement>("img")?.src).toBe("data:image/png;base64,cG5n");
+    expect(root?.querySelector<HTMLImageElement>("img")?.src).toBe(src);
     expect(modal.hasAttribute("title")).toBe(false);
     await vi.waitFor(() =>
       expect(root?.querySelector<HTMLAnchorElement>("a")?.href).toBe("blob:lightbox-original"),
@@ -106,20 +117,12 @@ describe("openclaw-image-lightbox", () => {
   });
 
   it("renders video in the shared overlay without image zoom controls", async () => {
-    render(
-      html`<openclaw-image-lightbox
-        mediaKind="video"
-        src="https://example.com/demo.mp4?playback=1"
-        originalSrc="https://example.com/demo.mp4"
-        .imageTitle=${"Demo clip"}
-      ></openclaw-image-lightbox>`,
-      container,
-    );
-    const modal = container.querySelector("openclaw-image-lightbox");
-    if (!modal) {
-      throw new Error("missing media lightbox");
-    }
-    await modal.updateComplete;
+    const { modal } = await renderLightbox({
+      mediaKind: "video",
+      src: "https://example.com/demo.mp4?playback=1",
+      originalSrc: "https://example.com/demo.mp4",
+      imageTitle: "Demo clip",
+    });
 
     const video = modal.shadowRoot?.querySelector<HTMLVideoElement>("video");
     expect(video?.src).toBe("https://example.com/demo.mp4?playback=1");
@@ -226,30 +229,6 @@ describe("openclaw-image-lightbox", () => {
     expect(Panzoom).not.toHaveBeenCalled();
   });
 
-  it("accepts parameters on safe raster MIME types", async () => {
-    fetchImage.mockResolvedValueOnce({
-      blob: async () => new Blob(["png"], { type: "image/png;charset=utf-8" }),
-    });
-    render(
-      html`<openclaw-image-lightbox
-        src="data:image/png;charset=utf-8;base64,cG5n"
-        .imageTitle=${"Generated lobster"}
-      ></openclaw-image-lightbox>`,
-      container,
-    );
-    const modal = container.querySelector("openclaw-image-lightbox");
-    if (!modal) {
-      throw new Error("missing image lightbox");
-    }
-    await modal.updateComplete;
-
-    await vi.waitFor(() =>
-      expect(modal.shadowRoot?.querySelector<HTMLAnchorElement>(".open-original")?.href).toBe(
-        "blob:lightbox-original",
-      ),
-    );
-  });
-
   it("releases and recreates the original-image URL across reconnection", async () => {
     const { modal } = await renderLightbox();
     await vi.waitFor(() => expect(createObjectUrl).toHaveBeenCalledTimes(1));
@@ -263,18 +242,10 @@ describe("openclaw-image-lightbox", () => {
   });
 
   it("omits the original action for active data image formats", async () => {
-    render(
-      html`<openclaw-image-lightbox
-        src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'></svg>"
-        .imageTitle=${"Untrusted SVG"}
-      ></openclaw-image-lightbox>`,
-      container,
-    );
-    const modal = container.querySelector("openclaw-image-lightbox");
-    if (!modal) {
-      throw new Error("missing image lightbox");
-    }
-    await modal.updateComplete;
+    const { modal } = await renderLightbox({
+      src: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'></svg>",
+      imageTitle: "Untrusted SVG",
+    });
 
     expect(modal.shadowRoot?.querySelector(".open-original")).toBeNull();
     expect(fetchImage).not.toHaveBeenCalled();
@@ -285,18 +256,10 @@ describe("openclaw-image-lightbox", () => {
     fetchImage.mockResolvedValueOnce({
       blob: async () => new Blob(["svg"], { type: "image/svg+xml" }),
     });
-    render(
-      html`<openclaw-image-lightbox
-        src="blob:untrusted-svg"
-        .imageTitle=${"Untrusted SVG"}
-      ></openclaw-image-lightbox>`,
-      container,
-    );
-    const modal = container.querySelector("openclaw-image-lightbox");
-    if (!modal) {
-      throw new Error("missing image lightbox");
-    }
-    await modal.updateComplete;
+    const { modal } = await renderLightbox({
+      src: "blob:untrusted-svg",
+      imageTitle: "Untrusted SVG",
+    });
 
     await vi.waitFor(() => expect(fetchImage).toHaveBeenCalledWith("blob:untrusted-svg"));
     expect(modal.shadowRoot?.querySelector(".open-original")).toBeNull();
@@ -304,18 +267,7 @@ describe("openclaw-image-lightbox", () => {
   });
 
   it("keeps the original action for inert blob image formats", async () => {
-    render(
-      html`<openclaw-image-lightbox
-        src="blob:safe-png"
-        .imageTitle=${"Safe PNG"}
-      ></openclaw-image-lightbox>`,
-      container,
-    );
-    const modal = container.querySelector("openclaw-image-lightbox");
-    if (!modal) {
-      throw new Error("missing image lightbox");
-    }
-    await modal.updateComplete;
+    const { modal } = await renderLightbox({ src: "blob:safe-png", imageTitle: "Safe PNG" });
 
     await vi.waitFor(() =>
       expect(modal.shadowRoot?.querySelector<HTMLAnchorElement>(".open-original")?.href).toBe(
@@ -467,56 +419,27 @@ describe("openclaw-image-lightbox", () => {
       closes += 1;
     });
 
-    image?.dispatchEvent(
-      new PointerEvent("pointerdown", { bubbles: true, button: 0, isPrimary: true, pointerId: 1 }),
-    );
-    stage?.dispatchEvent(
-      new PointerEvent("pointerup", { bubbles: true, button: 0, isPrimary: true, pointerId: 1 }),
-    );
+    const pointer = (target: Element | null | undefined, type: string, pointerId: number, xy = 0) =>
+      target?.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          button: 0,
+          isPrimary: true,
+          pointerId,
+          clientX: xy,
+          clientY: xy,
+        }),
+      );
+    pointer(image, "pointerdown", 1);
+    pointer(stage, "pointerup", 1);
     expect(closes).toBe(0);
 
-    stage?.dispatchEvent(
-      new PointerEvent("pointerdown", {
-        bubbles: true,
-        button: 0,
-        clientX: 10,
-        clientY: 10,
-        isPrimary: true,
-        pointerId: 2,
-      }),
-    );
-    stage?.dispatchEvent(
-      new PointerEvent("pointerup", {
-        bubbles: true,
-        button: 0,
-        clientX: 30,
-        clientY: 30,
-        isPrimary: true,
-        pointerId: 2,
-      }),
-    );
+    pointer(stage, "pointerdown", 2, 10);
+    pointer(stage, "pointerup", 2, 30);
     expect(closes).toBe(0);
 
-    stage?.dispatchEvent(
-      new PointerEvent("pointerdown", {
-        bubbles: true,
-        button: 0,
-        clientX: 10,
-        clientY: 10,
-        isPrimary: true,
-        pointerId: 3,
-      }),
-    );
-    stage?.dispatchEvent(
-      new PointerEvent("pointerup", {
-        bubbles: true,
-        button: 0,
-        clientX: 10,
-        clientY: 10,
-        isPrimary: true,
-        pointerId: 3,
-      }),
-    );
+    pointer(stage, "pointerdown", 3, 10);
+    pointer(stage, "pointerup", 3, 10);
     expect(closes).toBe(1);
   });
 });

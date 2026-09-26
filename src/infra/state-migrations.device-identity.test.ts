@@ -843,7 +843,7 @@ describe("legacy device identity Doctor migration", () => {
       await gatewayLock.release();
     }
 
-    expect(result.warnings.join("\n")).toContain("Gateway or another SQLite maintenance command");
+    expect(result.warnings.join("\n")).toContain("gateway already running");
     expect(fs.existsSync(sourcePath)).toBe(true);
   });
 

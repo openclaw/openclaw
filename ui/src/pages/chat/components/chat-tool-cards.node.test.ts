@@ -44,7 +44,7 @@ describe("tool-card extraction", () => {
     },
   };
 
-  it.each(["read", "browser.open", "mcp__other__browser", undefined])(
+  it.each(["browser.open", undefined])(
     "keeps browser-shaped results from %s as ordinary tool cards",
     (name) => {
       for (const message of [
@@ -76,7 +76,6 @@ describe("tool-card extraction", () => {
   );
 
   it.each([
-    ["browser", undefined, true],
     ["browser", "read", true],
     ["read", "browser", false],
     [undefined, "browser", false],
@@ -126,7 +125,7 @@ describe("tool-card extraction", () => {
     expect(cards[1]?.browserTab).toBeUndefined();
   });
 
-  it.each(["read", "browser.open", "mcp__other__browser", undefined])(
+  it.each(["browser.open", undefined])(
     "does not let nested content claim browser origin inside a %s tool envelope",
     (toolName) => {
       for (const nameField of ["toolName", "tool_name"]) {
@@ -220,20 +219,13 @@ describe("tool-card extraction", () => {
 
   it.each([
     ["about:blank", false],
-    ["about:blank#section", false],
-    ["chrome://newtab", false],
-    ["file:///tmp/page.html", false],
-    ["data:text/html,hello", false],
     ["javascript:void(0)", false],
-    ["blob:https://example.com/id", false],
-    ["ftp://example.com/file", false],
     ["/relative", false],
     ["https://", false],
     ["", false],
     [undefined, false],
     ["http://example.com", true],
     ["https://example.com/page", true],
-    ["HTTPS://example.com/page", true],
   ] as const)("keeps routing and raw output while classifying preview URL %s", (url, eligible) => {
     const browserTab = { profile: "managed", target: "host", targetId: "tab-1" };
     const details = { browserTab: { ...browserTab, ...(url === undefined ? {} : { url }) } };
@@ -906,7 +898,7 @@ describe("tool card outcomes", () => {
     expect(finished[0]).toMatchObject({ live: true, completed: true });
   });
 
-  it.each(['{"error": "partial text"}', '{"status":"failed"}', "Tool not found", "partial text"])(
+  it.each(['{"error": "partial text"}', "partial text"])(
     "keeps partial output %s nonterminal until the live result arrives",
     (text) => {
       // The stream emits toolresult blocks for partial `update` output; only

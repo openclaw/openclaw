@@ -19,6 +19,15 @@ afterEach(async () => {
   await sandboxExecServerRegistry.closeAll();
 });
 
+async function openSandboxSocket(sandbox: ReturnType<typeof createSandboxContext>) {
+  const client = createClient();
+  await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
+  const socket = await openSocket(execServerUrlFromClient(client));
+  await rpc(socket, "initialize", { clientName: "test" });
+  socket.send(JSON.stringify({ method: "initialized" }));
+  return socket;
+}
+
 describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
   it("streams sandbox files through connection-owned Codex file handles", async () => {
     const data = Buffer.from("0123456789");
@@ -27,11 +36,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
       readFile,
       stat: async () => ({ type: "file", size: data.byteLength, mtimeMs: 1 }),
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     await expect(
       rpc(socket, "fs/open", {
@@ -119,11 +124,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
   it("enforces sandbox read policy before opening a streamed file", async () => {
     const readFile = vi.fn(async () => Buffer.from("secret"));
     const sandbox = createSandboxContext({ readFile });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     await expect(
       rpc(socket, "fs/open", {
@@ -147,11 +148,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
       readFile: async () => data,
       stat: async () => ({ type: "file", size: data.byteLength, mtimeMs: 1 }),
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     const path = "file:///workspace/bounded.txt";
     await rpc(socket, "fs/open", { handleId: "bounded", path });
@@ -180,11 +177,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
       readFile,
       stat: async () => ({ type: "file", size: 64 * 1024 * 1024 + 1, mtimeMs: 1 }),
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     await expect(
       rpc(socket, "fs/open", { handleId: "oversized", path: "file:///workspace/oversized.bin" }),
@@ -204,11 +197,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
       readFile,
       stat: async () => ({ type: "file", size: 5, mtimeMs: 1 }),
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     const params = { handleId: "growing", path: "file:///workspace/growing.txt" };
     await expect(rpc(socket, "fs/open", params)).rejects.toMatchObject({
@@ -240,11 +229,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
       readFile,
       stat: async () => ({ type: "file", size: halfBudget, mtimeMs: 1 }),
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     const first = rpc(socket, "fs/open", {
       handleId: "first",
@@ -303,11 +288,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
     );
     const readFile = vi.fn(async () => Buffer.from("never read"));
     const sandbox = createSandboxContext({ readFile, stat });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     const responses = new Map<number, { error?: { code: number } }>();
     socket.on("message", (data) => {
@@ -402,11 +383,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
       readFile,
       stat: async () => ({ type: "file", size: halfBudget, mtimeMs: 1 }),
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     const first = rpc(socket, "fs/open", {
       handleId: "first",
@@ -485,11 +462,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
       return Promise.resolve({ type: "file" as const, size: 5, mtimeMs: 1 });
     });
     const sandbox = createSandboxContext({ readFile, stat });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     socket.send(
       JSON.stringify({

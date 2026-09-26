@@ -175,13 +175,12 @@ function resolvePayloadReceiptKind(
   const hasPortablePresentation = Boolean(
     ctx.payload.presentation?.title || ctx.payload.presentation?.blocks?.length,
   );
-  if (hasPortablePresentation || hasRenderedPresentationBlocks(ctx.payload.channelData)) {
-    return "card";
-  }
-  if (ctx.payload.interactive) {
-    return "card";
-  }
-  if (ctx.payload.location) {
+  if (
+    hasPortablePresentation ||
+    hasRenderedPresentationBlocks(ctx.payload.channelData) ||
+    ctx.payload.interactive ||
+    ctx.payload.location
+  ) {
     return "card";
   }
   if (ctx.payload.text?.trim() || ctx.text.trim()) {

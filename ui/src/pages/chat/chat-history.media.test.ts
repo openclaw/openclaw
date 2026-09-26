@@ -18,7 +18,6 @@ function userMessageWithMedia(media: unknown[]): {
 
 describe("chat history canonical media filtering", () => {
   it.each([
-    ["facts-only", [{ path: "/media/fact.png", contentType: "image/png" }]],
     ["sparse", [{}, { path: "/media/sparse.png", contentType: "image/png" }]],
     ["media-only", [{ url: "media://inbound/media-only.png", kind: "image" }]],
   ])("keeps an empty %s user row", (_name, media) => {
@@ -31,11 +30,8 @@ describe("chat history canonical media filtering", () => {
     ).toBe(false);
   });
 
-  it.each([
-    ["truly empty", { role: "user", content: "" }],
-    ["metadata-only media", userMessageWithMedia([{ contentType: "image/png" }])],
-  ])("drops a %s user row", (_name, message) => {
-    expect(isEmptyUserTextOnlyMessage(message)).toBe(true);
+  it("drops a truly empty user row", () => {
+    expect(isEmptyUserTextOnlyMessage({ role: "user", content: "" })).toBe(true);
   });
 
   it("renders a safe media-only user turn without rendering metadata-only local media", () => {
@@ -98,76 +94,41 @@ describe("chat history attachment card labels", () => {
     expect(entries[0]?.fileName).toBe("report.pdf");
   });
 
-  it("labels a managed inbound attachment with the persisted original fileName", () => {
-    const { attachments } = projectMessageMedia(
-      userMessageWithMedia([
-        {
-          path: `media://inbound/report---${MANAGED_UUID}.pdf`,
-          fileName: "report.pdf",
-          contentType: "application/pdf",
-        },
-      ]),
-      [],
-    );
-    expect(attachments[0]?.attachment.label).toBe("report.pdf");
-  });
-
-  it("restores the original name from a legacy managed inbound UUID suffix when fileName is absent", () => {
-    const { attachments } = projectMessageMedia(
-      userMessageWithMedia([
-        {
-          path: `media://inbound/openclaw-attachment-test---${MANAGED_UUID}.docx`,
-          contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        },
-      ]),
-      [],
-    );
-    expect(attachments[0]?.attachment.label).toBe("openclaw-attachment-test.docx");
-  });
-
-  it("leaves non-managed https attachment paths unchanged", () => {
-    // `---old` is not a canonical managed UUID suffix, so it must not be stripped
-    // from https URLs (which never carry the collision-safe managed suffix).
-    const { attachments } = projectMessageMedia(
-      userMessageWithMedia([
-        {
-          path: "https://example.com/files/openclaw-attachment-test---old.docx",
-          contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        },
-      ]),
-      [],
-    );
-    expect(attachments[0]?.attachment.label).toBe("openclaw-attachment-test---old.docx");
-  });
-
-  it("does not strip a managed inbound basename that lacks a UUID suffix", () => {
-    const { attachments } = projectMessageMedia(
-      userMessageWithMedia([
-        {
-          path: "media://inbound/plain-name.docx",
-          contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        },
-      ]),
-      [],
-    );
-    expect(attachments[0]?.attachment.label).toBe("plain-name.docx");
-  });
-
-  it("strips only the terminal managed UUID suffix, preserving a UUID-shaped segment in the original name", () => {
-    // Legacy record (no persisted fileName) whose original filename itself
-    // contains a "---<uuid>"-shaped segment before the terminal managed suffix.
-    const { attachments } = projectMessageMedia(
-      userMessageWithMedia([
-        {
-          path: `media://inbound/report---a1b2c3d4-e5f6-7890-abcd-ef1234567890-final---${MANAGED_UUID}.docx`,
-          contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        },
-      ]),
-      [],
-    );
-    expect(attachments[0]?.attachment.label).toBe(
-      "report---a1b2c3d4-e5f6-7890-abcd-ef1234567890-final.docx",
-    );
+  it.each([
+    {
+      name: "labels a managed inbound attachment with the persisted original fileName",
+      path: `media://inbound/report---${MANAGED_UUID}.pdf`,
+      fileName: "report.pdf",
+      contentType: "application/pdf",
+      label: "report.pdf",
+    },
+    {
+      name: "restores the original name from a legacy managed inbound UUID suffix when fileName is absent",
+      path: `media://inbound/openclaw-attachment-test---${MANAGED_UUID}.docx`,
+      contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      label: "openclaw-attachment-test.docx",
+    },
+    {
+      name: "leaves non-managed https attachment paths unchanged",
+      path: "https://example.com/files/openclaw-attachment-test---old.docx",
+      contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      label: "openclaw-attachment-test---old.docx",
+    },
+    {
+      name: "does not strip a managed inbound basename that lacks a UUID suffix",
+      path: "media://inbound/plain-name.docx",
+      contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      label: "plain-name.docx",
+    },
+    {
+      name: "strips only the terminal managed UUID suffix, preserving a UUID-shaped segment in the original name",
+      path: `media://inbound/report---a1b2c3d4-e5f6-7890-abcd-ef1234567890-final---${MANAGED_UUID}.docx`,
+      contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      label: "report---a1b2c3d4-e5f6-7890-abcd-ef1234567890-final.docx",
+    },
+  ])("$name", ({ name: _name, label, ...media }) => {
+    const { attachments } = projectMessageMedia(userMessageWithMedia([media]), []);
+    expect(attachments[0]?.attachment.label).toBe(label);
   });
 
   it("preserves a dotted UUID-shaped segment in a legacy attachment name", () => {

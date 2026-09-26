@@ -237,11 +237,13 @@ describe("session accessor readonly listing", () => {
     expect(handle.isOpen).toBe(true);
     expect(handle.isTransaction).toBe(false);
     closeOpenClawAgentDatabasesForTest();
+    clearRegisteredAgentDatabases(env);
 
     expect(listSessionEntriesReadOnly(listScope)).toEqual(writableEntries);
     expect(openSessionEntryReadView(listScope).entries()).toEqual(writableEntries);
     expect(readSessionStoreSummaryReadOnly(listScope, summaryOptions)).toEqual(expectedSummary);
     expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(listScope))).toBe(false);
+    expect(countRegisteredAgentDatabases(env)).toBe(0);
   });
 
   it("keeps missing database probes read-only with empty exact results", () => {
@@ -932,43 +934,5 @@ describe("session accessor readonly listing", () => {
       prepareSpy.mockRestore();
       external.close();
     }
-  });
-
-  it("uses the current-session-id index for fallback identity probes", async () => {
-    const stateDir = autoTempDirs.make("openclaw-session-readonly-evidence-index-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agentId = "worker-1";
-    const database = openOpenClawAgentDatabase({ agentId, env });
-    const detail = database.db
-      .prepare(
-        "EXPLAIN QUERY PLAN SELECT session_key FROM session_nodes WHERE current_session_id IN (?)",
-      )
-      .all("session-1")
-      .map((row) => {
-        const rowDetail = (row as { detail?: unknown }).detail;
-        return typeof rowDetail === "string" ? rowDetail : "";
-      })
-      .join(" ");
-
-    expect(detail).toContain("idx_agent_session_nodes_current_session_id");
-  });
-
-  it("does not register a populated database during readonly health-style listing", async () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-session-readonly-registry-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agentId = "worker-1";
-    const scope = { agentId, env };
-
-    await upsertSessionEntryCore(
-      { ...scope, sessionKey: "agent:worker-1:main" },
-      { sessionId: "session-1", updatedAt: 10 },
-    );
-    const databasePath = resolveOpenClawAgentSqlitePath({ agentId, env });
-    closeOpenClawAgentDatabasesForTest();
-    clearRegisteredAgentDatabases(env);
-
-    expect(listSessionEntriesReadOnly(scope)).toHaveLength(1);
-    expect(countRegisteredAgentDatabases(env)).toBe(0);
-    expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
   });
 });

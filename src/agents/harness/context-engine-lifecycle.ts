@@ -1,8 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
-/**
- * Manages context-engine lifecycle hooks for native agent harnesses.
- */
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import {
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
@@ -58,36 +55,29 @@ type HarnessRuntimeSettingsParams = {
 function buildHarnessContextEngineRuntimeSettings(
   params: HarnessRuntimeSettingsParams,
 ): ContextEngineRuntimeSettings {
-  return (
-    params.runtimeSettings ??
-    (() => {
-      const selectedId = params.contextEngine?.info.id;
-      return buildContextEngineRuntimeSettings({
-        contextEngineHost: params.contextEngineHostSupport ?? OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-        harnessId: params.harnessId,
-        runtimeId: params.runtimeId,
-        provider: params.providerId,
-        requestedModel: params.requestedModelId,
-        resolvedModel: params.modelId ?? params.requestedModelId,
-        // model.family is a real family value when the caller supplies one; it is
-        // never derived from the model id, which would put a concrete id in a
-        // field named "family". Defaults to null until a family value exists.
-        modelFamily: params.modelFamily ?? null,
-        selectedContextEngineId: selectedId,
-        contextEngineSelectionSource:
-          selectedId === "legacy" ? "default" : selectedId ? "configured" : "unknown",
-        promptTokenBudget: params.tokenBudget,
-        maxOutputTokens: params.maxOutputTokens,
-        fallbackReason: params.fallbackReason,
-        degradedReason: params.degradedReason,
-      });
-    })()
-  );
+  if (params.runtimeSettings !== undefined && params.runtimeSettings !== null) {
+    return params.runtimeSettings;
+  }
+  const selectedId = params.contextEngine?.info.id;
+  return buildContextEngineRuntimeSettings({
+    contextEngineHost: params.contextEngineHostSupport ?? OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+    harnessId: params.harnessId,
+    runtimeId: params.runtimeId,
+    provider: params.providerId,
+    requestedModel: params.requestedModelId,
+    resolvedModel: params.modelId ?? params.requestedModelId,
+    // Model ids do not attest a model family.
+    modelFamily: params.modelFamily ?? null,
+    selectedContextEngineId: selectedId,
+    contextEngineSelectionSource:
+      selectedId === "legacy" ? "default" : selectedId ? "configured" : "unknown",
+    promptTokenBudget: params.tokenBudget,
+    maxOutputTokens: params.maxOutputTokens,
+    fallbackReason: params.fallbackReason,
+    degradedReason: params.degradedReason,
+  });
 }
 
-/**
- * Run optional bootstrap + bootstrap maintenance for a harness-owned context engine.
- */
 export async function bootstrapHarnessContextEngine(
   params: Omit<HarnessRuntimeSettingsParams, "modelFamily" | "tokenBudget"> & {
     hadSessionFile: boolean;
@@ -141,9 +131,6 @@ export async function bootstrapHarnessContextEngine(
   }
 }
 
-/**
- * Assemble model context through the active harness-owned context engine.
- */
 export async function assembleHarnessContextEngine(
   params: Omit<HarnessRuntimeSettingsParams, "modelId" | "tokenBudget"> & {
     sessionId: string;
@@ -223,16 +210,7 @@ export async function assembleHarnessContextEngine(
   });
 }
 
-/**
- * Validate that a context engine's assemble() return value matches the
- * AssembleResult contract before the runner consumes it. Engines that omit
- * `messages` or return a non-array previously crashed the runner downstream
- * when prompt assembly tried to read `activeSession.messages.length` (#75541).
- *
- * Throws a descriptive error so the runner's existing assemble try/catch can
- * log the offending engine id and fall back to the unmodified pipeline
- * messages instead of poisoning session state.
- */
+/** Invalid plugin results must fail here so the runner can fall back without poisoning state. */
 function ensureAssembleResultShape(result: unknown, engineId: string): AssembleResult {
   if (!result || typeof result !== "object") {
     throw new Error(
@@ -258,9 +236,6 @@ function describeAssembleResultType(value: unknown): string {
   return typeof value;
 }
 
-/**
- * Finalize a completed harness turn via afterTurn or ingest fallbacks.
- */
 export async function finalizeHarnessContextEngineTurn(
   params: Omit<HarnessRuntimeSettingsParams, "modelFamily" | "tokenBudget"> & {
     promptError: boolean;
@@ -389,9 +364,6 @@ function buildContextEngineConversationSnapshot(params: {
   };
 }
 
-/**
- * Run optional transcript maintenance for a harness-owned context engine.
- */
 export async function runHarnessContextEngineMaintenance(
   params: Omit<HarnessRuntimeSettingsParams, "modelFamily"> & {
     sessionId: string;
@@ -427,9 +399,6 @@ export async function runHarnessContextEngineMaintenance(
   });
 }
 
-/**
- * Return true when a non-legacy context engine should affect plugin harness behavior.
- */
 export function isActiveHarnessContextEngine(
   contextEngine: ContextEngine | undefined,
 ): contextEngine is ContextEngine {

@@ -56,7 +56,7 @@ describe("Doctor config persistence after deferred migrations", () => {
           const outputPath = include ? state.statePath("plugins.json") : state.configPath;
           const retiredPath = `${include ? "" : "plugins."}entries.codex.config.codexDynamicToolsProfile`;
           if (deferred) {
-            recordDeferredPluginMigrations({
+            await recordDeferredPluginMigrations({
               env: state.env,
               pending: [
                 {
@@ -131,7 +131,7 @@ describe("Doctor config persistence after deferred migrations", () => {
           );
           const desired = structuredClone(ctx.cfg);
           if (deferred) {
-            recordDeferredPluginMigrations({
+            await recordDeferredPluginMigrations({
               env: state.env,
               pending: [],
               resolvedPluginIds: ["codex"],

@@ -9,6 +9,7 @@ import {
   tableExists,
   withOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isMemorySessionIndexable } from "./memory/manager-session-sync-state.js";
 
 export type ForgetDatabase = {
@@ -46,7 +47,7 @@ export function referencesSession(
   agentId: string,
   sessionIds: ReadonlySet<string>,
 ): boolean {
-  const agent = escapePattern(agentId);
+  const agent = escapeRegExp(agentId);
   const references = new RegExp(
     `(?:^|[\\s[/:])(?:sessions/${agent}/|${agent}:(?!sessions/))([^\\s\\]#;:/]+)`,
     "gu",
@@ -61,10 +62,6 @@ export function referencesSession(
       sessionIds.has(sessionId!),
     )
   );
-}
-
-function escapePattern(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 export async function planMemoryIndex(params: {

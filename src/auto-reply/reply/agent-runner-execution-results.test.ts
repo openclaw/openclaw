@@ -20,7 +20,6 @@ import {
   expectMockCallArgFields,
   createMinimalRunAgentTurnParams,
   createRunAgentTurnParams,
-  NON_DIRECT_FAILURE_SURFACE_CASES,
   createNonDirectFailureSessionCtx,
 } from "./agent-runner-execution.test-support.js";
 import type {
@@ -108,7 +107,10 @@ describe("executeAgentTurn: result and tool delivery", () => {
     ).toBeUndefined();
   });
 
-  it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+  it.each([
+    { label: "Discord group", provider: "discord", chatType: "group" },
+    { label: "Slack channel", provider: "slack", chatType: "channel" },
+  ] as const)(
     "surfaces model capacity errors from no-text mid-turn failures in $label chats",
     async (testCase) => {
       state.runEmbeddedAgentMock.mockResolvedValueOnce({

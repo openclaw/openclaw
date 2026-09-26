@@ -23,7 +23,7 @@ describe("isMatrixRoomId", () => {
     expect(isMatrixRoomId("General")).toBe(false);
   });
 
-  it.each(["!", " !  "])("rejects an empty room identifier: %j", (roomId) => {
-    expect(isMatrixRoomId(roomId)).toBe(false);
+  it("rejects an empty room identifier after trimming", () => {
+    expect(isMatrixRoomId(" !  ")).toBe(false);
   });
 });

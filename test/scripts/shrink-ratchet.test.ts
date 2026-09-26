@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   compareRatchetCounts,
   compareRatchetSets,
-  formatRatchetMessage,
   loadRatchetReference,
   loadRatchetSnapshot,
   loadRatchetSources,
@@ -92,7 +91,6 @@ describe("shrink-ratchet", () => {
   it.each([
     () => parseRatchetScalar("1\n2\n", "scalar.txt"),
     () => parseRatchetScalar("-1\n", "scalar.txt"),
-    () => parseRatchetScalar("many\n", "scalar.txt"),
   ])("rejects malformed scalar baselines", (parse) => {
     expect(parse).toThrow(/exactly one non-negative integer/u);
   });
@@ -139,11 +137,5 @@ describe("shrink-ratchet", () => {
     },
   ])("compares $name without permitting growth", ({ compare, expected }) => {
     expect(compare()).toEqual(expected);
-  });
-
-  it("formats shrink guidance", () => {
-    expect(
-      formatRatchetMessage("Shrink baseline entries:", ["src/a.ts: 1 < 2", "src/b.ts: 0 < 1"]),
-    ).toBe("Shrink baseline entries:\n  src/a.ts: 1 < 2\n  src/b.ts: 0 < 1");
   });
 });

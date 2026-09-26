@@ -268,37 +268,30 @@ class MotionHandler internal constructor(
   private val appContext: Context,
   private val dataSource: MotionDataSource = SystemMotionDataSource,
 ) {
-  /** Classifies a short accelerometer sample into the gateway activity shape. */
-  suspend fun handleMotionActivity(paramsJson: String?): GatewaySession.InvokeResult {
-    if (!dataSource.hasPermission(appContext)) {
-      return GatewaySession.InvokeResult.error(
-        code = "MOTION_PERMISSION_REQUIRED",
-        message = "MOTION_PERMISSION_REQUIRED: grant Motion permission",
-      )
-    }
-    val request =
-      parseRangeRequest(paramsJson)
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: expected JSON object",
-        )
-    return try {
+  suspend fun handleMotionActivity(paramsJson: String?): GatewaySession.InvokeResult =
+    invokeMotion(paramsJson, "motion activity failed") { request ->
       val activity = dataSource.activity(appContext, request)
-      GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("activities" to listOf(activity))))
-    } catch (err: IllegalArgumentException) {
-      GatewaySession.InvokeResult.error(code = "MOTION_UNAVAILABLE", message = err.message ?: "MOTION_UNAVAILABLE")
-    } catch (err: CancellationException) {
-      throw err
-    } catch (err: Throwable) {
-      GatewaySession.InvokeResult.error(
-        code = "MOTION_UNAVAILABLE",
-        message = "MOTION_UNAVAILABLE: ${err.message ?: "motion activity failed"}",
-      )
+      Json.encodeToString(mapOf("activities" to listOf(activity)))
     }
-  }
 
-  /** Returns the current boot-scoped Android step-counter reading. */
-  suspend fun handleMotionPedometer(paramsJson: String?): GatewaySession.InvokeResult {
+  suspend fun handleMotionPedometer(paramsJson: String?): GatewaySession.InvokeResult =
+    invokeMotion(paramsJson, "pedometer query failed") { request ->
+      val payload = dataSource.pedometer(appContext, request)
+      buildJsonObject {
+        put("startISO", JsonPrimitive(payload.startISO))
+        put("endISO", JsonPrimitive(payload.endISO))
+        payload.steps?.let { put("steps", JsonPrimitive(it)) }
+        payload.distanceMeters?.let { put("distanceMeters", JsonPrimitive(it)) }
+        payload.floorsAscended?.let { put("floorsAscended", JsonPrimitive(it)) }
+        payload.floorsDescended?.let { put("floorsDescended", JsonPrimitive(it)) }
+      }.toString()
+    }
+
+  private suspend inline fun invokeMotion(
+    paramsJson: String?,
+    fallbackMessage: String,
+    query: (MotionRangeRequest) -> String,
+  ): GatewaySession.InvokeResult {
     if (!dataSource.hasPermission(appContext)) {
       return GatewaySession.InvokeResult.error(
         code = "MOTION_PERMISSION_REQUIRED",
@@ -312,17 +305,7 @@ class MotionHandler internal constructor(
           message = "INVALID_REQUEST: expected JSON object",
         )
     return try {
-      val payload = dataSource.pedometer(appContext, request)
-      GatewaySession.InvokeResult.ok(
-        buildJsonObject {
-          put("startISO", JsonPrimitive(payload.startISO))
-          put("endISO", JsonPrimitive(payload.endISO))
-          payload.steps?.let { put("steps", JsonPrimitive(it)) }
-          payload.distanceMeters?.let { put("distanceMeters", JsonPrimitive(it)) }
-          payload.floorsAscended?.let { put("floorsAscended", JsonPrimitive(it)) }
-          payload.floorsDescended?.let { put("floorsDescended", JsonPrimitive(it)) }
-        }.toString(),
-      )
+      GatewaySession.InvokeResult.ok(query(request))
     } catch (err: IllegalArgumentException) {
       GatewaySession.InvokeResult.error(code = "MOTION_UNAVAILABLE", message = err.message ?: "MOTION_UNAVAILABLE")
     } catch (err: CancellationException) {
@@ -330,7 +313,7 @@ class MotionHandler internal constructor(
     } catch (err: Throwable) {
       GatewaySession.InvokeResult.error(
         code = "MOTION_UNAVAILABLE",
-        message = "MOTION_UNAVAILABLE: ${err.message ?: "pedometer query failed"}",
+        message = "MOTION_UNAVAILABLE: ${err.message ?: fallbackMessage}",
       )
     }
   }

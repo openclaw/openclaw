@@ -643,17 +643,23 @@ export async function deliverAgentCommandResult(
     }
   }
 
-  const replyNormalization = normalizeAgentCommandReplyPayloads({
-    cfg,
-    opts,
-    outboundSession,
-    payloads,
-    result,
-    deliveryChannel,
-    plugin: deliveryPlugin,
-    accountId: resolvedAccountId,
-    applyChannelTransforms: deliver,
-  });
+  const normalizeReplyPayloads = (
+    replyPayloads: ReplyPayload[] | undefined,
+    includeRunModelContext = true,
+  ) =>
+    normalizeAgentCommandReplyPayloads({
+      cfg,
+      opts,
+      outboundSession,
+      payloads: replyPayloads,
+      result,
+      deliveryChannel,
+      plugin: deliveryPlugin,
+      accountId: resolvedAccountId,
+      applyChannelTransforms: deliver,
+      includeRunModelContext,
+    });
+  const replyNormalization = normalizeReplyPayloads(payloads);
   const normalizedReplyPayloads =
     replyNormalization.kind === "deliver" ? replyNormalization.payload : [];
   const canonicalReplyPayloads = projectOutboundPayloadPlanForDelivery(
@@ -665,18 +671,10 @@ export async function deliverAgentCommandResult(
     Boolean(deliveryTarget) &&
     !isInternalMessageChannel(deliveryChannel);
   const normalizeSentTexts = (sentTexts: readonly string[]) => {
-    const outcome = normalizeAgentCommandReplyPayloads({
-      cfg,
-      opts,
-      outboundSession,
-      payloads: sentTexts.map((text) => ({ text })),
-      result,
-      deliveryChannel,
-      plugin: deliveryPlugin,
-      accountId: resolvedAccountId,
-      applyChannelTransforms: deliver,
-      includeRunModelContext: false,
-    });
+    const outcome = normalizeReplyPayloads(
+      sentTexts.map((text) => ({ text })),
+      false,
+    );
     return (outcome.kind === "deliver" ? outcome.payload : []).flatMap((payload) =>
       payload.text?.trim() ? [payload.text] : [],
     );
@@ -789,7 +787,7 @@ export async function deliverAgentCommandResult(
     }
     return completeDelivery();
   }
-  if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
+  if (deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget && !deliveryStatus) {
       params.assertDeliveryCurrent?.();
       // The outbound projection contains transport data, not private payload metadata.
@@ -851,10 +849,10 @@ export async function deliverAgentCommandResult(
       deliverySucceeded = send.status === "sent" || send.status === "suppressed";
     }
   }
-  if (deliver && !deliveryStatus) {
+  if (!deliveryStatus) {
     deliveryStatus = preDeliveryFailureStatus("no_delivery_target");
   }
-  if (deliver && !deliverySucceeded && !opts.json && !deliveryLoggedError) {
+  if (!deliverySucceeded && !opts.json && !deliveryLoggedError) {
     const message =
       `[delivery] delivery requested but not completed: ${deliveryStatus?.status ?? "unknown"} ` +
       `(reason=${deliveryStatus?.reason ?? "none"} session=${effectiveSessionKey ?? "unknown"} ` +

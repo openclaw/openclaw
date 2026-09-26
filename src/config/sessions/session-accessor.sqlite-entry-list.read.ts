@@ -34,35 +34,44 @@ import {
 } from "./session-canonical-key.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 
-/** Select metadata without hydrating a store snapshot or participant display facts. */
-export function readSelectedSessionEntryMetadataInDatabase(
+/** Select listing facts without hydrating the store; creation retains only its target payloads. */
+export function readSelectedSessionEntriesInDatabase(
   database: OpenClawAgentReadOnlyDatabase,
   sessionKeys: readonly string[],
-  continuation?: CanonicalSessionReaderContinuation,
+  options: {
+    continuation?: CanonicalSessionReaderContinuation;
+    fullEntryKeys?: readonly string[];
+    label?: string;
+  } = {},
 ): SessionEntrySummary[] {
-  return readWithCanonicalSessionReaderContinuation(database, continuation, () => {
+  return readWithCanonicalSessionReaderContinuation(database, options.continuation, () => {
     assertCanonicalSqliteSessionKeysCurrent(database);
     const keys = new Set(sessionKeys);
-    const query = selectSessionEntryRows(database, "list").select("updated_at");
-    const pending = getNodeSqliteKysely<DB>(database.db)
-      .selectFrom("session_canonical_validation_pending")
-      .select("session_key");
+    const fullEntryKeys = new Set(options.fullEntryKeys);
+    const query = selectSessionEntryRows(database, "list", options.fullEntryKeys).select(
+      "updated_at",
+    );
+    const db = getNodeSqliteKysely<DB>(database.db);
+    const pending = db.selectFrom("session_canonical_validation_pending").select("session_key");
+    let selected = db
+      .selectFrom("session_nodes")
+      .select("session_key")
+      .where("session_key", "in", sqliteStringSet(sessionKeys));
+    if (options.label !== undefined) {
+      selected = selected.union(
+        db
+          .selectFrom("session_nodes")
+          .select("session_key")
+          .where("label", "=", options.label.trim()),
+      );
+    }
     // Warm admission permits raw metadata changes. The listing contract still
     // rejects delivery-canonical sibling drift, so include its existing dirty set.
     // Older readers have no dirty set and retain their full validation inventory.
     const rows = executeSqliteQuerySync(
       database.db,
       hasCanonicalSessionValidationProjection(database)
-        ? query.where(
-            "session_key",
-            "in",
-            pending.union(
-              getNodeSqliteKysely<DB>(database.db)
-                .selectFrom("session_nodes")
-                .select("session_key")
-                .where("session_key", "in", sqliteStringSet(sessionKeys)),
-            ),
-          )
+        ? query.where("session_key", "in", pending.union(selected))
         : query,
     ).rows;
     const entries: SessionEntrySummary[] = [];
@@ -70,12 +79,18 @@ export function readSelectedSessionEntryMetadataInDatabase(
       if (isInternalSessionEffectsKey(row.session_key)) {
         continue;
       }
-      const entry = parseSessionEntryJson(row, "list");
+      const entry = parseSessionEntryJson(
+        row,
+        fullEntryKeys.has(row.session_key) ? "full" : "list",
+      );
       if (!entry) {
         continue;
       }
       validateDeliveryCanonicalSessionEntry(row.session_key, entry);
-      if (keys.has(row.session_key)) {
+      if (
+        keys.has(row.session_key) ||
+        (options.label !== undefined && entry.label === options.label)
+      ) {
         entries.push({ sessionKey: row.session_key, entry });
       }
     }
@@ -151,7 +166,7 @@ export function listSqliteSessionEntriesFromDatabase(
 }
 
 /** Applies the listing visibility and canonical-key contract to an owned snapshot. */
-export function* iterateSessionEntriesForListing(
+function* iterateSessionEntriesForListing(
   snapshot: SessionEntryCacheSnapshot,
   cloneEntries = false,
   sessionKeys?: ReadonlySet<string>,

@@ -1,9 +1,6 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import {
-  FAILOVER_REASONS,
-  type FailoverReason,
-} from "../../../packages/gateway-protocol/src/failover-reasons.js";
+import { FAILOVER_REASONS } from "../../../packages/gateway-protocol/src/failover-reasons.js";
 import { WorkerLiveEventParamsSchema } from "../../../packages/gateway-protocol/src/schema.js";
 
 const EPOCH = 7;
@@ -16,7 +13,7 @@ const validateLiveProtocolEvent = (event: unknown) =>
     runId: RUN,
     event,
   });
-const fallbackEvent = (reason: FailoverReason) => ({
+const fallbackEvent = (reason: (typeof FAILOVER_REASONS)[number]) => ({
   kind: "lifecycle",
   payload: {
     phase: "fallback",

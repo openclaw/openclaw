@@ -20,6 +20,19 @@ type ResolvedSessionResetCommand = {
   triggerBodyNormalized: string;
 };
 
+type SessionResetCommandContext = {
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+  agentId: string;
+  isGroup: boolean;
+};
+
+type AnchoredResetCommand = SessionResetCommandContext & {
+  source: string;
+  trigger: string;
+  commandText: string;
+};
+
 function skipWhitespace(source: string, start: number): number {
   let cursor = start;
   while (/\s/.test(source[cursor] ?? "")) {
@@ -95,16 +108,7 @@ function resolveExplicitMessageStart(source: string, ctx: MsgContext): number | 
   return cursor;
 }
 
-function stripLeadingMention(params: {
-  source: string;
-  start: number;
-  trigger: string;
-  commandText: string;
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  agentId: string;
-  isGroup: boolean;
-}): number | undefined {
+function stripLeadingMention(params: AnchoredResetCommand & { start: number }): number | undefined {
   const triggerLower = normalizeLowercaseStringOrEmpty(params.trigger);
   if (
     normalizeLowercaseStringOrEmpty(
@@ -145,13 +149,9 @@ function stripLeadingMention(params: {
     : undefined;
 }
 
-function isRecognizedCommandSuffix(params: {
-  suffix: string;
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  agentId: string;
-  isGroup: boolean;
-}): boolean {
+function isRecognizedCommandSuffix(
+  params: SessionResetCommandContext & { suffix: string },
+): boolean {
   const botUsername = params.ctx.BotUsername?.trim().replace(/^@/, "");
   if (
     botUsername &&
@@ -165,15 +165,7 @@ function isRecognizedCommandSuffix(params: {
   return !stripMentions(`@${params.suffix}`, params.ctx, params.cfg, params.agentId).trim();
 }
 
-function resolveAnchoredResetPayload(params: {
-  source: string;
-  trigger: string;
-  commandText: string;
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  agentId: string;
-  isGroup: boolean;
-}): string | undefined {
+function resolveAnchoredResetPayload(params: AnchoredResetCommand): string | undefined {
   if (params.source === "") {
     return undefined;
   }
@@ -198,16 +190,7 @@ function resolveAnchoredResetPayload(params: {
       payloadStart += 1;
     }
     const suffix = params.source.slice(suffixStart, payloadStart);
-    if (
-      !suffix ||
-      !isRecognizedCommandSuffix({
-        suffix,
-        ctx: params.ctx,
-        cfg: params.cfg,
-        agentId: params.agentId,
-        isGroup: params.isGroup,
-      })
-    ) {
+    if (!suffix || !isRecognizedCommandSuffix({ ...params, suffix })) {
       return undefined;
     }
   }
@@ -224,13 +207,9 @@ function resolveAnchoredResetPayload(params: {
   return params.source.slice(payloadStart).trimStart();
 }
 
-function resolveCommandTextForSession(params: {
-  commandText: string;
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  agentId: string;
-  isGroup: boolean;
-}): string {
+function resolveCommandTextForSession(
+  params: SessionResetCommandContext & { commandText: string },
+): string {
   const messageStart = resolveExplicitMessageStart(params.commandText, params.ctx);
   const anchored =
     messageStart === undefined ? params.commandText.trim() : params.commandText.slice(messageStart);
@@ -246,16 +225,14 @@ function isTranscriptOnlyCommand(ctx: MsgContext, commandText: string): boolean 
   );
 }
 
-export function resolveSessionResetCommand(params: {
-  commandText: string;
-  rawText: string;
-  resetTriggers: readonly string[];
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  agentId: string;
-  isGroup: boolean;
-  resetAuthorized: boolean;
-}): ResolvedSessionResetCommand {
+export function resolveSessionResetCommand(
+  params: SessionResetCommandContext & {
+    commandText: string;
+    rawText: string;
+    resetTriggers: readonly string[];
+    resetAuthorized: boolean;
+  },
+): ResolvedSessionResetCommand {
   const triggerBodyNormalized = resolveCommandTextForSession(params);
   const normalizedResetBody = normalizeCommandBody(triggerBodyNormalized, {
     botUsername: params.ctx.BotUsername,
@@ -290,13 +267,9 @@ export function resolveSessionResetCommand(params: {
       continue;
     }
     const payload = resolveAnchoredResetPayload({
+      ...params,
       source: params.rawText,
       trigger,
-      commandText: params.commandText,
-      ctx: params.ctx,
-      cfg: params.cfg,
-      agentId: params.agentId,
-      isGroup: params.isGroup,
     });
     if (payload === undefined) {
       continue;
@@ -311,26 +284,19 @@ export function resolveSessionResetCommand(params: {
   return result;
 }
 
-export function resolveAuthorizedSessionResetCommand(params: {
-  agentId: string;
-  cfg: OpenClawConfig;
-  commandAuthorized: boolean;
-  ctx: MsgContext;
-  isGroup: boolean;
-}): { resetAuthorized: boolean; resetCommand: ResolvedSessionResetCommand } {
+export function resolveAuthorizedSessionResetCommand(
+  params: SessionResetCommandContext & { commandAuthorized: boolean },
+): { resetAuthorized: boolean; resetCommand: ResolvedSessionResetCommand } {
   const resetAuthorized = isResetAuthorizedForContext(params);
   return {
     resetAuthorized,
     resetCommand: resolveSessionResetCommand({
+      ...params,
       commandText: params.ctx.commandText ?? "",
       rawText: params.ctx.rawText ?? "",
       resetTriggers: params.cfg.session?.resetTriggers?.length
         ? params.cfg.session.resetTriggers
         : DEFAULT_RESET_TRIGGERS,
-      ctx: params.ctx,
-      cfg: params.cfg,
-      agentId: params.agentId,
-      isGroup: params.isGroup,
       resetAuthorized,
     }),
   };

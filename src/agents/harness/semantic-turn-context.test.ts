@@ -267,6 +267,40 @@ describe("semantic turn context apply", () => {
     expect(result).toBe(source);
   });
 
+  it("does not dispatch after run authority closes during provider preparation", async () => {
+    const { requests } = installDecisionFixture();
+    const source = candidate();
+    const original = structuredClone(source);
+    const closed = new Error("closed admission");
+    let active = true;
+    let revocations = 0;
+    await expect(
+      withPluginRuntimeGatewayRequestScope(
+        {
+          resolveGatewayContext: () => {
+            queueMicrotask(() => {
+              revocations++;
+              active = false;
+            });
+            return undefined;
+          },
+        },
+        () =>
+          observeSemanticTurnContext(source, {
+            ...applyOptions(),
+            assertActive: () => {
+              if (!active) {
+                throw closed;
+              }
+            },
+          }),
+      ),
+    ).rejects.toBe(closed);
+    expect(revocations).toBeGreaterThan(0);
+    expect(requests).toHaveLength(0);
+    expect(source).toEqual(original);
+  });
+
   it("keeps the most recent assembled tool result when a synthetic prompt is appended", async () => {
     installDecisionFixture();
     const source = candidate();

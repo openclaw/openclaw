@@ -64,7 +64,11 @@ export const UpdateCandidatePluginTreePlanSchema = z.object({
 });
 export type UpdateCandidatePluginTreePlan = z.infer<typeof UpdateCandidatePluginTreePlanSchema>;
 
-async function dependencyOwner(target: string, withinRetainedHost = false): Promise<string> {
+async function dependencyOwner(
+  target: string,
+  withinRetainedHost = false,
+  retainedHost?: { root: string; moduleOnlyRoots: Set<string> },
+): Promise<string> {
   // A pnpm package resolves dependencies beside its package directory. Preserve
   // that Node lookup ancestry, including scoped packages and nested installs.
   const parts = target.split(path.sep);
@@ -76,9 +80,24 @@ async function dependencyOwner(target: string, withinRetainedHost = false): Prom
   if (modules >= 0 && !withinRetainedHost) {
     return parts.slice(0, modules + 1).join(path.sep);
   }
-  let directory = (await fs.stat(target)).isDirectory() ? target : path.dirname(target);
+  const stat = await fs.stat(target);
+  let directory = stat.isDirectory() ? target : path.dirname(target);
   const fallback = target;
   for (;;) {
+    if (directory === retainedHost?.root) {
+      // A retired workspace can leave only ignored modules behind. Other host
+      // contents still belong to the host and must reach the inferred-root refusal.
+      const entries = stat.isDirectory() ? await fs.readdir(target) : [];
+      if (
+        entries.length === 1 &&
+        entries[0] === "node_modules" &&
+        (await fs.lstat(path.join(target, "node_modules"))).isDirectory()
+      ) {
+        retainedHost.moduleOnlyRoots.add(target);
+        return target;
+      }
+      return directory;
+    }
     if (
       await fs.stat(path.join(directory, "package.json")).then(
         () => true,
@@ -129,6 +148,9 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   const moduleAliases = new Map<string, string>();
   const moduleOwners = new Set<string>();
   const retainedHostRoot = params.retainedHostRoot;
+  const retainedHost = retainedHostRoot
+    ? { root: retainedHostRoot, moduleOnlyRoots: new Set<string>() }
+    : undefined;
   const isOwnedHostEdge = (file: string) =>
     path.basename(file) === "openclaw" && moduleOwners.has(path.dirname(file));
   const lookupRoots = (values: Iterable<string>) =>
@@ -284,15 +306,24 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     if (path.basename(directory) === "node_modules") {
       moduleOwners.add(directory);
     }
-    await discoverHoistedDependencies(directory);
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    // Listing names are only absence hints: retain canonical reads for filesystem aliases.
+    const mayContain = (name: string) =>
+      entries.some(
+        (entry) => entry.name.toLowerCase() === name || /[^\x20-\x7e]|[. ]$/u.test(entry.name),
+      );
+    if (mayContain("package.json")) {
+      await discoverHoistedDependencies(directory);
+    }
     // Read before link discovery, so custom external stores retain their owner.
-    const modules = await readRuntimeModulesManifest(path.join(directory, ".modules.yaml"));
+    const modules = mayContain(".modules.yaml")
+      ? await readRuntimeModulesManifest(path.join(directory, ".modules.yaml"))
+      : null;
     if (typeof modules?.manifest.virtualStoreDir === "string") {
       const store = await fs.realpath(path.resolve(directory, modules.manifest.virtualStoreDir));
       stores.add(store);
       addRoot(store);
     }
-    const entries = await fs.readdir(directory, { withFileTypes: true });
     // Register identities before visiting siblings: a physical module directory
     // may sort before the node_modules alias that establishes its ownership.
     for (const entry of entries) {
@@ -446,7 +477,11 @@ export async function prepareUpdateCandidatePluginTrees(params: {
       const retainedDependency = insideHost(real) && isRetainedDependency(real);
       const owner =
         (!retainedDependency ? store : undefined) ??
-        (await dependencyOwner(real, retainedDependency).catch((cause: unknown) => {
+        (await dependencyOwner(
+          real,
+          retainedDependency,
+          isRetainedDependency(real) ? retainedHost : undefined,
+        ).catch((cause: unknown) => {
           throw new Error(`Cannot privately copy plugin dependency ${file} -> ${real}`, { cause });
         }));
       if (excludesInferredRoot(owner)) {
@@ -502,9 +537,23 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   const hostLinks = new Set(
     [...hosts].filter((root) => root !== params.retainedHostRoot).map(projected),
   );
-  const entries = [...footprints.values()].filter(
-    (entry) => !insideHost(entry.path) && copyOwner(entry.path) !== undefined,
-  );
+  const entries = [...footprints.values()].filter((entry) => {
+    if (insideHost(entry.path) || copyOwner(entry.path) === undefined) {
+      return false;
+    }
+    // Owner selection precedes scanning; bind its exception to the actual inventory.
+    const moduleOnlyRoots = retainedHost?.moduleOnlyRoots;
+    if (
+      (moduleOnlyRoots?.has(entry.path) &&
+        (entry.kind !== "directory" ||
+          footprints.get(path.join(entry.path, "node_modules"))?.kind !== "directory")) ||
+      (moduleOnlyRoots?.has(path.dirname(entry.path)) &&
+        (path.basename(entry.path) !== "node_modules" || entry.kind !== "directory"))
+    ) {
+      throw new Error(`Retired workspace changed during runtime retention: ${entry.path}`);
+    }
+    return true;
+  });
   // Full lengths and entry metadata bound copies even when sources have sparse extents.
   const bytes = entries.reduce(
     (total, entry) => total + Math.max(4096, Math.ceil(entry.size / 4096) * 4096),

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -26,7 +26,7 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 
 describe("worker placement dispatch conflict lookup", () => {
   let root: string;
@@ -50,6 +50,7 @@ describe("worker placement dispatch conflict lookup", () => {
 
   afterEach(async () => {
     await closeStateDatabaseForTest();
+    tempDirs.cleanup();
   });
 
   it("reclaims an unchanged worker with unknown conflict state without silently clearing its report", async () => {
@@ -81,7 +82,7 @@ describe("worker placement dispatch conflict lookup", () => {
     "reclaims a previous-instance pending result with $kind conflict state without clearing unseen reports",
     async (lookup) => {
       const originalHarness = createTestHarness();
-      const active = originalHarness.placements.seedActive(2);
+      const active = await originalHarness.placements.seedActive(2);
       if (active.state !== "active") {
         throw new Error("active placement fixture was not active");
       }

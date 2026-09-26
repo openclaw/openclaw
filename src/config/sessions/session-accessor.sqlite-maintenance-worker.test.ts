@@ -577,7 +577,7 @@ it.each(
       });
       await completed;
       expect(changed).toBe(true);
-      expect(reclaimedWorkers).toBe(boundary === "after-settlement" ? 0 : 1);
+      expect(reclaimedWorkers).toBe(warm ? 0 : 1);
       if (boundary !== "before-authorization") {
         expect(adoptedAfterMutation[0]).toBeUndefined();
       }

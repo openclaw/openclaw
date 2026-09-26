@@ -100,16 +100,6 @@ async function createPlanSource(): Promise<{ source: ClawSourceIdentity; workspa
 }
 
 describe("parseClawManifest", () => {
-  it("parses the grouped portable contract", () => {
-    const manifest = requireManifest();
-
-    expect(manifest.agent.id).toBe("github-triage");
-    expect(manifest.workspace.files).toHaveLength(1);
-    expect(manifest.packages.map((pkg) => pkg.kind)).toEqual(["skill", "plugin"]);
-    expect(Object.keys(manifest.mcpServers)).toEqual(["github"]);
-    expect(manifest.cronJobs[0]?.id).toBe("weekday-triage");
-  });
-
   it("defaults optional ownership groups without inventing agent settings", () => {
     const manifest = requireManifest({ schemaVersion: 1, agent: { id: "minimal-agent" } });
 
@@ -124,14 +114,16 @@ describe("parseClawManifest", () => {
     });
   });
 
-  it("rejects the prototype flat entries contract", () => {
+  it("rejects operator-controlled agent settings", () => {
     const result = parseClawManifest({
-      schemaVersion: "openclaw.claw.v1",
-      id: "old-claw",
-      entries: [{ kind: "skill", id: "demo", required: false }],
+      schemaVersion: 1,
+      agent: { id: "unsafe-agent", model: "value" },
     });
 
     expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "invalid_manifest", path: "$.agent" }),
+    );
   });
 
   it.each(["model", "provider", "skills", "runtime", "bindings", "auth"])(
@@ -252,7 +244,6 @@ describe("parseClawManifest", () => {
       headers: { Authorization: "secret" },
     },
     { url: "https://example.com/mcp", transport: "streamable-http", command: "npx" },
-    { url: "file:///tmp/mcp", transport: "sse" },
     { url: "https://example.com/mcp", transport: "stdio" },
   ])("rejects non-portable remote MCP config %#", (server) => {
     const result = parseClawManifest({

@@ -98,7 +98,7 @@ channels.irc.groups.*.enabled channels.irc.groups.*.requireMention channels.irc.
 channels.irc.nick channels.irc.nickserv.password channels.irc.password channels.irc.port
 channels.irc.tls channels.irc.accounts.*.nickserv.password channels.irc.accounts.*.port
 channels.msteams.appId channels.msteams.appPassword channels.msteams.requireMention
-channels.msteams.tenantId channels.msteams.webhook.port channels.qqbot.stt.apiKey
+channels.msteams.tenantId channels.msteams.legacyWebhook.port channels.qqbot.stt.apiKey
 channels.qqbot.stt.model channels.signal.account channels.signal.cliPath
 channels.signal.groups.*.requireMention channels.slack.appToken channels.slack.botToken
 channels.slack.channels.*.enabled channels.slack.channels.*.requireMention

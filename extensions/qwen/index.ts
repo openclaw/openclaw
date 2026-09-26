@@ -1,7 +1,9 @@
-// Qwen plugin entrypoint registers its OpenClaw integration.
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import {
+  defineSingleProviderPluginEntry,
+  type SingleProviderPluginApiKeyAuthOptions,
+} from "openclaw/plugin-sdk/provider-entry";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { classifyQwenFailoverReason } from "./failover.js";
 import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -47,14 +49,10 @@ const QWEN_TOKEN_PLAN_GLM_NO_MAX_THINKING_LEVEL_IDS = QWEN_TOKEN_PLAN_THINKING_L
 
 function resolveConfiguredQwenBaseUrl(
   config: { models?: { providers?: Record<string, { baseUrl?: string } | undefined> } } | undefined,
+  providerIds: readonly string[],
 ): string | undefined {
-  const providers = config?.models?.providers;
-  if (!providers) {
-    return undefined;
-  }
-  for (const [providerId, provider] of Object.entries(providers)) {
-    const normalized = normalizeLowercaseStringOrEmpty(providerId);
-    if (normalized !== PROVIDER_ID && normalized !== LEGACY_PROVIDER_ID) {
+  for (const [providerId, provider] of Object.entries(config?.models?.providers ?? {})) {
+    if (!providerIds.includes(normalizeLowercaseStringOrEmpty(providerId))) {
       continue;
     }
     const baseUrl = provider?.baseUrl?.trim();
@@ -65,24 +63,56 @@ function resolveConfiguredQwenBaseUrl(
   return undefined;
 }
 
-function resolveConfiguredQwenTokenPlanBaseUrl(
-  config: { models?: { providers?: Record<string, { baseUrl?: string } | undefined> } } | undefined,
-): string | undefined {
-  const providers = config?.models?.providers;
-  if (!providers) {
-    return undefined;
-  }
-  for (const [providerId, provider] of Object.entries(providers)) {
-    const normalized = normalizeLowercaseStringOrEmpty(providerId);
-    if (normalized !== QWEN_TOKEN_PLAN_PROVIDER_ID) {
-      continue;
-    }
-    const baseUrl = provider?.baseUrl?.trim();
-    if (baseUrl) {
-      return baseUrl;
-    }
-  }
-  return undefined;
+function createQwenAuthMethod(
+  plan: "standard" | "coding",
+  region: "global" | "cn",
+): SingleProviderPluginApiKeyAuthOptions {
+  const isStandard = plan === "standard";
+  const isCn = region === "cn";
+  const regionLabel = isCn ? "China" : "Global/Intl";
+  const planLabel = isStandard ? "Standard" : "Coding Plan";
+  const host = isStandard
+    ? isCn
+      ? "dashscope.aliyuncs.com"
+      : "dashscope-intl.aliyuncs.com"
+    : isCn
+      ? "coding.dashscope.aliyuncs.com"
+      : "coding-intl.dashscope.aliyuncs.com";
+  const standardKey = isStandard ? "Standard" : "";
+  const standardFlag = isStandard ? "standard-" : "";
+  return {
+    methodId: `${standardFlag}api-key${isCn ? "-cn" : ""}`,
+    label: `${planLabel} API Key for ${regionLabel} (${isStandard ? "pay-as-you-go" : "subscription"})`,
+    hint: `Endpoint: ${host}`,
+    optionKey: `modelstudio${standardKey}ApiKey${isCn ? "Cn" : ""}`,
+    flagName: `--modelstudio-${standardFlag}api-key${isCn ? "-cn" : ""}`,
+    envVar: "QWEN_API_KEY",
+    promptMessage: isStandard
+      ? `Enter Qwen Cloud API key (${regionLabel} standard endpoint)`
+      : `Enter Qwen Cloud Coding Plan API key (${regionLabel})`,
+    defaultModel: QWEN_DEFAULT_MODEL_REF,
+    applyConfig: isStandard
+      ? isCn
+        ? applyQwenStandardConfigCn
+        : applyQwenStandardConfig
+      : isCn
+        ? applyQwenConfigCn
+        : applyQwenConfig,
+    noteMessage: [
+      "Manage API keys: https://home.qwencloud.com/api-keys",
+      "Docs: https://docs.qwencloud.com/",
+      `Endpoint: ${host}${isStandard ? "/compatible-mode/v1" : ""}`,
+      isStandard
+        ? "Models: qwen3.8-max, qwen3.8-flash, qwen3.7-plus, and other discovered models."
+        : "Models: qwen3.5-plus, glm-5, kimi-k2.5, MiniMax-M2.5, etc.",
+    ].join("\n"),
+    noteTitle: `Qwen Cloud ${planLabel} (${regionLabel})`,
+    wizard: {
+      choiceHint: `Endpoint: ${host}`,
+      groupLabel: "Qwen Cloud",
+      groupHint: "Standard / Coding Plan (CN / Global) + multimodal roadmap",
+    },
+  };
 }
 
 function createQwenTokenPlanAuthMethod(region: "global" | "cn") {
@@ -162,98 +192,10 @@ export default defineSingleProviderPluginEntry({
     docsPath: "/providers/qwen",
     aliases: ["modelstudio", "qwencloud"],
     auth: [
-      {
-        methodId: "standard-api-key-cn",
-        label: "Standard API Key for China (pay-as-you-go)",
-        hint: "Endpoint: dashscope.aliyuncs.com",
-        optionKey: "modelstudioStandardApiKeyCn",
-        flagName: "--modelstudio-standard-api-key-cn",
-        envVar: "QWEN_API_KEY",
-        promptMessage: "Enter Qwen Cloud API key (China standard endpoint)",
-        defaultModel: QWEN_DEFAULT_MODEL_REF,
-        applyConfig: (cfg) => applyQwenStandardConfigCn(cfg),
-        noteMessage: [
-          "Manage API keys: https://home.qwencloud.com/api-keys",
-          "Docs: https://docs.qwencloud.com/",
-          "Endpoint: dashscope.aliyuncs.com/compatible-mode/v1",
-          "Models: qwen3.8-max, qwen3.8-flash, qwen3.7-plus, and other discovered models.",
-        ].join("\n"),
-        noteTitle: "Qwen Cloud Standard (China)",
-        wizard: {
-          choiceHint: "Endpoint: dashscope.aliyuncs.com",
-          groupLabel: "Qwen Cloud",
-          groupHint: "Standard / Coding Plan (CN / Global) + multimodal roadmap",
-        },
-      },
-      {
-        methodId: "standard-api-key",
-        label: "Standard API Key for Global/Intl (pay-as-you-go)",
-        hint: "Endpoint: dashscope-intl.aliyuncs.com",
-        optionKey: "modelstudioStandardApiKey",
-        flagName: "--modelstudio-standard-api-key",
-        envVar: "QWEN_API_KEY",
-        promptMessage: "Enter Qwen Cloud API key (Global/Intl standard endpoint)",
-        defaultModel: QWEN_DEFAULT_MODEL_REF,
-        applyConfig: (cfg) => applyQwenStandardConfig(cfg),
-        noteMessage: [
-          "Manage API keys: https://home.qwencloud.com/api-keys",
-          "Docs: https://docs.qwencloud.com/",
-          "Endpoint: dashscope-intl.aliyuncs.com/compatible-mode/v1",
-          "Models: qwen3.8-max, qwen3.8-flash, qwen3.7-plus, and other discovered models.",
-        ].join("\n"),
-        noteTitle: "Qwen Cloud Standard (Global/Intl)",
-        wizard: {
-          choiceHint: "Endpoint: dashscope-intl.aliyuncs.com",
-          groupLabel: "Qwen Cloud",
-          groupHint: "Standard / Coding Plan (CN / Global) + multimodal roadmap",
-        },
-      },
-      {
-        methodId: "api-key-cn",
-        label: "Coding Plan API Key for China (subscription)",
-        hint: "Endpoint: coding.dashscope.aliyuncs.com",
-        optionKey: "modelstudioApiKeyCn",
-        flagName: "--modelstudio-api-key-cn",
-        envVar: "QWEN_API_KEY",
-        promptMessage: "Enter Qwen Cloud Coding Plan API key (China)",
-        defaultModel: QWEN_DEFAULT_MODEL_REF,
-        applyConfig: (cfg) => applyQwenConfigCn(cfg),
-        noteMessage: [
-          "Manage API keys: https://home.qwencloud.com/api-keys",
-          "Docs: https://docs.qwencloud.com/",
-          "Endpoint: coding.dashscope.aliyuncs.com",
-          "Models: qwen3.5-plus, glm-5, kimi-k2.5, MiniMax-M2.5, etc.",
-        ].join("\n"),
-        noteTitle: "Qwen Cloud Coding Plan (China)",
-        wizard: {
-          choiceHint: "Endpoint: coding.dashscope.aliyuncs.com",
-          groupLabel: "Qwen Cloud",
-          groupHint: "Standard / Coding Plan (CN / Global) + multimodal roadmap",
-        },
-      },
-      {
-        methodId: "api-key",
-        label: "Coding Plan API Key for Global/Intl (subscription)",
-        hint: "Endpoint: coding-intl.dashscope.aliyuncs.com",
-        optionKey: "modelstudioApiKey",
-        flagName: "--modelstudio-api-key",
-        envVar: "QWEN_API_KEY",
-        promptMessage: "Enter Qwen Cloud Coding Plan API key (Global/Intl)",
-        defaultModel: QWEN_DEFAULT_MODEL_REF,
-        applyConfig: (cfg) => applyQwenConfig(cfg),
-        noteMessage: [
-          "Manage API keys: https://home.qwencloud.com/api-keys",
-          "Docs: https://docs.qwencloud.com/",
-          "Endpoint: coding-intl.dashscope.aliyuncs.com",
-          "Models: qwen3.5-plus, glm-5, kimi-k2.5, MiniMax-M2.5, etc.",
-        ].join("\n"),
-        noteTitle: "Qwen Cloud Coding Plan (Global/Intl)",
-        wizard: {
-          choiceHint: "Endpoint: coding-intl.dashscope.aliyuncs.com",
-          groupLabel: "Qwen Cloud",
-          groupHint: "Standard / Coding Plan (CN / Global) + multimodal roadmap",
-        },
-      },
+      createQwenAuthMethod("standard", "cn"),
+      createQwenAuthMethod("standard", "global"),
+      createQwenAuthMethod("coding", "cn"),
+      createQwenAuthMethod("coding", "global"),
     ],
     catalog: {
       run: async (ctx) => {
@@ -261,7 +203,9 @@ export default defineSingleProviderPluginEntry({
         if (!auth.apiKey) {
           return null;
         }
-        const baseUrl = resolveConfiguredQwenBaseUrl(ctx.config) ?? QWEN_BASE_URL;
+        const baseUrl =
+          resolveConfiguredQwenBaseUrl(ctx.config, [PROVIDER_ID, LEGACY_PROVIDER_ID]) ??
+          QWEN_BASE_URL;
         return await buildOpenAICompatibleLiveProviderCatalog({
           discoveryMode: "strict",
           providerId: PROVIDER_ID,
@@ -301,7 +245,7 @@ export default defineSingleProviderPluginEntry({
           if (!auth.apiKey) {
             return null;
           }
-          const baseUrl = resolveConfiguredQwenTokenPlanBaseUrl(ctx.config);
+          const baseUrl = resolveConfiguredQwenBaseUrl(ctx.config, [QWEN_TOKEN_PLAN_PROVIDER_ID]);
           return await buildOpenAICompatibleLiveProviderCatalog({
             discoveryMode: "strict",
             providerId: QWEN_TOKEN_PLAN_PROVIDER_ID,

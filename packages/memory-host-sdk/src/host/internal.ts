@@ -4,7 +4,6 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
-import { runWithConcurrency as runWithConcurrencyImpl } from "./concurrency.js";
 import { MEMORY_HOST_ROOT_FILENAME, normalizeConfiguredMemoryExtraPaths } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import type { EmbeddingInput } from "./embedding-inputs.js";
@@ -490,11 +489,4 @@ export {
   type CuratedProjectAnnotations,
 } from "./curated-annotations.js";
 
-export function runMemoryHostTasksWithConcurrency<T>(
-  tasks: Array<() => Promise<T>>,
-  limit: number,
-): Promise<T[]> {
-  return runWithConcurrencyImpl(tasks, limit);
-}
-
-export { runMemoryHostTasksWithConcurrency as runWithConcurrency };
+export { runWithConcurrency } from "./concurrency.js";

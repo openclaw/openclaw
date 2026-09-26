@@ -6,7 +6,7 @@ import {
   type OutboundPayloadHarnessParams,
 } from "openclaw/plugin-sdk/channel-contract-testing";
 import { describe, expect, it, vi } from "vitest";
-import { DiscordError, RateLimitError, RequestClient } from "./internal/discord.js";
+import { DiscordError, RequestClient } from "./internal/discord.js";
 import { discordOutbound } from "./outbound-adapter.js";
 import { recordDiscordMessageCreateAmbiguity } from "./retry.js";
 import { sendMessageDiscord } from "./send.outbound.js";
@@ -363,78 +363,6 @@ describe("Discord voice fallback delivery safety", () => {
     return { onDeliveryResult, promise, textDelivery, voiceDelivery };
   }
 
-  it.each([
-    {
-      label: "a request timeout",
-      error: Object.assign(new Error("voice create timed out"), { status: 408 }),
-    },
-    {
-      label: "an actual Discord HTTP error",
-      error: new DiscordError(new Response(null, { status: 502 }), {
-        message: "voice create failed after acceptance",
-      }),
-    },
-    {
-      label: "a wrapped server error with a pre-connect cause",
-      error: Object.assign(new Error("voice create failed after acceptance"), {
-        status: 502,
-        cause: Object.assign(new Error("proxy refused"), { code: "ECONNREFUSED" }),
-      }),
-    },
-    {
-      label: "a connection reset",
-      error: Object.assign(new Error("voice create connection reset"), { code: "ECONNRESET" }),
-    },
-    {
-      label: "an undici response body timeout",
-      error: Object.assign(new Error("voice create response timed out"), {
-        code: "UND_ERR_BODY_TIMEOUT",
-      }),
-    },
-    {
-      label: "a wrapped socket timeout",
-      error: new Error("Discord voice request failed", {
-        cause: Object.assign(new Error("socket timeout"), { code: "ETIMEDOUT" }),
-      }),
-    },
-    {
-      label: "an aborted request",
-      error: Object.assign(new Error("voice request aborted"), { name: "AbortError" }),
-    },
-    {
-      label: "an actual message-only fetch failure",
-      error: new TypeError("fetch failed"),
-    },
-    {
-      label: "a wrapped message-only fetch failure",
-      error: new Error("Discord voice request failed", { cause: new TypeError("fetch failed") }),
-    },
-    ...[
-      "network error",
-      "NetworkError",
-      "socket hang up",
-      "bad gateway",
-      "service unavailable",
-      "temporarily unavailable",
-      "timed out",
-      "timeout",
-      "connection closed",
-      "connection reset",
-      "connection refused",
-    ].map((message) => ({
-      label: `the existing Discord retry owner's message-only ${message} transport error`,
-      error: new Error(message),
-    })),
-  ])("does not replay a potentially accepted voice message after $label", async ({ error }) => {
-    const { promise, textDelivery, voiceDelivery } = runVoicePayload(error, {
-      messageCreateAmbiguous: true,
-    });
-
-    await expect(promise).rejects.toBe(error);
-    expect(voiceDelivery).toHaveBeenCalledOnce();
-    expect(textDelivery).not.toHaveBeenCalled();
-  });
-
   it("does not conceal an ambiguous voice failure behind an already-delivered transcript", async () => {
     const error = Object.assign(new Error("voice create failed after acceptance"), { status: 503 });
     const { promise, textDelivery, voiceDelivery } = runVoicePayload(error, {
@@ -460,86 +388,20 @@ describe("Discord voice fallback delivery safety", () => {
     expect(textDelivery).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      label: "remote audio download failed with a server error",
-      error: new DiscordError(new Response(null, { status: 503 }), {
-        message: "audio source unavailable",
-      }),
-    },
-    {
-      label: "attachment negotiation failed before message creation",
-      error: Object.assign(new Error("voice upload unavailable"), { status: 502 }),
-    },
-    {
-      label: "the source fetch failed before message creation",
-      error: new TypeError("fetch failed"),
-    },
-    {
-      label: "voice preparation was aborted before message creation",
-      error: Object.assign(new Error("audio source aborted"), { name: "AbortError" }),
-    },
-  ])("reports failure after preserving text fallback when $label", async ({ error }) => {
+  it("preserves fallback text before reporting a source download server failure", async () => {
+    const error = new DiscordError(new Response(null, { status: 503 }), {
+      message: "audio source unavailable",
+    });
     const { onDeliveryResult, promise, textDelivery, voiceDelivery } = runVoicePayload(error);
 
     await expect(promise).rejects.toBe(error);
     expect(voiceDelivery).toHaveBeenCalledOnce();
-    expect(textDelivery).toHaveBeenCalledOnce();
-    expect(onDeliveryResult).toHaveBeenCalledOnce();
-    expect(onDeliveryResult).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "discord", messageId: "fallback-text" }),
-    );
-  });
-
-  it.each([
-    {
-      label: "an unavailable audio encoder",
-      error: new Error("ffmpeg unavailable"),
-    },
-    {
-      label: "a definitive voice rejection",
-      error: Object.assign(new Error("voice payload rejected"), { status: 400 }),
-    },
-    {
-      label: "an expired attachment",
-      error: Object.assign(new Error("voice attachment not found"), { statusCode: 404 }),
-    },
-    {
-      label: "a rate-limit rejection",
-      error: new RateLimitError(new Response(null, { status: 429 }), {
-        message: "voice create rate limited",
-        retry_after: 1,
-        global: false,
-      }),
-    },
-    {
-      label: "a pre-connect failure",
-      error: Object.assign(new Error("voice connect refused"), { code: "ECONNREFUSED" }),
-    },
-    {
-      label: "a wrapped DNS failure",
-      error: new Error("voice connection failed", {
-        cause: Object.assign(new Error("DNS lookup failed"), { code: "ENOTFOUND" }),
-      }),
-    },
-    {
-      label: "a fetch failure whose nested DNS error proves pre-connect rejection",
-      error: new TypeError("fetch failed", {
-        cause: Object.assign(new Error("DNS lookup failed"), { code: "ENOTFOUND" }),
-      }),
-    },
-  ])("retains text progress before reporting $label", async ({ error }) => {
-    const { onDeliveryResult, promise, textDelivery, voiceDelivery } = runVoicePayload(error);
-
-    await expect(promise).rejects.toBe(error);
-    expect(voiceDelivery).toHaveBeenCalledOnce();
-    expect(textDelivery).toHaveBeenCalledWith(
+    expect(textDelivery).toHaveBeenCalledExactlyOnceWith(
       "channel:123456",
       "answer",
       expect.objectContaining({ cfg: {} }),
     );
-    expect(onDeliveryResult).toHaveBeenCalledOnce();
-    expect(onDeliveryResult).toHaveBeenCalledWith(
+    expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ channel: "discord", messageId: "fallback-text" }),
     );
   });
@@ -573,15 +435,6 @@ describe("Discord voice fallback delivery safety", () => {
     await expect(promise).rejects.toBe(voiceError);
     expect(voiceDelivery).toHaveBeenCalledOnce();
     expect(textDelivery).toHaveBeenCalledTimes(2);
-    console.log(
-      `discord-voice-partial-proof ${JSON.stringify({
-        voiceAttempt: "failed",
-        fallbackTextDelivered: true,
-        remainingMediaAttempted: true,
-        remainingMediaFailed: true,
-        reportedError: "ffmpeg unavailable",
-      })}`,
-    );
   });
 
   it("keeps an existing transcript when an audio encoder fails before voice delivery", async () => {

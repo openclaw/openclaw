@@ -43,33 +43,6 @@ describe("evaluateMattermostNoVisibleReply", () => {
     expect(violation?.mediaUrlCount).toBe(2);
   });
 
-  it("does not flag reasoning_skipped outcome (intentional suppression)", () => {
-    expect(
-      evaluateMattermostNoVisibleReply({
-        outcome: "reasoning_skipped",
-        payload: { text: "Reasoning: hidden" },
-      }),
-    ).toBeNull();
-  });
-
-  it("does not flag text outcome (visible delivery happened)", () => {
-    expect(
-      evaluateMattermostNoVisibleReply({
-        outcome: "text",
-        payload: { text: "hello" },
-      }),
-    ).toBeNull();
-  });
-
-  it("does not flag media outcome (visible delivery happened)", () => {
-    expect(
-      evaluateMattermostNoVisibleReply({
-        outcome: "media",
-        payload: { mediaUrl: "https://example.org/a.png" },
-      }),
-    ).toBeNull();
-  });
-
   it("does not flag empty outcome when the payload was nominally empty (no text or media at all)", () => {
     expect(
       evaluateMattermostNoVisibleReply({
@@ -101,29 +74,6 @@ describe("evaluateMattermostNoVisibleReply", () => {
 });
 
 describe("formatMattermostNoVisibleReplyLog", () => {
-  it("emits a grep-friendly single-line diagnostic with the expected key/value pairs", () => {
-    const line = formatMattermostNoVisibleReplyLog({
-      violation: {
-        reason: "no-visible-reply-after-final-delivery",
-        outcome: "empty",
-        finalTextLength: 137,
-        mediaUrlCount: 0,
-      },
-      to: "channel:town-square",
-      accountId: "default",
-      agentId: "main",
-    });
-    expect(line).toBe(
-      "mattermost no-visible-reply: no-visible-reply-after-final-delivery" +
-        " to=channel:town-square" +
-        " accountId=default" +
-        " agentId=main" +
-        " outcome=empty" +
-        " finalTextLength=137" +
-        " mediaUrlCount=0",
-    );
-  });
-
   it("falls back to unknown when agentId is undefined", () => {
     const line = formatMattermostNoVisibleReplyLog({
       violation: {

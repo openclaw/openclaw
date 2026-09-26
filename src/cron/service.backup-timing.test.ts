@@ -1,6 +1,7 @@
-// Backup timing regression tests cover scheduled backup run timing.
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
+// Backup timing regression tests cover scheduled backup run timing.
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import { createCronStoreHarness, createNoopLogger } from "./service.test-harness.js";
 import { loadCronStore, saveCronStore } from "./store.js";
@@ -45,6 +46,8 @@ describe("cron backup timing for edit", () => {
     });
 
     const service = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,

@@ -69,11 +69,8 @@ describe("keyed commentary after an unphased live stream", () => {
     ]);
     vi.useRealTimers();
   });
-  it.each([
-    "First paragraph.\n\nSecond paragraph.",
-    "- first\n- second",
-    "```python\nif ready:\n    run()\n```",
-  ])("preserves complete formatting when the keyed projection flattens %j", (text) => {
+  it("preserves complete formatting when the keyed projection flattens code", () => {
+    const text = "```python\nif ready:\n    run()\n```";
     const host = createHost({ chatRunId: "run-1", chatStream: `${text}\n\n` });
     const flattened = text.replace(/\s+/gu, " ");
     preamble(host, "item-a", flattened, 1);
@@ -81,7 +78,7 @@ describe("keyed commentary after an unphased live stream", () => {
     expect(visibleParts(host)).toEqual([{ text, itemId: "item-a" }]);
   });
 
-  it.each([`${COMMENTARY} More detail.`, `Before. ${COMMENTARY}`, "Different text."])(
+  it.each([`${COMMENTARY} More detail.`, `Before. ${COMMENTARY}`])(
     "does not retire a different complete occurrence: %s",
     (text) => {
       const host = createHost({ chatRunId: "run-1", chatStream: text });

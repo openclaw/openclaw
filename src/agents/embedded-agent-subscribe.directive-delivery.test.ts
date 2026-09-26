@@ -426,7 +426,7 @@ describe.each(["google raw", "responses prepared"] as const)("%s directive deliv
             response.push({ type: "done", reason: "stop", message: output });
             response.end();
           });
-    let deltas = 0;
+    let receivedText = "";
     const running = runAgentLoop(
       [{ role: "user", content: "Explain the marker syntax.", timestamp: 1 }],
       { systemPrompt: "", messages: [] },
@@ -444,8 +444,8 @@ describe.each(["google raw", "responses prepared"] as const)("%s directive deliv
         emit(event);
         await subscription.waitForPendingEvents();
         if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-          deltas += 1;
-          if (deltas === chunks.length) {
+          receivedText += event.assistantMessageEvent.delta;
+          if (receivedText === chunks.join("")) {
             await pipeline.flush({ force: true });
             beforeEnd.resolve();
           }
@@ -465,8 +465,8 @@ describe.each(["google raw", "responses prepared"] as const)("%s directive deliv
       expect(delivered.length).toBeGreaterThan(0);
       const beforeTerminalCount = delivered.length;
       if ("prefixCorrection" in scenario) {
-        expect(delivered.map((payload) => payload.text)).toEqual(
-          scenario.chunks.map((text) => text.trimEnd()),
+        expect(delivered.map((payload) => payload.text).join("\n")).toBe(
+          scenario.chunks.map((text) => text.trimEnd()).join("\n"),
         );
       }
       const text = delivered.map((payload) => payload.text ?? "").join("");

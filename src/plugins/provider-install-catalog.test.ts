@@ -73,20 +73,27 @@ function registrySnapshot(
   };
 }
 
-function vllmPluginWithPackageInstall(): InstalledPluginIndexRecord {
+function installedPlugin(
+  pluginId: string,
+  origin: InstalledPluginIndexRecord["origin"],
+  overrides: Partial<InstalledPluginIndexRecord>,
+): InstalledPluginIndexRecord {
+  const rootDir = `${origin === "global" ? "/Users/test/.openclaw/plugins" : "/repo/extensions"}/${pluginId}`;
   return {
-    pluginId: "vllm",
-    origin: "global",
-    manifestPath: "/Users/test/.openclaw/plugins/vllm/openclaw.plugin.json",
+    pluginId,
+    origin,
+    rootDir,
+    manifestPath: `${rootDir}/openclaw.plugin.json`,
     manifestHash: "hash",
-    rootDir: "/Users/test/.openclaw/plugins/vllm",
     enabled: true,
-    startup: {
-      sidecar: false,
-      memory: false,
-      agentHarnesses: [],
-    },
+    startup: { sidecar: false, memory: false, agentHarnesses: [] },
     compat: [],
+    ...overrides,
+  };
+}
+
+function vllmPluginWithPackageInstall(): InstalledPluginIndexRecord {
+  return installedPlugin("vllm", "global", {
     packageName: "@openclaw/vllm",
     packageInstall: {
       npm: {
@@ -100,7 +107,7 @@ function vllmPluginWithPackageInstall(): InstalledPluginIndexRecord {
       },
       warnings: [],
     },
-  };
+  });
 }
 
 function mockVllmAuthChoice() {
@@ -119,65 +126,37 @@ function mockVllmAuthChoice() {
 describe("provider install catalog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    loadPluginRegistrySnapshot.mockReturnValue({
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    });
+    loadPluginRegistrySnapshot.mockReturnValue(registrySnapshot());
     resolveManifestProviderAuthChoices.mockReturnValue([]);
     listOfficialExternalProviderCatalogEntries.mockReturnValue([]);
   });
 
   it("merges manifest auth-choice metadata with registry install metadata", () => {
-    loadPluginRegistrySnapshot.mockReturnValue({
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [
-        {
-          pluginId: "openai",
-          origin: "bundled",
-          manifestPath: "/repo/extensions/openai/openclaw.plugin.json",
-          manifestHash: "hash",
-          rootDir: "/repo/extensions/openai",
-          enabled: true,
-          startup: {
-            sidecar: false,
-            memory: false,
-            agentHarnesses: [],
-          },
-          compat: [],
-          packageName: "@openclaw/openai",
-          packageInstall: {
-            defaultChoice: "npm",
-            npm: {
-              spec: "@openclaw/openai@1.2.3",
-              packageName: "@openclaw/openai",
-              selector: "1.2.3",
-              selectorKind: "exact-version",
-              exactVersion: true,
-              expectedIntegrity: "sha512-openai",
-              pinState: "exact-with-integrity",
+    loadPluginRegistrySnapshot.mockReturnValue(
+      registrySnapshot({
+        plugins: [
+          installedPlugin("openai", "bundled", {
+            packageName: "@openclaw/openai",
+            packageInstall: {
+              defaultChoice: "npm",
+              npm: {
+                spec: "@openclaw/openai@1.2.3",
+                packageName: "@openclaw/openai",
+                selector: "1.2.3",
+                selectorKind: "exact-version",
+                exactVersion: true,
+                expectedIntegrity: "sha512-openai",
+                pinState: "exact-with-integrity",
+              },
+              local: {
+                path: "extensions/openai",
+              },
+              warnings: [],
             },
-            local: {
-              path: "extensions/openai",
-            },
-            warnings: [],
-          },
-        },
-      ],
-      diagnostics: [],
-    });
+          }),
+        ],
+      }),
+    );
     resolveManifestProviderAuthChoices.mockReturnValue([
       {
         pluginId: "openai",
@@ -373,45 +352,27 @@ describe("provider install catalog", () => {
   });
 
   it("does not expose untrusted global package install intent without an install record", () => {
-    loadPluginRegistrySnapshot.mockReturnValue({
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [
-        {
-          pluginId: "demo-provider",
-          origin: "global",
-          manifestPath: "/Users/test/.openclaw/plugins/demo-provider/openclaw.plugin.json",
-          manifestHash: "hash",
-          rootDir: "/Users/test/.openclaw/plugins/demo-provider",
-          enabled: true,
-          startup: {
-            sidecar: false,
-            memory: false,
-            agentHarnesses: [],
-          },
-          compat: [],
-          packageName: "@vendor/demo-provider",
-          packageInstall: {
-            npm: {
-              spec: "@vendor/demo-provider@1.2.3",
-              packageName: "@vendor/demo-provider",
-              selector: "1.2.3",
-              selectorKind: "exact-version",
-              exactVersion: true,
-              expectedIntegrity: "sha512-demo",
-              pinState: "exact-with-integrity",
+    loadPluginRegistrySnapshot.mockReturnValue(
+      registrySnapshot({
+        plugins: [
+          installedPlugin("demo-provider", "global", {
+            packageName: "@vendor/demo-provider",
+            packageInstall: {
+              npm: {
+                spec: "@vendor/demo-provider@1.2.3",
+                packageName: "@vendor/demo-provider",
+                selector: "1.2.3",
+                selectorKind: "exact-version",
+                exactVersion: true,
+                expectedIntegrity: "sha512-demo",
+                pinState: "exact-with-integrity",
+              },
+              warnings: [],
             },
-            warnings: [],
-          },
-        },
-      ],
-      diagnostics: [],
-    });
+          }),
+        ],
+      }),
+    );
     resolveManifestProviderAuthChoices.mockReturnValue([
       {
         pluginId: "demo-provider",
@@ -426,44 +387,26 @@ describe("provider install catalog", () => {
   });
 
   it("ignores malformed persisted package install metadata", () => {
-    loadPluginRegistrySnapshot.mockReturnValue({
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [
-        {
-          pluginId: "openai",
-          origin: "bundled",
-          manifestPath: "/repo/extensions/openai/openclaw.plugin.json",
-          manifestHash: "hash",
-          rootDir: "/repo/extensions/openai",
-          enabled: true,
-          startup: {
-            sidecar: false,
-            memory: false,
-            agentHarnesses: [],
-          },
-          compat: [],
-          packageName: "@openclaw/openai",
-          packageInstall: {
-            defaultChoice: "npm",
-            npm: {
-              spec: 12,
-              packageName: "@openclaw/openai",
-              selectorKind: "exact-version",
-              exactVersion: true,
-              pinState: "exact-with-integrity",
-            },
-            warnings: [],
-          } as unknown as PluginInstallSourceInfo,
-        },
-      ],
-      diagnostics: [],
-    });
+    loadPluginRegistrySnapshot.mockReturnValue(
+      registrySnapshot({
+        plugins: [
+          installedPlugin("openai", "bundled", {
+            packageName: "@openclaw/openai",
+            packageInstall: {
+              defaultChoice: "npm",
+              npm: {
+                spec: 12,
+                packageName: "@openclaw/openai",
+                selectorKind: "exact-version",
+                exactVersion: true,
+                pinState: "exact-with-integrity",
+              },
+              warnings: [],
+            } as unknown as PluginInstallSourceInfo,
+          }),
+        ],
+      }),
+    );
     resolveManifestProviderAuthChoices.mockReturnValue([
       {
         pluginId: "openai",
@@ -478,38 +421,21 @@ describe("provider install catalog", () => {
   });
 
   it("skips untrusted workspace package install metadata when the plugin is disabled", () => {
-    loadPluginRegistrySnapshot.mockReturnValue({
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [
-        {
-          pluginId: "demo-provider",
-          origin: "workspace",
-          manifestPath: "/repo/extensions/demo-provider/openclaw.plugin.json",
-          manifestHash: "hash",
-          rootDir: "/repo/extensions/demo-provider",
-          enabled: false,
-          startup: {
-            sidecar: false,
-            memory: false,
-            agentHarnesses: [],
-          },
-          compat: [],
-          packageInstall: {
-            local: {
-              path: "extensions/demo-provider",
+    loadPluginRegistrySnapshot.mockReturnValue(
+      registrySnapshot({
+        plugins: [
+          installedPlugin("demo-provider", "workspace", {
+            enabled: false,
+            packageInstall: {
+              local: {
+                path: "extensions/demo-provider",
+              },
+              warnings: [],
             },
-            warnings: [],
-          },
-        },
-      ],
-      diagnostics: [],
-    });
+          }),
+        ],
+      }),
+    );
     resolveManifestProviderAuthChoices.mockReturnValue([
       {
         pluginId: "demo-provider",

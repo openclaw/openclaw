@@ -94,20 +94,6 @@ afterEach(() => {
 });
 
 describe("createCopilotClientPool", () => {
-  it("same key reuses client", async () => {
-    const sdk = makeFake();
-    const pool = createCopilotClientPool({ sdkFactory: sdk.fake });
-    const key = makeKey();
-    const options = makeOptions();
-
-    const first = await pool.acquire(key, options);
-    const second = await pool.acquire(key, options);
-
-    expect(first.client).toBe(second.client);
-    expect(first.key).toEqual(second.key);
-    expect(sdk.ctorCalls.length).toBe(1);
-  });
-
   it("keeps hardened empty-mode clients separate from normal clients", async () => {
     const sdk = makeFake();
     const pool = createCopilotClientPool({ sdkFactory: sdk.fake });
@@ -356,7 +342,7 @@ describe("createCopilotClientPool", () => {
   });
 
   it("dispose during in-flight acquire", async () => {
-    const clientDeferred = createDeferred<CopilotClient>();
+    const clientDeferred = createDeferred<void>();
     const stopped: number[] = [];
     const sdkFactory = async () => {
       const client = {
@@ -377,15 +363,7 @@ describe("createCopilotClientPool", () => {
 
     const acquirePromise = pool.acquire(makeKey(), makeOptions());
     const disposePromise = pool.dispose();
-    const client = {
-      id: 1,
-      copilotHome: "copilot-home",
-      start: vi.fn(async () => undefined),
-      stop: vi.fn(async () => []),
-      createSession: vi.fn(async () => ({})),
-      disconnect: vi.fn(),
-    } as unknown as CopilotClient;
-    clientDeferred.resolve(client);
+    clientDeferred.resolve();
 
     await expect(acquirePromise).rejects.toThrow("[copilot-pool] pool disposed");
     expect(await disposePromise).toEqual([]);

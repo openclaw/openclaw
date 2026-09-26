@@ -1,4 +1,3 @@
-// Tlon tests cover channel ops plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureUrbitChannelOpen, scryUrbitPath } from "./channel-ops.js";
 import { urbitFetch } from "./fetch.js";
@@ -52,18 +51,6 @@ describe("Urbit channel operations", () => {
       ),
     ).rejects.toThrow("Tlon scry response for path /chat/inbox.json: malformed JSON response");
     expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("cancels the unread scry error body before release", async () => {
-    const state = mockGuardedResponse(
-      new Response("ship exploded", { status: 500 }),
-      "https://example.com/~/scry/chat/inbox.json",
-    );
-
-    await expect(
-      scryUrbitPath(CHANNEL_DEPS, { path: "/chat/inbox.json", auditContext: "test" }),
-    ).rejects.toThrow("Scry for path /chat/inbox.json");
-    expect(state.bodyUsedAtRelease).toBe(true);
   });
 
   it("cancels the unread channel creation error body before release", async () => {

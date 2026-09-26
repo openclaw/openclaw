@@ -10,7 +10,6 @@ import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
 import { formatGoalSummary } from "../shared/session-goal-display.js";
 import { isSessionRunActive } from "../shared/session-run-state.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
-import { resolveAssistantIdentity } from "./assistant-identity.js";
 import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
 import type { SessionListTargetLookup } from "./session-list-target.js";
 import type {
@@ -82,6 +81,7 @@ const staticSearchFields = new WeakMap<
 export function createSessionListSearchMatcher(params: {
   cfg: OpenClawConfig;
   search: string;
+  identityNames?: ReadonlyMap<string, string>;
   getTarget: SessionListTargetLookup;
   modelCatalog?: SessionListModelCatalog;
   now: number;
@@ -89,7 +89,6 @@ export function createSessionListSearchMatcher(params: {
   projectActiveRun?: SessionListActiveRunProjector;
 }) {
   const { cfg, search, now } = params;
-  const identityNames = new Map<string, string>();
   let rowContext: SessionListRowContext | undefined;
   const context = () => (rowContext ??= params.getRowContext());
   return (key: string, entry: SessionEntry): boolean => {
@@ -148,10 +147,7 @@ export function createSessionListSearchMatcher(params: {
     ) {
       return true;
     }
-    if (!identityNames.has(agentId)) {
-      identityNames.set(agentId, resolveAssistantIdentity({ cfg, agentId }).name);
-    }
-    if (matchesSessionListSearch([identityNames.get(agentId)], search)) {
+    if (matchesSessionListSearch([params.identityNames?.get(agentId)], search)) {
       return true;
     }
     const source = expectDefined(

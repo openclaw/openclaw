@@ -80,7 +80,7 @@ async function seedRetainedSource(
   );
   const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
   await state.writeConfig(cfg);
-  recordDeferredPluginMigrations({
+  await recordDeferredPluginMigrations({
     env: state.env,
     pending: [
       {
@@ -247,7 +247,7 @@ describe("retained legacy ACP metadata", () => {
         expect(readAcpSessionMeta(fixture.acpScope)).toBeUndefined();
         fixture.assertOriginalsRetained();
         if (pluginState === "resolved") {
-          recordDeferredPluginMigrations({
+          await recordDeferredPluginMigrations({
             env: state.env,
             pending: [],
             resolvedPluginIds: [PLUGIN_ID],

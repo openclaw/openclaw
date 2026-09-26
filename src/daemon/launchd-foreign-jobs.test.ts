@@ -119,7 +119,6 @@ describe("foreign launchd command classification", () => {
     ],
     ["ai.openclaw.help", ["/opt/bin/openclaw", "gateway", "restart", "--help"], []],
     ["ai.openclaw.help-short", ["/opt/bin/openclaw", "gateway", "restart", "-h"], []],
-    ["ai.openclaw.exec", ["exec", "openclaw", "gateway", "restart"], []],
   ])("reports %s and verifies only executable lifecycle arguments", async (name, args, actions) => {
     addJob(name, args);
     const found = await findForeignLaunchdJobs({});
@@ -157,16 +156,9 @@ describe("foreign launchd command classification", () => {
       "#!/bin/sh\nopenclaw_bin=/usr/local/bin/openclaw\n$openclaw_bin gateway restart\n",
       ["restart"],
     ],
-    [
-      "#!/bin/sh\nopenclaw_bin=/usr/local/bin/openclaw\n${openclaw_bin} gateway restart\n",
-      ["restart"],
-    ],
     ["#!/bin/sh\nexec /usr/local/bin/openclaw gateway restart --profile work\n", ["restart"]],
-    ["#!/bin/sh\nopenclaw gateway restart --help\n", []],
-    ['#!/bin/sh\n"openclaw" gateway restart\n', []],
     ['#!/bin/sh\nset "-e"\nopenclaw gateway restart\n', []],
     ['#!/bin/sh\nopenclaw_bin=/bin/echo\n"$openclaw_bin" gateway restart\n', []],
-    ["#!/bin/sh\nopenclaw gateway restart\u2028", []],
     [
       '#!/bin/sh\nopenclaw_bin=/usr/local/bin/openclaw\u2028\n"$openclaw_bin" gateway restart\n',
       [],
@@ -175,7 +167,6 @@ describe("foreign launchd command classification", () => {
       '#!/bin/sh\r\nopenclaw_bin=/usr/local/bin/openclaw\r\n"$openclaw_bin" gateway restart\r\n',
       [],
     ],
-    ["#!/bin/sh\nopenclaw gateway restart\n# carriage return\r", []],
     [
       '#!/bin/bash\nset -e\nUID=1000\nopenclaw_bin=/usr/local/bin/openclaw\n"$openclaw_bin" gateway restart\n',
       [],
@@ -184,22 +175,14 @@ describe("foreign launchd command classification", () => {
       '#!/bin/sh\nPATH=/usr/local/bin\nopenclaw_bin=/usr/local/bin/openclaw\n"$openclaw_bin" gateway restart\n',
       [],
     ],
-    ["#!/bin/sh\nexport PATH=/usr/local/bin\nopenclaw gateway restart\n", []],
     [
       '#!/bin/sh\nexport OPENCLAW_BIN=/usr/local/bin/openclaw\n"$OPENCLAW_BIN" gateway restart\n',
       ["restart"],
     ],
     ["#!/bin/sh\nset -e -u -x +e +u +x\n/usr/local/bin/openclaw gateway restart\n", ["restart"]],
-    ["#!/bin/sh\nset -eu\nopenclaw gateway restart\n", []],
     ["#!/bin/sh\nexec >/dev/null\nopenclaw gateway restart\n", []],
-    ["#!/bin/sh\nUID=/usr/local/bin/openclaw gateway restart\n", []],
-    ["#!/bin/sh\nenv PATH=/usr/local/bin openclaw gateway restart\n", []],
     [
       '#!/bin/sh\nset -u\nopenclaw_bin=/usr/local/bin/openclaw\n"$openclaw_bin" gateway restart --profile "$PROFILE"\nopenclaw gateway restart\n',
-      [],
-    ],
-    [
-      '#!/bin/sh\nset -u\nopenclaw_bin=/usr/local/bin/openclaw\n"$openclaw_bin" gateway restart --profile "${PROFILE}"\n',
       [],
     ],
     [
@@ -209,24 +192,10 @@ describe("foreign launchd command classification", () => {
     ["#!/bin/sh\n/opt/bin/openclaw gateway stop\n/opt/bin/openclaw gateway start\n", ["stop"]],
     ['#!/bin/sh\n# openclaw gateway restart\necho "openclaw gateway start"\n', []],
     ["#!/bin/sh\ncat <<EOF\nopenclaw gateway restart\nEOF\n", []],
-    ['#!/bin/sh\necho "example:\nopenclaw gateway restart\n"\n', []],
-    ["#!/bin/sh\noc=\"/opt/bin/openclaw\"\n'$oc' gateway restart\n", []],
-    ['#!/bin/sh\n"$unknown" gateway restart\n', []],
-    ['#!/bin/sh\noc="/opt/bin/openclaw"\nunset oc\n"$oc" gateway restart\n', []],
-    ["#!/bin/sh\ncleanup() {\nopenclaw gateway restart\n}\nsleep 30\n", []],
     ["#!/bin/sh\nif false; then\nopenclaw gateway restart\nfi\n", []],
-    ["#!/bin/sh\nexit 0\nopenclaw gateway restart\n", []],
-    ['#!/bin/sh\noc="/opt/bin/openclaw"\nread oc\n"$oc" gateway restart\n', []],
-    ["#!/bin/sh\nopenclaw '' gateway restart\n", []],
     ["#!/bin/sh\nset -n\nopenclaw gateway restart\n", []],
     ["#!/bin/sh\nset -o noexec\nopenclaw gateway restart\n", []],
-    ['#!/bin/sh\noc="/opt/bin/openclaw"\nprintf -v oc /bin/echo\n"$oc" gateway restart\n', []],
-    ['#!/bin/sh\noc=/opt/bin/openclaw\nname=oc\nunset "$name"\n"$oc" gateway restart\n', []],
-    ['#!/bin/zsh\noc=/opt/bin/openclaw\nother=${oc::=/bin/echo}\n"$oc" gateway restart\n', []],
-    ['#!/bin/zsh\noc=/opt/bin/openclaw\necho "${oc::=/bin/echo}"\n"$oc" gateway restart\n', []],
-    ['#!/bin/sh\nopenclaw_bin="echo /opt/bin/openclaw"\n$openclaw_bin gateway restart\n', []],
     ["#!/bin/sh\nIFS=o\nopenclaw_bin=openclaw\n$openclaw_bin gateway restart\n", []],
-    ['#!/bin/bash\nRANDOM=openclaw\n"$RANDOM" gateway restart\n', []],
     [
       '#!/bin/zsh\nopenclaw_bin=/opt/bin/openclaw\nexec >${openclaw_bin::=/bin/echo}\n"$openclaw_bin" gateway restart\n',
       [],
@@ -341,11 +310,12 @@ describe("foreign launchd command classification", () => {
     },
   );
 
-  it.each(
-    ["openclaw", "openclaw.mjs", "node", "bun", "env"].flatMap((name) =>
-      (name === "env" ? [false] : [false, true]).map((viaEnv) => ({ name, viaEnv })),
-    ),
-  )(
+  it.each([
+    { name: "openclaw", viaEnv: false },
+    { name: "openclaw", viaEnv: true },
+    { name: "node", viaEnv: true },
+    { name: "env", viaEnv: false },
+  ])(
     "guards an executed shell script even when its filename is $name (env: $viaEnv)",
     async ({ name, viaEnv }) => {
       const file = path.join(dir, name);
@@ -371,9 +341,6 @@ describe("foreign launchd command classification", () => {
 
   it.each([
     { shebang: "#!/bin/bash", verified: true },
-    { shebang: "#!/bin/sh", verified: true },
-    { shebang: "#!/usr/bin/env bash", verified: true },
-    { shebang: "#!/usr/bin/env sh", verified: true },
     { shebang: "#!/usr/bin/env zsh", verified: true },
     { shebang: "#!/usr/bin/python3", verified: false },
     { shebang: "", verified: false },

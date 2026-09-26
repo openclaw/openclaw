@@ -380,6 +380,24 @@ when their used heap has grown by 32 MiB since the last idle collection. SQLite,
 history, transcript, and reclamation workers request a 512 MiB V8 old-generation
 limit; an explicit process-wide `--max-old-space-size` overrides Node's worker
 resource limit. These limits do not cover native allocations or transferred buffers.
+Memory diagnostics report each sampled direct worker by script and thread ID,
+including its heap and external memory. Task workers also publish ArrayBuffer
+bytes from inside their isolate; ArrayBuffers are already included in external
+memory, so do not add those values together. Other direct workers use native heap
+statistics and leave ArrayBuffer bytes unavailable. Nested workers are outside
+the parent registry's coverage.
+
+`workerHeapSampledCount` and `workerArrayBuffersSampledCount` show coverage against
+`workerCount`. `workerMemoryCoverage` is `complete`, `partial`, or `unavailable`
+for direct workers. Before the first sample or after a sample expires, missing
+bytes are omitted instead of reported as zero; `workerMemoryMissing` identifies
+pending, stale, or unavailable workers. Samples expire after 60 seconds. Sampling
+never waits for a busy worker and keeps at most one request outstanding per
+transport. If a worker cannot handle port messages, native V8 interrupts still
+refresh its heap and external counters; ArrayBuffer coverage remains unavailable
+until the worker responds. Memory pressure warnings include these counters and the external-memory
+limit caveat; Node does not provide a worker limit for external/native allocations.
+
 Critical memory pressure retires idle workers through their existing cleanup owners,
 including when diagnostic event collection is disabled. Active operations keep
 their custody and the usual 30-minute database retention window resumes after use.

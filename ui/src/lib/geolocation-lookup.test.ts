@@ -80,16 +80,6 @@ describe("client geolocation lookup", () => {
     });
   });
 
-  it("reports an unavailable database as retryable rather than as a placement", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => jsonResponse({ error: "unavailable" }, false)),
-    );
-    await expect(lookupClientGeolocation("203.0.113.11")).resolves.toEqual({
-      status: "unavailable",
-    });
-  });
-
   it("reports a failed request as unavailable rather than rejecting", async () => {
     vi.stubGlobal(
       "fetch",

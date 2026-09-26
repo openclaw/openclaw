@@ -140,7 +140,7 @@ final class LiveActivityManager {
             agentName: agentName,
             sessionKey: sessionKey)
         let hasMeasuredAudio = isSpeaking || isListening
-        if !hasSameOwner || Self.shouldResetVoiceSamples(previousStatus: previousVoice?.state.status) {
+        if !hasSameOwner {
             self.resetVoiceSamples()
         }
         if hasMeasuredAudio, let sample = LiveActivityVoiceSampleBuffer.quantize(audioLevel) {
@@ -515,14 +515,6 @@ final class LiveActivityManager {
         case .idle, .disconnected:
             return false
         }
-    }
-
-    /// A live voice producer owns the waveform buffer. Phase changes preserve
-    /// its recent envelope; only a newly adopted producer starts a new trace.
-    nonisolated static func shouldResetVoiceSamples(
-        previousStatus: OpenClawActivityAttributes.ContentState.Status?) -> Bool
-    {
-        previousStatus == nil
     }
 
     nonisolated static func hasSameOwner(

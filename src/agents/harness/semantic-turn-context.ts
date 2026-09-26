@@ -152,7 +152,12 @@ export async function observeSemanticTurnContext(
     selection = await evaluateCompactionShadowCuration({
       runtime,
       snapshot,
-      isEligible: options.isEligible,
+      isEligible: () => {
+        // Provider preparation awaits plugin authority. A closed run must not
+        // send its evidence even when configuration consent remains enabled.
+        options.assertActive();
+        return options.isEligible();
+      },
       agentId: options.agentId,
       signal: options.signal,
       timeoutMs: options.config.timeoutMs,

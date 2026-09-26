@@ -40,38 +40,22 @@ async function resolveBridgeMissingArtifactsStatus() {
   });
 }
 
-describe("resolveMemoryWikiStatus", () => {
-  it("reports missing vault and missing requested obsidian cli", async () => {
-    const config = resolveMemoryWikiConfig(
-      {
-        vault: { path: "/tmp/wiki" },
-        obsidian: { enabled: true, useOfficialCli: true },
-      },
-      { homedir: "/Users/tester" },
-    );
+async function resolveMissingVaultStatus() {
+  const config = resolveMemoryWikiConfig(
+    {
+      vault: { path: "/tmp/wiki" },
+      obsidian: { enabled: true, useOfficialCli: true },
+    },
+    { homedir: "/Users/tester" },
+  );
 
-    const status = await resolveMemoryWikiStatus(config, {
-      pathExists: async () => false,
-      resolveCommand: async () => null,
-    });
-
-    expect(status.vaultExists).toBe(false);
-    expect(status.vaultScope).toBe("global");
-    expect(status.agentId).toBeNull();
-    expect(status.obsidianCli.requested).toBe(true);
-    expect(status.warnings.map((warning) => warning.code)).toEqual([
-      "vault-missing",
-      "obsidian-cli-missing",
-    ]);
-    expect(status.sourceCounts).toEqual({
-      native: 0,
-      bridge: 0,
-      bridgeEvents: 0,
-      unsafeLocal: 0,
-      other: 0,
-    });
+  return resolveMemoryWikiStatus(config, {
+    pathExists: async () => false,
+    resolveCommand: async () => null,
   });
+}
 
+describe("resolveMemoryWikiStatus", () => {
   it("warns when unsafe-local is selected without explicit private access", async () => {
     const config = resolveMemoryWikiConfig(
       {
@@ -86,13 +70,6 @@ describe("resolveMemoryWikiStatus", () => {
     });
 
     expect(status.warnings.map((warning) => warning.code)).toContain("unsafe-local-disabled");
-  });
-
-  it("warns when bridge mode has no exported memory artifacts", async () => {
-    const status = await resolveBridgeMissingArtifactsStatus();
-
-    expect(status.bridgePublicArtifactCount).toBe(0);
-    expect(status.warnings.map((warning) => warning.code)).toContain("bridge-artifacts-missing");
   });
 
   it("skips artifact enumeration when readMemoryArtifacts is disabled", async () => {
@@ -404,49 +381,8 @@ describe("resolveMemoryWikiStatus", () => {
 });
 
 describe("renderMemoryWikiStatus", () => {
-  it("includes warnings in the text output", () => {
-    const rendered = renderMemoryWikiStatus({
-      vaultScope: "global",
-      agentId: null,
-      vaultMode: "isolated",
-      renderMode: "native",
-      vaultPath: "/tmp/wiki",
-      vaultExists: false,
-      bridge: {
-        enabled: false,
-        readMemoryArtifacts: true,
-        indexDreamReports: true,
-        indexDailyNotes: true,
-        indexMemoryRoot: true,
-        followMemoryEvents: true,
-      },
-      bridgePublicArtifactCount: null,
-      obsidianCli: {
-        enabled: true,
-        requested: true,
-        available: false,
-        command: null,
-      },
-      unsafeLocal: {
-        allowPrivateMemoryCoreAccess: false,
-        pathCount: 0,
-      },
-      pageCounts: {
-        source: 0,
-        entity: 0,
-        concept: 0,
-        synthesis: 0,
-        report: 0,
-      },
-      sourceCounts: {
-        native: 0,
-        bridge: 0,
-        bridgeEvents: 0,
-        unsafeLocal: 0,
-        other: 0,
-      },
-      warnings: [{ code: "vault-missing", message: "Wiki vault has not been initialized yet." }],
-    });
+  it("includes warnings in the text output", async () => {
+    const rendered = renderMemoryWikiStatus(await resolveMissingVaultStatus());
 
     expect(rendered).toContain("Wiki vault mode: isolated");
     expect(rendered).toContain("Vault scope: global");
@@ -461,18 +397,23 @@ describe("renderMemoryWikiStatus", () => {
 
 describe("memory wiki doctor", () => {
   it("builds actionable fixes from status warnings", async () => {
-    const config = resolveMemoryWikiConfig(
-      {
-        vault: { path: "/tmp/wiki" },
-        obsidian: { enabled: true, useOfficialCli: true },
-      },
-      { homedir: "/Users/tester" },
-    );
-
-    const status = await resolveMemoryWikiStatus(config, {
-      pathExists: async () => false,
-      resolveCommand: async () => null,
+    const status = await resolveMissingVaultStatus();
+    expect(status.vaultExists).toBe(false);
+    expect(status.vaultScope).toBe("global");
+    expect(status.agentId).toBeNull();
+    expect(status.obsidianCli.requested).toBe(true);
+    expect(status.warnings.map((warning) => warning.code)).toEqual([
+      "vault-missing",
+      "obsidian-cli-missing",
+    ]);
+    expect(status.sourceCounts).toEqual({
+      native: 0,
+      bridge: 0,
+      bridgeEvents: 0,
+      unsafeLocal: 0,
+      other: 0,
     });
+
     const report = buildMemoryWikiDoctorReport(status);
     const rendered = renderMemoryWikiDoctor(report);
 
@@ -485,6 +426,8 @@ describe("memory wiki doctor", () => {
 
   it("suggests bridge fixes when no public artifacts are exported", async () => {
     const status = await resolveBridgeMissingArtifactsStatus();
+    expect(status.bridgePublicArtifactCount).toBe(0);
+    expect(status.warnings.map((warning) => warning.code)).toContain("bridge-artifacts-missing");
     const report = buildMemoryWikiDoctorReport(status);
 
     expect(report.fixes.map((fix) => fix.code)).toContain("bridge-artifacts-missing");

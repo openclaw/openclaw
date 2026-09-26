@@ -219,6 +219,22 @@ export function releaseNativeDirectChild(child: ChildState): void {
   release?.();
 }
 
+export function admitNativeChildModelExecution(
+  child: ChildState,
+  owner: ParentOwner,
+  known: KnownChild | undefined,
+): void {
+  if (known) {
+    known.configurationQualification = owner.configurationQualification;
+  }
+  child.modelExecution ??= retainNativeModelExecution(
+    owner,
+    child.nativeTurnId,
+    child.childThreadId,
+  );
+  owner.onDirectChildAccepted?.();
+}
+
 export function consumeNativeChildModelAdmission(
   evidence: Extract<NativeChildAdmissionEvidence, { kind: "interaction" }>,
 ): void {

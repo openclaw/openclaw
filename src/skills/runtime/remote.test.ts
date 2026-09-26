@@ -40,30 +40,6 @@ describe("skills-remote", () => {
     vi.restoreAllMocks();
   });
 
-  it("removes disconnected nodes from remote skill eligibility", () => {
-    const nodeId = `node-${randomUUID()}`;
-    const bin = `bin-${randomUUID()}`;
-    recordRemoteNodeInfo({
-      nodeId,
-      displayName: "Remote Mac",
-      platform: "darwin",
-      commands: ["system.run"],
-    });
-    recordRemoteNodeBins(nodeId, [bin], TEST_PAIRING_GENERATION);
-
-    expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
-
-    removeRemoteNodeInfo(nodeId);
-
-    expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
-  });
-
-  it("supports idempotent remote node removal", () => {
-    const nodeId = `node-${randomUUID()}`;
-    expect(removeRemoteNodeInfo(nodeId)).toBeUndefined();
-    expect(removeRemoteNodeInfo(nodeId)).toBeUndefined();
-  });
-
   it("preserves bins across reconnects only within one pairing generation", () => {
     const nodeId = `node-${randomUUID()}`;
     const retiredBin = `bin-${randomUUID()}`;

@@ -22,7 +22,7 @@ export function resolveForwardedNodeCompilerArgs(execArgv = process.execArgv) {
   return execArgv.filter((arg) => FORWARDED_COMPILER_FLAGS.has(arg));
 }
 
-function resolveConfiguredModulesDir(checkoutRoot) {
+export function resolveConfiguredModulesDir(checkoutRoot) {
   const modulesDir =
     (process.env.PNPM_CONFIG_MODULES_DIR ?? process.env.pnpm_config_modules_dir) ||
     process.env.npm_config_modules_dir;

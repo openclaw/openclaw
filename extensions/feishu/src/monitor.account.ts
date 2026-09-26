@@ -1,5 +1,6 @@
 import * as crypto from "node:crypto";
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
@@ -560,6 +561,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       durableIngress?.start();
       if (connectionMode === "webhook") {
         return await monitorWebhook({
+          gatewayPort: resolveGatewayPort(cfg),
           account,
           accountId,
           runtime,

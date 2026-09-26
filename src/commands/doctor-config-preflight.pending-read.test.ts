@@ -164,7 +164,7 @@ it.each(["Doctor repair", "Gateway readiness"] as const)(
         configPaths: [["legacyFixture"]],
         validationExcludedPaths: [["legacyFixture"]],
       };
-      pendingMigrations.recordDeferredPluginMigrations({ pending: [pending] });
+      await pendingMigrations.recordDeferredPluginMigrations({ pending: [pending] });
       await closeOpenClawStateDatabaseAsync();
       const held = createDeferredCore();
       const release = createDeferredCore();

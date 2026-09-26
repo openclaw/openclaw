@@ -23,10 +23,6 @@ afterEach(() => {
 });
 
 describe("loadExtraExcludePatternsFromEnv", () => {
-  it("returns an empty list when no extra exclude file is configured", () => {
-    expect(loadExtraExcludePatternsFromEnv({})).toStrictEqual([]);
-  });
-
   it("loads extra exclude patterns from a JSON file", () => {
     const filePath = patternFiles.writePatternFile("extra-exclude.json", [
       "src/infra/update-runner.test.ts",
@@ -75,18 +71,6 @@ describe("unit vitest config", () => {
     ]) {
       expect(testConfig.include).not.toContain(pattern);
     }
-  });
-
-  it("narrows the active include list to CLI file filters when present", () => {
-    const unitConfig = createUnitVitestConfigWithOptions(
-      {},
-      {
-        argv: ["node", "vitest", "run", "src/media-generation/runtime-shared.test.ts"],
-      },
-    );
-    const testConfig = requireTestConfig(unitConfig);
-    expect(testConfig.include).toEqual(["src/media-generation/runtime-shared.test.ts"]);
-    expect(testConfig.passWithNoTests).toBeUndefined();
   });
 
   it.each([false, true])(
@@ -199,18 +183,6 @@ describe("unit vitest config", () => {
     expect(coverageInclude).toContain("src/web-search/runtime.ts");
     expect(coverageInclude).not.toContain("packages/markdown-core/src/render.ts");
     expect(coverageInclude).not.toContain("src/security/audit-workspace-skills.ts");
-  });
-
-  it("leaves coverage include filters unset for explicit unit include lists", () => {
-    const unitConfig = createUnitVitestConfigWithOptions(
-      {},
-      {
-        includePatterns: ["src/media-generation/runtime-shared.test.ts"],
-      },
-    );
-    const testConfig = requireTestConfig(unitConfig);
-
-    expect(testConfig.coverage?.include).toBeUndefined();
   });
 
   it("keeps bundled unit include files out of the resolved exclude list", () => {

@@ -184,14 +184,6 @@ test("expires task cursors when a profile merge changes the same caller's sessio
           "task-1",
           "task-0",
         ]);
-        console.info("profile-merge cursor proof", {
-          sameProfile: before.payload?.profile.id === after.payload?.profile.id,
-          first: first.payload?.tasks.map((task) => task.id),
-          resumedOk: resumed.ok,
-          resumedError: resumed.error,
-          resumedTasks: resumed.payload?.tasks.map((task) => task.id),
-          fresh: fresh.payload?.tasks.map((task) => task.id),
-        });
         expect(resumed).toMatchObject({
           ok: false,
           error: {

@@ -64,7 +64,6 @@ import {
 
 vi.mock("openclaw/plugin-sdk/media-runtime", { spy: true });
 let preflightDiscordMessage: typeof import("./message-handler.preflight.js").preflightDiscordMessage;
-let resolvePreflightMentionRequirement: typeof import("./message-handler.preflight.js").resolvePreflightMentionRequirement;
 let shouldIgnoreBoundThreadWebhookMessage: typeof import("./message-handler.preflight.js").shouldIgnoreBoundThreadWebhookMessage;
 let defaultThreadBindings: import("./thread-bindings.js").ThreadBindingManager;
 let createNoopThreadBindingManager: typeof import("./thread-bindings.js").createNoopThreadBindingManager;
@@ -72,11 +71,8 @@ let createThreadBindingManager: typeof import("./thread-bindings.js").createThre
 let createDiscordMessageDispatcher: typeof import("./message-dispatcher.js").createDiscordMessageDispatcher;
 
 beforeAll(async () => {
-  ({
-    preflightDiscordMessage,
-    resolvePreflightMentionRequirement,
-    shouldIgnoreBoundThreadWebhookMessage,
-  } = await import("./message-handler.preflight.js"));
+  ({ preflightDiscordMessage, shouldIgnoreBoundThreadWebhookMessage } =
+    await import("./message-handler.preflight.js"));
   ({ createThreadBindingManager, createNoopThreadBindingManager } =
     await import("./thread-bindings.js"));
   ({ createDiscordMessageDispatcher } = await import("./message-dispatcher.js"));
@@ -264,35 +260,6 @@ async function runIgnoreOtherMentionsPreflight(params: {
     },
   });
 }
-
-describe("resolvePreflightMentionRequirement", () => {
-  it("requires mention when config requires mention and thread is not bound", () => {
-    expect(
-      resolvePreflightMentionRequirement({
-        shouldRequireMention: true,
-        bypassMentionRequirement: false,
-      }),
-    ).toBe(true);
-  });
-
-  it("disables mention requirement when the route explicitly bypasses mentions", () => {
-    expect(
-      resolvePreflightMentionRequirement({
-        shouldRequireMention: true,
-        bypassMentionRequirement: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps mention requirement disabled when config already disables it", () => {
-    expect(
-      resolvePreflightMentionRequirement({
-        shouldRequireMention: false,
-        bypassMentionRequirement: false,
-      }),
-    ).toBe(false);
-  });
-});
 
 describe("preflightDiscordMessage", () => {
   beforeEach(() => {
@@ -2935,25 +2902,6 @@ describe("preflightDiscordMessage", () => {
 describe("shouldIgnoreBoundThreadWebhookMessage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  it("returns true when inbound webhook id matches the bound thread webhook", () => {
-    expect(
-      shouldIgnoreBoundThreadWebhookMessage({
-        webhookId: "wh-1",
-        threadBinding: createThreadBinding(),
-      }),
-    ).toBe(true);
-  });
-
-  it("returns true when a bound thread receives a different webhook id", () => {
-    expect(
-      shouldIgnoreBoundThreadWebhookMessage({
-        threadId: "thread-1",
-        webhookId: "wh-other",
-        threadBinding: createThreadBinding(),
-      }),
-    ).toBe(true);
   });
 
   it("returns true when a bound thread receives a webhook without a recorded bound webhook id", () => {

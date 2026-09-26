@@ -788,9 +788,7 @@ describe("dispatchAndStartWorkboardCards", () => {
       options: { now: 10, maxStarts: 3 },
     });
 
-    expect(result.started.map((entry) => entry.cardId).toSorted()).toEqual(
-      [first.id, otherAgent.id].toSorted(),
-    );
+    expect(result.started.map((entry) => entry.cardId)).toEqual([first.id, otherAgent.id]);
     expect(run).toHaveBeenCalledTimes(2);
     expect(run.mock.calls[0]?.[0]).toMatchObject({
       sessionKey: `agent:codex-main:subagent:workboard-default-${first.id}`,
@@ -911,45 +909,43 @@ describe("dispatchAndStartWorkboardCards", () => {
     await expect(store.get(ready.id)).resolves.toMatchObject({ status: "ready" });
   });
 
-  it.each(["worker", "other-worker"])(
-    "starts recoverable work after a higher-priority worker fails (next owner: %s)",
-    async (nextOwner) => {
-      const store = createWorkboardSqliteTestStore();
-      const failed = await store.create({
-        title: "Unavailable urgent worker",
-        status: "ready",
-        priority: "urgent",
-        agentId: "worker",
-        workspaceAccess: { unrestricted: true },
-      });
-      const recovered = await store.create({
-        title: "Recoverable queued worker",
-        status: "ready",
-        agentId: nextOwner,
-        workspaceAccess: { unrestricted: true },
-      });
-      const run = vi
-        .fn()
-        .mockRejectedValueOnce(new Error("model unavailable"))
-        .mockResolvedValueOnce({ runId: "run-recovered" });
+  it("starts recoverable work after a higher-priority worker with the same owner fails", async () => {
+    const nextOwner = "worker";
+    const store = createWorkboardSqliteTestStore();
+    const failed = await store.create({
+      title: "Unavailable urgent worker",
+      status: "ready",
+      priority: "urgent",
+      agentId: "worker",
+      workspaceAccess: { unrestricted: true },
+    });
+    const recovered = await store.create({
+      title: "Recoverable queued worker",
+      status: "ready",
+      agentId: nextOwner,
+      workspaceAccess: { unrestricted: true },
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("model unavailable"))
+      .mockResolvedValueOnce({ runId: "run-recovered" });
 
-      const result = await dispatchAndStartWorkboardCards({
-        store,
-        subagent: { run },
-        options: { now: 10, maxStarts: 1 },
-      });
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { now: 10, maxStarts: 1 },
+    });
 
-      expect(run).toHaveBeenCalledTimes(2);
-      expect(result.started).toEqual([
-        expect.objectContaining({ cardId: recovered.id, runId: "run-recovered" }),
-      ]);
-      expect(result.startFailures).toEqual([
-        expect.objectContaining({ cardId: failed.id, error: "model unavailable" }),
-      ]);
-      await expect(store.get(failed.id)).resolves.toMatchObject({ status: "blocked" });
-      await expect(store.get(recovered.id)).resolves.toMatchObject({ status: "running" });
-    },
-  );
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.started).toEqual([
+      expect.objectContaining({ cardId: recovered.id, runId: "run-recovered" }),
+    ]);
+    expect(result.startFailures).toEqual([
+      expect.objectContaining({ cardId: failed.id, error: "model unavailable" }),
+    ]);
+    await expect(store.get(failed.id)).resolves.toMatchObject({ status: "blocked" });
+    await expect(store.get(recovered.id)).resolves.toMatchObject({ status: "running" });
+  });
 
   it("does not let review cards consume an agent running slot", async () => {
     const store = createWorkboardSqliteTestStore();
@@ -1017,33 +1013,6 @@ describe("dispatchAndStartWorkboardCards", () => {
       status: "ready",
       metadata: { automation: { boardId: "product" } },
     });
-  });
-
-  it("keeps claimed review cards in the owner running slot", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const review = await store.create({
-      title: "Claimed operator review",
-      status: "review",
-      priority: "normal",
-      agentId: "codex-main",
-    });
-    await store.claim(review.id, { ownerId: "codex-main", token: "review-token" });
-    await store.create({
-      title: "Next ready card",
-      status: "ready",
-      priority: "high",
-      agentId: "codex-main",
-    });
-    const run = vi.fn().mockResolvedValue({ runId: "run-next" });
-
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      options: { now: 10, maxStarts: 3 },
-    });
-
-    expect(result.started).toEqual([]);
-    expect(run).not.toHaveBeenCalled();
   });
 
   it("blocks a card when worker start fails after claim", async () => {

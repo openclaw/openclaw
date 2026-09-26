@@ -1,7 +1,3 @@
-/**
- * `openclaw browser extension` CLI: register the Store and development extension
- * native bootstrap host, and retain advanced manual pairing.
- */
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Command } from "commander";
@@ -40,7 +36,6 @@ import {
 } from "../browser/extension-setup.js";
 import { runBrowserCliCommand, type BrowserParentOpts } from "./browser-cli-shared.js";
 
-/** Absolute path to the bundled unpacked Chrome extension directory. */
 function resolveChromeExtensionDir(pluginRoot?: string): string {
   if (pluginRoot) {
     return path.join(pluginRoot, "chrome-extension");
@@ -54,14 +49,7 @@ function resolveBrowserPluginRoot(pluginRoot?: string): string {
   return pluginRoot ?? path.resolve(resolveChromeExtensionDir(), "..");
 }
 
-async function buildPairingString(options: {
-  gatewayUrl?: string;
-  localGateway: boolean;
-}): Promise<{
-  pairing: string;
-  relayPort: number;
-  remote: boolean;
-}> {
+async function buildPairingString(options: { gatewayUrl?: string; localGateway: boolean }) {
   const cfg = getRuntimeConfig();
   if (options.localGateway && options.gatewayUrl !== undefined) {
     throw new Error("--local-gateway cannot be combined with --gateway-url");
@@ -81,28 +69,8 @@ async function buildPairingString(options: {
   };
 }
 
-type BrowserRelayCdpEndpoint = {
-  browserUrl: string;
-  wsEndpoint: string;
-  auth: {
-    label: typeof BROWSER_RELAY_AUTH_LABEL;
-    version: typeof BROWSER_RELAY_AUTH_VERSION;
-    keyId: string;
-    challengeUrl: string;
-    completeUrl: string;
-    role: "cdp";
-    transport: "connection";
-    method: "SEQUENCE";
-    resource: "/json/version -> /cdp";
-    flow: "cdp";
-  };
-  headers?: { Authorization: string };
-};
-
 /** Resolve safe v2 metadata, with an explicit gated legacy credential escape hatch. */
-async function buildCdpEndpoint(options: {
-  legacyBearer: boolean;
-}): Promise<BrowserRelayCdpEndpoint> {
+async function buildCdpEndpoint(options: { legacyBearer: boolean }) {
   const cfg = getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const token = await ensureExtensionRelayToken();
@@ -126,21 +94,17 @@ async function buildCdpEndpoint(options: {
       flow: "cdp" as const,
     },
   };
-  if (!options.legacyBearer) {
-    return metadata;
-  }
-  if (!resolved.extensionRelay.allowLegacyAuth) {
+  if (options.legacyBearer && !resolved.extensionRelay.allowLegacyAuth) {
     throw new Error(
       "Legacy browser relay auth is disabled; remove --legacy-bearer and use Browser Relay Authentication v2.",
     );
   }
   return {
     ...metadata,
-    headers: { Authorization: `Bearer ${token}` },
+    ...(options.legacyBearer ? { headers: { Authorization: `Bearer ${token}` } } : {}),
   };
 }
 
-/** Register `openclaw browser extension` lifecycle and compatibility commands. */
 export function registerBrowserExtensionCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -397,18 +361,15 @@ export function registerBrowserExtensionCommands(
         });
         if (json) {
           defaultRuntime.writeJson(result);
-          if (result.refused.length) {
-            defaultRuntime.exit(1);
+        } else {
+          defaultRuntime.log(
+            result.manualRequired
+              ? theme.warn("Windows native-host removal is manual; no registry key was changed.")
+              : info(`Removed ${result.removed.length} owned native-host artifact(s).`),
+          );
+          for (const refused of result.refused) {
+            defaultRuntime.error(theme.warn(`Refused registration removal: ${refused}`));
           }
-          return;
-        }
-        defaultRuntime.log(
-          result.manualRequired
-            ? theme.warn("Windows native-host removal is manual; no registry key was changed.")
-            : info(`Removed ${result.removed.length} owned native-host artifact(s).`),
-        );
-        for (const refused of result.refused) {
-          defaultRuntime.error(theme.warn(`Refused registration removal: ${refused}`));
         }
         if (result.refused.length) {
           defaultRuntime.exit(1);

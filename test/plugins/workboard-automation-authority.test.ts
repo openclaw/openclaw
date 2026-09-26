@@ -34,6 +34,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../src/plugins/runtime/gateway-request-scope.js";
 import { startPluginServices } from "../../src/plugins/services.js";
+import { createTestGatewayScheduler } from "../../src/test-utils/gateway-scheduler-clock.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "workboard-nudge-" });
 
@@ -54,6 +55,8 @@ describe("Workboard terminal hook automation ownership", () => {
       expect(getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext?.()).toBe(gatewayContext);
     });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: false,
       defaultAgentId: "main",

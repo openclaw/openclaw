@@ -168,10 +168,6 @@ export async function setupChannels(
   let preparedWorkspaceDir = options?.workspaceDir;
   const resolveWorkspaceDir = () =>
     (preparedWorkspaceDir ??= resolveChannelSetupWorkspaceDir(next));
-  const rememberScopedPlugin = (plugin: ChannelSetupPlugin) => {
-    const channel = plugin.id;
-    scopedPluginsById.set(channel, plugin);
-  };
   const activePluginsById = new Map<ChannelChoice, ChannelSetupPlugin>();
   const rememberActivePlugin = (plugin: ChannelSetupPlugin) => {
     activePluginsById.set(plugin.id, plugin);
@@ -222,17 +218,12 @@ export async function setupChannels(
     });
     const plugin =
       snapshot.channelSetups.find((entry) => entry.plugin.id === channel)?.plugin ??
-      snapshot.channels.find((entry) => entry.plugin.id === channel)?.plugin;
+      snapshot.channels.find((entry) => entry.plugin.id === channel)?.plugin ??
+      getBundledChannelSetupPlugin(channel);
     if (plugin) {
-      rememberScopedPlugin(plugin);
-      return plugin;
+      scopedPluginsById.set(plugin.id, plugin);
     }
-    const bundledPlugin = getBundledChannelSetupPlugin(channel);
-    if (bundledPlugin) {
-      rememberScopedPlugin(bundledPlugin);
-      return bundledPlugin;
-    }
-    return undefined;
+    return plugin;
   };
   const setupCache = getPluginCache();
   const enableChannelPluginForSetup = async (channel: ChannelChoice) =>
@@ -251,13 +242,8 @@ export async function setupChannels(
       }
       return result;
     });
-  const getVisibleSetupFlowAdapter = (channel: ChannelChoice) => {
-    const scopedPlugin = scopedPluginsById.get(channel);
-    if (scopedPlugin) {
-      return resolveChannelSetupWizardAdapterForPlugin(scopedPlugin);
-    }
-    return resolveChannelSetupWizardAdapterForPlugin(getVisibleChannelPlugin(channel));
-  };
+  const getVisibleSetupFlowAdapter = (channel: ChannelChoice) =>
+    resolveChannelSetupWizardAdapterForPlugin(getVisibleChannelPlugin(channel));
   const preloadConfiguredExternalPlugins = async () => {
     // Keep setup memory bounded by snapshot-loading only configured external plugins.
     listVisibleInstalledPlugins();
@@ -350,18 +336,9 @@ export async function setupChannels(
       deferStatusUntilSelection,
     });
 
-  const getChannelEntries = () => {
-    const resolved = resolveVisibleChannelEntries();
-    return {
-      entries: resolved.entries,
-      catalogById: resolved.installableCatalogById,
-      installedCatalogById: resolved.installedCatalogById,
-    };
-  };
-
   // Deferred setup has no runtime status yet; only external catalog entries need download hints.
   const buildStatusByChannelForSelection = (
-    catalogById: ReturnType<typeof getChannelEntries>["catalogById"],
+    catalogById: ReturnType<typeof resolveVisibleChannelEntries>["installableCatalogById"],
   ): Map<ChannelChoice, ChannelSetupStatus> => {
     const decorated = new Map(statusByChannel);
     if (catalogById.size === 0) {
@@ -388,7 +365,7 @@ export async function setupChannels(
 
   const resolveSelectionContributions = () =>
     withCommandPluginMetadata({ config: next, workspaceDir: resolveWorkspaceDir() }, async () => {
-      const { entries, catalogById } = getChannelEntries();
+      const { entries, installableCatalogById: catalogById } = resolveVisibleChannelEntries();
       const disabledHints = new Map<ChannelChoice, string | undefined>();
       for (const entry of entries) {
         if (shouldShowChannelInSetup(entry.meta)) {
@@ -442,20 +419,7 @@ export async function setupChannels(
       return false;
     }
     const plugin = getVisibleChannelPlugin(channel);
-    const adapter = getVisibleSetupFlowAdapter(channel);
     if (!plugin) {
-      if (adapter) {
-        await prompter.note(
-          t("wizard.channels.pluginMissingRecoverable", {
-            channel,
-            listCommand: formatCliCommand("openclaw plugins list"),
-            enableCommand: formatCliCommand("openclaw plugins enable " + channel),
-          }),
-          t("wizard.channels.setupTitle"),
-        );
-        await refreshStatus(channel);
-        return true;
-      }
       await prompter.note(
         t("wizard.channels.pluginNotAvailable", { channel }),
         t("wizard.channels.setupTitle"),
@@ -791,7 +755,8 @@ export async function setupChannels(
         return "done";
       }
     }
-    const { catalogById, installedCatalogById } = getChannelEntries();
+    const { installableCatalogById: catalogById, installedCatalogById } =
+      resolveVisibleChannelEntries();
     const catalogEntry = catalogById.get(channel);
     const installedCatalogEntry = installedCatalogById.get(channel);
     if (catalogEntry) {

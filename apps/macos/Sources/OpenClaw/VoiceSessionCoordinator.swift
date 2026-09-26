@@ -11,12 +11,8 @@ final class VoiceSessionCoordinator {
 
     struct Session {
         let token: UUID
-        let source: Source
         var text: String
-        var attributed: NSAttributedString?
-        var isFinal: Bool
         var sendChime: VoiceWakeChime
-        var autoSendDelay: TimeInterval?
         var voiceWakeTrigger: String?
     }
 
@@ -37,17 +33,13 @@ final class VoiceSessionCoordinator {
         let attributedText = attributed ?? VoiceWakeOverlayController.shared.makeAttributed(from: text)
         let session = Session(
             token: token,
-            source: source,
             text: text,
-            attributed: attributedText,
-            isFinal: false,
             sendChime: .none,
-            autoSendDelay: nil,
             voiceWakeTrigger: voiceWakeTrigger)
         self.session = session
         VoiceWakeOverlayController.shared.startSession(
             token: token,
-            source: VoiceWakeOverlayController.Source(rawValue: source.rawValue) ?? .wakeWord,
+            source: source,
             transcript: text,
             attributed: attributedText,
             forwardEnabled: forwardEnabled,
@@ -58,8 +50,12 @@ final class VoiceSessionCoordinator {
     func updatePartial(token: UUID, text: String, attributed: NSAttributedString? = nil) {
         guard let session, session.token == token else { return }
         self.session?.text = text
-        self.session?.attributed = attributed
         VoiceWakeOverlayController.shared.updatePartial(token: token, transcript: text, attributed: attributed)
+    }
+
+    func updateEditedText(token: UUID, text: String) {
+        guard self.session?.token == token else { return }
+        self.session?.text = text
     }
 
     func finalize(
@@ -74,9 +70,7 @@ final class VoiceSessionCoordinator {
             .info(
                 "coordinator finalize token=\(token.uuidString) len=\(text.count) autoSendAfter=\(autoSendAfter ?? -1)")
         self.session?.text = text
-        self.session?.isFinal = true
         self.session?.sendChime = sendChime
-        self.session?.autoSendDelay = autoSendAfter
         if let voiceWakeTrigger {
             self.session?.voiceWakeTrigger = voiceWakeTrigger
         }
@@ -97,7 +91,7 @@ final class VoiceSessionCoordinator {
         guard !text.isEmpty else {
             self.logger.info("coordinator sendNow \(reason) empty -> dismiss")
             VoiceWakeOverlayController.shared.dismiss(token: token, reason: .empty, outcome: .empty)
-            self.clearSession()
+            self.session = nil
             return
         }
         VoiceWakeOverlayController.shared.beginSendUI(token: token, sendChime: sendChime)
@@ -115,7 +109,7 @@ final class VoiceSessionCoordinator {
     {
         guard let session, session.token == token else { return }
         VoiceWakeOverlayController.shared.dismiss(token: token, reason: reason, outcome: outcome)
-        self.clearSession()
+        self.session = nil
     }
 
     func updateLevel(token: UUID, _ level: Double) {
@@ -127,17 +121,11 @@ final class VoiceSessionCoordinator {
         (self.session?.token, self.session?.text ?? "", VoiceWakeOverlayController.shared.isVisible)
     }
 
-    // MARK: - Private
-
-    private func clearSession() {
-        self.session = nil
-    }
-
     /// Overlay dismiss completion callback (manual X, empty, auto-dismiss after send).
     /// Ensures the wake-word recognizer is resumed if Voice Wake is enabled.
     func overlayDidDismiss(token: UUID) {
         if self.session?.token == token {
-            self.clearSession()
+            self.session = nil
         }
         Task { await VoiceWakeRuntime.shared.refresh(state: AppStateStore.shared) }
     }

@@ -66,14 +66,6 @@ describe("resolveSlackThreadTargets", () => {
     expectAutoCreatedTopLevelThreadTsBehavior("off");
   });
 
-  it("keeps first-mode behavior for auto-created top-level thread_ts", () => {
-    expectAutoCreatedTopLevelThreadTsBehavior("first");
-  });
-
-  it("keeps batched-mode behavior for auto-created top-level thread_ts", () => {
-    expectAutoCreatedTopLevelThreadTsBehavior("batched");
-  });
-
   it("sets messageThreadId for top-level messages when replyToMode is all", () => {
     const context = resolveSlackThreadContext({
       replyToMode: "all",

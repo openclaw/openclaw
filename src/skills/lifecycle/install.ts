@@ -62,13 +62,10 @@ function buildNodeInstallCommand(prefs: SkillsInstallPreferences): string[] {
 
 function resolveDefaultNodeInstallStateDir(): string {
   const cwd = process.cwd();
-  const getuid = process.getuid?.bind(process);
-  const homedir = os.homedir;
-  const platform = process.platform;
-  if (platform !== "win32" && getuid?.() === 0) {
+  if (process.platform !== "win32" && process.getuid?.() === 0) {
     return path.join(path.parse(cwd).root, "var", "lib", "openclaw");
   }
-  return path.join(homedir(), ".openclaw");
+  return path.join(os.homedir(), ".openclaw");
 }
 
 async function buildNodeInstallEnv(prefs: SkillsInstallPreferences): Promise<NodeJS.ProcessEnv> {
@@ -178,22 +175,14 @@ async function resolveBrewBinDir(timeoutMs: number, brewExe?: string): Promise<s
   }
 
   for (const candidate of ["/opt/homebrew/bin", "/usr/local/bin"]) {
-    try {
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    } catch {
-      // ignore
+    if (fs.existsSync(candidate)) {
+      return candidate;
     }
   }
   return undefined;
 }
 
-type CommandResult = {
-  code: number | null;
-  stdout: string;
-  stderr: string;
-};
+type CommandResult = Pick<SkillInstallResult, "code" | "stdout" | "stderr">;
 
 function createInstallFailure(params: {
   message: string;
@@ -227,12 +216,7 @@ async function runCommandSafely(
   optionsOrTimeout: number | CommandOptions,
 ): Promise<CommandResult> {
   try {
-    const result = await runCommandWithTimeout(argv, optionsOrTimeout);
-    return {
-      code: result.code,
-      stdout: result.stdout,
-      stderr: result.stderr,
-    };
+    return await runCommandWithTimeout(argv, optionsOrTimeout);
   } catch (err) {
     return {
       code: null,
@@ -278,15 +262,21 @@ async function ensureUvInstalled(params: {
     });
   }
 
-  const brewResult = await runCommandSafely([params.brewExe, "install", "uv"], {
-    timeoutMs: params.timeoutMs,
-  });
+  return installPrerequisiteViaBrew("uv", params.brewExe, params.timeoutMs);
+}
+
+async function installPrerequisiteViaBrew(
+  name: "uv" | "go",
+  brewExe: string,
+  timeoutMs: number,
+): Promise<SkillInstallResult | undefined> {
+  const brewResult = await runCommandSafely([brewExe, "install", name], { timeoutMs });
   if (brewResult.code === 0) {
     return undefined;
   }
 
   return createInstallFailure({
-    message: "Failed to install uv (brew)",
+    message: `Failed to install ${name} (brew)`,
     ...brewResult,
   });
 }
@@ -485,16 +475,7 @@ async function ensureGoInstalled(params: {
   }
 
   if (params.brewExe) {
-    const brewResult = await runCommandSafely([params.brewExe, "install", "go"], {
-      timeoutMs: params.timeoutMs,
-    });
-    if (brewResult.code === 0) {
-      return undefined;
-    }
-    return createInstallFailure({
-      message: "Failed to install go (brew)",
-      ...brewResult,
-    });
+    return installPrerequisiteViaBrew("go", params.brewExe, params.timeoutMs);
   }
 
   if (hasBinary("apt-get")) {
@@ -662,16 +643,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     }),
   );
   if (scanResult?.blocked) {
-    return withWarnings(
-      {
-        ok: false,
-        message: scanResult.blocked.reason,
-        stdout: "",
-        stderr: "",
-        code: null,
-      },
-      warnings,
-    );
+    return withWarnings(createInstallFailure({ message: scanResult.blocked.reason }), warnings);
   }
   // Warn when install is triggered from a non-bundled source.
   // Workspace/project/personal agent skills can contain attacker-controlled metadata.
@@ -683,13 +655,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   }
   if (!spec) {
     return withWarnings(
-      {
-        ok: false,
-        message: `Installer not found: ${params.installId}`,
-        stdout: "",
-        stderr: "",
-        code: null,
-      },
+      createInstallFailure({ message: `Installer not found: ${params.installId}` }),
       warnings,
     );
   }
@@ -717,7 +683,7 @@ export async function installSkillDependencies(
 
   const command = buildInstallCommand(spec, prefs);
   if (command.error) {
-    return { ok: false, message: command.error, stdout: "", stderr: "", code: null };
+    return createInstallFailure({ message: command.error });
   }
 
   const brewExe = hasBinary("brew") ? "brew" : resolveBrewExecutable();

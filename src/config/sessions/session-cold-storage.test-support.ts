@@ -5,7 +5,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { replaceSessionEntry } from "./session-accessor.js";
+import { replaceSessionEntrySync } from "./session-accessor.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
@@ -25,7 +25,8 @@ export async function createSessionColdStorageFixture(
     sessionKey,
     sessionId: historicalId,
   };
-  await replaceSessionEntry(scope, { sessionId: historicalId, updatedAt: 1 });
+  // Callers own explicit cold-storage maintenance; seeding must not arm automatic age cleanup.
+  replaceSessionEntrySync(scope, { sessionId: historicalId, updatedAt: 1 });
   await replaceTranscriptEvents(scope, [
     { type: "session", id: historicalId },
     {
@@ -44,12 +45,12 @@ export async function createSessionColdStorageFixture(
     },
   ]);
   await waitForSessionTranscriptIndexReconcile(options);
-  await replaceSessionEntry(scope, { sessionId: currentId, updatedAt: 1 });
+  replaceSessionEntrySync(scope, { sessionId: currentId, updatedAt: 1 });
   await replaceTranscriptEvents({ ...scope, sessionId: currentId }, [
     { type: "session", id: currentId, content: "Keep current history hot" },
   ]);
   await waitForSessionTranscriptIndexReconcile(options);
-  await replaceSessionEntry(scope, { sessionId: currentId, updatedAt: 1 });
+  replaceSessionEntrySync(scope, { sessionId: currentId, updatedAt: 1 });
   runOpenClawAgentWriteTransaction(({ db: database }) => {
     const db = getNodeSqliteKysely<DB>(database);
     executeSqliteQuerySync(

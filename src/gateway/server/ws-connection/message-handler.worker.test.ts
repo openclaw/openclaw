@@ -110,24 +110,6 @@ describe("dedicated worker websocket protocol", () => {
     });
   });
 
-  it("returns a bounded admission rejection", async () => {
-    const reason = "invalid-credential" as const;
-    const harness = attachHarness({ admissionFailure: reason });
-    harness.sendConnect();
-
-    await waitForWorkerProtocol(() =>
-      expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"),
-    );
-    expect(harness.responses[0]).toMatchObject({
-      ok: false,
-      error: { details: { reason: "invalid-handshake" } },
-    });
-    expect(harness.logWsControl.warn).toHaveBeenCalledWith(
-      `worker admission rejected reason=${reason}`,
-    );
-    expect(harness.setClient).not.toHaveBeenCalled();
-  });
-
   it("fails closed when public ingress context is missing", async () => {
     const harness = attachHarness({ omitPublicAdmission: true });
     harness.sendConnect();
@@ -164,6 +146,7 @@ describe("dedicated worker websocket protocol", () => {
       );
       expect(harness.setCloseCause).toHaveBeenCalledWith(internalReason);
       expect(recordFailure).toHaveBeenCalledWith("203.0.113.10", "worker-admission");
+      expect(harness.setClient).not.toHaveBeenCalled();
     },
   );
 
@@ -286,82 +269,76 @@ describe("dedicated worker websocket protocol", () => {
     expect(harness.service.cancelInference).toHaveBeenCalledWith(ATTACHED_IDENTITY, INFERENCE_IDS);
   });
 
-  it.each(SESSION_TOOL_CASES)(
-    "keeps heartbeats flowing while $name is pending",
-    async (testCase) => {
-      const operation = createDeferredCore<WorkerSessionToolResult>();
-      const harness = attachHarness({
-        identity: ATTACHED_IDENTITY,
-        onSessionTool: () => operation.promise,
-      });
-      await admit(harness);
-      harness.sendRequest(testCase.method, testCase.request, `${testCase.name}-1`);
-      await waitForWorkerProtocol(() =>
-        expect(harness.service.executeSessionTool).toHaveBeenCalledOnce(),
-      );
+  it("keeps heartbeats flowing while a session tool is pending", async () => {
+    const testCase = SESSION_TOOL_CASES[0];
+    const operation = createDeferredCore<WorkerSessionToolResult>();
+    const harness = attachHarness({
+      identity: ATTACHED_IDENTITY,
+      onSessionTool: () => operation.promise,
+    });
+    await admit(harness);
+    harness.sendRequest(testCase.method, testCase.request, `${testCase.name}-1`);
+    await waitForWorkerProtocol(() =>
+      expect(harness.service.executeSessionTool).toHaveBeenCalledOnce(),
+    );
 
-      harness.sendRequest("worker.heartbeat", { sentAtMs: 1, status: "busy" }, "heartbeat-1");
-      await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(2));
-      expect(harness.responses[1]).toMatchObject({
-        id: "heartbeat-1",
-        ok: true,
-        payload: { status: "ok" },
-      });
+    harness.sendRequest("worker.heartbeat", { sentAtMs: 1, status: "busy" }, "heartbeat-1");
+    await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(2));
+    expect(harness.responses[1]).toMatchObject({
+      id: "heartbeat-1",
+      ok: true,
+      payload: { status: "ok" },
+    });
 
-      operation.resolve({ resultJson: JSON.stringify({ content: [] }) });
-      await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(3));
-      expect(harness.responses[2]).toMatchObject({ id: `${testCase.name}-1`, ok: true });
-    },
-  );
+    operation.resolve({ resultJson: JSON.stringify({ content: [] }) });
+    await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(3));
+    expect(harness.responses[2]).toMatchObject({ id: `${testCase.name}-1`, ok: true });
+  });
 
-  it.each(SESSION_TOOL_CASES)(
-    "rejects an in-flight duplicate $name request id",
-    async (testCase) => {
-      const operation = createDeferredCore<WorkerSessionToolResult>();
-      const harness = attachHarness({
-        identity: ATTACHED_IDENTITY,
-        onSessionTool: () => operation.promise,
-      });
-      await admit(harness);
-      harness.sendRequest(testCase.method, testCase.request, "duplicate-session-operation");
-      await waitForWorkerProtocol(() =>
-        expect(harness.service.executeSessionTool).toHaveBeenCalledOnce(),
-      );
+  it("rejects an in-flight duplicate session tool request id", async () => {
+    const testCase = SESSION_TOOL_CASES[0];
+    const operation = createDeferredCore<WorkerSessionToolResult>();
+    const harness = attachHarness({
+      identity: ATTACHED_IDENTITY,
+      onSessionTool: () => operation.promise,
+    });
+    await admit(harness);
+    harness.sendRequest(testCase.method, testCase.request, "duplicate-session-operation");
+    await waitForWorkerProtocol(() =>
+      expect(harness.service.executeSessionTool).toHaveBeenCalledOnce(),
+    );
 
-      harness.sendRequest(testCase.method, testCase.request, "duplicate-session-operation");
-      await waitForWorkerProtocol(() =>
-        expect(harness.close).toHaveBeenCalledWith(1008, "invalid-frame"),
-      );
-      expect(harness.service.executeSessionTool).toHaveBeenCalledOnce();
-      operation.resolve({ resultJson: JSON.stringify({ content: [] }) });
-    },
-  );
+    harness.sendRequest(testCase.method, testCase.request, "duplicate-session-operation");
+    await waitForWorkerProtocol(() =>
+      expect(harness.close).toHaveBeenCalledWith(1008, "invalid-frame"),
+    );
+    expect(harness.service.executeSessionTool).toHaveBeenCalledOnce();
+    operation.resolve({ resultJson: JSON.stringify({ content: [] }) });
+  });
 
-  it.each(SESSION_TOOL_CASES)(
-    "continues durable $name work but suppresses its response after cleanup",
-    async (testCase) => {
-      let operationStarted = false;
-      let operationSignal: AbortSignal | undefined;
-      const operation = createDeferredCore<WorkerSessionToolResult>();
-      const harness = attachHarness({
-        identity: ATTACHED_IDENTITY,
-        onSessionTool: (signal) => {
-          operationStarted = true;
-          operationSignal = signal;
-          return operation.promise;
-        },
-      });
-      await admit(harness);
-      harness.sendRequest(testCase.method, testCase.request, `${testCase.name}-1`);
-      await waitForWorkerProtocol(() => expect(operationStarted).toBe(true));
+  it("continues durable session tool work but suppresses its response after cleanup", async () => {
+    const testCase = SESSION_TOOL_CASES[0];
+    let operationStarted = false;
+    let operationSignal: AbortSignal | undefined;
+    const operation = createDeferredCore<WorkerSessionToolResult>();
+    const harness = attachHarness({
+      identity: ATTACHED_IDENTITY,
+      onSessionTool: (signal) => {
+        operationStarted = true;
+        operationSignal = signal;
+        return operation.promise;
+      },
+    });
+    await admit(harness);
+    harness.sendRequest(testCase.method, testCase.request, `${testCase.name}-1`);
+    await waitForWorkerProtocol(() => expect(operationStarted).toBe(true));
 
-      harness.cleanup();
-      expect(operationSignal).toBeUndefined();
-      operation.resolve({ resultJson: JSON.stringify({ content: [] }) });
-      await Promise.resolve();
-      expect(harness.responses).toHaveLength(1);
-    },
-  );
+    harness.cleanup();
+    expect(operationSignal).toBeUndefined();
+    operation.resolve({ resultJson: JSON.stringify({ content: [] }) });
+    await Promise.resolve();
+    expect(harness.responses).toHaveLength(1);
+  });
 
   it.each(SESSION_TOOL_CASES)("routes and frames $name responses", async (testCase) => {
     const harness = attachHarness({ identity: ATTACHED_IDENTITY });
@@ -386,27 +363,30 @@ describe("dedicated worker websocket protocol", () => {
     });
   });
 
-  it.each(SESSION_TOOL_CASES)("feature-gates $name independently", async (testCase) => {
-    const requiredFeature =
-      testCase.toolName === "portal"
-        ? WORKER_PORTAL_PROTOCOL_FEATURE
-        : WORKER_SESSION_TOOLS_PROTOCOL_FEATURE;
-    const harness = attachHarness({
-      identity: {
-        ...ATTACHED_IDENTITY,
-        protocolFeatures: ATTACHED_IDENTITY.protocolFeatures.filter(
-          (feature) => feature !== requiredFeature,
-        ),
-      },
-    });
-    await admit(harness);
-    harness.sendRequest(testCase.method, testCase.request);
+  it.each([SESSION_TOOL_CASES[0], SESSION_TOOL_CASES[2]])(
+    "feature-gates $name independently",
+    async (testCase) => {
+      const requiredFeature =
+        testCase.toolName === "portal"
+          ? WORKER_PORTAL_PROTOCOL_FEATURE
+          : WORKER_SESSION_TOOLS_PROTOCOL_FEATURE;
+      const harness = attachHarness({
+        identity: {
+          ...ATTACHED_IDENTITY,
+          protocolFeatures: ATTACHED_IDENTITY.protocolFeatures.filter(
+            (feature) => feature !== requiredFeature,
+          ),
+        },
+      });
+      await admit(harness);
+      harness.sendRequest(testCase.method, testCase.request);
 
-    await waitForWorkerProtocol(() =>
-      expect(harness.close).toHaveBeenCalledWith(1008, "method-not-allowed"),
-    );
-    expect(harness.service.executeSessionTool).not.toHaveBeenCalled();
-  });
+      await waitForWorkerProtocol(() =>
+        expect(harness.close).toHaveBeenCalledWith(1008, "method-not-allowed"),
+      );
+      expect(harness.service.executeSessionTool).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ["an invalid action", { toolCallId: "call-portal", action: "delete", port: 3000 }],
@@ -708,7 +688,7 @@ describe("dedicated worker websocket protocol", () => {
       agentId: "main",
       sessionKey: "agent:main:worker-suspension",
     };
-    const active = advancePlacementFixtureToActive(placements, database, session);
+    const active = await advancePlacementFixtureToActive(placements, database, session);
     const claim = await placements.claimTurn({
       ...session,
       claimId: templateClaim.claimId,

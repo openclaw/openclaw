@@ -41,6 +41,11 @@ describe("extractKeywords", () => {
     ]);
   });
 
+  it("keeps ASCII terms embedded in unspaced Chinese text", () => {
+    const keywords = extractKeywords("用react部署k8s集群");
+    expect(keywords).toStrictEqual(["react", "部", "署", "部署", "k8s", "集", "群", "集群"]);
+  });
+
   it("returns specific technical terms", () => {
     const keywords = extractKeywords("what was the solution for the CFR bug");
     expect(keywords).toStrictEqual(["solution", "cfr", "bug"]);
@@ -162,6 +167,11 @@ describe("extractKeywords", () => {
         "方案",
       ]);
       expect(trigramKeywords).toStrictEqual(["之前讨论的那个方案"]);
+    });
+
+    it("splits Han runs around embedded ASCII terms in trigram mode", () => {
+      const keywords = extractKeywords("用react部署方案", trigramOpts);
+      expect(keywords).toStrictEqual(["react", "部署方案"]);
     });
 
     it("skips Japanese kanji bigrams in trigram mode", () => {

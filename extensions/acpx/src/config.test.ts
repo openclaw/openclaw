@@ -19,33 +19,33 @@ function expectedMcpServerArgs(params: { sourceEntry: string; distEntry: string 
 }
 
 describe("embedded acpx plugin config", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
 
-  it("resolves workspace stateDir and cwd by default", () => {
+  it("resolves state independently of the session working directory", () => {
     const workspaceDir = path.resolve("/tmp/openclaw-acpx");
+    const stateDir = path.resolve("/tmp/openclaw-state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const resolved = resolveAcpxPluginConfig({
       rawConfig: undefined,
       workspaceDir,
     });
 
     expect(resolved.cwd).toBe(workspaceDir);
-    expect(resolved.stateDir).toBe(path.join(workspaceDir, "state"));
+    expect(resolved.stateDir).toBe(path.join(stateDir, "acpx"));
     expect(resolved.permissionMode).toBe("approve-reads");
     expect(resolved.nonInteractivePermissions).toBe("fail");
     expect(resolved.timeoutSeconds).toBe(120);
     expect(resolved.probeAgent).toBeUndefined();
     expect(resolved.agents).toStrictEqual({});
-  });
-
-  it("keeps explicit timeoutSeconds config", () => {
-    const resolved = resolveAcpxPluginConfig({
-      rawConfig: {
-        timeoutSeconds: 300,
-      },
-      workspaceDir: "/tmp/openclaw-acpx",
-    });
-
-    expect(resolved.timeoutSeconds).toBe(300);
+    expect(
+      resolveAcpxPluginConfig({ rawConfig: { stateDir: workspaceDir }, stateDir }).stateDir,
+    ).toBe(workspaceDir);
+    expect(resolveAcpxPluginConfig({ rawConfig: {}, stateDir: workspaceDir }).stateDir).toBe(
+      path.join(workspaceDir, "acpx"),
+    );
   });
 
   it("accepts agent command overrides", () => {
@@ -62,29 +62,6 @@ describe("embedded acpx plugin config", () => {
     expect(resolved.agents).toEqual({
       claude: ["claude", "--acp"],
       codex: ["codex", "custom-acp"],
-    });
-  });
-
-  it("combines agent command with args array", () => {
-    const resolved = resolveAcpxPluginConfig({
-      rawConfig: {
-        agents: {
-          claude: {
-            command: "node",
-            args: ["/path/to/adapter.mjs", "--verbose"],
-          },
-          codex: {
-            command: "codex-acp",
-            args: ["--model", "gpt-5"],
-          },
-        },
-      },
-      workspaceDir: "/tmp/openclaw-acpx",
-    });
-
-    expect(resolved.agents).toEqual({
-      claude: ["node", "/path/to/adapter.mjs", "--verbose"],
-      codex: ["codex-acp", "--model", "gpt-5"],
     });
   });
 
@@ -138,21 +115,6 @@ describe("embedded acpx plugin config", () => {
 
     expect(resolved.agents).toEqual({
       custom: ["node", "/tmp/My Adapter.mjs", "--flag=value with spaces", "owner's-choice"],
-    });
-  });
-
-  it("handles agent command without args (backward compat)", () => {
-    const resolved = resolveAcpxPluginConfig({
-      rawConfig: {
-        agents: {
-          simple: { command: "simple-acp" },
-        },
-      },
-      workspaceDir: "/tmp/openclaw-acpx",
-    });
-
-    expect(resolved.agents).toEqual({
-      simple: ["simple-acp"],
     });
   });
 

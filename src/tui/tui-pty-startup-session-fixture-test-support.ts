@@ -51,6 +51,25 @@ export function createTuiStartupRelease(
 
 // Injects delayed session restore and history controls into the real-runTui PTY fixture.
 export const TUI_PTY_STARTUP_SESSION_FIXTURE = {
+  returnedState: `
+        const returnStateKey = process.env.OPENCLAW_TUI_PTY_RETURN_STATE_KEY;
+        if (returnStateKey) {
+          const database = new DatabaseSync(
+            join(process.env.OPENCLAW_STATE_DIR!, "state", "openclaw.sqlite"),
+            { readOnly: true },
+          );
+          try {
+            const row = database.prepare(
+              "SELECT value_json FROM config_machine_state WHERE state_key = ?",
+            ).get(returnStateKey);
+            record("returned", {
+              rememberedSessionKey: row ? JSON.parse(String(row.value_json)) : null,
+            });
+          } finally {
+            database.close();
+          }
+        }
+  `,
   variables: `
       const restoreDelayMs = Number(process.env.OPENCLAW_TUI_PTY_RESTORE_DELAY_MS ?? 0);
       const restoreFailures = Number(process.env.OPENCLAW_TUI_PTY_RESTORE_FAILURES ?? 0);
@@ -68,7 +87,7 @@ export const TUI_PTY_STARTUP_SESSION_FIXTURE = {
         thinkingLevels,
       });
       const fixtureSessions = () => enablePickerFixture ? [
-        sessionEntry("main"),
+        sessionEntry(process.env.OPENCLAW_TUI_PTY_MAIN_SESSION_KEY ?? "main"),
         ...Array.from({ length: Number(process.env.OPENCLAW_TUI_PTY_DECOY_COUNT ?? 0) }, (_, index) => ({
           ...sessionEntry(pickerSessionKey + "-decoy-" + index),
           label: pickerSessionKey + " label " + index,

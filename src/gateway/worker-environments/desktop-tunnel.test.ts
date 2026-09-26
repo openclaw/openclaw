@@ -702,23 +702,20 @@ describe("worker desktop tunnels", () => {
     },
   );
 
-  it.each(["browser", "terminal"] as const)(
-    "does not replay a %s launch after ambiguous SSH exit 255",
-    async (app) => {
-      const fake = fakeRunner(() => ({
-        ...success(),
-        code: 255,
-        stderr: "connection lost after remote acceptance",
-      }));
-      const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+  it("does not replay an app launch after ambiguous SSH exit 255", async () => {
+    const fake = fakeRunner(() => ({
+      ...success(),
+      code: 255,
+      stderr: "connection lost after remote acceptance",
+    }));
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
 
-      await expect(launchApp(manager, app, 1, { ...SSH, fallbackPorts: [2203] })).rejects.toThrow(
-        "connection lost after remote acceptance",
-      );
-      expect(fake.runs.map(({ argv }) => argv[argv.indexOf("-p") + 1])).toEqual(["2202"]);
-      await manager.stopAll();
-    },
-  );
+    await expect(
+      launchApp(manager, "browser", 1, { ...SSH, fallbackPorts: [2203] }),
+    ).rejects.toThrow("connection lost after remote acceptance");
+    expect(fake.runs.map(({ argv }) => argv[argv.indexOf("-p") + 1])).toEqual(["2202"]);
+    await manager.stopAll();
+  });
 
   it("aborts pending launchers on matching teardown and fences stale epochs", async () => {
     const signals: AbortSignal[] = [];

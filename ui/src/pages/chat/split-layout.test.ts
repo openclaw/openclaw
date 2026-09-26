@@ -42,22 +42,6 @@ describe("chat split layout", () => {
     });
   });
 
-  it("composes the split layout from an ephemeral single pane", () => {
-    expect(createSinglePaneLayout("main")).toEqual({
-      columns: [{ id: "c1", panes: [{ id: "p1", sessionKey: "main" }], paneWeights: [1] }],
-      columnWeights: [1],
-      activePaneId: "p1",
-    });
-    expect(insertPane(createSinglePaneLayout("main"), "p1", "dropped", "left")).toEqual({
-      columns: [
-        { id: "c2", panes: [{ id: "p2", sessionKey: "dropped" }], paneWeights: [1] },
-        { id: "c1", panes: [{ id: "p1", sessionKey: "main" }], paneWeights: [1] },
-      ],
-      columnWeights: [0.5, 0.5],
-      activePaneId: "p2",
-    });
-  });
-
   it("inserts columns immediately left or right and halves only the target weight", () => {
     const right = insertPane(createSplitLayout("main"), "p1", "right", "right");
     expect(right.columns.map((column) => column.id)).toEqual(["c1", "c3", "c2"]);

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService, type CronEvent } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 
@@ -20,6 +21,8 @@ describe("cron webhook optional output", () => {
       const sendCronWebhook = vi.fn(async () => {});
       const events: CronEvent[] = [];
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath: store.storePath,
         cronEnabled: true,
         log: logger,

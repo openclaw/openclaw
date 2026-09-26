@@ -49,6 +49,7 @@ import {
   createFreeBsdPkgOwnershipInspection,
   type FreeBsdPkgOwnershipInspection,
 } from "../../infra/update-freebsd-pkg-ownership.js";
+import type { UPDATE_PREFLIGHT_DETAILS } from "../../infra/update-preflight-details.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -76,13 +77,18 @@ export type ManagedServiceRootRedirect = {
 export class GatewayServiceUpdateOwnershipError extends Error {
   readonly failureFacts: UpdateFailureFact[];
 
-  constructor(message: string, cause: unknown, inspectionReason?: ServiceInspectionReason) {
+  constructor(
+    message: string,
+    cause: unknown,
+    inspectionReason?: ServiceInspectionReason,
+    code?: keyof typeof UPDATE_PREFLIGHT_DETAILS,
+  ) {
     super(inspectionReason ? formatServiceInspectionReason(inspectionReason) : message, { cause });
     this.name = "GatewayServiceUpdateOwnershipError";
     this.failureFacts = [
       createUpdateFailureFact({
         check: "managed-service",
-        code: inspectionReason ?? "service-ownership-unverified",
+        code: inspectionReason ?? code ?? "service-ownership-unverified",
         message: this.message,
       }),
     ];
@@ -103,6 +109,7 @@ export function assertGatewayServiceAdmissionUnchanged(
       serviceUpdateVerdict.kind === "unavailable"
         ? serviceUpdateVerdict.inspectionReason
         : undefined,
+      serviceUpdateVerdict.kind === "unavailable" ? undefined : "service-ownership-changed",
     );
   }
   if (
@@ -115,6 +122,8 @@ export function assertGatewayServiceAdmissionUnchanged(
     throw new GatewayServiceUpdateOwnershipError(
       "Gateway service definition changed after database admission; retry against its current configuration.",
       undefined,
+      undefined,
+      "service-definition-changed",
     );
   }
 }
@@ -137,7 +146,12 @@ export function assertGatewayServiceManagementAllowedForUpdate(
     assertGatewayServiceMutationAllowed("manage the gateway service during update", env);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new GatewayServiceUpdateOwnershipError(message, err);
+    throw new GatewayServiceUpdateOwnershipError(
+      message,
+      err,
+      undefined,
+      "service-mutation-refused",
+    );
   }
 }
 

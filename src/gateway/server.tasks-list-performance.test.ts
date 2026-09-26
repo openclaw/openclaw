@@ -7,12 +7,13 @@ import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import * as inboundDispatch from "../auto-reply/dispatch.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { applyTaskRegistryMaintenanceRetention } from "../tasks/task-registry-maintenance-retention.js";
 import * as taskRegistryRead from "../tasks/task-registry-read.js";
 import {
   createTaskRecord,
-  deleteTaskRecordById,
   listTaskRecords,
   markTaskTerminalById,
+  publishTaskRecordAfterAtomicStore,
 } from "../tasks/task-registry.js";
 import {
   configureTaskRegistryRuntime,
@@ -183,9 +184,9 @@ describe("tasks.list Gateway performance", () => {
       (task) => task.requesterSessionKey === OWNED_SESSION_KEY,
     );
     const initialOwnedPage = expectedTaskIds(ownedTasks, 10, 25);
-    const deletedTaskId = initialOwnedPage[0];
+    const changedTaskId = initialOwnedPage[0];
     const updatedTask = ownedTasks.find((task) => !initialOwnedPage.includes(task.taskId));
-    if (!deletedTaskId || !updatedTask) {
+    if (!changedTaskId || !updatedTask) {
       throw new Error("expected selected and unselected owned task fixtures");
     }
 
@@ -236,7 +237,13 @@ describe("tasks.list Gateway performance", () => {
               endedAt: TASK_COUNT + 1,
               lastEventAt: TASK_COUNT + 1,
             });
-            const deleted = deleteTaskRecordById(deletedTaskId);
+            const current = getTaskRegistryStore().loadSnapshot().tasks.get(changedTaskId);
+            if (!current) {
+              throw new Error("Expected the selected task before metadata publication");
+            }
+            const changed = { ...current, task: "Changed during scan" };
+            getTaskRegistryStore().upsertTaskWithDeliveryState({ task: changed });
+            publishTaskRecordAfterAtomicStore(changed);
             const created = createTaskRecord({
               runtime: "cli",
               requesterSessionKey: OWNED_SESSION_KEY,
@@ -249,7 +256,7 @@ describe("tasks.list Gateway performance", () => {
               deliveryStatus: "pending",
               lastEventAt: TASK_COUNT + 2,
             });
-            mutationsApplied = updated !== null && deleted && created !== null;
+            mutationsApplied = updated !== null && created !== null;
           });
         };
         const listPromise = sendRpc<TasksListResult>(admin, "tasks-list", "tasks.list", {
@@ -259,7 +266,7 @@ describe("tasks.list Gateway performance", () => {
 
         const listMaxSortedInput = Math.max(0, ...sortedInputLengths);
         const persistedTasks = getTaskRegistryStore().loadSnapshot().tasks;
-        expect(persistedTasks.has(deletedTaskId)).toBe(false);
+        expect(persistedTasks.get(changedTaskId)?.task).toBe("Changed during scan");
         expect(persistedTasks.get(updatedTask.taskId)).toMatchObject({
           endedAt: TASK_COUNT + 1,
           lastEventAt: TASK_COUNT + 1,
@@ -268,7 +275,7 @@ describe("tasks.list Gateway performance", () => {
           [...persistedTasks.values()].some((task) => task.runId === "run-created-during-scan"),
         ).toBe(true);
         const currentTasks = listTaskRecords();
-        expect(currentTasks).toHaveLength(TASK_COUNT);
+        expect(currentTasks).toHaveLength(TASK_COUNT + 1);
         const adminExpected = expectedTaskIds(currentTasks, 0, 7);
         expect(mutationsApplied).toBe(true);
         expect(list.ok, JSON.stringify(list.error)).toBe(true);
@@ -285,7 +292,18 @@ describe("tasks.list Gateway performance", () => {
           cursor: tamperedCursor.join("."),
           limit: 7,
         });
-        expect(deleteTaskRecordById(updatedTask.taskId)).toBe(true);
+        const completed = persistedTasks.get(updatedTask.taskId);
+        if (!completed || completed.cleanupAfter === undefined) {
+          throw new Error("Expected the completed task's retention deadline");
+        }
+        expect(
+          await applyTaskRegistryMaintenanceRetention(
+            completed,
+            completed.cleanupAfter + 1,
+            new Map(),
+            () => {},
+          ),
+        ).toBe("pruned");
         const revisionCursor = cursor.split(".");
         revisionCursor[2] = String(Number(revisionCursor[2]) + 1);
         await expectCursorRejected(admin, "tasks-revision-mismatch", {

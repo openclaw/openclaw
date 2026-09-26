@@ -7,6 +7,7 @@ import {
   collectChannelDoctorPreviewWarnings,
   collectChannelDoctorStaleConfigMutations,
   createChannelDoctorEmptyAllowlistPolicyHooks,
+  runChannelDoctorConfigSequences,
 } from "./channel-doctor.js";
 
 const mocks = vi.hoisted(() => ({
@@ -249,6 +250,27 @@ describe("channel doctor compatibility mutations", () => {
     expect(normalizeCompatibilityConfig).toHaveBeenCalledTimes(1);
     expectMatrixDoctorLookupCalls(cfg);
     expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalledWith("discord");
+  });
+
+  it("retains informational channel guidance separately from changes and warnings", async () => {
+    mockReadOnlyMatrixPlugin({
+      runConfigSequence: () => ({
+        changeNotes: ["Migrated explicit listener settings."],
+        infoNotes: ["The default listener remains available; set legacyWebhook:false to close it."],
+        warningNotes: ["The callback path requires Gateway authentication."],
+      }),
+    });
+    await expect(
+      runChannelDoctorConfigSequences({
+        cfg: createMatrixEnabledConfig(),
+        env: {},
+        shouldRepair: false,
+      }),
+    ).resolves.toEqual({
+      changeNotes: ["Migrated explicit listener settings."],
+      infoNotes: ["The default listener remains available; set legacyWebhook:false to close it."],
+      warningNotes: ["The callback path requires Gateway authentication."],
+    });
   });
 
   it("keeps unresolved SecretRef preview reads non-fatal", async () => {

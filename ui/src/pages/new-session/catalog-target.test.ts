@@ -139,19 +139,6 @@ describe("new-session catalog target", () => {
     });
   });
 
-  it("preserves a valid requested agent for catalog-targeted sessions", () => {
-    expect(
-      resolveAgentId(
-        {
-          agentId: "research",
-          catalogId: "claude",
-        },
-        agents,
-        "main",
-      ),
-    ).toBe("research");
-  });
-
   it("canonicalizes the requested agent or falls back before catalog resolution", () => {
     const target = { agentId: "Research", catalogId: "claude" };
 

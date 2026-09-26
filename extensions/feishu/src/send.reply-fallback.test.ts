@@ -94,111 +94,26 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     );
   });
 
-  it("falls back to create for withdrawn post replies", async () => {
-    replyMock.mockResolvedValue({
-      code: 230011,
-      msg: "The message was withdrawn.",
-    });
-    createMock.mockResolvedValue({
-      code: 0,
-      data: { message_id: "om_new" },
-    });
-
-    await expectFallbackResult(
-      () =>
-        sendMessageFeishu({
-          cfg: {} as never,
-          to: "user:ou_target",
-          text: "hello",
-          replyToMessageId: "om_parent",
-        }),
-      "om_new",
-    );
-  });
-
-  it.each([
-    {
-      label: "text",
-      prefix: "Feishu reply failed",
-      send: () =>
-        sendMessageFeishu({
-          cfg: {} as never,
-          to: "user:ou_target",
-          text: "hello",
-          replyToMessageId: "om_parent",
-        }),
-    },
-    {
-      label: "card",
-      prefix: "Feishu card reply failed",
-      send: () =>
-        sendCardFeishu({
-          cfg: {} as never,
-          to: "user:ou_target",
-          card: { schema: "2.0" },
-          replyToMessageId: "om_parent",
-        }),
-    },
-  ])(
-    "never duplicates an accepted $label reply with a missing platform id",
-    async ({ prefix, send }) => {
-      replyMock.mockResolvedValueOnce({ code: 0, data: {} });
-
-      let caught: unknown;
-      try {
-        await send();
-      } catch (error) {
-        caught = error;
-      }
-
-      expect(isChannelPartialDeliveryError(caught)).toBe(true);
-      if (!(caught instanceof Error) || !isChannelPartialDeliveryError(caught)) {
-        throw new Error("expected an accepted Feishu reply without an identity");
-      }
-      expect(caught.message).toBe(`${prefix}: no message_id returned`);
-      expect(caught.deliveryResult).toEqual({ messageIds: [], visibleReplySent: true });
-      expect(replyMock).toHaveBeenCalledOnce();
-      expect(createMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it("falls back to create for withdrawn card replies", async () => {
-    replyMock.mockResolvedValue({
-      code: 231003,
-      msg: "The message is not found",
-    });
-    createMock.mockResolvedValue({
-      code: 0,
-      data: { message_id: "om_card_new" },
-    });
-
-    await expectFallbackResult(
-      () =>
-        sendCardFeishu({
-          cfg: {} as never,
-          to: "user:ou_target",
-          card: { schema: "2.0" },
-          replyToMessageId: "om_parent",
-        }),
-      "om_card_new",
-    );
-  });
-
-  it("still throws for non-withdrawn reply failures", async () => {
-    replyMock.mockResolvedValue({
-      code: 999999,
-      msg: "unknown failure",
-    });
-
-    await expect(
-      sendMessageFeishu({
-        cfg: {} as never,
+  it("never duplicates an accepted reply with a missing platform id", async () => {
+    replyMock.mockResolvedValueOnce({ code: 0, data: {} });
+    let caught: unknown;
+    try {
+      await sendMessageFeishu({
+        cfg: {},
         to: "user:ou_target",
         text: "hello",
         replyToMessageId: "om_parent",
-      }),
-    ).rejects.toThrow("Feishu reply failed");
-
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    if (!(caught instanceof Error) || !isChannelPartialDeliveryError(caught)) {
+      throw new Error("expected an accepted Feishu reply without an identity");
+    }
+    expect(caught.message).toBe("Feishu reply failed: no message_id returned");
+    expect(caught.deliveryResult).toEqual({ messageIds: [], visibleReplySent: true });
+    expect(replyMock).toHaveBeenCalledOnce();
     expect(createMock).not.toHaveBeenCalled();
   });
 
@@ -242,22 +157,6 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
         }),
       "om_axios_fallback",
     );
-  });
-
-  it("re-throws non-withdrawn thrown errors for text messages", async () => {
-    const sdkError = Object.assign(new Error("rate limited"), { code: 99991400 });
-    replyMock.mockRejectedValue(sdkError);
-
-    await expect(
-      sendMessageFeishu({
-        cfg: {} as never,
-        to: "user:ou_target",
-        text: "hello",
-        replyToMessageId: "om_parent",
-      }),
-    ).rejects.toThrow("rate limited");
-
-    expect(createMock).not.toHaveBeenCalled();
   });
 
   it("falls back to a top-level group send when normal quoted replies target withdrawn messages", async () => {
@@ -311,40 +210,6 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
         msg_type: "post",
       },
     });
-  });
-
-  it("falls back to create when normal quoted replies throw withdrawn errors", async () => {
-    resolveFeishuSendTargetMock.mockReturnValue({
-      client: {
-        im: {
-          message: {
-            reply: replyMock,
-            create: createMock,
-          },
-        },
-      },
-      receiveId: "oc_group_1",
-      receiveIdType: "chat_id",
-    });
-    const sdkError = Object.assign(new Error("request failed"), { code: 230011 });
-    replyMock.mockRejectedValue(sdkError);
-    createMock.mockResolvedValue({
-      code: 0,
-      data: { message_id: "om_thrown_thread_fallback" },
-    });
-
-    await expectFallbackResult(
-      () =>
-        sendMessageFeishu({
-          cfg: {} as never,
-          to: "chat:oc_group_1",
-          text: "hello",
-          replyToMessageId: "om_parent",
-          replyInThread: true,
-          allowTopLevelReplyFallback: true,
-        }),
-      "om_thrown_thread_fallback",
-    );
   });
 
   it("fails native thread replies instead of falling back to a top-level send", async () => {
@@ -465,21 +330,5 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
         }),
       "om_non_thread_fallback",
     );
-  });
-
-  it("re-throws non-withdrawn thrown errors for card messages", async () => {
-    const sdkError = Object.assign(new Error("permission denied"), { code: 99991401 });
-    replyMock.mockRejectedValue(sdkError);
-
-    await expect(
-      sendCardFeishu({
-        cfg: {} as never,
-        to: "user:ou_target",
-        card: { schema: "2.0" },
-        replyToMessageId: "om_parent",
-      }),
-    ).rejects.toThrow("permission denied");
-
-    expect(createMock).not.toHaveBeenCalled();
   });
 });

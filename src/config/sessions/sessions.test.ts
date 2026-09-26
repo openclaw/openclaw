@@ -64,24 +64,15 @@ it("keeps only recognized archive reasons on archived rows", () => {
 });
 
 it("preserves shipped pending key-as-session-id rows without a transcript id", () => {
-  expect(
-    normalizePersistedSessionEntryShape(
-      {
-        sessionId: "agent:child:main",
-        updatedAt: 42,
-      },
-      { sessionKey: "agent:child:main" },
-    ),
-  ).toMatchObject({ initializationPending: true, updatedAt: 42 });
-  expect(
-    normalizePersistedSessionEntryShape(
-      {
-        sessionId: "agent:child:main",
-        updatedAt: 42,
-      },
-      { sessionKey: "agent:child:main" },
-    ),
-  ).not.toHaveProperty("sessionId");
+  const entry = normalizePersistedSessionEntryShape(
+    {
+      sessionId: "agent:child:main",
+      updatedAt: 42,
+    },
+    { sessionKey: "agent:child:main" },
+  );
+  expect(entry).toMatchObject({ initializationPending: true, updatedAt: 42 });
+  expect(entry).not.toHaveProperty("sessionId");
 });
 
 it("rejects locked key-as-session-id rows instead of treating them as pending", () => {

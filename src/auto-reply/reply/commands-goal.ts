@@ -16,6 +16,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { commandReply as goalReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
+import { matchSlashCommandToken } from "./commands-slash-parse.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
 const GOAL_COMMAND_PREFIX = "/goal";
@@ -40,13 +41,10 @@ const GOAL_ACTIONS = new Set([
 
 /** Parses /goal action text, defaulting unknown actions to goal creation. */
 export function parseGoalCommand(raw: string): { action: string; text: string } | null {
-  const trimmed = raw.trim();
-  const commandEnd = trimmed.search(/\s/);
-  const commandToken = commandEnd === -1 ? trimmed : trimmed.slice(0, commandEnd);
-  if (normalizeOptionalLowercaseString(commandToken) !== GOAL_COMMAND_PREFIX) {
+  const argText = matchSlashCommandToken(raw, GOAL_COMMAND_PREFIX);
+  if (argText === null) {
     return null;
   }
-  const argText = commandEnd === -1 ? "" : trimmed.slice(commandEnd).trim();
   if (!argText) {
     return { action: "status", text: "" };
   }

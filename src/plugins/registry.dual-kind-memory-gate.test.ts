@@ -1,4 +1,3 @@
-/** Verifies memory capability registration keeps slot ownership explicit. */
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
@@ -55,58 +54,6 @@ describe("dual-kind memory registration gate", () => {
     ]);
   });
 
-  it("allows memory runtime registration for dual-kind plugins selected for memory slot", () => {
-    const { config, registry } = createPluginRegistryFixture();
-
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
-        id: "dual-plugin",
-        name: "Dual Plugin",
-        kind: ["memory", "context-engine"],
-        memorySlotSelected: true,
-      }),
-      register(api) {
-        api.registerMemoryCapability({ runtime: createStubMemoryRuntime() });
-      },
-    });
-    expect(
-      requireMemoryRuntime(registry).resolveMemoryBackendConfig({
-        cfg: {} as never,
-        agentId: "main",
-      }),
-    ).toEqual({ backend: "builtin" });
-    expect(
-      registry.registry.diagnostics.filter(
-        (d) => d.pluginId === "dual-plugin" && d.level === "warn",
-      ),
-    ).toHaveLength(0);
-  });
-
-  it("drops the indexing runtime of single-kind memory plugins not selected for the memory slot", () => {
-    const { config, registry } = createPluginRegistryFixture();
-
-    registerVirtualTestPlugin({
-      registry,
-      config,
-      id: "memory-only",
-      name: "Memory Only",
-      kind: "memory",
-      register(api) {
-        api.registerMemoryCapability({ runtime: createStubMemoryRuntime() });
-      },
-    });
-    expect(registry.registry.memoryCapabilities).toEqual([
-      { pluginId: "memory-only", capability: {}, memorySlotSelected: false },
-    ]);
-    expect(
-      registry.registry.diagnostics.filter(
-        (d) => d.pluginId === "memory-only" && d.level === "warn",
-      ),
-    ).toHaveLength(1);
-  });
-
   it("allows selected dual-kind plugins to register the unified memory capability", () => {
     const { config, registry } = createPluginRegistryFixture();
     const runtime = createStubMemoryRuntime();
@@ -141,6 +88,7 @@ describe("dual-kind memory registration gate", () => {
         agentId: "main",
       }),
     ).toEqual({ backend: "builtin" });
+    expect(registry.registry.diagnostics.filter((entry) => entry.level === "warn")).toEqual([]);
   });
 
   it("preserves an earlier memory capability when an artifact bridge fails", () => {

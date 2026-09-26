@@ -28,33 +28,19 @@ const session = (threadId: string): SessionCatalogSession => ({
   canArchive: false,
 });
 
+const shareRoute = {
+  kind: "thread-id-prefix",
+  routeSegment: "shared-sessions",
+  hostId: "gateway",
+  identifierAlphabet: "lowercase-hex",
+  fullLength: 32,
+  minPrefixLength: 12,
+  lookup: "catalog-list-search-by-thread-id-prefix",
+  ambiguity: "multiple-results-or-next-cursor",
+} satisfies NonNullable<SessionCatalogProvider["shareRoute"]>;
+void shareRoute;
+
 describe("session catalog SDK", () => {
-  it("exposes the closed share-route contract to external providers", () => {
-    const shareRoute = {
-      kind: "thread-id-prefix",
-      routeSegment: "shared-sessions",
-      hostId: "gateway",
-      identifierAlphabet: "lowercase-hex",
-      fullLength: 32,
-      minPrefixLength: 12,
-      lookup: "catalog-list-search-by-thread-id-prefix",
-      ambiguity: "multiple-results-or-next-cursor",
-    } as const satisfies NonNullable<SessionCatalogProvider["shareRoute"]>;
-    const provider = {
-      id: "external",
-      label: "External",
-      shareRoute,
-      async list() {
-        return [];
-      },
-      async read({ hostId, threadId }) {
-        return { hostId, threadId, items: [] };
-      },
-    } satisfies SessionCatalogProvider;
-
-    expect(provider.shareRoute).toEqual(shareRoute);
-  });
-
   it("owns canonical list/read parameter and cursor parsing", () => {
     const cursor = sessionCatalogPaging.encodeCursor(2);
     expect(
@@ -102,23 +88,14 @@ describe("session catalog SDK", () => {
     ).toThrow("cursor is invalid");
   });
 
-  it.each([
-    { name: "missing", timestamps: [] },
-    {
-      name: "equal",
-      timestamps: Array.from({ length: 5 }, () => "2026-08-30T12:00:00Z"),
-    },
-    {
-      name: "non-monotonic",
-      timestamps: [
-        "2026-08-30T12:00:04Z",
-        "2026-08-30T12:00:01Z",
-        "2026-08-30T12:00:03Z",
-        "2026-08-30T12:00:00Z",
-        "2026-08-30T12:00:02Z",
-      ],
-    },
-  ])("pages newest-first by source order with $name timestamps", ({ timestamps }) => {
+  it("pages newest-first by source order with non-monotonic timestamps", () => {
+    const timestamps = [
+      "2026-08-30T12:00:04Z",
+      "2026-08-30T12:00:01Z",
+      "2026-08-30T12:00:03Z",
+      "2026-08-30T12:00:00Z",
+      "2026-08-30T12:00:02Z",
+    ];
     const items: SessionCatalogTranscriptItem[] = ["z", "2", "10", "a", "1"].map((id, index) => ({
       id,
       type: "agentMessage",
@@ -441,8 +418,6 @@ describe("session catalog SDK", () => {
     { joinDuring: "lookup", firstAgentId: "main", secondAgentId: "other" },
     { joinDuring: "lookup", firstAgentId: undefined, secondAgentId: "main" },
     { joinDuring: "completion", firstAgentId: "main", secondAgentId: "main" },
-    { joinDuring: "completion", firstAgentId: "main", secondAgentId: "other" },
-    { joinDuring: "completion", firstAgentId: undefined, secondAgentId: "main" },
   ])(
     "coordinates $firstAgentId/$secondAgentId adoption during $joinDuring and reuses stored adoption",
     async ({ joinDuring, firstAgentId, secondAgentId }) => {

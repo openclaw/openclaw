@@ -78,6 +78,7 @@ export const UPDATE_FOREIGN_DESTINATION_REASON = "global-install-foreign-destina
 export const UPDATE_GLOBAL_PERMISSION_REASON = "global-install-permission-denied";
 export const UPDATE_ENVIRONMENT_FAILURE_REASONS: ReadonlySet<string> = new Set([
   "node-runtime-preflight",
+  "source-artifact-ownership",
   UPDATE_GLOBAL_PERMISSION_REASON,
   UPDATE_FOREIGN_DESTINATION_REASON,
 ]);
