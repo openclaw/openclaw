@@ -202,7 +202,8 @@ export function createCliEventHandlers(params: {
           ...(tracked && startedArgs ? { args: sanitizeToolArgs(startedArgs) } : {}),
           ...(resultContentSource ? { resultContentSource } : {}),
         },
-        { args: tracked ? executedArgs : startedArgs },
+        // Native CLI tools have no loopback executed args; keep their request in the terminal item.
+        { args: executedArgs ?? startedArgs },
       );
     }
   };
