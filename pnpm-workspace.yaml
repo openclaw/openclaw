@@ -43,15 +43,15 @@ minimumReleaseAgeExclude:
   - "@openclaw/proxyline@0.3.12"
   - "@openai/codex"
   - "@openai/codex-*"
-  # Reviewed fs-safe 0.18.1 release and native helpers; remove after 2026-09-29T12:41:53.020Z.
-  - "@openclaw/fs-safe@0.18.1"
-  - "@openclaw/fs-safe-darwin-arm64@0.18.1"
-  - "@openclaw/fs-safe-darwin-x64@0.18.1"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.18.1"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.18.1"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.18.1"
-  - "@openclaw/fs-safe-linux-x64-musl@0.18.1"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.18.1"
+  # Reviewed fs-safe 0.20.0 release and native helpers; remove after 2026-10-03T03:43:11.184Z.
+  - "@openclaw/fs-safe@0.20.0"
+  - "@openclaw/fs-safe-darwin-arm64@0.20.0"
+  - "@openclaw/fs-safe-darwin-x64@0.20.0"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.20.0"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.20.0"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.20.0"
+  - "@openclaw/fs-safe-linux-x64-musl@0.20.0"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.20.0"
   # fs-safe archive dependency; remove after 2026-09-16.
   - "jszip@3.10.2"
   # GHSA-prgh-xp8r-p3m5 / GHSA-v53p-9fqp-m79j security fixes; remove after 2026-09-18.
