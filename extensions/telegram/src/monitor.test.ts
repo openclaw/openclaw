@@ -139,7 +139,7 @@ describe("monitorTelegramProvider", () => {
         updateId: 1,
       });
       await expect(startMonitor({ token: "222222:token-b" }).task).rejects.toThrow(
-        "interrupted reset",
+        /account "default".*restart.*interrupted reset/,
       );
       expect(mocks.sessions).toHaveLength(0);
       expect(await store.readTelegramUpdateOffset({ botToken: "111111:token-a" })).toBe(1);

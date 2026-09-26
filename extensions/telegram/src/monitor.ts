@@ -154,13 +154,20 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       botToken: token,
       onRotationDetected: async (info) => {
         log(formatTelegramOffsetRotationMessage(account.accountId, info));
-        // Keep the old identity until the queue purge commits so interrupted resets retry.
-        await getTelegramRuntime()
-          .state.openChannelIngressQueue({
-            accountId: account.accountId,
-          })
-          .purge();
-        await deleteTelegramUpdateOffset({ accountId: account.accountId });
+        try {
+          // Keep the old identity until the queue purge commits so interrupted resets retry.
+          await getTelegramRuntime()
+            .state.openChannelIngressQueue({
+              accountId: account.accountId,
+            })
+            .purge();
+          await deleteTelegramUpdateOffset({ accountId: account.accountId });
+        } catch (err) {
+          throw new Error(
+            `telegram: failed to reset ingress for account "${account.accountId}" after rotation; restart the account to retry: ${formatErrorMessage(err)}`,
+            { cause: err },
+          );
+        }
       },
     });
     const lastUpdateId = normalizeTelegramUpdateId(persistedOffsetRaw);
