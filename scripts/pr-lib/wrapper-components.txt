@@ -542,7 +542,9 @@ src/daemon/service-process-env.ts
 src/gateway/control-ui-bootstrap-contract.ts
 src/gateway/control-ui-session-prs-git.runtime.ts
 src/gateway/control-ui-session-prs-landing.ts
+src/gateway/github-publication-base.ts
 src/gateway/github-remote.ts
+src/gateway/github-repository-publication-snapshot.ts
 src/gateway/operator-scopes.ts
 src/gateway/server-methods/workspace-fs.ts
 src/gateway/worker-environments/session-attachment.ts

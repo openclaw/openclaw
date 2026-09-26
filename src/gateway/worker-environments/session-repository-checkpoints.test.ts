@@ -114,14 +114,15 @@ async function publicationFixture(root: string, content = "working tree\n") {
 it("keeps publication staging workspace-row reads independent of distinct blob count", async () => {
   const measure = async (blobCount: number) => {
     const { root, remote, database, store, workspace, stage } = await fixture();
-    const files = Array.from({ length: blobCount }, (_, index) => {
+    const files: Array<{ path: string; content: string; sha: string }> = [];
+    for (let index = 0; index < blobCount; index++) {
       const content = `publication blob ${index}\n`;
-      const sha = createHash("sha1")
-        .update(`blob ${Buffer.byteLength(content)}\0`)
-        .update(content)
-        .digest("hex");
-      return { path: `edit-${index}.txt`, content, sha };
-    });
+      // Ask Git for its object identity; this is not a configuration/security digest.
+      const sha = await requireWorkspaceResultGit(root, ["hash-object", "--stdin"], {
+        input: Buffer.from(content),
+      });
+      files.push({ path: `edit-${index}.txt`, content, sha });
+    }
     const publicationStagingRoot = path.join(root, "publication");
     await fs.mkdir(path.join(publicationStagingRoot, "blobs"), { recursive: true });
     for (const file of files) {
