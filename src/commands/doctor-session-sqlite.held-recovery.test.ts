@@ -14,7 +14,7 @@ it.each(["missing", "reconstructed-held", "reconstructed-then-missing"] as const
   "preserves conflicting retained sources while deletion history is %s",
   async (history) => {
     await withOpenClawTestState({ label: `r16-recover-${history}` }, async (state) => {
-      const { cfg, storePath } = seedDeferredPluginSessionSource(state, "default");
+      const { cfg, storePath } = await seedDeferredPluginSessionSource(state, "default");
       const imported = await runDoctorSessionSqlite({
         cfg,
         env: state.env,

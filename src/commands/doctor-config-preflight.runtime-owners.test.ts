@@ -73,7 +73,7 @@ describe("runtime plugin migration ownership", () => {
     async ({ facts, includePluginMetadata, valid }) => {
       await withRuntimeOwner(async (configPath) => {
         const retained = { ...pending, validationExcludedPaths: [["legacyFixture"]] };
-        recordDeferredPluginMigrations({ pending: [retained] });
+        await recordDeferredPluginMigrations({ pending: [retained] });
         const raw = JSON.stringify({ ...config, legacyFixture: { enabled: true } });
         await fs.writeFile(configPath, raw);
         const result = await readConfigPreflightSnapshot({
@@ -109,7 +109,7 @@ describe("runtime plugin migration ownership", () => {
             plugins: { entries: { "missing-fixture": { enabled: true } } },
           }),
         );
-        recordDeferredPluginMigrations({ pending: [pending] });
+        await recordDeferredPluginMigrations({ pending: [pending] });
         const retained = readDeferredPluginMigrations();
         const original = await fs.readFile(configPath, "utf8");
         const startup = await runStartupConfigPreflight({ gateway: true, observe: false });
@@ -143,7 +143,7 @@ describe("runtime plugin migration ownership", () => {
     { validationExcludedPaths: [["legacyFixture"]] },
   ])("preserves a retained obligation %j", async (obligation) => {
     await withRuntimeOwner(async () => {
-      recordDeferredPluginMigrations({ pending: [{ ...pending, ...obligation }] });
+      await recordDeferredPluginMigrations({ pending: [{ ...pending, ...obligation }] });
       await runDoctorConfigPreflight({
         migrateLegacyConfig: false,
         invalidConfigNote: false,
@@ -162,7 +162,7 @@ describe("runtime plugin migration ownership", () => {
         configPath,
         JSON.stringify({ ...config, plugins: { entries: { [runtimeId]: { enabled: true } } } }),
       );
-      recordDeferredPluginMigrations({ pending: [pending] });
+      await recordDeferredPluginMigrations({ pending: [pending] });
       const result = await runDoctorConfigPreflight({
         migrateLegacyConfig: false,
         invalidConfigNote: false,
@@ -179,7 +179,7 @@ describe("runtime plugin migration ownership", () => {
 
   it("reconciles a false runtime record that retained only the shared session locator", async () => {
     await withRuntimeOwner(async () => {
-      recordDeferredPluginMigrations({
+      await recordDeferredPluginMigrations({
         pending: [{ ...pending, configPaths: [["session", "store"]] }],
       });
       await runDoctorConfigPreflight({

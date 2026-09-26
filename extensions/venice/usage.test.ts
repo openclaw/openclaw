@@ -1,4 +1,6 @@
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import plugin from "./index.js";
 import { fetchVeniceUsage } from "./usage.js";
 
 describe("Venice usage", () => {
@@ -12,7 +14,11 @@ describe("Venice usage", () => {
       }),
     );
 
-    const snapshot = await fetchVeniceUsage({
+    const provider = await registerSingleProviderPlugin(plugin);
+    const snapshot = await provider.fetchUsageSnapshot!({
+      config: {},
+      env: {},
+      provider: "venice",
       token: "venice-key",
       timeoutMs: 5000,
       fetchFn: fetchFn as unknown as typeof fetch,

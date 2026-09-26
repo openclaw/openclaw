@@ -296,7 +296,9 @@ final class ShareViewController: UIViewController {
     }
 
     private func loadImageAttachment(from provider: NSItemProvider, index: Int) async throws -> LoadedAttachment {
-        let imageUTI = self.preferredImageTypeIdentifier(from: provider) ?? UTType.image.identifier
+        let imageUTI = provider.registeredTypeIdentifiers.first {
+            UTType($0)?.conforms(to: .image) == true
+        } ?? UTType.image.identifier
         guard let rawData = await self.loadDataValue(from: provider, typeIdentifier: imageUTI) else {
             throw ShareImageProcessor.ProcessError.invalidImage
         }
@@ -317,17 +319,13 @@ final class ShareViewController: UIViewController {
             preview: self.boundedPreview(from: image))
     }
 
-    private func imageProcessingErrorMessage() -> String {
-        NSLocalizedString(
-            "The shared image could not be prepared.",
-            comment: "Share extension image processing failure")
-    }
-
     private func applyAttachmentBlockReason(_ blockReason: ShareAttachmentBlockReason) {
         switch blockReason {
         case .imageProcessingFailed:
             ShareGatewayRelaySettings.saveLastEvent("Share blocked: image processing failed.")
-            self.composeView.apply(.blocked(self.imageProcessingErrorMessage()))
+            self.composeView.apply(.blocked(NSLocalizedString(
+                "The shared image could not be prepared.",
+                comment: "Share extension image processing failure")))
         case let .omitted(message):
             ShareGatewayRelaySettings.saveLastEvent("Share blocked: attachment(s) omitted.")
             self.composeView.apply(.blocked(message))
@@ -352,16 +350,6 @@ final class ShareViewController: UIViewController {
         return UIGraphicsImageRenderer(size: target, format: format).image { _ in
             image.draw(in: CGRect(origin: .zero, size: target))
         }
-    }
-
-    private func preferredImageTypeIdentifier(from provider: NSItemProvider) -> String? {
-        for identifier in provider.registeredTypeIdentifiers {
-            guard let utType = UTType(identifier) else { continue }
-            if utType.conforms(to: .image) {
-                return identifier
-            }
-        }
-        return nil
     }
 
     private func loadDataValue(from provider: NSItemProvider, typeIdentifier: String) async -> Data? {

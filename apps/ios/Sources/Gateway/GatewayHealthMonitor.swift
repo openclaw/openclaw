@@ -69,17 +69,13 @@ final class GatewayHealthMonitor {
         if timeout == 0 {
             return await (try? check()) ?? false
         }
-        do {
-            let timeoutError = NSError(
-                domain: "GatewayHealthMonitor",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "health check timed out"])
-            return try await AsyncTimeout.withTimeout(
-                seconds: timeout,
-                onTimeout: { timeoutError },
-                operation: check)
-        } catch {
-            return false
-        }
+        let timeoutError = NSError(
+            domain: "GatewayHealthMonitor",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "health check timed out"])
+        return await (try? AsyncTimeout.withTimeout(
+            seconds: timeout,
+            onTimeout: { timeoutError },
+            operation: check)) ?? false
     }
 }

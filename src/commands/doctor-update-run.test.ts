@@ -112,7 +112,9 @@ it.each(["state migration is pending", "data/settings upgrade is unfinished"])(
         reason: "The plugin has not reported completion.",
         command: "openclaw doctor --fix",
       });
-      recordDeferredPluginMigrations({ pending: [pending("resolved"), pending("unfinished")] });
+      await recordDeferredPluginMigrations({
+        pending: [pending("resolved"), pending("unfinished")],
+      });
       const warnings = [
         `Plugin "unrecorded" ${wording}: Completion has never been recorded.`,
         `Plugin "unfinished" ${wording}: The plugin has not reported completion.`,
@@ -143,7 +145,7 @@ it.each(["state migration is pending", "data/settings upgrade is unfinished"])(
       };
       expect(await output()).toContain(warnings[3]);
 
-      recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: ["resolved"] });
+      await recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: ["resolved"] });
       const repaired = await output();
       expect(repaired).not.toContain(warnings[3]);
       for (const warning of warnings.slice(0, 3)) {
@@ -151,11 +153,11 @@ it.each(["state migration is pending", "data/settings upgrade is unfinished"])(
       }
       expect(getUpdateRun(run.runId)).toEqual(history);
 
-      recordDeferredPluginMigrations({ pending: [pending("resolved")] });
+      await recordDeferredPluginMigrations({ pending: [pending("resolved")] });
       expect(await output()).toContain(warnings[3]);
       expect(getUpdateRun(run.runId)).toEqual(history);
 
-      recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: ["resolved"] });
+      await recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: ["resolved"] });
       const later = createUpdateRun({ trigger: "cli" });
       recordUpdateRunStep(later.runId, {
         step: "warning:openclaw doctor",

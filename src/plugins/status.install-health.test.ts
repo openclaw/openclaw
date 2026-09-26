@@ -5,7 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { listManagedPlugins } from "./management-service.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -180,7 +180,7 @@ describe("plugin inventory install health", () => {
       env,
       installRecords: { [pluginId]: record },
     });
-    writePersistedInstalledPluginIndexSync(index, { stateDir });
+    await writePersistedInstalledPluginIndex(index, { stateDir });
     if (scenario === "empty-project") {
       fs.rmSync(projectRoot, { recursive: true });
       fs.mkdirSync(projectRoot);
