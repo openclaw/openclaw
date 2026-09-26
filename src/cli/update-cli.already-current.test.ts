@@ -6,6 +6,7 @@ import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { resolveConfigPath } from "../config/paths.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import * as serviceMembership from "../daemon/service-process-membership.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import * as versionManagerPath from "../shared/version-manager-path.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -269,70 +270,6 @@ describe("update-cli", () => {
     expect(lastWriteJsonCall()).toMatchObject({ status: "skipped", reason: "already-current" });
   });
 
-  it.each(runtimeRecovery.alreadyCurrentHandoffCases(VERSION))(
-    "keeps the selected target through already-current managed handoff ($packageInstallSpec, $channel)",
-    async ({ packageInstallSpec, channel, expectedTag }) => {
-      const { finishAlreadyCurrentUpdate } = await import("./update-cli/update-command-noop.js");
-      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      const { pkgRoot: root, entryPath } = await setupInstalledPackageRoot(
-        createCaseDir("current-artifact-handoff"),
-        VERSION,
-      );
-      mockFileBackedPathExists();
-      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entryPath);
-      mockRunningManagedGateway([process.execPath, entryPath, "gateway", "run"]);
-      mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, gatewayFixturePid, 1]));
-      managedUpdateHandoff.start.mockResolvedValue({
-        status: "started",
-        handoffId: "current-artifact-handoff",
-        installRoot: root,
-        logPath: "/tmp/current-artifact-handoff.log",
-        command: "openclaw update --yes",
-        pid: 12345,
-      });
-      managedUpdateHandoff.transfer.mockResolvedValue(true);
-      const refuseUpdate = vi.fn();
-
-      await withEnvAsync({ INVOCATION_ID: "current-artifact-invocation" }, () =>
-        finishAlreadyCurrentUpdate({
-          root,
-          packageInstallSpec,
-          opts: { yes: true, json: true },
-          result: {
-            status: "skipped",
-            mode: "npm",
-            root,
-            reason: "already-current",
-            before: { version: VERSION },
-            after: { version: VERSION },
-            steps: [],
-            durationMs: 1,
-          },
-          requestedChannel: null,
-          storedChannel: channel,
-          channel,
-          shouldRestart: true,
-          updateStepTimeoutMs: 1000,
-          invocationCwd: process.cwd(),
-          startedAt: Date.now(),
-          controlPlaneUpdateSentinelMeta: null,
-          managedServiceRootRedirect: null,
-          stop: vi.fn(),
-          refuseUpdate,
-        }),
-      );
-
-      expect(refuseUpdate).not.toHaveBeenCalled();
-      expect(
-        managedUpdateHandoff.start.mock.calls.map(([params]) => ({
-          root: params.root,
-          tag: params.tag,
-        })),
-      ).toEqual([{ root, tag: expectedTag }]);
-      expectNoSideEffects(serviceStop, serviceRestart, updateNpmInstalledPlugins);
-    },
-  );
-
   registerAlreadyCurrentAdmissionTests({
     prepareCurrentPackage: async (prefix) => {
       const root = await mockPackageInstallAtCaseDir(prefix, VERSION);
@@ -466,18 +403,51 @@ describe("update-cli", () => {
     },
   );
 
-  it.each([true, false])(
-    "never stops an unchanged same-version managed gateway (restart=%s)",
-    async (restart) => {
+  it.each(
+    [true, false].flatMap((restart) =>
+      (["outside", "unknown", "inside", "descendant"] as const).map((membership) => ({
+        restart,
+        membership,
+      })),
+    ),
+  )(
+    "never stages or stops an unchanged managed gateway under auto admission (restart=$restart, membership=$membership)",
+    async ({ restart, membership }) => {
       const root = await mockPackageInstallAtCaseDir("openclaw-current-package", VERSION);
       readPackageVersion.mockResolvedValue(VERSION);
       primeNpmChannelTag("latest", VERSION);
       mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+      vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue(
+        membership === "descendant" ? "inside" : membership,
+      );
+      if (membership === "descendant") {
+        mockGetSelfAndAncestorPidsSync.mockReturnValue(
+          new Set([process.pid, gatewayFixturePid, 1]),
+        );
+      }
 
-      await updateCommand({ yes: true, restart, json: true });
+      await updateCommand({ admission: "auto", yes: true, restart, json: true });
 
       expectNoSideEffects(serviceStop, serviceRestart, runDaemonRestart, candidateValidation);
-      expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
+      expect(managedUpdateHandoff.start).not.toHaveBeenCalled();
+      if (membership === "outside") {
+        expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
+      } else {
+        expectNoSideEffects(updateNpmInstalledPlugins, syncPluginsForUpdateChannel, systemdPolicy);
+        expect(lastWriteJsonCall()).toMatchObject({
+          steps: [
+            expect.objectContaining({
+              exitCode: 0,
+              advisory: {
+                kind: "recoverable-maintenance",
+                message: expect.stringContaining(
+                  "plugin, runtime, and service maintenance was deferred",
+                ),
+              },
+            }),
+          ],
+        });
+      }
       expect(packageInstallCommandCall()?.[0]).toBeUndefined();
       expect(replaceConfigFile).not.toHaveBeenCalled();
       expect(lastWriteJsonCall()).toMatchObject({ status: "skipped", reason: "already-current" });
@@ -490,38 +460,61 @@ describe("update-cli", () => {
     },
   );
 
-  it("reports a same-version channel switch as successful without updating the package", async () => {
-    const root = await mockPackageInstallAtCaseDir("openclaw-current-package", VERSION);
-    const stateDir = tempDirs.make("openclaw-update-channel-switch-");
-    initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
-    readPackageVersion.mockResolvedValue(VERSION);
-    primeNpmChannelTag("beta", VERSION);
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue(
-      configSnapshot({ update: { channel: "stable" } }),
-    );
-    await writeJsonFixture(path.join(stateDir, "openclaw.json"), {
-      update: { channel: "stable" },
-    });
-    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+  it.each(["outside", "unknown"] as const)(
+    "reports the outcome of a same-version channel switch (%s)",
+    async (membership) => {
+      const root = await mockPackageInstallAtCaseDir("openclaw-current-package", VERSION);
+      const stateDir = profileStateDir();
+      initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
+      readPackageVersion.mockResolvedValue(VERSION);
+      primeNpmChannelTag("beta", VERSION);
+      vi.mocked(readConfigFileSnapshot).mockResolvedValue(
+        configSnapshot({ update: { channel: "stable" } }),
+      );
+      await writeJsonFixture(path.join(stateDir, "openclaw.json"), {
+        update: { channel: "stable" },
+      });
+      mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+      vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue(
+        membership,
+      );
 
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      await updateCommand({ channel: "beta", yes: true, restart: true, json: true });
-    });
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await updateCommand({
+          admission: "auto",
+          channel: "beta",
+          yes: true,
+          restart: true,
+          json: true,
+        });
+      });
 
-    expect(lastReplaceConfigCall()?.nextConfig?.update?.channel).toBe("beta");
-    expectNoSideEffects(serviceStop, serviceRestart, runDaemonRestart, candidateValidation);
-    expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
-    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-    expect(doctorCommandCall()).toBeUndefined();
-    expect(lastWriteJsonCall()).toMatchObject({ status: "ok" });
-    expect(lastWriteJsonCall()).not.toHaveProperty("reason");
-    const result = lastWriteJsonCall() as UpdateRunResult;
-    expect(
-      getUpdateRun(requireValue(result.runId, "channel switch run id"), {
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      }),
-    ).toMatchObject({ status: "succeeded", downtimeMs: 0 });
-  });
+      expectNoSideEffects(serviceStop, serviceRestart, runDaemonRestart, candidateValidation);
+      expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+      expect(doctorCommandCall()).toBeUndefined();
+      if (membership === "unknown") {
+        expectNoSideEffects(replaceConfigFile, updateNpmInstalledPlugins);
+        expect(lastWriteJsonCall()).toMatchObject({ status: "skipped", reason: "already-current" });
+        expect(getErrorOutput()).toContain(
+          "Requested channel change to beta was not applied; retry with --channel beta.",
+        );
+        expect(
+          JSON.parse(await fs.readFile(path.join(stateDir, "openclaw.json"), "utf8")),
+        ).toMatchObject({ update: { channel: "stable" } });
+        return;
+      }
+      expect(lastReplaceConfigCall()?.nextConfig?.update?.channel).toBe("beta");
+      expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
+      expect(lastWriteJsonCall()).toMatchObject({ status: "ok" });
+      expect(lastWriteJsonCall()).not.toHaveProperty("reason");
+      const result = lastWriteJsonCall() as UpdateRunResult;
+      expect(
+        getUpdateRun(requireValue(result.runId, "channel switch run id"), {
+          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        }),
+      ).toMatchObject({ status: "succeeded", downtimeMs: 0 });
+    },
+  );
 
   it("keeps an explicit same-version channel no-op skipped without snapshot capacity or config rewrites", async () => {
     const root = await mockPackageInstallAtCaseDir("openclaw-current-package", VERSION);

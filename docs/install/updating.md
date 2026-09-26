@@ -105,11 +105,37 @@ Service membership uses the running Gateway's process ancestry and native superv
 facts. An external terminal that inherited service environment markers can still update after native
 membership is verified as external. Reparented children remain inside when they
 share the Gateway's macOS process group or launchd job, or its systemd unit cgroup.
+An already-current core update never refuses for service membership. When membership
+cannot be verified as external, it completes with `already-current` and a warning
+that plugin, runtime, and service maintenance was deferred, before that maintenance
+can change files or stop the Gateway. An explicit channel change is also left
+unapplied and named in the warning so it can be retried. Real updates retain the containment checks.
 Unreadable native membership refuses with `service-membership-unverified`;
 confirmed native membership uses `inside-gateway-service`. Windows currently uses
 verified ancestry and the inherited-marker fallback because job-object membership
 is not available to the runtime. A genuine Gateway descendant must use the managed
 update handoff or an independent terminal.
+
+Missing containment facts mean unverified, not inside. Linux supports both cgroup v2
+and the named systemd v1 hierarchy. An emulated service can still kill its process
+group without a cgroup, and launchd can retain a reparented macOS process in its job,
+so complete external ancestry alone does not authorize a real update. When native
+inspection is unavailable, run this sequence from an interactive external shell not started
+by the Gateway service, under the installation's owning account:
+
+```bash
+openclaw gateway stop && openclaw update --yes && openclaw gateway start
+```
+
+Stopping the Gateway removes the live containment ambiguity. Keep the same account,
+profile, and state/configuration paths throughout, and repeat any requested `--channel`
+or `--tag` on the update command. If the update reports an error,
+follow its recovery guidance before starting the Gateway. With native helper support,
+`openclaw gateway call update.run --params '{}'`, the Gateway tool's `update.run`
+action, and `/update` can instead perform a managed handoff. Linux transient user
+handoffs require `systemd-run`; an emulated manager without it cannot use that route.
+See [Automation and SSH](/cli/update#automation-and-ssh).
+
 Managed-service refusals retain a specific code, such as
 `inside-gateway-process-tree` or `service-definition-changed`, in the failure
 report and `openclaw update status --json`. Shared reports preserve that code and
