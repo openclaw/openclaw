@@ -226,7 +226,7 @@ describe("registered exec deadline handoff", () => {
       expect(followUp).toContain("Use process");
       if (!notifyOnExit) {
         expect(followUp).toContain("Automatic completion wake is disabled");
-        expect(followUp).toContain("process poll with a timeout");
+        expect(followUp).toContain("poll with a timeout");
         expect(followUp).toContain("before ending the turn");
       } else {
         expect(followUp).not.toContain("Automatic completion wake is disabled");
