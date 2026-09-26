@@ -1,6 +1,7 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
   type ReplyMediaAttachment,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
@@ -58,23 +59,26 @@ function mergeDefinedReplySemantics(target: ReplyPayload, source: ReplyPayload):
     sanitizeReplyDirectiveId(source.replyToId) ??
     sanitizeReplyDirectiveId(sourceInlineDirectives?.replyToExplicitId);
   const mergedMedia = mergeMediaReplySemantics(target, source, sourceInlineDirectives);
-  return copyReplyPayloadMetadata(mergedMedia, {
-    ...mergedMedia,
-    ...(source.presentation !== undefined ? { presentation: source.presentation } : {}),
-    ...(source.delivery !== undefined ? { delivery: source.delivery } : {}),
-    ...(source.interactive !== undefined ? { interactive: source.interactive } : {}),
-    ...(sourceReplyToId !== undefined ? { replyToId: sourceReplyToId } : {}),
-    ...(source.replyToTag === true || target.replyToTag === true ? { replyToTag: true } : {}),
-    ...(source.replyToCurrent === true ||
-    sourceInlineDirectives?.replyToCurrent === true ||
-    target.replyToCurrent === true
-      ? { replyToCurrent: true }
-      : {}),
-    ...(source.spokenText !== undefined ? { spokenText: source.spokenText } : {}),
-    ...(source.ttsSupplement !== undefined ? { ttsSupplement: source.ttsSupplement } : {}),
-    ...(source.isError === true || target.isError === true ? { isError: true } : {}),
-    ...(source.channelData !== undefined ? { channelData: source.channelData } : {}),
-  });
+  return copyReplyPayloadMetadata(
+    source,
+    copyReplyPayloadMetadata(mergedMedia, {
+      ...mergedMedia,
+      ...(source.presentation !== undefined ? { presentation: source.presentation } : {}),
+      ...(source.delivery !== undefined ? { delivery: source.delivery } : {}),
+      ...(source.interactive !== undefined ? { interactive: source.interactive } : {}),
+      ...(sourceReplyToId !== undefined ? { replyToId: sourceReplyToId } : {}),
+      ...(source.replyToTag === true || target.replyToTag === true ? { replyToTag: true } : {}),
+      ...(source.replyToCurrent === true ||
+      sourceInlineDirectives?.replyToCurrent === true ||
+      target.replyToCurrent === true
+        ? { replyToCurrent: true }
+        : {}),
+      ...(source.spokenText !== undefined ? { spokenText: source.spokenText } : {}),
+      ...(source.ttsSupplement !== undefined ? { ttsSupplement: source.ttsSupplement } : {}),
+      ...(source.isError === true || target.isError === true ? { isError: true } : {}),
+      ...(source.channelData !== undefined ? { channelData: source.channelData } : {}),
+    }),
+  );
 }
 
 function mergeMediaReplySemantics(
@@ -106,21 +110,24 @@ function mergeMediaReplySemantics(
       return merged;
     });
   }
-  return copyReplyPayloadMetadata(target, {
-    ...target,
-    ...(attachments ? { attachments } : {}),
-    ...(source.trustedLocalMedia === true || target.trustedLocalMedia === true
-      ? { trustedLocalMedia: true }
-      : {}),
-    ...(source.sensitiveMedia === true || target.sensitiveMedia === true
-      ? { sensitiveMedia: true }
-      : {}),
-    ...(source.audioAsVoice === true ||
-    sourceInlineDirectives?.audioAsVoice === true ||
-    target.audioAsVoice === true
-      ? { audioAsVoice: true }
-      : {}),
-  });
+  return copyReplyPayloadMetadata(
+    source,
+    copyReplyPayloadMetadata(target, {
+      ...target,
+      ...(attachments ? { attachments } : {}),
+      ...(source.trustedLocalMedia === true || target.trustedLocalMedia === true
+        ? { trustedLocalMedia: true }
+        : {}),
+      ...(source.sensitiveMedia === true || target.sensitiveMedia === true
+        ? { sensitiveMedia: true }
+        : {}),
+      ...(source.audioAsVoice === true ||
+      sourceInlineDirectives?.audioAsVoice === true ||
+      target.audioAsVoice === true
+        ? { audioAsVoice: true }
+        : {}),
+    }),
+  );
 }
 
 function hasMergeableReplySemantics(payload: ReplyPayload): boolean {
@@ -168,6 +175,50 @@ function mediaSetsMatch(leftMediaUrls: readonly string[], rightMediaUrls: readon
 
 function replyDisplayText(payload: ReplyPayload): string {
   return sanitizeAssistantDisplayText(payload.text) ?? "";
+}
+
+function haveCompatibleReplyOwners(left: ReplyPayload, right: ReplyPayload): boolean {
+  const leftMetadata = getReplyPayloadMetadata(left);
+  const rightMetadata = getReplyPayloadMetadata(right);
+  const leftAuthority = leftMetadata?.sessionWriterDeliveryAuthority;
+  const rightAuthority = rightMetadata?.sessionWriterDeliveryAuthority;
+  if (
+    leftAuthority &&
+    rightAuthority &&
+    (leftAuthority.agentId !== rightAuthority.agentId ||
+      leftAuthority.harnessCompletion?.taskId !== rightAuthority.harnessCompletion?.taskId ||
+      leftAuthority.harnessCompletion?.taskStatus !==
+        rightAuthority.harnessCompletion?.taskStatus ||
+      leftAuthority.harnessCompletion?.taskRunId !== rightAuthority.harnessCompletion?.taskRunId ||
+      leftAuthority.harnessCompletion?.sourceRunId !==
+        rightAuthority.harnessCompletion?.sourceRunId ||
+      leftAuthority.harnessCompletion?.requesterSessionKey !==
+        rightAuthority.harnessCompletion?.requesterSessionKey ||
+      leftAuthority.harnessCompletion?.requesterAgentId !==
+        rightAuthority.harnessCompletion?.requesterAgentId ||
+      leftAuthority.harnessCompletion?.sessionId !== rightAuthority.harnessCompletion?.sessionId ||
+      leftAuthority.harnessCompletion?.lifecycleRevision !==
+        rightAuthority.harnessCompletion?.lifecycleRevision ||
+      leftAuthority.expectedLifecycleRevision !== rightAuthority.expectedLifecycleRevision ||
+      leftAuthority.expectedSessionId !== rightAuthority.expectedSessionId ||
+      leftAuthority.expectedWriterRunId !== rightAuthority.expectedWriterRunId ||
+      leftAuthority.sessionKey !== rightAuthority.sessionKey ||
+      leftAuthority.storePath !== rightAuthority.storePath)
+  ) {
+    return false;
+  }
+  const leftMirror = leftMetadata?.sourceReplyTranscriptMirror;
+  const rightMirror = rightMetadata?.sourceReplyTranscriptMirror;
+  return !(
+    leftMirror &&
+    rightMirror &&
+    (leftMirror.agentId !== rightMirror.agentId ||
+      leftMirror.expectedSessionId !== rightMirror.expectedSessionId ||
+      leftMirror.idempotencyKey !== rightMirror.idempotencyKey ||
+      leftMirror.sessionKey !== rightMirror.sessionKey ||
+      leftMirror.transcriptOwner !== rightMirror.transcriptOwner ||
+      leftMirror.transcriptWriteBlocked !== rightMirror.transcriptWriteBlocked)
+  );
 }
 
 /** Folds raw command replies while preserving each prepared reply's ownership. */
@@ -223,6 +274,7 @@ export function selectChatSendFinalReplyInputs(params: {
             ? commandBlockPayloadEntriesForDelivery.find(
                 (candidate) =>
                   candidate.input.kind === "raw" &&
+                  haveCompatibleReplyOwners(candidate.input.payload, payload) &&
                   mediaSetsMatch(replyMediaDedupeKeys(candidate.input.payload), finalMediaKeys),
               )
             : undefined;
@@ -230,6 +282,7 @@ export function selectChatSendFinalReplyInputs(params: {
           ? commandBlockPayloadEntriesForDelivery.find(
               (candidate) =>
                 candidate.input.kind === "raw" &&
+                haveCompatibleReplyOwners(candidate.input.payload, payload) &&
                 replyDisplayText(candidate.input.payload) === finalDisplayText &&
                 (finalMediaUrls.length === 0 ||
                   mediaSetsMatch(replyMediaDedupeKeys(candidate.input.payload), finalMediaKeys)),
