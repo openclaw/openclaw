@@ -1,5 +1,6 @@
 /** Shared durable channel-ingress admission, pump, retention, and shutdown lifecycle. */
 import { formatErrorMessage } from "../../infra/errors.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import {
   getGatewayRestartDrainSignal,
   getGatewaySuspendAdmissionPhase,
@@ -566,12 +567,14 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         await sleep(delayMs);
       }
       try {
-        const result = await getQueue().enqueue(params.facts.eventId, params.payload, {
+        return await getQueue().enqueue(params.facts.eventId, params.payload, {
           receivedAt: params.receivedAt,
           laneKey: params.facts.laneKey,
         });
-        return result;
       } catch (error) {
+        if (hasSqliteWorkerOutcomeUnknown(error)) {
+          throw error;
+        }
         lastError = error;
       }
     }
