@@ -1075,7 +1075,7 @@ describe("stuck session diagnostics threshold", () => {
       const events: DiagnosticEventPayload[] = [];
       const recoverStuckSession = vi.fn(() => new Promise<never>(() => {}));
       const stuckSessionWarnMs = 30_000;
-      const stuckSessionAbortMs = 90_000;
+      const stuckSessionAbortMs = activeWorkKind === "tool_call" ? 900_000 : 90_000;
       const unsubscribe = onDiagnosticEvent((event) => events.push(event));
       try {
         startEnabledDiagnosticHeartbeat({
@@ -1104,7 +1104,7 @@ describe("stuck session diagnostics threshold", () => {
         }
 
         for (let attempt = 2; attempt <= 6; attempt += 1) {
-          vi.advanceTimersByTime(30_000);
+          vi.advanceTimersByTime(stuckSessionAbortMs / 3);
           logSessionStateChange({
             sessionId: "s1",
             sessionKey: "main",
@@ -1124,19 +1124,18 @@ describe("stuck session diagnostics threshold", () => {
         unsubscribe();
       }
 
-      expectRecordFields(
-        requireRecord(
-          events.find((event) => event.type === "session.stalled"),
-          "stalled event",
-        ),
-        {
-          classification: "stalled_agent_run",
-          reason: "repeated_model_requests_without_progress",
-          repeatedRequestNoProgressAgeMs: stuckSessionAbortMs,
-          activeWorkKind,
-          activeToolAgeMs: activeWorkKind === "tool_call" ? stuckSessionAbortMs : undefined,
-        },
+      const stalled = events.find(
+        (event) =>
+          event.type === "session.stalled" &&
+          event.reason === "repeated_model_requests_without_progress",
       );
+      expectRecordFields(requireRecord(stalled, "stalled event"), {
+        classification: "stalled_agent_run",
+        reason: "repeated_model_requests_without_progress",
+        repeatedRequestNoProgressAgeMs: stuckSessionAbortMs,
+        activeWorkKind,
+        activeToolAgeMs: activeWorkKind === "tool_call" ? stuckSessionAbortMs : undefined,
+      });
       expect(recoverStuckSession).toHaveBeenCalledTimes(1);
       expectRecoveryCall(
         recoverStuckSession,
@@ -1324,7 +1323,7 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
-  it("defers direct and repeated recovery until the latest model request allowance expires", async () => {
+  it("preserves a fresh model request allowance after semantic progress", async () => {
     const recoverStuckSession = vi.fn(() => new Promise<never>(() => {}));
     const ref = { sessionId: "allowance-session", sessionKey: "agent:main:allowance" };
     const runId = "allowance-run";
@@ -1350,6 +1349,7 @@ describe("stuck session diagnostics threshold", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     vi.advanceTimersByTime(120_000);
+    emitCoreSemanticRunProgressDiagnosticEvent({ ...ref, runId, reason: "assistant:progress" });
     emitCoreModelRequestStartedDiagnosticEvent(
       {
         ...ref,
@@ -1363,8 +1363,7 @@ describe("stuck session diagnostics threshold", () => {
     );
     await vi.advanceTimersByTimeAsync(0);
 
-    // The first request has exceeded the provider allowance, but the active
-    // retry has not. Recovery must honor the exact request currently in flight.
+    // Semantic progress gives the next request its full provider allowance.
     vi.advanceTimersByTime(30_000);
     expect(recoverStuckSession).not.toHaveBeenCalled();
     vi.advanceTimersByTime(120_000);

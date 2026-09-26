@@ -16,6 +16,7 @@ import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
+import "../../plugins/control-ui-contributions.ts";
 import { renderPluginReadme } from "./catalog-detail.ts";
 import { renderArtTile } from "./consent-dialog.ts";
 import { renderPluginDetailShell } from "./detail-shell.ts";
@@ -23,6 +24,7 @@ import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
+  renderPluginDeclaredCapabilities,
   renderPluginMetadata,
   renderPluginPublisher,
   renderPluginAskAction,
@@ -262,7 +264,8 @@ export function renderPluginSettingsInventory(props: InventoryProps): TemplateRe
           </label>
           <div class="settings-group oc-settings-group">${renderInstalledInventory(props)}</div>
         `
-      : html`<div id="plugin-settings-advanced">
+      : html`<div id="plugin-settings-advanced" class="settings-stack">
+          <openclaw-plugin-manager></openclaw-plugin-manager>
           ${renderSettingsSection(
             {
               title: t("pluginsPage.advanced"),
@@ -451,6 +454,7 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
           : undefined,
       panel: html`${notices}
       ${!props.inspection && !catalog && !props.inspectionError ? renderSettingsLoadingSkeleton({ rows: 2, carapace: true }) : nothing}
+      ${renderPluginDeclaredCapabilities(props.inspection?.overview?.capabilities?.contracts, props.inspection?.overview?.capabilities?.ui)}
       ${props.skillsSection ?? renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), skills, icons.bookOpenText)}
       ${renderPluginCapabilitySection(
         t("pluginsPage.detailTools"),

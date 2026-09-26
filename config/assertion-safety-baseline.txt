@@ -1316,7 +1316,7 @@ packages/ai/src/internal/default-runtime.ts	2
 packages/ai/src/openai-completions-messages.ts	7
 packages/ai/src/provider-transcript-transform.ts	3
 packages/ai/src/provider-types.ts	1
-packages/ai/src/providers/agent-tools-parameter-schema.ts	23
+packages/ai/src/providers/agent-tools-parameter-schema.ts	15
 packages/ai/src/providers/anthropic-model-contract.ts	1
 packages/ai/src/providers/anthropic-refusal.ts	1
 packages/ai/src/providers/anthropic-server-fallback.ts	3
@@ -1759,7 +1759,7 @@ src/agents/session-placement-admission.ts	1
 src/agents/session-raw-append-message.ts	2
 src/agents/session-suspension.ts	1
 src/agents/session-tool-result-guard.ts	11
-src/agents/session-transcript-repair.ts	6
+src/agents/session-transcript-repair.ts	4
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/agent-session-extensions.ts	1
 src/agents/sessions/agent-session-models.ts	2

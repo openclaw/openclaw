@@ -870,9 +870,11 @@ h3.settings-row__title {
 
 /* ---------- plugin settings ---------- */
 
-/* The inventory header is already inside the padded settings page. Remove the
-   shared outer-header inset so its title aligns with this page's rows. */
-.settings-page.oc-app-surface:has(> .plugins-settings-content) > .content-header--settings {
+/* The inventory header is already inside the padded settings page. Its page
+   owner must override the outer-header inset regardless of lazy stylesheet order. */
+openclaw-plugins-page
+  .settings-page.oc-app-surface:has(> .plugins-settings-content)
+  > .content-header--settings {
   width: 100%;
   max-width: none;
   margin-inline: 0;

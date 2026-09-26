@@ -514,12 +514,27 @@ export function createPluginValueView(
       }
       return undefined;
     };
-    const invoke = <T>(run: () => T): T => {
+    const assertActive = () => {
       if (!active || !bindings.hasToken(token)) {
         throw new Error(`Plugin ${bindings.instance.pluginId} stream is closed`);
       }
+    };
+    const invoke = <T>(run: () => T): T => {
+      assertActive();
       pending += 1;
       return bindings.invoke(run, { token, release: releaseOperation });
+    };
+    const readResultMember = (result: object, key: "done" | "value"): unknown => {
+      assertActive();
+      const descriptor = !types.isProxy(result) && Object.getOwnPropertyDescriptor(result, key);
+      if (descriptor && "value" in descriptor) {
+        const value: unknown = descriptor.value;
+        // Primitive data cannot execute plugin code or require thenable settlement.
+        if (value === null || (typeof value !== "object" && typeof value !== "function")) {
+          return value;
+        }
+      }
+      return invoke(() => Reflect.get(result, key));
     };
     const admission: PluginIteratorAdmission = {
       get done() {
@@ -560,7 +575,7 @@ export function createPluginValueView(
             if (next === null || (typeof next !== "object" && typeof next !== "function")) {
               throw new TypeError("Plugin async iterator result must be an object");
             }
-            const complete = Boolean(invoke(() => Reflect.get(next, "done")));
+            const complete = Boolean(readResultMember(next, "done"));
             // IteratorClose ends this admission even when a generator yields in finally.
             // A later explicit next can acquire a new lease only while the instance is live.
             state = complete ? "done" : key === "return" ? "returned" : state;
@@ -568,8 +583,7 @@ export function createPluginValueView(
               // The consumer reads completion after the last call may have joined disposal.
               done: complete,
               get value() {
-                const read = (): unknown => Reflect.get(next, "value");
-                return active ? invoke(read) : read();
+                return active ? readResultMember(next, "value") : Reflect.get(next, "value");
               },
             };
           } catch (error) {

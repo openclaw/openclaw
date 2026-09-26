@@ -138,8 +138,10 @@ describe("structured Goal admission", () => {
 
   it("restores a rejected objective and retains the original run identity on a stored Retry", async () => {
     let reject = true;
+    const goalMode = { action: "start" as const, sessionId: "incarnation-a" };
     const host = makeChatHost({
       chatMessage: "Start this exactly once",
+      chatGoalDraftMode: goalMode,
       currentSessionId: "incarnation-a",
       chatDisplayedLeafEntryId: "leaf-a",
       requestHandlers: {
@@ -156,9 +158,11 @@ describe("structured Goal admission", () => {
     });
     await handleSendChat(host, undefined, { intent });
     expect(host.chatMessage).toBe("Start this exactly once");
+    expect(host.chatGoalDraftMode).toBe(goalMode);
 
     // Restored outboxes retry an already minted request; they must not mint another run.
     reject = false;
+    host.chatGoalDraftMode = null;
     host.chatMessage = "A separate conversation draft";
     const original = findChatSendPayload(host);
     const queued = {
@@ -185,6 +189,49 @@ describe("structured Goal admission", () => {
     expect(requests[1]?.[1]).toEqual(original);
     expect(host.chatMessage).toBe("A separate conversation draft");
   });
+});
+
+describe("composer recovery", () => {
+  it.each(["attachment", "reply", "goal"])(
+    "does not mix a failed model-wait draft with a newer %s-only draft",
+    async (edit) => {
+      const switchUpdate = createDeferred<boolean>();
+      const newerAttachment =
+        edit === "attachment" ? createStagedAttachment("newer-picker-attachment") : null;
+      const newerReply = edit === "reply" ? { messageId: "newer-quote", text: "New quote" } : null;
+      const newerGoal = edit === "goal" ? { action: "start" as const } : null;
+      const host = makeChatHost({
+        requestHandlers: {},
+        chatMessage: "keep this send separate",
+        pendingSettingsPatches: { "agent:main": switchUpdate.promise },
+      });
+
+      const send = handleSendChat(host);
+      await Promise.resolve();
+      expect(host.chatMessage).toBe("");
+      expect(host.chatQueue[0]?.sendState).toBe("waiting-model");
+      host.chatAttachments = newerAttachment ? [newerAttachment] : [];
+      host.chatReplyTarget = newerReply;
+      host.chatGoalDraftMode = newerGoal;
+
+      switchUpdate.resolve(false);
+      await send;
+
+      expect(host.request).not.toHaveBeenCalled();
+      expect(host.chatMessage).toBe("");
+      expect(host.chatAttachments).toEqual(newerAttachment ? [newerAttachment] : []);
+      expect(host.chatReplyTarget).toBe(newerReply);
+      expect(host.chatGoalDraftMode).toBe(newerGoal);
+      expect(host.chatQueue[0]).toMatchObject({
+        sendError: "Chat settings update was interrupted. Review and retry when ready.",
+        sendState: "failed",
+        text: "keep this send separate",
+      });
+      if (newerAttachment) {
+        expect(getChatAttachmentDataUrl(newerAttachment)).toBe(attachmentDataUrl);
+      }
+    },
+  );
 });
 
 describe("reply submission", () => {
