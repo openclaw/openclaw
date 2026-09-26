@@ -136,8 +136,22 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
       ? extractLatestToolOutput(input)
       : "");
   const toolJson = parseToolOutputJson(scenarioToolOutput);
-  const structuredToolText = Array.isArray(toolJson?.content)
+  const nestedToolResult = toolJson?.result;
+  const nestedToolContent =
+    nestedToolResult &&
+    typeof nestedToolResult === "object" &&
+    !Array.isArray(nestedToolResult) &&
+    "content" in nestedToolResult &&
+    Array.isArray(nestedToolResult.content)
+      ? nestedToolResult.content
+      : undefined;
+  const structuredToolContent = Array.isArray(toolJson?.content)
     ? toolJson.content
+    : Array.isArray(nestedToolContent)
+      ? nestedToolContent
+      : undefined;
+  const structuredToolText = Array.isArray(structuredToolContent)
+    ? structuredToolContent
         .map((entry) =>
           entry && typeof entry === "object" && !Array.isArray(entry)
             ? (entry as { text?: unknown }).text

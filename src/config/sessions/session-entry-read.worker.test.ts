@@ -290,6 +290,21 @@ it("closes worker-prepared authority synchronously before queued consumers can r
     const sessionKey = "agent:main:consumer";
     writeSessionEntry(database, sessionKey, { sessionId: "consumer-session", updatedAt: 1 });
     const input = { agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env };
+    const order: string[] = [];
+    await withSessionEntriesFromStoresInWorker(
+      [input],
+      ([read]) => {
+        order.push("consume");
+        read!.assertCurrent();
+      },
+      {
+        beforeConsume: async () => {
+          order.push("prepare");
+          await Promise.resolve();
+        },
+      },
+    );
+    expect(order).toEqual(["prepare", "consume"]);
     let queued: Promise<void> | undefined;
     await withSessionEntriesFromStoresInWorker([input], ([read]) => {
       expect(read!.result.entries[0]?.entry.sessionId).toBe("consumer-session");

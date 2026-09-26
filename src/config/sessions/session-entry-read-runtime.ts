@@ -401,9 +401,10 @@ export type PreparedSessionEntryWorkerRead = {
 export async function withSessionEntriesFromStoresInWorker<T>(
   inputs: readonly SessionEntryWorkerRead[],
   consume: (reads: readonly PreparedSessionEntryWorkerRead[]) => T,
+  operation?: { beforeConsume?: () => Promise<void> },
 ): Promise<T> {
   const reads: PreparedSessionEntryWorkerRead[] = [];
-  const enter = (index: number): Promise<T> => {
+  const enter = async (index: number): Promise<T> => {
     const input = inputs[index];
     if (input) {
       return withSessionEntriesFromStoreInWorker(input, async (read) => {
@@ -414,6 +415,9 @@ export async function withSessionEntriesFromStoresInWorker<T>(
           reads.pop();
         }
       });
+    }
+    if (operation?.beforeConsume) {
+      await operation.beforeConsume();
     }
     for (const read of reads) {
       read.assertCurrent();
@@ -436,7 +440,7 @@ export async function withSessionEntriesFromStoresInWorker<T>(
         void Promise.resolve(result).catch(() => {});
         throw new Error("Session entry read consumers must remain synchronous");
       }
-      return Promise.resolve(result);
+      return result;
     } finally {
       active = false;
     }

@@ -13096,6 +13096,19 @@ public struct QuestionSecretStoreExisting: Codable, Sendable {
     }
 }
 
+public struct QuestionSourceBindingRoute: Codable, Sendable {
+    public let conversation: [String: AnyCodable]
+    public let selection: AnyCodable
+
+    public init(
+        conversation: [String: AnyCodable],
+        selection: AnyCodable)
+    {
+        self.conversation = conversation
+        self.selection = selection
+    }
+}
+
 public struct QuestionWaitAnswerParams: Codable, Sendable {
     public let id: String
     public let timeoutms: Int?

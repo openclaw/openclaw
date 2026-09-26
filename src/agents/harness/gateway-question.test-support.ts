@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { WebSocket, WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer, type RawData } from "ws";
 import type {
   QuestionRequestParams,
   QuestionResolveParams,
@@ -12,6 +12,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { QuestionManager, QuestionManagerError } from "../../gateway/question-manager.js";
+import { prepareQuestionSourceBindingGuard } from "../../gateway/question-source-binding.js";
 import { createDeferredCore as deferred, type Deferred } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 // Collect the real transport before test deadlines; production still imports it lazily.
@@ -74,7 +75,7 @@ export async function withQuestionGateway(
             payload: { nonce: "synthetic-question-nonce", ts: Date.now() },
           }),
         );
-        socket.on("message", (raw) => {
+        const handleMessage = async (raw: RawData) => {
           const frame = JSON.parse(rawDataToString(raw)) as RequestFrame;
           const respond = (payload: unknown) => {
             if (socket.readyState === WebSocket.OPEN) {
@@ -122,6 +123,15 @@ export async function withQuestionGateway(
               waitStarted.resolve();
             } else if (frame.method === "question.resolve") {
               const request = frame.params as QuestionResolveParams;
+              const sourceBinding = prepareQuestionSourceBindingGuard(request.sourceBindingRoutes);
+              await sourceBinding.beforeConsume?.();
+              if (
+                !sourceBinding.authorize((ok, payload, error) => {
+                  socket.send(JSON.stringify({ type: "res", id: frame.id, ok, payload, error }));
+                })
+              ) {
+                return;
+              }
               const result =
                 "cancel" in request
                   ? manager.cancel(request.id, request.resolvedBy)
@@ -157,6 +167,9 @@ export async function withQuestionGateway(
               }),
             );
           }
+        };
+        socket.on("message", (raw) => {
+          void handleMessage(raw);
         });
       });
       try {

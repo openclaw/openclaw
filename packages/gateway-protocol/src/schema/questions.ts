@@ -17,6 +17,36 @@ const QuestionSecretStoreAllowedHostsSchema = Type.Array(
   { maxItems: 128, uniqueItems: true },
 );
 
+const QuestionSourceBindingConversationSchema = closedObject({
+  channel: NonEmptyString,
+  accountId: NonEmptyString,
+  conversationId: NonEmptyString,
+  parentConversationId: Type.Optional(NonEmptyString),
+});
+
+const QuestionSourceBindingSelectionSchema = Type.Union([
+  closedObject({ kind: Type.Literal("none") }),
+  closedObject({ kind: Type.Literal("unavailable") }),
+  closedObject({
+    kind: Type.Literal("binding"),
+    bindingId: NonEmptyString,
+    boundAt: Type.Integer({ minimum: 0 }),
+    targetSessionKey: NonEmptyString,
+    targetKind: Type.Union([Type.Literal("subagent"), Type.Literal("session")]),
+    conversation: QuestionSourceBindingConversationSchema,
+  }),
+]);
+
+export const QuestionSourceBindingRouteSchema = closedObject({
+  conversation: QuestionSourceBindingConversationSchema,
+  selection: QuestionSourceBindingSelectionSchema,
+});
+
+const QuestionSourceBindingRoutesSchema = Type.Array(QuestionSourceBindingRouteSchema, {
+  minItems: 1,
+  maxItems: 8,
+});
+
 export const QuestionOptionSchema = closedObject({
   label: NonEmptyString,
   description: Type.Optional(Type.String()),
@@ -128,11 +158,13 @@ export const QuestionResolveParamsSchema = Type.Union([
     ),
     resolvedBy: Type.Optional(NonEmptyString),
     resolutionId: Type.Optional(QuestionResolutionIdSchema),
+    sourceBindingRoutes: Type.Optional(withSince("2026.9", QuestionSourceBindingRoutesSchema)),
   }),
   closedObject({
     id: NonEmptyString,
     cancel: Type.Literal(true),
     resolvedBy: Type.Optional(NonEmptyString),
+    sourceBindingRoutes: Type.Optional(withSince("2026.9", QuestionSourceBindingRoutesSchema)),
   }),
 ]);
 
@@ -174,6 +206,7 @@ export type QuestionRequestParams = Static<typeof QuestionRequestParamsSchema>;
 export type QuestionRequestResult = Static<typeof QuestionRequestResultSchema>;
 export type QuestionWaitAnswerParams = Static<typeof QuestionWaitAnswerParamsSchema>;
 export type QuestionWaitAnswerResult = Static<typeof QuestionWaitAnswerResultSchema>;
+export type QuestionSourceBindingRoute = Static<typeof QuestionSourceBindingRouteSchema>;
 export type QuestionResolveParams = Static<typeof QuestionResolveParamsSchema>;
 export type QuestionResolveResult = Static<typeof QuestionResolveResultSchema>;
 export type QuestionGetParams = Static<typeof QuestionGetParamsSchema>;

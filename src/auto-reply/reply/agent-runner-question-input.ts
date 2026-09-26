@@ -12,7 +12,10 @@ import type { RunReplyAgentParams } from "./agent-runner-core.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
+import type { ReplyToolAuthorityOverlay } from "./reply-run-registry.contracts.js";
+import { claimPendingReplyMessageInjectionTarget, replyRunRegistry } from "./reply-run-registry.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.js";
+import { readPreparedConversationBindingSourceRoutes } from "./session-conversation-binding.js";
 
 type ReplyQuestionInputParams = Pick<
   RunReplyAgentParams,
@@ -29,6 +32,53 @@ type ReplyQuestionInputParams = Pick<
 type ReplyQuestionInputResult =
   | { handled: false }
   | { handled: true; payload: ReplyPayload | undefined };
+
+/** Claims before a successor operation can hide or supersede the waiting creator. */
+export async function claimPendingReplyQuestionInput(params: {
+  sessionKey: string;
+  text: string;
+  caller: ReplyToolAuthorityOverlay;
+  assertSourceCurrent: () => void;
+  assertPreparedCurrent?: () => Promise<void>;
+  sourceBindingRoutes?: Parameters<
+    typeof claimPendingAgentQuestionAnswerFromCaller
+  >[0]["sourceBindingRoutes"];
+  onAnswerProcessed?: () => void;
+  sourceRecorder?: Parameters<
+    typeof claimPendingAgentQuestionAnswerFromCaller
+  >[0]["sourceRecorder"];
+}): Promise<boolean> {
+  let claimed = await claimPendingAgentQuestionAnswerFromCaller({
+    sessionKey: params.sessionKey,
+    text: params.text,
+    caller: params.caller,
+    assertSourceCurrent: params.assertSourceCurrent,
+    assertPreparedCurrent: params.assertPreparedCurrent,
+    sourceBindingRoutes: params.sourceBindingRoutes,
+    onAnswerProcessed: params.onAnswerProcessed,
+    sourceRecorder: params.sourceRecorder,
+  });
+  if (claimed) {
+    return true;
+  }
+  const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(params.sessionKey);
+  if (!target) {
+    return false;
+  }
+  claimed = await claimPendingReplyMessageInjectionTarget({
+    target,
+    text: params.text,
+    options: {
+      isInboundUserMessage: true,
+      toolAuthorityOverlay: params.caller,
+      userTurnTranscriptRecorder: params.sourceRecorder,
+      questionSourceBindingRoutes: params.sourceBindingRoutes,
+    },
+    assertSourceCurrent: params.assertSourceCurrent,
+    assertPreparedCurrent: params.assertPreparedCurrent,
+  });
+  return claimed;
+}
 
 /** Question-only runtimes accept answers without exposing ordinary steering. */
 export async function runReplyQuestionInput(
@@ -74,11 +124,12 @@ export async function runReplyQuestionInput(
   const state = resolveReplyOperationRunState(opts);
   let outcome: { status: "answered" } | { status: "indeterminate"; errorMessage: string };
   try {
-    const claimed = await claimPendingAgentQuestionAnswerFromCaller({
+    const claimed = await claimPendingReplyQuestionInput({
       sessionKey,
       text,
       caller,
       assertSourceCurrent,
+      sourceBindingRoutes: readPreparedConversationBindingSourceRoutes(params.sessionCtx),
       sourceRecorder: followupRun.userTurnTranscriptRecorder,
       onAnswerProcessed: () => {
         if (state) {

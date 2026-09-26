@@ -2,8 +2,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../../sessions/user-turn-transcript.test-support.js";
-import type { AgentHarnessQuestionGatewayCall } from "../../harness/gateway-question-dispatch.js";
-import { runAgentHarnessGatewayQuestion } from "../../harness/gateway-question.js";
+import type {
+  AgentHarnessQuestionGatewayCall,
+  AgentQuestionDispatcher,
+} from "../../harness/gateway-question-dispatch.js";
+import {
+  registerPendingAgentQuestion,
+  runAgentHarnessGatewayQuestion,
+} from "../../harness/gateway-question.js";
 import { registerQueuedUserMessageRetirement } from "../../sessions/queued-user-message-retirement.js";
 import {
   reportSteeringMessagePersistenceFailure,
@@ -67,6 +73,47 @@ function steerWithDeliveryWait(
 }
 
 describe("embedded OpenClaw queued steering cancellation", () => {
+  it("lets a matching-authority Talk queue claim pending input without steering", async () => {
+    const sessionKey = "agent:main:talk-question";
+    const questionResolve = vi.fn();
+    const gatewayCall: AgentQuestionDispatcher = {
+      version: 2,
+      call: async (request) => {
+        if (request.authority.kind === "source-bound") {
+          request.authority.assertCurrent();
+        }
+        if (request.method === "question.resolve") {
+          questionResolve();
+        }
+        return {};
+      },
+    };
+    const question = registerPendingAgentQuestion({
+      sessionKey,
+      questionId: "ask_talk_question",
+      questions: [{ id: "answer", header: "Answer", question: "Continue?" }],
+      gatewayCall,
+    });
+    question.attachRegistration(Promise.resolve());
+    const steer = vi.fn(async () => undefined);
+    try {
+      await steerActiveSessionWithOptionalDeliveryWait(
+        { steer, subscribe: () => () => {} },
+        "Continue",
+        { isInboundUserMessage: true, toolAuthorityFingerprint: "creator-authority" },
+        sessionKey,
+        () => true,
+        { kind: "source-bound", assertCurrent: () => {} },
+        "creator-authority",
+      );
+
+      expect(questionResolve).toHaveBeenCalledOnce();
+      expect(steer).not.toHaveBeenCalled();
+    } finally {
+      question.dispose();
+    }
+  });
+
   it.each(["text", "offloaded", "recorded"] as const)(
     "keeps %s replies distinct from harness secrets",
     async (kind) => {

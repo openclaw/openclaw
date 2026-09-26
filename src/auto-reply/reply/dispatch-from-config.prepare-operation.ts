@@ -1,4 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  PreparedQuestionAnswerRefusedError,
+  QuestionAnswerUnconfirmedError,
+  QuestionDispatchRefusedError,
+} from "../../agents/harness/gateway-question-dispatch.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
@@ -13,12 +18,23 @@ import {
 } from "../../plugins/conversation-binding.js";
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
+import {
+  PLUGIN_COMMAND_DISPATCH,
+  type PluginCommandExecutionReplyOptions,
+} from "../../plugins/plugin-command-runtime.js";
+import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
-import type { ReplyPayload } from "../reply-payload.js";
+import { hasControlCommand } from "../command-detection.js";
+import {
+  markReplyPayloadForSourceSuppressionDelivery,
+  type ReplyPayload,
+} from "../reply-payload.js";
+import { claimPendingReplyQuestionInput } from "./agent-runner-question-input.js";
 import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
 } from "./dispatch-from-config.abort.js";
+import { shouldDeliverDespiteSourceReplySuppression } from "./dispatch-from-config.payloads.js";
 import { shouldBypassPluginOwnedBindingForCommand } from "./dispatch-from-config.plugin-binding.js";
 import type { PrepareDispatchOperationContextReadyState } from "./dispatch-from-config.prepare-context.js";
 import {
@@ -27,8 +43,12 @@ import {
 } from "./dispatch-from-config.runtime-loaders.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
+import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.js";
 import { extractShortModelName } from "./response-prefix-template.js";
-import { assertPreparedConversationBindingRouteCurrent } from "./session-conversation-binding.js";
+import {
+  assertPreparedConversationBindingRouteCurrent,
+  readPreparedConversationBindingSourceRoutes,
+} from "./session-conversation-binding.js";
 
 export async function prepareDispatchOperation(state: PrepareDispatchOperationContextReadyState) {
   const {
@@ -66,7 +86,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   const finishFastCommand = async (fast: {
     payload?: ReplyPayload;
     reason: "fast_abort" | "before_dispatch_handled";
-    logKind: "fast_abort" | "fast_approve";
+    logKind: "fast_abort" | "fast_approve" | "question_answer";
   }) => {
     if (pluginOwnedBinding) {
       await getSessionBindingService().touchAsync(
@@ -78,7 +98,10 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     emitMessageReceivedHooks();
     let queuedFinal = false;
     let routedFinalCount = 0;
-    if (!suppressDelivery && fast.payload) {
+    if (
+      fast.payload &&
+      (!suppressDelivery || shouldDeliverDespiteSourceReplySuppression(fast.payload, state))
+    ) {
       const selectedModel = resolveSessionModelRef(cfg, sessionStoreEntry.entry, sessionAgentId);
       const modelSelection = {
         ...selectedModel,
@@ -182,6 +205,93 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     }
   };
   await assertCurrentBindingRoute();
+
+  const questionText = ctx.commandText.trim();
+  params.replyOptions ??= {};
+  // SAFETY: Internal reply options carry the same opaque dispatch selected by the plugin runtime.
+  const pluginCommandReplyOptions = params.replyOptions as PluginCommandExecutionReplyOptions;
+  const isRegisteredPluginCommand =
+    questionText.startsWith("/") &&
+    shouldBypassPluginOwnedBindingForCommand(ctx, cfg, pluginCommandReplyOptions) &&
+    pluginCommandReplyOptions[PLUGIN_COMMAND_DISPATCH]?.kind === "plugin";
+  const canClaimQuestion =
+    Boolean(sessionKey) &&
+    Boolean(questionText) &&
+    !ctx.media?.length &&
+    ctx.InboundEventKind !== "room_event" &&
+    classifySessionStateActor({ inputProvenance: ctx.InputProvenance }).actorType === "human" &&
+    !hasControlCommand(questionText, cfg) &&
+    !isRegisteredPluginCommand;
+  if (canClaimQuestion && sessionKey) {
+    const authorization = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: ctx.CommandAuthorized,
+    });
+    const assertSourceCurrent = () => {
+      params.replyOptions?.abortSignal?.throwIfAborted();
+    };
+    const adoptClaimedQuestionAnswer = async () => {
+      try {
+        await params.replyOptions?.turnAdoptionLifecycle?.onAdopted();
+      } catch (error) {
+        logVerbose(`question input adoption failed after custody transferred: ${String(error)}`);
+      }
+    };
+    try {
+      const claimed = await claimPendingReplyQuestionInput({
+        sessionKey,
+        text: questionText,
+        caller: resolveInboundReplyToolAuthorityOverlay({
+          ctx,
+          sessionEntry: sessionStoreEntry.entry,
+          senderIsOwner: authorization.senderIsOwner,
+          toolsAllow: params.replyOptions?.toolsAllow,
+          disableTools: params.replyOptions?.disableTools === true,
+        }),
+        assertSourceCurrent,
+        assertPreparedCurrent: assertCurrentBindingRoute,
+        sourceBindingRoutes: readPreparedConversationBindingSourceRoutes(ctx),
+        sourceRecorder: params.replyOptions.userTurnTranscriptRecorder,
+      });
+      if (claimed) {
+        await adoptClaimedQuestionAnswer();
+        return await finishFastCommand({
+          reason: "before_dispatch_handled",
+          logKind: "question_answer",
+        });
+      }
+    } catch (error) {
+      if (error instanceof PreparedQuestionAnswerRefusedError) {
+        if (error.cause instanceof Error) {
+          throw error.cause;
+        }
+        throw error;
+      }
+      if (error instanceof QuestionDispatchRefusedError) {
+        return await finishFastCommand({
+          payload: markReplyPayloadForSourceSuppressionDelivery({
+            text: `The answer was not sent: ${error.message}. Use the question controls in the Control UI, or check the active run and your permissions before retrying.`,
+            isError: true,
+          }),
+          reason: "before_dispatch_handled",
+          logKind: "question_answer",
+        });
+      }
+      if (error instanceof QuestionAnswerUnconfirmedError) {
+        await adoptClaimedQuestionAnswer();
+        return await finishFastCommand({
+          payload: markReplyPayloadForSourceSuppressionDelivery({
+            text: error.message,
+            isError: true,
+          }),
+          reason: "before_dispatch_handled",
+          logKind: "question_answer",
+        });
+      }
+      throw error;
+    }
+  }
   const preDispatchAcquisition = await state.ensureDispatchReplyOperation(
     "pre_dispatch",
     Boolean(pluginOwnedBinding),

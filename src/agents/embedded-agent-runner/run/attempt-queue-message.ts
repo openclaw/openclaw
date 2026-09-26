@@ -10,6 +10,7 @@ import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-tra
 import {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
+  claimPendingAgentQuestionAnswerFromCaller,
 } from "../../harness/gateway-question.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { retireQueuedUserMessage } from "../../sessions/queued-user-message-retirement.js";
@@ -326,6 +327,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   sessionKey?: string,
   canInject?: () => boolean,
   authority?: Parameters<typeof claimPendingAgentQuestionAnswer>[0]["authority"],
+  creatorToolAuthorityFingerprint?: string,
 ): Promise<void | EmbeddedAgentQueueMessageResult> {
   const isInboundUserMessage = options?.isInboundUserMessage === true;
   const isPlainTextAnswer = !hasPromptImageInput(options);
@@ -351,7 +353,14 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   if (
     isInboundUserMessage &&
     isPlainTextAnswer &&
-    (await claimEmbeddedPendingUserInputAnswer(text, options, sessionKey, canInject, authority))
+    (await claimEmbeddedPendingUserInputAnswer(
+      text,
+      options,
+      sessionKey,
+      canInject,
+      authority,
+      creatorToolAuthorityFingerprint,
+    ))
   ) {
     options?.onQueueAccepted?.(true);
     return;
@@ -404,9 +413,23 @@ export async function claimEmbeddedPendingUserInputAnswer(
   sessionKey?: string,
   canInject?: () => boolean,
   authority?: Parameters<typeof claimPendingAgentQuestionAnswer>[0]["authority"],
+  creatorToolAuthorityFingerprint?: string,
+  assertPreparedCurrent?: () => Promise<void>,
 ): Promise<boolean> {
   if (options?.isInboundUserMessage !== true || hasPromptImageInput(options)) {
     return false;
+  }
+  if (authority?.kind === "source-bound") {
+    return claimPendingAgentQuestionAnswerFromCaller({
+      sessionKey,
+      text,
+      sourceRecorder: options.userTurnTranscriptRecorder,
+      callerFingerprint: options.toolAuthorityFingerprint,
+      creatorFingerprint: creatorToolAuthorityFingerprint,
+      assertSourceCurrent: authority.assertCurrent,
+      assertPreparedCurrent,
+      sourceBindingRoutes: options.questionSourceBindingRoutes,
+    });
   }
   const claimed = await claimPendingAgentQuestionAnswer({
     sessionKey,

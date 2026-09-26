@@ -367,6 +367,118 @@ describe("gateway harness questions", () => {
     expect(persist).not.toHaveBeenCalled();
   });
 
+  it("carries source binding identity to the gateway resolution boundary", async () => {
+    const sessionKey = "agent:main:source-binding-route";
+    const gatewayCall = vi.fn().mockResolvedValue(undefined);
+    const question = registerPendingAgentQuestion({
+      questionId: "ask_source_binding_route",
+      sessionKey,
+      questions,
+      gatewayCall: { version: 2, call: gatewayCall },
+    });
+    question.attachRegistration(Promise.resolve());
+    const conversation = {
+      channel: "webchat",
+      accountId: "default",
+      conversationId: "source-binding-route",
+    };
+    const sourceBindingRoutes = [
+      {
+        conversation,
+        selection: {
+          kind: "binding" as const,
+          bindingId: "binding-source",
+          boundAt: 1,
+          targetSessionKey: sessionKey,
+          targetKind: "session" as const,
+          conversation,
+        },
+      },
+    ];
+    try {
+      await expect(
+        claimPendingAgentQuestionAnswerFromCaller({
+          sessionKey,
+          text: "Continue",
+          callerFingerprint: "source-binding-policy",
+          creatorFingerprint: "source-binding-policy",
+          assertSourceCurrent: () => {},
+          sourceBindingRoutes,
+        }),
+      ).resolves.toBe(true);
+      expect(gatewayCall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "question.resolve",
+          params: expect.objectContaining({ sourceBindingRoutes }),
+        }),
+      );
+    } finally {
+      question.dispose();
+    }
+  });
+
+  it.each([
+    {
+      label: "matching",
+      callerFingerprint: "creator-policy",
+      creatorFingerprint: "creator-policy",
+      accepted: true,
+    },
+    {
+      label: "mismatched",
+      callerFingerprint: "other-policy",
+      creatorFingerprint: "creator-policy",
+      accepted: false,
+    },
+    {
+      label: "missing-creator",
+      callerFingerprint: "creator-policy",
+      creatorFingerprint: undefined,
+      accepted: false,
+    },
+  ])("checks a $label cross-runtime caller against the frozen creator", async (testCase) => {
+    await withQuestionGateway(async (fixture) => {
+      const sessionKey = `agent:main:fingerprint-${testCase.label}`;
+      const promptDelivered = createDeferred();
+      const run = runAgentHarnessGatewayQuestion({
+        questionId: `ask_fingerprint_${testCase.label}`,
+        sessionKey,
+        runId: `fingerprint-${testCase.label}-run`,
+        questions,
+        timeoutMs: 60_000,
+        signal: fixture.backingRun.signal,
+        delivery: { onBlockReply: async () => promptDelivered.resolve() },
+      });
+      await Promise.all([fixture.waitStarted, promptDelivered.promise]);
+
+      const claim = claimPendingAgentQuestionAnswerFromCaller({
+        sessionKey,
+        text: "Continue",
+        callerFingerprint: testCase.callerFingerprint,
+        creatorFingerprint: testCase.creatorFingerprint,
+        assertSourceCurrent: () => {},
+      });
+      if (testCase.accepted) {
+        await expect(claim).resolves.toBe(true);
+      } else {
+        await expect(claim).rejects.toBeInstanceOf(QuestionDispatchRefusedError);
+        await expect(
+          claimPendingAgentQuestionAnswerFromCaller({
+            sessionKey,
+            text: "Continue",
+            callerFingerprint: "creator-policy",
+            creatorFingerprint: "creator-policy",
+            assertSourceCurrent: () => {},
+          }),
+        ).resolves.toBe(true);
+      }
+      await expect(run).resolves.toEqual({
+        status: "answered",
+        answers: { answers: { answer: ["Continue"] } },
+      });
+    });
+  });
+
   it.each([
     { change: "open", cancel: false },
     { change: "closed", cancel: false },

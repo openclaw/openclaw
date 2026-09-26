@@ -1,15 +1,43 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import type { AgentQuestionDispatcher } from "../../agents/harness/gateway-question-dispatch.js";
-import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
+import {
+  claimPendingAgentQuestionAnswer,
+  registerPendingAgentQuestion,
+} from "../../agents/harness/gateway-question.js";
 import {
   createAgentQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
 } from "../../agents/harness/host-private-capabilities.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import {
+  copyConversationBindingRouteFacts,
+  readConversationBindingRouteFacts,
+  withConversationBindingRouteFacts,
+} from "../../channels/conversation-binding-route-facts.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  listSessionPendingInputs,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { EmbeddedQuestionBroker } from "../../infra/embedded-question-broker.js";
+import {
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
+  type SessionBindingAdapter,
+  type SessionBindingRecord,
+} from "../../infra/outbound/session-binding-service.js";
+import { registerPluginCommand } from "../../plugins/commands.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import {
+  createTestUserTurnTranscriptTarget,
+  readTranscriptMessages,
+} from "../../sessions/user-turn-transcript.test-support.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
@@ -154,6 +182,320 @@ function createQuestionDispatch(name: string) {
 }
 
 describe("dispatch input custody after a question response", () => {
+  it("keeps an authorized registered plugin command out of a pending question", async () => {
+    const sessionKey = "agent:main:discord:direct:plugin-command-question";
+    sessionStoreMocks.currentEntry = {
+      sessionId: "plugin-command-question",
+      updatedAt: Date.now(),
+    };
+    const pluginHandler = vi.fn(async () => ({ text: "paired" }));
+    expect(
+      registerPluginCommand("test-plugin", {
+        name: "pair-test",
+        description: "Pair test command",
+        handler: pluginHandler,
+      }),
+    ).toEqual({ ok: true });
+    const resolved = vi.fn();
+    const gatewayCall: AgentQuestionDispatcher = {
+      version: 2,
+      call: async (request) => {
+        if (request.authority.kind === "source-bound") {
+          request.authority.assertCurrent();
+        }
+        if (request.method === "question.resolve") {
+          resolved();
+        }
+        return {};
+      },
+    };
+    const question = registerPendingAgentQuestion({
+      sessionKey,
+      questionId: "ask_plugin_command_question",
+      questions: [{ id: "answer", header: "Answer", question: "Continue?" }],
+      gatewayCall,
+    });
+    question.attachRegistration(Promise.resolve());
+    const command = "/pair-test";
+    const replyResolver = vi.fn(async () => ({ text: "normal command path" }));
+    try {
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "direct",
+          From: "user:plugin-command",
+          To: "channel:plugin-command",
+          SessionKey: sessionKey,
+          MessageSid: "plugin-command-answer",
+          Body: command,
+          RawBody: command,
+          BodyForAgent: command,
+          BodyForCommands: command,
+          CommandBody: command,
+          CommandSource: "text",
+          CommandAuthorized: true,
+        }),
+        cfg: { ...automaticDirectReplyConfig, commands: { text: true } },
+        dispatcher: createDispatcher(),
+        replyResolver,
+      });
+
+      expect(replyResolver).toHaveBeenCalledOnce();
+      expect(resolved).not.toHaveBeenCalled();
+      await expect(claimPendingAgentQuestionAnswer({ sessionKey, text: "Continue" })).resolves.toBe(
+        true,
+      );
+      expect(resolved).toHaveBeenCalledOnce();
+    } finally {
+      question.dispose();
+    }
+  });
+
+  it.each([
+    ["before dispatch", "before-dispatch"],
+    ["after claim entry", "after-claim"],
+  ] as const)("refuses a reassigned conversation binding %s", async (when, slug) => {
+    const sessionKey = `agent:main:webchat:direct:stale-binding-${slug}`;
+    const conversation = {
+      channel: "webchat",
+      accountId: "default",
+      conversationId: `stale-binding-${slug}`,
+    };
+    const observed: SessionBindingRecord = {
+      bindingId: "binding-observed",
+      boundAt: 1,
+      targetKind: "session",
+      targetSessionKey: sessionKey,
+      conversation,
+      status: "active",
+    };
+    const reassigned: SessionBindingRecord = {
+      ...observed,
+      bindingId: "binding-reassigned",
+      boundAt: 2,
+    };
+    let binding = when === "before dispatch" ? reassigned : observed;
+    sessionStoreMocks.currentEntry = {
+      sessionId: `stale-binding-${slug}`,
+      updatedAt: Date.now(),
+    };
+    const resolved = vi.fn();
+    const gatewayCall: AgentQuestionDispatcher = {
+      version: 2,
+      call: async (request) => {
+        if (request.method === "question.resolve") {
+          resolved();
+        }
+        return {};
+      },
+    };
+    let claimStarted = false;
+    let releaseRegistration = () => {};
+    const registration =
+      when === "before dispatch"
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            releaseRegistration = resolve;
+          });
+    const authority = createAgentQuestionAnswerAuthority({
+      sessionKey,
+      fingerprint: "binding-question",
+      project: () => "binding-question",
+      assertActive: () => {
+        claimStarted = true;
+      },
+    });
+    const question = withAgentQuestionAnswerAuthority(authority, () =>
+      registerPendingAgentQuestion({
+        sessionKey,
+        questionId: `ask_stale_binding_${slug}`,
+        questions: [{ id: "answer", header: "Answer", question: "Continue?" }],
+        gatewayCall,
+      }),
+    );
+    question.attachRegistration(registration);
+    const adapter: SessionBindingAdapter = {
+      channel: conversation.channel,
+      accountId: conversation.accountId,
+      listBySession: () => [binding],
+      inspectByConversation: () => binding,
+      inspectByConversationAsync: async () => binding,
+      resolveByConversation: () => binding,
+      resolveByConversationAsync: async () => binding,
+      touchAsync: async () => undefined,
+    };
+    registerSessionBindingAdapter(adapter);
+    const route = withConversationBindingRouteFacts(
+      { sessionKey, agentId: "main" },
+      { kind: "agent", binding: observed, sessionKey },
+      "main",
+      conversation,
+    );
+    const answer = "Continue";
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      ChatType: "direct",
+      From: `user:${slug}`,
+      To: `channel:${slug}`,
+      AgentId: "main",
+      SessionKey: sessionKey,
+      MessageSid: `${slug}-answer`,
+      Body: answer,
+      RawBody: answer,
+      BodyForAgent: answer,
+      BodyForCommands: answer,
+      CommandBody: answer,
+      CommandSource: "text",
+      CommandAuthorized: true,
+    });
+    copyConversationBindingRouteFacts(route, ctx);
+    const routeFacts = readConversationBindingRouteFacts(ctx);
+    expect(routeFacts?.kind === "agent" ? routeFacts.bindingId : undefined).toBe(
+      "binding-observed",
+    );
+    const replyResolver = vi.fn(async () => ({ text: "should not start a turn" }));
+    const pending = dispatchReplyFromConfig({
+      ctx,
+      cfg: automaticDirectReplyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+    try {
+      if (when === "after claim entry") {
+        await vi.waitFor(() => expect(claimStarted).toBe(true));
+        binding = reassigned;
+        releaseRegistration();
+      }
+      await expect(pending).rejects.toMatchObject({
+        code: "SESSION_WORK_START_CHANGED",
+        message: expect.stringContaining("Conversation binding changed"),
+      });
+      expect(resolved).not.toHaveBeenCalled();
+      expect(replyResolver).not.toHaveBeenCalled();
+    } finally {
+      releaseRegistration();
+      unregisterSessionBindingAdapter({
+        channel: adapter.channel,
+        accountId: adapter.accountId,
+        adapter,
+      });
+      question.dispose();
+    }
+  });
+
+  it("persists a staged inbound answer before question resolution", async () => {
+    const sessionKey = "agent:main:webchat:direct:staged-question";
+    const sessionId = "staged-question";
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ask-user-staged-"));
+    const storePath = path.join(dir, "sessions.sqlite");
+    const target = createTestUserTurnTranscriptTarget({ sessionId, sessionKey, storePath });
+    const answer = "Continue";
+    sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+    const order: string[] = [];
+    const resolved = vi.fn();
+    const adapter: SessionBindingAdapter = {
+      channel: "webchat",
+      accountId: "default",
+      listBySession: () => [],
+      inspectByConversation: () => null,
+      inspectByConversationAsync: async () => null,
+      resolveByConversation: () => null,
+      resolveByConversationAsync: async () => null,
+      touchAsync: async () => undefined,
+    };
+    registerSessionBindingAdapter(adapter);
+    try {
+      await replaceSessionEntry(target, { sessionId, updatedAt: Date.now() });
+      const recorder = createUserTurnTranscriptRecorder({
+        target,
+        input: { text: answer, idempotencyKey: "staged-question:user" },
+      });
+      expect(
+        await recorder.stageApproved?.({ runId: "staged-question", assertCurrent: () => {} }),
+      ).toBe(true);
+      expect(listSessionPendingInputs(target).total).toBe(1);
+      const persist = recorder.persistApproved.bind(recorder);
+      vi.spyOn(recorder, "persistApproved").mockImplementation(async (options) => {
+        const result = await persist(options);
+        order.push(recorder.hasPersisted() ? "persisted" : "not-persisted");
+        return result;
+      });
+      const authority = createAgentQuestionAnswerAuthority({
+        sessionKey,
+        fingerprint: "staged-question",
+        project: () => "staged-question",
+        assertActive: () => {},
+        admitTranscriptAnswer: (source) => {
+          order.push(source?.hasPersisted() ? "admitted" : "not-admitted");
+        },
+      });
+      const gatewayCall: AgentQuestionDispatcher = {
+        version: 2,
+        call: async (request) => {
+          if (request.method === "question.resolve") {
+            order.push("resolved");
+            resolved();
+          }
+          return {};
+        },
+      };
+      const question = withAgentQuestionAnswerAuthority(authority, () =>
+        registerPendingAgentQuestion({
+          sessionKey,
+          questionId: "ask_staged",
+          questions: [{ id: "answer", header: "Answer", question: "Continue?" }],
+          gatewayCall,
+        }),
+      );
+      question.attachRegistration(Promise.resolve());
+      const replyResolver = vi.fn(async () => ({ text: "should not start a turn" }));
+      try {
+        await dispatchReplyFromConfig({
+          ctx: buildTestCtx({
+            Provider: "webchat",
+            Surface: "webchat",
+            ChatType: "direct",
+            From: "user:staged-question",
+            To: "channel:staged-question",
+            AgentId: "main",
+            SessionKey: sessionKey,
+            MessageSid: "staged-question-answer",
+            Body: answer,
+            RawBody: answer,
+            BodyForAgent: answer,
+            BodyForCommands: answer,
+            CommandBody: answer,
+            CommandSource: "text",
+            CommandAuthorized: true,
+          }),
+          cfg: automaticDirectReplyConfig,
+          dispatcher: createDispatcher(),
+          replyOptions: { userTurnTranscriptRecorder: recorder },
+          replyResolver,
+        });
+        expect(order).toEqual(["persisted", "admitted", "resolved"]);
+        expect(listSessionPendingInputs(target).total).toBe(0);
+        expect(await readTranscriptMessages({ sessionId, sessionKey, storePath })).toEqual([
+          expect.objectContaining({ role: "user", content: answer }),
+        ]);
+        expect(resolved).toHaveBeenCalledOnce();
+        expect(replyResolver).not.toHaveBeenCalled();
+      } finally {
+        unregisterSessionBindingAdapter({
+          channel: adapter.channel,
+          accountId: adapter.accountId,
+          adapter,
+        });
+        question.dispose();
+      }
+    } finally {
+      await closeOpenClawAgentDatabasesAsync(dir);
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   // Real question/receipt classification is covered by the wire regression. Here
   // the real dispatch owner must preserve that recorded fact through source faults.
   it.each(

@@ -522,6 +522,95 @@ raw callback string. Actor and source-message checks remain channel-owned.
       (for example the Microsoft Teams or Google Chat plugin package) for real patterns.
     </Note>
 
+    <a id="release-inbound-on-adoption"></a>
+
+    ### Release plugin queues when core adopts the turn
+
+    A plugin-owned per-chat queue or mutex is an **admission** lane. It may keep
+    same-chat events ordered until OpenClaw adopts, defers, or abandons an inbound
+    turn, but it must not hold the lane until the returned dispatch promise settles.
+    `dispatchReplyWithBufferedBlockDispatcher(...)` and the channel inbound
+    `run`/`dispatch` helpers can remain pending for the complete agent turn. In
+    particular, an active `ask_user` or `secrets` request can keep that promise
+    open until the user answers or the request times out.
+
+    Pass a `turnAdoptionLifecycle` through `replyOptions`, and release the
+    plugin-owned lane from `onAdopted`, `onDeferred`, or `onAbandoned`. Keep the
+    full dispatch promise separately so callers can still observe delivery errors;
+    use its settlement only as a fallback when core never reaches an adoption
+    callback. Make every release path idempotent.
+
+    ```typescript
+    const chatAdmissionTails = new Map<string, Promise<void>>();
+
+    function enqueueChatAdmission(
+      chatId: string,
+      dispatch: (lifecycle: {
+        admission: "exclusive";
+        onAdopted: () => void;
+        onDeferred: () => void;
+        onAbandoned: () => void;
+      }) => Promise<void>,
+    ): Promise<void> {
+      const previous = chatAdmissionTails.get(chatId) ?? Promise.resolve();
+      let finish!: () => void;
+      let fail!: (error: unknown) => void;
+      const completion = new Promise<void>((resolve, reject) => {
+        finish = resolve;
+        fail = reject;
+      });
+
+      const admit = async () => {
+        let release!: () => void;
+        const adopted = new Promise<void>((resolve) => {
+          let released = false;
+          release = () => {
+            if (!released) {
+              released = true;
+              resolve();
+            }
+          };
+        });
+        const lifecycle = {
+          admission: "exclusive" as const,
+          onAdopted: release,
+          onDeferred: release,
+          onAbandoned: release,
+        };
+        void Promise.resolve()
+          .then(() => dispatch(lifecycle))
+          .then(finish, fail)
+          .finally(release);
+        await adopted;
+      };
+
+      const tail = previous.then(admit, admit);
+      chatAdmissionTails.set(chatId, tail);
+      void tail.finally(() => {
+        if (chatAdmissionTails.get(chatId) === tail) chatAdmissionTails.delete(chatId);
+      });
+      return completion;
+    }
+
+    await enqueueChatAdmission(chatId, async (turnAdoptionLifecycle) => {
+      await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+        ctx,
+        cfg,
+        dispatcherOptions,
+        replyOptions: { turnAdoptionLifecycle },
+      });
+    });
+    ```
+
+    Do not pre-claim raw text outside normal dispatch. Sending every event through
+    the official channel inbound dispatch preserves `/stop`, `/new`, and `/reset`
+    routing, pending question creator authority, input custody, and existing
+    queue/steer/fence behavior. After fast control-command handling and before
+    admitting a successor reply operation, core offers eligible plain text to the
+    active run's pending `ask_user` or `secrets` request. When that request accepts
+    the text, core consumes it without starting or replaying a second agent turn.
+    With no pending request, ordinary dispatch behavior is unchanged.
+
     Routes registered with `auth: "gateway"` use the Gateway's credential
     checks. Before a handler discloses protected data, performs a mutation, or starts other side effects,
     finish reading and validating its body and waiting for queued work, then call

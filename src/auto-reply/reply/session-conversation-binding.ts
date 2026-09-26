@@ -2,6 +2,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { QuestionSourceBindingRoute } from "../../../packages/gateway-protocol/src/schema/questions.js";
 import {
   matchesConversationBindingRouteFacts,
   readConversationBindingRouteFacts,
@@ -159,6 +160,38 @@ export async function assertPreparedConversationBindingRouteCurrent(
   if (!resolveCommandTurnTargetSessionKey(ctx)) {
     await readPreparedConversationBindingRouteCurrent(ctx);
   }
+}
+
+/** Carries the prepared durable owner identity to the Gateway commit boundary. */
+export function readPreparedConversationBindingSourceRoutes(
+  ctx: MsgContext,
+): QuestionSourceBindingRoute[] | undefined {
+  if (resolveCommandTurnTargetSessionKey(ctx)) {
+    return undefined;
+  }
+  const observations = readConversationBindingRouteObservations(ctx);
+  if (observations.length === 0) {
+    return undefined;
+  }
+  return observations.map((expected): QuestionSourceBindingRoute => {
+    if (!("bindingId" in expected)) {
+      return {
+        conversation: { ...expected.conversation },
+        selection: { kind: expected.kind },
+      };
+    }
+    return {
+      conversation: { ...expected.conversation },
+      selection: {
+        kind: "binding",
+        bindingId: expected.bindingId,
+        boundAt: expected.boundAt,
+        targetSessionKey: expected.targetSessionKey,
+        targetKind: expected.targetKind,
+        conversation: { ...expected.bindingConversation },
+      },
+    };
+  });
 }
 
 export async function resolveSessionConversationBinding(params: {

@@ -39,6 +39,7 @@ import {
   questionBroadcastOptions,
 } from "../question-session-access.js";
 import type { QuestionSessionAccess } from "../question-session-access.types.js";
+import { prepareQuestionSourceBindingGuard } from "../question-source-binding.js";
 import { questionShapeError } from "../question-validation.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { isGatewayAdmin } from "../session-sharing.js";
@@ -494,6 +495,7 @@ export function createQuestionHandlers(
         const observation = question ? manager.observe(request.id, question) : null;
         const authorize = prepareQuestionAuthorization(options, observation, request.id, "mutate");
         let reload: { name: string; result: ReturnType<QuestionManager["resolve"]> } | undefined;
+        const sourceBinding = prepareQuestionSourceBindingGuard(request.sourceBindingRoutes);
         await withPreparedQuestionSessions(
           options,
           [authorize.target],
@@ -501,6 +503,9 @@ export function createQuestionHandlers(
             const authorizationError = authorize.authorize(prepared);
             if (authorizationError) {
               respond(false, undefined, authorizationError);
+              return;
+            }
+            if (!sourceBinding.authorize(respond)) {
               return;
             }
             if ("cancel" in request) {
@@ -600,6 +605,7 @@ export function createQuestionHandlers(
             includeMembers:
               !readGatewayRequestMutationAuthority(options).sessionScope &&
               hasOperatorBoundary(client, options.context.getRuntimeConfig()),
+            beforeConsume: sourceBinding.beforeConsume,
           },
         );
         if (reload) {

@@ -30,6 +30,7 @@ import {
   type ReplyMessageInjectionRejectionReason,
   type ReplyMessageInjectionTarget,
   type ReplyOperation,
+  type ReplyToolAuthorityOverlay,
 } from "./reply-run-registry.contracts.js";
 import {
   getAttachedBackend,
@@ -435,6 +436,101 @@ export function beginReplyMessageInjectionTarget(
     acceptance: acceptance.promise,
     outcome,
   };
+}
+
+/** Claims only a pending user-input request on one exact active reply operation. */
+export async function claimPendingReplyMessageInjectionTarget(params: {
+  target: ReplyMessageInjectionTarget;
+  text: string;
+  options: Omit<ReplyMessageInjectionOptions, "toolAuthorityOverlay"> & {
+    toolAuthorityOverlay: ReplyToolAuthorityOverlay;
+  };
+  assertSourceCurrent: () => void;
+  assertPreparedCurrent?: () => Promise<void>;
+}): Promise<boolean> {
+  const operation = params.target[replyMessageInjectionTargetOperation];
+  if (
+    replyRunState.activeRunsByKey.get(operation.key) !== operation ||
+    operation.result ||
+    operation.phase !== "running" ||
+    isReplyRunEvidenceStale(operation)
+  ) {
+    return false;
+  }
+  const backend = getAttachedBackend(operation);
+  const guarded = backend?.messageInjectionV2;
+  if (!backend || guarded?.version !== 2 || !guarded.claimPendingUserInputAnswer) {
+    return false;
+  }
+  const canInject = () => {
+    params.assertSourceCurrent();
+    return (
+      replyRunState.activeRunsByKey.get(operation.key) === operation &&
+      !operation.result &&
+      operation.phase === "running" &&
+      getAttachedBackend(operation) === backend
+    );
+  };
+  const assertCurrent = createMessageInjectionAuthority(canInject);
+  const assertTargetCurrent = () => {
+    try {
+      assertCurrent();
+    } catch (error) {
+      throw new QuestionDispatchRefusedError(
+        error instanceof Error ? error.message : "question answer authority refused",
+        { cause: error },
+      );
+    }
+  };
+  assertTargetCurrent();
+  try {
+    if (!guarded.isAvailable()) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  const { toolAuthorityOverlay, ...backendOptions } = params.options;
+  const projectedToolAuthorityFingerprint =
+    operation.projectToolAuthorityFingerprint(toolAuthorityOverlay);
+  const creatorToolAuthorityFingerprint = normalizeOptionalString(
+    backend.toolAuthorityFingerprint ?? operation.toolAuthorityFingerprint,
+  );
+  const assertClaimCurrent = () => {
+    assertTargetCurrent();
+    if (
+      !creatorToolAuthorityFingerprint ||
+      projectedToolAuthorityFingerprint !== creatorToolAuthorityFingerprint
+    ) {
+      throw new QuestionDispatchRefusedError(
+        "question answer caller policy does not match its creator",
+      );
+    }
+    assertTargetCurrent();
+  };
+  // An absent question must fall through as an ordinary message. V2 sinks call
+  // this assertion only after they find and reserve a real pending input, then
+  // again at final I/O; projection itself still receives an immediate liveness check.
+  const claimOptions = {
+    ...backendOptions,
+    toolAuthorityFingerprint: projectedToolAuthorityFingerprint,
+  };
+  assertTargetCurrent();
+  if (!params.assertPreparedCurrent) {
+    return guarded.claimPendingUserInputAnswer(
+      params.text,
+      claimOptions,
+      assertClaimCurrent,
+      "source-bound",
+    );
+  }
+  return guarded.claimPendingUserInputAnswer(
+    params.text,
+    claimOptions,
+    assertClaimCurrent,
+    "source-bound",
+    params.assertPreparedCurrent,
+  );
 }
 
 /** Finalize adoption and cleanup on the captured operation without rediscovery. */

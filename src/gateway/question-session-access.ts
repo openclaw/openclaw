@@ -88,7 +88,11 @@ export async function withPreparedQuestionSessions<T>(
   options: GatewayRequestHandlerOptions,
   questions: readonly QuestionTarget[],
   consume: (prepared: readonly (PreparedQuestionSession | undefined)[]) => T,
-  operation: { assertCurrent: () => void; includeMembers?: boolean },
+  operation: {
+    assertCurrent: () => void;
+    includeMembers?: boolean;
+    beforeConsume?: () => Promise<void>;
+  },
 ): Promise<T> {
   const signal = getAsyncWorkSignal();
   while (true) {
@@ -163,7 +167,13 @@ export async function withPreparedQuestionSessions<T>(
       }
     });
     try {
-      const outcome = await withSessionEntriesFromStoresInWorker([...groups.values()], (reads) => {
+      const readPrepared = <TResult>(
+        readConsumer: (reads: readonly PreparedSessionEntryWorkerRead[]) => TResult,
+      ) =>
+        withSessionEntriesFromStoresInWorker([...groups.values()], readConsumer, {
+          beforeConsume: operation.beforeConsume,
+        });
+      const outcome = await readPrepared((reads) => {
         readSignal?.throwIfAborted();
         operation.assertCurrent();
         if (

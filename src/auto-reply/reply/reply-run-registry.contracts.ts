@@ -1,3 +1,4 @@
+import type { QuestionSourceBindingRoute } from "../../../packages/gateway-protocol/src/schema/questions.js";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { CurrentInboundPromptContext } from "../../agents/internal-runtime-context.js";
 import type { ReplyExpectation } from "../../agents/reply-completion.js";
@@ -32,6 +33,8 @@ export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
 export type ReplyBackendQueueMessageOptions = {
   /** Prepared context for this queue item, separate from its transcript and answer text. */
   currentInboundContext?: CurrentInboundPromptContext;
+  /** Durable conversation owners that must still match at Gateway question commit. */
+  questionSourceBindingRoutes?: readonly QuestionSourceBindingRoute[];
   steeringMode?: "all";
   /** True when this queue item came from the channel's current user turn. */
   isInboundUserMessage?: boolean;
@@ -141,6 +144,7 @@ export type ReplyBackendMessageInjectionV2 = {
     options: ReplyBackendQueueMessageOptions | undefined,
     assertCurrent: () => void,
     authorityKind: "run" | "source-bound",
+    assertPreparedCurrent?: () => Promise<void>,
   ): Promise<boolean>;
   cancelPendingUserInput?(
     resolvedBy: string,
