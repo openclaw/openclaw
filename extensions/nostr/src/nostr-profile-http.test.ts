@@ -13,10 +13,11 @@ type NostrProfileHttpContext = Parameters<typeof createNostrProfileHttpHandler>[
 const runtimeScopeMock = vi.hoisted(() => vi.fn());
 const clearProfileRateLimiterMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./nostr-profile-http-runtime.js", async () => {
-  const webhookIngress = await import("openclaw/plugin-sdk/webhook-ingress");
-  const requestGuards = await import("openclaw/plugin-sdk/webhook-request-guards");
+vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => {
+  const webhookIngress =
+    await importOriginal<typeof import("openclaw/plugin-sdk/webhook-ingress")>();
   return {
+    ...webhookIngress,
     createFixedWindowRateLimiter: (
       ...args: Parameters<typeof webhookIngress.createFixedWindowRateLimiter>
     ) => {
@@ -24,11 +25,13 @@ vi.mock("./nostr-profile-http-runtime.js", async () => {
       clearProfileRateLimiterMock.mockImplementation(() => limiter.clear());
       return limiter;
     },
-    readJsonBodyWithLimit: requestGuards.readJsonBodyWithLimit,
-    requestBodyErrorToText: requestGuards.requestBodyErrorToText,
-    getPluginRuntimeGatewayRequestScope: runtimeScopeMock,
   };
 });
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>()),
+  getPluginRuntimeGatewayRequestScope: runtimeScopeMock,
+}));
 
 // Mock the channel exports
 vi.mock("./channel.js", () => ({

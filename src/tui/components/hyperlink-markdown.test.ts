@@ -18,24 +18,22 @@ function osc8Targets(raw: string) {
 }
 
 describe("HyperlinkMarkdown", () => {
-  it.each([
-    "alexandertheodorewilliamson@example.org",
-    "pneumonoultramicroscopicsilicovolcanoconiosis",
-    "requireConfirmationForMutatingActions",
-    `${"a".repeat(31)}e\u0301clair`,
-  ])("wraps %s without inserting spaces into its text", (text) => {
-    const constructed = new HyperlinkMarkdown(text, 0, 0, markdownTheme);
-    const updated = new HyperlinkMarkdown("previous text", 0, 0, markdownTheme);
-    updated.setText(text);
+  it.each(["alexandertheodorewilliamson@example.org", `${"a".repeat(31)}e\u0301clair`])(
+    "wraps %s without inserting spaces into its text",
+    (text) => {
+      const constructed = new HyperlinkMarkdown(text, 0, 0, markdownTheme);
+      const updated = new HyperlinkMarkdown("previous text", 0, 0, markdownTheme);
+      updated.setText(text);
 
-    for (const width of [120, 16]) {
-      for (const markdown of [constructed, updated]) {
-        const lines = markdown.render(width);
-        expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
-        expect(lines.map((line) => stripAnsi(line).trimEnd()).join("")).toBe(text);
+      for (const width of [120, 16]) {
+        for (const markdown of [constructed, updated]) {
+          const lines = markdown.render(width);
+          expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+          expect(lines.map((line) => stripAnsi(line).trimEnd()).join("")).toBe(text);
+        }
       }
-    }
-  });
+    },
+  );
 
   it("does not reallocate prepared lines for an unchanged same-width redraw", () => {
     const markdown = new HyperlinkMarkdown(

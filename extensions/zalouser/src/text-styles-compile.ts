@@ -6,11 +6,7 @@ import {
   type MarkdownIRWithBlockMetadata,
   type TextEdit,
 } from "./text-styles-shared.js";
-import {
-  sourceContainerPrefixLength,
-  sourceContainerProjection,
-  sourceListItemContent,
-} from "./text-styles-source-spans.js";
+import { sourceContainerProjection, sourceListItemContent } from "./text-styles-source-spans.js";
 import { sourceAtxIsMarkerOnly } from "./text-styles-source.js";
 import { TextStyle } from "./zca-constants.js";
 
@@ -477,14 +473,14 @@ function normalizeCodeBlock(
       }
       const lineIndex = sourceStartLine + index;
       const rawLine = sourceLines[lineIndex] ?? "";
-      const prefixLength = sourceContainerPrefixLength(
+      const prefixLength = sourceContainerProjection(
         rawLine,
         lineIndex,
         ir,
         sourceLineStarts,
         sourceLines,
         blockquoteDepth,
-      );
+      ).offset;
       const sourceContent = rawLine.slice(prefixLength);
       return /^[ \t]+$/u.test(sourceContent)
         ? normalizeCodeBlockLeadingWhitespace(sourceContent)

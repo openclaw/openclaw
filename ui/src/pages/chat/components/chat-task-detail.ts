@@ -9,6 +9,7 @@ import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-backgro
 import { uiConversationMatches } from "../../../lib/sessions/session-key.ts";
 import {
   isActiveTask,
+  newestTaskSnapshot,
   taskDetail,
   taskRuntimeLabel,
   taskTimestampMs,
@@ -21,7 +22,6 @@ import {
   backgroundTaskStatusLabel,
   backgroundTaskIsExecuting,
   backgroundTaskDeliveryLabel,
-  newestTaskSnapshot,
   STATUS_TONES,
 } from "./chat-background-tasks-shared.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
@@ -53,28 +53,23 @@ export function renderTaskDetailPanel(params: {
   if (!task) {
     resetTaskDetail(params.host);
     const error = taskId ? backgroundTasks.taskDetailErrors.get(taskId) : undefined;
-    if (
+    const loading =
       !error &&
       (backgroundTasks.loading ||
         (backgroundTasks.connected && backgroundTasks.tasks === null && !backgroundTasks.error) ||
-        (taskId && backgroundTasks.taskDetailLoadingIds.has(taskId)))
-    ) {
-      return html`
-        <div class="sidebar-panel chat-task-detail" data-task-detail-panel>
-          ${renderTaskHeader(t("chat.backgroundTasks.taskDetailTitle"), undefined, undefined, params.onBack)}
-          ${renderBackgroundTasksError(backgroundTasks.error)}
-          ${renderPanelLoadingSkeleton("tasks", t("chat.backgroundTasks.detailLoading"))}
-        </div>
-      `;
-    }
+        (taskId && backgroundTasks.taskDetailLoadingIds.has(taskId)));
     return html`
       <div class="sidebar-panel chat-task-detail" data-task-detail-panel>
         ${renderTaskHeader(t("chat.backgroundTasks.taskDetailTitle"), undefined, undefined, params.onBack)}
         ${renderBackgroundTasksError(backgroundTasks.error)}
-        <div class="sidebar-content chat-task-detail__state">
-          ${error ?? backgroundTasks.error ?? t("chat.backgroundTasks.taskUnavailable")}
-          ${error && taskId && backgroundTasks.onLoadDetail ? html`<button type="button" @click=${() => backgroundTasks.onLoadDetail?.({ id: taskId })}>${t("chat.backgroundTasks.detailRetry")}</button>` : nothing}
-        </div>
+        ${
+          loading
+            ? renderPanelLoadingSkeleton("tasks", t("chat.backgroundTasks.detailLoading"))
+            : html`<div class="sidebar-content chat-task-detail__state">
+                ${error ?? backgroundTasks.error ?? t("chat.backgroundTasks.taskUnavailable")}
+                ${error && taskId && backgroundTasks.onLoadDetail ? html`<button type="button" @click=${() => backgroundTasks.onLoadDetail?.({ id: taskId })}>${t("chat.backgroundTasks.detailRetry")}</button>` : nothing}
+              </div>`
+        }
       </div>
     `;
   }

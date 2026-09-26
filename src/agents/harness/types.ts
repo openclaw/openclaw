@@ -281,14 +281,26 @@ export type AgentHarnessSideQuestionResult = {
   /** Aggregate billed usage for the side question, including native tool-loop calls. */
   usage?: import("../usage.js").NormalizedUsage;
 };
-export type AgentHarnessCompactParams =
+type LegacyAgentHarnessCompactParams =
   import("../embedded-agent-runner/compact.types.js").CompactEmbeddedAgentSessionParams;
+/** Select version 2 for required host authority; the default preserves registered legacy callbacks. */
+export type AgentHarnessCompactParams<Version extends 1 | 2 = 1> = Version extends 2
+  ? LegacyAgentHarnessCompactParams & {
+      hostCapabilities: Readonly<
+        Pick<AgentHarnessHostCapabilities, "kind" | "version" | "assertActive"> &
+          Required<Pick<AgentHarnessHostCapabilities, "retainSourceAuthority">>
+      >;
+    }
+  : LegacyAgentHarnessCompactParams;
+/** Current compaction implementation contract; registered legacy callbacks remain source-compatible. */
+export type AgentHarnessCompactParamsV2 = AgentHarnessCompactParams<2>;
 export type AgentHarnessCompactResult =
   import("../embedded-agent-runner/types.js").EmbeddedAgentCompactResult;
 export type AgentHarnessNativeCompactionRequest = "after_context_engine" | "required_preflight";
-export type AgentHarnessNativeCompactionParams = AgentHarnessCompactParams & {
-  nativeCompactionRequest: AgentHarnessNativeCompactionRequest;
-};
+export type AgentHarnessNativeCompactionParams<Version extends 1 | 2 = 1> =
+  AgentHarnessCompactParams<Version> & {
+    nativeCompactionRequest: AgentHarnessNativeCompactionRequest;
+  };
 export type AgentHarnessNativeCompaction = (
   params: AgentHarnessNativeCompactionParams,
 ) => Promise<AgentHarnessCompactResult | undefined>;

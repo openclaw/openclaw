@@ -1,7 +1,7 @@
-// Diagnostic stability bundle helpers collect stable diagnostic data for comparison.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
@@ -15,7 +15,13 @@ import {
   isMissingPathError,
 } from "../infra/errors.js";
 import { registerFatalErrorHook } from "../infra/fatal-error-hooks.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
+import { readMemoryUsage } from "./diagnostic-memory-bundle.js";
+import {
+  assignOptionalFields,
+  readObject,
+  readOptionalPositiveInteger,
+  readRequiredNumber,
+} from "./diagnostic-stability-readers.js";
 import {
   getDiagnosticStabilitySnapshot,
   MAX_DIAGNOSTIC_STABILITY_LIMIT,
@@ -168,33 +174,7 @@ function normalizeReason(reason: string): string {
   return SAFE_REASON_CODE.test(reason) ? reason : "unknown";
 }
 
-function readErrorCode(error: unknown): string | undefined {
-  if (!error || typeof error !== "object" || !("code" in error)) {
-    return undefined;
-  }
-  const code = (error as { code?: unknown }).code;
-  if (typeof code === "string" && SAFE_REASON_CODE.test(code)) {
-    return code;
-  }
-  if (typeof code === "number" && Number.isFinite(code)) {
-    return String(code);
-  }
-  return undefined;
-}
-
-function readErrorName(error: unknown): string | undefined {
-  if (!error || typeof error !== "object" || !("name" in error)) {
-    return undefined;
-  }
-  const name = (error as { name?: unknown }).name;
-  return typeof name === "string" && SAFE_REASON_CODE.test(name) ? name : undefined;
-}
-
-function readErrorMessage(error: unknown): string | undefined {
-  if (!error || typeof error !== "object" || !("message" in error)) {
-    return undefined;
-  }
-  const message = (error as { message?: unknown }).message;
+function readErrorMessage(message: unknown): string | undefined {
   if (typeof message !== "string") {
     return undefined;
   }
@@ -208,11 +188,21 @@ function readErrorMessage(error: unknown): string | undefined {
 }
 
 function readSafeErrorMetadata(error: unknown): DiagnosticStabilityBundle["error"] | undefined {
-  const name = readErrorName(error);
-  const code = readErrorCode(error);
-  const message = readErrorMessage(error);
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const rawName = "name" in error ? error.name : undefined;
+  const name = typeof rawName === "string" && SAFE_REASON_CODE.test(rawName) ? rawName : undefined;
+  const rawCode = "code" in error ? error.code : undefined;
+  const code =
+    typeof rawCode === "string" && SAFE_REASON_CODE.test(rawCode)
+      ? rawCode
+      : typeof rawCode === "number" && Number.isFinite(rawCode)
+        ? String(rawCode)
+        : undefined;
+  const message = readErrorMessage("message" in error ? error.message : undefined);
   const stack =
-    error && typeof error === "object" && "stack" in error && typeof error.stack === "string"
+    "stack" in error && typeof error.stack === "string"
       ? truncateUtf16Safe(
           redactSensitiveText(error.stack, { mode: "tools" }),
           MAX_SAFE_ERROR_STACK_LENGTH,
@@ -271,28 +261,6 @@ function isBundleFile(name: string): boolean {
   return name.startsWith(BUNDLE_PREFIX) && name.endsWith(BUNDLE_SUFFIX);
 }
 
-function readObject(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Invalid stability bundle: ${label} must be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function readRequiredNumber(value: unknown, label: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`Invalid stability bundle: ${label} must be a finite number`);
-  }
-  return value;
-}
-
-function readOptionalPositiveInteger(value: unknown, label: string): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const parsed = readRequiredNumber(value, label);
-  return parsed >= 0 ? Math.floor(parsed) : undefined;
-}
-
 function readTimestampMs(value: unknown, label: string): number {
   const timestamp = readRequiredNumber(value, label);
   if (Number.isNaN(new Date(timestamp).getTime())) {
@@ -337,33 +305,6 @@ function readOptionalCodeString(value: unknown, label: string): string | undefin
   }
   const code = readRequiredString(value, label);
   return SAFE_REASON_CODE.test(code) ? code : undefined;
-}
-
-function assignOptionalFields<T extends object>(
-  target: T,
-  source: Record<string, unknown>,
-  label: string,
-  fields: readonly (keyof T & string)[],
-  read: (value: unknown, label: string) => string | number | undefined,
-): void {
-  // The fixed order preserves serialized fields and the first failing validation label.
-  for (const key of fields) {
-    const parsed = read(source[key], `${label}.${key}`);
-    if (parsed !== undefined) {
-      (target as Record<string, unknown>)[key] = parsed;
-    }
-  }
-}
-
-function readMemoryUsage(value: unknown, label: string): DiagnosticMemoryUsage {
-  const memory = readObject(value, label);
-  return {
-    rssBytes: readRequiredNumber(memory.rssBytes, `${label}.rssBytes`),
-    heapTotalBytes: readRequiredNumber(memory.heapTotalBytes, `${label}.heapTotalBytes`),
-    heapUsedBytes: readRequiredNumber(memory.heapUsedBytes, `${label}.heapUsedBytes`),
-    externalBytes: readRequiredNumber(memory.externalBytes, `${label}.externalBytes`),
-    arrayBuffersBytes: readRequiredNumber(memory.arrayBuffersBytes, `${label}.arrayBuffersBytes`),
-  };
 }
 
 function readHeapStatistics(value: unknown): DiagnosticHeapStatisticsSummary | undefined {

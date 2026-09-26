@@ -127,7 +127,10 @@ export function trackSqliteStatementExecutions<Key extends string>(
 }
 
 /** Observe host data SQL while allowing only the captured state's lifecycle control database. */
-export function observeHostDataSql(env?: NodeJS.ProcessEnv): {
+export function observeHostDataSql(
+  env?: NodeJS.ProcessEnv,
+  onQuery?: (sql: string) => void,
+): {
   calls: Mock[];
   queries: string[];
   restore: () => void;
@@ -154,6 +157,10 @@ export function observeHostDataSql(env?: NodeJS.ProcessEnv): {
   };
   const databases = new WeakMap<StatementSync, DatabaseSync>();
   const queries: string[] = [];
+  const recordQuery = (sql: string) => {
+    queries.push(sql);
+    onQuery?.(sql);
+  };
   const prepare = vi.fn();
   const exec = vi.fn();
   // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted database receiver.
@@ -167,7 +174,7 @@ export function observeHostDataSql(env?: NodeJS.ProcessEnv): {
     ) {
       if (!isControl(this)) {
         prepare(sql);
-        queries.push(sql);
+        recordQuery(sql);
       }
       const statement = originalPrepare.call(this, sql);
       databases.set(statement, this);
@@ -179,7 +186,7 @@ export function observeHostDataSql(env?: NodeJS.ProcessEnv): {
     ) {
       if (!isControl(this)) {
         exec(sql);
-        queries.push(sql);
+        recordQuery(sql);
       }
       return originalExec.call(this, sql);
     }),
@@ -192,7 +199,7 @@ export function observeHostDataSql(env?: NodeJS.ProcessEnv): {
         apply(target, receiver: StatementSync, args) {
           if (!isControl(databases.get(receiver))) {
             called(...args);
-            queries.push(receiver.sourceSQL);
+            recordQuery(receiver.sourceSQL);
           }
           return Reflect.apply(target, receiver, args);
         },

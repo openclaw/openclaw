@@ -418,7 +418,7 @@ describe("gateway auxiliary authority lifecycle", () => {
       sessionId: identity.sessionId,
       ownerEpoch: 7,
     });
-    let placement = placements.startDispatch(identity);
+    let placement = await placements.startDispatch(identity);
     placement = placements.transition({
       sessionId: identity.sessionId,
       from: "requested",
@@ -458,7 +458,7 @@ describe("gateway auxiliary authority lifecycle", () => {
       runId: "worker-run-close",
     });
     const runAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-    const turnClaim = placements.claimTurn({
+    const turnClaim = await placements.claimTurn({
       ...identity,
       claimId: "worker-claim-close",
       runId: operationalRunInstance.runId,
@@ -553,7 +553,7 @@ describe("gateway auxiliary authority lifecycle", () => {
     expect(questionResolved).not.toHaveBeenCalled();
     expect(publishResolved).not.toHaveBeenCalled();
 
-    placements.releaseTurn(turnClaim);
+    await placements.releaseTurn(turnClaim);
 
     expect(questionResolved).toHaveBeenCalledExactlyOnceWith(
       { id: question.id, status: "cancelled" },

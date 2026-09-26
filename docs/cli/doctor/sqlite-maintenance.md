@@ -95,19 +95,25 @@ When a plugin migration is deferred, the verified import receipt also captures
 unreferenced JSONL inputs. Completing the plugin migration archives those originals
 with the same identity and byte checks as indexed transcripts. Files created after
 capture and changed originals are verified separately before settlement.
+File-era session path repair preserves those originals until their verified import
+receipts finish archival, even after the pending plugin migration records clear.
 Retries and read-only checks reuse the verified receipt, including transcripts
 discovered outside `sessions.json`. Doctor reports one pending-plugin warning
 for these retained inputs; they do not fail the completed core migration or
 require `doctor --session-sqlite recover`. Warning-only results exit successfully.
 An active legacy JSONL outside that receipt is an advisory awaiting verification.
-`doctor --fix` and `--session-sqlite recover` compare its ordered entries against
-the owning agent's SQLite transcript. Already imported history, including a
-prefix of a longer SQLite transcript, is archived with a verified migration
-receipt. Missing events go through the existing importer before verification;
+`doctor --fix` and `--session-sqlite recover` verify that its event identities and
+contents are present in the owning agent's SQLite transcript. A prefix or subset
+of a longer SQLite transcript is superseded, not a count mismatch. Doctor archives
+the original and records `superseded by SQLite (N of M events present)` in its
+existing migration receipt, where N is the legacy event count and M is the SQLite
+event count. Missing suffix events go through the existing importer before verification;
 current session settings and its active generation remain unchanged. Original
 bytes stay in the migration archive for recovery. A changed, malformed, or
-conflicting source that cannot be verified stays in place with a finding naming
-that agent and file; a healthy agent does not inherit another agent's failure.
+conflicting source that cannot be verified stays in place. A conflicting identity
+or missing middle event is named in the finding. Compare those events with a
+verified backup, preserve the original, and restore a corrected JSONL at the named
+path before rerunning recovery. A healthy agent does not inherit another agent's failure.
 When the legacy index and live transcript inputs are gone, verified historical
 archives keep their existing receipts. They do not require a new legacy-index
 receipt or block post-session plugin repair. The plugin's completion releases
@@ -185,7 +191,10 @@ for cleanup. Preserve the remaining originals and migration manifests for recove
 `historical_transcript_deferred` can report that an archived session registry no
 longer matches its migration receipt. The receipt identifies the original file by
 device, inode, modification time, size, and SHA-256; it is not an agent or install
-ID. Copying, replacing, touching, or editing an archive can invalidate that receipt.
+ID. Historical archive discovery and recovery cleanup accept a device-number
+change after a volume remount; inode, modification time, size, and SHA-256 must
+still match. Copying, replacing, touching, or editing an archive can invalidate
+that receipt.
 The identity format is the same in 2026.9.4 and 2026.9.5; 2026.9.5 added historical
 archive discovery that checks these older receipts.
 
@@ -244,9 +253,9 @@ Modes:
 | `inspect`  | Read SQLite counts and any selected legacy-source diagnostics without importing; legacy files are not required.        |
 | `dry-run`  | Parse legacy entries and transcript JSONL files, count importable rows, and report issues without writing SQLite rows. |
 | `import`   | Import legacy entries and transcript events into SQLite for the selected targets.                                      |
-| `validate` | Compare the selected legacy sources against SQLite rows and transcript event counts.                                   |
+| `validate` | Verify selected legacy session identities and transcript contents against SQLite.                                      |
 | `compact`  | Checkpoint and VACUUM selected agent SQLite databases to reclaim free pages after large deletes or archive cleanup.    |
-| `recover`  | Restore a failed migration run, verify and archive leftover active JSONL files, and prepare a sanitized issue report.  |
+| `recover`  | Restore a failed migration run, settle leftover active JSONL files, and report any remaining recovery issues.          |
 | `restore`  | Restore archived transcript artifacts from recorded migration manifests without deleting SQLite data.                  |
 
 Selectors:
@@ -278,7 +287,8 @@ openclaw doctor --session-sqlite inspect --session-sqlite-all-agents --json
 legacy sources. After a successful import, `validate` may select no legacy
 targets; use `inspect` to see the current SQLite state. While legacy sources
 remain, `validate` exits non-zero when a selected entry is missing from SQLite,
-a session id differs, or a transcript event count differs.
+a session id differs, or legacy transcript events are absent or conflict with
+SQLite. Additional SQLite events do not fail validation.
 When using `--session-sqlite-store <path>`, check that the report contains the
 expected target count; a nonexistent legacy source selects no targets for
 `dry-run`, `import`, or `validate`.
@@ -318,14 +328,14 @@ record why issue creation was skipped.
 
 Recovery selects the latest failed migration manifest, restores only the
 manifest's archived artifacts, validates the affected targets, and prepares
-sanitized `.failure.md` and `.failure.json` reports when failure evidence exists.
+sanitized `.failure.md` and `.failure.json` reports when current recovery issues remain.
 Reports include the recorded run ID, failure timestamp (or `not recorded` for an
 older journal without one), target, and failure code and error. They separate current
-recovery findings from recorded migration and recovery evidence. A successful
-recovery can have zero current issues while preserving earlier failures for
-diagnosis; a target not inspected by this recovery is labeled accordingly.
-When recovery has no work, no current issues, and no recorded failure, Doctor prints
-`nothing to recover; no report filed` and does not prepare or open a GitHub issue.
+recovery findings from recorded migration and recovery evidence. Earlier failures
+and existing reports remain available for diagnosis. A successful recovery with
+zero current issues does not prepare or open a GitHub issue, even when it archived
+superseded JSONL files. Repeating completed recovery is a clean no-op; blocked or
+untrusted recovery artifacts still require inspection.
 The JSON report keeps the combined `issues` evidence and adds `recoveryIssues`
 for inspected targets. The GitHub issue body avoids
 transcript contents, raw environment, secrets, and unbounded config. Once an
@@ -372,6 +382,20 @@ are safe duplicates, and one nonempty legacy `sessions.json` may supersede empty
 copies created by older writers. Distinct nonempty indexes, distinct transcript
 archives, invalid archives, and archives missing without a recorded prior
 restore fail closed so restore cannot silently replace or hide recoverable data.
+
+Reimporting an unchanged, manifest-recorded restored index preserves current SQLite
+session metadata while reconciling its transcript history. It does not reset newer
+labels, activity timestamps, or the current session pointer to the restored values.
+A changed restore receipt refuses import without replacing that state. Unreadable
+recovery history permits an import only when the destination has no session rows;
+Doctor verifies that condition and imports the target in one transaction. This can
+use a larger transaction than normal batched imports. A newly created index with a
+different file identity remains an ordinary import when recovery history is readable.
+Keep recovery manifests with their original files so Doctor can distinguish the two.
+Shared indexes retain a receipt for each agent's SQLite target; another owner's
+receipt alone does not establish restored provenance for the selected target. Explicit custom
+stores keep their existing restore/import admission outside the state directory;
+that does not make their files eligible for automatic recovery cleanup.
 
 After verifying the migration and current history, use
 `openclaw update cleanup --dry-run` to inspect retained recovery data without

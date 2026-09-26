@@ -391,7 +391,8 @@ export async function prepareTelegramCommandDispatch(
   const { route, bindingMode, targetSessionKey } = auth;
   const nativeCommandRuntime = await loadTelegramNativeCommandRuntime();
   auth.assertOwnerCurrent?.();
-  touchTelegramConversationRoute(auth.inspectedRoute);
+  await touchTelegramConversationRoute(auth.inspectedRoute);
+  auth.assertOwnerCurrent?.();
   if (bindingMode.kind === "configured") {
     auth.assertOwnerCurrent?.();
     const ensured = await nativeCommandRuntime.ensureConfiguredBindingRouteReady({

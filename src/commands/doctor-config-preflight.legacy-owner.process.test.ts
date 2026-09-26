@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, describe, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,10 +17,7 @@ import {
 } from "./doctor-config-preflight.process.test-support.js";
 import { doctorConfigRuntimeEntrypoints } from "./doctor-config-runtime.test-support.js";
 
-const STARTUP_REFUSAL =
-  "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.";
-const STARTUP_RECOVERY =
-  'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.';
+const STARTUP_RECOVERY = "openclaw doctor --fix";
 const tempDirs = createFixtureLifetime();
 afterAll(() => tempDirs.cleanup());
 
@@ -52,7 +48,7 @@ describe("startup legacy store classification", () => {
     { database: true, reason: "no agent owner" },
     { database: false, reason: "Deferred legacy agent/session migration: select an agent owner" },
   ])(
-    "defers unused legacy state but refuses an unsafe required store (database=$database)",
+    "preserves unused legacy state but refuses an unsafe required store (database=$database)",
     async ({ database, reason }) => {
       const root = fs.realpathSync(tempDirs.createTempDir("openclaw-legacy-owner-refusal-"));
       const stateDir = path.join(root, "state");
@@ -92,17 +88,13 @@ describe("startup legacy store classification", () => {
         );
       }
       const before = fs.readFileSync(legacyPath);
-      const preflightUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.preflight).href;
+      const preflightUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.startup).href;
       const script = `
-        const { runDoctorConfigPreflight } = await import(${JSON.stringify(preflightUrl)});
+        const { runStartupConfigPreflight } = await import(${JSON.stringify(preflightUrl)});
         try {
-          const result = await runDoctorConfigPreflight({
-            migrateLegacyConfig: false,
-            invalidConfigNote: false,
-            observe: false,
-            requireStartupMigrationCheckpoint: true,
+          await runStartupConfigPreflight({
+            gateway: true,
           });
-          console.log("__RECEIPTS__" + JSON.stringify(result.stateMigrationStepReceipts));
           console.log("__READY__");
         } catch (error) {
           console.error("__REFUSED__", error instanceof Error ? error.message : String(error));
@@ -124,30 +116,18 @@ describe("startup legacy store classification", () => {
       if (database) {
         expect(result.stdout, output).not.toContain("__READY__");
         expect(result.stderr, output).toContain("__REFUSED__");
-        expect(output).toContain(STARTUP_REFUSAL);
+        expect(output).toContain(STARTUP_RECOVERY);
+        expect(output).toContain(reason);
       } else {
         expect(result.stdout, output).toContain("__READY__");
         expect(output).not.toContain("__REFUSED__");
-        const receipts = result.stdout.split("\n").find((line) => line.startsWith("__RECEIPTS__"));
-        expect(
-          JSON.parse(
-            expectDefined(receipts, "startup migration receipts").slice("__RECEIPTS__".length),
-          ),
-        ).toContainEqual(
-          expect.objectContaining({
-            id: "migration-detection",
-            outcome: "deferred",
-            warnings: [reason],
-          }),
+        expect(fs.readFileSync(path.join(stateDir, "exec-approvals.json"), "utf8")).toBe(
+          JSON.stringify({ version: 1, defaults: {}, agents: {} }),
         );
-        expect(output).toContain("Startup migration warnings; continuing with degraded state.");
-        expect(fs.existsSync(path.join(stateDir, "exec-approvals.json"))).toBe(false);
-        expect(fs.readdirSync(stateDir)).toContainEqual(
+        expect(fs.readdirSync(stateDir)).not.toContainEqual(
           expect.stringMatching(/^exec-approvals\.json\.migrated\./),
         );
       }
-      expect(output).toContain(STARTUP_RECOVERY);
-      expect(output).toContain(reason);
       expect(fs.readFileSync(legacyPath)).toEqual(before);
       expect(hasActiveStartupMigrationLease({ env })).toBe(false);
     },

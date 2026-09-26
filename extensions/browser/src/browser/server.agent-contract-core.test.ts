@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ACT_ERROR_CODES } from "./routes/agent.act.errors.js";
+import { BROWSER_ACT_ERROR_CODES } from "./errors.js";
 import { isActKind } from "./routes/agent.act.shared.js";
 import {
   installAgentContractHooks,
@@ -110,7 +110,7 @@ describe("browser control server", () => {
     () => {
       expect(isActKind(undefined)).toBe(false);
       expect(isActKind("")).toBe(false);
-      expect(ACT_ERROR_CODES.kindRequired).toBe("ACT_KIND_REQUIRED");
+      expect(BROWSER_ACT_ERROR_CODES.kindRequired).toBe("ACT_KIND_REQUIRED");
     },
     slowTimeoutMs,
   );
@@ -188,7 +188,9 @@ describe("browser control server", () => {
 
       expect(response.status).toBe(501);
       expect(response.body.code).toBe("ACT_EXISTING_SESSION_UNSUPPORTED");
-      expect(response.body.error).toContain("batch");
+      expect(response.body.error).toBe(
+        "existing-session batch is not supported yet; send actions individually.",
+      );
     },
     slowTimeoutMs,
   );

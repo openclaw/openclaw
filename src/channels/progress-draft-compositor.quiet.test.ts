@@ -17,6 +17,78 @@ function createTestProgressDraftCompositor(
 }
 
 describe("createChannelProgressDraftCompositor quiet drafts", () => {
+  it("lets named failed tool items scroll out while retaining the plan and blocked states", async () => {
+    const update = vi.fn();
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, maxLines: 5, label: false },
+        },
+      },
+      update,
+    });
+    try {
+      await progress.pushPlanProgress([
+        { step: "Inspect", status: "completed" },
+        { step: "Repair", status: "in_progress" },
+        { step: "Verify", status: "pending" },
+      ]);
+      for (let index = 0; index < 8; index++) {
+        await progress.pushItemEvent(
+          projectAgentToolActivity({
+            name: "exec",
+            toolCallId: `failed-command-${index}`,
+            phase: "result",
+            status: "failed",
+          }),
+        );
+      }
+      await progress.pushItemEvent({
+        itemId: "failed-automations",
+        kind: "tool",
+        name: "automations",
+        status: "failed",
+      });
+      await progress.pushItemEvent({
+        itemId: "real-failure",
+        kind: "tool",
+        name: "read",
+        status: "failed",
+        progressText: "Read failed",
+      });
+      await progress.pushItemEvent({
+        itemId: "blocked-read",
+        kind: "tool",
+        name: "read",
+        status: "blocked",
+        progressText: "Read blocked",
+      });
+      for (let index = 0; index < 8; index++) {
+        await progress.pushToolEvent({ name: "read", toolCallId: `new-${index}`, phase: "start" });
+      }
+      const snapshot = progress.getSnapshot();
+      expect(
+        snapshot.lines.some(
+          (line) => typeof line === "object" && line.id === "tool:failed-command-0",
+        ),
+      ).toBe(false);
+      expect(
+        snapshot.lines.some((line) => typeof line === "object" && line.id === "failed-automations"),
+      ).toBe(false);
+      expect(
+        snapshot.lines.some((line) => typeof line === "object" && line.id === "real-failure"),
+      ).toBe(false);
+      expect(
+        snapshot.lines.some((line) => typeof line === "object" && line.id === "blocked-read"),
+      ).toBe(true);
+      expect(update.mock.lastCall?.[0]).toContain("Repair");
+      expect(update.mock.lastCall?.[0]).toContain("Read blocked");
+    } finally {
+      progress.cancel();
+    }
+  });
+
   it("preserves the shipped summary presentation for external SDK callers", async () => {
     const update = vi.fn();
     const progress = createTestProgressDraftCompositor({
@@ -287,7 +359,7 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
   );
 
   it.each(["failed", "error", "blocked"])(
-    "flushes and retains explicit %s status while tool progress is enabled",
+    "flushes explicit %s status and retains only protected outcomes",
     async (status) => {
       const update = vi.fn();
       const progress = createTestProgressDraftCompositor({
@@ -324,7 +396,11 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
             itemId: `comment-${index}`,
           });
         }
-        expect(update.mock.lastCall?.[0]).toContain("Check access");
+        if (status === "failed") {
+          expect(update.mock.lastCall?.[0]).not.toContain("Check access");
+        } else {
+          expect(update.mock.lastCall?.[0]).toContain("Check access");
+        }
         expect(update.mock.lastCall?.[0].split("\n").filter(Boolean).length).toBeLessThanOrEqual(3);
       } finally {
         progress.cancel();

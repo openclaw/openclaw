@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { clean as cleanSemver } from "semver";
 import type { Deferred } from "../../shared/deferred.js";
 
 type PackedVersion = {
@@ -128,10 +129,21 @@ export async function packPlugins(
     { cwd: rootDir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
   );
   const versions: PackedVersion[] = [];
+  const packedFiles = new Set(await fs.readdir(rootDir));
   for (const { params, peerDependenciesMeta, version } of prepared) {
     // npm 12 keys JSON output by name, which collapses two versions of one package.
-    // Read each manifest-named archive instead; a missing artifact remains a fixture failure.
-    const tarballName = `${params.packageName.replace(/^@/, "").replaceAll("/", "-")}-${version}.tgz`;
+    // Archive names can use the raw or normalized version depending on npm.
+    const packedVersion = expectDefined(
+      cleanSemver(version, { loose: true }),
+      "packed fixture version",
+    );
+    const tarballNames = [...new Set([version, packedVersion])]
+      .map((value) => `${params.packageName.replace(/^@/, "").replaceAll("/", "-")}-${value}.tgz`)
+      .filter((name) => packedFiles.has(name));
+    if (tarballNames.length !== 1) {
+      throw new Error(`Expected one packed archive for ${params.packageName}@${version}`);
+    }
+    const tarballName = expectDefined(tarballNames[0], "packed fixture archive");
     const archive = await fs.readFile(path.join(rootDir, tarballName));
     versions.push({
       archive,

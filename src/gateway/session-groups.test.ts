@@ -471,10 +471,16 @@ describe("session groups catalog", () => {
     const storePath = await seedSessionStore({
       "agent:main:dashboard:a": { sessionId: "a1", updatedAt: updatedAtA, category: "Old" },
       "agent:main:dashboard:b": { sessionId: "b1", updatedAt: updatedAtB, category: "Other" },
+      "agent:main:dashboard:c": {
+        sessionId: "c1",
+        updatedAt: updatedAtB,
+        category: " Old ",
+        skillsSnapshot: { prompt: "retained session prompt", skills: [] },
+      },
     });
 
     const result = await renameSessionGroup({ cfg, name: "Old", to: "New", env });
-    expect(result.updatedSessions).toBe(1);
+    expect(result.updatedSessions).toBe(2);
     expect(result.groups.map((group) => group.name)).toEqual(["New", "Other"]);
     expect(result.sectionOrder).toEqual(["ungrouped", "category:New", "work", "category:Other"]);
 
@@ -491,6 +497,14 @@ describe("session groups catalog", () => {
     expect(sessionA?.category).toBe("New");
     expect(sessionA?.updatedAt).toBe(updatedAtA);
     expect(sessionB?.category).toBe("Other");
+    expect(
+      loadSessionEntry({ agentId: "main", storePath, sessionKey: "agent:main:dashboard:c" }),
+    ).toMatchObject({
+      sessionId: "c1",
+      updatedAt: updatedAtB,
+      category: "New",
+      skillsSnapshot: { prompt: "retained session prompt", skills: [] },
+    });
   });
 
   it("deletes a group and clears member categories", async () => {
@@ -518,15 +532,11 @@ describe("session groups catalog", () => {
     ).toBeUndefined();
   });
 
-  it.each(
-    [
-      { action: "rename", targetExists: false },
-      { action: "rename", targetExists: true },
-      { action: "delete", targetExists: false },
-    ].flatMap(({ action, targetExists }) =>
-      ["main", "other"].map((stopAgent) => ({ action, targetExists, stopAgent })),
-    ),
-  )(
+  it.each([
+    { action: "rename", targetExists: false, stopAgent: "main" },
+    { action: "rename", targetExists: true, stopAgent: "other" },
+    { action: "delete", targetExists: false, stopAgent: "other" },
+  ])(
     "keeps group state coherent when $action stops in $stopAgent (target exists: $targetExists)",
     async ({ action, targetExists, stopAgent }) => {
       const groupCfg: OpenClawConfig = {

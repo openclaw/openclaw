@@ -9,10 +9,12 @@ import {
 import { once } from "node:events";
 import {
   chmodSync,
+  closeSync,
   cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   realpathSync,
@@ -38,7 +40,11 @@ import {
   validReview,
   writeReviewArtifacts,
 } from "./pr-review-artifact-fixture.js";
-import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
+import {
+  copyPrWrapperSources,
+  createIndependentPrFixtureEnv,
+  linkPrWrapperDependencies,
+} from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const freshMainTemplateDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -78,7 +84,11 @@ function realpathSpecialFixtureWithNode(filePath: string): string {
 }
 
 function spawnDetached(command: string, args: readonly string[], options: SpawnOptions = {}) {
-  const child = spawn(command, args, { ...options, detached: true });
+  const child = spawn(command, args, {
+    env: createIndependentPrFixtureEnv(),
+    ...options,
+    detached: true,
+  });
   detachedChildren.add(child);
   if (child.pid) {
     goneProcessGroups.delete(child.pid);
@@ -210,16 +220,9 @@ function expectMaterializedWorktree(worktreeDir: string) {
   ).toBe("false");
 }
 
-function bashSource(repoDir: string, supervised = false) {
+function bashSource(repoDir: string) {
   return [
     "set -euo pipefail",
-    ...(supervised
-      ? []
-      : [
-          "unset OPENCLAW_PR_LOCK_NOTIFY_FD",
-          "unset OPENCLAW_PR_LOCK_SUPERVISOR_PID",
-          "unset OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT",
-        ]),
     `source '${worktreeScript}'`,
     `source '${lockScript}'`,
     `source '${commonScript}'`,
@@ -241,7 +244,7 @@ function writeOperationFixture(repoDir: string, name: string, commands: string[]
   const fixture = writeFixtureFile(
     repoDir,
     name,
-    ["#!/usr/bin/env bash", ...bashSource(repoDir, true), ...commands].join("\n"),
+    ["#!/usr/bin/env bash", ...bashSource(repoDir), ...commands].join("\n"),
   );
   chmodSync(fixture, 0o755);
   return fixture;
@@ -385,7 +388,7 @@ async function runSupervisedFixture(
     ],
     {
       cwd: repoDir,
-      env: { ...process.env, ...options.env },
+      env: { ...createIndependentPrFixtureEnv(), ...options.env },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -455,7 +458,7 @@ function runLockShell(
 ) {
   return spawnSync("bash", ["-c", [...bashSource(repoDir), ...commands].join("\n")], {
     cwd: repoDir,
-    env: parentEnv,
+    env: createIndependentPrFixtureEnv(parentEnv),
     detached: true,
     encoding: "utf8",
     timeout: 10_000,
@@ -789,7 +792,7 @@ describe("scripts/pr process-group platform guard", () => {
       const child = spawnDetached("bash", [fixture], {
         cwd: repoDir,
         env: {
-          ...process.env,
+          ...createIndependentPrFixtureEnv(),
           OPENCLAW_PR_DEDICATED_PROCESS_GROUP: "1",
           OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
           OPENCLAW_PR_LOCK_SUPERVISOR_PID: String(process.pid),
@@ -808,11 +811,13 @@ describe("scripts/pr process-group platform guard", () => {
 
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 describePosix("scripts/pr per-PR operation lock", () => {
-  it("isolates unsupervised candidate-source fixtures from unrelated supervisor bindings", () => {
+  it("isolates independent fixtures from inherited maintainer bindings", () => {
     const repoDir = createRepo();
     const result = runLockShell(
       repoDir,
       [
+        'test -z "${OPENCLAW_PR_GIT-}"',
+        'test -z "${GIT_EXEC-}"',
         'test -z "${OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT-}"',
         'test -z "${OPENCLAW_PR_LOCK_NOTIFY_FD-}"',
         'test -z "${OPENCLAW_PR_LOCK_SUPERVISOR_PID-}"',
@@ -822,6 +827,8 @@ describePosix("scripts/pr per-PR operation lock", () => {
       ],
       {
         ...process.env,
+        OPENCLAW_PR_GIT: "/bin/false",
+        GIT_EXEC: "/bin/false",
         OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: tempDirs.make("unrelated-lock-snapshot-"),
         OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
         OPENCLAW_PR_LOCK_SUPERVISOR_PID: "1",
@@ -1064,15 +1071,22 @@ describePosix("scripts/pr per-PR operation lock", () => {
         OPENCLAW_TEST_FAILURE: failure,
         OPENCLAW_TEST_AUTH_FAILURE: failure === "auth" ? "1" : "0",
       };
-      const controller = spawn(
-        cli,
-        [command, "42", ...(command === "review-tests" ? ["missing-fixture.test.ts"] : [])],
-        {
-          cwd: repoDir,
-          env: childEnv,
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
+      // A concurrent fork can retain the copied script's writable descriptor on Linux.
+      const writableCli = openSync(cli, "r+");
+      let controller: ChildProcess;
+      try {
+        controller = spawn(
+          join(binDir, "bash"),
+          [cli, command, "42", ...(command === "review-tests" ? ["missing-fixture.test.ts"] : [])],
+          {
+            cwd: repoDir,
+            env: childEnv,
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        );
+      } finally {
+        closeSync(writableCli);
+      }
       let output = "";
       controller.stdout!.setEncoding("utf8");
       controller.stderr!.setEncoding("utf8");
@@ -1446,7 +1460,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       {
         cwd: repoDir,
         encoding: "utf8",
-        env: { ...process.env, PATH: binDir },
+        env: { ...createIndependentPrFixtureEnv(), PATH: binDir },
       },
     );
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
@@ -1474,12 +1488,10 @@ describePosix("scripts/pr per-PR operation lock", () => {
     writeFileSync(reviewScript, `${readFileSync(reviewScript, "utf8")}\nreview_init() { :; }\n`);
     installRequiredPrCommandStubs(binDir);
     const env: NodeJS.ProcessEnv = {
-      ...process.env,
+      ...createIndependentPrFixtureEnv(),
       OPENCLAW_PR_DEDICATED_PROCESS_GROUP: "1",
       PATH: `${binDir}:${process.env.PATH ?? ""}`,
     };
-    delete env.OPENCLAW_PR_LOCK_NOTIFY_FD;
-    delete env.OPENCLAW_PR_LOCK_SUPERVISOR_PID;
     const result = spawnSync(cli, ["review-init", "42"], {
       cwd: repoDir,
       encoding: "utf8",
@@ -1504,7 +1516,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const result = spawnSync(cli, ["review-init", "42"], {
       cwd: repoDir,
       encoding: "utf8",
-      env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+      env: { ...createIndependentPrFixtureEnv(), PATH: `${binDir}:${process.env.PATH ?? ""}` },
     });
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
@@ -1529,7 +1541,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const result = spawnSync(cli, ["review-init", "42"], {
       cwd: repoDir,
       encoding: "utf8",
-      env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+      env: { ...createIndependentPrFixtureEnv(), PATH: `${binDir}:${process.env.PATH ?? ""}` },
     });
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
@@ -2036,7 +2048,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
           // Linked landing verifies the full transitive anchor before starting cleanup.
           timeout: wrapper === "linked" ? 120_000 : 15_000,
           env: {
-            ...process.env,
+            ...createIndependentPrFixtureEnv(),
             canonical_repo_root: join(repoDir, "untrusted-root"),
             OPENCLAW_GH_BIN: gh,
             GH_REPO: "fixture/repo",
@@ -2947,7 +2959,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         cwd: repoDir,
         // The test deliberately kills the relay before its managed claim can release.
         // Only this fixture's independent group census may dispose its retained inputs.
-        env: { ...process.env, TMPDIR: repoDir, TMP: repoDir, TEMP: repoDir },
+        env: { ...createIndependentPrFixtureEnv(), TMPDIR: repoDir, TMP: repoDir, TEMP: repoDir },
         stdio: "ignore",
       });
       let nestedPgid: number | undefined;

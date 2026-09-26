@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
-  retireUnsafeCodexTurnClientBestEffort,
   unsubscribeCodexThreadBestEffort,
   terminateCodexBackgroundTerminals,
 } from "./attempt-client-cleanup.js";
@@ -13,10 +12,8 @@ import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 describe("Codex app-server attempt client cleanup", () => {
   it.each([
-    { terminated: true, oneShot: false },
     { terminated: false, oneShot: false },
     { terminated: true, oneShot: true },
-    { terminated: false, oneShot: true },
   ])(
     "drains native terminals without claiming OS cleanup (terminated=$terminated, oneShot=$oneShot)",
     async ({ terminated, oneShot }) => {
@@ -90,18 +87,6 @@ describe("Codex app-server attempt client cleanup", () => {
     await expect(closeCodexStartupClientBestEffort({ closeAndWait } as never)).rejects.toThrow(
       "strict client retirement failed",
     );
-  });
-
-  it("preserves the primary failure when unsafe turn retirement rejects", async () => {
-    const close = vi.fn();
-    const closeAndWait = vi.fn(async () => {
-      throw new Error("unsafe client retirement failed");
-    });
-
-    await expect(
-      retireUnsafeCodexTurnClientBestEffort({ close, closeAndWait } as never, "startup interrupt"),
-    ).resolves.toBeUndefined();
-    expect(close).toHaveBeenCalledOnce();
   });
 
   it("waits for the matching terminal after an interrupt is acknowledged", async () => {

@@ -1,9 +1,5 @@
 import fsSync from "node:fs";
 import path from "node:path";
-import {
-  getAgentWorkspaceAccess,
-  WorkspaceAccessUnavailableError,
-} from "../../agents/workspace-access.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 import { resolveClawHubBaseUrl } from "../../infra/clawhub-client.js";
 import {
@@ -26,6 +22,7 @@ import {
   readClawHubSkillsLockfile,
   readClawHubSkillsLockfileStatusSync,
   type ClawHubSkillsLockfileStatusRead,
+  resolveWorkspaceClawHubSkills,
 } from "./clawhub-store.js";
 import {
   normalizeTrackedSkillSlug,
@@ -266,10 +263,6 @@ export function readLocalSkillCardContentSync(skillDir: string): string | undefi
   return readLocalSkillCardSync(skillDir, true)?.content;
 }
 
-function normalizeOptionalSelector(value: string | undefined): string | undefined {
-  return value?.trim() || undefined;
-}
-
 export async function searchSkillsFromClawHub(params: {
   query?: string;
   limit?: number;
@@ -286,22 +279,16 @@ export async function resolveClawHubSkillVerificationTarget(
   params: Parameters<WorkspaceSkillLifecycle["resolveClawHubSkillVerificationTarget"]>[0],
 ): Promise<ClawHubSkillVerificationTargetResult> {
   try {
-    const workspaceAccess = getAgentWorkspaceAccess(params.workspaceDir, "loadSkills");
-    const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
-    if (access) {
-      if (!access.clawHubSkills) {
-        throw new WorkspaceAccessUnavailableError(
-          "Remote workspace ClawHub tracking is unavailable",
-        );
-      }
-      return await access.clawHubSkills.resolveClawHubSkillVerificationTarget({
+    const tracking = resolveWorkspaceClawHubSkills(params.workspaceDir);
+    if (tracking) {
+      return await tracking.resolveClawHubSkillVerificationTarget({
         ...params,
         // Keep Gateway registry configuration when the skill has no installed origin.
         baseUrl: resolveClawHubBaseUrl(params.baseUrl),
       });
     }
-    const version = normalizeOptionalSelector(params.version);
-    const tag = normalizeOptionalSelector(params.tag);
+    const version = normalizeOptionalStringValue(params.version);
+    const tag = normalizeOptionalStringValue(params.tag);
     if (version && tag) {
       return { ok: false, error: "Use either --version or --tag." };
     }

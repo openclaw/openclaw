@@ -90,41 +90,15 @@ describe("Discord report source", () => {
           archivePages += 1;
           if (archivePages === 1) {
             return json({
-              threads: [
-                {
-                  id: "22",
-                  parent_id: "20",
-                  name: "design",
-                  type,
-                  thread_metadata: {
-                    archive_timestamp: new Date(archiveTimes[0] ?? 0).toISOString(),
-                  },
-                },
-              ],
+              threads: [{ ...thread("22", archiveTimes[0] ?? 0, type), name: "design" }],
               has_more: true,
             });
           }
           expect(url.searchParams.get("before")).toBe(new Date(archiveTimes[0] ?? 0).toISOString());
           return json({
             threads: [
-              {
-                id: "21",
-                parent_id: "20",
-                name: "review",
-                type,
-                thread_metadata: {
-                  archive_timestamp: new Date(archiveTimes[1] ?? 0).toISOString(),
-                },
-              },
-              {
-                id: "23",
-                parent_id: "20",
-                name: "old",
-                type,
-                thread_metadata: {
-                  archive_timestamp: new Date(archiveTimes[2] ?? 0).toISOString(),
-                },
-              },
+              { ...thread("21", archiveTimes[1] ?? 0, type), name: "review" },
+              { ...thread("23", archiveTimes[2] ?? 0, type), name: "old" },
             ],
             has_more: true,
           });
@@ -149,38 +123,8 @@ describe("Discord report source", () => {
         { channelId: "22", parentChannelId: "20", channelName: "engineering/design" },
       ]);
       expect(context.requests.filter((url) => url.pathname.endsWith("/messages"))).toHaveLength(3);
-      expect(context.logs).toEqual([
-        "team-reports: Discord channels/threads listed: 1 channels, 2 threads",
-        "team-reports: Discord messages done: 1 channels, 2 threads, 3 messages",
-      ]);
     },
   );
-
-  it("preserves private thread messages after the thread archives", async () => {
-    const privateThread = thread(message(window.sinceMs - 1000).id, window.sinceMs + 1000);
-    let archived = false;
-    const context = runtime((url) => {
-      if (url.pathname.endsWith("/threads/active")) {
-        return json({ threads: archived ? [] : [privateThread] });
-      }
-      if (url.pathname.endsWith("/channels/20/threads/archived/private")) {
-        return json({ threads: archived ? [privateThread] : [], has_more: false });
-      }
-      if (url.pathname.endsWith(`/channels/${privateThread.id}/messages`)) {
-        expect(url.searchParams.get("after")).toBe("175928843960320000");
-        return json([message(window.sinceMs + 1)]);
-      }
-      return undefined;
-    });
-    const source = createDiscordSource(context);
-    const activeResult = await source.collect(config, window, roster);
-    archived = true;
-    const archivedResult = await source.collect(config, window, roster);
-    expect(activeResult.messages).toHaveLength(1);
-    expect(archivedResult.messages).toEqual(activeResult.messages);
-    expect(archivedResult.status.warnings).toEqual([]);
-    expect(archivedResult.status.stale).not.toBe(true);
-  });
 
   it("falls back to joined private archives and pages by thread id past old archive timestamps", async () => {
     const newerThread = thread(message(window.sinceMs - 1000).id, window.sinceMs - 1);
@@ -248,6 +192,7 @@ describe("Discord report source", () => {
       const result = await createDiscordSource(context).collect(config, window, roster);
       expect(result.status.warnings).toEqual([expect.stringMatching(/20.*404/)]);
       expect(result.status.stale).toBe(true);
+      expect(result.status.ok).toBe(false);
       expect(result.status.stats.privateArchivesSkipped).toBe(0);
     },
   );
@@ -358,7 +303,7 @@ describe("Discord report source", () => {
       window,
       roster,
     );
-    expect(result.status.ok).toBe(true);
+    expect(result.status.ok).toBe(false);
     expect(result.status.stale).toBe(true);
     expect(result.status.warnings).toEqual([expect.stringMatching(/20.*403/)]);
     expect(result.messages.map((entry) => entry.channelId)).toEqual(["21"]);

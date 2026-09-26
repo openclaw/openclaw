@@ -17,9 +17,10 @@ export async function copyPreparedWorkerArtifacts(template, directory) {
     if (hashVitestWorkerArtifact(source) !== manifest.outputs[name]) {
       throw new Error(`Prepared compiler artifact changed: ${name}`);
     }
-    const output = /\.m?js$/u.test(name)
-      ? Buffer.from(source.toString("utf8").replaceAll(sourceUrl, targetUrl))
-      : source;
+    const output =
+      /\.m?js$/u.test(name) && source.includes(sourceUrl)
+        ? Buffer.from(source.toString("utf8").replaceAll(sourceUrl, targetUrl))
+        : source;
     const filename = path.join(directory, "dist", name);
     const parent = path.dirname(filename);
     let created = directories.get(parent);

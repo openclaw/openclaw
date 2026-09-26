@@ -64,9 +64,9 @@ import {
 import {
   createCurrentProcessFreshDoctorFixture,
   createUpdateCliPackageFixtures,
+  writeGitUpdateResultFixture,
   writeJsonFixture,
   writeNpmPackageInstall,
-  writeOpenClawPackageFixture,
 } from "./update-cli/update-cli-package.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
@@ -77,6 +77,15 @@ export function createUpdateCliFixture() {
   // because macOS os.tmpdir() is a /var -> /private/var symlink.
   const fixtureRoot = fsSync.realpathSync(
     fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-update-tests-")),
+  );
+  const checkoutRoot = path.join(fixtureRoot, "checkout");
+  fsSync.mkdirSync(checkoutRoot);
+  for (const directory of [".git", "src", "extensions"]) {
+    fsSync.mkdirSync(path.join(checkoutRoot, directory));
+  }
+  fsSync.writeFileSync(
+    path.join(checkoutRoot, "package.json"),
+    JSON.stringify({ name: "openclaw", version: VERSION }),
   );
   const globalNpmConfig = path.join(fixtureRoot, "global-npmrc");
   fsSync.writeFileSync(globalNpmConfig, "");
@@ -455,11 +464,9 @@ export function createUpdateCliFixture() {
   const setupManagedGitRootRefresh = async (reinspect = false) => {
     const { root, entrypoints } = setupUpdatedRootRefresh();
     const updatedEntrypoint = requireValue(entrypoints[0], "updated entrypoint");
-    await writeOpenClawPackageFixture(root, VERSION, { entryPath: updatedEntrypoint });
     mockOwnedGitService();
     mockGitUpdateAfterMutation(
-      makeOkUpdateResult({
-        mode: "git",
+      await writeGitUpdateResultFixture({
         root,
         before: { sha: "old-managed-sha", version: "2026.4.26" },
         after: { sha: "new-managed-sha", version: VERSION },

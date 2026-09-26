@@ -23,6 +23,7 @@ const targets = [
   "skills",
   "config",
   "cli-root-options.mjs",
+  "docker-entrypoint.mjs",
   "gateway-run-argv.mjs",
   "gateway-shutdown-budget.mjs",
   "node-compile-cache.mjs",

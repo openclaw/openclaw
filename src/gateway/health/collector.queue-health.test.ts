@@ -52,10 +52,10 @@ describe("queue health collector", () => {
     const failed = [{ channelId: "telegram", accountId: "ops", count: 1 }];
     const countIngress = vi
       .spyOn(ingressHealth, "countFailedChannelIngressQueueEntries")
-      .mockReturnValue(failed);
+      .mockResolvedValue(failed);
     const countPressure = vi
       .spyOn(ingressHealth, "countChannelIngressQueuePressure")
-      .mockReturnValue([]);
+      .mockResolvedValue([]);
     try {
       const pending = collectHealth();
       expect(capture).toHaveBeenCalledTimes(1);

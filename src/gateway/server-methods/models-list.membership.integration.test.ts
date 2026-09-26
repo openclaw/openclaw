@@ -152,7 +152,10 @@ it.each([
             agentId: "main",
             refresh,
           });
-          return result.models.filter((row) => row.provider === provider).map((row) => row.id);
+          return result.models
+            .filter((row) => row.provider === provider)
+            .map((row) => row.id)
+            .toSorted();
         };
         const initial = allow.length === 0 ? expected : ["manual"];
         expect(await list(true)).toEqual(initial);

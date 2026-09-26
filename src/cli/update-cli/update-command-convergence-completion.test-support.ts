@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { recordUpdateModelRetirement } from "../../infra/update-deferred-model-retirement.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { VERSION } from "../../version.js";
 import { readPackageVersion } from "./shared.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
@@ -35,6 +36,9 @@ export function registerConvergenceCompletionTests({
   )(
     "completes unchanged plugins with deferred model retirement once ($runtime, current=$coreAlreadyCurrent)",
     async ({ runtime, coreAlreadyCurrent }) => {
+      const resumesTarget = runtime === "resumed" || (runtime === "current" && !coreAlreadyCurrent);
+      const installedVersion = runtime === "resumed" ? "2026.9.4" : VERSION;
+      vi.mocked(readPackageVersion).mockResolvedValue(installedVersion);
       const run = createUpdateRun({ trigger: "cli" });
       vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
       recordUpdateModelRetirement("deferred");
@@ -51,8 +55,7 @@ export function registerConvergenceCompletionTests({
         params.onWarnings?.(["Deferred retirement repair warning"]);
         return { pluginUpdate, configSnapshot: validConfigSnapshot };
       });
-      if (runtime === "resumed") {
-        vi.mocked(readPackageVersion).mockResolvedValue("2026.9.4");
+      if (resumesTarget) {
         vi.mocked(postCoreUpdateParentOwnsCompletion).mockResolvedValue(true);
         vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", "/fixture/post-core-result.json");
         vi.mocked(continuePostCoreUpdateInFreshProcess).mockImplementationOnce(async () => {
@@ -75,9 +78,12 @@ export function registerConvergenceCompletionTests({
         candidateRuntime: runtime === "candidate",
         coreAlreadyCurrent,
         result: {
-          status: "ok",
+          status: coreAlreadyCurrent ? "skipped" : "ok",
+          ...(coreAlreadyCurrent ? { reason: "already-current" } : {}),
           mode: runtime === "resumed" ? "npm" : "git",
           root: "/tmp/openclaw",
+          before: { version: VERSION },
+          after: { version: installedVersion },
           steps: [],
           durationMs: 0,
         },
@@ -115,7 +121,9 @@ export function registerConvergenceCompletionTests({
           },
         }),
       );
-      if (runtime !== "resumed") {
+      if (resumesTarget) {
+        expect(continuePostCoreUpdateInFreshProcess).toHaveBeenCalledOnce();
+      } else {
         expect(continuePostCoreUpdateInFreshProcess).not.toHaveBeenCalled();
       }
     },

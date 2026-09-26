@@ -1,5 +1,4 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
@@ -16,6 +15,7 @@ import {
   type UpdateCommandOptions,
 } from "./shared.js";
 import { withUpdateCandidateAdmission } from "./update-command-candidate-admission.js";
+import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 import {
   captureUpdateCommandExecutorAuthority,
   type UpdateCommandExecutor,
@@ -26,7 +26,11 @@ import { admitUpdateRequesterContinuation } from "./update-command-managed-conte
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
-import { UpdateCommandFailure, withUpdateAdmissionReporting } from "./update-command-result.js";
+import {
+  UpdateCommandFailure,
+  UpdateCommandPendingRecoveryFailure,
+  withUpdateAdmissionReporting,
+} from "./update-command-result.js";
 import {
   admitUpdateCommandRun,
   assertUpdatePackageActivationAdmission,
@@ -393,13 +397,8 @@ async function runResolvedUpdate(
     !legacyConfigPlan &&
     !run.candidateAdmissionChecks?.includes("config")
   ) {
-    return await refuseUpdate(
-      "invalid-config",
-      [
-        "Config is invalid; cannot set update channel.",
-        ...formatConfigIssueLines(configSnapshot.issues, "-"),
-      ].join("\n"),
-    );
+    const failure = createUpdateConfigFailure(configSnapshot);
+    return await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
   }
   const schemaPreflight = await preflightUpdateCommandSchemas({
     ...target,
@@ -525,6 +524,8 @@ async function runResolvedUpdate(
     finishAlreadyCurrentUpdate,
     continueMigratedUpdateInFreshProcess,
     inspectActivatedUpdateState,
+    restoreFailedUpdateDatabases,
+    createUpdateCommandFinalizationFence,
   } = await import("./update-execution.runtime.js");
 
   const progress = createUpdateRunProgress(run, presentation.progress);
@@ -562,7 +563,7 @@ async function runResolvedUpdate(
     };
     const retentionStartedAt = Date.now();
     progress.onStepStart?.(retentionStep);
-    await retainRuntime({
+    const retention = await retainRuntime({
       mutationRoots: [root, ...(switchToGit ? [resolveGitInstallDir()] : [])],
       installTarget,
       env,
@@ -573,6 +574,7 @@ async function runResolvedUpdate(
       ...retentionStep,
       durationMs: Date.now() - retentionStartedAt,
       exitCode: 0,
+      diagnostics: retention ? [JSON.stringify(retention)] : undefined,
     });
     mutableUpdatePrepared = true;
   };
@@ -663,10 +665,32 @@ async function runResolvedUpdate(
   if (opts.recovery || rollbackBlockedReason) {
     // Only candidate code may reopen migrated state, including during reporting and cleanup.
     recoveryState.ledgerHandoffOwned = true;
+    const assertRollbackCurrent = createUpdateCommandFinalizationFence(finalization);
     const continued = await continueMigratedUpdateInFreshProcess(
       { ...finalization, rollbackBlockedReason },
       progress.pendingSteps,
     );
+    if (continued.databaseRollbackAvailable && finalization.databaseBackup) {
+      const restored = await restoreFailedUpdateDatabases({
+        backup: finalization.databaseBackup,
+        result: continued.result,
+        runId: run.runId,
+        env: ownedManagedUpdateContext?.env ?? run.env,
+        assertCurrent: assertRollbackCurrent,
+        progress,
+      });
+      if (!restored) {
+        throw new UpdateCommandPendingRecoveryFailure(
+          continued.result,
+          continued.result.steps.at(-1)?.stderrTail ?? undefined,
+        );
+      }
+      progress.flushLedgerWrites();
+      recoveryState.ledgerHandoffOwned = false;
+      presentation.resume();
+      await finishUpdate({ ...finalization, result: continued.result });
+      return;
+    }
     recoveryState.ledgerHandoffCompleted = true;
     opts.onResult?.(continued.result);
     if (continued.exitCode !== 0) {

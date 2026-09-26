@@ -29,39 +29,28 @@ const {
   resetConfiguredGlobalAgentSessionStore,
 } = setupSessionCreateTestHarness();
 
-test.each(["rpc", "service"] as const)(
-  "creates a fresh selected-agent child outside fixed global ownership through %s",
-  (entrypoint) =>
-    withFixedOwnerSessionStore(createSessionStoreDir, "global", async ({ storePath, cfg }) => {
-      let connection: Awaited<ReturnType<typeof openClient>> | undefined;
-      try {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: "global", storePath },
-          { sessionId: "fixed-global-owner", updatedAt: 1 },
-        );
-        const { createGatewaySession } = await import("./session-create-service.js");
-        if (entrypoint === "rpc") {
-          connection = await openClient();
-        }
-        const created = connection
-          ? await rpcReq<{ key: string }>(connection.ws, "sessions.create", {
-              agentId: "ops",
-            }).then((result) => ({ ok: result.ok, key: result.payload?.key, error: result.error }))
-          : await createGatewaySession({ cfg, agentId: "ops", commandSource: "test" });
-        expect(created.ok, JSON.stringify(created)).toBe(true);
-        const key = requireNonEmptyString(created.ok ? created.key : undefined, "fresh child key");
-        expect(key).toMatch(/^agent:ops:dashboard:/);
-        expect(loadSessionEntry({ agentId: "ops", sessionKey: key, storePath })).toBeDefined();
-        expect(
-          loadSessionEntry({ agentId: "main", sessionKey: "global", storePath })?.sessionId,
-        ).toBe("fixed-global-owner");
-      } finally {
-        if (connection) {
-          await closeGatewayTestWebSocket(connection.ws);
-        }
-      }
-    }),
-);
+test("creates a fresh selected-agent child outside fixed global ownership through RPC", () =>
+  withFixedOwnerSessionStore(createSessionStoreDir, "global", async ({ storePath }) => {
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: "global", storePath },
+      { sessionId: "fixed-global-owner", updatedAt: 1 },
+    );
+    const { ws } = await openClient();
+    try {
+      const created = await rpcReq<{ key: string }>(ws, "sessions.create", {
+        agentId: "ops",
+      });
+      expect(created.ok, JSON.stringify(created)).toBe(true);
+      const key = requireNonEmptyString(created.payload?.key, "fresh child key");
+      expect(key).toMatch(/^agent:ops:dashboard:/);
+      expect(loadSessionEntry({ agentId: "ops", sessionKey: key, storePath })).toBeDefined();
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: "global", storePath })?.sessionId,
+      ).toBe("fixed-global-owner");
+    } finally {
+      await closeGatewayTestWebSocket(ws);
+    }
+  }));
 
 test("sessions.create scopes the main alias to the requested agent", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -399,6 +388,10 @@ test("sessions.get reads selected global messages from the requested agent store
       storePath: workStorePath,
     });
 
+    const cfg = {
+      agents: { entries: { main: {}, work: {} } },
+      session: { scope: "global", store: storeTemplate },
+    };
     const result = await directSessionReq<{ messages?: unknown[] }>(
       "sessions.get",
       {
@@ -407,10 +400,7 @@ test("sessions.get reads selected global messages from the requested agent store
       },
       {
         context: {
-          getRuntimeConfig: () => ({
-            agents: { entries: { main: {}, work: {} } },
-            session: { scope: "global", store: storeTemplate },
-          }),
+          getRuntimeConfig: () => cfg,
         },
       },
     );

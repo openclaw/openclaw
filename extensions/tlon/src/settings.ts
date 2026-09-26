@@ -1,14 +1,4 @@
-/**
- * Settings Store integration for hot-reloading Tlon plugin config.
- *
- * Settings are stored in Urbit's %settings agent under:
- *   desk: "moltbot"
- *   bucket: "tlon"
- *
- * This allows config changes via poke from any Landscape client
- * without requiring a gateway restart.
- */
-
+// Settings in Urbit's %settings agent hot-reload without restarting the Gateway.
 import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { UrbitSSEClient } from "./urbit/sse-client.js";
 
@@ -74,7 +64,6 @@ function parseChannelRules(
     return undefined;
   }
 
-  // If it's a string, try to parse as JSON
   if (typeof value === "string") {
     try {
       const parsed = JSON.parse(value);
@@ -86,7 +75,6 @@ function parseChannelRules(
     }
   }
 
-  // If it's already an object, use directly
   if (isChannelRulesObject(value)) {
     return value;
   }
@@ -164,7 +152,6 @@ function parsePendingApprovals(value: unknown): PendingApproval[] | undefined {
     return undefined;
   }
 
-  // If it's a string, try to parse as JSON
   let parsed: unknown = value;
   if (typeof value === "string") {
     try {
@@ -174,12 +161,10 @@ function parsePendingApprovals(value: unknown): PendingApproval[] | undefined {
     }
   }
 
-  // Validate it's an array
   if (!Array.isArray(parsed)) {
     return undefined;
   }
 
-  // Filter to valid PendingApproval objects
   return parsed.filter((item): item is PendingApproval => {
     if (!item || typeof item !== "object") {
       return false;
@@ -194,9 +179,6 @@ function parsePendingApprovals(value: unknown): PendingApproval[] | undefined {
   });
 }
 
-/**
- * Parse a single settings entry update event.
- */
 function parseSettingsEvent(event: unknown): { key: string; value: unknown } | null {
   if (!event || typeof event !== "object") {
     return null;
@@ -204,80 +186,45 @@ function parseSettingsEvent(event: unknown): { key: string; value: unknown } | n
 
   const evt = event as Record<string, unknown>;
 
-  // Handle put-entry events
-  if (evt["put-entry"]) {
-    const put = evt["put-entry"] as Record<string, unknown>;
-    if (put.desk !== SETTINGS_DESK || put["bucket-key"] !== SETTINGS_BUCKET) {
-      return null;
-    }
-    return {
-      key: typeof put["entry-key"] === "string" ? put["entry-key"] : "",
-      value: put.value,
-    };
+  const operation = evt["put-entry"] ? "put-entry" : "del-entry";
+  const entry = evt[operation] as Record<string, unknown> | undefined;
+  if (!entry || entry.desk !== SETTINGS_DESK || entry["bucket-key"] !== SETTINGS_BUCKET) {
+    return null;
   }
-
-  // Handle del-entry events
-  if (evt["del-entry"]) {
-    const del = evt["del-entry"] as Record<string, unknown>;
-    if (del.desk !== SETTINGS_DESK || del["bucket-key"] !== SETTINGS_BUCKET) {
-      return null;
-    }
-    return {
-      key: typeof del["entry-key"] === "string" ? del["entry-key"] : "",
-      value: undefined,
-    };
-  }
-
-  return null;
+  return {
+    key: typeof entry["entry-key"] === "string" ? entry["entry-key"] : "",
+    value: operation === "put-entry" ? entry.value : undefined,
+  };
 }
 
-/**
- * Apply a single settings update to the current state.
- */
 function applySettingsUpdate(
   current: TlonSettingsStore,
   key: string,
   value: unknown,
 ): TlonSettingsStore {
-  const next = { ...current };
+  const parsed = parseSettingsResponse({ [SETTINGS_BUCKET]: { [key]: value } });
+  return Object.hasOwn(parsed, key)
+    ? { ...current, [key]: parsed[key as keyof TlonSettingsStore] }
+    : { ...current };
+}
 
-  switch (key) {
-    case "groupChannels":
-      next.groupChannels = Array.isArray(value) ? filterStringEntries(value) : undefined;
-      break;
-    case "dmAllowlist":
-      next.dmAllowlist = Array.isArray(value) ? filterStringEntries(value) : undefined;
-      break;
-    case "autoDiscoverChannels":
-      next.autoDiscoverChannels = typeof value === "boolean" ? value : undefined;
-      break;
-    case "showModelSig":
-      next.showModelSig = typeof value === "boolean" ? value : undefined;
-      break;
-    case "autoAcceptDmInvites":
-      next.autoAcceptDmInvites = typeof value === "boolean" ? value : undefined;
-      break;
-    case "autoAcceptGroupInvites":
-      next.autoAcceptGroupInvites = typeof value === "boolean" ? value : undefined;
-      break;
-    case "groupInviteAllowlist":
-      next.groupInviteAllowlist = Array.isArray(value) ? filterStringEntries(value) : undefined;
-      break;
-    case "channelRules":
-      next.channelRules = parseChannelRules(value);
-      break;
-    case "defaultAuthorizedShips":
-      next.defaultAuthorizedShips = Array.isArray(value) ? filterStringEntries(value) : undefined;
-      break;
-    case "ownerShip":
-      next.ownerShip = typeof value === "string" ? value : undefined;
-      break;
-    case "pendingApprovals":
-      next.pendingApprovals = parsePendingApprovals(value);
-      break;
-  }
-
-  return next;
+export async function putTlonSetting(
+  api: Pick<UrbitSSEClient, "poke">,
+  key: keyof TlonSettingsStore,
+  value: unknown,
+): Promise<void> {
+  await api.poke({
+    app: "settings",
+    mark: "settings-event",
+    json: {
+      "put-entry": {
+        desk: SETTINGS_DESK,
+        "bucket-key": SETTINGS_BUCKET,
+        "entry-key": key,
+        value,
+      },
+    },
+  });
 }
 
 type SettingsLogger = {
@@ -285,14 +232,6 @@ type SettingsLogger = {
   error?: (msg: string) => void;
 };
 
-/**
- * Create a settings store subscription manager.
- *
- * Usage:
- *   const settings = createSettingsManager(api, logger);
- *   await settings.load();
- *   settings.subscribe((newSettings) => { ... });
- */
 export function createSettingsManager(api: UrbitSSEClient, logger?: SettingsLogger) {
   const state: TlonSettingsState = {
     current: {},
@@ -326,9 +265,6 @@ export function createSettingsManager(api: UrbitSSEClient, logger?: SettingsLogg
       return state.loaded;
     },
 
-    /**
-     * Load initial settings via scry.
-     */
     async load(): Promise<TlonSettingsStore> {
       try {
         const raw = await api.scry("/settings/all.json");
@@ -348,9 +284,6 @@ export function createSettingsManager(api: UrbitSSEClient, logger?: SettingsLogg
       }
     },
 
-    /**
-     * Subscribe to settings changes.
-     */
     async startSubscription(): Promise<void> {
       await api.subscribe({
         app: "settings",
@@ -375,9 +308,6 @@ export function createSettingsManager(api: UrbitSSEClient, logger?: SettingsLogg
       logger?.log?.("[settings] Subscribed to settings updates");
     },
 
-    /**
-     * Register a listener for settings changes.
-     */
     onChange(listener: (settings: TlonSettingsStore) => void): () => void {
       listeners.add(listener);
       return () => listeners.delete(listener);

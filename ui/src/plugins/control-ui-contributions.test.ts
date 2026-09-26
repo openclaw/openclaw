@@ -29,7 +29,7 @@ type ContributionsElement = LitElement & {
 const sessionKey = "agent:main:main";
 const cleanups: (() => void)[] = [];
 
-it("opens customization once and retains reload state across close and reopen", async () => {
+it("renders customization inline and retains pending reload state", async () => {
   const listeners = new Set<() => void>();
   const replacement = {
     key: "fixture/composer",
@@ -80,26 +80,18 @@ it("opens customization once and retains reload state across close and reopen", 
     }
     return found;
   };
-  let mostDialogs = 0;
-  const observer = new MutationObserver(() => {
-    mostDialogs = Math.max(mostDialogs, manager.querySelectorAll("openclaw-modal-dialog").length);
-  });
-  observer.observe(manager, { childList: true, subtree: true });
   provider.append(manager);
   document.body.append(provider);
   try {
     await manager.updateComplete;
     expect(manager.querySelector("openclaw-modal-dialog")).toBeNull();
-    button(t("pluginUi.customize")).click();
     await vi.waitFor(() => expect(manager.querySelector("select")).not.toBeNull());
-    expect(mostDialogs).toBe(1);
     expect(manager.querySelector('[role="alert"]')).toBeNull();
+    expect(manager.querySelector('[role="status"]')?.textContent).toContain("custom-review");
     const labs = manager.querySelector<HTMLAnchorElement>('a[href="/console/settings/labs"]');
     expect(labs?.textContent?.trim()).toBe("Open Labs");
     labs?.click();
     expect(navigate).toHaveBeenCalledExactlyOnceWith("labs");
-    await vi.waitFor(() => expect(manager.querySelector("openclaw-modal-dialog")).toBeNull());
-    button(t("pluginUi.customize")).click();
     await vi.waitFor(() => expect(manager.querySelector("select")).not.toBeNull());
 
     const select = manager.querySelector<HTMLSelectElement>("select");
@@ -115,10 +107,9 @@ it("opens customization once and retains reload state across close and reopen", 
 
     button(t("pluginUi.reload")).click();
     expect(plugins.reload).toHaveBeenCalledOnce();
-    button(t("common.close")).click();
-    await vi.waitFor(() => expect(manager.querySelector("openclaw-modal-dialog")).toBeNull());
-    button(t("pluginUi.customize")).click();
     await vi.waitFor(() => expect(button(t("pluginUi.reload")).disabled).toBe(true));
+    button(t("pluginUi.reload")).click();
+    expect(plugins.reload).toHaveBeenCalledOnce();
     pendingReload.reject(new Error("Synthetic reload failure"));
     await vi.waitFor(() =>
       expect(manager.querySelector('[role="alert"]')?.textContent).toContain(
@@ -128,9 +119,8 @@ it("opens customization once and retains reload state across close and reopen", 
     expect(button(t("pluginUi.reload")).disabled).toBe(false);
     button(t("common.retry")).click();
     expect(plugins.refresh).toHaveBeenCalledOnce();
-    expect(mostDialogs).toBe(1);
+    expect(manager.querySelector("openclaw-modal-dialog")).toBeNull();
   } finally {
-    observer.disconnect();
     pendingReload.resolve();
   }
 });

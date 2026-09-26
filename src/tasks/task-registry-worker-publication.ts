@@ -27,6 +27,8 @@ export type TaskRegistryWorkerMutationContext = {
   scope: TaskRegistryMutationScope;
   admission: OpenClawStateDatabaseReadAdmission;
   publicationRecords: () => ReadonlyMap<string, TaskRecord>;
+  /** Exact rows deleted by this mutation, never inferred from readback absence alone. */
+  publicationDeletions?: () => ReadonlyMap<string, TaskRecord>;
   readEventTarget?: () => TaskAgentEventTarget | undefined;
   /** Producer-owned identity writes; canonical readback and discovery retain the full scope. */
   readIdentity?: TaskRegistryReadIdentity;
@@ -68,7 +70,7 @@ function captureTaskRegistryWorkerSnapshot(
 
 function createTaskRegistryPublicationRecovery(
   pending: PendingTaskRegistryMutation,
-  recover: (snapshot: TaskRegistryStoreSnapshot) => TaskRecord | undefined,
+  recover?: (snapshot: TaskRegistryStoreSnapshot) => TaskRecord | undefined,
 ) {
   const witness = { writtenTaskIds: new Set<string>(), replaced: false };
   pending.recoveryWitness = witness;
@@ -81,7 +83,7 @@ function createTaskRegistryPublicationRecovery(
       witness.replaced = false;
     },
     recover: (snapshot: TaskRegistryStoreSnapshot) => {
-      expected = recover(snapshot);
+      expected = recover?.(snapshot);
       return expected;
     },
     assertCurrent() {
@@ -202,7 +204,9 @@ export async function reconcileTaskRegistryWorkerSnapshot(params: {
     try {
       install(
         merged.snapshot,
-        params.taskRowsWritten === false ? undefined : pending.publication?.records,
+        params.taskRowsWritten === false || !pending.publication
+          ? undefined
+          : new Map([...pending.publication.records, ...pending.publication.deletions]),
       );
     } finally {
       pending.recoveryWitness = recovery;
@@ -211,6 +215,11 @@ export async function reconcileTaskRegistryWorkerSnapshot(params: {
     for (const [taskId, expected] of pending.publication?.records ?? []) {
       const current = tasks.get(taskId);
       if (current !== undefined && isEquivalentTaskRecord(expected, current)) {
+        pending.publication?.ready.add(taskId);
+      }
+    }
+    for (const taskId of pending.publication?.deletions.keys() ?? []) {
+      if (!tasks.has(taskId)) {
         pending.publication?.ready.add(taskId);
       }
     }
@@ -237,6 +246,16 @@ export function publishTaskRegistryWorkerMutation(params: {
     return;
   }
   const { tasks } = getTaskRegistryProcessState();
+  for (const [taskId, previous] of publication.deletions) {
+    if (
+      publication.ready.has(taskId) &&
+      !publication.invalidated.has(taskId) &&
+      !tasks.has(taskId) &&
+      pending.published.get(taskId)
+    ) {
+      emit(() => ({ kind: "deleted", taskId, previous: cloneTaskRecordForObserver(previous) }));
+    }
+  }
   for (const [taskId, expected] of publication.records) {
     if (!publication.ready.has(taskId) || publication.invalidated.has(taskId)) {
       continue;
@@ -272,7 +291,9 @@ function inheritPublicationBaseline(pending: PendingTaskRegistryMutation, taskId
   for (const prior of state.projection.pending) {
     if (
       prior !== pending &&
-      (prior.published.has(taskId) || prior.publication?.records.has(taskId))
+      (prior.published.has(taskId) ||
+        prior.publication?.records.has(taskId) ||
+        prior.publication?.deletions.has(taskId))
     ) {
       const previous = prior.published.get(taskId);
       pending.published.set(taskId, previous && cloneTaskRecordForObserver(previous));
@@ -287,19 +308,31 @@ function inheritPublicationBaseline(pending: PendingTaskRegistryMutation, taskId
 export function claimTaskRegistryPublication(
   pending: PendingTaskRegistryMutation,
   records: ReadonlyMap<string, TaskRecord>,
+  deletions: ReadonlyMap<string, TaskRecord> = new Map(),
 ): void {
-  for (const taskId of records.keys()) {
+  for (const taskId of deletions.keys()) {
+    if (records.has(taskId)) {
+      throw new Error("A task publication cannot both replace and delete the same row");
+    }
+  }
+  for (const taskId of [...records.keys(), ...deletions.keys()]) {
     if (!pending.published.has(taskId)) {
       inheritPublicationBaseline(pending, taskId);
     }
   }
   pending.publication = {
     records: new Map(Array.from(records, ([taskId, record]) => [taskId, cloneTaskRecord(record)])),
+    deletions: new Map(
+      Array.from(deletions, ([taskId, record]) => [taskId, cloneTaskRecord(record)]),
+    ),
     ready: new Set(),
     invalidated: new Set(),
   };
   const recovery = pending.recoveryWitness;
-  for (const [taskId, record] of pending.publication.records) {
+  for (const [taskId, record] of [
+    ...pending.publication.records,
+    ...pending.publication.deletions,
+  ]) {
     // Competing writes can precede the receipt's publication claim.
     if (recovery?.replaced || recovery?.writtenTaskIds.has(taskId)) {
       pending.publication.invalidated.add(taskId);
@@ -325,9 +358,10 @@ export function createPendingTaskRegistryMutation(
     admission,
     readIdentity,
     recoverPublication,
+    publicationDeletions,
   }: Pick<
     TaskRegistryWorkerMutationContext,
-    "scope" | "admission" | "readIdentity" | "recoverPublication"
+    "scope" | "admission" | "readIdentity" | "recoverPublication" | "publicationDeletions"
   >,
   store: TaskRegistryStore,
   readEventTarget?: () => TaskAgentEventTarget | undefined,
@@ -357,7 +391,10 @@ export function createPendingTaskRegistryMutation(
         baselineIds.add(taskId);
       }
     }
-    for (const [taskId, record] of prior.publication?.records ?? []) {
+    for (const [taskId, record] of [
+      ...(prior.publication?.records ?? []),
+      ...(prior.publication?.deletions ?? []),
+    ]) {
       if (matchesScope(record, scope)) {
         baselineIds.add(taskId);
       }
@@ -379,8 +416,9 @@ export function createPendingTaskRegistryMutation(
         : undefined;
     };
   }
-  const recovery = recoverPublication
-    ? createTaskRegistryPublicationRecovery(pending, recoverPublication)
-    : undefined;
+  const recovery =
+    recoverPublication || publicationDeletions
+      ? createTaskRegistryPublicationRecovery(pending, recoverPublication)
+      : undefined;
   return { pending, recovery, settle: readSettlement?.resolve };
 }

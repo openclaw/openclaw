@@ -380,13 +380,14 @@ export abstract class AgentSessionBase {
 
     const sourceSlots =
       event.type === "message_end" ? takeCodeModeResponseSource(event.message) : undefined;
-    // Emit to extensions first
-    let messageChanged = await this.emitExtensionEvent(event);
+    let messageChanged = false;
+    if (event.type !== "message_update" || this.currentExtensionRunner.hasHandlers(event.type)) {
+      messageChanged = await this.emitExtensionEvent(event);
+    }
     // Extensions can replace the final result. Protect listeners before publishing it.
     messageChanged = prepareSessionToolResult(this.sessionManager, event) || messageChanged;
     const publishAfterPersistence = event.type === "message_end" && event.message.role === "user";
 
-    // Notify all listeners
     if (event.type === "agent_end") {
       await this.emitTerminal({
         ...event,
@@ -399,7 +400,6 @@ export abstract class AgentSessionBase {
     // Persist the same prepared bytes after synchronous listener changes.
     messageChanged = prepareSessionToolResult(this.sessionManager, event) || messageChanged;
 
-    // Handle session persistence
     if (event.type === "message_end") {
       // Check if this is a custom message from extensions
       if (event.message.role === "custom") {

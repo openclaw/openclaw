@@ -116,6 +116,7 @@ beforeEach(() => {
   native.wait.mockResolvedValue(undefined);
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   if (hostBunVersion) {
     Object.defineProperty(process.versions, "bun", hostBunVersion);
   }
@@ -123,6 +124,29 @@ afterEach(() => {
 });
 
 describe("diagnostic CPU profile owner", () => {
+  it("reports synchronous start blocking separately from awaited capture time", async () => {
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    native.post.mockImplementation((method: string) => {
+      if (method === "Profiler.start") {
+        now += 2_100;
+        return Promise.resolve().then(() => {
+          now += 700;
+          return {};
+        });
+      }
+      now += 20;
+      return Promise.resolve(method === "Profiler.stop" ? { profile: profile() } : {});
+    });
+    native.wait.mockImplementation(async () => {
+      now += 5_000;
+    });
+    expect(await capture()).toMatchObject({
+      status: "complete",
+      result: { startBlockedMs: 2_100, actualDurationMs: 5_500 },
+    });
+  });
+
   it("returns a complete sanitized graph only after native cleanup", async () => {
     const outcome = await capture();
     expect(outcome.status).toBe("complete");

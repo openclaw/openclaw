@@ -574,14 +574,10 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       }
       return false;
     } finally {
-      if (isCurrent()) {
-        if (!older) {
-          this.catalogLoading = false;
-          state.chatLoading = false;
-        }
-        if (!older) {
-          state.requestUpdate();
-        }
+      if (isCurrent() && !older) {
+        this.catalogLoading = false;
+        state.chatLoading = false;
+        state.requestUpdate();
       }
     }
   }

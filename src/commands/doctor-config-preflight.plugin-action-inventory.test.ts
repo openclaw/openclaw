@@ -22,8 +22,9 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
-import { completeDoctorPreflightMigrations } from "./doctor-config-preflight-startup.js";
+import { assertDoctorPreflightMigrationsComplete } from "./doctor-config-preflight-migrations.js";
 import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
 const withHome = useDoctorConfigPreflightHome();
 
@@ -33,7 +34,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-it.each(["startup", "doctor"] as const)(
+it.each(["deferred-doctor", "doctor"] as const)(
   "keeps %s post-session execution bound to the admitted external plugin inventory",
   async (caller) => {
     await withHome(async (home) => {
@@ -112,7 +113,7 @@ module.exports = { stateMigrations: [{
         async () => {
           const env = process.env;
           openOpenClawStateDatabase({ env });
-          if (caller === "startup") {
+          if (caller === "deferred-doctor") {
             await withPluginLifecycleLease({ env }, (lease) =>
               writePersistedInstalledPluginIndexInstallRecordsWithLease(
                 Object.fromEntries(
@@ -131,7 +132,7 @@ module.exports = { stateMigrations: [{
             );
           }
           const pending =
-            caller === "startup"
+            caller === "deferred-doctor"
               ? [
                   {
                     pluginId: "codex",
@@ -144,7 +145,7 @@ module.exports = { stateMigrations: [{
           if (pending.length > 0) {
             recordDeferredPluginMigrations({ env, pending });
           }
-          const admitted = caller === "startup" ? actions.slice(0, 1) : actions;
+          const admitted = caller === "deferred-doctor" ? actions.slice(0, 1) : actions;
           let receipt;
           if (caller === "doctor") {
             const ctx = await prepareDoctorContext(configPath);
@@ -160,14 +161,14 @@ module.exports = { stateMigrations: [{
             receipt = ctx.configResult.stateMigrationStepReceipts?.at(-1);
           } else {
             // Convergence exclusions belong to preflight's metadata scope, which ends
-            // before startup completes the deferred session phase.
+            // before Doctor completes the deferred session phase.
             const prepared = await withDeferredPluginDoctorMigrations(["codex"], () =>
               autoMigrateLegacyState({
                 cfg,
                 env,
                 homedir: () => home,
                 doctorOnlyStateMigrations: true,
-                invocationPurpose: "startup",
+                invocationPurpose: "doctor",
                 legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
               }),
             );
@@ -176,11 +177,18 @@ module.exports = { stateMigrations: [{
               { pluginId: "acpx", id: "acpx-session-owner-resources" },
             ]);
 
-            await completeDoctorPreflightMigrations({
+            await assertDoctorPreflightMigrationsComplete({
               cfg,
               stepReceipts: prepared.stepReceipts,
               report: () => {},
-              startup: { env, postSessionPluginMigration: prepared.postSessionPluginMigration },
+            });
+            await noteSessionTranscriptHealth({
+              cfg,
+              env,
+              shouldRepair: true,
+              postSessionPluginMigration: prepared.postSessionPluginMigration,
+              postSessionPluginMigrationPlanBound: true,
+              onStepReceipt: (step) => prepared.stepReceipts.push(step),
             });
             receipt = prepared.stepReceipts.at(-1);
           }
@@ -197,7 +205,7 @@ module.exports = { stateMigrations: [{
             ).toBe("retained session state");
           }
           for (const pluginRoot of [
-            ...(caller === "startup" ? [path.join(externalRoot, "codex")] : []),
+            ...(caller === "deferred-doctor" ? [path.join(externalRoot, "codex")] : []),
             path.join(bundledRoot, "acpx"),
             path.join(bundledRoot, "codex"),
           ]) {

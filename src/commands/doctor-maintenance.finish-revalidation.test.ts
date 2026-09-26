@@ -49,8 +49,14 @@ import {
 
 const mocks = vi.hoisted(() => ({
   resolveService: vi.fn<() => GatewayService>(),
+  gatewayPid: process.pid + 100_000,
   coordinatorRuntimeDir: "",
   stops: 0,
+}));
+vi.mock("../daemon/service-process-membership.js", () => ({
+  // This in-memory service places Doctor outside its synthetic process scope.
+  inspectServiceProcessMembershipSync: (pid: number) =>
+    pid === mocks.gatewayPid ? "outside" : "unknown",
 }));
 
 vi.mock("../daemon/service.js", async (importOriginal) => ({
@@ -375,10 +381,9 @@ async function runDoctorFinishForStoppedUnit(
       let competingUpdateStarted = false;
       let otherOwner: ReturnType<typeof tryAcquireExclusiveSqliteCoordinator> | undefined;
       let releaseDuringInspection: (() => Promise<void>) | undefined;
-      const legacyGatewayPid = process.pid + 100_000;
       if (scenario === "legacy-gateway-lifecycle-contended") {
         vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
-          pid: legacyGatewayPid,
+          pid: mocks.gatewayPid,
           createdAt: new Date().toISOString(),
           port: gatewayPort.port,
         });
@@ -498,9 +503,7 @@ async function runDoctorFinishForStoppedUnit(
             if (running) {
               return {
                 status: "running",
-                ...(scenario === "legacy-gateway-lifecycle-contended"
-                  ? { pid: legacyGatewayPid }
-                  : {}),
+                pid: mocks.gatewayPid,
                 systemd: { managerUid: 2001 },
               };
             }
@@ -749,7 +752,7 @@ it("preserves the existing malformed continuation writer refusal before stopping
 
 it("refuses a foreign lifecycle holder before stopping the service", async () => {
   await expect(runDoctorFinishForStoppedUnit("lifecycle-contended")).rejects.toThrow(
-    "another OpenClaw process owns gateway-lifecycle",
+    "OpenClaw state database is busy (gateway-lifecycle)",
   );
   expect(mocks.stops).toBe(0);
 });

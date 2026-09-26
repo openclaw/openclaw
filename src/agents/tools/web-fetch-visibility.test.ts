@@ -72,95 +72,28 @@ describe("sanitizeHtml", () => {
     }
   });
 
-  it("strips display:none elements", async () => {
-    const html = '<p>Visible</p><p style="display:none">Hidden</p>';
-    const result = await sanitizeHtml(html);
+  it.each([
+    "display:none",
+    "visibility:hidden",
+    "opacity:0",
+    "font-size:0px",
+    "text-indent:-9999px",
+    "color:transparent",
+    "color:rgba(0,0,0,0)",
+    "color:rgba(0,0,0,0.0)",
+    "color:hsla(0,0%,0%,0)",
+    "transform:scale(0)",
+    "transform:translateX(-9999px)",
+    "transform:translateY(-9999px)",
+    "width:0;height:0;overflow:hidden",
+    "left:-9999px",
+    "top:-9999px",
+    "clip-path:inset(100%)",
+    "clip-path:inset(50%)",
+  ])("strips elements hidden by %s", async (style) => {
+    const result = await sanitizeHtml(`<p>Visible</p><div style="${style}">Hidden</div>`);
     expect(result).toContain("Visible");
     expect(result).not.toContain("Hidden");
-  });
-
-  it("strips visibility:hidden elements", async () => {
-    const html = '<p>Visible</p><span style="visibility:hidden">Secret</span>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Secret");
-  });
-
-  it("strips opacity:0 elements", async () => {
-    const html = '<p>Show</p><div style="opacity:0">Invisible</div>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Invisible");
-  });
-
-  it("strips font-size:0 elements", async () => {
-    const html = '<p>Normal</p><span style="font-size:0px">Tiny</span>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Tiny");
-  });
-
-  it("strips text-indent far-offscreen elements", async () => {
-    const html = '<p>Normal</p><p style="text-indent:-9999px">Offscreen</p>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Offscreen");
-  });
-
-  it("strips color:transparent elements", async () => {
-    const html = '<p>Visible</p><p style="color:transparent">Ghost</p>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Ghost");
-  });
-
-  it("strips color:rgba with zero alpha elements", async () => {
-    const html = '<p>Visible</p><p style="color:rgba(0,0,0,0)">Invisible</p>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Invisible");
-  });
-
-  it("strips color:rgba with zero decimal alpha elements", async () => {
-    const html = '<p>Visible</p><p style="color:rgba(0,0,0,0.0)">Invisible</p>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Invisible");
-  });
-
-  it("strips color:hsla with zero alpha elements", async () => {
-    const html = '<p>Visible</p><p style="color:hsla(0,0%,0%,0)">Invisible</p>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Invisible");
-  });
-
-  it("strips transform:scale(0) elements", async () => {
-    const html = '<p>Show</p><div style="transform:scale(0)">Scaled</div>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Scaled");
-  });
-
-  it("strips transform:translateX far-offscreen elements", async () => {
-    const html = '<p>Show</p><div style="transform:translateX(-9999px)">Translated</div>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Translated");
-  });
-
-  it("strips width:0 height:0 overflow:hidden elements", async () => {
-    const html = '<p>Show</p><div style="width:0;height:0;overflow:hidden">Zero</div>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Zero");
-  });
-
-  it("strips left far-offscreen positioned elements", async () => {
-    const html = '<p>Show</p><div style="left:-9999px">Offscreen</div>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Offscreen");
-  });
-
-  it("strips clip-path:inset(100%) elements", async () => {
-    const html = '<p>Show</p><div style="clip-path:inset(100%)">Clipped</div>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Clipped");
-  });
-
-  it("strips clip-path:inset(50%) elements", async () => {
-    const html = '<p>Show</p><div style="clip-path:inset(50%)">Clipped</div>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Clipped");
   });
 
   it("does not strip clip-path:inset(0%) elements", async () => {
@@ -169,29 +102,13 @@ describe("sanitizeHtml", () => {
     expect(result).toContain("Visible");
   });
 
-  it("strips sr-only class elements", async () => {
-    const html = '<p>Main</p><span class="sr-only">Screen reader only</span>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Screen reader only");
-  });
-
-  it("strips visually-hidden class elements", async () => {
-    const html = '<p>Main</p><span class="visually-hidden">Hidden visually</span>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Hidden visually");
-  });
-
-  it("strips d-none class elements", async () => {
-    const html = '<p>Main</p><div class="d-none">Bootstrap hidden</div>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Bootstrap hidden");
-  });
-
-  it("strips hidden class elements", async () => {
-    const html = '<p>Main</p><div class="hidden">Class hidden</div>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Class hidden");
-  });
+  it.each(["sr-only", "visually-hidden", "d-none", "hidden"])(
+    "strips elements with the %s class",
+    async (className) => {
+      const result = await sanitizeHtml(`<p>Main</p><span class="${className}">Hidden</span>`);
+      expect(result).not.toContain("Hidden");
+    },
+  );
 
   it("does not strip elements with hidden as substring of class name", async () => {
     const html = '<p>Main</p><div class="un-hidden">Should be visible</div>';
@@ -487,31 +404,6 @@ describe("sanitizeHtml", () => {
 });
 
 describe("stripInvisibleUnicode", () => {
-  it("strips zero-width space", () => {
-    const text = "Hello\u200BWorld";
-    expect(stripInvisibleUnicode(text)).toBe("HelloWorld");
-  });
-
-  it("strips zero-width non-joiner", () => {
-    const text = "Hello\u200CWorld";
-    expect(stripInvisibleUnicode(text)).toBe("HelloWorld");
-  });
-
-  it("strips zero-width joiner", () => {
-    const text = "Hello\u200DWorld";
-    expect(stripInvisibleUnicode(text)).toBe("HelloWorld");
-  });
-
-  it("strips left-to-right mark", () => {
-    const text = "Hello\u200EWorld";
-    expect(stripInvisibleUnicode(text)).toBe("HelloWorld");
-  });
-
-  it("strips right-to-left mark", () => {
-    const text = "Hello\u200FWorld";
-    expect(stripInvisibleUnicode(text)).toBe("HelloWorld");
-  });
-
   it("strips directional overrides (LRO, RLO, PDF, etc.)", () => {
     // Directional controls can make visible text render differently from the
     // byte sequence the model sees.

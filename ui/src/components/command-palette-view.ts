@@ -1,6 +1,11 @@
 import { html, noChange, nothing } from "lit";
 import type { GatewayAgentRow } from "../api/types.ts";
-import { pathForAgentPanel, pathForPluginSettings, type RouteId } from "../app-route-paths.ts";
+import {
+  pathForAgentPanel,
+  pathForPluginCatalogEntry,
+  pathForPluginSettings,
+  type RouteId,
+} from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
@@ -19,6 +24,7 @@ import type {
 } from "../pages/chat/components/chat-composer-mention-menu.ts";
 import { renderSelectedHumanMentions } from "../pages/chat/components/chat-composer-selected-mentions.ts";
 import type { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
+import "../styles/command-palette.css";
 import {
   commandPaletteCategoryLabel,
   filterCommandPaletteItems,
@@ -38,7 +44,6 @@ import {
 
 registerCommandPaletteEnglish();
 
-type PaletteItem = CommandPaletteItem;
 export type PaletteFilter = "all" | "sessions" | "messages";
 
 type CommandPaletteProps = {
@@ -55,8 +60,8 @@ type CommandPaletteProps = {
   agents: readonly GatewayAgentRow[];
   agentIdentity?: AgentIdentityCapability;
   defaultAgentId: string;
-  sessionItems: readonly PaletteItem[];
-  catalogItems: readonly PaletteItem[];
+  sessionItems: readonly CommandPaletteItem[];
+  catalogItems: readonly CommandPaletteItem[];
   primaryModelSearch: boolean;
   modelSearchError: string | null;
   sessionSearchPending: boolean;
@@ -79,14 +84,16 @@ type CommandPaletteProps = {
   onNavigate?: ApplicationContext["navigate"];
   onSelectSession?: (sessionKey: string) => void;
   onSlashCommand?: (command: string) => void;
+  pluginIconUrls: Readonly<Record<string, string>>;
+  onPluginIconError: (pluginId: string) => void;
   desktopAvailable: boolean;
   custodianAvailable: boolean;
   onInputRef: (element: Element | undefined) => void;
   draft: PaletteSessionDraft;
 };
 
-function groupItems(items: PaletteItem[]): Array<[string, PaletteItem[]]> {
-  const map = new Map<string, PaletteItem[]>();
+function groupItems(items: CommandPaletteItem[]): Array<[string, CommandPaletteItem[]]> {
+  const map = new Map<string, CommandPaletteItem[]>();
   for (const item of items) {
     const group = map.get(item.category) ?? [];
     group.push(item);
@@ -98,7 +105,7 @@ function groupItems(items: PaletteItem[]): Array<[string, PaletteItem[]]> {
 const paletteInputId = COMMAND_PALETTE_INPUT_ID;
 const paletteListboxId = "cmd-palette-listbox";
 
-function selectItem(item: PaletteItem, props: CommandPaletteProps) {
+function selectItem(item: CommandPaletteItem, props: CommandPaletteProps) {
   if (props.draft.submitting || props.searchDebouncing) {
     return;
   }
@@ -109,7 +116,11 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
       props.onNavigate?.(routeId, {
         pathname: pathForAgentPanel(item.agentId, null, props.basePath),
       });
-    } else if (item.pluginId) {
+    } else if (item.catalogId) {
+      props.onNavigate?.(routeId, {
+        pathname: pathForPluginCatalogEntry(item.catalogId, props.basePath),
+      });
+    } else if (item.pluginId && routeId === "plugin-settings") {
       props.onNavigate?.(routeId, {
         pathname: pathForPluginSettings(item.pluginId, props.basePath),
       });
@@ -127,10 +138,6 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
   } else {
     props.onSlashCommand?.(item.action);
   }
-  props.onToggle();
-}
-
-function closePalette(props: CommandPaletteProps) {
   props.onToggle();
 }
 
@@ -182,7 +189,7 @@ function handleKeydown(event: KeyboardEvent, readProps: () => CommandPaletteProp
   if (event.key === "Escape") {
     event.preventDefault();
     event.stopPropagation();
-    closePalette(props);
+    props.onToggle();
     return;
   }
   if (props.draft.submitting) {
@@ -221,7 +228,7 @@ function getOptionId(index: number): string {
   return `cmd-palette-option-${index}`;
 }
 
-function matchesFilter(item: PaletteItem, filter: PaletteFilter) {
+function matchesFilter(item: CommandPaletteItem, filter: PaletteFilter) {
   return filter === "all" || item.category === (filter === "sessions" ? "chats" : "messages");
 }
 
@@ -306,7 +313,7 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
           event.preventDefault();
           return;
         }
-        closePalette(props);
+        props.onToggle();
       }}
     >
       <div
@@ -450,7 +457,7 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
                                 }}
                                 @mouseenter=${() => props.onActiveIdChange(item.id)}
                               >
-                                ${renderCommandPaletteResult(item, props.searchQuery, agent, props.agentIdentity?.get(agentId))}
+                                ${renderCommandPaletteResult(item, props.searchQuery, agent, props.agentIdentity?.get(agentId), props.pluginIconUrls, props.onPluginIconError)}
                               </div>
                             `;
                           })}

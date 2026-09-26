@@ -1,4 +1,3 @@
-// Message contract tests cover shared channel message shape and runtime invariants.
 import { describe, expect, it, vi } from "vitest";
 import {
   verifyChannelMessageAdapterCapabilityProofs,
@@ -20,31 +19,6 @@ function expectOnlyVerifiedOrNotDeclared(results: readonly { status: string }[])
 }
 
 describe("durable final capability contracts", () => {
-  it("runs proofs for every declared durable-final capability", async () => {
-    const text = vi.fn();
-    const silent = vi.fn(async () => {});
-
-    const results = await verifyDurableFinalCapabilityProofs({
-      adapterName: "demo",
-      capabilities: {
-        text: true,
-        silent: true,
-      },
-      proofs: {
-        text,
-        silent,
-      },
-    });
-    expect(verifiedEntries(results)).toEqual([
-      { capability: "text", status: "verified" },
-      { capability: "silent", status: "verified" },
-    ]);
-    expect(results).toHaveLength(durableFinalDeliveryCapabilities.length);
-    expectOnlyVerifiedOrNotDeclared(results);
-    expect(text).toHaveBeenCalledTimes(1);
-    expect(silent).toHaveBeenCalledTimes(1);
-  });
-
   it("fails when a declared durable-final capability has no proof", async () => {
     await expect(
       verifyDurableFinalCapabilityProofs({

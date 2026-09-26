@@ -1,4 +1,8 @@
-// Googlechat plugin module implements channel behavior.
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelStatusIssue,
+} from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
@@ -7,6 +11,8 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
+import { buildChannelConfigSchema, GoogleChatConfigSchema } from "../config-api.js";
+import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
   googleChatApprovalCapability,
   shouldSuppressLocalGoogleChatExecApprovalPrompt,
@@ -22,18 +28,6 @@ import {
   googlechatThreadingAdapter,
 } from "./channel.adapters.js";
 import {
-  buildChannelConfigSchema,
-  DEFAULT_ACCOUNT_ID,
-  GoogleChatConfigSchema,
-  isGoogleChatSpaceTarget,
-  isGoogleChatUserTarget,
-  normalizeGoogleChatTarget,
-  resolveGoogleChatOutboundSessionRoute,
-  type ChannelMessageActionAdapter,
-  type ChannelStatusIssue,
-  type ResolvedGoogleChatAccount,
-} from "./channel.deps.runtime.js";
-import {
   legacyConfigRules as GOOGLECHAT_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeGoogleChatCompatibilityConfig,
 } from "./doctor-contract.js";
@@ -41,6 +35,12 @@ import { collectGoogleChatMutableAllowlistWarnings } from "./doctor.js";
 import { startGoogleChatGatewayAccount } from "./gateway.js";
 import { describeGoogleChatMessageTool } from "./message-tool-api.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
+import {
+  isGoogleChatSpaceTarget,
+  isGoogleChatUserTarget,
+  normalizeGoogleChatTarget,
+  resolveGoogleChatOutboundSessionRoute,
+} from "./targets.js";
 
 const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),

@@ -1,4 +1,3 @@
-// Diagnostic stability helpers compare diagnostic outputs across runs.
 import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
@@ -236,6 +235,15 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     type: event.type,
   };
 
+  const copy = <Key extends keyof DiagnosticStabilityEventRecord>(
+    source: Pick<DiagnosticStabilityEventRecord, Key>,
+    ...keys: Key[]
+  ): void => {
+    for (const key of keys) {
+      record[key] = source[key];
+    }
+  };
+
   switch (event.type) {
     case "agent.commentary":
       // Trusted commentary belongs to harness traces, not the stability subscription.
@@ -247,71 +255,50 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       // Runtime measurements are exporter-only and excluded by the subscription.
       break;
     case "model.usage":
-      record.channel = event.channel;
-      record.provider = event.provider;
-      record.model = event.model;
+      copy(event, "channel", "provider", "model");
       record.usage = { ...event.usage };
       record.context = event.context ? { ...event.context } : undefined;
-      record.costUsd = event.costUsd;
-      record.durationMs = event.durationMs;
+      copy(event, "costUsd", "durationMs");
       break;
     case "webhook.received":
     case "webhook.error":
       record.channel = event.channel;
       break;
     case "webhook.processed":
-      record.channel = event.channel;
-      record.durationMs = event.durationMs;
+      copy(event, "channel", "durationMs");
       break;
     case "message.queued":
-      record.channel = event.channel;
-      record.source = event.source;
-      record.queueDepth = event.queueDepth;
+      copy(event, "channel", "source", "queueDepth");
       break;
     case "message.received":
     case "message.dispatch.started":
-      record.channel = event.channel;
-      record.source = event.source;
+      copy(event, "channel", "source");
       break;
     case "message.dispatch.completed":
-      record.channel = event.channel;
-      record.source = event.source;
-      record.durationMs = event.durationMs;
-      record.outcome = event.outcome;
+      copy(event, "channel", "source", "durationMs", "outcome");
       assignReasonCode(record, event.reason);
       break;
     case "message.processed":
-      record.channel = event.channel;
-      record.durationMs = event.durationMs;
-      record.outcome = event.outcome;
+      copy(event, "channel", "durationMs", "outcome");
       assignReasonCode(record, event.reason);
       break;
     case "message.delivery.started":
-      record.channel = event.channel;
-      record.deliveryKind = event.deliveryKind;
-      break;
     case "message.delivery.completed":
-      record.channel = event.channel;
-      record.deliveryKind = event.deliveryKind;
-      record.durationMs = event.durationMs;
-      record.resultCount = event.resultCount;
-      record.outcome = "completed";
-      break;
     case "message.delivery.error":
-      record.channel = event.channel;
-      record.deliveryKind = event.deliveryKind;
-      record.durationMs = event.durationMs;
-      record.outcome = "error";
-      assignReasonCode(record, event.errorCategory);
+      copy(event, "channel", "deliveryKind");
+      if (event.type !== "message.delivery.started") {
+        record.durationMs = event.durationMs;
+        if (event.type === "message.delivery.completed") {
+          record.resultCount = event.resultCount;
+          record.outcome = "completed";
+        } else {
+          record.outcome = "error";
+          assignReasonCode(record, event.errorCategory);
+        }
+      }
       break;
     case "talk.event":
-      record.talkEventType = event.talkEventType;
-      record.mode = event.mode;
-      record.transport = event.transport;
-      record.brain = event.brain;
-      record.provider = event.provider;
-      record.final = event.final;
-      record.durationMs = event.durationMs;
+      copy(event, "talkEventType", "mode", "transport", "brain", "provider", "final", "durationMs");
       record.bytes = event.byteLength;
       break;
     case "session.state":
@@ -327,8 +314,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
         record.level = "warning";
       }
       assignReasonCode(record, event.reason);
-      record.ageMs = event.ageMs;
-      record.queueDepth = event.queueDepth;
+      copy(event, "ageMs", "queueDepth");
       if (event.activeWorkKind) {
         record.activeWorkKind = event.activeWorkKind;
       }
@@ -339,8 +325,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "session.recovery.requested":
       record.outcome = event.state;
       record.action = event.allowActiveAbort ? "abort" : "recover";
-      record.ageMs = event.ageMs;
-      record.queueDepth = event.queueDepth;
+      copy(event, "ageMs", "queueDepth");
       if (event.activeWorkKind) {
         record.activeWorkKind = event.activeWorkKind;
       }
@@ -348,9 +333,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       break;
     case "session.recovery.completed":
       record.outcome = event.status;
-      record.action = event.action;
-      record.ageMs = event.ageMs;
-      record.queueDepth = event.queueDepth;
+      copy(event, "action", "ageMs", "queueDepth");
       record.count = event.released;
       if (event.activeWorkKind) {
         record.activeWorkKind = event.activeWorkKind;
@@ -363,13 +346,12 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.outcome = event.trigger;
       break;
     case "queue.lane.enqueue":
-      record.source = event.lane;
-      record.queueSize = event.queueSize;
-      break;
     case "queue.lane.dequeue":
       record.source = event.lane;
       record.queueSize = event.queueSize;
-      record.waitMs = event.waitMs;
+      if (event.type === "queue.lane.dequeue") {
+        record.waitMs = event.waitMs;
+      }
       break;
     case "run.attempt":
       record.count = event.attempt;
@@ -378,15 +360,11 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       assignReasonCode(record, event.reason);
       break;
     case "run.execution_phase":
-      record.phase = event.phase;
-      record.provider = event.provider;
-      record.model = event.model;
+      copy(event, "phase", "provider", "model");
       record.toolName = event.tool;
       break;
     case "context.assembled":
-      record.channel = event.channel;
-      record.provider = event.provider;
-      record.model = event.model;
+      copy(event, "channel", "provider", "model");
       record.count = event.messageCount;
       record.bytes = event.promptChars;
       record.context =
@@ -394,23 +372,24 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       break;
     case "diagnostic.heartbeat":
       record.webhooks = { ...event.webhooks };
-      record.active = event.active;
-      record.waiting = event.waiting;
-      record.queued = event.queued;
+      copy(event, "active", "waiting", "queued");
       break;
     case "diagnostic.liveness.warning":
       record.level = resolveDiagnosticLivenessRecordLevel(event);
       record.durationMs = event.degradedSinceMs ?? event.intervalMs;
       record.count = event.reasons.length;
       assignReasonCode(record, event.reasons[0]);
-      record.eventLoopDelayP99Ms = event.eventLoopDelayP99Ms;
-      record.eventLoopDelayMaxMs = event.eventLoopDelayMaxMs;
-      record.eventLoopUtilization = event.eventLoopUtilization;
-      record.cpuCoreRatio = event.cpuCoreRatio;
-      record.active = event.active;
-      record.waiting = event.waiting;
-      record.queued = event.queued;
-      record.phase = event.phase;
+      copy(
+        event,
+        "eventLoopDelayP99Ms",
+        "eventLoopDelayMaxMs",
+        "eventLoopUtilization",
+        "cpuCoreRatio",
+        "active",
+        "waiting",
+        "queued",
+        "phase",
+      );
       if (event.activeWorkLabels?.length) {
         record.source = event.activeWorkLabels[0];
       } else if (event.queuedWorkLabels?.length) {
@@ -419,44 +398,30 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       break;
     case "diagnostic.phase.completed":
       record.phase = event.name;
-      record.durationMs = event.durationMs;
-      record.cpuCoreRatio = event.cpuCoreRatio;
+      copy(event, "durationMs", "cpuCoreRatio");
       break;
     case "tool.loop":
-      record.toolName = event.toolName;
-      record.level = event.level;
-      record.action = event.action;
-      record.detector = event.detector;
-      record.count = event.count;
-      record.pairedToolName = event.pairedToolName;
+      copy(event, "toolName", "level", "action", "detector", "count", "pairedToolName");
       break;
     case "tool.execution.started":
-      record.toolName = event.toolName;
-      record.source = event.toolSource;
-      record.pluginId = event.toolOwner;
-      break;
     case "tool.execution.completed":
-      record.toolName = event.toolName;
-      record.source = event.toolSource;
-      record.pluginId = event.toolOwner;
-      record.durationMs = event.durationMs;
-      break;
     case "tool.execution.error":
-      record.toolName = event.toolName;
-      record.source = event.toolSource;
-      record.pluginId = event.toolOwner;
-      record.durationMs = event.durationMs;
-      if (event.terminalReason) {
-        record.outcome = event.terminalReason;
-      }
-      assignReasonCode(record, event.errorCategory);
-      break;
     case "tool.execution.blocked":
       record.toolName = event.toolName;
       record.source = event.toolSource;
       record.pluginId = event.toolOwner;
-      record.outcome = "blocked";
-      assignReasonCode(record, event.deniedReason);
+      if (event.type === "tool.execution.completed" || event.type === "tool.execution.error") {
+        record.durationMs = event.durationMs;
+      }
+      if (event.type === "tool.execution.error") {
+        if (event.terminalReason) {
+          record.outcome = event.terminalReason;
+        }
+        assignReasonCode(record, event.errorCategory);
+      } else if (event.type === "tool.execution.blocked") {
+        record.outcome = "blocked";
+        assignReasonCode(record, event.deniedReason);
+      }
       break;
     case "skill.used":
       record.toolName = event.toolName;
@@ -465,84 +430,63 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.target = event.skillName;
       break;
     case "exec.process.completed":
-      record.target = event.target;
-      record.mode = event.mode;
-      record.outcome = event.outcome;
-      record.durationMs = event.durationMs;
-      record.commandLength = event.commandLength;
-      record.exitCode = event.exitCode;
-      record.timedOut = event.timedOut;
-      record.failureKind = event.failureKind;
+      copy(
+        event,
+        "target",
+        "mode",
+        "outcome",
+        "durationMs",
+        "commandLength",
+        "exitCode",
+        "timedOut",
+        "failureKind",
+      );
       assignReasonCode(record, event.failureKind);
       break;
     case "exec.approval.followup_suppressed":
-      record.approvalId = event.approvalId;
-      record.phase = event.phase;
+      copy(event, "approvalId", "phase");
       assignReasonCode(record, event.reason);
       break;
     case "run.started":
-      record.provider = event.provider;
-      record.model = event.model;
-      record.channel = event.channel;
-      break;
     case "run.completed":
-      record.provider = event.provider;
-      record.model = event.model;
-      record.channel = event.channel;
-      record.durationMs = event.durationMs;
-      record.outcome = event.outcome;
-      assignReasonCode(record, event.errorCategory);
+      copy(event, "provider", "model", "channel");
+      if (event.type === "run.completed") {
+        copy(event, "durationMs", "outcome");
+        assignReasonCode(record, event.errorCategory);
+      }
       break;
     case "harness.run.started":
-      record.source = event.harnessId;
-      record.pluginId = event.pluginId;
-      record.provider = event.provider;
-      record.model = event.model;
-      record.channel = event.channel;
-      break;
     case "harness.run.completed":
-      record.source = event.harnessId;
-      record.pluginId = event.pluginId;
-      record.provider = event.provider;
-      record.model = event.model;
-      record.channel = event.channel;
-      record.durationMs = event.durationMs;
-      record.outcome = event.outcome;
-      record.count = event.itemLifecycle?.completedCount;
-      break;
     case "harness.run.error":
       record.source = event.harnessId;
-      record.pluginId = event.pluginId;
-      record.provider = event.provider;
-      record.model = event.model;
-      record.channel = event.channel;
-      record.durationMs = event.durationMs;
-      record.outcome = "error";
-      record.action = event.phase;
-      assignReasonCode(record, event.errorCategory);
+      copy(event, "pluginId", "provider", "model", "channel");
+      if (event.type !== "harness.run.started") {
+        record.durationMs = event.durationMs;
+        if (event.type === "harness.run.completed") {
+          record.outcome = event.outcome;
+          record.count = event.itemLifecycle?.completedCount;
+        } else {
+          record.outcome = "error";
+          record.action = event.phase;
+          assignReasonCode(record, event.errorCategory);
+        }
+      }
       break;
     case "model.call.started":
-      record.provider = event.provider;
-      record.model = event.model;
-      break;
     case "model.call.completed":
-      record.provider = event.provider;
-      record.model = event.model;
-      record.durationMs = event.durationMs;
-      record.requestBytes = event.requestPayloadBytes;
-      record.responseBytes = event.responseStreamBytes;
-      record.timeToFirstByteMs = event.timeToFirstByteMs;
-      break;
     case "model.call.error":
-      record.provider = event.provider;
-      record.model = event.model;
-      record.durationMs = event.durationMs;
-      record.requestBytes = event.requestPayloadBytes;
-      record.responseBytes = event.responseStreamBytes;
-      record.timeToFirstByteMs = event.timeToFirstByteMs;
-      record.failureKind = event.failureKind;
-      record.memory = event.memory ? { ...event.memory } : undefined;
-      assignReasonCode(record, event.errorCategory);
+      copy(event, "provider", "model");
+      if (event.type !== "model.call.started") {
+        record.durationMs = event.durationMs;
+        record.requestBytes = event.requestPayloadBytes;
+        record.responseBytes = event.responseStreamBytes;
+        record.timeToFirstByteMs = event.timeToFirstByteMs;
+        if (event.type === "model.call.error") {
+          record.failureKind = event.failureKind;
+          record.memory = event.memory ? { ...event.memory } : undefined;
+          assignReasonCode(record, event.errorCategory);
+        }
+      }
       break;
     case "log.record":
       record.level = event.level;
@@ -550,8 +494,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       break;
     case "security.event":
       record.source = event.category;
-      record.action = event.action;
-      record.outcome = event.outcome;
+      copy(event, "action", "outcome");
       record.level = event.severity;
       record.target = event.target?.name ?? event.target?.kind;
       assignReasonCode(record, event.reason ?? event.policy?.reason);
@@ -563,18 +506,10 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.level = event.level;
       assignReasonCode(record, event.reason);
       record.memory = { ...event.memory };
-      record.thresholdBytes = event.thresholdBytes;
-      record.rssGrowthBytes = event.rssGrowthBytes;
-      record.windowMs = event.windowMs;
+      copy(event, "thresholdBytes", "rssGrowthBytes", "windowMs");
       break;
     case "payload.large":
-      record.surface = event.surface;
-      record.action = event.action;
-      record.bytes = event.bytes;
-      record.limitBytes = event.limitBytes;
-      record.count = event.count;
-      record.channel = event.channel;
-      record.pluginId = event.pluginId;
+      copy(event, "surface", "action", "bytes", "limitBytes", "count", "channel", "pluginId");
       assignReasonCode(record, event.reason);
       break;
     case "telemetry.exporter":
@@ -584,13 +519,16 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       assignReasonCode(record, event.reason ?? event.errorCategory);
       break;
     case "diagnostic.async_queue.dropped":
-      record.droppedEvents = event.droppedEvents;
-      record.droppedTrustedEvents = event.droppedTrustedEvents;
-      record.droppedUntrustedEvents = event.droppedUntrustedEvents;
-      record.droppedPriorityEvents = event.droppedPriorityEvents;
-      record.queueLength = event.queueLength;
-      record.maxQueueLength = event.maxQueueLength;
-      record.drainBatchSize = event.drainBatchSize;
+      copy(
+        event,
+        "droppedEvents",
+        "droppedTrustedEvents",
+        "droppedUntrustedEvents",
+        "droppedPriorityEvents",
+        "queueLength",
+        "maxQueueLength",
+        "drainBatchSize",
+      );
       break;
     case "model.failover":
       record.provider = event.fromProvider;

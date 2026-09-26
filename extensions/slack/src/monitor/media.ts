@@ -5,6 +5,7 @@ import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-run
 import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -22,7 +23,6 @@ import {
   unlinkIfExists,
 } from "./media.runtime.js";
 import { isGovSlackClient } from "./slack-client-kind.js";
-import { logVerbose } from "./thread.runtime.js";
 export type { SlackMediaResult } from "./media-types.js";
 
 function isSlackHostname(hostname: string, govSlack: boolean): boolean {

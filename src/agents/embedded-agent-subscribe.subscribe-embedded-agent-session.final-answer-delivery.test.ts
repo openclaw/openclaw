@@ -137,6 +137,8 @@ describe("text_end snapshot reconciliation", () => {
       };
       const answer = "Answer".repeat(32);
       const expected = expectedPrefix + answer;
+      const queuedText = queuedDeltas.join("");
+      let observedQueuedText = "";
       const rawProcessed = createDeferred();
       const reanchorProcessed = createDeferred();
       const phaseProcessed = createDeferred();
@@ -236,7 +238,8 @@ describe("text_end snapshot reconciliation", () => {
               await phaseProcessed.promise;
             }
           }
-          if (update.type === "text_delta" && queuedDeltas.includes(update.delta)) {
+          if (update.type === "text_delta" && queuedText && queuedText.includes(update.delta)) {
+            observedQueuedText += update.delta;
             expect(onPartialReply).not.toHaveBeenCalled();
           }
         },
@@ -246,6 +249,7 @@ describe("text_end snapshot reconciliation", () => {
       try {
         await Promise.all([producing, running]);
         await subscription.waitForPendingEvents();
+        expect(observedQueuedText).toBe(queuedText);
         expect(extractTextPayloads(onBlockReply.mock.calls).join("")).toBe(expected);
         expect(subscription.assistantTexts.join("")).toBe(expected);
         expect(onBlockReply.mock.calls[0]?.[0].audioAsVoice ?? false).toBe(audioAsVoice);

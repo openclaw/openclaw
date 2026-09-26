@@ -77,13 +77,14 @@ describe("steering input custody", () => {
         incomingGrant,
         scenario === "changed grant" ? "replacement-grant" : "original-grant",
       );
-      const captured = captureGatewayOperatorRunAuthority({
-        client: originalClient,
-        context: fixture.context,
-      });
+      let captured: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
       let backingRun: Promise<void> | undefined;
       let releaseProvider = () => {};
       try {
+        captured = await captureGatewayOperatorRunAuthority({
+          client: originalClient,
+          context: fixture.context,
+        });
         if (!captured || !fixture.activeRun) {
           throw new Error("Expected original operator and active run ownership");
         }
@@ -229,10 +230,16 @@ describe("steering input custody", () => {
           expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
         }
       } finally {
-        releaseProvider();
-        await backingRun;
-        await fixture.cleanup();
-        captured?.release();
+        try {
+          releaseProvider();
+          await backingRun;
+        } finally {
+          try {
+            await fixture.cleanup();
+          } finally {
+            captured?.release();
+          }
+        }
       }
     },
   );

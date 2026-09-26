@@ -41,8 +41,8 @@ export {
 } from "@openclaw/llm-core";
 
 // Anthropic gates OAuth models with claude_code_version_too_old. Keep this floor
-// at the published Claude Code release (2.1.278); older or absent CLIs must not downgrade it.
-export const ANTHROPIC_CLAUDE_CODE_VERSION = "2.1.278";
+// at the published Claude Code release (2.1.280); older or absent CLIs must not downgrade it.
+export const ANTHROPIC_CLAUDE_CODE_VERSION = "2.1.280";
 
 /** Build OAuth headers and the matching billing identity from one request snapshot. */
 export function buildAnthropicClaudeCodeIdentity(

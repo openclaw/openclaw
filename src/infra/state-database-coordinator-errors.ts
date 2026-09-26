@@ -12,7 +12,11 @@ export const StateDatabaseCoordinatorContentionError = resolveGlobalSingleton(
         readonly blockingOwner?: StateDatabaseCoordinatorOwner,
       ) {
         super(
-          `another OpenClaw process owns ${family}${blockingOwner ? ` holder=${JSON.stringify(blockingOwner)}` : ""}`,
+          `OpenClaw state database is busy (${family}). Wait for the other OpenClaw process to finish, then retry. If it persists, run \`openclaw gateway status\` and check for other OpenClaw processes using the same state directory.${
+            family === "state-lifecycle"
+              ? ""
+              : " A running Gateway can hold this lock until it stops; stop it through its service manager or original terminal before retrying."
+          }${blockingOwner ? ` holder=${JSON.stringify(blockingOwner)}` : ""}`,
         );
         this.name = "StateDatabaseCoordinatorContentionError";
       }

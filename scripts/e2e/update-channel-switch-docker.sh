@@ -39,6 +39,7 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_FS_SAFE_NATIVE_CONTRACT \
   -e OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT \
   -e OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT \
+  -e OPENCLAW_E2E_GIT_CHANNEL_TIMEOUT \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
@@ -110,6 +111,10 @@ OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT="${OPENCLAW_UPDATE_CHANNEL_
 export OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT
 command -v openclaw >/dev/null
 openclaw_e2e_enable_openclaw_cli_timeout
+# Channel switches install dependencies and swap the whole package inside the
+# container, which outgrew the ordinary per-command budget; every other CLI call
+# keeps the OPENCLAW_E2E_COMMAND_TIMEOUT default.
+git_channel_timeout="${OPENCLAW_E2E_GIT_CHANNEL_TIMEOUT:-900s}"
 
 registry_port_file=/tmp/openclaw-update-channel-registry.port
 registry_log=/tmp/openclaw-update-channel-registry.log
@@ -218,7 +223,7 @@ node -e "require(\"node:fs\").unlinkSync(process.argv[1])" "$git_root/operator-u
 
 echo "==> package -> git dev channel"
 set +e
-dev_json="$(openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
+dev_json="$(OPENCLAW_E2E_COMMAND_TIMEOUT="$git_channel_timeout" openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
 dev_status=$?
 set -e
 printf "%s\n" "$dev_json"
@@ -235,7 +240,7 @@ STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions
 
 echo "==> git -> package stable channel"
 set +e
-stable_json="$(openclaw update --channel stable --tag "$pkg_tgz_path" --yes --json --no-restart)"
+stable_json="$(OPENCLAW_E2E_COMMAND_TIMEOUT="$git_channel_timeout" openclaw update --channel stable --tag "$pkg_tgz_path" --yes --json --no-restart)"
 stable_status=$?
 set -e
 printf "%s\n" "$stable_json"

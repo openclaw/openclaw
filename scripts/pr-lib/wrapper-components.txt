@@ -14,6 +14,7 @@ packages/gateway-protocol/package.json
 packages/gateway-protocol/src/capability-consent-error-details.ts
 packages/gateway-protocol/src/client-info.ts
 packages/gateway-protocol/src/failover-reasons.ts
+packages/gateway-protocol/src/plugin-ui-capabilities.ts
 packages/gateway-protocol/src/protocol-value-normalization.ts
 packages/gateway-protocol/src/schema/closed-object.ts
 packages/gateway-protocol/src/schema/failover-reason.ts
@@ -135,6 +136,7 @@ scripts/lib/record-shared.mjs
 scripts/lib/release-changelog.mjs
 scripts/lib/repo-root.mjs
 scripts/lib/test-selector-source-facts.mts
+scripts/lib/test-source-term-matcher.mts
 scripts/lib/tsdown-declaration-boundary.mts
 scripts/lib/tsgo-core-test-shards.mts
 scripts/lib/tsx-cli-shim.mjs
@@ -185,6 +187,7 @@ src/agents/defaults.ts
 src/agents/glob-pattern.ts
 src/agents/internal-runtime-context.ts
 src/agents/mcp-oauth-store-error.ts
+src/agents/model-auth-policy.ts
 src/agents/model-catalog-lookup.ts
 src/agents/model-catalog-metadata.ts
 src/agents/model-compat-catalog.ts
@@ -258,6 +261,7 @@ src/channels/chat-meta.ts
 src/channels/config-metadata.ts
 src/channels/config-presence.ts
 src/channels/ids.ts
+src/channels/message/ingress-queue-read-contract.ts
 src/channels/plugins/bootstrap-registry.ts
 src/channels/plugins/bundled-ids.ts
 src/channels/plugins/bundled-root.ts
@@ -370,6 +374,7 @@ src/config/future-version-guard.ts
 src/config/gateway-control-ui-origins.ts
 src/config/gateway-env-selection.ts
 src/config/gateway-portal-ingress.ts
+src/config/gateway-public-origin.ts
 src/config/github-identity-profile-id.ts
 src/config/include-write-boundary.ts
 src/config/includes.ts
@@ -528,7 +533,7 @@ src/config/zod-schema.ts
 src/cron/completion-status.ts
 src/cron/execution-error-constants.ts
 src/cron/run-diagnostics-normalize.ts
-src/cron/task-run-detail.ts
+src/cron/run-history-detail.ts
 src/daemon/arg-split.ts
 src/daemon/constants.ts
 src/daemon/runtime-binary.ts
@@ -537,8 +542,11 @@ src/daemon/service-process-env.ts
 src/gateway/control-ui-bootstrap-contract.ts
 src/gateway/control-ui-session-prs-git.runtime.ts
 src/gateway/control-ui-session-prs-landing.ts
+src/gateway/github-publication-base.ts
 src/gateway/github-remote.ts
+src/gateway/github-repository-publication-snapshot.ts
 src/gateway/operator-scopes.ts
+src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
 src/gateway/worker-environments/session-attachment.ts
 src/gateway/worker-environments/workspace-actual-manifest.ts
@@ -636,11 +644,8 @@ src/infra/file-descriptor.ts
 src/infra/file-lock-manager.ts
 src/infra/file-lock-sync.ts
 src/infra/file-lock.ts
-src/infra/file-read.ts
 src/infra/fixed-window-rate-limit.ts
-src/infra/fs-safe-advanced.ts
 src/infra/fs-safe-copy.worker.ts
-src/infra/fs-safe-defaults.ts
 src/infra/fs-safe.ts
 src/infra/gateway-lock-process.ts
 src/infra/gateway-owner-lease.ts
@@ -705,17 +710,14 @@ src/infra/openclaw-root.ts
 src/infra/path-case.ts
 src/infra/path-existence.ts
 src/infra/path-guards.ts
-src/infra/path-safety.ts
 src/infra/plain-object.ts
 src/infra/ports-lsof.ts
 src/infra/ports-netstat.ts
 src/infra/private-mode.ts
-src/infra/private-temp-workspace.ts
 src/infra/process-env.ts
 src/infra/prototype-keys.ts
-src/infra/regular-file.ts
-src/infra/replace-file.ts
 src/infra/restart-stale-pids.ts
+src/infra/root-walk.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-url.ts
 src/infra/runtime-worker-generation.ts
@@ -772,6 +774,8 @@ src/infra/sqlite-snapshot-staging-owner.ts
 src/infra/sqlite-snapshot-staging.ts
 src/infra/sqlite-snapshot-wal-prefix.ts
 src/infra/sqlite-source-handle.ts
+src/infra/sqlite-source-revision.ts
+src/infra/sqlite-source-revision.worker.ts
 src/infra/sqlite-staging-token.ts
 src/infra/sqlite-store.worker.ts
 src/infra/sqlite-strict.ts
@@ -835,6 +839,7 @@ src/infra/update-run-limits.ts
 src/infra/update-run-driver-schema.ts
 src/infra/update-run-schema.ts
 src/infra/update-run-timeouts.ts
+src/infra/update-runtime-path-index.ts
 src/infra/update-snapshot-capacity-schema.ts
 src/infra/update-step-identity.ts
 src/infra/warning-filter.ts
@@ -844,7 +849,9 @@ src/infra/windows-port-pids.ts
 src/infra/windows-private-directory.ts
 src/infra/windows-process-start.ts
 src/infra/worker-cpu.ts
+src/infra/worker-diagnostic-script.ts
 src/infra/worker-idle-gc.ts
+src/infra/worker-memory.ts
 src/infra/worker-task-capacity.ts
 src/infra/worker-task-native-sections.ts
 src/infra/worker-task-pool-completion.ts
@@ -933,6 +940,7 @@ src/plugins/config-normalization-shared.ts
 src/plugins/config-policy.ts
 src/plugins/config-state.ts
 src/plugins/control-plane-workspace.ts
+src/plugins/control-ui-assets.ts
 src/plugins/current-plugin-metadata-snapshot.ts
 src/plugins/current-plugin-metadata-state.ts
 src/plugins/default-enablement.ts
@@ -954,6 +962,8 @@ src/plugins/host-hook-cleanup-timeout.ts
 src/plugins/host-hook-json.ts
 src/plugins/host-hook-runtime.ts
 src/plugins/host-hooks.ts
+src/plugins/http-path.ts
+src/plugins/http-route-owner.ts
 src/plugins/install-channel-specs.ts
 src/plugins/install-paths.ts
 src/plugins/install-root-context.ts
@@ -972,6 +982,7 @@ src/plugins/installed-plugin-index-record-cache.ts
 src/plugins/installed-plugin-index-record-reader.ts
 src/plugins/installed-plugin-index-record-state.ts
 src/plugins/installed-plugin-index-row.ts
+src/plugins/installed-plugin-index-source-admissions.ts
 src/plugins/installed-plugin-index-store-path.ts
 src/plugins/installed-plugin-index-store.ts
 src/plugins/installed-plugin-index-types.ts
@@ -1029,9 +1040,12 @@ src/plugins/plugin-cache.ts
 src/plugins/plugin-config-trust.ts
 src/plugins/plugin-control-plane-context.ts
 src/plugins/plugin-generation-artifact.ts
+src/plugins/plugin-generation-file-capture.ts
+src/plugins/plugin-generation-receipt.ts
 src/plugins/plugin-generation-source-lookup.ts
 src/plugins/plugin-install-default-choice.ts
 src/plugins/plugin-instance-argument-views.ts
+src/plugins/plugin-instance-disposal.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
 src/plugins/plugin-instance-module-loader.ts
@@ -1053,7 +1067,11 @@ src/plugins/plugin-metadata-snapshot.ts
 src/plugins/plugin-metadata-state-worker.ts
 src/plugins/plugin-module-loader-cache.ts
 src/plugins/plugin-module-loader-recovery.ts
+src/plugins/plugin-native-admission-state.ts
+src/plugins/plugin-native-admission.ts
 src/plugins/plugin-native-module-loader.ts
+src/plugins/plugin-native-namespace.ts
+src/plugins/plugin-native-reference.ts
 src/plugins/plugin-package-metadata-capture.ts
 src/plugins/plugin-peer-link.ts
 src/plugins/plugin-policy-id.ts
@@ -1066,15 +1084,19 @@ src/plugins/plugin-return-value.ts
 src/plugins/plugin-runtime-artifact-identity.ts
 src/plugins/plugin-runtime-artifact-resolution.ts
 src/plugins/plugin-runtime-artifact-selection.ts
+src/plugins/plugin-safety-inspected-files.ts
 src/plugins/plugin-scope.ts
 src/plugins/plugin-sdk-native-resolver.ts
 src/plugins/plugin-setup-module.ts
 src/plugins/plugin-shared-module-loader.ts
+src/plugins/plugin-source-admission-store.ts
 src/plugins/plugin-source-build.ts
 src/plugins/plugin-source-capture-context.ts
 src/plugins/plugin-source-capture-directory.ts
 src/plugins/plugin-source-capture-path.ts
+src/plugins/plugin-source-file.ts
 src/plugins/plugin-source-references.ts
+src/plugins/plugin-source-verification.ts
 src/plugins/portable-icon-paths.ts
 src/plugins/prepared-message-tool-catalog.ts
 src/plugins/provider-config-owner.ts
@@ -1213,10 +1235,12 @@ src/shared/path-array-index.ts
 src/shared/pid-alive.ts
 src/shared/regexp.ts
 src/shared/sandbox-workspace-paths.ts
+src/shared/settle-within.ts
 src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
 src/skills/discovery/filter.ts
 src/skills/lifecycle/upload-store-error.ts
+src/state/agent-deletion-journal-history.ts
 src/state/config-machine-state-write.ts
 src/state/config-machine-state.ts
 src/state/openclaw-agent-board-schema.ts
@@ -1248,6 +1272,8 @@ src/state/openclaw-state-db-audit-migration.ts
 src/state/openclaw-state-db-borrow.ts
 src/state/openclaw-state-db-cache.idle.ts
 src/state/openclaw-state-db-cache.ts
+src/state/openclaw-state-db-content-version.ts
+src/state/openclaw-state-db-cache.wal.ts
 src/state/openclaw-state-db-contract.ts
 src/state/openclaw-state-db-delivery-queue-backfill.ts
 src/state/openclaw-state-db-doctor-schema.ts
@@ -1311,6 +1337,7 @@ src/state/openclaw-state-schema-compatibility.ts
 src/state/openclaw-state-schema-publication.ts
 src/state/openclaw-state-schema.sql
 src/state/openclaw-state-schema.ts
+src/state/openclaw-state-worker-context.capture.ts
 src/state/openclaw-state-worker-context.ts
 src/state/openclaw-state-worker-error-identity.ts
 src/state/openclaw-state-worker-error.ts
@@ -1320,6 +1347,7 @@ src/state/openclaw-state.worker.ts
 src/state/openclaw-update-schema-refusal.ts
 src/state/session-metadata-unavailable-error.ts
 src/state/session-watch-cursor-provenance.ts
+src/test-utils/bun-process.ts
 src/utils.ts
 src/utils/boolean.ts
 src/utils/fetch-timeout.ts

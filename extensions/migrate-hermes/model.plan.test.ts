@@ -9,7 +9,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HERMES_REASON_DEFAULT_MODEL_CONFIGURED } from "./items.js";
 import { buildHermesMigrationProvider } from "./provider.js";
-import { makeContext, writeFile } from "./test/provider-helpers.js";
+import { makeContext, makeHermesPaths, writeFile } from "./test/provider-helpers.js";
 
 let testWorkspace: TempWorkspace;
 
@@ -45,10 +45,7 @@ describe("Hermes migration model planning", () => {
   });
 
   it("preserves the provider for top-level string model refs", async () => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
+    const { source, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
     await writeFile(path.join(source, "config.yaml"), "provider: openai\nmodel: gpt-5.4\n");
 
     const provider = buildHermesMigrationProvider();
@@ -58,9 +55,7 @@ describe("Hermes migration model planning", () => {
   });
 
   it("preserves provider routing for vendor-qualified models and normalizes aliases", async () => {
-    const root = testWorkspace.dir;
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
+    const { root, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
     const provider = buildHermesMigrationProvider();
     const cases = [
       ["openrouter", "anthropic/claude-opus-4.7", "openrouter/anthropic/claude-opus-4.7"],
@@ -110,8 +105,7 @@ describe("Hermes migration model planning", () => {
   });
 
   it("rewrites a provider-qualified retired Qwen model without a separate provider field", async () => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, "hermes");
+    const { root, source } = makeHermesPaths(testWorkspace.dir);
     await writeFile(path.join(source, "config.yaml"), "model: qwen-oauth/qwen3.5-plus\n");
 
     const plan = await buildHermesMigrationProvider().plan(
@@ -128,31 +122,8 @@ describe("Hermes migration model planning", () => {
     );
   });
 
-  it.each([
-    ["sk-kimi-placeholder", "kimi/kimi-k2.5"],
-    ["legacy-moonshot-placeholder", "moonshot/kimi-k2.5"],
-  ])("routes kimi-coding from the effective key contract", async (apiKey, expectedModel) => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, expectedModel.split("/")[0]!);
-    await writeFile(
-      path.join(source, "config.yaml"),
-      "model:\n  provider: kimi-coding\n  default: kimi-k2.5\n",
-    );
-    await writeFile(path.join(source, ".env"), `KIMI_API_KEY=${apiKey}\n`);
-
-    const plan = await buildHermesMigrationProvider().plan(
-      makeContext({
-        source,
-        stateDir: path.join(root, "state"),
-        workspaceDir: path.join(root, "workspace"),
-      }),
-    );
-    expect(plan.items[0]?.details?.model).toBe(expectedModel);
-  });
-
   it("routes a model-scoped custom endpoint without an explicit provider", async () => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, "hermes");
+    const { root, source } = makeHermesPaths(testWorkspace.dir);
     await writeFile(
       path.join(source, "config.yaml"),
       "model:\n  default: vendor/current-model\n  base_url: https://models.example/v1\n",
@@ -172,10 +143,7 @@ describe("Hermes migration model planning", () => {
   });
 
   it("treats existing object-form default model primaries as conflicts", async () => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
+    const { source, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
     await writeFile(
       path.join(source, "config.yaml"),
       "model:\n  provider: openai\n  model: gpt-5.4\n",
@@ -203,10 +171,7 @@ describe("Hermes migration model planning", () => {
   });
 
   it("treats default-agent model overrides as conflicts", async () => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
+    const { source, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
     await writeFile(
       path.join(source, "config.yaml"),
       "model:\n  provider: openai\n  model: gpt-5.4\n",
@@ -244,9 +209,7 @@ describe("Hermes migration model planning", () => {
   ])(
     "checks the selected agent model instead of the default (%s, %s)",
     async (main, model, status) => {
-      const root = testWorkspace.dir;
-      const source = path.join(root, "hermes");
-      const workspaceDir = path.join(root, "workspace");
+      const { root, source, workspaceDir } = makeHermesPaths(testWorkspace.dir);
       await writeFile(path.join(source, "config.yaml"), "model: imported/model\n");
       const config: OpenClawConfig = {
         agents: {

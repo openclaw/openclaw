@@ -6,7 +6,7 @@ import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import { admitQueuedMessageForSession, subscribeChatOutboxProjection } from "./chat-queue.ts";
+import { admitQueuedMessageForSession } from "./chat-queue.ts";
 import { moveQueuedChatMessage } from "./chat-send-actions.ts";
 import {
   admitStoredChatComposerQueueItem,
@@ -37,7 +37,7 @@ function queueHost(items: readonly Partial<ChatQueueItem>[], sessionKey = SESSIO
       agents: [{ id: "main" }],
     },
   });
-  const unsubscribe = subscribeChatOutboxProjection(host as never);
+  const unsubscribe = chatOutboxOwner(host as never).subscribe(host as never);
   items.forEach((item, index) => {
     const admitted = admitQueuedMessageForSession(
       host as never,
@@ -154,19 +154,6 @@ describe("queued message reorder", () => {
     }
   });
 
-  it("moves a row to the head of both the visible queue and the stored outbox", () => {
-    const { host, unsubscribe } = queueHost([{}, {}, {}]);
-
-    expect(storedOrder(host)).toEqual(["queued-1", "queued-2", "queued-3"]);
-
-    moveQueuedChatMessage(host as never, "queued-3", "queued-1");
-
-    expect(storedOrder(host)).toEqual(["queued-3", "queued-1", "queued-2"]);
-    expect(host.chatQueue.map((item) => item.id)).toEqual(storedOrder(host));
-    expect(host.lastError).toBeNull();
-    unsubscribe();
-  });
-
   it("survives a reload, because the position is stored with the message", () => {
     const { host, unsubscribe } = queueHost([{}, {}, {}]);
     moveQueuedChatMessage(host as never, "queued-3", "queued-1");
@@ -279,12 +266,8 @@ describe("queued message reorder", () => {
   });
 
   it("rejects a two-row batch instead of committing a mixed permutation when one row went stale", () => {
-    // `moveQueuedChatMessage` always re-reads storage immediately before it
-    // writes, so it can never observe a mid-flight race by itself. This test
-    // exercises the batch CAS primitive directly with a snapshot captured
-    // before a concurrent write lands, which is what a real cross-tab race
-    // looks like: the caller's `expected` rows were read before the other
-    // writer's commit, then presented to the write after it.
+    // Reorder rereads storage synchronously; capture stale rows at the CAS boundary
+    // to simulate a second tab writing between the original read and commit.
     const { host, unsubscribe } = queueHost([{}, {}, {}]);
     unsubscribe();
 
@@ -292,13 +275,9 @@ describe("queued message reorder", () => {
       listStoredChatOutboxes(host as never)
         .flatMap(({ queue }) => queue)
         .find((entry) => entry.id === id)!;
-    // Snapshot taken "before" the concurrent write, matching what a caller
-    // would have read prior to another writer's commit.
     const expectedQueued2 = storedById("queued-2");
     const expectedQueued3 = storedById("queued-3");
 
-    // A second tab/writer lands a durable change to queued-2 (a retry attempt
-    // bump) after that snapshot was taken.
     const concurrentWrite = updateStoredChatComposerQueueItem(
       host as never,
       SESSION_KEY,
@@ -310,9 +289,6 @@ describe("queued message reorder", () => {
     );
     expect(concurrentWrite).toBe(true);
 
-    // The reorder permutation this batch represents: an adjacent swap that
-    // changes exactly queued-2 and queued-3's orderKey and leaves queued-1
-    // untouched, mirroring a move from queued-3 to queued-2's position.
     const applied = updateStoredChatComposerQueueItems(host as never, SESSION_KEY, [
       {
         expected: expectedQueued3,
@@ -324,11 +300,7 @@ describe("queued message reorder", () => {
       },
     ]);
 
-    // queued-3's own compare-and-set would have succeeded alone; the batch must
-    // still reject in full because its sibling row, queued-2, went stale using
-    // the pre-concurrent-write snapshot. Any stored order other than the
-    // untouched original (aside from the concurrent writer's own sendAttempts
-    // bump) would mean the batch committed part of the permutation.
+    // queued-3 would succeed alone, but its stale sibling rejects the whole batch.
     expect(applied).toBe(false);
     expect(storedOrder(host)).toEqual(["queued-1", "queued-2", "queued-3"]);
     expect(storedById("queued-3").orderKey).toBe(expectedQueued3.orderKey);

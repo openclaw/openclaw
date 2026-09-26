@@ -1,5 +1,6 @@
 import { renameSync } from "node:fs";
 import { setImmediate } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
@@ -11,12 +12,14 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import * as profileReader from "../state/user-profile-list.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
@@ -31,6 +34,9 @@ import { createSessionRowProjection, type SessionRowProjection } from "./session
 const mocks = vi.hoisted(() => ({
   profileCurrent: true,
   prepare: vi.fn(),
+  prepareIdentity:
+    vi.fn<typeof import("../state/user-profile-list.js").prepareUserProfileIdentity>(),
+  profileLeases: new Set<object>(),
   toolAllowed: true,
   sandboxRequired: false,
   sandboxed: false,
@@ -133,6 +139,28 @@ beforeEach(() => {
   mocks.sandboxed = false;
   mocks.ambient = undefined;
   mocks.assertAmbient.mockReset();
+  mocks.prepareIdentity.mockReset().mockImplementation(async (profileId) => {
+    const lease = {};
+    mocks.profileLeases.add(lease);
+    const readCurrentProfile = () => {
+      if (!mocks.profileLeases.has(lease)) {
+        throw new Error("Prepared profile lease was released");
+      }
+      return { profileId, assignedRole: null };
+    };
+    return {
+      readCurrentProfile,
+      emailBindingIds: [],
+      readCurrentFacts: () => ({
+        profile: { ...readCurrentProfile(), emails: [] },
+        aliases: new Set([profileId]),
+      }),
+      release: () => {
+        mocks.profileLeases.delete(lease);
+      },
+    };
+  });
+  vi.spyOn(profileReader, "prepareUserProfileIdentity").mockImplementation(mocks.prepareIdentity);
   mocks.prepare.mockReset().mockImplementation(async () => ({
     profileId: "alice",
     role: null,
@@ -145,11 +173,90 @@ afterEach(() => {
     authority.release();
   }
   setActivePluginRegistry(createEmptyPluginRegistry());
+  vi.restoreAllMocks();
+  expect(mocks.profileLeases.size).toBe(0);
 });
 
 describe("session resource admission", () => {
+  it.each(["grant", "profile", "scope"] as const)(
+    "refuses a replaced original %s during canonical profile preparation before route effects",
+    async (change) => {
+      const test = fixture();
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      const prepare = expectDefined(
+        mocks.prepareIdentity.getMockImplementation(),
+        "prepared profile fixture",
+      );
+      mocks.prepareIdentity.mockImplementationOnce(async (...args) => {
+        const profile = await prepare(...args);
+        entered.resolve();
+        await resume.promise;
+        return profile;
+      });
+      const effect = vi.fn();
+      const handler = vi.fn<GatewayRequestHandler>(({ sessionAccessAuthority, respond }) => {
+        expectDefined(sessionAccessAuthority, "registered session authority").assertCurrent();
+        effect();
+        respond(true, {});
+      });
+      const method = "fixture.session.open";
+      const respond = vi.fn();
+      const pending = handleGatewayRequest({
+        req: { type: "req", id: "profile-preparation", method, params: { sessionKey: key } },
+        respond,
+        client: test.client,
+        context: test.context,
+        methodRegistry: createGatewayMethodRegistry([
+          createPluginGatewayMethodDescriptor({
+            pluginId: "fixture",
+            name: method,
+            handler,
+            scope: "operator.write",
+            sessionAccess: { mode: "write", requiredTool: "browser" },
+          }),
+        ]),
+        isWebchatConnect: () => false,
+      });
+      const failure = pending.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await Promise.race([entered.promise, pending]);
+        expect(mocks.profileLeases.size).toBe(1);
+        if (change === "grant") {
+          const internal = expectDefined(test.client.internal, "original client metadata");
+          internal.operatorAccessAuthority = {
+            ...expectDefined(internal.operatorAccessAuthority, "original access grant"),
+            signal: new AbortController().signal,
+            assertCurrent: () => {},
+          };
+        } else if (change === "profile") {
+          test.client.authenticatedUserProfile = {
+            ...expectDefined(test.client.authenticatedUserProfile, "original profile"),
+            profileId: "replacement-profile",
+          };
+        } else {
+          test.client.connect.scopes = ["operator.read"];
+        }
+        resume.resolve();
+        const thrown = await failure;
+        expect(handler).not.toHaveBeenCalled();
+        expect(effect).not.toHaveBeenCalled();
+        expect(
+          thrown instanceof Error ? thrown.message : respond.mock.calls[0]?.[2]?.message,
+        ).toMatch(/authority|Session access changed/);
+        expect(mocks.profileLeases.size).toBe(0);
+      } finally {
+        resume.resolve();
+        await failure;
+      }
+    },
+  );
+
   it.each(["identity", "scope"])(
-    "hydrates the profile before capture and fences a later operator %s change",
+    "captures the canonical profile before alias preparation and fences a later operator %s change",
     async (kind) => {
       const test = fixture();
       const profile = test.client.authenticatedUserProfile;
@@ -564,6 +671,7 @@ describe("session resource admission", () => {
     emitSessionIdentityMutation({
       kind: "reset",
       agentId: "main",
+      databaseIdentity: Symbol("session-access-fixture-database"),
       previous: { sessionId: "session-1", sessionKeys: [key] },
       current: { sessionId: "session-2", sessionKeys: [key] },
     });
@@ -620,18 +728,24 @@ describe("session resource admission", () => {
 
   it("rejects a renewed ingress grant that changes while profile preparation awaits", async () => {
     const test = fixture();
-    let finish!: (profile: unknown) => void;
-    mocks.prepare.mockReturnValueOnce(
-      new Promise((resolve) => {
-        finish = resolve;
-      }),
-    );
+    const entered = createDeferredCore();
+    const prepared = createDeferredCore<{
+      profileId: string;
+      role: null;
+      aliases: string[];
+      isCurrent: () => boolean;
+    }>();
+    mocks.prepare.mockImplementationOnce(() => {
+      entered.resolve();
+      return prepared.promise;
+    });
     const pending = test.prepare();
+    await Promise.race([entered.promise, pending]);
     test.client.internal!.operatorAccessAuthority = {
       signal: new AbortController().signal,
       assertCurrent: () => {},
     } as never;
-    finish({ profileId: "alice", role: null, aliases: ["alice"], isCurrent: () => true });
+    prepared.resolve({ profileId: "alice", role: null, aliases: ["alice"], isCurrent: () => true });
     await expect(pending).rejects.toThrow("Session access changed");
   });
 

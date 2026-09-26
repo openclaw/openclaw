@@ -1,8 +1,3 @@
-/**
- * Synology Chat HTTP client.
- * Sends messages TO Synology Chat via the incoming webhook URL.
- */
-
 import * as http from "node:http";
 import * as https from "node:https";
 import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
@@ -127,14 +122,6 @@ const ChatUserListResponseSchema = z.object({
 const chatUserCache = new Map<string, ChatUserCacheEntry>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-/**
- * Send a text message to Synology Chat via the incoming webhook.
- *
- * @param incomingUrl - Synology Chat incoming webhook URL
- * @param text - Message text to send
- * @param userId - Optional user ID to mention with @
- * @returns true if sent successfully
- */
 export async function sendMessage(
   incomingUrl: string,
   text: string,
@@ -172,9 +159,6 @@ export async function sendMessage(
   return true;
 }
 
-/**
- * Send an OpenClaw-hosted immutable file URL to Synology Chat.
- */
 export async function sendHostedFileUrl(
   incomingUrl: string,
   fileUrl: SynologyHostedMediaUrl,
@@ -368,13 +352,7 @@ export async function resolveLegacyWebhookNameToChatUserId(params: {
     return byNickname.user_id;
   }
 
-  // Then by username
-  const byUsername = users.find((u) => normalizeLowercaseStringOrEmpty(u.username) === lower);
-  if (byUsername) {
-    return byUsername.user_id;
-  }
-
-  return undefined;
+  return users.find((user) => normalizeLowercaseStringOrEmpty(user.username) === lower)?.user_id;
 }
 
 function buildWebhookBody(payload: ChatWebhookPayload, userId?: string | number): string {

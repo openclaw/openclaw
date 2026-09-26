@@ -9,7 +9,7 @@ import {
   ensureAuthProfileStore,
   loadAuthProfileStoreForRuntime,
 } from "./auth-profiles/store-runtime.js";
-import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import type { AuthProfileCredential } from "./auth-profiles/types.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import {
   readCodexCliCredentialsCached,
@@ -98,21 +98,6 @@ function encodeOAuthIdentity(credential: {
   ]);
 }
 
-function encodeCodexCredential(credential: CodexCliCredential): string {
-  return encodeOAuthIdentity(credential);
-}
-
-function encodeGeminiCredential(credential: GeminiCliCredential): string {
-  // Delegate to the shared OAuth-identity encoder. The Gemini CLI reader
-  // lifts the Google-account identity (sub, email) off the openid id_token
-  // onto the credential, so the encoder fingerprints the user through stable,
-  // non-secret identity fields — matching the Claude/Codex OAuth contract.
-  // When the id_token is absent (older logins, scope omitted), the encoder
-  // falls back to a provider-keyed constant, the same identity-less behavior
-  // the Claude CLI OAuth branch tolerates.
-  return encodeOAuthIdentity(credential);
-}
-
 function encodeAuthProfileCredential(credential: AuthProfileCredential): string {
   switch (credential.type) {
     case "api_key":
@@ -172,50 +157,21 @@ function encodeAuthProfileEpochPart(
   return `profile:${authProfileId}:${credentialHash}`;
 }
 
-function getLocalCliCredentialFingerprint(provider: string): string | undefined {
-  switch (provider) {
-    case "codex-cli": {
-      const credential = cliAuthEpochDeps.readCodexCliCredentialsCached({
-        ttlMs: 5000,
-        allowKeychainPrompt: false,
-      });
-      return credential ? hashCliAuthEpochPart(encodeCodexCredential(credential)) : undefined;
-    }
-    case "google-gemini-cli": {
-      const credential = cliAuthEpochDeps.readGeminiCliCredentialsCached({
-        ttlMs: 5000,
-      });
-      return credential ? hashCliAuthEpochPart(encodeGeminiCredential(credential)) : undefined;
-    }
-    default:
-      return undefined;
-  }
-}
-
-function getLocalCliCredential(provider: string): AuthProfileCredential | undefined {
+function getLocalCliCredential(
+  provider: string,
+  ttlMs = 0,
+): CodexCliCredential | GeminiCliCredential | undefined {
   switch (provider) {
     case "codex-cli":
       return (
-        cliAuthEpochDeps.readCodexCliCredentialsCached({
-          ttlMs: 0,
-          allowKeychainPrompt: false,
-        }) ?? undefined
+        cliAuthEpochDeps.readCodexCliCredentialsCached({ ttlMs, allowKeychainPrompt: false }) ??
+        undefined
       );
     case "google-gemini-cli":
-      return cliAuthEpochDeps.readGeminiCliCredentialsCached({ ttlMs: 0 }) ?? undefined;
+      return cliAuthEpochDeps.readGeminiCliCredentialsCached({ ttlMs }) ?? undefined;
     default:
       return undefined;
   }
-}
-
-function getAuthProfileCredential(
-  store: AuthProfileStore,
-  authProfileId: string | undefined,
-): AuthProfileCredential | undefined {
-  if (!authProfileId) {
-    return undefined;
-  }
-  return store.profiles[authProfileId];
 }
 
 /** Resolves the stable auth epoch hash for a CLI runtime/provider session. */
@@ -230,9 +186,9 @@ export async function resolveCliAuthEpoch(params: {
   const parts: string[] = [];
 
   if (params.skipLocalCredential !== true) {
-    const localFingerprint = getLocalCliCredentialFingerprint(provider);
-    if (localFingerprint) {
-      parts.push(`local:${provider}:${localFingerprint}`);
+    const credential = getLocalCliCredential(provider, 5000);
+    if (credential) {
+      parts.push(`local:${provider}:${hashCliAuthEpochPart(encodeOAuthIdentity(credential))}`);
     }
   }
 
@@ -241,7 +197,7 @@ export async function resolveCliAuthEpoch(params: {
       readOnly: true,
       allowKeychainPrompt: false,
     });
-    const credential = getAuthProfileCredential(store, authProfileId);
+    const credential = store.profiles[authProfileId];
     if (credential) {
       parts.push(encodeAuthProfileEpochPart(authProfileId, credential));
     }

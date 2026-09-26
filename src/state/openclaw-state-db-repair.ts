@@ -12,6 +12,7 @@ import { assertSqliteSchemaTablesPresent } from "../infra/sqlite-schema-contract
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
+import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
 import {
   clearOpenClawDatabaseQuarantine,
   readOpenClawDatabaseQuarantineFailure,
@@ -118,42 +119,63 @@ export function repairStateSchema(
           openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(pathname) ||
           readOpenClawDatabaseQuarantineFailure("state", pathname, { env }))
       ) {
-        runSqliteImmediateTransactionSync(db, () => {
-          // A previous REINDEX can commit before quarantine cleanup succeeds.
-          if (indexChanges.length === 0) {
-            assertSqliteIntegrity(db, pathname);
-          }
-          assertIndexRepairCurrent();
-          if (!clearOpenClawDatabaseQuarantine(pathname, { env })) {
-            throw new Error(
-              `Repaired ${pathname}, but its quarantine record could not be cleared.`,
-            );
-          }
-          clearOpenClawStateDatabaseOpenFailure(pathname);
-        });
+        runSqliteImmediateTransactionSync(
+          db,
+          () => {
+            // A previous REINDEX can commit before quarantine cleanup succeeds.
+            if (indexChanges.length === 0) {
+              assertSqliteIntegrity(db, pathname);
+            }
+            assertIndexRepairCurrent();
+            if (!clearOpenClawDatabaseQuarantine(pathname, { env })) {
+              throw new Error(
+                `Repaired ${pathname}, but its quarantine record could not be cleared.`,
+              );
+            }
+            clearOpenClawStateDatabaseOpenFailure(pathname);
+          },
+          {
+            databaseLabel: pathname,
+            operationLabel: "state.schema.quarantine-clear",
+          },
+        );
       }
       return { changes: indexChanges, warnings: [] };
     }
     if (scope === "readability") {
-      return {
-        changes: runSqliteImmediateTransactionSync(
+      const changes = runSqliteImmediateTransactionSync(
+        db,
+        () => {
+          const schemaChanges = repairAdmittedSchema();
+          if (schemaChanges.length > 0) {
+            assertOpenClawStateDatabaseOwner(db, { pathname });
+            assertSqliteTableIntegrity(db, pathname, "skill_workshop_collection_reviews");
+          }
+          return schemaChanges;
+        },
+        {
+          busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+          databaseLabel: pathname,
+          operationLabel: "state.schema.readability-repair",
+        },
+      );
+      // Recovery snapshots committed source bytes in another process. Publish
+      // catalog readability before its preservation transaction inspects them.
+      changes.push(
+        ...runSqliteImmediateTransactionSync(
           db,
           () => {
-            const changes = repairAdmittedSchema();
-            if (changes.length > 0) {
-              assertOpenClawStateDatabaseOwner(db, { pathname });
-              assertSqliteTableIntegrity(db, pathname, "skill_workshop_collection_reviews");
-            }
-            return changes;
+            assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+            return recoverOrphanTaskDeliveryRows(db, pathname);
           },
           {
             busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
             databaseLabel: pathname,
-            operationLabel: "state.schema.readability-repair",
+            operationLabel: "state.schema.readability-recovery",
           },
         ),
-        warnings: [],
-      };
+      );
+      return { changes, warnings: [] };
     }
     const applied: string[] = [...indexChanges];
     const changes = runStateSchemaMigrationTransaction(
@@ -162,6 +184,8 @@ export function repairStateSchema(
       () => {
         applied.push(...recoverOrphanTaskDeliveryRows(db, pathname));
         const previousVersion = readStateSchemaMigrationVersion(db);
+        const includeAgentDeletionJournal =
+          tableExists(db, "agent_deletion_journal") || hasPreJournalStateSchema(db);
         const preAuditSchema = previousVersion === 1 && !tableExists(db, "audit_events");
         if (preAuditSchema) {
           assertOpenClawStateDatabaseOwner(db, { pathname });
@@ -224,6 +248,7 @@ export function repairStateSchema(
           }
           executeCanonicalStateSchema(db, {
             includeVersionLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
+            includeAgentDeletionJournal,
           });
           migrateLegacyCronRunLogsToTaskRuns(db);
           if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {

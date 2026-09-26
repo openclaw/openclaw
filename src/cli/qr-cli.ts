@@ -1,6 +1,5 @@
 // QR/setup-code CLI for mobile/device pairing with local or remote Gateway credentials.
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,6 +18,7 @@ import {
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
 import { getQrRemoteCommandSecretTargetIds } from "./command-secret-targets.js";
+import { formatDocsHelp } from "./help-format.js";
 
 type QrCliOptions = {
   json?: boolean;
@@ -36,16 +36,8 @@ type QrCliOptions = {
 const LIMITED_TRANSPORT_WARNING =
   "This Gateway URL uses plaintext ws://, so the setup code was limited for safety. Use wss:// or Tailscale Serve, then generate a new code for full access.";
 
-function renderQrAscii(data: string): Promise<string> {
-  return renderQrTerminal(data, { small: true });
-}
 function readDevicePairPublicUrlFromConfig(cfg: OpenClawConfig): string | undefined {
-  const value = cfg.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  return trimToUndefined(cfg.plugins?.entries?.["device-pair"]?.config?.["publicUrl"]);
 }
 
 function shouldResolveLocalGatewayPasswordSecret(
@@ -106,10 +98,7 @@ export function registerQrCli(program: Command) {
   program
     .command("qr")
     .description("Generate a mobile pairing QR code and setup code")
-    .addHelpText(
-      "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/qr", "docs.openclaw.ai/cli/qr")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/qr"))
     .option(
       "--remote",
       "Use gateway.remote.url and gateway.remote token/password (ignores device-pair publicUrl)",
@@ -203,12 +192,7 @@ export function registerQrCli(program: Command) {
           await resolveLocalGatewayPasswordSecretIfNeeded(cfg);
         }
 
-        const explicitUrl =
-          typeof opts.url === "string" && opts.url.trim()
-            ? opts.url.trim()
-            : typeof opts.publicUrl === "string" && opts.publicUrl.trim()
-              ? opts.publicUrl.trim()
-              : undefined;
+        const explicitUrl = trimToUndefined(opts.url) ?? trimToUndefined(opts.publicUrl);
         const publicUrl =
           explicitUrl ?? (wantsRemote ? undefined : readDevicePairPublicUrlFromConfig(cfg));
 
@@ -264,7 +248,7 @@ export function registerQrCli(program: Command) {
         ];
 
         if (opts.ascii !== false) {
-          const qrAscii = await renderQrAscii(setupCode);
+          const qrAscii = await renderQrTerminal(setupCode, { small: true });
           lines.push(qrAscii.trimEnd(), "");
         }
 

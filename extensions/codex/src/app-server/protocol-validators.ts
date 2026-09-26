@@ -1,8 +1,5 @@
+import path from "node:path";
 import { normalizeJsonSchemaForTypeBox } from "openclaw/plugin-sdk/json-schema-runtime";
-/**
- * Runtime validators for Codex app-server protocol payloads, including schema
- * normalization for generated JSON Schema before TypeBox compilation.
- */
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import rawDynamicToolCallParamsSchema from "./protocol-generated/json/DynamicToolCallParams.json" with { type: "json" };
@@ -26,6 +23,24 @@ import {
   type CodexTurnCompletedNotification,
   type CodexTurnStartResponse,
 } from "./protocol.js";
+
+export function readSupervisionResponseThreadId(value: unknown): unknown {
+  const thread = isRecord(value) ? value.thread : undefined;
+  return isRecord(thread) ? thread.id : undefined;
+}
+
+export function resolveCodexThreadRolloutPath(thread: CodexThread): string | undefined {
+  const rolloutPath = thread.path?.trim();
+  if (
+    !rolloutPath ||
+    !path.isAbsolute(rolloutPath) ||
+    path.extname(rolloutPath) !== ".jsonl" ||
+    !path.basename(rolloutPath).includes(thread.id)
+  ) {
+    return undefined;
+  }
+  return rolloutPath;
+}
 
 type ValidationError = {
   instancePath?: string;
@@ -251,17 +266,14 @@ const validateTurnStartResponse = compileCodexSchema<CodexTurnStartResponse>(
   rawTurnStartResponseSchema,
 );
 
-/** Asserts and normalizes a Codex thread/start response. */
 export function assertCodexThreadStartResponse(value: unknown): CodexThreadStartResponse {
   return assertCodexShape(validateThreadStartResponse, value, "thread/start response");
 }
 
-/** Asserts and normalizes a Codex thread/fork response. */
 export function assertCodexThreadForkResponse(value: unknown): CodexThreadForkResponse {
   return assertCodexShape(validateThreadStartResponse, value, "thread/fork response");
 }
 
-/** Asserts and normalizes a Codex thread/resume response. */
 export function assertCodexThreadResumeResponse(value: unknown): CodexThreadResumeResponse {
   return assertCodexShape(validateThreadResumeResponse, value, "thread/resume response");
 }
@@ -286,7 +298,6 @@ export function assertCodexThreadAcceptsDirectInput(
   }
 }
 
-/** Asserts and normalizes a Codex turn/start response. */
 export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResponse {
   return assertCodexShape(validateTurnStartResponse, value, "turn/start response");
 }
@@ -335,24 +346,20 @@ export function assertCodexPassiveTurnItems(
   }
 }
 
-/** Reads Codex dynamic-tool call params, returning undefined for invalid payloads. */
 export function readCodexDynamicToolCallParams(
   value: unknown,
 ): CodexDynamicToolCallParams | undefined {
   return readCodexShape(validateDynamicToolCallParams, value);
 }
 
-/** Reads a Codex error notification payload if it matches the protocol schema. */
 export function readCodexErrorNotification(value: unknown): CodexErrorNotification | undefined {
   return readCodexShape(validateErrorNotification, value);
 }
 
-/** Asserts and normalizes a Codex model/list response. */
 export function assertCodexModelListResponse(value: unknown): CodexModelListResponse {
   return assertCodexShape(validateModelListResponse, value, "model/list response");
 }
 
-/** Reads a Codex turn/completed notification payload if it matches the protocol schema. */
 export function readCodexTurnCompletedNotification(
   value: unknown,
 ): CodexTurnCompletedNotification | undefined {

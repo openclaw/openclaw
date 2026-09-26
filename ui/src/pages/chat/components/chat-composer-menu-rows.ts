@@ -22,7 +22,7 @@ export function renderCapabilityToggleRow(options: {
   label: string;
   checked: boolean;
   disabled: boolean;
-  title: string | null | undefined;
+  title?: string | null;
   icon?: TemplateResult;
   note?: TemplateResult | typeof nothing;
   checkbox?: boolean;

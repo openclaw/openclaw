@@ -344,11 +344,13 @@ struct RootTabs: View {
                 openSettings: { self.selectSidebarDestination(.gateway) })
                 .id(self.selectedSidebarDestination.id)
         case .desktop:
-            DesktopHubScreen(
+            ControlUIHubScreen(
+                page: .desktop(source: nil, session: nil),
                 headerSidebarAction: self.sidebarHeaderAction,
                 gatewayAction: { self.selectSidebarDestination(.gateway) })
         case .terminal:
-            TerminalHubScreen(
+            ControlUIHubScreen(
+                page: .terminal,
                 headerSidebarAction: self.sidebarHeaderAction,
                 gatewayAction: { self.selectSidebarDestination(.gateway) })
         case .docs:
@@ -771,7 +773,7 @@ extension RootTabs {
                 agentId: target.agentId)
             guard self.shouldCollapseSidebarAfterSelection else { return }
             withAnimation(self.sidebarAnimation) {
-                self.setSidebarVisible(false)
+                self.isSidebarVisible = false
             }
         }
     }
@@ -784,7 +786,7 @@ extension RootTabs {
         self.activeSettingsRoute = destination.settingsRoute
         guard self.shouldCollapseSidebarAfterSelection else { return }
         withAnimation(self.sidebarAnimation) {
-            self.setSidebarVisible(false)
+            self.isSidebarVisible = false
         }
     }
 
@@ -817,7 +819,7 @@ extension RootTabs {
         self.sidebarNavigationPath = [route]
         guard self.shouldCollapseSidebarAfterSelection else { return }
         withAnimation(self.sidebarAnimation) {
-            self.setSidebarVisible(false)
+            self.isSidebarVisible = false
         }
     }
 
@@ -844,9 +846,6 @@ extension RootTabs {
         self.activeSettingsRoute = route
         if route == nil {
             self.selectedSettingsRoute = nil
-            if self.selectedSidebarDestination == .settings {
-                self.selectedSidebarDestination = .settings
-            }
         }
         self.suppressedExecApprovalForNotificationSettings = nil
     }
@@ -865,14 +864,14 @@ extension RootTabs {
     private func showSidebar() {
         if !self.isSidebarDrawerLayout { self.splitSidebarVisibility = true }
         withAnimation(self.sidebarAnimation) {
-            self.setSidebarVisible(true)
+            self.isSidebarVisible = true
         }
     }
 
     private func hideSidebar() {
         if !self.isSidebarDrawerLayout { self.splitSidebarVisibility = false }
         withAnimation(self.sidebarAnimation) {
-            self.setSidebarVisible(false)
+            self.isSidebarVisible = false
         }
     }
 
@@ -885,13 +884,9 @@ extension RootTabs {
         self.isSidebarDrawerLayout = layoutMode == .drawer
         // A drawer never opens just because the window narrowed. The user's split
         // preference survives the compact interval, including an explicitly hidden sidebar.
-        self.setSidebarVisible(initialVisibility ?? Self.sidebarVisibility(
+        self.isSidebarVisible = initialVisibility ?? Self.sidebarVisibility(
             layoutMode: layoutMode,
-            splitPreference: self.splitSidebarVisibility))
-    }
-
-    private func setSidebarVisible(_ isVisible: Bool) {
-        self.isSidebarVisible = isVisible
+            splitPreference: self.splitSidebarVisibility)
     }
 
     private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String? {

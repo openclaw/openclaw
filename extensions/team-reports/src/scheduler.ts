@@ -314,7 +314,7 @@ export class TeamReportsScheduler {
           .map(([sourceId]) => sourceId);
         if (failed.length > 0) {
           throw new Error(
-            `Activity sources failed (${failed.join(", ")}); inspect report source warnings and check access`,
+            `Activity sources failed (${failed.join(", ")}); inspect run source warnings and check access`,
           );
         }
         await this.options.store.finishRun(id, { status: "ok", finishedAtMs: Date.now(), stats });

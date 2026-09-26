@@ -44,6 +44,7 @@ This directory owns docs authoring, published link rules, and docs i18n policy.
 - Repo-local internal scratch/mirror docs may live under ignored `docs/internal/`.
 - Never add `docs/internal/**` pages to `docs/docs.json` navigation or link them from public docs.
 - `scripts/docs-sync-publish.mjs` excludes and prunes `docs/internal/**` from the public `openclaw/docs` publish repo if a page is force-added later.
+- Root `docs/AGENTS.md` and `docs/CLAUDE.md` are repository instructions, not public pages. Source sync excludes and prunes them; translation finalization removes their locale copies. Public workspace templates under `docs/reference/templates/**` remain published.
 - Internal docs may mention repo paths, private app names, 1Password item names, and runbooks, but never include secret values.
 
 ## Maturity Scorecard Editing

@@ -16,7 +16,6 @@ import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   defineChannelMessageAdapter,
   createRuntimeOutboundDelegates,
-  createAccountStatusSink,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
@@ -50,7 +49,6 @@ import type {
   ChannelMeta,
   ChannelPlugin,
   ClawdbotConfig,
-  PluginRuntime,
 } from "../runtime-api.js";
 import {
   inspectFeishuCredentials,
@@ -58,7 +56,6 @@ import {
   listFeishuAccountIds,
   resolveDefaultFeishuAccountId,
   resolveFeishuAccount,
-  resolveFeishuRuntimeAccount,
 } from "./accounts.js";
 import { feishuApprovalAuth } from "./approval-auth.js";
 import { FEISHU_CARD_INTERACTION_VERSION } from "./card-interaction.js";
@@ -79,6 +76,7 @@ import {
 } from "./directory.static.js";
 import { feishuDoctor } from "./doctor.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
+import { feishuGatewayAdapter } from "./gateway.js";
 import { chunkFeishuMarkdown } from "./markdown.js";
 import { messageActionTargetAliases } from "./message-action-contract.js";
 import { readNativeFeishuCardJson } from "./native-card.js";
@@ -1041,9 +1039,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
   createChatChannelPlugin({
     base: {
       id: "feishu",
-      meta: {
-        ...meta,
-      },
+      meta,
       capabilities: {
         chatTypes: ["direct", "channel"],
         polls: false,
@@ -1100,13 +1096,10 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       config: {
         ...feishuConfigAdapter,
         deleteAccount: ({ cfg, accountId }) => {
-          const isDefault = accountId === DEFAULT_ACCOUNT_ID;
-
-          if (isDefault) {
-            // Delete entire feishu config
-            const next = { ...cfg } as ClawdbotConfig;
+          if (accountId === DEFAULT_ACCOUNT_ID) {
+            const next = { ...cfg };
             const nextChannels = { ...cfg.channels };
-            delete (nextChannels as Record<string, unknown>).feishu;
+            delete nextChannels.feishu;
             if (Object.keys(nextChannels).length > 0) {
               next.channels = nextChannels;
             } else {
@@ -1115,7 +1108,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             return next;
           }
 
-          // Delete specific account from accounts
           const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
           const accounts = { ...feishuCfg?.accounts };
           delete accounts[accountId];
@@ -1372,15 +1364,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             if (!message) {
               return {
                 isError: true,
-                content: [
-                  {
-                    type: "text" as const,
-                    text: JSON.stringify({
-                      error: `Feishu read failed or message not found: ${messageId}`,
-                    }),
-                  },
-                ],
-                details: { error: `Feishu read failed or message not found: ${messageId}` },
+                ...jsonActionResult({
+                  error: `Feishu read failed or message not found: ${messageId}`,
+                }),
               };
             }
             return jsonActionResult({ ok: true, channel: "feishu", action: "read", message });
@@ -1462,8 +1448,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             }
             const runtime = await loadFeishuChannelRuntime();
             await getAuthorizedFeishuChatInfo({ ctx, account, runtime, chatId });
-            const { listPinsFeishu } = runtime;
-            const result = await listPinsFeishu({
+            const result = await runtime.listPinsFeishu({
               cfg: ctx.cfg,
               chatId,
               startTime: readFirstString(ctx.params, ["startTime", "start_time"]),
@@ -1534,30 +1519,32 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           if (ctx.action === "member-info") {
             const runtime = await loadFeishuChannelRuntime();
             const memberId = resolveFeishuMemberId(ctx.params);
+            const chatId = resolveFeishuChatId(ctx);
+            if (!chatId) {
+              throw new Error(
+                memberId
+                  ? "Feishu member-info requires chatId or channelId when memberId is provided."
+                  : "Feishu member-info requires memberId or chatId/channelId.",
+              );
+            }
+            const { chat, client } = await getAuthorizedFeishuChatInfo({
+              ctx,
+              account,
+              runtime,
+              chatId,
+            });
+            const requestedMemberIdType = resolveRequestedFeishuMemberIdType(ctx.params);
+            const memberIdType = resolveFeishuMemberIdType(ctx.params);
+            const authorization = authorizeFeishuChatMemberRead({
+              cfg: ctx.cfg,
+              account,
+              chatId,
+              chatType: resolveFeishuChatType(chat),
+              ctx,
+              ...(memberId ? { memberId } : {}),
+              memberIdType: requestedMemberIdType,
+            });
             if (memberId) {
-              const chatId = resolveFeishuChatId(ctx);
-              if (!chatId) {
-                throw new Error(
-                  "Feishu member-info requires chatId or channelId when memberId is provided.",
-                );
-              }
-              const { chat, client } = await getAuthorizedFeishuChatInfo({
-                ctx,
-                account,
-                runtime,
-                chatId,
-              });
-              const requestedMemberIdType = resolveRequestedFeishuMemberIdType(ctx.params);
-              const memberIdType = resolveFeishuMemberIdType(ctx.params);
-              const authorization = authorizeFeishuChatMemberRead({
-                cfg: ctx.cfg,
-                account,
-                chatId,
-                chatType: resolveFeishuChatType(chat),
-                ctx,
-                memberId,
-                memberIdType: requestedMemberIdType,
-              });
               if (authorization.kind === "group") {
                 await runtime.assertFeishuChatMember(client, chatId, memberId, memberIdType);
               }
@@ -1573,25 +1560,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 member,
               });
             }
-            const chatId = resolveFeishuChatId(ctx);
-            if (!chatId) {
-              throw new Error("Feishu member-info requires memberId or chatId/channelId.");
-            }
-            const { chat, client } = await getAuthorizedFeishuChatInfo({
-              ctx,
-              account,
-              runtime,
-              chatId,
-            });
-            const requestedMemberIdType = resolveRequestedFeishuMemberIdType(ctx.params);
-            const authorization = authorizeFeishuChatMemberRead({
-              cfg: ctx.cfg,
-              account,
-              chatId,
-              chatType: resolveFeishuChatType(chat),
-              ctx,
-              memberIdType: requestedMemberIdType,
-            });
             const members =
               authorization.kind === "direct"
                 ? runtime.buildFeishuDirectChatMembers(authorization)
@@ -1600,7 +1568,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                     chatId,
                     readOptionalPositiveInteger(ctx.params, ["pageSize", "page_size"]),
                     readFirstString(ctx.params, ["pageToken", "page_token"]),
-                    resolveFeishuMemberIdType(ctx.params),
+                    memberIdType,
                   );
             return jsonActionResult({
               ok: true,
@@ -1850,36 +1818,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           },
         }),
       }),
-      gateway: {
-        startAccount: async (ctx) => {
-          const { monitorFeishuProvider } = await import("./monitor.js");
-          const account = resolveFeishuRuntimeAccount(
-            { cfg: ctx.cfg, accountId: ctx.accountId },
-            { requireEventSecrets: true },
-          );
-          const port = account.config?.webhookPort ?? null;
-          ctx.setStatus({ accountId: ctx.accountId, port });
-          ctx.log?.info(
-            `starting feishu[${ctx.accountId}] (mode: ${account.config?.connectionMode ?? "websocket"})`,
-          );
-          // Publish Feishu connected state and event recency through the
-          // shared channel status sink.
-          const statusSink = createAccountStatusSink({
-            accountId: ctx.accountId,
-            setStatus: ctx.setStatus,
-          });
-          return monitorFeishuProvider({
-            config: ctx.cfg,
-            runtime: ctx.runtime,
-            // Gateway provides the full channel runtime here; the public SDK type
-            // stays context-only for external compatibility.
-            channelRuntime: ctx.channelRuntime as PluginRuntime["channel"] | undefined,
-            abortSignal: ctx.abortSignal,
-            accountId: ctx.accountId,
-            statusSink,
-          });
-        },
-      },
+      gateway: feishuGatewayAdapter,
       message: feishuMessageAdapter,
     },
     security: {

@@ -19,6 +19,7 @@ import {
   getOpenClawStateRuntimeSchema,
   STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
 } from "../state/openclaw-state-schema-compatibility.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { recordSessionCreated } from "./session-created.js";
 import {
   acknowledgeSessionStateNotices,
@@ -33,7 +34,6 @@ import {
   recordSessionHumanDirectMessage,
   recordSessionStateEvent,
   recordSubagentSpawned,
-  recordSubagentTerminalState,
   registerMainSessionGroupWatch,
   registerSessionStateWatch,
   sweepSessionStateWatchNotices,
@@ -48,6 +48,7 @@ import {
   seedChild,
   watcher,
 } from "./session-state-events.test-support.js";
+import { recordSubagentTerminalState } from "./subagent-terminal-state.js";
 
 const SESSION_STATE_MAX_ROWS = 50_000;
 const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
@@ -211,50 +212,45 @@ describe("session state events", () => {
     expect(peekSystemEventEntries(watcher)).toEqual([]);
   });
 
-  it.each([false, true])(
-    "wakes main watchers but only queues notices for nested watchers (prior clock=%s)",
-    async (priorClock) => {
-      if (priorClock) {
-        vi.useFakeTimers();
-        vi.advanceTimersByTime(30_000);
-        requestHeartbeat({
-          source: "exec-event",
-          intent: "event",
-          reason: "exec-event",
-          coalesceMs: 0,
-        });
-        vi.useRealTimers();
-      }
-      vi.useFakeTimers();
-      const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
-      disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
-      // Pending deadlines may belong to a previous fake-clock origin.
-      await vi.runAllTimersAsync();
-      wakes.mockClear();
-      const database = createDatabaseOptions();
-      seedChild(database, nestedWatcher);
+  it("wakes main watchers but only queues nested notices after a prior clock", async () => {
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(30_000);
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      coalesceMs: 0,
+    });
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
+    disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
+    // Pending deadlines may belong to a previous fake-clock origin.
+    await vi.runAllTimersAsync();
+    wakes.mockClear();
+    const database = createDatabaseOptions();
+    seedChild(database, nestedWatcher);
 
-      recordSessionStateEvent(eventInput({ watcherSessionKeys: [nestedWatcher] }), database);
-      await vi.advanceTimersByTimeAsync(21_000);
-      expect(peekSystemEventEntries(nestedWatcher)).toHaveLength(1);
-      expect(wakes).not.toHaveBeenCalled();
+    recordSessionStateEvent(eventInput({ watcherSessionKeys: [nestedWatcher] }), database);
+    await vi.advanceTimersByTimeAsync(21_000);
+    expect(peekSystemEventEntries(nestedWatcher)).toHaveLength(1);
+    expect(wakes).not.toHaveBeenCalled();
 
-      seedChild(database, watcher);
-      recordSessionStateEvent(eventInput(), database);
-      await vi.advanceTimersByTimeAsync(21_000);
-      expect(wakes).toHaveBeenCalledWith(
-        // intent "immediate" is load-bearing: event-intent wakes defer on heartbeat
-        // dueness and would sit on the notice until the next scheduled tick. The
-        // wake itself coalesces for SESSION_STATE_WAKE_COALESCE_MS (20s), hence
-        // the 21s timer advances in these tests.
-        expect.objectContaining({
-          source: "session-state",
-          sessionKey: watcher,
-          intent: "immediate",
-        }),
-      );
-    },
-  );
+    seedChild(database, watcher);
+    recordSessionStateEvent(eventInput(), database);
+    await vi.advanceTimersByTimeAsync(21_000);
+    expect(wakes).toHaveBeenCalledWith(
+      // intent "immediate" is load-bearing: event-intent wakes defer on heartbeat
+      // dueness and would sit on the notice until the next scheduled tick. The
+      // wake itself coalesces for SESSION_STATE_WAKE_COALESCE_MS (20s), hence
+      // the 21s timer advances in these tests.
+      expect.objectContaining({
+        source: "session-state",
+        sessionKey: watcher,
+        intent: "immediate",
+      }),
+    );
+  });
 
   it("suppresses watcher-originated material events", () => {
     const database = createDatabaseOptions();
@@ -903,24 +899,35 @@ describe("session state events", () => {
       requesterSessionKey: watcher,
       agentId: "main",
     });
-    recordSubagentTerminalState({
-      childSessionKey: child,
-      runId: "run-child",
-      requesterSessionKey: watcher,
-      outcomeStatus: "ok",
-    });
-    recordSubagentTerminalState({
-      childSessionKey: child,
-      runId: "run-child",
-      requesterSessionKey: watcher,
-      outcomeStatus: "ok",
-    });
-    recordSubagentTerminalState({
-      childSessionKey: child,
-      runId: "run-child-cancelled",
-      requesterSessionKey: watcher,
-      outcomeStatus: "cancelled",
-    });
+    const terminalContext = captureOpenClawStateWorkerContext(database);
+    const assertTerminalCurrent = () => terminalContext.admission.assertCurrent();
+    await recordSubagentTerminalState(
+      {
+        childSessionKey: child,
+        runId: "run-child",
+        requesterSessionKey: watcher,
+        outcomeStatus: "ok",
+      },
+      assertTerminalCurrent,
+    );
+    await recordSubagentTerminalState(
+      {
+        childSessionKey: child,
+        runId: "run-child",
+        requesterSessionKey: watcher,
+        outcomeStatus: "ok",
+      },
+      assertTerminalCurrent,
+    );
+    await recordSubagentTerminalState(
+      {
+        childSessionKey: child,
+        runId: "run-child-cancelled",
+        requesterSessionKey: watcher,
+        outcomeStatus: "cancelled",
+      },
+      assertTerminalCurrent,
+    );
     await recordSessionGoalChanged({
       sessionKey: child,
       entry: {

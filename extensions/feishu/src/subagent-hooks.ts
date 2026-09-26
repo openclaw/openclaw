@@ -41,12 +41,7 @@ function resolveFeishuRequesterConversation(params: {
   if (requesterSessionKey) {
     const existingBindings = manager.listBySessionKey(requesterSessionKey);
     if (existingBindings.length === 1) {
-      const existing = existingBindings[0]!;
-      return {
-        accountId: existing.accountId,
-        conversationId: existing.conversationId,
-        parentConversationId: existing.parentConversationId,
-      };
+      return existingBindings[0]!;
     }
     if (existingBindings.length > 1) {
       if (rawTo && normalizedTarget && !threadId && !isChatTarget) {
@@ -57,12 +52,7 @@ function resolveFeishuRequesterConversation(params: {
             !entry.parentConversationId,
         );
         if (directMatches.length === 1) {
-          const existing = directMatches[0]!;
-          return {
-            accountId: existing.accountId,
-            conversationId: existing.conversationId,
-            parentConversationId: existing.parentConversationId,
-          };
+          return directMatches[0]!;
         }
         return null;
       }
@@ -78,12 +68,7 @@ function resolveFeishuRequesterConversation(params: {
           );
         });
         if (matchingTopicBindings.length === 1) {
-          const existing = matchingTopicBindings[0]!;
-          return {
-            accountId: existing.accountId,
-            conversationId: existing.conversationId,
-            parentConversationId: existing.parentConversationId,
-          };
+          return matchingTopicBindings[0]!;
         }
         return null;
       }

@@ -72,20 +72,15 @@ export function resolveEffectiveMemorySearchSettings(
   };
 }
 
-function resolveConfiguredMemoryEmbeddingProvider(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-}): string | undefined {
-  const agentEntry = resolveAgentConfig(params.cfg, normalizeAgentId(params.agentId));
-  return agentEntry?.memory?.search?.provider ?? params.cfg.memory?.search?.provider;
-}
-
 export function resolveMemoryEmbeddingProviderRequirement(params: {
   cfg: OpenClawConfig;
   agentId: string;
   settings: ResolvedMemorySearchConfig;
 }): MemoryEmbeddingProviderRequirement {
-  const configuredProvider = resolveConfiguredMemoryEmbeddingProvider(params)?.trim();
+  const agentEntry = resolveAgentConfig(params.cfg, normalizeAgentId(params.agentId));
+  const configuredProvider = (
+    agentEntry?.memory?.search?.provider ?? params.cfg.memory?.search?.provider
+  )?.trim();
   if (params.settings.provider === "none" || configuredProvider === "none") {
     return { mode: "fts-only", provider: params.settings.provider };
   }
@@ -110,13 +105,13 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   protected abstract readonly cacheKey: string;
   protected abstract readonly purpose: "default" | "status" | "cli" | "maintenance";
   protected abstract readonly providerRequirement: MemoryEmbeddingProviderRequirement;
-  protected abstract providerInitPromise: Promise<void> | null;
-  protected abstract providerInitialized: boolean;
-  protected abstract embeddingBootstrapFailure?: MemoryEmbeddingBootstrapDebug;
-  protected abstract providerRetirementPromise: Promise<void>;
-  protected abstract providersPendingRetirement: Set<EmbeddingProvider>;
-  protected abstract activeBackgroundSearchSyncs: Set<Promise<void>>;
-  protected abstract indexIdentityDirty: boolean;
+  protected providerInitPromise: Promise<void> | null = null;
+  protected providerInitialized = false;
+  protected embeddingBootstrapFailure?: MemoryEmbeddingBootstrapDebug;
+  protected providerRetirementPromise: Promise<void> = Promise.resolve();
+  protected providersPendingRetirement = new Set<EmbeddingProvider>();
+  protected activeBackgroundSearchSyncs = new Set<Promise<void>>();
+  protected indexIdentityDirty = false;
   protected abstract indexIdentityState: MemoryIndexIdentityState;
   protected abstract syncAdmitted(
     params?: MemorySyncParams,
@@ -133,6 +128,8 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     this.providerLifecycle = providerState.lifecycle;
     this.providerRuntime = providerState.providerRuntime;
     this.providerInitialized = true;
+    this.providerKey = this.computeProviderKey();
+    this.batch = this.resolveBatchConfig();
   }
 
   protected markEmbeddingBootstrapFailure(
@@ -336,8 +333,6 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         requestedProvider: "none",
         providerUnavailableReason: "No embedding provider available (FTS-only mode)",
       });
-      this.providerKey = this.computeProviderKey();
-      this.batch = this.resolveBatchConfig();
       return;
     }
     if (!this.providerInitPromise) {
@@ -355,8 +350,6 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
           ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
         });
         this.applyProviderResult(providerResult);
-        this.providerKey = this.computeProviderKey();
-        this.batch = this.resolveBatchConfig();
       })();
     }
     try {
@@ -460,10 +453,6 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     return errors;
   }
 
-  protected isRequiredProviderUnavailable(): boolean {
-    return this.providerRequirement.mode === "required" && !this.provider;
-  }
-
   protected buildRequiredProviderUnavailableError(operation: "search" | "sync"): Error {
     const registeredProviderIds = listRegisteredMemoryEmbeddingProviderAdapters()
       .map((adapter) => adapter.id)
@@ -484,7 +473,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   }
 
   protected assertRequiredProviderAvailable(operation: "search" | "sync"): void {
-    if (this.isRequiredProviderUnavailable()) {
+    if (this.providerRequirement.mode === "required" && !this.provider) {
       const error = this.buildRequiredProviderUnavailableError(operation);
       this.resetProviderInitializationForRetry();
       throw error;

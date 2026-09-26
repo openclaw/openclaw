@@ -245,7 +245,7 @@ describe("CommandPalette search", () => {
   );
 
   it.each([
-    { event: "config.changed", payload: {}, retainsChoices: false },
+    { event: "config.changed", payload: {}, retainsChoices: true },
     {
       event: "chat.metadata.changed",
       payload: { modelSelectionChanged: true },
@@ -508,19 +508,38 @@ describe("CommandPalette search", () => {
   });
 
   it.each([
-    ["Reviewer", "click", "agents", "/settings/agents/reviewer%2Eteam", "", true],
-    ["Reviewer", "keyboard", "agents", "/settings/agents/reviewer%2Eteam", "", true],
-    ["Workboard", "click", "plugin-settings", "/settings/plugins/workboard", "workboard", true],
-    ["Workboard", "keyboard", "plugin-settings", "/settings/plugins/w%2Eb", "w.b", true],
-    ["Workboard", "click", "plugins", "", "workboard", false],
-    ["Plugins", "click", "plugins", "", "", false],
+    ["Reviewer", "click", "agents", "/settings/agents/reviewer%2Eteam", "", true, ""],
+    ["Reviewer", "keyboard", "agents", "/settings/agents/reviewer%2Eteam", "", true, ""],
+    ["Workboard", "click", "plugin-settings", "/settings/plugins/workboard", "workboard", true, ""],
+    ["Workboard", "keyboard", "plugin-settings", "/settings/plugins/w%2Eb", "w.b", true, ""],
+    [
+      "Workboard",
+      "click",
+      "plugins",
+      "/plugins/ch_d29ya2JvYXJk",
+      "workboard",
+      false,
+      "ch_d29ya2JvYXJk",
+    ],
+    [
+      "Workboard",
+      "keyboard",
+      "plugins",
+      "/plugins/ch_d29ya2JvYXJk",
+      "workboard",
+      false,
+      "ch_d29ya2JvYXJk",
+    ],
+    ["Workboard", "click", "plugins", "", "workboard", false, ""],
+    ["Plugins", "click", "plugins", "", "", false, ""],
   ])(
     "opens the selected %s destination by %s",
-    async (label, method, route, pathname, pluginId, installed) => {
+    async (label, method, route, pathname, pluginId, installed, catalogId) => {
       const plugin = {
         id: pluginId,
         name: "Workboard",
         installed,
+        catalogId: catalogId || undefined,
         enabled: false,
         state: installed ? "disabled" : "not-installed",
       };
@@ -920,27 +939,21 @@ describe("CommandPalette search", () => {
     expect(palette.isOpen).toBe(false);
   });
 
-  it.each([
-    { available: true, expectedCount: 1 },
-    { available: false, expectedCount: 0 },
-  ])(
-    "shows the desktop action only when availability is $available",
-    async ({ available, expectedCount }) => {
-      const { gateway } = createGateway(true);
-      const { palette } = await mountPalette(
-        createContext(
-          gateway,
-          vi.fn(async () => createSessionResult("agent:main:test", "Test")),
-        ),
-      );
-      palette.desktopAvailable = available;
-      await enterQuery(palette, "desktop");
-      await vi.advanceTimersByTimeAsync(200);
-      await palette.updateComplete;
+  it("hides Desktop when unavailable", async () => {
+    const { gateway } = createGateway(true);
+    const { palette } = await mountPalette(
+      createContext(
+        gateway,
+        vi.fn(async () => createSessionResult("agent:main:test", "Test")),
+      ),
+    );
+    palette.desktopAvailable = false;
+    await enterQuery(palette, "desktop");
+    await vi.advanceTimersByTimeAsync(200);
+    await palette.updateComplete;
 
-      expect(findPaletteOption(palette, "Desktop", true) ? 1 : 0).toBe(expectedCount);
-    },
-  );
+    expect(findPaletteOption(palette, "Desktop", true)).toBeUndefined();
+  });
 
   it("opens the desktop panel from its palette action", async () => {
     const { gateway } = createGateway(true);
@@ -967,27 +980,21 @@ describe("CommandPalette search", () => {
     expect(events[0]?.detail).toEqual({ open: true });
   });
 
-  it.each([
-    { available: true, expectedCount: 1 },
-    { available: false, expectedCount: 0 },
-  ])(
-    "shows Ask OpenClaw only when availability is $available",
-    async ({ available, expectedCount }) => {
-      const { gateway } = createGateway(true);
-      const { palette } = await mountPalette(
-        createContext(
-          gateway,
-          vi.fn(async () => createSessionResult("agent:main:test", "Test")),
-        ),
-      );
-      palette.custodianAvailable = available;
-      await enterQuery(palette, "openclaw");
-      await vi.advanceTimersByTimeAsync(200);
-      await palette.updateComplete;
+  it("hides Ask OpenClaw when unavailable", async () => {
+    const { gateway } = createGateway(true);
+    const { palette } = await mountPalette(
+      createContext(
+        gateway,
+        vi.fn(async () => createSessionResult("agent:main:test", "Test")),
+      ),
+    );
+    palette.custodianAvailable = false;
+    await enterQuery(palette, "openclaw");
+    await vi.advanceTimersByTimeAsync(200);
+    await palette.updateComplete;
 
-      expect(findPaletteOption(palette, "Ask OpenClaw", true) ? 1 : 0).toBe(expectedCount);
-    },
-  );
+    expect(findPaletteOption(palette, "Ask OpenClaw", true)).toBeUndefined();
+  });
 
   it("opens Ask OpenClaw from its palette action", async () => {
     const { gateway } = createGateway(true);

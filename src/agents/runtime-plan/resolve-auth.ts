@@ -4,6 +4,7 @@ import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-st
 import { OAuthRefreshFailureError } from "../auth-profiles/oauth-refresh-failure.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
+import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
 import { getApiKeyForModelCore } from "../model-auth.js";
 import { providerModelRouteAcceptsAuthMode } from "../provider-model-route-auth.js";
 import { shouldForceDirectAuthFallbackModelResolve } from "./credential-scoped-model.js";
@@ -200,7 +201,7 @@ export function scopeAuthProfileStoreToPreparedPlan(
   plan: AgentRuntimeAuthPlan,
 ): AuthProfileStore {
   const profileIds =
-    plan.modelRoute?.authRequirement === "api-key"
+    plan.modelRoute?.authRequirement === "api-key" && plan.selectedAuthMode !== "oauth"
       ? []
       : [plan.forwardedAuthProfileId, ...(plan.forwardedAuthProfileCandidateIds ?? [])].filter(
           (profileId, index, values): profileId is string => {
@@ -223,6 +224,7 @@ function applyResolvedAuthToPlan(params: {
       forwardedAuthProfileSource: undefined,
       forwardedAuthProfileCandidateIds: undefined,
       selectedAuthMode: params.auth.mode,
+      selectedAuthFlow: params.auth.authFlow,
     };
   }
   const resolvedIndex = params.candidates.indexOf(profileId);
@@ -237,6 +239,7 @@ function applyResolvedAuthToPlan(params: {
     forwardedAuthProfileSource: source,
     forwardedAuthProfileCandidateIds: source === "auto" ? remainingCandidates : [profileId],
     selectedAuthMode: params.auth.mode,
+    selectedAuthFlow: params.auth.authFlow,
   };
 }
 
@@ -250,6 +253,13 @@ function assertResolvedAuthMatchesPreparedRoute(params: {
     providerModelRouteAcceptsAuthMode({
       requirement: route.authRequirement,
       mode: params.auth.mode,
+      authRequirement: resolveProviderModelAuthPolicy({
+        provider: route.provider,
+        mode: params.auth.mode,
+        authFlow: params.auth.authFlow,
+        api: route.api,
+        baseUrl: route.baseUrl,
+      }).authRequirement,
     })
   ) {
     return;

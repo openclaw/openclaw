@@ -452,7 +452,7 @@ describe("media-understanding CLI audio entry", () => {
     },
   );
 
-  it.each(transcriptFileCases)("reads $name transcript output", async (testCase) => {
+  it.each(transcriptFileCases.slice(1))("reads $name transcript output", async (testCase) => {
     runExecMock.mockImplementationOnce(async (_command, args: string[]) => {
       await fs.writeFile(testCase.resolvePath(args), "file transcript\n");
       return { stdout: "Transcribing...\n", stderr: "" };

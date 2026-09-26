@@ -11,25 +11,22 @@ import {
   claimCodexAppServerLiveThread,
   hasCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
-  type CodexAppServerLiveThreadOwnership,
 } from "./client-runtime.js";
+import type { CodexAppServerLiveThreadOwnership } from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
 import type {
   MonitorOptions,
   NativeSubagentMonitorClient,
   NativeSubagentMonitorRuntime,
   NativeModelToolInputRequest,
-  NativeModelMapping,
   NativeModelSourceCapture,
   NativeModelSourceRequest,
+  ParentRegistrationHandle,
 } from "./native-subagent-monitor-types.js";
 import type { NativeParentRegistration } from "./native-subagent-parent-owner.js";
 
 type NativeMonitor = {
-  registerParent(params: NativeParentRegistration): {
-    bindTurn: (turnId: string, mapping?: NativeModelMapping) => void;
-    unregister: () => Promise<void>;
-  };
+  registerParent(params: NativeParentRegistration): Promise<ParentRegistrationHandle>;
   retireParent(parentThreadId: string): void;
   captureModelSource(
     request: NativeModelSourceRequest,
@@ -57,7 +54,7 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
 ) {
   const monitors = new WeakMap<CodexAppServerClient, NativeMonitor>();
 
-  function registerMonitor({
+  async function registerMonitor({
     client,
     runtime,
     retainClient,
@@ -67,10 +64,7 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
     Pick<MonitorOptions, "retainClient" | "retainParentThread"> & {
       client: CodexAppServerClient;
       runtime?: NativeSubagentMonitorRuntime;
-    }): {
-    bindTurn: (turnId: string, mapping?: NativeModelMapping) => void;
-    unregister: () => Promise<void>;
-  } {
+    }): Promise<ParentRegistrationHandle> {
     let monitor = monitors.get(client);
     if (!monitor) {
       // Native start/completion can race; serialize each child so only its

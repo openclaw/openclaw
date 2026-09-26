@@ -55,15 +55,19 @@ it("retries native acquisition, retaining one deadline and the original physical
 });
 
 it("does not attempt native acquisition after sleeping to the deadline", async () => {
+  const contention = new StateDatabaseCoordinatorContentionError("state-lifecycle", {
+    pid: 321,
+    startTime: 123,
+    command: "coordinator-fixture",
+    family: "state-lifecycle",
+  });
   acquire.mockImplementation(() => {
-    throw busy();
+    throw contention;
   });
   const params = { ...options(), deadlineMs: performance.now() + 50 };
   const outcome = Promise.allSettled([acquireStateDatabaseCoordinatorWithWait(params)]);
   await vi.advanceTimersByTimeAsync(50);
-  expect(await outcome).toMatchObject([
-    { status: "rejected", reason: { family: "state-lifecycle" } },
-  ]);
+  expect(await outcome).toEqual([{ status: "rejected", reason: contention }]);
   expect(acquire).toHaveBeenCalledTimes(2);
 });
 

@@ -82,7 +82,7 @@ type Job = {
   if?: string | boolean;
   concurrency?: Concurrency;
   outputs?: Record<string, string>;
-  steps: { id?: string; name?: string; if?: string; with?: { script?: string } }[];
+  steps: { id?: string; name?: string; if?: string; uses?: string; with?: { script?: string } }[];
 };
 type Concurrency = { group: string; "cancel-in-progress": string | boolean };
 type Workflow = {
@@ -187,7 +187,7 @@ function workflowConcurrency(workflow: Workflow): Concurrency {
 
 // Like ci-workflow-guards, this uses VM evaluation, not a general Actions parser.
 // Supported here: typed primitive ==/!=/!/&&/||, parentheses, property lookup,
-// format, JSON/string helpers, always(), and embedded interpolation. Missing
+// format, JSON/string helpers, always()/cancelled(), and embedded interpolation. Missing
 // properties are empty strings; hyphenated property names are single lookups.
 // Expression fixtures avoid coercion/case-folding and escaped strings, where JS
 // differs. Admission separately normalizes concurrency group names to lowercase.
@@ -211,6 +211,7 @@ function expression(source: string, context: Record<string, unknown>): unknown {
       format: (template: string, ...values: unknown[]) =>
         template.replace(/\{(\d+)\}/gu, (_match, index: string) => String(values[Number(index)])),
       always: () => true,
+      cancelled: () => context.cancelled === true,
       fromJSON: JSON.parse,
       contains: (values: string[], value: string) =>
         values.some((item) => item.toLowerCase() === value.toLowerCase()),
@@ -258,8 +259,12 @@ async function eligibleJobs(workflow: Workflow, github: Github, vars: Record<str
         if (!evaluate(step.if ?? true, context, true)) {
           continue;
         }
-        if (step.name === "Checkout") {
+        if (step.uses?.startsWith("actions/checkout@")) {
           checkouts++;
+        }
+        if (step.uses === "./.github/actions/detect-scheduled-changes") {
+          // Admission ordering uses changed inputs; the cost suite owns proof-reuse decisions.
+          outputs.changed = "true";
         }
         if (!step.with?.script) {
           continue;
@@ -320,7 +325,7 @@ class Admission {
 
   groups = new Map<string, { running?: Run; pending?: Run }>();
 
-  async admit(workflow: Workflow, github: Github, control?: { group: string; cancel: false }) {
+  async admit(workflow: Workflow, github: Github) {
     expect(subscribes(workflow, github), `${workflow.name}: ${github.event_name}`).toBe(true);
     let policy = workflow.concurrency;
     let eligibility: Run["eligibility"];
@@ -344,8 +349,8 @@ class Admission {
     if (!policy) {
       throw new Error("Expected concurrency on the workflow or its admitted job");
     }
-    const group = control?.group ?? String(evaluate(policy.group, { github }));
-    const cancel = control?.cancel ?? Boolean(evaluate(policy["cancel-in-progress"], { github }));
+    const group = String(evaluate(policy.group, { github }));
+    const cancel = Boolean(evaluate(policy["cancel-in-progress"], { github }));
     const run: Run = {
       workflow,
       github,
@@ -392,36 +397,25 @@ class Admission {
       await this.start(slots.running);
     }
   }
-
-  userCancel(run: Run) {
-    const slots = this.groups.get(run.group.toLowerCase())!;
-    if (slots.pending === run) {
-      slots.pending = undefined;
-      run.state = "cancelled";
-    } else {
-      expect(slots.running).toBe(run);
-      run.cancelRequested = true;
-    }
-  }
 }
 
 function expectDraftSkipped(run: Run) {
   expect(run.state).toBe("skipped");
   expect(run.eligibility).toBeDefined();
   for (const [id, eligible] of Object.entries(run.eligibility!.jobs)) {
-    expect(eligible, id).toBe(id === "scope");
+    if (id !== "scope") {
+      expect(eligible, id).toBe(false);
+    }
   }
   expect(run.eligibility!.diffCalls).toBe(0);
   expect(run.eligibility!.checkouts).toBe(0);
 }
 
-const DELAYED = ["opened", "reopened", "synchronize"].flatMap((passive) =>
-  ["ready_for_review", "synchronize"].map((useful) => ({
-    passive,
-    useful,
-    head: useful === "synchronize" ? "b" : "a",
-  })),
-);
+const DELAYED = [
+  { passive: "opened", useful: "ready_for_review", head: "a" },
+  { passive: "reopened", useful: "ready_for_review", head: "a" },
+  { passive: "synchronize", useful: "synchronize", head: "b" },
+];
 
 describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
   const { file, prGroup, manual, push, convertToDraft } = policy;
@@ -437,7 +431,11 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
       expect(ready.cancelRequested).toBe(false);
       expectDraftSkipped(delayed);
       expect(delayed.group).not.toBe(ready.group);
-      expect(Object.values(ready.eligibility!.jobs).every(Boolean)).toBe(true);
+      for (const [id, eligible] of Object.entries(ready.eligibility!.jobs)) {
+        if (id !== "scope") {
+          expect(eligible, id).toBe(true);
+        }
+      }
     },
   );
 
@@ -459,25 +457,6 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
       expect(ready.cancelRequested).toBe(false);
     },
   );
-
-  it("demonstrates old-group pending replacement even with active cancellation disabled", async () => {
-    const queue = new Admission();
-    const control = {
-      group: String(
-        evaluate(workflowConcurrency(workflow).group, { github: pr(workflow, 100, "synchronize") }),
-      ),
-      cancel: false,
-    } as const;
-    const running = await queue.admit(workflow, pr(workflow, 100, "synchronize"), control);
-    const pending = await queue.admit(workflow, pr(workflow, 101, "ready_for_review"), control);
-    const delayed = await queue.admit(workflow, pr(workflow, 102, "opened", true), control);
-    expect(running.cancelRequested).toBe(false);
-    expect(pending.state).toBe("cancelled");
-    expect(delayed.state).toBe("pending");
-    expect(delayed.eligibility).toBeUndefined();
-    await queue.release(running);
-    expectDraftSkipped(delayed);
-  });
 
   it("keeps the exact useful PR group and supersedes old heads, including pending work", async () => {
     const queue = new Admission();
@@ -601,19 +580,13 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
     });
   }
 
-  it("keeps passive runs unique and never resurrects user-cancelled work", async () => {
+  it("keeps passive runs unique", async () => {
     const queue = new Admission();
-    const active = await queue.admit(workflow, pr(workflow, 100, "ready_for_review"));
-    const pending = await queue.admit(workflow, pr(workflow, 101, "synchronize", false, "b"));
-    queue.userCancel(pending);
-    queue.userCancel(active);
-    await queue.release(active);
     const draft1 = await queue.admit(workflow, pr(workflow, 102, "opened", true));
     const draft2 = await queue.admit(workflow, pr(workflow, 103, "opened", true));
     expect(draft1.group).not.toBe(draft2.group);
     expectDraftSkipped(draft1);
     expectDraftSkipped(draft2);
-    expect([active.state, pending.state]).toEqual(["cancelled", "cancelled"]);
     expect([...queue.groups.values()].every((slot) => !slot.running && !slot.pending)).toBe(true);
   });
 
@@ -630,6 +603,20 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
       expectDraftSkipped(converted);
     });
   }
+});
+
+it("honors cancellation after a schedule-only scope job is skipped", () => {
+  const workflow = parse(
+    readFileSync(".github/workflows/plugin-init-scaffold-validation.yml", "utf8"),
+  ) as Workflow;
+  const guard = workflow.jobs["validate-provider-scaffold"]!.if!;
+  const context = {
+    github: pr(workflow, 100, "ready_for_review"),
+    needs: { scope: { result: "skipped", outputs: {} } },
+    vars: {},
+  };
+  expect(evaluate(guard, { ...context, cancelled: false }, true)).toBe(true);
+  expect(evaluate(guard, { ...context, cancelled: true }, true)).toBe(false);
 });
 
 describe("Labeler admission", () => {

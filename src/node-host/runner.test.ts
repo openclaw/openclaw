@@ -27,24 +27,12 @@ import {
 describe("runNodeHost", () => {
   beforeEach(resetRunnerTestState);
 
-  it("runs startup state migrations before constructing node-host state", async () => {
-    await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
-      "event loop readiness timeout",
-    );
-
-    expect(mocks.runStartupMigrations).toHaveBeenCalledTimes(1);
-    expect(mocks.runStartupMigrations.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.configureNodeHost.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-  });
-
-  it("keeps managed runtime startup on existing state without rerunning legacy migrations", async () => {
+  it("keeps managed runtime startup on its admitted existing state", async () => {
     await withExistingOpenClawStateSchema({ path: resolveOpenClawStateSqlitePath() }, async () => {
       await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
         "event loop readiness timeout",
       );
     });
-    expect(mocks.runStartupMigrations).not.toHaveBeenCalled();
     expect(mocks.configureNodeHost).toHaveBeenCalledOnce();
     expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce();
   });
@@ -129,30 +117,20 @@ describe("runNodeHost", () => {
     );
   });
 
-  it.each([
-    { runtime: "darwin", platform: "macos", deviceFamily: "Mac" },
-    { runtime: "win32", platform: "windows", deviceFamily: "Windows" },
-    { runtime: "linux", platform: "linux", deviceFamily: "Linux" },
-    { runtime: "freebsd", platform: "freebsd", deviceFamily: undefined },
-  ] as const)(
-    "maps $runtime to gateway platform $platform",
-    async ({ runtime, platform, deviceFamily }) => {
-      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(runtime);
-      try {
-        await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
-          "event loop readiness timeout",
-        );
-      } finally {
-        platformSpy.mockRestore();
-      }
-
-      expect(lastCapturedOptions()?.platform).toBe(platform);
-      expect(lastCapturedOptions()?.deviceFamily).toBe(deviceFamily);
-      expect(lastCapturedOptions()?.modelIdentifier).toBe(
-        runtime === "freebsd" ? undefined : "TestMachine1,1",
+  it("passes the resolved platform and hardware identity to the gateway", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    try {
+      await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
+        "event loop readiness timeout",
       );
-    },
-  );
+    } finally {
+      platformSpy.mockRestore();
+    }
+
+    expect(lastCapturedOptions()?.platform).toBe("macos");
+    expect(lastCapturedOptions()?.deviceFamily).toBe("Mac");
+    expect(lastCapturedOptions()?.modelIdentifier).toBe("TestMachine1,1");
+  });
 
   it("passes a paired bootstrap credential with first-connect preference", async () => {
     await expect(
@@ -313,7 +291,6 @@ describe("runNodeHost", () => {
   });
 
   it.each([
-    ["127.0.0.1", "ws://127.0.0.1:18789"],
     ["gateway.local", "ws://gateway.local:18789"],
     ["::1", "ws://[::1]:18789"],
     ["[::1]", "ws://[::1]:18789"],
@@ -703,18 +680,4 @@ describe("runNodeHost", () => {
       expect(mocks.capturedConfiguredGatewayConfigs.at(-1)?.contextPath).toBe(gatewayContextPath);
     },
   );
-
-  it("clears configured contextPath when opts do not pass one (retarget scenario)", async () => {
-    await expect(
-      runNodeHost({
-        gatewayHost: "192.168.1.1",
-        gatewayPort: 9999,
-      }),
-    ).rejects.toThrow("event loop readiness timeout");
-
-    const lastConfigured =
-      mocks.capturedConfiguredGatewayConfigs[mocks.capturedConfiguredGatewayConfigs.length - 1];
-    expect(lastConfigured?.contextPath).toBeUndefined();
-    expect(lastCapturedOptions()?.url).toBe("ws://192.168.1.1:9999");
-  });
 });

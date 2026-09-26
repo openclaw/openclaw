@@ -1,13 +1,11 @@
-import path from "node:path";
-
-export function sqliteLifecycleFixtureFiles(repoRoot: string): Record<string, string> {
-  const source = (name: string) => JSON.stringify(path.join(repoRoot, "src", name));
+// Literal resolver calls keep generated imports visible to CI's dependency graph.
+export function sqliteLifecycleFixtureFiles(): Record<string, string> {
   const readPoolFixture = `
 const readPool = vi.hoisted(() => ({ close: vi.fn(async () => {}) }));
-vi.mock(${source("infra/runtime-process-url.ts")}, () => ({
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-process-url.ts"))}, () => ({
   resolveRuntimeProcessEntrypointUrl: () => new URL("file:///synthetic/state-read.worker.js"),
 }));
-vi.mock(${source("infra/worker-task-pool.ts")}, () => ({
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/worker-task-pool.ts"))}, () => ({
   WorkerTaskError: class extends Error {},
   createOwnedWorkerTaskPool: () => ({
     runTask: () => ({
@@ -18,8 +16,8 @@ vi.mock(${source("infra/worker-task-pool.ts")}, () => ({
     closeResources: async () => {},
   }),
 }));
-import { createOpenClawStateReadTransport } from ${source("state/openclaw-state-read-worker.ts")};
-import { closeOpenClawStateDatabaseAsync } from ${source("state/openclaw-state-db-cache.ts")};
+import { createOpenClawStateReadTransport } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-read-worker.ts"))};
+import { closeOpenClawStateDatabaseAsync } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-cache.ts"))};
 async function useReadPool() {
   const transport = createOpenClawStateReadTransport({ type: "fleet.list" });
   const authority = { signal: new AbortController().signal, assertCurrent() {} };
@@ -43,21 +41,21 @@ async function useReadPool() {
 }
 `;
   return {
-    ...stateReadPoolFixtureFiles(repoRoot),
-    ...failedDrainFixtureFiles(repoRoot, readPoolFixture),
+    ...stateReadPoolFixtureFiles(),
+    ...failedDrainFixtureFiles(readPoolFixture),
     "11-a-sqlite-owner.test.ts": `
 import { afterAll, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-vi.mock(${source("infra/runtime-worker-url.ts")}, () => ({
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
 }));
-import { isSqliteWorkerStoreAvailable } from ${source("infra/sqlite-worker-store.ts")};
-import { registerOpenClawStateDatabaseAsyncResource } from ${source("state/openclaw-state-db-cache.ts")};
-import { openOpenClawStateWorkerCleanupStore } from ${source("state/openclaw-state-worker-store.ts")};
-import { openOpenClawAgentDatabase } from ${source("state/openclaw-agent-db.ts")};
-import { tryAcquireExclusiveSqliteCoordinator } from ${source("infra/sqlite-coordinator.ts")};
-import { captureCoordinatorDatabase } from ${source("infra/sqlite-coordinator.test-support.ts")};
+import { isSqliteWorkerStoreAvailable } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))};
+import { registerOpenClawStateDatabaseAsyncResource } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-cache.ts"))};
+import { openOpenClawStateWorkerCleanupStore } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-store.ts"))};
+import { openOpenClawAgentDatabase } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db.ts"))};
+import { tryAcquireExclusiveSqliteCoordinator } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-coordinator.ts"))};
+import { captureCoordinatorDatabase } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-coordinator.test-support.ts"))};
 ${readPoolFixture}
 const drainKey = Symbol.for("fixture.sqliteDrain");
 it("retains a real shared-state owner after host admission is refused", async () => {
@@ -97,18 +95,18 @@ afterAll(() => {
 `,
     "11-b-sqlite-cleanup.test.ts": `
 import { afterEach, expect, it, vi } from "vitest";
-import type { SqliteWorkerStore } from ${source("infra/sqlite-worker-contract.ts")};
+import type { SqliteWorkerStore } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-contract.ts"))};
 import {
   runWithSqliteWorkerStateContext,
   type SqliteWorkerStateContext,
-} from ${source("infra/sqlite-worker-state-context.ts")};
-import { cleanupRetiredAgentDatabaseLease } from ${source("state/openclaw-agent-execution-cleanup.ts")};
+} from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-state-context.ts"))};
+import { cleanupRetiredAgentDatabaseLease } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-execution-cleanup.ts"))};
 import {
   assertOpenClawStateSchemaRepairAllowed,
   getExistingOpenClawStateSchemaPath,
-} from ${source("state/openclaw-state-db-schema-policy.ts")};
-import type { OpenClawStateWorkerContext } from ${source("state/openclaw-state-worker-context.types.ts")};
-import type { OpenClawStateWorkerCleanupOperations } from ${source("state/openclaw-state-worker-contract.ts")};
+} from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-schema-policy.ts"))};
+import type { OpenClawStateWorkerContext } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-context.types.ts"))};
+import type { OpenClawStateWorkerCleanupOperations } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-contract.ts"))};
 ${readPoolFixture}
 
 // Keep the real shared-state owner in this cross-file proof; another test's mocks
@@ -129,17 +127,20 @@ const edge = vi.hoisted(() => ({
 }));
 
 vi.mock("node:sqlite", () => ({ DatabaseSync: edge.forbidden }));
-vi.mock("node:worker_threads", () => ({ Worker: edge.forbidden }));
-vi.mock(${source("infra/runtime-worker-url.ts")}, () => ({
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...await importOriginal<typeof import("node:worker_threads")>(),
+  Worker: edge.forbidden,
+}));
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
 }));
-vi.mock(${source("infra/sqlite-worker-identity.ts")}, () => ({
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-identity.ts"))}, () => ({
   readDatabasePathIdentity: async (canonicalPath: string) => ({
     key: "file:synthetic-state",
     canonicalPath,
   }),
 }));
-vi.mock(${source("infra/sqlite-worker-store.ts")}, () => ({
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))}, () => ({
   openSharedStateSqliteWorkerStore: async (
     options: { databasePath: string },
     context: SqliteWorkerStateContext,
@@ -224,27 +225,23 @@ it("retains installed-schema repair ownership through retired agent lease cleanu
   };
 }
 
-function failedDrainFixtureFiles(
-  repoRoot: string,
-  readPoolFixture: string,
-): Record<string, string> {
-  const source = (name: string) => JSON.stringify(path.join(repoRoot, "src", name));
+function failedDrainFixtureFiles(readPoolFixture: string): Record<string, string> {
   return {
     "13-a-retained-lease.test.ts": `
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
-vi.mock(${source("infra/runtime-worker-url.ts")}, () => ({
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
 }));
-import { resolveGlobalSingleton } from ${source("shared/global-singleton.ts")};
-import { openOpenClawAgentDatabase } from ${source("state/openclaw-agent-db.ts")};
-import { agentDatabaseLifecycle, closeOpenClawAgentDatabasesAsync } from ${source("state/openclaw-agent-db-lifecycle.ts")};
-import { registerOpenClawAgentDatabaseAsyncResource } from ${source("state/openclaw-agent-db-resources.ts")};
-import { openOpenClawStateWorkerCleanupStore } from ${source("state/openclaw-state-worker-store.ts")};
-import { isSqliteWorkerStoreAvailable } from ${source("infra/sqlite-worker-store.ts")};
-import { closeIdleSqliteCoordinators, tryAcquireExclusiveSqliteCoordinator } from ${source("infra/sqlite-coordinator.ts")};
-import { captureCoordinatorDatabase } from ${source("infra/sqlite-coordinator.test-support.ts")};
+import { resolveGlobalSingleton } from ${JSON.stringify(import.meta.resolve("../src/shared/global-singleton.ts"))};
+import { openOpenClawAgentDatabase } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db.ts"))};
+import { agentDatabaseLifecycle, closeOpenClawAgentDatabasesAsync } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-lifecycle.ts"))};
+import { registerOpenClawAgentDatabaseAsyncResource } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-resources.ts"))};
+import { openOpenClawStateWorkerCleanupStore } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-store.ts"))};
+import { isSqliteWorkerStoreAvailable } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))};
+import { closeIdleSqliteCoordinators, tryAcquireExclusiveSqliteCoordinator } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-coordinator.ts"))};
+import { captureCoordinatorDatabase } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-coordinator.test-support.ts"))};
 ${readPoolFixture}
 const probeKey = Symbol.for("fixture.retainedAgentLease");
 it("retains its native handle and lease when resource teardown refuses cleanup", async () => {
@@ -310,10 +307,10 @@ afterAll(() => {
 `,
     "13-b-retained-lease-observer.test.ts": `
 import { expect, it, vi } from "vitest";
-vi.mock(${source("infra/runtime-process-url.ts")}, () => ({
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-process-url.ts"))}, () => ({
   resolveRuntimeProcessEntrypointUrl: () => new URL("file:///synthetic/observer-process.js"),
 }));
-import { resolveRuntimeProcessEntrypointUrl } from ${source("infra/runtime-process-url.ts")};
+import { resolveRuntimeProcessEntrypointUrl } from ${JSON.stringify(import.meta.resolve("../src/infra/runtime-process-url.ts"))};
 it("preserves failed custody while independent cleanup and the next file still run", async () => {
   const probeKey = Symbol.for("fixture.retainedAgentLease");
   const probe = Reflect.get(globalThis, probeKey);
@@ -350,8 +347,7 @@ it("preserves failed custody while independent cleanup and the next file still r
   };
 }
 
-function stateReadPoolFixtureFiles(repoRoot: string): Record<string, string> {
-  const source = (name: string) => JSON.stringify(path.join(repoRoot, "src", name));
+function stateReadPoolFixtureFiles(): Record<string, string> {
   return Object.fromEntries(
     ["a", "b", "c"].map((generation) => [
       `12-${generation}-state-read-pool.test.ts`,
@@ -359,17 +355,17 @@ function stateReadPoolFixtureFiles(repoRoot: string): Record<string, string> {
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
-import { executeExistingOpenClawStateRead } from ${source("state/openclaw-state-db-readonly.ts")};
-import { readWorkspaceStateSnapshot } from ${source("agents/workspace-state-store.ts")};
-import { createWorkspaceStateIdentity } from ${source("agents/workspace-state-identity.ts")};
+import { executeExistingOpenClawStateRead } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-readonly.ts"))};
+import { readWorkspaceStateSnapshot } from ${JSON.stringify(import.meta.resolve("../src/agents/workspace-state-store.ts"))};
+import { createWorkspaceStateIdentity } from ${JSON.stringify(import.meta.resolve("../src/agents/workspace-state-identity.ts"))};
 
 const generation = ${JSON.stringify(generation)};
 const probeKey = Symbol.for("fixture.stateReadPoolGenerations");
 const probe = Reflect.get(globalThis, probeKey) ?? { closes: [] as string[], reads: [] as string[] };
 Reflect.set(globalThis, probeKey, probe);
 const edge = vi.hoisted(() => ({ create: vi.fn(), close: vi.fn(async () => {}) }));
-vi.mock(${source("infra/worker-task-pool.ts")}, async (importOriginal) => ({
-  ...await importOriginal<typeof import(${source("infra/worker-task-pool.ts")})>(),
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/worker-task-pool.ts"))}, async (importOriginal) => ({
+  ...await importOriginal<typeof import(${JSON.stringify(import.meta.resolve("../src/infra/worker-task-pool.ts"))})>(),
   createOwnedWorkerTaskPool: edge.create,
 }));
 edge.close.mockImplementation(async () => { probe.closes.push(generation); });

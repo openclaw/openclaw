@@ -1,4 +1,5 @@
 import type { ApprovalChannelReviewer } from "../../packages/gateway-protocol/src/index.js";
+import { isConfiguredCommandOwner } from "../auto-reply/command-auth.js";
 import {
   getLoadedChannelPlugin,
   resolveChannelApprovalCapability,
@@ -29,7 +30,17 @@ export function prepareApprovalChannelCustody(params: {
   const plugin = getLoadedChannelPlugin(channel);
   const capability = resolveChannelApprovalCapability(plugin);
   const authorizeActorAction = capability?.authorizeActorAction;
-  if (!plugin || !authorizeActorAction) {
+  if (!authorizeActorAction) {
+    // Without channel approver settings, an OpenClaw change needs a configured
+    // owner. The final decision guard re-prepares custody from current config.
+    if (params.approvalKind !== "system-agent") {
+      return null;
+    }
+    return isConfiguredCommandOwner(params.cfg, { channel, accountId, senderId })
+      ? { resolverId: `${channel}:${accountId}`, authorizes: () => true }
+      : null;
+  }
+  if (!plugin) {
     return null;
   }
   const isActorAuthorized = (candidateAccountId: string) =>

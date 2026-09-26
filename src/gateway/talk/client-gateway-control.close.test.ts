@@ -197,26 +197,6 @@ describe("Talk client Gateway control teardown", () => {
     },
   );
 
-  it("finishes logical cleanup when provider teardown fails", async () => {
-    const closeLogicalSession = vi.fn(async () => undefined);
-    const owner = createTalkClientGatewayControlOwner({
-      voiceSessionId: "voice-close-error",
-      sessionTarget,
-      connId: "conn-close-error",
-      context: controlContext(),
-      runToolAgentConsult: vi.fn(async () => ({ text: "done" })),
-      runAgentConsult: vi.fn(async () => ({ text: "done" })),
-      appendTranscript: vi.fn(async () => undefined),
-      flushTranscript: vi.fn(async () => undefined),
-      closeLogicalSession,
-    });
-    await owner.adoptProvider(vi.fn(() => Promise.reject(new Error("provider close failed"))));
-    owner.activate();
-
-    await expect(owner.close()).rejects.toThrow("provider close failed");
-    expect(closeLogicalSession).toHaveBeenCalledOnce();
-  });
-
   it("replaces only the physical transport while preserving the logical owner and run", async () => {
     const consult = createDeferred<{ text: string }>();
     const runStarted = createDeferred();

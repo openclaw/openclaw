@@ -159,7 +159,7 @@ export async function createGatewayMetadataCloseFixture(label: string) {
           port,
           auth: { mode: "token", token },
           controlUi: { enabled: false },
-          reload: { mode: "off" },
+          reload: config.gateway?.reload ?? { mode: "off" },
         },
       });
       const factory = vi

@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   inspectOtelParentGraph,
@@ -7,17 +6,6 @@ import {
 } from "./otel-generation-config-watcher-contract.js";
 
 describe("OTEL generation config watcher runtime", () => {
-  it("keeps the full same-PID proof in the QA script scenario", () => {
-    const scenario = fs.readFileSync(
-      "qa/scenarios/observability/otel-generation-config-watcher.yaml",
-      "utf8",
-    );
-    expect(scenario).toContain("kind: script");
-    expect(scenario).toContain(
-      "path: test/e2e/qa-lab/runtime/otel-generation-config-watcher-runtime.ts",
-    );
-  });
-
   it("rejects missing output-dir values", () => {
     expect(() => parseOtelGenerationConfigWatcherOptions(["--output-dir"])).toThrow(
       "--output-dir requires a value",

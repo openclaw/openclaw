@@ -232,26 +232,33 @@ describe("models list published transport", () => {
 
   it.each([
     { refresh: true, refreshFailed: undefined },
+    { refresh: false, refreshFailed: undefined },
     { refresh: true, refreshFailed: true },
     { refresh: false, refreshFailed: true },
-  ])("warns and retains published rows for %j", async ({ refresh, refreshFailed }) => {
-    vi.mocked(gateway.callGateway).mockResolvedValue({
-      models: [model],
-      ...(refreshFailed
-        ? { refreshFailed }
-        : { providerOutcomes: [{ provider: "catalog-provider", status: "unavailable" }] }),
-    });
-    await list({ refresh, json: true });
-    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
-      "Model discovery could not refresh all providers. Showing the available published model list.",
-    );
-    expect(runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ count: 1 }), 2);
-    expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        params: { view: "default", includeDetails: true, ...(refresh ? { refresh: true } : {}) },
-      }),
-    );
-  });
+  ])(
+    "uses published refresh status with rejected auth for %j",
+    async ({ refresh, refreshFailed }) => {
+      vi.mocked(gateway.callGateway).mockResolvedValue({
+        models: [model],
+        refreshFailed,
+        providerOutcomes: [{ provider: "signed-out", status: "auth-rejected" }],
+      });
+      await list({ refresh, json: true });
+      if (refreshFailed) {
+        expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+          "Model discovery could not refresh all providers. Showing the available published model list.",
+        );
+      } else {
+        expect(runtime.error).not.toHaveBeenCalled();
+      }
+      expect(runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ count: 1 }), 2);
+      expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          params: { view: "default", includeDetails: true, ...(refresh ? { refresh: true } : {}) },
+        }),
+      );
+    },
+  );
 
   it.each([false, true])(
     "uses the standalone owner only with no selected Gateway, refresh=%s",

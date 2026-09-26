@@ -1,3 +1,4 @@
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type {
@@ -85,6 +86,7 @@ function readChangedSessions(
 
 function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotStore {
   const watchedByOwner = new Map<object, { keys: Set<string>; foreground: boolean }>();
+  let orderedWatchedKeys: string[] | undefined;
   const loadTokens = new WeakMap<object, object>();
   const snapshots = new Map<string, ControlUiSessionPullRequestSnapshot>();
   const listeners = new Set<() => void>();
@@ -100,6 +102,12 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   let syncRequestGeneration = 0;
   let refreshingGeneration: number | null = null;
   let refreshingKeys: readonly string[] = [];
+  let requestController: AbortController | null = null;
+
+  const retireRequest = () => {
+    requestController?.abort();
+    requestController = null;
+  };
 
   const notify = () => {
     for (const listener of Array.from(listeners)) {
@@ -119,19 +127,23 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   };
 
   const watchedKeys = (): string[] => {
+    if (orderedWatchedKeys) {
+      return orderedWatchedKeys;
+    }
     const keys = new Map<string, boolean>();
     for (const watched of watchedByOwner.values()) {
       for (const key of watched.keys) {
         keys.set(key, (keys.get(key) ?? false) || watched.foreground);
       }
     }
-    return [...keys]
+    orderedWatchedKeys = [...keys]
       .toSorted(
         ([leftKey, leftForeground], [rightKey, rightForeground]) =>
           Number(rightForeground) - Number(leftForeground) || leftKey.localeCompare(rightKey),
       )
       .slice(0, CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS)
       .map(([key]) => key);
+    return orderedWatchedKeys;
   };
 
   const pruneUnwatched = () => {
@@ -172,6 +184,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   const retireConnection = () => {
     retainRefreshIntent(watchedKeys());
     syncRequestGeneration += 1;
+    retireRequest();
     refreshingGeneration = null;
     refreshingKeys = [];
     lastHello = null;
@@ -286,6 +299,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     },
     onDetach: () => {
       syncRequestGeneration += 1;
+      retireRequest();
       refreshingGeneration = null;
       refreshingKeys = [];
       lastHello = null;
@@ -308,8 +322,10 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       snapshot.hello !== null &&
       isGatewayMethodAdvertised(snapshot, SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD) === true;
     if (!available) {
+      retainRefreshIntent(watchedKeys());
       lastHello = null;
       lastSignature = null;
+      retireRequest();
       for (const key of waiters.keys()) {
         settle(key);
       }
@@ -354,6 +370,9 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     lastHello = snapshot.hello;
     lastSignature = signature;
     const requestGeneration = ++syncRequestGeneration;
+    // Fence retired catches before aborting a superseded local waiter.
+    retireRequest();
+    requestController = new AbortController();
     const isCurrentRequest = () =>
       lifecycle.attached &&
       isActive() &&
@@ -366,10 +385,11 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     for (const key of refreshSessionKeys) {
       pendingRefreshKeys.delete(key);
     }
-    const request = client.request(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys,
-      ...(refreshSessionKeys.length > 0 ? { refreshSessionKeys } : {}),
-    });
+    const request = client.request(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      { sessionKeys, ...(refreshSessionKeys.length > 0 ? { refreshSessionKeys } : {}) },
+      { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS, signal: requestController.signal },
+    );
     if (!isActive()) {
       lifecycle.detach();
     }
@@ -428,6 +448,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     } else {
       watchedByOwner.set(owner, { keys: next, foreground: options.foreground === true });
     }
+    orderedWatchedKeys = undefined;
     retry.reset();
     pruneUnwatched();
     if (isActive()) {

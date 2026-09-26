@@ -20,9 +20,10 @@ import {
   resolveDiscordChannelConfigWithFallback,
   type DiscordGuildEntryResolved,
 } from "../monitor/allow-list.js";
+import * as discordMessagingActionRuntime from "../send.js";
+import { resolveDiscordTargetChannelId } from "../send.shared.js";
 import type { DiscordReactOpts } from "../send.types.js";
-import { parseDiscordTarget } from "../targets.js";
-import * as discordMessagingActionRuntime from "./runtime.messaging.runtime.js";
+import { parseDiscordTarget, resolveDiscordChannelId } from "../targets.js";
 import { createDiscordActionOptions } from "./runtime.shared.js";
 
 type ConversationReadInvocationOrigin = NonNullable<
@@ -326,7 +327,7 @@ export function createDiscordMessagingActionContext(params: {
       return false;
     }
     try {
-      return discordMessagingActionRuntime.resolveDiscordChannelId(currentChannelId) === channelId;
+      return resolveDiscordChannelId(currentChannelId) === channelId;
     } catch {
       return false;
     }
@@ -501,13 +502,13 @@ export function createDiscordMessagingActionContext(params: {
     options: params.options,
     accountId,
     resolveChannelId: () =>
-      discordMessagingActionRuntime.resolveDiscordChannelId(
+      resolveDiscordChannelId(
         readStringParam(params.input, "channelId", {
           required: true,
         }),
       ),
     assertReadTargetAllowed: async ({ guildId, channelId }) => {
-      const targetChannelId = discordMessagingActionRuntime.resolveDiscordChannelId(channelId);
+      const targetChannelId = resolveDiscordChannelId(channelId);
       const target = await resolveReadTargetContext(targetChannelId);
       const currentConversation = isCurrentReadTarget(targetChannelId);
       if (guildId && target.metadataKnown && target.guildId !== guildId) {
@@ -664,7 +665,7 @@ export function createDiscordMessagingActionContext(params: {
             { defaultKind: "channel" },
           );
           if (currentTarget?.kind === "user" && currentTarget.id === reactionTarget.id) {
-            const currentChannelId = discordMessagingActionRuntime.resolveDiscordChannelId(
+            const currentChannelId = resolveDiscordChannelId(
               currentReadContext.currentChannelId ?? "",
             );
             if (isCurrentReadTarget(currentChannelId)) {
@@ -673,13 +674,18 @@ export function createDiscordMessagingActionContext(params: {
           }
         }
         // Resolving a user through the send path can create a DM before read policy runs.
-        return discordMessagingActionRuntime.resolveDiscordChannelId(target);
+        return resolveDiscordChannelId(target);
       }
-      return await discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId({
-        target,
-        cfg: params.cfg,
-        accountId: resolvedReactionAccountId,
-      });
+      try {
+        return resolveDiscordChannelId(target);
+      } catch {
+        return (
+          await resolveDiscordTargetChannelId(target, {
+            cfg: params.cfg,
+            accountId: resolvedReactionAccountId,
+          })
+        ).channelId;
+      }
     },
     withOpts,
     withReactionRuntimeOptions: (extra) =>

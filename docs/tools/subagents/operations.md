@@ -9,7 +9,7 @@ read_when:
 
 ## Concurrency
 
-Each spawning session has its own in-process sub-agent queue. The setting
+Each spawning session has its own in-process queue for ordinary sub-agents. The setting
 `agents.defaults.subagents.maxConcurrent` limits concurrent child runs for that
 session (default `8`). Independent sessions have independent budgets, so one
 busy session does not consume another session's sub-agent slots. A nested
@@ -20,9 +20,19 @@ Changing where a child's completion is delivered does not move its execution
 to another session's budget. Accepted runs above the execution limit queue until
 a slot is available.
 
+[Swarm](/tools/swarm) collector children (`collect: true`) instead use a dedicated
+`subagent:swarm:<schedulerGroupKey>` lane. Its cap is the group's resolved
+`tools.swarm.maxConcurrent` (default `32`), independent of the parent's ordinary
+`subagent:<immediate session>` lane. An ordinary spawn from the same parent can
+start while its Swarm lane is full. Ordinary children spawned by a collector use
+that collector's own session lane. Each running collector costs one model stream
+and one Code Mode worker isolate; tune the Swarm cap for the Gateway's resources.
+
 `maxChildrenPerAgent` is a separate admission limit on active children per
 session (default `5`); increasing execution concurrency does not raise that
-limit. [Codex-native subagents](/plugins/codex-harness) use Codex's own scheduler
+limit. Collector admission instead uses Swarm's `maxChildrenPerGroup` (default
+`50`) and `maxTotalPerGroup` (default `200`); raising execution concurrency does
+not raise either group limit. [Codex-native subagents](/plugins/codex-harness) use Codex's own scheduler
 and limits independently of these OpenClaw queues.
 
 Suspended completion deliveries do not block new work. Native subagents, ACP
@@ -59,6 +69,12 @@ interrupted and that partially completed actions need checking. A parent waiting
 for its child batch receives the settled results, including children that finished
 before the restart, and decides what work remains.
 
+An already-admitted completion turn for a yielded nested requester is different
+from an orphaned child launch. Its frozen child-result batch retains the exact
+saved continuation across restart. Registry recovery waits for that owner instead
+of reporting interruption while the same continuation is being replayed. This
+does not authorize automatic relaunch of unrelated interrupted child work.
+
 Recovery handles both sessions marked `abortedLastRun: true` and hard kills that
 prevented the shutdown marker from being written. For a hard kill, the child
 session must still identify the exact run from the retired Gateway, with no newer
@@ -66,6 +82,11 @@ run or admitted work owning that session. Live executions and queued collectors
 keep their existing owners. Orphaned runs settle their background task before
 cleanup, so retained child sessions do not leave phantom running activity. If the
 task update fails, completion remains available for retry.
+
+Startup session maintenance reports retained run/task owners in one informational
+summary. Those rows remain with registry recovery; the session-only orphan repair
+does not compete for their ownership. Ownership changes during a repair and failed
+ownership checks still produce warnings.
 
 The parent can inspect a retained child transcript and use `sessions_send` to
 continue that session, or spawn a replacement after confirming the old execution
@@ -135,7 +156,7 @@ timeout. Those events do not automatically cancel them.
 ## Limitations
 
 - Direct announce attempts are best-effort, but admitted session-queued completion handoffs and their owner/task projections survive gateway restarts in the shared SQLite state database.
-- Sub-agents still share the same Gateway process resources; `maxConcurrent` bounds each spawning session's execution, not total Gateway concurrency.
+- Sub-agents still share the same Gateway process resources; concurrency caps apply per spawning session or Swarm group, not to total Gateway concurrency.
 - `sessions_spawn` returns `{ status: "accepted", runId, childSessionKey }` when startup is accepted, without waiting for the child task to finish. Cloud-worker spawns can wait for provisioning before returning this receipt.
 - Sub-agent context only injects `AGENTS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Its `## Tools` section carries environment-specific notes. Codex-native subagents follow the same boundary through native `AGENTS.md` discovery, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.
 - Recursive spawning is enabled through depth `5` by default. Set `maxSpawnDepth` from `1` through `5` to lower the boundary.

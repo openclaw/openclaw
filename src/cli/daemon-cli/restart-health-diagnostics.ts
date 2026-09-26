@@ -1,11 +1,24 @@
-import { formatPortDiagnostics } from "../../infra/ports.js";
-import type { GatewayPortHealthSnapshot, GatewayRestartSnapshot } from "./restart-health.types.js";
+import { formatPortDiagnostics } from "../../infra/ports-format.js";
+import type {
+  GatewayPortHealthSnapshot,
+  GatewayRestartSnapshot,
+  GatewayRestartWaitOutcome,
+} from "./restart-health.types.js";
+
+const restartFailureReasons: Partial<Record<GatewayRestartWaitOutcome, string>> = {
+  "plugin-errors": "activated plugins reported load errors",
+  "channel-errors": "channel health checks failed",
+  "version-mismatch": "the running Gateway version did not match the expected version",
+  "build-id-mismatch": "the running Gateway build did not match the expected build",
+  "stale-pids": "stale Gateway processes remained",
+  "generation-changed": "the Gateway process generation changed before readiness was confirmed",
+};
 
 function formatGatewayStillStarting(snapshot: GatewayRestartSnapshot): string {
   return `Gateway service is still starting after ${Math.round((snapshot.elapsedMs ?? 0) / 1000)}s. Last observed startup phase: ${snapshot.startupPhase ?? "unknown"}. Run openclaw gateway status --deep.`;
 }
 
-function renderPortUsageDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
+export function renderGatewayPortHealthDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
   const lines: string[] = [];
   if (snapshot.portUsage.status === "busy") {
     lines.push(...formatPortDiagnostics(snapshot.portUsage));
@@ -69,7 +82,7 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
   if (runtimeSummary) {
     lines.push(`Service runtime: ${runtimeSummary}`);
   }
-  lines.push(...renderPortUsageDiagnostics(snapshot));
+  lines.push(...renderGatewayPortHealthDiagnostics(snapshot));
   return lines;
 }
 
@@ -89,6 +102,11 @@ export function formatGatewayRestartFailure(params: {
       failMessage: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and health checks never came up.`,
     };
   }
+  const reason = params.health.waitOutcome && restartFailureReasons[params.health.waitOutcome];
+  if (reason) {
+    const message = `Gateway restart failed: ${reason}.`;
+    return { statusLine: message, failMessage: message };
+  }
   const timeoutSeconds = Math.max(
     1,
     Math.round(
@@ -101,8 +119,4 @@ export function formatGatewayRestartFailure(params: {
     statusLine: `Timed out after ${timeoutSeconds}s waiting for gateway port ${params.port} to become healthy.`,
     failMessage: `Gateway restart timed out after ${timeoutSeconds}s waiting for health checks.`,
   };
-}
-
-export function renderGatewayPortHealthDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
-  return renderPortUsageDiagnostics(snapshot);
 }

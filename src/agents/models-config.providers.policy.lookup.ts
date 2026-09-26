@@ -10,6 +10,7 @@ const GENERIC_PROVIDER_APIS = new Set<string>([
   "openai-responses",
   "anthropic-messages",
   "google-generative-ai",
+  "google-interactions",
 ]);
 
 export function resolveProviderPluginLookupKey(

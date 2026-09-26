@@ -1,13 +1,7 @@
-/**
- * Browser storage and context mutation routes.
- *
- * Parses and applies cookies, local/session storage, geolocation, permissions,
- * and related browser-context mutations for the selected profile/tab.
- */
-
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import {
   asNullableRecord,
+  normalizeOptionalString,
   readNonBlankString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -15,13 +9,7 @@ import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { PwAiModule } from "../pw-ai-module.js";
 import type { InteractionTargetOptions } from "../pw-tools-core.interactions.navigation.js";
 import type { BrowserRouteContext } from "../server-context.js";
-import {
-  readBody,
-  resolveProfileContext,
-  resolveTargetIdFromBody,
-  resolveTargetIdFromQuery,
-  withPlaywrightRouteContext,
-} from "./agent.shared.js";
+import { readBody, resolveProfileContext, withPlaywrightRouteContext } from "./agent.shared.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { readOptionalRouteFiniteNumber, readRouteFiniteNumber } from "./route-numeric.js";
 import type { BrowserRequest, BrowserRouteRegistrar } from "./types.js";
@@ -29,17 +17,8 @@ import { jsonError, readHttpOrigin, toBoolean, toStringOrEmpty } from "./utils.j
 
 type StorageKind = "local" | "session";
 
-type GeolocationOptions = {
-  clear: boolean;
-  latitude?: number;
-  longitude?: number;
-  accuracy?: number;
-  origin?: string;
-};
-
 type CookieSetOptions = Parameters<PwAiModule["cookiesSetViaPlaywright"]>[0]["cookie"];
 
-/** Parse the supported browser storage bucket names. */
 function parseStorageKind(raw: string): StorageKind | null {
   if (raw === "local" || raw === "session") {
     return raw;
@@ -74,7 +53,6 @@ function readOptionalHttpOrigin(raw: unknown): string | undefined {
   return origin;
 }
 
-/** Parse cookie options accepted by browser storage mutation routes. */
 function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSetOptions {
   return {
     name: toStringOrEmpty(cookie.name),
@@ -92,8 +70,7 @@ function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSetOption
   };
 }
 
-/** Parse geolocation override options accepted by context mutation routes. */
-function parseGeolocationOptions(body: Record<string, unknown>): GeolocationOptions {
+function parseGeolocationOptions(body: Record<string, unknown>) {
   const clear = toBoolean(body.clear) ?? false;
   if (clear) {
     return { clear };
@@ -115,13 +92,12 @@ function parseGeolocationOptions(body: Record<string, unknown>): GeolocationOpti
   if (accuracy !== undefined && accuracy < 0) {
     throw new Error("accuracy must be non-negative.");
   }
-  if (!clear && (latitude === undefined || longitude === undefined)) {
+  if (latitude === undefined || longitude === undefined) {
     throw new Error("latitude and longitude are required (or set clear=true)");
   }
   return { clear, latitude, longitude, accuracy, origin };
 }
 
-/** Register storage and browser-context mutation endpoints. */
 export function registerBrowserAgentStorageRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -140,7 +116,7 @@ export function registerBrowserAgentStorageRoutes(
   ) => {
     app.post(path, async (req, res) => {
       const body = readBody(req);
-      const targetId = resolveTargetIdFromBody(body);
+      const targetId = normalizeOptionalString(body.targetId);
       let run: Mutation;
       try {
         run = prepare(body, req.params);
@@ -186,7 +162,7 @@ export function registerBrowserAgentStorageRoutes(
   };
 
   app.get("/cookies", async (req, res) => {
-    const targetId = resolveTargetIdFromQuery(req.query);
+    const targetId = normalizeOptionalString(req.query.targetId);
     await withPlaywrightRouteContext({
       req,
       res,
@@ -245,7 +221,7 @@ export function registerBrowserAgentStorageRoutes(
     if (!kind) {
       return jsonError(res, 400, "kind must be local|session");
     }
-    const targetId = resolveTargetIdFromQuery(req.query);
+    const targetId = normalizeOptionalString(req.query.targetId);
     const key = readNonBlankString(
       readStringValue(req.query.key) ?? toStringOrEmpty(req.query.key),
     );

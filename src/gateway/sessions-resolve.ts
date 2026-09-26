@@ -2,12 +2,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Gateway sessions.resolve implementation helper.
 // Resolves key/sessionId/label/shortId selectors into one canonical session key.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  ErrorCodes,
-  type ErrorShape,
-  errorShape,
-  type SessionsResolveCandidate,
-  type SessionsResolveParams,
+import type {
+  ErrorShape,
+  SessionsResolveCandidate,
+  SessionsResolveParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
   controlUiSessionSlug,
@@ -26,6 +24,8 @@ import { parseSessionLabel } from "../sessions/session-label.js";
 import { hasOperatorBoundary } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { invalidSessionRequest } from "./session-request-error.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { authorizeIncognitoSessionTarget } from "./session-sharing-policy.js";
@@ -53,10 +53,7 @@ function noSessionFoundResult(params: { p: SessionsResolveParams; message: strin
   if (params.p.allowMissing) {
     return { ok: true, missing: true } as const;
   }
-  return {
-    ok: false,
-    error: errorShape(ErrorCodes.INVALID_REQUEST, params.message),
-  } as const;
+  return invalidSessionRequest(params.message);
 }
 
 /** Rejects sessions whose owning agent no longer exists in config (#65524). */
@@ -70,13 +67,7 @@ function validateSessionAgentExists(
   if (deletedAgentId === null) {
     return null;
   }
-  return {
-    ok: false,
-    error: errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `Agent "${deletedAgentId}" no longer exists in configuration`,
-    ),
-  };
+  return invalidSessionRequest(`Agent "${deletedAgentId}" no longer exists in configuration`);
 }
 
 function normalizeShortSessionId(shortId: string): string | null {
@@ -96,6 +87,38 @@ function sessionResolveCandidate(
     ...(entry.boardFace ? { boardFace: entry.boardFace } : {}),
     ...(entry.boardPresentation ? { boardPresentation: entry.boardPresentation } : {}),
   };
+}
+
+/** Prepare durable facts, then resolve and consume against current caller state without a yield. */
+export async function withPreparedSessionResolve<T>(
+  params: Parameters<typeof resolveSessionKeyFromResolveParams>[0] & { isCurrent?: () => boolean },
+  consume: (result: SessionsResolveResult) => T,
+): Promise<T> {
+  const { projection, p } = params;
+  const key = normalizeOptionalString(p.key);
+  const assertCurrent = () => {
+    if (params.isCurrent?.() === false) {
+      throw new Error("Session projection changed while resolving the session; retry the request");
+    }
+  };
+  if (key) {
+    return withReadySessionRows(
+      projection,
+      (cfg) => {
+        const agent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
+        return agent.ok ? [{ key, agentId: agent.agentId }] : [];
+      },
+      () => {
+        assertCurrent();
+        return consume(resolveSessionKeyFromResolveParams(params));
+      },
+    );
+  }
+  do {
+    await projection.ensureMaterialized();
+    assertCurrent();
+  } while (projection.needsMaterialization);
+  return consume(resolveSessionKeyFromResolveParams(params));
 }
 
 export function resolveSessionKeyFromResolveParams(params: {
@@ -178,31 +201,18 @@ export function resolveSessionKeyFromResolveParams(params: {
   const hasReference = p.reference !== undefined;
   const hasSlugHint = p.slugHint !== undefined;
   if (hasSlugHint && !hasShortId) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "slugHint requires shortId"),
-    };
+    return invalidSessionRequest("slugHint requires shortId");
   }
   const selectionCount = [hasKey, hasSessionId, hasLabel, hasShortId, hasReference].filter(
     Boolean,
   ).length;
   if (selectionCount > 1) {
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "Provide either key, sessionId, label, shortId, or reference (not multiple)",
-      ),
-    };
+    return invalidSessionRequest(
+      "Provide either key, sessionId, label, shortId, or reference (not multiple)",
+    );
   }
   if (selectionCount === 0) {
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "Either key, sessionId, label, shortId, or reference is required",
-      ),
-    };
+    return invalidSessionRequest("Either key, sessionId, label, shortId, or reference is required");
   }
 
   if (p.reference) {
@@ -306,13 +316,9 @@ export function resolveSessionKeyFromResolveParams(params: {
         const { matches: agentMatches, getTarget } = sessionIdMatches(agentId);
         const agentSelection = resolveSessionIdMatchSelection(agentMatches, sessionId);
         if (agentSelection.kind === "ambiguous") {
-          return {
-            ok: false,
-            error: errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `Multiple sessions found for sessionId: ${sessionId} (${agentSelection.sessionKeys.join(", ")})`,
-            ),
-          };
+          return invalidSessionRequest(
+            `Multiple sessions found for sessionId: ${sessionId} (${agentSelection.sessionKeys.join(", ")})`,
+          );
         }
         if (agentSelection.kind === "selected") {
           const entry = agentMatches.find(
@@ -330,15 +336,11 @@ export function resolveSessionKeyFromResolveParams(params: {
         }
       }
       if (ownerTaggedMatches.size > 1) {
-        return {
-          ok: false,
-          error: errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `Multiple sessions found for sessionId: ${sessionId} (${[...ownerTaggedMatches.values()]
-              .map((match) => `${match.agentId}:${match.key}`)
-              .join(", ")})`,
-          ),
-        };
+        return invalidSessionRequest(
+          `Multiple sessions found for sessionId: ${sessionId} (${[...ownerTaggedMatches.values()]
+            .map((match) => `${match.agentId}:${match.key}`)
+            .join(", ")})`,
+        );
       }
       const ownerTaggedMatch = ownerTaggedMatches.values().next().value;
       if (ownerTaggedMatch) {
@@ -361,13 +363,9 @@ export function resolveSessionKeyFromResolveParams(params: {
       return noSessionFoundResult({ p, message: `No session found: ${sessionId}` });
     }
     if (selection.kind === "ambiguous") {
-      return {
-        ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `Multiple sessions found for sessionId: ${sessionId} (${selection.sessionKeys.join(", ")})`,
-        ),
-      };
+      return invalidSessionRequest(
+        `Multiple sessions found for sessionId: ${sessionId} (${selection.sessionKeys.join(", ")})`,
+      );
     }
     const selectedEntry = matches.find(([matchKey]) => matchKey === selection.sessionKey)?.[1];
     let selectedAgentId = parseAgentSessionKey(selection.sessionKey)?.agentId ?? p.agentId;
@@ -391,13 +389,7 @@ export function resolveSessionKeyFromResolveParams(params: {
   if (hasShortId) {
     const shortId = normalizeShortSessionId(rawShortId);
     if (!shortId) {
-      return {
-        ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "shortId must be 8-32 hexadecimal characters",
-        ),
-      };
+      return invalidSessionRequest("shortId must be 8-32 hexadecimal characters");
     }
     const prepared = prepare();
     const matchingEntries = filterAndSortSessionEntries({
@@ -437,10 +429,7 @@ export function resolveSessionKeyFromResolveParams(params: {
 
   const parsedLabel = parseSessionLabel(p.label);
   if (!parsedLabel.ok) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, parsedLabel.error),
-    };
+    return invalidSessionRequest(parsedLabel.error);
   }
 
   const prepared = prepare();
@@ -461,13 +450,9 @@ export function resolveSessionKeyFromResolveParams(params: {
   }
   if (matches.length > 1) {
     const keys = matches.map(([matchKey]) => matchKey).join(", ");
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `Multiple sessions found with label: ${parsedLabel.label} (${keys})`,
-      ),
-    };
+    return invalidSessionRequest(
+      `Multiple sessions found with label: ${parsedLabel.label} (${keys})`,
+    );
   }
 
   const [labelKey, labelEntry] = expectDefined(matches[0], "label session match at 0");

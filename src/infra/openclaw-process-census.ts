@@ -67,6 +67,14 @@ export function inspectOtherOpenClawProcesses(): { pids: number[] } | { error: s
         if (!command || !("argv" in command)) {
           return false;
         }
+        // Retained terminal writers can use node --eval with the runtime path in argv.
+        if (
+          command.argv.some((arg) =>
+            /(?:^|[/\\])openclaw-update-runtime-[A-Za-z0-9]{6}(?:[/\\]|$)/u.test(arg),
+          )
+        ) {
+          return true;
+        }
         const identity = classifyOpenClawArgv(command.argv, {
           pid,
           serviceMarker: command.serviceMarker,

@@ -240,7 +240,7 @@ export async function claimMainSessionRecoveryOwner(params: {
   if (!claim.entry && (params.allowMissingSession || params.replacementSessionId)) {
     // A fresh explicit session has no predecessor. An automatic rollover can
     // also lose its predecessor before admission. Either way, no row remains to fence.
-    return { kind: "not_required" } as const;
+    return { kind: "not_required", entry: claim.entry, sessionKey: claim.sessionKey } as const;
   }
   const healthyExpectedSession =
     claim.entry &&
@@ -254,12 +254,12 @@ export async function claimMainSessionRecoveryOwner(params: {
     claim.sessionKey &&
     !isMainRestartRecoveryCandidate(claim.entry, claim.sessionKey)
   ) {
-    return { kind: "not_required" } as const;
+    return { kind: "not_required", entry: claim.entry, sessionKey: claim.sessionKey } as const;
   }
   if (healthyExpectedSession) {
     // A healthy completion may clear recovery between the caller's read and this
     // transaction. Only that fully clean same-session state can proceed unclaimed.
-    return { kind: "not_required" } as const;
+    return { kind: "not_required", entry: claim.entry, sessionKey: claim.sessionKey } as const;
   }
   const reason = claim.transition.kind === "rejected" ? claim.transition.reason : "state_changed";
   return { kind: "invalidated", reason } as const;

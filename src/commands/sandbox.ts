@@ -126,29 +126,20 @@ function validateRecreateOptions(opts: SandboxRecreateOptions, runtime: RuntimeE
 }
 
 async function fetchAndFilterContainers(opts: SandboxRecreateOptions): Promise<FilteredContainers> {
-  const allContainers = await listSandboxContainers();
-  const allBrowsers = await listSandboxBrowsers();
-
-  let containers = opts.browser ? [] : allContainers;
-  let browsers = opts.browser ? allBrowsers : [];
-
-  if (opts.session) {
-    containers = containers.filter((c) => c.sessionKey === opts.session);
-    browsers = browsers.filter((b) => b.sessionKey === opts.session);
-  } else if (opts.agent) {
-    // Agent-scoped cleanup removes both the agent root session and its child
-    // session keys while leaving unrelated agent containers untouched.
-    const matchesAgent = createAgentMatcher(opts.agent);
-    containers = containers.filter(matchesAgent);
-    browsers = browsers.filter(matchesAgent);
-  }
-
-  return { containers, browsers };
+  const matches = opts.session
+    ? (item: Pick<ContainerItem, "sessionKey">) => item.sessionKey === opts.session
+    : opts.agent
+      ? createAgentMatcher(opts.agent)
+      : undefined;
+  return {
+    containers: opts.browser ? [] : await listSandboxContainers(matches),
+    browsers: opts.browser ? await listSandboxBrowsers(matches) : [],
+  };
 }
 
 function createAgentMatcher(agentId: string) {
   const agentPrefix = `agent:${agentId}`;
-  return (item: ContainerItem) =>
+  return (item: Pick<ContainerItem, "sessionKey">) =>
     item.sessionKey === agentPrefix || item.sessionKey.startsWith(`${agentPrefix}:`);
 }
 
@@ -172,42 +163,21 @@ async function removeContainers(
 
   // Remove normal sandboxes first, then browser containers; reporting keeps one
   // aggregate fail count so callers can exit non-zero on partial cleanup.
-  for (const container of filtered.containers) {
-    const result = await removeContainer(container.containerName, removeSandboxContainer, runtime);
-    if (result.success) {
-      successCount++;
-    } else {
-      failCount++;
-    }
-  }
-
-  for (const browser of filtered.browsers) {
-    const result = await removeContainer(
-      browser.containerName,
-      removeSandboxBrowserContainer,
-      runtime,
-    );
-    if (result.success) {
-      successCount++;
-    } else {
-      failCount++;
+  for (const [containers, remove] of [
+    [filtered.containers, removeSandboxContainer],
+    [filtered.browsers, removeSandboxBrowserContainer],
+  ] as const) {
+    for (const { containerName } of containers) {
+      try {
+        await remove(containerName);
+        runtime.log(`✓ Removed ${containerName}`);
+        successCount++;
+      } catch (err) {
+        runtime.error(`Failed to remove ${containerName}: ${formatErrorMessage(err)}.`);
+        failCount++;
+      }
     }
   }
 
   return { successCount, failCount };
-}
-
-async function removeContainer(
-  containerName: string,
-  removeFn: (name: string) => Promise<void>,
-  runtime: RuntimeEnv,
-): Promise<{ success: boolean }> {
-  try {
-    await removeFn(containerName);
-    runtime.log(`✓ Removed ${containerName}`);
-    return { success: true };
-  } catch (err) {
-    runtime.error(`Failed to remove ${containerName}: ${formatErrorMessage(err)}.`);
-    return { success: false };
-  }
 }

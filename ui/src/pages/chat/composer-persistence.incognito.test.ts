@@ -91,6 +91,7 @@ describe("Incognito composer persistence", () => {
       chatMessage: "@Alex private objective",
       chatMentions: [{ profileId: "alex", start: 0, end: 5 }],
       chatGoalDraftMode: { action: "start", sessionId: "private-session" },
+      chatReplyTarget: { messageId: "private-reply", text: "Private quote" },
       connected: true,
       client: { recoveryScope: "credential", recoveryScopeReady: true },
     });
@@ -107,6 +108,7 @@ describe("Incognito composer persistence", () => {
       draft: state.chatMessage,
       draftMentions: state.chatMentions,
       goalMode: state.chatGoalDraftMode,
+      replyTarget: state.chatReplyTarget,
     });
     sessionStorage.setItem(storageKey, JSON.stringify(legacy));
     const persistence = startPersistence(state);
@@ -122,6 +124,7 @@ describe("Incognito composer persistence", () => {
     expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].draft).toBeUndefined();
     expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].draftMentions).toBeUndefined();
     expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].goalMode).toBeUndefined();
+    expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].replyTarget).toBeUndefined();
     expect(restoreChatComposerState(state)).toBe(true);
     expect(state.chatMessage).toBe("@Alex private objective");
     expect(state.chatMentions).toHaveLength(1);
@@ -225,6 +228,7 @@ describe("Incognito composer persistence", () => {
       chatMessage: "@Alex private legacy draft",
       chatMentions: [{ profileId: "alex", start: 0, end: 5 }],
       chatGoalDraftMode: { action: "start", sessionId: "private-session" },
+      chatReplyTarget: { messageId: "private-reply", text: "Private quote" },
     });
     expect(persistChatComposerState(state)).toBe(true);
     const queued = { ...reconnectItem("legacy-queue", 1), sendState: "held" as const };

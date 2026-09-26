@@ -244,7 +244,7 @@ it("preserves committed Boards and admits followers after publication cleanup is
   let refusals = 0;
   const interception = vi
     .spyOn(admission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit) =>
+    .mockImplementation((admit, attachment) =>
       create((request, grant) => {
         if (refuseCleanup && request.stage === "prepare") {
           refuseCleanup = false;
@@ -255,7 +255,7 @@ it("preserves committed Boards and admits followers after publication cleanup is
         if (request.stage === "commit" && refusals === 0) {
           refuseCleanup = true;
         }
-      }),
+      }, attachment),
     );
   const put = (name: string) =>
     store.putWidget({ ...target, name, content: { kind: "html", html: `<p>${name}</p>` } });

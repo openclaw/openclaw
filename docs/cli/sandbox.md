@@ -7,7 +7,7 @@ status: active
 
 Manage sandbox runtimes for isolated agent execution: Docker/Podman containers, SSH targets, or OpenShell backends.
 
-[`openclaw agent exec`](/cli/agent#agent-exec) does not use these configured runtimes. Its isolated implicit policy config turns the agent sandbox off, allows full Gateway-host execution, and restricts filesystem tools to `--cwd`.
+[`openclaw agent exec`](/cli/agent#agent-exec) preserves a sandbox selected by the inherited config or `--config`, including its execution routing. Without a configured sandbox, its defaults allow full Gateway-host execution and restrict filesystem tools to `--cwd`. `--isolated` and `--auth-env-only` skip config inheritance and use those defaults.
 
 ## Commands
 
@@ -46,6 +46,18 @@ Options:
 - `--force`: skip the confirmation prompt
 
 Pass exactly one of `--all`, `--session`, or `--agent`.
+
+Scoped recreation selects registry entries before inspecting their backends. An
+unrelated runtime on another Podman connection or an unavailable backend does not
+block `--session` or `--agent`. The selected runtime still requires its recorded
+target to be active and reachable; `--force` only skips the confirmation prompt.
+Browser-only recreation does not inspect regular sandbox runtimes.
+
+When recorded Podman targets differ, an unscoped `sandbox list` can still fail its
+target check. Restore the affected runtime's original connection, use its known
+exact scope key with `recreate --session`, and review the preview before confirming.
+If you do not know the exact scope, keep the registry intact; do not guess a key,
+broaden to `--all`, or rewrite its recorded target to bypass validation.
 
 For `ssh` and OpenShell `remote`, recreate matters more than with Docker: the remote workspace is canonical after the initial seed, `recreate` deletes that canonical remote workspace for the selected scope, and the next run reseeds it from the current local workspace.
 

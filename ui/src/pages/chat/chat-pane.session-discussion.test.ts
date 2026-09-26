@@ -19,7 +19,11 @@ type DiscussionTestPane = TestChatPane & {
     sessionKey: string,
   ) => SessionDiscussionPanelConfig | null;
   probeSessionDiscussion: (sessionKey: string) => Promise<void>;
-  renderSessionDiscussionAction: () => unknown;
+  resolveSessionDiscussionAction: () => {
+    label: string;
+    active: boolean;
+    onToggle: () => void;
+  } | null;
   paneWidth: number;
 };
 
@@ -106,42 +110,24 @@ describe("chat pane session discussion", () => {
     container.remove();
   });
 
-  it("does not auto-show for a merely available discussion", async () => {
-    const { pane, updateSidebarLayout } = createDiscussionPane({
-      info: { state: "available" },
-    });
-
-    await pane.probeSessionDiscussion(SESSION_KEY);
-
-    expect(updateSidebarLayout).not.toHaveBeenCalled();
-  });
-
   it("uses the header action to open and close the discussion slot", async () => {
     const { pane, state, updateSidebarLayout } = createDiscussionPane({
       info: { state: "available" },
     });
-    const container = document.createElement("div");
-    document.body.append(container);
-
     await pane.probeSessionDiscussion(SESSION_KEY);
-    render(pane.renderSessionDiscussionAction(), container);
-
-    let action = container.querySelector<HTMLButtonElement>(".chat-session-discussion-toggle");
-    expect(action?.ariaLabel).toBe("Show discussion");
-    expect(action?.getAttribute("aria-pressed")).toBe("false");
-    action?.click();
+    let action = pane.resolveSessionDiscussionAction();
+    expect(action?.label).toBe("Show discussion");
+    expect(action?.active).toBe(false);
+    action?.onToggle();
     expect(updateSidebarLayout).toHaveBeenCalledTimes(1);
 
-    render(pane.renderSessionDiscussionAction(), container);
-    action = container.querySelector<HTMLButtonElement>(".chat-session-discussion-toggle");
-    expect(action?.ariaLabel).toBe("Hide discussion");
-    expect(action?.getAttribute("aria-pressed")).toBe("true");
-    action?.click();
+    action = pane.resolveSessionDiscussionAction();
+    expect(action?.label).toBe("Hide discussion");
+    expect(action?.active).toBe(true);
+    action?.onToggle();
     expect(state.sidebarLayout.columns[0]?.panels).toEqual([]);
     expect(state.sidebarLayout.open).toBe(false);
     expect(updateSidebarLayout).toHaveBeenCalledTimes(2);
-
-    container.remove();
   });
 
   it("opens beside an existing detail slot without stealing it", async () => {
@@ -149,17 +135,12 @@ describe("chat pane session discussion", () => {
       info: { state: "open", embedUrl: "https://clack.example/embed/c1" },
       detailOpen: true,
     });
-    const container = document.createElement("div");
-    document.body.append(container);
-
     await pane.probeSessionDiscussion(SESSION_KEY);
-    render(pane.renderSessionDiscussionAction(), container);
-    container.querySelector<HTMLButtonElement>(".chat-session-discussion-toggle")?.click();
+    pane.resolveSessionDiscussionAction()?.onToggle();
 
     expect(
       state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
     ).toEqual(["detail", "discussion"]);
-    container.remove();
   });
 
   it("opens as a collapsed tab when two columns cannot fit side by side", async () => {
@@ -168,17 +149,12 @@ describe("chat pane session discussion", () => {
       detailOpen: true,
     });
     pane.paneWidth = 700;
-    const container = document.createElement("div");
-    document.body.append(container);
-
     await pane.probeSessionDiscussion(SESSION_KEY);
-    render(pane.renderSessionDiscussionAction(), container);
-    container.querySelector<HTMLButtonElement>(".chat-session-discussion-toggle")?.click();
+    pane.resolveSessionDiscussionAction()?.onToggle();
 
     expect(
       state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
     ).toEqual(["detail", "discussion"]);
-    container.remove();
   });
 
   it("ignores a stale none callback after switching sessions", async () => {

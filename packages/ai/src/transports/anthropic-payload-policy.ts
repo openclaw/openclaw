@@ -7,6 +7,10 @@ import { getAiTransportHost } from "../host.js";
 import type { AnthropicContextManagementOptions } from "../provider-options.js";
 import { isAnthropicOAuthApiKey } from "../providers/anthropic-auth-headers.js";
 import { ANTHROPIC_CLAUDE_CODE_VERSION } from "../providers/anthropic-model-contract.js";
+import {
+  ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
+  ANTHROPIC_SERVER_SIDE_FALLBACKS,
+} from "../providers/anthropic-server-fallback.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
@@ -574,20 +578,24 @@ export function applyAnthropicContextManagementToRequest(
   );
 }
 
-export function resolveAnthropicContextManagementBetaHeader(
-  payload: AnthropicContextManagementPayload,
+export function resolveAnthropicRequestBetaHeader(
+  payload: AnthropicContextManagementPayload & { fallbacks?: unknown },
   directApiKeyBetaHeader: string | undefined,
 ): string | undefined {
-  if (directApiKeyBetaHeader === undefined || !isRecord(payload.context_management)) {
+  if (directApiKeyBetaHeader === undefined) {
     return directApiKeyBetaHeader;
   }
-  const edits = payload.context_management.edits;
+  const edits = isRecord(payload.context_management) ? payload.context_management.edits : undefined;
   const betas = new Set(
     directApiKeyBetaHeader
       .split(",")
       .map((beta) => beta.trim())
       .filter(Boolean),
   );
+  // Payload-required betas must survive model and per-request header overrides.
+  if (payload.fallbacks === ANTHROPIC_SERVER_SIDE_FALLBACKS) {
+    betas.add(ANTHROPIC_SERVER_SIDE_FALLBACK_BETA);
+  }
   for (const edit of Array.isArray(edits) ? edits : []) {
     if (!isRecord(edit)) {
       continue;

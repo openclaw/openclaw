@@ -1,6 +1,6 @@
+import { tempWorkspace } from "@openclaw/fs-safe/temp";
 // Owns private, short-lived environment transport for Docker and Podman commands.
 import { normalizeEnvVarKey } from "./host-env-security.js";
-import { tempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 type ContainerEnvFile = {

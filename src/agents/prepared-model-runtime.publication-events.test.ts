@@ -7,6 +7,38 @@ import {
 
 describe("catalog attempt status publication", () => {
   it.each(["provider", "native"] as const)(
+    "separates %s auth rejection from refresh failure",
+    (kind) => {
+      const reporter = createCatalogAttemptReporter(
+        {},
+        { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
+        () => true,
+        () => {},
+      );
+      const rejected = { provider: "signed-out", status: "auth-rejected" } as const;
+      const unavailable = { provider: "unreachable", status: "unavailable" } as const;
+      const publish = (outcomes: NonNullable<ModelCatalogSnapshot["providerOutcomes"]>) =>
+        reporter.withRefreshStatus({
+          entries: [],
+          routeVariants: [],
+          ...(kind === "native"
+            ? { nativeProviderOutcomes: { "native-app": outcomes } }
+            : { providerOutcomes: outcomes }),
+        });
+
+      const rejectedCatalog = publish([rejected]);
+      expect(rejectedCatalog.refreshFailed).toBeUndefined();
+      expect(publish([rejected, unavailable]).refreshFailed).toBe(true);
+
+      // A thrown acquisition failure is independent of a determinate provider outcome.
+      reporter.failed(new Error("catalog request timed out"), ["unreachable"], kind);
+      expect(rejectedCatalog.refreshFailed).toBe(true);
+      reporter.published(["unreachable"], kind);
+      expect(rejectedCatalog.refreshFailed).toBeUndefined();
+    },
+  );
+
+  it.each(["provider", "native"] as const)(
     "reports partial and complete %s settlement without marking model facts changed",
     (kind) => {
       const events = vi.fn<Parameters<typeof registerPreparedModelRuntimePublicationListener>[0]>();

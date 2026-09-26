@@ -526,9 +526,6 @@ export async function findInitialModel(options: {
     modelRegistry,
   } = options;
 
-  let model: Model | undefined;
-  let thinkingLevel: ThinkingLevel = DEFAULT_THINKING_LEVEL;
-
   // 1. CLI args take priority
   if (cliProvider && cliModel) {
     const resolved = resolveCliModel({
@@ -566,27 +563,20 @@ export async function findInitialModel(options: {
   if (defaultProvider && defaultModelId) {
     const found = modelRegistry.find(defaultProvider, defaultModelId);
     if (found && modelRegistry.hasConfiguredAuth(found)) {
-      model = found;
-      if (defaultThinkingLevel) {
-        thinkingLevel = defaultThinkingLevel;
-      }
-      return { model, thinkingLevel, fallbackMessage: undefined };
+      return {
+        model: found,
+        thinkingLevel: defaultThinkingLevel || DEFAULT_THINKING_LEVEL,
+        fallbackMessage: undefined,
+      };
     }
   }
 
   // 4. Try first available model with valid API key
-  const availableModels = modelRegistry.getAvailable();
-
-  if (availableModels.length > 0) {
-    return {
-      model: selectAvailableFallbackModel(availableModels),
-      thinkingLevel: DEFAULT_THINKING_LEVEL,
-      fallbackMessage: undefined,
-    };
-  }
-
-  // 5. No model found
-  return { model: undefined, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+  return {
+    model: selectAvailableFallbackModel(modelRegistry.getAvailable()),
+    thinkingLevel: DEFAULT_THINKING_LEVEL,
+    fallbackMessage: undefined,
+  };
 }
 
 /**
@@ -622,39 +612,25 @@ export async function restoreModelFromSession(
     );
   }
 
-  // If we already have a model, use it as fallback
-  if (currentModel) {
-    if (shouldPrintMessages) {
-      console.log(chalk.dim(`Falling back to: ${currentModel.provider}/${currentModel.id}`));
+  let fallbackModel = currentModel;
+  if (!fallbackModel) {
+    const availableModels = modelRegistry.getAvailable();
+    if (availableModels.length === 0) {
+      return { model: undefined, fallbackMessage: undefined };
     }
-    return {
-      model: currentModel,
-      fallbackMessage: `Could not restore model ${savedProvider}/${savedModelId} (${reason}). Using ${currentModel.provider}/${currentModel.id}.`,
-    };
-  }
-
-  // Try to find any available model
-  const availableModels = modelRegistry.getAvailable();
-
-  if (availableModels.length > 0) {
-    const fallbackModel = selectAvailableFallbackModel(availableModels);
+    fallbackModel = selectAvailableFallbackModel(availableModels);
     if (!fallbackModel) {
       return {
         model: undefined,
         fallbackMessage: `Could not restore model ${savedProvider}/${savedModelId} (${reason}). No models available.`,
       };
     }
-
-    if (shouldPrintMessages) {
-      console.log(chalk.dim(`Falling back to: ${fallbackModel.provider}/${fallbackModel.id}`));
-    }
-
-    return {
-      model: fallbackModel,
-      fallbackMessage: `Could not restore model ${savedProvider}/${savedModelId} (${reason}). Using ${fallbackModel.provider}/${fallbackModel.id}.`,
-    };
   }
-
-  // No models available
-  return { model: undefined, fallbackMessage: undefined };
+  if (shouldPrintMessages) {
+    console.log(chalk.dim(`Falling back to: ${fallbackModel.provider}/${fallbackModel.id}`));
+  }
+  return {
+    model: fallbackModel,
+    fallbackMessage: `Could not restore model ${savedProvider}/${savedModelId} (${reason}). Using ${fallbackModel.provider}/${fallbackModel.id}.`,
+  };
 }

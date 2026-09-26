@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyTaskEvent,
   coalesceTaskEvent,
   type CoalescedTaskEvent,
   mergeTaskLists,
@@ -8,7 +7,6 @@ import {
   normalizeTasksCancelResult,
   normalizeTasksGetResult,
   normalizeTasksListResult,
-  normalizeTasksRecoveryResult,
   partitionTasks,
   replayTaskEvents,
   sortTasks,
@@ -23,7 +21,7 @@ function task(overrides: Partial<TaskSummary> & Pick<TaskSummary, "id" | "status
   };
 }
 
-describe("tasks page data", () => {
+describe("task data", () => {
   it("sorts by updated time descending with an id tiebreak", () => {
     const sorted = sortTasks([
       task({ id: "b", status: "queued", updatedAt: 200 }),
@@ -173,25 +171,6 @@ describe("tasks page data", () => {
     expect(mergeTaskLists([running], [queued])).toEqual([running]);
   });
 
-  it("keeps the incoming running progress when both pages share a timestamp", () => {
-    const previous = task({
-      id: "shared",
-      status: "running",
-      updatedAt: 200,
-      toolUseCount: 1,
-      lastToolName: "read",
-    });
-    const progress = task({
-      id: "shared",
-      status: "running",
-      updatedAt: 200,
-      toolUseCount: 2,
-      lastToolName: "write",
-    });
-
-    expect(mergeTaskLists([previous], [progress])).toEqual([progress]);
-  });
-
   it("keeps the later page's equally current tool progress at the same tool count", () => {
     const previous = task({
       id: "shared",
@@ -332,8 +311,6 @@ describe("tasks page data", () => {
       expect(newestTaskSnapshot(fresh, { ...stale, prompt })).toEqual({ ...fresh, prompt });
       expect(mergeTaskLists([fresh], [stale])).toEqual([fresh]);
       expect(mergeTaskLists([stale], [fresh])).toEqual([fresh]);
-      expect(applyTaskEvent([fresh], { action: "upserted", task: stale }).tasks).toEqual([fresh]);
-      expect(applyTaskEvent([stale], { action: "upserted", task: fresh }).tasks).toEqual([fresh]);
     },
   );
 
@@ -397,44 +374,6 @@ describe("tasks page data", () => {
     expect(normalizeTasksCancelResult("nope")).toBeNull();
   });
 
-  it("normalizes bounded completion-delivery recovery results", () => {
-    expect(
-      normalizeTasksRecoveryResult({
-        results: [
-          {
-            taskId: "task-1",
-            ok: true,
-            duplicateRisk: true,
-            task: {
-              id: "task-1",
-              taskId: "task-1",
-              status: "completed",
-              deliveryStatus: "session_queued",
-              terminalOutcome: "succeeded",
-            },
-          },
-        ],
-      }),
-    ).toEqual({
-      results: [
-        {
-          taskId: "task-1",
-          ok: true,
-          duplicateRisk: true,
-          task: {
-            id: "task-1",
-            taskId: "task-1",
-            status: "completed",
-            deliveryStatus: "session_queued",
-            terminalOutcome: "succeeded",
-          },
-        },
-      ],
-    });
-    expect(normalizeTasksRecoveryResult({ results: [] })).toEqual({ results: [] });
-    expect(normalizeTasksRecoveryResult({ results: [{ taskId: "task-1" }] })).toBeNull();
-  });
-
   it("uses the protocol schema while preserving the required UI task id", () => {
     const wireTask = {
       id: " task-1 ",
@@ -461,161 +400,6 @@ describe("tasks page data", () => {
     expect(normalizeTasksListResult({ tasks: [wireTask], nextCursor: 2 })).toBeNull();
     expect(normalizeTasksListResult({ tasks: "not-a-page" })).toBeNull();
   });
-
-  it("merges upserts, applies deletes, and requests refetches for restored events", () => {
-    const initial = [task({ id: "task-1", status: "running", updatedAt: 100 })];
-    const completed = task({ id: "task-1", status: "completed", updatedAt: 200 });
-
-    const upserted = applyTaskEvent(initial, { action: "upserted", task: completed });
-    expect(upserted).toEqual({ tasks: [completed], refetch: false });
-
-    const deleted = applyTaskEvent(upserted.tasks, { action: "deleted", taskId: "task-1" });
-    expect(deleted).toEqual({ tasks: [], refetch: false });
-    expect(applyTaskEvent(initial, { action: "restored" })).toEqual({
-      tasks: initial,
-      refetch: true,
-    });
-    expect(applyTaskEvent(initial, { action: "upserted", task: { id: "broken" } })).toEqual({
-      tasks: initial,
-      refetch: true,
-    });
-  });
-
-  it.each([100, 200])(
-    "does not resurrect a completed task from a running event timestamped %i",
-    (updatedAt) => {
-      const completed = task({ id: "task-1", status: "completed", updatedAt: 200 });
-      const staleRunning = task({ id: "task-1", status: "running", updatedAt });
-
-      expect(applyTaskEvent([completed], { action: "upserted", task: staleRunning })).toEqual({
-        tasks: [completed],
-        refetch: false,
-      });
-    },
-  );
-
-  it.each(["completed", "failed", "cancelled", "timed_out"] as const)(
-    "does not replace an equally recent %s event with running work",
-    (status) => {
-      const terminal = task({ id: "task-1", status, updatedAt: 200 });
-      const running = task({
-        id: "task-1",
-        status: "running",
-        updatedAt: 200,
-        execution: { state: "running", lastActivityAt: 300 },
-      });
-
-      expect(applyTaskEvent([terminal], { action: "upserted", task: running })).toEqual({
-        tasks: [terminal],
-        refetch: false,
-      });
-      expect(applyTaskEvent([running], { action: "upserted", task: terminal })).toEqual({
-        tasks: [terminal],
-        refetch: false,
-      });
-    },
-  );
-
-  it.each(["completed", "failed", "cancelled", "timed_out"] as const)(
-    "accepts an authoritative equally recent %s terminal event correction",
-    (status) => {
-      const current = task({
-        id: "task-1",
-        status,
-        updatedAt: 200,
-        terminalSummary: "Previous terminal details",
-        execution: { state: "finished", lastActivityAt: 400 },
-      });
-      const correction = task({
-        id: "task-1",
-        status,
-        updatedAt: 200,
-        terminalSummary: "Authoritative terminal details",
-        execution: { state: "finished", lastActivityAt: 300 },
-      });
-
-      expect(applyTaskEvent([current], { action: "upserted", task: correction })).toEqual({
-        tasks: [correction],
-        refetch: false,
-      });
-    },
-  );
-
-  it("advances a queued task when its running event shares the timestamp", () => {
-    const queued = task({ id: "task-1", status: "queued", updatedAt: 200 });
-    const running = task({ id: "task-1", status: "running", updatedAt: 200 });
-
-    expect(applyTaskEvent([queued], { action: "upserted", task: running })).toEqual({
-      tasks: [running],
-      refetch: false,
-    });
-  });
-
-  it("applies incoming running tool progress at the same timestamp", () => {
-    const previous = task({
-      id: "task-1",
-      status: "running",
-      updatedAt: 200,
-      toolUseCount: 1,
-      lastToolName: "read",
-    });
-    const progress = task({
-      id: "task-1",
-      status: "running",
-      updatedAt: 200,
-      toolUseCount: 2,
-      lastToolName: "write",
-    });
-
-    expect(applyTaskEvent([previous], { action: "upserted", task: progress })).toEqual({
-      tasks: [progress],
-      refetch: false,
-    });
-  });
-
-  it("does not regress running tool progress from an equally recent stale event", () => {
-    const progress = task({
-      id: "task-1",
-      status: "running",
-      updatedAt: 200,
-      toolUseCount: 2,
-      lastToolName: "write",
-    });
-    const stale = task({
-      id: "task-1",
-      status: "running",
-      updatedAt: 200,
-      toolUseCount: 1,
-      lastToolName: "read",
-    });
-
-    expect(applyTaskEvent([progress], { action: "upserted", task: stale })).toEqual({
-      tasks: [progress],
-      refetch: false,
-    });
-  });
-
-  it("deletes only the requested task after applying task progress", () => {
-    const completed = task({ id: "completed", status: "completed", updatedAt: 200 });
-    const running = task({ id: "running", status: "running", updatedAt: 200 });
-
-    expect(
-      applyTaskEvent([completed, running], { action: "deleted", taskId: "completed" }),
-    ).toEqual({
-      tasks: [running],
-      refetch: false,
-    });
-  });
-
-  it("applies a genuinely newer running task event", () => {
-    const oldRunning = task({ id: "task-1", status: "running", updatedAt: 100 });
-    const newRunning = task({ id: "task-1", status: "running", updatedAt: 200 });
-
-    expect(applyTaskEvent([oldRunning], { action: "upserted", task: newRunning })).toEqual({
-      tasks: [newRunning],
-      refetch: false,
-    });
-  });
 });
 
 describe("coalesced task event replay", () => {
@@ -628,10 +412,25 @@ describe("coalesced task event replay", () => {
   it.each([
     {
       name: "newer and stale snapshots",
+      initial: [],
       events: [upsert({ updatedAt: 100 }), upsert({ updatedAt: 300 }), upsert({ updatedAt: 200 })],
+      expected: [task({ id: "shared", status: "running", updatedAt: 300 })],
+    },
+    {
+      name: "newer snapshot remains authoritative",
+      initial: [
+        task({ id: "shared", status: "running", updatedAt: 400, prompt: "Retained detail" }),
+      ],
+      events: [upsert({ updatedAt: 100 }), upsert({ updatedAt: 300 })],
+      expected: [
+        task({ id: "shared", status: "running", updatedAt: 400, prompt: "Retained detail" }),
+      ],
     },
     {
       name: "equal-time lifecycle and tool progress",
+      initial: [
+        task({ id: "shared", status: "queued", updatedAt: 200, prompt: "Retained detail" }),
+      ],
       events: [
         upsert({ status: "queued", updatedAt: 200, toolUseCount: 1 }),
         upsert({ updatedAt: 200, toolUseCount: 5 }),
@@ -639,9 +438,19 @@ describe("coalesced task event replay", () => {
         upsert({ updatedAt: 200, toolUseCount: 2 }),
         upsert({ updatedAt: 200, toolUseCount: 6 }),
       ],
+      expected: [
+        task({
+          id: "shared",
+          status: "running",
+          updatedAt: 200,
+          toolUseCount: 6,
+          prompt: "Retained detail",
+        }),
+      ],
     },
     {
       name: "terminal corrections and stale active progress",
+      initial: [],
       events: [
         upsert({ updatedAt: 200 }),
         upsert({ status: "completed", updatedAt: 200, terminalSummary: "Done" }),
@@ -649,22 +458,39 @@ describe("coalesced task event replay", () => {
         upsert({ updatedAt: 200, toolUseCount: 8 }),
         upsert({ status: "cancelled", updatedAt: 200, terminalSummary: "Final correction" }),
       ],
+      expected: [
+        task({
+          id: "shared",
+          status: "cancelled",
+          updatedAt: 200,
+          terminalSummary: "Final correction",
+        }),
+      ],
     },
     {
       name: "deletion followed by a lower-timestamp recreation",
+      initial: [
+        task({ id: "shared", status: "running", updatedAt: 400, prompt: "Discarded detail" }),
+      ],
       events: [
         upsert({ updatedAt: 300, title: "Old incarnation" }),
         remove(),
         upsert({ updatedAt: 100, title: "Recreated task" }),
         upsert({ updatedAt: 110, title: "Recreated task progress" }),
       ],
+      expected: [
+        task({ id: "shared", status: "running", updatedAt: 110, title: "Recreated task progress" }),
+      ],
     },
     {
-      name: "repeated final deletion",
+      name: "repeated final deletion preserves unrelated tasks",
+      initial: [task({ id: "untouched", status: "running", updatedAt: 200 })],
       events: [upsert({ updatedAt: 100 }), upsert({ updatedAt: 200 }), remove(), remove()],
+      expected: [task({ id: "untouched", status: "running", updatedAt: 200 })],
     },
     {
       name: "interleaved independent task identities",
+      initial: [],
       events: [
         upsert({ updatedAt: 100 }),
         upsert({ id: "other", updatedAt: 200 }),
@@ -673,33 +499,31 @@ describe("coalesced task event replay", () => {
         upsert({ updatedAt: 100 }),
         remove("other"),
       ],
+      expected: [task({ id: "shared", status: "running", updatedAt: 100 })],
     },
-  ])(
-    "matches sequential replay for $name against empty, stale, and newer snapshots",
-    ({ events }) => {
-      const seeds: TaskSummary[][] = [
-        [],
-        ...(["queued", "running", "completed"] as const).flatMap((status) =>
-          [100, 200, 300].map((updatedAt) => [
-            task({ id: "shared", status, updatedAt, toolUseCount: 4, prompt: "Retained detail" }),
-            task({ id: "untouched", status: "running", updatedAt: 200 }),
-          ]),
-        ),
-      ];
-      for (const seed of seeds) {
-        const pending = new Map<string, CoalescedTaskEvent>();
-        let sequential = seed;
-        for (const event of events) {
-          sequential = applyTaskEvent(sequential, event).tasks;
-          coalesceTaskEvent(pending, event);
-          expect(replayTaskEvents(seed, pending)).toEqual(sequential);
-        }
-        expect(pending.size).toBe(
-          new Set(
-            events.map((event) => (event.action === "deleted" ? event.taskId : event.task.id)),
-          ).size,
-        );
-      }
+  ])("replays $name", ({ initial, events, expected }) => {
+    const pending = new Map<string, CoalescedTaskEvent>();
+    for (const event of events) {
+      coalesceTaskEvent(pending, event);
+    }
+    expect(replayTaskEvents(initial, pending)).toEqual(expected);
+    expect(pending.size).toBe(
+      new Set(events.map((event) => (event.action === "deleted" ? event.taskId : event.task.id)))
+        .size,
+    );
+  });
+
+  it.each(["completed", "failed", "cancelled", "timed_out"] as const)(
+    "keeps %s terminal output after stale running progress and accepts its correction",
+    (status) => {
+      const terminal = task({ id: "shared", status, updatedAt: 200, terminalSummary: "Done" });
+      const pending = new Map<string, CoalescedTaskEvent>();
+      coalesceTaskEvent(pending, upsert({ updatedAt: 200, toolUseCount: 8 }));
+      expect(replayTaskEvents([terminal], pending)).toEqual([terminal]);
+      coalesceTaskEvent(pending, upsert({ status, updatedAt: 200, terminalSummary: "Corrected" }));
+      expect(replayTaskEvents([terminal], pending)).toEqual([
+        { ...terminal, terminalSummary: "Corrected" },
+      ]);
     },
   );
 });

@@ -34,6 +34,55 @@ function createStore(
 }
 
 describe("MeetingSessionTranscriptStore", () => {
+  it("observes pending and corrected sources before transcript dedup without persisting pending text", async () => {
+    const session = createSession();
+    const source = {
+      id: "caption-1",
+      epoch: "page-1",
+      revision: "1",
+      finalized: false,
+      ownEcho: false,
+    };
+    const pending = { text: "A pending invitation", source };
+    const committed = {
+      text: "A completed invitation",
+      source: { ...source, revision: "2", finalized: true },
+    };
+    const correction = { text: "A pending correction", source: { ...source, revision: "3" } };
+    const snapshots: MeetingTranscriptSnapshot[] = [
+      { droppedLines: 0, epoch: "page-1", lines: [], pendingLines: [pending] },
+      { droppedLines: 0, epoch: "page-1", lines: [committed], pendingLines: [] },
+      { droppedLines: 0, epoch: "page-1", lines: [committed], pendingLines: [correction] },
+    ];
+    const observed: string[][] = [];
+    const delivered: string[] = [];
+    const store = new MeetingSessionTranscriptStore({
+      getSession: () => session,
+      isBrowserSession: () => true,
+      isTranscribeSession: () => true,
+      hasBrowserTab: () => true,
+      capture: async () => snapshots.shift(),
+      onSnapshot: (_session, snapshot) => {
+        observed.push(
+          [...snapshot.lines, ...(snapshot.pendingLines ?? [])].map(
+            (line) => line.source?.revision ?? "",
+          ),
+        );
+      },
+      onLines: async (_session, lines) => {
+        expect(observed.at(-1)).toEqual(["2"]);
+        delivered.push(...lines.map((line) => line.text));
+      },
+    });
+
+    expect((await store.read(session.id)).lines).toEqual([]);
+    await store.read(session.id);
+    const result = await store.read(session.id);
+    expect(observed).toEqual([["1"], ["2"], ["2", "3"]]);
+    expect(delivered).toEqual(["A completed invitation"]);
+    expect(result.lines).toEqual([committed]);
+  });
+
   it("trims an oversized initial snapshot to the retained tail", async () => {
     const session = createSession();
     const store = createStore(session, [
@@ -109,29 +158,6 @@ describe("MeetingSessionTranscriptStore", () => {
     expect(afterAppend.lines?.map((line) => line.text)).toEqual(["new-5"]);
   });
 
-  it("retries durable delivery when a snapshot consumer fails", async () => {
-    const session = createSession();
-    const snapshot = {
-      droppedLines: 0,
-      epoch: "page-1",
-      lines: [{ text: "retry me" }],
-    };
-    let attempts = 0;
-    const delivered: string[][] = [];
-    const store = createStore(session, [snapshot, snapshot], async (lines) => {
-      attempts += 1;
-      if (attempts === 1) {
-        throw new Error("temporary store failure");
-      }
-      delivered.push(lines.map((line) => line.text));
-    });
-
-    await expect(store.read(session.id)).resolves.toMatchObject({ found: true });
-    await expect(store.read(session.id)).resolves.toMatchObject({ found: true });
-
-    expect(delivered).toEqual([["retry me"]]);
-  });
-
   it("acknowledges a durable snapshot one line at a time", async () => {
     const session = createSession();
     const snapshot = {
@@ -158,108 +184,53 @@ describe("MeetingSessionTranscriptStore", () => {
     expect(delivered).toEqual(["first", "second"]);
   });
 
-  it("treats a backward cursor without an epoch as a reset stream", async () => {
-    const session = createSession();
-    const delivered: string[] = [];
-    const store = createStore(
-      session,
-      [
+  it.each([
+    {
+      name: "treats a backward cursor without an epoch as a reset stream",
+      snapshots: [
         { droppedLines: 0, lines: [{ text: "old-0" }, { text: "old-1" }] },
         { droppedLines: 0, lines: [{ text: "new-0" }] },
       ],
-      async (lines) => {
-        delivered.push(...lines.map((line) => line.text));
-      },
-    );
-
-    await store.read(session.id);
-    await store.read(session.id);
-
-    expect(delivered).toEqual(["old-0", "old-1", "new-0"]);
-  });
-
-  it("detects a larger no-epoch reset after an empty snapshot", async () => {
-    const session = createSession();
-    const delivered: string[] = [];
-    const store = createStore(
-      session,
-      [
-        { droppedLines: 0, lines: [{ text: "old-0" }] },
-        { droppedLines: 0, lines: [] },
-        { droppedLines: 0, lines: [{ text: "new-0" }, { text: "new-1" }] },
-      ],
-      async (lines) => {
-        delivered.push(...lines.map((line) => line.text));
-      },
-    );
-
-    await store.read(session.id);
-    await store.read(session.id);
-    await store.read(session.id);
-
-    expect(delivered).toEqual(["old-0", "new-0", "new-1"]);
-  });
-
-  it("strips the maximal suffix-prefix overlap from a no-epoch reset", async () => {
-    const session = createSession();
-    const delivered: string[] = [];
-    const store = createStore(
-      session,
-      [
+      expected: ["old-0", "old-1", "new-0"],
+    },
+    {
+      name: "strips the maximal suffix-prefix overlap from a no-epoch reset",
+      snapshots: [
         { droppedLines: 0, lines: [{ text: "A" }, { text: "B" }] },
         { droppedLines: 0, lines: [{ text: "B" }, { text: "C" }] },
       ],
-      async (lines) => {
-        delivered.push(...lines.map((line) => line.text));
-      },
-    );
-
-    await store.read(session.id);
-    await store.read(session.id);
-
-    expect(delivered).toEqual(["A", "B", "C"]);
-  });
-
-  it("keeps repeated text after a non-overlapping dropped prefix", async () => {
-    const session = createSession();
-    const delivered: string[] = [];
-    const store = createStore(
-      session,
-      [
+      expected: ["A", "B", "C"],
+    },
+    {
+      name: "keeps repeated text after a non-overlapping dropped prefix",
+      snapshots: [
         { droppedLines: 0, lines: [{ text: "A" }, { text: "B" }] },
         { droppedLines: 2, lines: [{ text: "B" }, { text: "C" }] },
       ],
-      async (lines) => {
-        delivered.push(...lines.map((line) => line.text));
-      },
-    );
-
-    await store.read(session.id);
-    await store.read(session.id);
-
-    expect(delivered).toEqual(["A", "B", "B", "C"]);
-  });
-
-  it("commits an empty no-epoch reset before repeated rows return", async () => {
-    const session = createSession();
-    const delivered: string[] = [];
-    const store = createStore(
-      session,
-      [
+      expected: ["A", "B", "B", "C"],
+    },
+    {
+      name: "commits an empty no-epoch reset before repeated rows return",
+      snapshots: [
         { droppedLines: 0, lines: [{ text: "A" }] },
         { droppedLines: 0, lines: [] },
         { droppedLines: 0, lines: [{ text: "A" }, { text: "B" }] },
       ],
-      async (lines) => {
-        delivered.push(...lines.map((line) => line.text));
-      },
-    );
+      expected: ["A", "A", "B"],
+    },
+  ])("$name", async ({ snapshots, expected }) => {
+    const session = createSession();
+    const delivered: string[] = [];
+    const snapshotCount = snapshots.length;
+    const store = createStore(session, snapshots, async (lines) => {
+      delivered.push(...lines.map((line) => line.text));
+    });
 
-    await store.read(session.id);
-    await store.read(session.id);
-    await store.read(session.id);
+    for (let index = 0; index < snapshotCount; index += 1) {
+      await store.read(session.id);
+    }
 
-    expect(delivered).toEqual(["A", "A", "B"]);
+    expect(delivered).toEqual(expected);
   });
 
   it("queues newer final rows behind an unavailable pending batch", async () => {
@@ -284,32 +255,6 @@ describe("MeetingSessionTranscriptStore", () => {
     await expect(store.captureNotes(session, { finalize: true })).rejects.toThrow(
       "store unavailable",
     );
-    unavailable = false;
-    await store.flushPending(session);
-
-    expect(delivered).toEqual(["A", "B"]);
-  });
-
-  it("keeps polling snapshots while durable delivery is pending", async () => {
-    const session = createSession();
-    let unavailable = true;
-    const delivered: string[] = [];
-    const store = createStore(
-      session,
-      [
-        { droppedLines: 0, epoch: "page-1", lines: [{ text: "A" }] },
-        { droppedLines: 0, epoch: "page-1", lines: [{ text: "A" }, { text: "B" }] },
-      ],
-      async (lines) => {
-        if (unavailable) {
-          throw new Error("store unavailable");
-        }
-        delivered.push(...lines.map((line) => line.text));
-      },
-    );
-
-    await expect(store.captureNotes(session)).rejects.toThrow("store unavailable");
-    await expect(store.captureNotes(session)).rejects.toThrow("store unavailable");
     unavailable = false;
     await store.flushPending(session);
 

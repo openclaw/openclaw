@@ -12,7 +12,6 @@ import type {
   CodexAppServerHomeScope,
   CodexAppServerRemoteAppsSubstrate,
   CodexAppServerRuntimeOptions,
-  CodexAppServerSandboxMode,
   CodexAppServerStartOptions,
   CodexManagedCommandOrder,
   CodexComputerUseConfig,
@@ -67,7 +66,7 @@ import {
   resolveArgs,
 } from "./config-utils.js";
 import { readCodexAppServerConfigOptions } from "./launch-args.js";
-import type { CodexSandboxPolicy } from "./protocol.js";
+import type { CodexSandboxMode, CodexSandboxPolicy } from "./protocol.js";
 
 /**
  * Sole owner of the app-server home-scope decision. Ordinary harness connections
@@ -572,7 +571,7 @@ export function codexAppServerStartOptionsKey(
 }
 
 export function codexSandboxPolicyForTurn(
-  mode: CodexAppServerSandboxMode,
+  mode: CodexSandboxMode,
   cwd: string,
   nativeArgs: readonly string[] = [],
 ): CodexSandboxPolicy {

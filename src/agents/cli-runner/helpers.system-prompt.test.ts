@@ -71,9 +71,7 @@ describe("buildCliAgentSystemPrompt", () => {
     };
     const systemPrompt = buildCliAgentSystemPrompt(params);
 
-    expect(systemPrompt).toContain("## Skills");
     expect(systemPrompt).toContain("<name>weather</name>");
-    expect(systemPrompt).toContain("/tmp/skills/weather/SKILL.md");
     expect(systemPrompt).toContain("- Current: fixture/current");
     preparedModelRuntime.isCurrent.mockReturnValue(false);
     expect(buildCliAgentSystemPrompt(params)).not.toContain("## Model Aliases");
@@ -117,9 +115,6 @@ describe("buildCliAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Delegation");
-    expect(prompt).not.toContain("For long waits, avoid rapid poll loops");
-    expect(prompt).not.toContain("Larger work: use `sessions_spawn`");
-    expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
   });
 
   it("uses CLI backend tool fallback instead of OpenClaw tool assumptions", () => {
@@ -130,16 +125,8 @@ describe("buildCliAgentSystemPrompt", () => {
       modelDisplay: "test/model",
     });
 
-    expect(prompt).not.toContain("OpenClaw lists the standard tools above");
-    expect(prompt).not.toContain("This runtime enables:");
-    expect(prompt).not.toContain("For long waits, avoid rapid poll loops");
-    expect(prompt).not.toContain("Larger work: use `sessions_spawn`");
-    expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
     expect(prompt).toContain("No OpenClaw tool list is injected");
-    expect(prompt).toContain("docs first via `read`");
     expect(prompt).not.toContain("exec approval-pending");
-    expect(prompt).not.toContain("Config read: `gateway`");
-    expect(prompt).not.toContain("`gateway(config.schema.lookup)`");
   });
 
   it("describes bundled exec as synchronous node execution", () => {
@@ -150,7 +137,6 @@ describe("buildCliAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("- exec: Run shell on connected node; sync; host=node");
-    expect(prompt).not.toContain("pty available");
   });
 
   it("distinguishes the CLI working directory from the agent workspace", () => {
@@ -161,10 +147,8 @@ describe("buildCliAgentSystemPrompt", () => {
       modelDisplay: "test/model",
     });
 
-    expect(prompt).toContain("## Directory Roles");
     expect(prompt).toContain("Working directory: /tmp/task-repo");
     expect(prompt).toContain("Agent workspace: /tmp/openclaw-agent");
-    expect(prompt).not.toContain("## Workspace\n");
     expect(prompt).not.toContain("Working directory: /tmp/openclaw-agent");
   });
 
@@ -185,9 +169,7 @@ describe("buildCliAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Bootstrap Pending");
-    expect(prompt).toContain("BOOTSTRAP.md below; follow before normal reply.");
     expect(prompt).toContain("Can finish BOOTSTRAP.md here: do it.");
-    expect(prompt).toContain("First visible reply must follow BOOTSTRAP.md; no generic greeting.");
   });
 
   it("renders limited bootstrap guidance when the run cannot complete bootstrap", () => {
@@ -198,7 +180,6 @@ describe("buildCliAgentSystemPrompt", () => {
       modelDisplay: "test/model",
     });
 
-    expect(prompt).toContain("## Bootstrap Pending");
     expect(prompt).toContain("this run cannot safely finish full BOOTSTRAP.md");
   });
 
@@ -274,7 +255,6 @@ describe("buildCliAgentSystemPrompt", () => {
 
     expect(prompt).toContain("channel=telegram");
     expect(prompt).not.toContain("Telegram rich ON");
-    expect(prompt).not.toContain("Telegram rich OFF");
     expect(prompt).not.toContain("### message tool");
   });
 

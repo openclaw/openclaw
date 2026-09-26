@@ -8,7 +8,6 @@ import type { BrowserAnnotationDraft } from "../../components/browser/browser-an
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import {
-  cloneChatAttachmentsForIndependentOwner,
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
@@ -66,17 +65,6 @@ describe("staged attachment composer adoption", () => {
     });
   }
 
-  it("clones payload ownership for another retained composer", () => {
-    const source = storedAttachment("independent-source", false);
-    const [destination] = cloneChatAttachmentsForIndependentOwner([source]);
-
-    expect(destination?.id).not.toBe(source.id);
-    expect(getChatAttachmentDataUrl(destination!)).toBe(getChatAttachmentDataUrl(source));
-    releaseChatAttachmentPayload(source.id);
-    expect(getChatAttachmentDataUrl(source)).toBeNull();
-    expect(getChatAttachmentDataUrl(destination!)).not.toBeNull();
-  });
-
   function connectPaneThroughAttachmentRestore(
     context: ApplicationContext,
     paneId: string,
@@ -88,10 +76,7 @@ describe("staged attachment composer adoption", () => {
     pane.paneId = paneId;
     pane.sessionKey = sessionKey;
     const stopAfterRestore = new Error("stop after attachment restore");
-    vi.spyOn(
-      pane.chatState as unknown as { startComposerPersistence: () => void },
-      "startComposerPersistence",
-    ).mockImplementation(() => {
+    vi.spyOn(pane.chatState.composerPersistence, "start").mockImplementation(() => {
       throw stopAfterRestore;
     });
     expect(() => pane.connectedCallback()).toThrow(stopAfterRestore);

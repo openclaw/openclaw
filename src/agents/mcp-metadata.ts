@@ -48,11 +48,7 @@ export function sanitizeMcpMetadataText(value: string | undefined): string | und
   }
   const scrubbed = normalized
     .replace(
-      /ignore\s+(?:all\s+)?(?:previous|prior|above)\s+instructions/gi,
-      "[redacted MCP metadata instruction]",
-    )
-    .replace(
-      /disregard\s+(?:all\s+)?(?:previous|prior|above)\s+instructions/gi,
+      /(?:ignore|disregard)\s+(?:all\s+)?(?:previous|prior|above)\s+instructions/gi,
       "[redacted MCP metadata instruction]",
     )
     .replace(/system\s+prompt/gi, "system prompt");

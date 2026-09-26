@@ -17,37 +17,20 @@ public final class TalkBufferedAudioPlayer: NSObject {
         super.init()
     }
 
-    private final class Playback: @unchecked Sendable {
-        private let lock = NSLock()
-        private var finished = false
+    @MainActor
+    private final class Playback {
         private var continuation: CheckedContinuation<StreamingPlaybackResult, Never>?
-        private var watchdog: Task<Void, Never>?
+        var watchdog: Task<Void, Never>?
 
-        func setContinuation(_ continuation: CheckedContinuation<StreamingPlaybackResult, Never>) {
-            self.lock.lock()
-            defer { self.lock.unlock() }
+        init(_ continuation: CheckedContinuation<StreamingPlaybackResult, Never>) {
             self.continuation = continuation
         }
 
-        func setWatchdog(_ task: Task<Void, Never>?) {
-            self.lock.lock()
-            let old = self.watchdog
-            self.watchdog = task
-            self.lock.unlock()
-            old?.cancel()
-        }
-
         func finish(_ result: StreamingPlaybackResult) {
-            let continuation: CheckedContinuation<StreamingPlaybackResult, Never>?
-            self.lock.lock()
-            if self.finished {
-                continuation = nil
-            } else {
-                self.finished = true
-                continuation = self.continuation
-                self.continuation = nil
-            }
-            self.lock.unlock()
+            self.watchdog?.cancel()
+            self.watchdog = nil
+            let continuation = self.continuation
+            self.continuation = nil
             continuation?.resume(returning: result)
         }
     }
@@ -65,10 +48,9 @@ public final class TalkBufferedAudioPlayer: NSObject {
     public func play(data: Data) async -> StreamingPlaybackResult {
         self.stopInternal()
 
-        let playback = Playback()
-        self.playback = playback
         return await withCheckedContinuation { continuation in
-            playback.setContinuation(continuation)
+            let playback = Playback(continuation)
+            self.playback = playback
             do {
                 let player = try AVAudioPlayer(data: data)
                 self.player = player
@@ -134,7 +116,6 @@ public final class TalkBufferedAudioPlayer: NSObject {
 
     private func finish(playback: Playback?, result: StreamingPlaybackResult) {
         guard let playback else { return }
-        playback.setWatchdog(nil)
         playback.finish(result)
 
         guard self.playback === playback else { return }
@@ -146,7 +127,7 @@ public final class TalkBufferedAudioPlayer: NSObject {
     }
 
     private func armWatchdog(playback: Playback) {
-        playback.setWatchdog(Task { @MainActor [weak self] in
+        playback.watchdog = Task { @MainActor [weak self] in
             guard let self else { return }
             try? await Task.sleep(nanoseconds: 650_000_000)
             guard !Task.isCancelled, self.playback === playback else { return }
@@ -165,7 +146,7 @@ public final class TalkBufferedAudioPlayer: NSObject {
             self.finish(
                 playback: playback,
                 result: .init(finished: false, interruptedAt: nil))
-        })
+        }
     }
 }
 

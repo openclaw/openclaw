@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectMatrixDirectRooms, persistMatrixDirectRoomMapping } from "../direct-management.js";
 import { isStrictDirectRoom } from "../direct-room.js";
+import { setBoundedMap } from "../monitor/bounded-cache.js";
 import type { MatrixClient } from "../sdk.js";
 import { captureMatrixSendCurrentness } from "../sdk/send-currentness.js";
 import { isMatrixQualifiedUserId, normalizeMatrixResolvableTarget } from "../target-ids.js";
@@ -32,17 +33,6 @@ function resolveDirectRoomCache(client: MatrixClient): Map<string, string> {
   const created = new Map<string, string>();
   directRoomCacheByClient.set(client, created);
   return created;
-}
-
-function setDirectRoomCached(client: MatrixClient, key: string, value: string): void {
-  const directRoomCache = resolveDirectRoomCache(client);
-  directRoomCache.set(key, value);
-  if (directRoomCache.size > MAX_DIRECT_ROOM_CACHE_SIZE) {
-    const oldest = directRoomCache.keys().next().value;
-    if (oldest !== undefined) {
-      directRoomCache.delete(oldest);
-    }
-  }
 }
 
 async function resolveDirectRoomId(
@@ -86,7 +76,7 @@ async function resolveDirectRoomId(
         // Ignore persistence errors when send resolution has already found a usable room.
       });
     }
-    setDirectRoomCached(client, cacheKey, inspection.activeRoomId);
+    setBoundedMap(directRoomCache, cacheKey, inspection.activeRoomId, MAX_DIRECT_ROOM_CACHE_SIZE);
     return inspection.activeRoomId;
   }
 

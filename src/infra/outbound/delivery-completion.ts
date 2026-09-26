@@ -1,3 +1,4 @@
+import type { CommandOwnerAssertion } from "../../auto-reply/command-owner-authority.js";
 import type { SessionWriterDeliveryAuthority } from "../../auto-reply/reply-payload.js";
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
 import {
@@ -73,6 +74,8 @@ export type DurableDeliveryCompletion =
     }
   | {
       kind: "pending-final";
+      /** Null means an owner was admitted without recoverable authority; fail closed. */
+      commandOwnerReference?: CommandOwnerAssertion["recoveryReference"];
       /** Older queue records retain the canonical locator's original owner selection. */
       agentId?: string;
       deliveryId: string;

@@ -4,6 +4,7 @@ import type {
   readSessionBackingFactsInWorker,
   SessionBackingFact,
 } from "../config/sessions/session-accessor.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import type { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   deriveSessionChatTypeFromKey,
@@ -11,6 +12,7 @@ import {
 } from "../sessions/session-chat-type-shared.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import { getTaskRunOwner } from "./task-run-owner.js";
 
 export type BackingSessionRuntime = {
   readSessionBackingFacts: typeof readSessionBackingFacts;
@@ -133,4 +135,22 @@ export function findTaskSessionEntry(
   }
   // An unprepared or concurrently changed key is unknown, never evidence of death.
   return entries.get(target.sessionKey);
+}
+
+export function hasActiveCliRun(task: TaskRecord): boolean {
+  if (getTaskRunOwner(task)) {
+    return true;
+  }
+  const candidateRunIds = [task.sourceId, task.runId];
+  for (const candidate of candidateRunIds) {
+    const runId = candidate?.trim();
+    if (runId && getAgentRunContext(runId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function hasCliRunIdentity(task: TaskRecord): boolean {
+  return [task.sourceId, task.runId].some((candidate) => Boolean(candidate?.trim()));
 }

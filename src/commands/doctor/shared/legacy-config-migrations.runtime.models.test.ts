@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, it, expect } from "vitest";
 import { createModelVisibilityPolicy } from "../../../agents/model-visibility-policy.js";
+import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { AgentModelEntryConfig, OpenClawConfig } from "../../../config/types.js";
 import { validateConfigObjectRaw } from "../../../config/validation-core.js";
 import { legacyCodexProviderIdentityKey } from "./codex-route-model-ref.js";
@@ -10,6 +11,42 @@ import {
   collectBlockedLegacyOpenAICodexProviderPlan,
   LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS,
 } from "./legacy-config-migrations.runtime.models.js";
+
+describe("legacy vLLM Qwen thinking parameter detection", () => {
+  it.each([
+    {
+      name: "reports an owned null provider alias",
+      providerParams: { qwenThinkingFormat: null },
+      modelParams: { temperature: 0 },
+      paths: ["models.providers.vllm.params"],
+    },
+    {
+      name: "reports an owned false model alias",
+      providerParams: { temperature: 0 },
+      modelParams: { qwen_thinking_format: false },
+      paths: ["models.providers.vllm.models"],
+    },
+    {
+      name: "ignores provider and model params without legacy aliases",
+      providerParams: { temperature: 0 },
+      modelParams: { temperature: 0 },
+      paths: [],
+    },
+  ])("$name", ({ providerParams, modelParams, paths }) => {
+    const raw = {
+      models: {
+        providers: {
+          vllm: {
+            params: providerParams,
+            models: [{ id: "local-model", params: modelParams }],
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(paths);
+  });
+});
 
 describe("retired model pricing config migration", () => {
   const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS.find(

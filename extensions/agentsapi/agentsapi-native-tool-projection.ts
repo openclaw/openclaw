@@ -87,12 +87,6 @@ export class AgentsApiNativeToolProjection {
     };
   }
 
-  get hadPotentialSideEffects(): boolean {
-    return [...this.items.values()].some(
-      (state) => state.item.type === "command_execution" || state.item.type === "mcp_call",
-    );
-  }
-
   resolveTurnId(itemId: string): string | undefined {
     return this.turnByItem.get(itemId);
   }

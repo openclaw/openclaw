@@ -9,7 +9,7 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
   classifyToolUseResultPairing,
-  makeMissingToolResult as makePairingMissingToolResult,
+  makeMissingToolResult,
   normalizeLegacyToolResultId,
 } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import {
@@ -76,29 +76,8 @@ function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
   // trusted-operator transcript state per SECURITY.md, so do not redact or
   // rewrite sessions_spawn arguments here.
   const rawName = readStringValue(block.name);
-  const trimmedName = rawName?.trim();
-  const hasTrimmedName = typeof trimmedName === "string" && trimmedName.length > 0;
-  const normalizedName = hasTrimmedName ? trimmedName : undefined;
-  const nameChanged = hasTrimmedName && rawName !== trimmedName;
-
-  if (!nameChanged) {
-    return block;
-  }
-  const next = { ...(block as Record<string, unknown>) };
-  if (nameChanged && normalizedName) {
-    next.name = normalizedName;
-  }
-  return next as RawToolCallBlock;
-}
-
-function countRawToolCallBlocks(content: unknown[]): number {
-  let count = 0;
-  for (const block of content) {
-    if (isContractToolCallBlock(block)) {
-      count += 1;
-    }
-  }
-  return count;
+  const name = rawName?.trim();
+  return name && name !== rawName ? { ...block, name } : block;
 }
 
 function isReplaySafeThinkingAssistantTurn(
@@ -148,21 +127,7 @@ function hasSessionsSpawnAttachmentToolCall(content: unknown[]): boolean {
   return false;
 }
 
-function makeMissingToolResult(params: {
-  toolCallId: string;
-  toolName?: string;
-  text?: string;
-}): Extract<AgentMessage, { role: "toolResult" }> {
-  return makePairingMissingToolResult(params);
-}
-
 export { makeMissingToolResult };
-
-type ToolCallInputRepairReport = {
-  messages: AgentMessage[];
-  droppedToolCalls: number;
-  droppedAssistantMessages: number;
-};
 
 type ToolCallInputRepairOptions = {
   allowedToolNames?: Iterable<string>;
@@ -216,12 +181,10 @@ function collectFollowingToolResults(
   return { ids, displaced };
 }
 
-function repairToolCallInputs(
+export function sanitizeToolCallInputs(
   messages: AgentMessage[],
   options?: ToolCallInputRepairOptions,
-): ToolCallInputRepairReport {
-  let droppedToolCalls = 0;
-  let droppedAssistantMessages = 0;
+): AgentMessage[] {
   let changed = false;
   const out: AgentMessage[] = [];
   const allowedToolNames = normalizeAllowedToolNames(options?.allowedToolNames);
@@ -244,7 +207,7 @@ function repairToolCallInputs(
     if (
       allowProviderOwnedThinkingReplay &&
       msg.content.some((block) => isThinkingLikeBlock(block)) &&
-      countRawToolCallBlocks(msg.content) > 0
+      msg.content.some(isContractToolCallBlock)
     ) {
       // Signed Anthropic thinking blocks must remain byte-for-byte stable on
       // replay. Preserve the turn when every sibling tool call is already valid;
@@ -269,8 +232,6 @@ function repairToolCallInputs(
         changed ||= followingToolResults.displaced;
         out.push(msg);
       } else {
-        droppedToolCalls += countRawToolCallBlocks(msg.content);
-        droppedAssistantMessages += 1;
         changed = true;
       }
       continue;
@@ -288,7 +249,6 @@ function repairToolCallInputs(
           !hasToolCallId(block) ||
           !isAllowedToolCallName(rawBlock.name, isCompleted(rawBlock) ? null : allowedToolNames)
         ) {
-          droppedToolCalls += 1;
           changed = true;
           messageChanged = true;
           continue;
@@ -297,7 +257,6 @@ function repairToolCallInputs(
       let workBlock = block;
       if (isContractToolCallBlock(block) && hasPartialJson(block)) {
         if (!isFinalizedOpenAIResponsesToolCall(msg, block)) {
-          droppedToolCalls += 1;
           changed = true;
           messageChanged = true;
           continue;
@@ -324,37 +283,19 @@ function repairToolCallInputs(
       nextContent.push(workBlock);
     }
 
-    if (messageChanged) {
-      if (nextContent.length === 0) {
-        droppedAssistantMessages += 1;
-        continue;
-      }
-      const nextMessage = replaceCompactionReplayOwnerContent(msg, nextContent);
-      for (const toolCall of extractToolCallsFromAssistant(nextMessage)) {
-        priorToolCallIds.add(toolCall.id);
-      }
-      out.push(nextMessage);
+    if (messageChanged && nextContent.length === 0) {
       continue;
     }
-
-    for (const toolCall of extractToolCallsFromAssistant(msg)) {
+    const nextMessage = messageChanged
+      ? replaceCompactionReplayOwnerContent(msg, nextContent)
+      : msg;
+    for (const toolCall of extractToolCallsFromAssistant(nextMessage)) {
       priorToolCallIds.add(toolCall.id);
     }
-    out.push(msg);
+    out.push(nextMessage);
   }
 
-  return {
-    messages: changed ? out : messages,
-    droppedToolCalls,
-    droppedAssistantMessages,
-  };
-}
-
-export function sanitizeToolCallInputs(
-  messages: AgentMessage[],
-  options?: ToolCallInputRepairOptions,
-): AgentMessage[] {
-  return repairToolCallInputs(messages, options).messages;
+  return changed ? out : messages;
 }
 
 export function sanitizeToolUseResultPairing(
@@ -383,10 +324,6 @@ type ToolUseRepairReport = {
   droppedOrphanCount: number;
   moved: boolean;
 };
-
-function shouldDropErroredAssistantResults(options?: ToolUseResultPairingOptions): boolean {
-  return options?.erroredAssistantResultPolicy === "drop";
-}
 
 export function repairToolUseResultPairing(
   messages: AgentMessage[],
@@ -433,7 +370,7 @@ export function repairToolUseResultPairing(
     pushUnframedRange(frame.startIndex);
     cursor = frame.endIndex;
 
-    if (!(frame.failed && shouldDropErroredAssistantResults(options))) {
+    if (!(frame.failed && options?.erroredAssistantResultPolicy === "drop")) {
       out.push(frame.assistant);
       for (const occurrence of frame.occurrences) {
         if (occurrence.result) {

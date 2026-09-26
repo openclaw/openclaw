@@ -1,9 +1,15 @@
 import type { SqlBool } from "kysely";
+import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
+import type { GatewayConfig } from "../config/types.gateway.js";
+import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import type { USER_PROFILE_AVATAR_MIME_TYPES } from "../shared/avatar-limits.js";
+import type { DB } from "./openclaw-state-db.generated.js";
 
 export const MAX_USER_PROFILE_DISPLAY_NAME_LENGTH = 256;
 
 export type UserProfileAvatarMime = (typeof USER_PROFILE_AVATAR_MIME_TYPES)[number];
+
+export type UserProfile = Omit<UserProfileListItem, "emails" | "githubIdentity" | "hasAvatar">;
 
 export type UserProfileOwnerErrorCode = "merge" | "role" | "repair-required";
 
@@ -25,9 +31,24 @@ export type UserProfileGitHubAttributionRead = {
   canonicalProfileIds: string[];
 };
 
+export type UserChannelAuthorizationReference = Readonly<{ version: 1; id: string }>;
+export type UserChannelAuthorization = {
+  reference: UserChannelAuthorizationReference;
+  subject: string;
+  grant: GatewayAccessGrantRef | null;
+};
+export type UserChannelAuthorizationPolicy = {
+  roles: NonNullable<GatewayConfig["roles"]> | null;
+  identityScopes: NonNullable<NonNullable<GatewayConfig["auth"]>["identityScopes"]> | null;
+};
+
 export type UserChannelIdentity = { channelId: string; accountId: string; senderId: string };
+export type UserChannelIdentitySelector =
+  | UserChannelIdentity
+  | { authorizationId: string; policy: UserChannelAuthorizationPolicy };
 export type UserChannelIdentityLink = { profileId: string; identity: UserChannelIdentity };
 export type UserChannelIdentityAuthorityFacts = {
+  authorization?: UserChannelAuthorization;
   profileId: string;
   role: string | null;
   emails: string[];
@@ -41,9 +62,21 @@ export type UserChannelIdentityResult<T> =
 
 export type UserChannelIdentityWorkerOperations = {
   "userProfiles.channelIdentity.change": {
-    input: { action: "link" | "unlink"; profileId: string; identity: UserChannelIdentity };
+    input:
+      | { action: "link" | "unlink"; profileId: string; identity: UserChannelIdentity }
+      | { action: "policy"; policy: UserChannelAuthorizationPolicy; configuredOwnersHash?: string }
+      | {
+          action: "authorize";
+          profileId: string;
+          identity: UserChannelIdentity;
+          policy: UserChannelAuthorizationPolicy;
+          grant: GatewayAccessGrantRef | null;
+        };
     output: UserChannelIdentityResult<
-      { kind: "linked"; link: UserChannelIdentityLink } | { kind: "unlinked"; removed: boolean }
+      | { kind: "linked"; link: UserChannelIdentityLink }
+      | { kind: "unlinked"; removed: boolean }
+      | { kind: "policy" }
+      | { kind: "authorized"; reference: UserChannelAuthorizationReference | undefined }
     >;
   };
 };
@@ -61,6 +94,7 @@ export type UserProfileAccessFacts = Readonly<{
 }>;
 
 export type PreparedUserProfileIdentity = {
+  readCurrentProfile(this: void): Pick<UserProfileAccessFacts, "profileId" | "assignedRole">;
   readonly emailBindingIds: readonly string[];
   readCurrentFacts(
     this: void,
@@ -94,13 +128,7 @@ export type UserProfilesDatabase = {
     binding_id: string | null;
     created_at: number;
   };
-  user_profile_identities: {
-    provider: string;
-    subject: string;
-    profile_id: string;
-    canonical_login: string | null;
-    created_at: number;
-  };
+  user_profile_identities: DB["user_profile_identities"];
 };
 
 export type ProfileDisplayRow = Pick<

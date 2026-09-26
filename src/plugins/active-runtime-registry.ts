@@ -56,13 +56,6 @@ export function listLoadedRuntimePluginIds(): string[] {
   return registry ? listRuntimePluginIdsFromRegistry(registry) : [];
 }
 
-function normalizeRequiredPluginIds(ids?: readonly string[]): string[] | undefined {
-  if (ids === undefined) {
-    return undefined;
-  }
-  return normalizeSortedUniqueStringEntries(ids);
-}
-
 export function registryContainsRuntimePluginIds(
   registry: PluginRegistry,
   pluginIds: readonly string[] | undefined,
@@ -140,9 +133,9 @@ export function getLoadedRuntimePluginRegistry(
     requiredPluginIds?: readonly string[];
   } = {},
 ): PluginRegistry | undefined {
-  const requiredPluginIds = normalizeRequiredPluginIds(
-    params.requiredPluginIds ?? params.loadOptions?.onlyPluginIds,
-  );
+  const requiredIds = params.requiredPluginIds ?? params.loadOptions?.onlyPluginIds;
+  const requiredPluginIds =
+    requiredIds === undefined ? undefined : normalizeSortedUniqueStringEntries(requiredIds);
   if (params.loadOptions && requiredPluginIds === undefined) {
     // Unscoped requests need the full load identity. Bounded manifest scopes
     // can compare their prepared ownership facts below.

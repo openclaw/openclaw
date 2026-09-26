@@ -1,5 +1,4 @@
 import { consume } from "@lit/context";
-import type { ConversationListItem } from "@openclaw/gateway-protocol";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { AgentsListResult, CronJob, CronScratchGetResult } from "../../api/types.ts";
@@ -105,12 +104,6 @@ class CronPage extends OpenClawLightDomElement {
     isCurrentConnection: (scope) => this.gateway.isCurrent(scope),
     notify: (cronState) => this.requestCronUpdate(cronState),
   });
-  private get deliveryConversations(): ConversationListItem[] {
-    return this.deliveryDirectory.conversations;
-  }
-  private get deliveryConversationsError(): string | null {
-    return this.deliveryDirectory.error;
-  }
   private heartbeatScratchRequest = 0;
   private pageHidden = document.visibilityState === "hidden";
   private readonly gateway = new GatewayPageController(this, {
@@ -625,7 +618,7 @@ class CronPage extends OpenClawLightDomElement {
       agentsList: this.agentsList,
       modelSuggestions: this.cronModelSuggestions,
       conversationTargets: resolveConversationTargetSuggestions(
-        this.deliveryConversations,
+        this.deliveryDirectory.conversations,
         this.cron.cronForm.deliveryAccountId,
       ),
     });
@@ -681,7 +674,7 @@ class CronPage extends OpenClawLightDomElement {
           error:
             this.cron.cronError ??
             this.cron.cronRunsError ??
-            this.deliveryConversationsError ??
+            this.deliveryDirectory.error ??
             this.modelSuggestionsError,
           busy: this.cron.cronBusy,
           form: this.cron.cronForm,

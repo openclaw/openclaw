@@ -359,21 +359,6 @@ export function classifyCoreFailoverReasonFromErrorType(
       return null;
   }
 }
-export function classifyFailoverClassificationFromErrorType(
-  raw: string | undefined,
-): FailoverClassification | null {
-  const reason = classifyCoreFailoverReasonFromErrorType(raw);
-  return reason ? toReasonClassification(reason) : null;
-}
-function isProvider(provider: string | undefined, match: string): boolean {
-  const normalized = normalizeOptionalLowercaseString(provider);
-  return Boolean(normalized && normalized.includes(match));
-}
-function hasProviderBilling429Override(provider: string | undefined): boolean {
-  return (
-    isProvider(provider, "xai") || isProvider(provider, "moonshot") || isProvider(provider, "kimi")
-  );
-}
 function hasStructuredBilling429Signal(raw: string): boolean {
   if (hasBillingApiErrorType(raw)) {
     return true;
@@ -395,7 +380,11 @@ function isBilling429MessageForProvider(raw: string, provider: string | undefine
   if (!isBillingErrorMessage(raw)) {
     return false;
   }
-  return hasProviderBilling429Override(provider) || !isAmbiguousGeneric429BalanceMessage(raw);
+  const normalizedProvider = normalizeOptionalLowercaseString(provider) ?? "";
+  return (
+    ["xai", "moonshot", "kimi"].some((name) => normalizedProvider.includes(name)) ||
+    !isAmbiguousGeneric429BalanceMessage(raw)
+  );
 }
 const REPLAY_INVALID_RE =
   /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;

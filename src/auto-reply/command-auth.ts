@@ -20,6 +20,8 @@ import {
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import type { CommandOwnerReference } from "../state/user-channel-identities.js";
+import { prepareConfiguredCommandOwnerAuthority } from "../state/user-channel-identity-operations.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalMessageChannel,
@@ -28,6 +30,7 @@ import {
 import {
   captureCommandOwnerAssertion,
   getCommandOwnerAuthority,
+  type CommandOwnerAssertion,
 } from "./command-owner-authority.js";
 import { getCommandSenderAuthority } from "./command-sender-authority.js";
 import {
@@ -616,43 +619,54 @@ function captureCommandOwnerIdentity(
 
 export type PreparedCommandOwnerAuthority = Readonly<{
   source: string | undefined;
+  recoveryReference?: Exclude<CommandOwnerAssertion["recoveryReference"], null>;
   isCurrent: (currentCfg: OpenClawConfig) => boolean;
   /** The original additional person-policy grant, never a substitute for the current check. */
   signal?: AbortSignal;
 }>;
 
-/** Worker admission fixes the original person; synchronous final checks never touch SQLite. */
+/** Admission and recovery share the original authority owner; final checks never touch SQLite. */
 export async function prepareCommandOwnerAuthority(
   cfg: OpenClawConfig,
-  requester: { channel?: string; accountId?: string; senderId?: string },
+  requester: { channel?: string; accountId?: string; senderId?: string } | CommandOwnerReference,
   stateOptions: OpenClawStateDatabaseOptions = {},
 ): Promise<PreparedCommandOwnerAuthority> {
-  const captured = { ...requester };
-  if (isConfiguredCommandOwner(cfg, captured)) {
+  const captured = "version" in requester ? undefined : { ...requester };
+  const reference = "version" in requester ? requester : undefined;
+  if (reference?.version === 2 || (captured && isConfiguredCommandOwner(cfg, captured))) {
+    const prepared = await prepareConfiguredCommandOwnerAuthority(
+      cfg.commands?.ownerAllowFrom,
+      stateOptions,
+    );
+    const accepted = !reference || prepared?.recoveryReference.id === reference.id;
     return Object.freeze({
-      source: "configured-owner",
-      isCurrent: (currentCfg: OpenClawConfig) => isConfiguredCommandOwner(currentCfg, captured),
+      source: accepted ? "configured-owner" : undefined,
+      recoveryReference: prepared?.recoveryReference,
+      // Live configured admission remains config-owned; an absent durable policy cannot recover.
+      isCurrent: (currentCfg: OpenClawConfig) =>
+        accepted &&
+        (prepared ? prepared.isCurrent() : !reference) &&
+        (!captured || isConfiguredCommandOwner(currentCfg, captured)),
     });
   }
-  const providerId = normalizeAnyChannelId(captured.channel) ?? captured.channel;
-  const prepared =
-    providerId && captured.senderId
-      ? await prepareChannelOperatorAdmin(
-          cfg,
-          {
-            channelId: providerId,
-            accountId: normalizeAccountId(captured.accountId),
-            senderId: captured.senderId,
-          },
-          stateOptions,
-        )
-      : undefined;
+  const providerId = normalizeAnyChannelId(captured?.channel) ?? captured?.channel;
+  const identity =
+    reference ??
+    (providerId && captured?.senderId
+      ? {
+          channelId: providerId,
+          accountId: normalizeAccountId(captured.accountId),
+          senderId: captured.senderId,
+        }
+      : undefined);
+  const prepared = identity && (await prepareChannelOperatorAdmin(cfg, identity, stateOptions));
   return Object.freeze({
     source: prepared ? `profile:${prepared.profileId}` : undefined,
+    recoveryReference: prepared?.recoveryReference,
     ...(prepared?.signal ? { signal: prepared.signal } : {}),
     isCurrent: (currentCfg: OpenClawConfig) =>
       prepared !== undefined &&
-      !isConfiguredCommandOwner(currentCfg, captured) &&
+      (!captured || !isConfiguredCommandOwner(currentCfg, captured)) &&
       prepared.isCurrent(currentCfg),
   });
 }

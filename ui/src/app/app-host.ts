@@ -11,7 +11,7 @@ import "../components/assistant-panel.ts";
 import "../components/modal-dialog.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import "../components/resizable-divider.ts";
-import { APP_ROUTE_IDS, type RouteId } from "../app-routes.ts";
+import type { RouteId } from "../app-routes.ts";
 import type {
   CommandPaletteElement,
   CommandPaletteTargetDetail,
@@ -720,10 +720,6 @@ class OpenClawShell
     runtimeConfig = this.context?.runtimeConfig,
   ) {
     void this.shellGateway.ensureRuntimeConfig(snapshot, runtimeConfig).catch(() => undefined);
-  }
-
-  enabledRouteIds(): readonly RouteId[] {
-    return APP_ROUTE_IDS;
   }
 
   /** Agent targeted by the open new-session route, keyed off its ?agent param. */

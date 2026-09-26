@@ -24,7 +24,6 @@ import {
   loadMediaToolReferences,
   normalizeMediaReferenceInputs,
   resolveGenerateAction,
-  resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
 import {
@@ -239,7 +238,7 @@ export function createMusicGenerateTool(options?: MediaGenerateToolOptions): Any
           }
           signal?.throwIfAborted();
           acquired?.assertOpen();
-          const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
+          const remoteMediaSsrfPolicy = effectiveCfg.tools?.web?.fetch?.ssrfPolicy;
           const loadedReferenceImages = await loadMediaToolReferences({
             inputs: imageInputs,
             toolName: "music_generate",

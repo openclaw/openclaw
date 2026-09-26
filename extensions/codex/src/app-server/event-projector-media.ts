@@ -3,6 +3,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type MessagingToolSend,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessToolResultTelemetry } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { generatedImageAssetFromBase64 } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import {
@@ -10,8 +11,6 @@ import {
   saveMediaBuffer,
 } from "openclaw/plugin-sdk/media-store";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CodexConfirmedMediaDelivery } from "./dynamic-tools.js";
-import { readItemString } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 
@@ -44,16 +43,16 @@ export class CodexGeneratedMediaProjection {
     // Image generation is already a billable side effect even if its remote
     // artifact cannot be transferred into this gateway's media store.
     this.itemIds.add(item.id);
-    const savedPath = readItemString(item, "savedPath")?.trim();
+    const savedPath = readString(item, "savedPath")?.trim();
     if (savedPath) {
       this.mediaByItemId.set(item.id, { ...this.mediaByItemId.get(item.id), savedPath });
     }
-    const result = readItemString(item, "result");
+    const result = readString(item, "result");
     if (result) {
       await this.recordImage({
         itemId: item.id,
         result,
-        revisedPrompt: readItemString(item, "revisedPrompt"),
+        revisedPrompt: readString(item, "revisedPrompt"),
         source: "native",
       });
       return;
@@ -82,7 +81,7 @@ export class CodexGeneratedMediaProjection {
           await this.recordImage({
             itemId: item.id,
             result: response.dataBase64,
-            revisedPrompt: readItemString(item, "revisedPrompt"),
+            revisedPrompt: readString(item, "revisedPrompt"),
             source: "native",
           });
         } catch (error) {
@@ -206,7 +205,9 @@ export class CodexGeneratedMediaProjection {
     toolMediaUrls?: string[];
     messagingToolSentMediaUrls: string[];
     messagingToolSentTargets: MessagingToolSend[];
-    confirmedMediaDeliveries?: readonly CodexConfirmedMediaDelivery[];
+    confirmedMediaDeliveries?: Readonly<
+      AgentHarnessToolResultTelemetry["confirmedMediaDeliveries"]
+    >;
   }) {
     const generatedUrls = new Set<string>();
     const generatedUrlBySource = new Map<string, string>();

@@ -517,10 +517,14 @@ describe("chat pane pushed pull request state", () => {
     pane.refreshSessionPullRequests({ refresh: true });
     await Promise.resolve();
     await Promise.resolve();
-    expect(request).toHaveBeenCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: ["agent:main:current"],
-      refreshSessionKeys: ["agent:main:current"],
-    });
+    expect(request).toHaveBeenCalledWith(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      {
+        sessionKeys: ["agent:main:current"],
+        refreshSessionKeys: ["agent:main:current"],
+      },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+    );
     emitSnapshot(emitGatewayEvent, "agent:main:current", {
       pullRequests: [pullRequest(111772, "draft"), pullRequest(111751, "closed")],
       rateLimited: false,

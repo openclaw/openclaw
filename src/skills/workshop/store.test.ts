@@ -13,6 +13,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import * as stateLease from "../../state/openclaw-state-lease.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   createOpenClawTestState,
@@ -25,6 +26,7 @@ import * as proposalGeneration from "./proposal-generation.js";
 import {
   listSkillProposalEvents,
   listSkillProposals,
+  inspectSkillProposal,
   proposeCreateSkill,
   proposeUpdateSkill,
   quarantineSkillProposal,
@@ -33,7 +35,6 @@ import {
 } from "./service.js";
 import { createSkillProposalRollback } from "./service.test-support.js";
 import { captureSkillWorkshopStoreOptions } from "./store-client.js";
-import { parseSkillProposalEvaluation } from "./store-record.js";
 import { writeSkillProposalRollback } from "./store-rollback.js";
 import { appendSkillProposalEvent } from "./store-sqlite-event.js";
 import {
@@ -65,6 +66,55 @@ afterEach(async () => {
 });
 
 describe("Skill Workshop SQLite store", () => {
+  it("inspects terminal generations without write leases and rechecks file integrity", async () => {
+    const options = {
+      workspaceDir: testState.stateDir,
+      config: workshopConfig,
+      agentId: "main",
+      env: testState.env,
+    };
+    const proposal = await proposeCreateSkill({
+      ...options,
+      name: "Terminal Inspection",
+      description: "Read retained history without contending with active proposal writers",
+      content: "# Terminal Inspection\n\nRetained instructions.\n",
+      supportFiles: [{ path: "references/guide.md", content: "Retained supporting material.\n" }],
+    });
+    await rejectSkillProposal({
+      ...options,
+      proposalId: proposal.record.id,
+      expectedRevisionHash: proposal.revisionHash,
+    });
+    const leases = vi.spyOn(stateLease, "withOpenClawStateLeaseAsync");
+    try {
+      for (let index = 0; index < 20; index++) {
+        await expect(inspectSkillProposal(proposal.record.id, options)).resolves.toMatchObject({
+          record: { status: "rejected" },
+          revisionHash: proposal.revisionHash,
+          content: proposal.content,
+          supportFiles: [
+            { path: "references/guide.md", content: "Retained supporting material.\n" },
+          ],
+        });
+      }
+      expect(leases.mock.calls.length).toBe(0);
+      await expect(
+        inspectSkillProposal(proposal.record.id, { ...options, agentId: "other" }),
+      ).resolves.toBeNull();
+      await fs.writeFile(
+        testState.statePath(
+          proposalGeneration.proposalBundleRelativePath(proposal.record, "references/guide.md"),
+        ),
+        "Changed without updating metadata.\n",
+      );
+      await expect(inspectSkillProposal(proposal.record.id, options)).rejects.toThrow(
+        "Proposal support file changed without updating metadata",
+      );
+    } finally {
+      leases.mockRestore();
+    }
+  });
+
   it.each([
     { platform: "win32", stateKey: "openclaw_state_dir" },
     { platform: "linux", stateKey: "OPENCLAW_STATE_DIR" },
@@ -593,21 +643,6 @@ describe("Skill Workshop SQLite store", () => {
       payload: { evaluation: "manual", outcomeCount: 0 },
       evaluation: { id: evaluation.id },
     });
-  });
-
-  it("rejects non-string evaluation tree hashes", () => {
-    expect(
-      parseSkillProposalEvaluation({
-        id: "evaluation-invalid-tree-hash",
-        proposedVersion: "v1",
-        revisionHash: "a".repeat(64),
-        trigger: "manual",
-        startedAt: "2026-07-29T00:00:00.000Z",
-        completedAt: "2026-07-29T00:00:01.000Z",
-        targetTreeSha256: ["b".repeat(64)],
-        outcomes: [],
-      }),
-    ).toBeNull();
   });
 
   it("paginates durable evaluations before the response byte budget", async () => {

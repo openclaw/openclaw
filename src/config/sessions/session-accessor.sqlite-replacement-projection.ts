@@ -4,7 +4,10 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { deferOpenClawAgentPostCommitPublication } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import {
+  supportsOpenClawAgentDatabaseExecution,
+  type OpenClawAgentDatabaseExecution,
+} from "../../state/openclaw-agent-execution.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
@@ -22,11 +25,11 @@ import {
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
-import {
-  commitSessionEntryReplacementsInDatabase,
-  type SqliteSessionEntryReplacement,
-  type SessionEntryReplacementCommit,
-} from "./session-accessor.sqlite-replacement-state.js";
+import { commitSessionEntryReplacementsInDatabase } from "./session-accessor.sqlite-replacement-state.js";
+import type {
+  SqliteSessionEntryReplacement,
+  SessionEntryReplacementCommit,
+} from "./session-accessor.sqlite-replacement-types.js";
 import {
   commitSessionEntryReplacementsInWorker,
   prepareSessionEntryReplacementDatabase,
@@ -53,10 +56,14 @@ export type SessionEntryCanonicalReplacement = SessionEntryReplacement & {
 };
 
 type ReplacementProjectionOptions = {
+  retainedExecution?: OpenClawAgentDatabaseExecution;
   assertCommitAllowed?: () => void;
   withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
   ownerAssignment?: SessionEntryReplacementCommit["ownerAssignment"];
-  onLifecycleCommitted?: () => void;
+  labelClaim?: SessionEntryReplacementCommit["labelClaim"];
+  preparedTranscript?: SessionEntryReplacementCommit["preparedTranscript"];
+  checkPendingArchiveRecovery?: boolean;
+  onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
   env?: NodeJS.ProcessEnv;
   activeSessionKey?: string;
   agentId?: string;
@@ -123,10 +130,14 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
               });
             let result = await read();
             if (!result.replacement) {
-              await prepareSessionEntryReplacementDatabase(databaseOptions, () => {
-                owner.assertCurrent();
-                params.assertCommitAllowed?.();
-              });
+              await prepareSessionEntryReplacementDatabase(
+                databaseOptions,
+                () => {
+                  owner.assertCurrent();
+                  params.assertCommitAllowed?.();
+                },
+                params.retainedExecution,
+              );
               result = await read();
             }
             if (!result.replacement) {
@@ -244,8 +255,11 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
             includeLabelOwners: params.includeLabelOwners,
             validationKeys: [...validationKeys],
             replacements: applicable,
+            checkPendingArchiveRecovery: params.checkPendingArchiveRecovery,
             consumePendingReset: params.consumePendingReset,
             ownerAssignment: params.ownerAssignment,
+            labelClaim: params.labelClaim,
+            preparedTranscript: params.preparedTranscript,
             maintenance,
           };
           // Native harness rollback closures and process-held databases cannot cross isolates.
@@ -260,9 +274,8 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                     const committed = runOpenClawAgentWriteTransaction(
                       (database) => {
                         if (params.onLifecycleCommitted) {
-                          deferOpenClawAgentPostCommitPublication(
-                            database,
-                            params.onLifecycleCommitted,
+                          deferOpenClawAgentPostCommitPublication(database, () =>
+                            params.onLifecycleCommitted?.(result.pendingArchiveRecovery),
                           );
                         }
                         const result = commitSessionEntryReplacementsInDatabase(
@@ -314,6 +327,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                 ? (context) => params.afterCommitted!(operation.result, context)
                 : undefined,
             },
+            params.retainedExecution,
           );
           return { maintenancePlans: committed.maintenancePlans, result: operation.result };
         },

@@ -8,7 +8,8 @@ describe("permit pool", () => {
   it("admits FIFO without releasing another holder on a duplicate release", async () => {
     const pool = createPermitPool(2);
     const first = await pool.acquire();
-    const second = await pool.acquire();
+    const second = pool.tryAcquire();
+    expect(pool.tryAcquire()).toBeNull();
     const admitted: string[] = [];
     const queued = ["a", "b", "c"].map((name) =>
       pool.acquire().then((release) => {
@@ -21,6 +22,7 @@ describe("permit pool", () => {
     expect(second).toBeTypeOf("function");
     first?.();
     first?.();
+    expect(pool.tryAcquire()).toBeNull();
     await vi.advanceTimersByTimeAsync(0);
     expect(admitted).toEqual(["a"]);
     second?.();

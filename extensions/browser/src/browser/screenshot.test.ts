@@ -23,7 +23,7 @@ describe("browser screenshot normalization", () => {
   }, 120_000);
 
   it("keeps already-small screenshots unchanged", async () => {
-    const jpeg = await fs.readFile("docs/assets/showcase/roof-camera-sky.jpg");
+    const jpeg = await fs.readFile("test/fixtures/media/roof-camera-sky.jpg");
 
     const normalized = await normalizeBrowserScreenshot(jpeg, {
       maxSide: 2000,

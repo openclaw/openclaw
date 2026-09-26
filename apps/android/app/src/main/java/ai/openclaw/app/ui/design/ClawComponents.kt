@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.design
 
+import ai.openclaw.app.uppercaseFirstGraphemeOrNull
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -72,7 +73,6 @@ internal enum class ClawStatus {
   Danger,
 }
 
-/** Full-screen mobile scaffold that applies OpenClaw safe-area and canvas tokens. */
 @Composable
 internal fun ClawScaffold(
   modifier: Modifier = Modifier,
@@ -92,7 +92,6 @@ internal fun ClawScaffold(
   }
 }
 
-/** Section title row with an optional trailing action slot. */
 @Composable
 internal fun ClawSectionHeader(
   title: String,
@@ -113,7 +112,6 @@ internal fun ClawSectionHeader(
   }
 }
 
-/** Primary call-to-action button using the mobile design token set. */
 @Composable
 internal fun ClawPrimaryButton(
   text: String,
@@ -145,7 +143,6 @@ internal fun ClawPrimaryButton(
   }
 }
 
-/** Secondary action button for non-default commands. */
 @Composable
 internal fun ClawSecondaryButton(
   text: String,
@@ -177,7 +174,6 @@ internal fun ClawSecondaryButton(
   }
 }
 
-/** Fixed-size circular icon button for toolbar actions. */
 @Composable
 internal fun ClawIconButton(
   icon: ImageVector,
@@ -207,7 +203,6 @@ internal fun ClawIconButton(
   }
 }
 
-/** Transparent circular icon button for low-emphasis toolbar actions. */
 @Composable
 internal fun ClawPlainIconButton(
   icon: ImageVector,
@@ -275,7 +270,6 @@ internal fun ClawStatusRow(
   }
 }
 
-/** Compact status chip with a semantic color dot. */
 @Composable
 internal fun ClawStatusPill(
   text: String,
@@ -314,7 +308,6 @@ internal fun ClawStatusPill(
   }
 }
 
-/** Small optional-selectable pill used for filters and metadata chips. */
 @Composable
 internal fun ClawPill(
   text: String,
@@ -346,7 +339,6 @@ internal fun ClawPill(
   }
 }
 
-/** Panel wrapper for homogeneous lists with standard row separators. */
 @Composable
 internal fun <T> ClawListPanel(
   items: List<T>,
@@ -358,24 +350,35 @@ internal fun <T> ClawListPanel(
   }
 }
 
-/** Column helper that inserts standard dividers between rendered rows. */
 @Composable
 internal fun <T> ClawSeparatedColumn(
   items: List<T>,
   modifier: Modifier = Modifier,
+  dividerColor: Color = ClawTheme.colors.border.copy(alpha = 0.82f),
   row: @Composable (T) -> Unit,
 ) {
   Column(modifier = modifier) {
     items.forEachIndexed { index, item ->
       row(item)
       if (index != items.lastIndex) {
-        HorizontalDivider(color = ClawTheme.colors.border.copy(alpha = 0.82f), thickness = 1.dp)
+        HorizontalDivider(color = dividerColor, thickness = 1.dp)
       }
     }
   }
 }
 
-/** Circular text badge used for compact numeric or initials-style row marks. */
+internal fun badgeInitials(
+  value: String,
+  fallback: String,
+): String =
+  value
+    .split(' ', '-', '_')
+    .filter { it.isNotBlank() }
+    .take(2)
+    .mapNotNull { it.uppercaseFirstGraphemeOrNull() }
+    .joinToString("")
+    .ifBlank { fallback }
+
 @Composable
 internal fun ClawTextBadge(
   text: String,
@@ -394,7 +397,6 @@ internal fun ClawTextBadge(
   }
 }
 
-/** Circular icon badge used as a neutral leading marker in list rows. */
 @Composable
 internal fun ClawIconBadge(
   icon: ImageVector,
@@ -488,7 +490,6 @@ internal fun <T> segmentedControlRows(
   }
 }
 
-/** Equal-width segmented control with caller-controlled wrapping. */
 @Composable
 internal fun <T> ClawSegmentedControl(
   options: List<T>,
@@ -619,7 +620,6 @@ internal fun ClawTextField(
   }
 }
 
-/** Local design-system preview surface for visual smoke checks. */
 @Composable
 internal fun ClawComponentShowcase(modifier: Modifier = Modifier) {
   var selected by rememberSaveable { mutableStateOf("Chat") }

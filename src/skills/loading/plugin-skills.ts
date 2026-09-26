@@ -1,4 +1,3 @@
-// Plugin skill loaders discover and normalize skills exposed by plugin packages.
 import fs from "node:fs";
 import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
@@ -27,8 +26,6 @@ import { loadSkillRootRecords } from "./skill-root-loader.js";
 export type { PluginSkillRoot } from "./plugin-skill-root.js";
 
 const log = createSubsystemLogger("skills");
-
-type PluginSkillLinkType = "dir" | "junction";
 
 // This tracks the generated SDK links we last published, not plugin metadata.
 // Config and ACP availability can change the desired links without changing package files.
@@ -247,47 +244,22 @@ function collectAgentSkillTargets(skillsRoot: string): string[] {
   return targets;
 }
 
-function resolvePluginSkillLinkType(
-  platform: NodeJS.Platform = process.platform,
-): PluginSkillLinkType {
-  return platform === "win32" ? "junction" : "dir";
-}
-
-/**
- * Collect skill dir targets from a resolved directory.
- * If the directory contains a direct SKILL.md it is published as-is.
- * Otherwise child subdirectories that contain SKILL.md are expanded.
- */
 function collectSkillTargets(dir: string, targets: Map<string, string>): void {
-  if (hasPublishableSkillFile({ skillDir: dir, rootDir: dir })) {
-    const basename = path.basename(dir);
-    const existing = targets.get(basename);
-    if (existing) {
-      log.warn(
-        `plugin skill name collision: "${basename}" resolves to both ${existing} and ${dir}; ` +
-          `only the first will be published`,
+  const candidates = hasPublishableSkillFile({ skillDir: dir, rootDir: dir })
+    ? [{ name: path.basename(dir), path: dir }]
+    : listSkillChildDirectories(dir).filter((entry) =>
+        hasPublishableSkillFile({ skillDir: entry.path, rootDir: dir }),
       );
-      return;
-    }
-    targets.set(basename, dir);
-    return;
-  }
-
-  for (const entry of listSkillChildDirectories(dir)) {
-    const childPath = entry.path;
-    if (!hasPublishableSkillFile({ skillDir: childPath, rootDir: dir })) {
-      continue;
-    }
-    const basename = entry.name;
-    const existing = targets.get(basename);
+  for (const entry of candidates) {
+    const existing = targets.get(entry.name);
     if (existing) {
       log.warn(
-        `plugin skill name collision: "${basename}" resolves to both ${existing} and ${childPath}; ` +
+        `plugin skill name collision: "${entry.name}" resolves to both ${existing} and ${entry.path}; ` +
           `only the first will be published`,
       );
       continue;
     }
-    targets.set(basename, childPath);
+    targets.set(entry.name, entry.path);
   }
 }
 
@@ -320,10 +292,6 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
   const pluginSkillsDir = opts?.pluginSkillsDir ?? resolvePluginSkillsDir();
   const managedTargets = new Map<string, string>();
 
-  // Collect basename → target mappings, reporting collisions.
-  // Directories that contain SKILL.md are published as-is.
-  // Parent containers (e.g. ./skills/) are expanded to their child
-  // directories that each contain a SKILL.md.
   for (const dir of skillDirs) {
     collectSkillTargets(dir, managedTargets);
   }
@@ -369,15 +337,12 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
       }
     }
     try {
-      fs.symlinkSync(target, linkPath, resolvePluginSkillLinkType());
+      fs.symlinkSync(target, linkPath, process.platform === "win32" ? "junction" : "dir");
     } catch (err) {
       log.warn(`failed to create plugin skill symlink "${linkPath}" → "${target}": ${String(err)}`);
     }
   }
 
-  // Clean up stale symlinks for plugin skills that are no longer active.
-  // The plugin-skills directory is fully owned by OpenClaw: every entry is a
-  // generated symlink, so stale-link removal is safe without extra proof.
   let existingEntries: fs.Dirent[];
   try {
     existingEntries = fs.readdirSync(pluginSkillsDir, { withFileTypes: true });

@@ -20,6 +20,8 @@ import {
 type AgentCommandRecoveryFixture = {
   state: {
     runAgentAttemptMock: Mock;
+    resolveAgentDeliveryPlanWithSessionRouteMock: Mock;
+    commandWarnMock: Mock;
     emitAgentEventMock: Mock;
     deliverAgentCommandResultMock: Mock;
     persistSessionEntryMock: Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -38,6 +40,58 @@ type AgentCommandRecoveryFixture = {
 export function registerAgentCommandRecoveryCases(
   getFixture: () => AgentCommandRecoveryFixture,
 ): void {
+  it.each([false, true])(
+    "preserves rejected best-effort delivery intent without private diagnostics (Incognito: %s)",
+    async (incognito) => {
+      const {
+        state,
+        agentCommand,
+        setupSingleAttemptFallback,
+        setupBareStoredSession,
+        makeSuccessResult,
+      } = getFixture();
+      setupSingleAttemptFallback();
+      state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+      const now = Date.now();
+      setupBareStoredSession(incognito ? { incognito: true, createdAt: now, updatedAt: now } : {});
+      state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
+        baseDelivery: {},
+        resolvedChannel: "discord",
+        resolvedTo: "channel:missing",
+        deliveryTargetMode: "explicit",
+        targetResolutionError: new Error('Unknown Discord target "channel:missing"'),
+      });
+
+      await expect(
+        agentCommand({
+          message: "hello",
+          channel: "discord",
+          to: "channel:missing",
+          deliver: true,
+          bestEffortDeliver: true,
+        }),
+      ).resolves.toMatchObject({ payloads: [{ text: "ok" }] });
+
+      expect(state.runAgentAttemptMock).toHaveBeenCalled();
+      expect(state.commandWarnMock).toHaveBeenCalledWith(
+        expect.stringContaining("delivery preflight failed"),
+      );
+      const diagnostics = JSON.stringify(state.commandWarnMock.mock.calls);
+      if (incognito) {
+        expect(diagnostics).not.toContain("channel:missing");
+      } else {
+        expect(diagnostics).toContain("channel:missing");
+      }
+      expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
+        expect.objectContaining({ opts: expect.objectContaining({ deliver: true }) }),
+      );
+      const pendingEntries = state.persistSessionEntryMock.mock.calls
+        .map((call) => (call[0] as { entry?: SessionEntry }).entry)
+        .filter((entry): entry is SessionEntry => entry?.pendingFinalDelivery !== undefined);
+      expect(pendingEntries).toEqual([]);
+    },
+  );
+
   it("persists and clears current run delivery context for restart recovery", async () => {
     const {
       state,

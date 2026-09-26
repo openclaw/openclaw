@@ -1,10 +1,3 @@
-/**
- * Twitch resolver adapter for channel/user name resolution.
- *
- * This module implements the ChannelResolverAdapter interface to resolve
- * Twitch usernames to user IDs via the Twitch Helix API.
- */
-
 import {
   callTwitchApi,
   HttpStatusCodeError,
@@ -37,27 +30,12 @@ type TwitchUsersResponse = {
   data: TwitchUser[];
 };
 
-/**
- * Normalize a Twitch username - strip @ prefix and convert to lowercase
- */
 function normalizeUsername(input: string): string {
   const trimmed = input.trim();
   if (trimmed.startsWith("@")) {
     return normalizeLowercaseStringOrEmpty(trimmed.slice(1));
   }
   return normalizeLowercaseStringOrEmpty(trimmed);
-}
-
-/**
- * Create a logger that includes the Twitch prefix
- */
-function createLogger(logger?: ChannelLogSink): ChannelLogSink {
-  return {
-    info: (msg: string) => logger?.info(msg),
-    warn: (msg: string) => logger?.warn(msg),
-    error: (msg: string) => logger?.error(msg),
-    debug: (msg: string) => logger?.debug?.(msg) ?? (() => {}),
-  };
 }
 
 function createHelixUserResolver(clientId: string, accessToken: string) {
@@ -113,25 +91,14 @@ function createHelixUserResolver(clientId: string, accessToken: string) {
   };
 }
 
-/**
- * Resolve Twitch usernames to user IDs via the Helix API
- *
- * @param inputs - Array of usernames or user IDs to resolve
- * @param account - Twitch account configuration with auth credentials
- * @param kind - Type of target to resolve ("user" or "group")
- * @param logger - Optional logger
- * @returns Promise resolving to array of ChannelResolveResult
- */
 export async function resolveTwitchTargets(
   inputs: string[],
   account: TwitchAccountConfig,
   _kind: ChannelResolveKind,
-  logger?: ChannelLogSink,
+  log?: ChannelLogSink,
 ): Promise<ChannelResolveResult[]> {
-  const log = createLogger(logger);
-
   if (!account.clientId || !account.accessToken) {
-    log.error("Missing Twitch client ID or accessToken");
+    log?.error("Missing Twitch client ID or accessToken");
     return inputs.map((input) => ({
       input,
       resolved: false,
@@ -160,45 +127,34 @@ export async function resolveTwitchTargets(
     const looksLikeUserId = /^\d+$/.test(normalized);
 
     try {
-      if (looksLikeUserId) {
-        const user = await resolveHelixUser({ id: normalized });
-
-        if (user) {
-          results.push({
-            input,
-            resolved: true,
-            id: user.id,
-            name: user.login,
-          });
-          log.debug?.(`Resolved user ID ${normalized} -> ${user.login}`);
-        } else {
-          results.push({
-            input,
-            resolved: false,
-            note: "user ID not found",
-          });
-          log.warn(`User ID ${normalized} not found`);
-        }
+      const user = await resolveHelixUser(
+        looksLikeUserId ? { id: normalized } : { login: normalized },
+      );
+      if (user) {
+        results.push({
+          input,
+          resolved: true,
+          id: user.id,
+          name: user.login,
+          ...(!looksLikeUserId
+            ? {
+                note:
+                  user.display_name !== user.login ? `display: ${user.display_name}` : undefined,
+              }
+            : {}),
+        });
+        log?.debug?.(
+          looksLikeUserId
+            ? `Resolved user ID ${normalized} -> ${user.login}`
+            : `Resolved username ${normalized} -> ${user.id} (${user.login})`,
+        );
       } else {
-        const user = await resolveHelixUser({ login: normalized });
-
-        if (user) {
-          results.push({
-            input,
-            resolved: true,
-            id: user.id,
-            name: user.login,
-            note: user.display_name !== user.login ? `display: ${user.display_name}` : undefined,
-          });
-          log.debug?.(`Resolved username ${normalized} -> ${user.id} (${user.login})`);
-        } else {
-          results.push({
-            input,
-            resolved: false,
-            note: "username not found",
-          });
-          log.warn(`Username ${normalized} not found`);
-        }
+        results.push({
+          input,
+          resolved: false,
+          note: looksLikeUserId ? "user ID not found" : "username not found",
+        });
+        log?.warn(`${looksLikeUserId ? "User ID" : "Username"} ${normalized} not found`);
       }
     } catch (error) {
       const errorMessage = formatErrorMessage(error);
@@ -207,7 +163,7 @@ export async function resolveTwitchTargets(
         resolved: false,
         note: `API error: ${errorMessage}`,
       });
-      log.error(`Failed to resolve ${input}: ${errorMessage}`);
+      log?.error(`Failed to resolve ${input}: ${errorMessage}`);
     }
   }
 

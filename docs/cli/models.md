@@ -156,6 +156,11 @@ Chat model menus, the Control UI, and `models list` display the catalog's refres
 warning. The CLI writes the warning to stderr, keeping JSON and plain stdout
 machine-readable.
 
+A provider that rejects authentication keeps its sign-in status without causing
+a catalog refresh warning. For an installed agent app, open **Models** in the
+Control UI and follow its sign-in guidance. Timeouts and other discovery failures
+still produce the refresh warning, even when another provider needs sign-in.
+
 A selected Gateway must advertise `published-model-catalog`. If it does not,
 update or restart it and retry. Connection, authorization and capability errors
 are reported directly; they do not switch the command to a different local list.
@@ -365,6 +370,10 @@ For the shared-main agent, `--force` clears the provider's shared credentials an
 Use either `openclaw models auth --agent <id> <subcommand>` or `openclaw models auth <subcommand> --agent <id>` to target a specific configured agent store. Both forms are supported by `add`, `list`, `login`, `activate`, `logout`, `paste-api-key`, `setup-token`, `paste-token`, `login-github-copilot`, and `order get`/`set`/`clear`.
 
 For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login. Use `--method api-key` only when you want to add an OpenAI API-key profile, usually as a backup for Codex subscription limits. Run `openclaw doctor --fix` to migrate older legacy OpenAI Codex prefix auth/profile state to `openai`.
+
+See [OpenAI authentication](/providers/openai/authentication) to compare Codex
+OAuth, device code, API keys, and Sign in with ChatGPT (`--method siwc`),
+including model access, hosted plugins, and shared versus personal setup.
 
 Examples:
 

@@ -343,7 +343,7 @@ describe("plugin background completions", () => {
           },
         };
         const profile = ensureProfileForEmail("completion-model-policy@example.com");
-        const source = captureGatewayOperatorRunAuthority({
+        const source = await captureGatewayOperatorRunAuthority({
           client: createSyntheticPluginRuntimeClient({
             scopes: ["operator.write"],
             authenticatedUserProfile: { ...operatorProfile, profileId: profile.id },
@@ -420,70 +420,84 @@ describe("plugin background completions", () => {
   it.each(["runtime retirement", "binding replacement"])(
     "rechecks the host after profile verification awaits during %s",
     async (reason) => {
-      const entered = createDeferred();
-      const verification = createDeferred();
-      const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
-      client.authenticatedGitHubIdentitySync = async () => {
-        entered.resolve();
-        await verification.promise;
-        client.authenticatedUserProfile = operatorProfile;
-        return { profileId: operatorProfile.profileId, updatedAt: Date.now() };
-      };
-      const result = completeScoped(client, { agentId: "main" });
-      const rejected = expect(result).rejects.toThrow(/retired|current gateway instance binding/u);
-      await entered.promise;
-      if (reason === "runtime retirement") {
-        lifetime.abort(new Error("runtime retired"));
-      } else {
-        context = { getRuntimeConfig: () => config } as GatewayRequestContext;
-      }
-      verification.resolve();
-      await rejected;
-      expect(isolated).not.toHaveBeenCalled();
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const profile = {
+          ...operatorProfile,
+          profileId: ensureProfileForEmail("verification-completion@example.test").id,
+        };
+        const entered = createDeferred();
+        const verification = createDeferred();
+        const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
+        client.authenticatedGitHubIdentitySync = async () => {
+          entered.resolve();
+          await verification.promise;
+          client.authenticatedUserProfile = profile;
+          return { profileId: profile.profileId, updatedAt: Date.now() };
+        };
+        const result = completeScoped(client, { agentId: "main" });
+        const rejected = expect(result).rejects.toThrow(
+          /retired|current gateway instance binding/u,
+        );
+        await entered.promise;
+        if (reason === "runtime retirement") {
+          lifetime.abort(new Error("runtime retired"));
+        } else {
+          context = { getRuntimeConfig: () => config } as GatewayRequestContext;
+        }
+        verification.resolve();
+        await rejected;
+        expect(isolated).not.toHaveBeenCalled();
+      });
     },
   );
 
   it.each(["queued", "running"])(
     "rejects %s work after inherited operator tool authority closes",
     async (phase) => {
-      const blockers = blockBackgroundSlots(phase === "queued" ? 3 : 0);
-      const started = createDeferred();
-      const cleanup = createDeferred();
-      let runningSignal: AbortSignal | undefined;
-      if (phase === "running") {
-        isolated.mockImplementationOnce(async (params) => {
-          runningSignal = params.abortSignal;
-          started.resolve();
-          await cleanup.promise;
-          return {
-            text: "late output",
-            provider: params.provider,
-            model: params.model,
-            owner: { kind: "harness", id: "test-runtime" },
-          };
-        });
-      }
-      let rejected: Promise<void> | undefined;
-      await inProcessDispatch.withOperatorToolGatewayAuthority(
-        { authenticatedUserProfile: operatorProfile, scopes: ["operator.write"] },
-        async () => {
-          const result = complete(createRuntime());
-          rejected = expect(result).rejects.toThrow("operator tool invocation authority expired");
-          if (phase === "queued") {
-            await vi.waitFor(() => expect(getBackgroundWorkSnapshot().queuedCount).toBe(1));
-          } else {
-            await started.promise;
-          }
-        },
-      );
-      if (phase === "running") {
-        expect(runningSignal?.aborted).toBe(true);
-      }
-      blockers.release();
-      cleanup.resolve();
-      await rejected;
-      await blockers.settled();
-      expect(isolated).toHaveBeenCalledTimes(phase === "queued" ? 0 : 1);
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const profile = {
+          ...operatorProfile,
+          profileId: ensureProfileForEmail("inherited-completion@example.test").id,
+        };
+        const blockers = blockBackgroundSlots(phase === "queued" ? 3 : 0);
+        const started = createDeferred();
+        const cleanup = createDeferred();
+        let runningSignal: AbortSignal | undefined;
+        if (phase === "running") {
+          isolated.mockImplementationOnce(async (params) => {
+            runningSignal = params.abortSignal;
+            started.resolve();
+            await cleanup.promise;
+            return {
+              text: "late output",
+              provider: params.provider,
+              model: params.model,
+              owner: { kind: "harness", id: "test-runtime" },
+            };
+          });
+        }
+        let rejected: Promise<void> | undefined;
+        await inProcessDispatch.withOperatorToolGatewayAuthority(
+          { authenticatedUserProfile: profile, scopes: ["operator.write"] },
+          async () => {
+            const result = complete(createRuntime());
+            rejected = expect(result).rejects.toThrow("operator tool invocation authority expired");
+            if (phase === "queued") {
+              await vi.waitFor(() => expect(getBackgroundWorkSnapshot().queuedCount).toBe(1));
+            } else {
+              await started.promise;
+            }
+          },
+        );
+        if (phase === "running") {
+          expect(runningSignal?.aborted).toBe(true);
+        }
+        blockers.release();
+        cleanup.resolve();
+        await rejected;
+        await blockers.settled();
+        expect(isolated).toHaveBeenCalledTimes(phase === "queued" ? 0 : 1);
+      });
     },
   );
 

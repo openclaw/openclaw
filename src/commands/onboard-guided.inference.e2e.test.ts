@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
@@ -60,6 +61,12 @@ describe("guided onboarding inference composition", () => {
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
       setTestEnvValue("OPENAI_API_KEY", "test-openai-key");
       setTestEnvValue("PATH", path.dirname(process.execPath));
+      // The live probe and owner revalidation must use the same packaged plugin tree.
+      // The shared source-test default otherwise mixes built fingerprints with source loading.
+      setTestEnvValue(
+        "OPENCLAW_BUNDLED_PLUGINS_DIR",
+        fileURLToPath(new URL("../../dist/extensions", import.meta.url)),
+      );
 
       await fs.mkdir(workspace, { recursive: true });
       await fs.writeFile(

@@ -209,7 +209,9 @@ export function renderSettingsGroup(
   return html`<div class=${groupClass}>${rows}</div>`;
 }
 
-export function renderSettingsRow(props: SettingsRowProps): TemplateResult {
+export function renderSettingsRow(
+  props: SettingsRowProps & { role?: "alert" | "status" },
+): TemplateResult {
   const className = [
     "settings-row",
     props.stacked ? "settings-row--stacked" : "",
@@ -219,7 +221,7 @@ export function renderSettingsRow(props: SettingsRowProps): TemplateResult {
     .filter(Boolean)
     .join(" ");
   return html`
-    <div class=${className}>
+    <div class=${className} role=${props.role ?? nothing}>
       <div class="settings-row__text ${props.carapace ? "oc-settings-row-content" : ""}">
         <span class="settings-row__title ${props.carapace ? "oc-settings-row-title" : ""}"
           >${props.title}</span

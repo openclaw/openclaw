@@ -1,4 +1,3 @@
-// Matrix helper module supports setup config behavior.
 import {
   applyAccountNameToChannelSection,
   DEFAULT_ACCOUNT_ID,

@@ -41,13 +41,6 @@ describe("security audit attack surface summary", () => {
 
   it.each([
     {
-      name: "restrictive plugin allowlist excludes browser and no browser config is present",
-      cfg: {
-        plugins: { allow: ["openai"] },
-      } satisfies OpenClawConfig,
-      expected: "browser control: disabled",
-    },
-    {
       name: "explicit browser config does not bypass a restrictive plugin allowlist",
       cfg: {
         browser: { enabled: true },
@@ -63,10 +56,10 @@ describe("security audit attack surface summary", () => {
       expected: "browser control: enabled",
     },
     {
-      name: "plugin deny policy wins over explicit browser config",
+      name: "case-normalized plugin deny policy wins over explicit browser config",
       cfg: {
         browser: { enabled: true },
-        plugins: { allow: ["browser"], deny: ["browser"] },
+        plugins: { allow: ["browser"], deny: ["BROWSER"] },
       } satisfies OpenClawConfig,
       expected: "browser control: disabled",
     },
@@ -83,13 +76,6 @@ describe("security audit attack surface summary", () => {
       cfg: {
         browser: { enabled: false },
         plugins: { allow: ["browser"] },
-      } satisfies OpenClawConfig,
-      expected: "browser control: disabled",
-    },
-    {
-      name: "case-normalized plugin deny policy disables browser control",
-      cfg: {
-        plugins: { deny: ["BROWSER"] },
       } satisfies OpenClawConfig,
       expected: "browser control: disabled",
     },

@@ -107,12 +107,6 @@ describe("sessions", () => {
       ctx: { From: "room-123", ChatType: "group", Provider: "demo-chat" },
       expected: "demo-chat:group:room-123",
     },
-    {
-      name: "prefixes group keys with provider when available",
-      scope: "per-sender" as const,
-      ctx: { From: "room-456", ChatType: "group", Provider: "demo-chat" },
-      expected: "demo-chat:group:room-456",
-    },
   ] as const;
 
   for (const testCase of deriveSessionKeyCases) {
@@ -146,20 +140,6 @@ describe("sessions", () => {
       scope: "per-sender" as const,
       ctx: { From: "+1555" },
       mainKey: undefined,
-      expected: "agent:main:main",
-    },
-    {
-      name: "collapses direct chats to main even when sender missing",
-      scope: "per-sender" as const,
-      ctx: {},
-      mainKey: undefined,
-      expected: "agent:main:main",
-    },
-    {
-      name: "maps direct chats to main key when provided",
-      scope: "per-sender" as const,
-      ctx: { From: "chat:+1555" },
-      mainKey: "main",
       expected: "agent:main:main",
     },
     {

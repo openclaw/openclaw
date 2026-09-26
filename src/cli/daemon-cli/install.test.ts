@@ -130,6 +130,19 @@ describe("runDaemonInstall", () => {
     expect(service.readCommand).toHaveBeenCalledOnce();
   });
 
+  it("reports Task Scheduler timeout details before any install mutation", async () => {
+    service.readCommand.mockRejectedValueOnce(
+      new ServiceInspectionError("windows-task-inspection-failed", {
+        kind: "timeout",
+        timeoutMs: 731,
+      }),
+    );
+    await runDaemonInstall({ json: true });
+    expect(actionState.failed[0]?.message).toContain("timed out after 731 ms");
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+  });
+
   it("blocks non-default install identities before inspecting host services", async () => {
     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
 

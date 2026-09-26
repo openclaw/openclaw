@@ -1,4 +1,3 @@
-// Gateway Client tests cover event loop ready behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForEventLoopReady } from "./event-loop-ready.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timeouts.js";
@@ -22,9 +21,12 @@ describe("waitForEventLoopReady", () => {
     expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), 25);
 
     await vi.advanceTimersByTimeAsync(50);
-    await expect(readiness).resolves.toMatchObject({
+    await expect(readiness).resolves.toEqual({
       ready: true,
+      aborted: false,
+      elapsedMs: 50,
       checks: 2,
+      maxDriftMs: 0,
     });
   });
 
@@ -47,26 +49,6 @@ describe("waitForEventLoopReady", () => {
     await expect(readiness).resolves.toMatchObject({
       ready: true,
       checks: 1,
-    });
-  });
-
-  it("resolves ready after consecutive low-drift timer checks", async () => {
-    vi.useFakeTimers();
-
-    const readiness = waitForEventLoopReady({
-      maxWaitMs: 100,
-      intervalMs: 10,
-      consecutiveReadyChecks: 2,
-    });
-
-    await vi.advanceTimersByTimeAsync(20);
-
-    await expect(readiness).resolves.toEqual({
-      ready: true,
-      aborted: false,
-      elapsedMs: 20,
-      checks: 2,
-      maxDriftMs: 0,
     });
   });
 

@@ -37,13 +37,17 @@ import {
   type WorktreeCleanupOwnerPolicy,
 } from "./gc-removal.js";
 import {
-  createWorktreeLockPrefilter,
+  createWorktreeGcPrefilter,
   lockState,
   lockWorktreeForProcess,
   unlockWorktree,
 } from "./git-lock.js";
 import { commandError, worktreePathExists, runGit } from "./git.js";
-import { canonicalPathKey, shouldPreserveOrphanCandidate } from "./orphan-paths.js";
+import {
+  canonicalPathKey,
+  resolveManagedWorktreePathKeys,
+  shouldPreserveOrphanCandidate,
+} from "./orphan-paths.js";
 import { worktreeOwnerMatches } from "./owner.js";
 import { provisionIncludedFiles } from "./provisioned-files.js";
 import { readRegistryWorktrees, readWorktreeCleanupState } from "./registry-read.js";
@@ -1184,7 +1188,6 @@ export class ManagedWorktreeService {
 
   async removeIfLossless(id: string): Promise<boolean> {
     let record = this.requireLiveRecord(id);
-    let inspectedHead: string;
     const claimToken = randomUUID();
     const recordOutcome = (outcome: ManagedWorktreeRunEndCleanupOutcome, error?: unknown) => {
       // Retained/failed writes happen after this remover released or aborted its
@@ -1233,7 +1236,7 @@ export class ManagedWorktreeService {
     }
     try {
       record = await this.rebindLiveRepository(record);
-      inspectedHead = await requireManagedWorktreeHead(record, {});
+      const inspectedHead = await requireManagedWorktreeHead(record, {});
       const inspection = await inspectManagedWorktreeCheckout(record, "lossless", {
         env: this.env,
         getConfig: this.getConfig ?? getRuntimeConfig,
@@ -1249,12 +1252,6 @@ export class ManagedWorktreeService {
         recordOutcome(retainedOutcome);
         return false;
       }
-    } catch (error) {
-      abortWorktreeRemoval(this.env, id, claimToken);
-      recordOutcome("failed", error);
-      throw error;
-    }
-    try {
       await this.release(id);
       const result = await this.remove({
         id,
@@ -1292,7 +1289,7 @@ export class ManagedWorktreeService {
 
   async gc(params: ManagedWorktreeGcParams = {}): Promise<ManagedWorktreeGcResult> {
     const now = this.now();
-    const isLocked = createWorktreeLockPrefilter();
+    const prefilter = createWorktreeGcPrefilter();
     const progress = new WorktreeGcProgress();
     const result = progress.result;
     const { records, leases } = await readWorktreeCleanupState(this.env);
@@ -1305,12 +1302,13 @@ export class ManagedWorktreeService {
     const protect = (record: ManagedWorktreeRecord) =>
       autoRemovalProtectionReason(
         record,
-        isLocked,
+        prefilter,
         hasLiveLease,
         { env: this.env, getConfig: this.getConfig ?? getRuntimeConfig },
-        params.shouldProtectOwner,
+        params,
       );
     const onError = createWorktreeGcErrorHandler({ env: this.env, now, progress, policy: params });
+    // Keep cold classification serial: each candidate can request several Git processes.
     for (const record of records) {
       let retiredOwner = false;
       try {
@@ -1487,15 +1485,9 @@ export class ManagedWorktreeService {
     records: ManagedWorktreeRecord[],
     guard: WorktreeMutationGuard,
   ): Promise<number> {
-    const managedPaths = new Set<string>();
-    for (const record of records) {
-      try {
-        managedPaths.add(await canonicalPathKey(record.path));
-      } catch (error) {
-        if (!isMissingPathError(error)) {
-          throw error;
-        }
-      }
+    const managedPaths = await resolveManagedWorktreePathKeys(records);
+    if (!managedPaths) {
+      return 0;
     }
     // Only the default state-owned area grants orphan cleanup authority. A custom
     // root can contain unrelated directories; its cleanup is registry-bound above.

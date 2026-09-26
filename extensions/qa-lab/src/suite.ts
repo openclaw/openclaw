@@ -101,15 +101,7 @@ export function resolveQaSuiteTransportReadyTimeoutMs(
   ) {
     return Math.floor(explicitTimeoutMs);
   }
-  const raw = env.OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS;
-  if (!raw) {
-    return 120_000;
-  }
-  const parsed = parseStrictPositiveInteger(raw);
-  if (parsed === undefined) {
-    return 120_000;
-  }
-  return parsed;
+  return parseStrictPositiveInteger(env.OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS) ?? 120_000;
 }
 
 export function writeQaSuiteProgress(enabled: boolean, message: string) {
@@ -326,9 +318,7 @@ const QA_IMAGE_UNDERSTANDING_LARGE_PNG_BASE64 =
 const QA_IMAGE_UNDERSTANDING_VALID_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAALklEQVR4nO3OoQEAAAyDsP7/9HYGJgJNdtuVDQAAAAAAACAHxH8AAAAAAACAHvBX0fhq85dN7QAAAABJRU5ErkJggg==";
 
-export type QaSuiteResult = Omit<QaSuiteBaseResult, "scenarios"> & {
-  scenarios: QaSuiteScenarioResult[];
-};
+export type QaSuiteResult = QaSuiteBaseResult;
 
 export async function runQaSuiteScenarioDefinitionForRuntime(
   env: QaSuiteEnvironment,
@@ -349,8 +339,6 @@ export async function runQaSuiteScenarioDefinitionForRuntime(
     },
   });
 }
-
-type QaGatewayHandle = QaGatewayChild;
 
 export function buildQaSuiteRuntimeMetrics(params: {
   startedAt: Date;
@@ -427,7 +415,7 @@ async function listGatewayHeapSnapshotFiles(tempRoot: string) {
 }
 
 export async function captureGatewayHeapSnapshotCheckpoint(params: {
-  gateway: Pick<QaGatewayHandle, "tempRoot" | "pid" | "signalProcess" | "call">;
+  gateway: Pick<QaGatewayChild, "tempRoot" | "pid" | "signalProcess" | "call">;
   outputDir: string;
   label: string;
 }): Promise<QaSuiteGatewayHeapSnapshot | undefined> {

@@ -71,7 +71,7 @@ openclaw tui --local
 - If the session has a [goal](/tools/goal), the footer shows its compact state:
   `Pursuing goal`, `Goal paused (/goal resume)`, `Goal blocked (/goal resume)`, or `Goal achieved`.
 - When started without `--session`, gateway-mode TUI resumes the last selected session. The gateway, agent, and session scope must match, and that session must still exist. Passing `--session`, `/session`, `/new`, or `/reset` remains explicit.
-- Session details and remembered-session restoration select the exact conversation, even when newer sessions have similar names. After reconnecting, metadata from the previous connection is discarded.
+- Session details and remembered-session restoration keep the selected agent and exact conversation, even when another agent has the same session name. After reconnecting, metadata from the previous connection is discarded.
 
 ## Sending + delivery
 
@@ -87,6 +87,11 @@ openclaw tui --local
 - Settings (`/settings`): toggle tool output expansion and thinking visibility. This panel does not control delivery.
 
 Esc or Ctrl+C closes a picker. In the session picker, the first press clears a nonempty filter. Press again to close it.
+
+The model picker opens immediately, showing a checking state if no models are known yet.
+In Gateway mode, it reuses the selected agent's last known list while refreshing in the
+background. Catalog changes update an open picker without clearing its search or
+moving its highlighted choice when that model is still present.
 
 ## Questions
 

@@ -3,12 +3,14 @@ import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SkillStatusReport } from "../../api/types.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
+import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -435,27 +437,10 @@ class SkillsPage extends OpenClawLightDomElement {
                   }),
               },
             })
-          : html`<div class="plugins-toolbar">
-              <button
-                type="button"
-                class="btn"
-                @click=${() =>
-                  this.context.navigate("skills", {
-                    search: this.skillsAgentId
-                      ? `?agent=${encodeURIComponent(this.skillsAgentId)}`
-                      : "",
-                  })}
-              >
-                ${icons.search} ${t("skillDiscovery.search")}
-              </button>
-              <button
-                type="button"
-                class="btn"
-                @click=${() => this.context.navigate("skill-workshop")}
-              >
-                ${t("pluginsPage.workshopTab")}
-              </button>
-            </div>`
+          : renderSettingsPageHeader({
+              title: titleForRoute("skill-settings"),
+              subtitle: subtitleForRoute("skill-settings"),
+            })
       }
       ${renderSettingsWorkspace(html`
         <div
@@ -475,7 +460,30 @@ class SkillsPage extends OpenClawLightDomElement {
                     ${this.library.notice && !this.library.draft ? html`<div class="callout success" role="status">${this.library.notice}</div>` : nothing}
                     ${renderSkillLibraryDialogs(this.library)}
                   `
-                : renderSkillLibrary(this.library),
+                : renderSkillLibrary(
+                    this.library,
+                    html`
+                      <button
+                        type="button"
+                        class="btn"
+                        @click=${() =>
+                          this.context.navigate("skills", {
+                            search: this.skillsAgentId
+                              ? `?agent=${encodeURIComponent(this.skillsAgentId)}`
+                              : "",
+                          })}
+                      >
+                        ${icons.search} ${t("skillDiscovery.search")}
+                      </button>
+                      <button
+                        type="button"
+                        class="btn"
+                        @click=${() => this.context.navigate("skill-workshop")}
+                      >
+                        ${t("pluginsPage.workshopTab")}
+                      </button>
+                    `,
+                  ),
             showInventory: this.library.showWorkspace,
             canUpdate: this.canUpdateSkills(),
             canInstall: this.canInstallFromClawHub(),

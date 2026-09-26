@@ -219,7 +219,7 @@ describe("visitor access admitted caller", () => {
                       };
                       const intercept = vi
                         .spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission")
-                        .mockImplementation((admit) =>
+                        .mockImplementation((admit, attachment) =>
                           createAdmission((request, grant) => {
                             stages.push(request.stage);
                             if (
@@ -242,7 +242,7 @@ describe("visitor access admitted caller", () => {
                             ) {
                               revokeSource();
                             }
-                          }),
+                          }, attachment),
                         );
                       try {
                         [renewal] = await Promise.allSettled([invite(2)]);
@@ -581,7 +581,7 @@ describe("visitor access admitted caller", () => {
               "registered Visitor access missing",
             );
             const captured = expectDefined(
-              captureGatewayOperatorRunAuthority({
+              await captureGatewayOperatorRunAuthority({
                 client: {
                   ...operatorWriteCliClient([SESSION_WRITE_SCOPE]),
                   authenticatedUserProfile: {

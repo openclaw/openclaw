@@ -581,7 +581,7 @@ it("keeps a newly selected native model when a queued full refresh partly fails"
 });
 
 it.each(["native-a", "__proto__", "constructor"])(
-  "publishes native failures through provider renewals, retaining siblings until recovery (%s)",
+  "preserves native auth rejection through provider renewals without a refresh error (%s)",
   async (runtimeA) => {
     const { owner, a, b, loadA, loadB } = await fixture(true, false, runtimeA);
     const api = { provider: "api-provider", id: "model", name: "API model" };
@@ -613,7 +613,8 @@ it.each(["native-a", "__proto__", "constructor"])(
       outcomes: [{ provider: b.provider, status: "ready" }],
     });
     const partial = await owner.loadFullModelCatalog!({ refresh: true });
-    expect(partial).toMatchObject({ authoritative: false, refreshFailed: true });
+    expect(partial.authoritative).toBe(false);
+    expect(partial.refreshFailed).toBeUndefined();
     expect(partial.providerOutcomes).toContainEqual(failure);
     expect(partial.entries).toEqual(
       expect.arrayContaining([expect.objectContaining(a), expect.objectContaining(updatedB)]),
@@ -636,7 +637,8 @@ it.each(["native-a", "__proto__", "constructor"])(
     }
     const renewed = owner.readFullModelCatalog!()!;
     expect(loadA).toHaveBeenCalledTimes(nativeCalls);
-    expect(renewed).toMatchObject({ authoritative: false, refreshFailed: true });
+    expect(renewed.authoritative).toBe(false);
+    expect(renewed.refreshFailed).toBeUndefined();
     expect(renewed.providerOutcomes).toContainEqual(failure);
     expect(renewed.entries).toContainEqual(expect.objectContaining(updatedB));
 

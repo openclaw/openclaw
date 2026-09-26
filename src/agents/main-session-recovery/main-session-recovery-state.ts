@@ -14,7 +14,10 @@ import {
   isSubagentSessionKey,
 } from "../../routing/session-key.js";
 import { interruptAdmittedMainSessionRecovery } from "./main-session-recovery-admitted-interruption.js";
-import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
+import {
+  buildMainSessionRecoveryClearPatch,
+  removeMainSessionRecoveryForegroundClaim,
+} from "./main-session-recovery-clear.js";
 import type {
   MainSessionRecoveryCommand,
   MainSessionRecoveryConflict,
@@ -671,26 +674,15 @@ export function transitionMainSessionRecovery(
       if (!state || !claims || !ownsForegroundClaim(state, command.claim)) {
         return { kind: "no_change" };
       }
-      const tokens = claims.tokens.filter((token) => token !== command.claim.claimId);
-      const runIdsByClaimId = Object.fromEntries(
-        Object.entries(claims.runIdsByClaimId ?? {}).filter(
-          ([token]) => token !== command.claim.claimId,
-        ),
+      const foregroundClaims = removeMainSessionRecoveryForegroundClaim(
+        claims,
+        command.claim.claimId,
       );
-      if (tokens.length === 0 && entry.abortedLastRun !== true) {
+      if (!foregroundClaims && entry.abortedLastRun !== true) {
         Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
         return { kind: "applied" };
       }
-      updateRecoveryState(entry, state, {
-        foregroundClaims:
-          tokens.length > 0
-            ? {
-                lifecycleGeneration: command.claim.lifecycleGeneration,
-                tokens,
-                ...(Object.keys(runIdsByClaimId).length > 0 ? { runIdsByClaimId } : {}),
-              }
-            : undefined,
-      });
+      updateRecoveryState(entry, state, { foregroundClaims });
       return { kind: "applied" };
     }
     case "tombstone": {

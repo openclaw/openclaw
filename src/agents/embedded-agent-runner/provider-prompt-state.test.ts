@@ -21,8 +21,11 @@ const model = {
   baseUrl: "https://api.openai.com/v1",
 } as Model;
 
-function createResultStream(stopReason: "error" | "stop") {
-  const stream = createAssistantMessageEventStream();
+function endResultStream(
+  stream: ReturnType<typeof createAssistantMessageEventStream>,
+  stopReason: "error" | "stop",
+  errorMessage = "context length exceeded",
+) {
   stream.end({
     role: "assistant",
     content: [],
@@ -31,9 +34,14 @@ function createResultStream(stopReason: "error" | "stop") {
     model: model.id,
     usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
     stopReason,
-    ...(stopReason === "error" ? { errorMessage: "context length exceeded" } : {}),
+    ...(stopReason === "error" ? { errorMessage } : {}),
     timestamp: 1,
   });
+}
+
+function createResultStream(stopReason: "error" | "stop", errorMessage?: string) {
+  const stream = createAssistantMessageEventStream();
+  endResultStream(stream, stopReason, errorMessage);
   return stream;
 }
 
@@ -220,18 +228,7 @@ describe("provider prompt state", () => {
     await observedResult.result();
     expect(state.lastAttempt).toBeDefined();
 
-    const stream = createAssistantMessageEventStream();
-    stream.end({
-      role: "assistant",
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
-      stopReason: "error",
-      errorMessage: "connection dropped after dispatch",
-      timestamp: 1,
-    });
+    const stream = createResultStream("error", "connection dropped after dispatch");
     const wrapped = wrapStreamFnWithProviderPromptState({
       streamFn: () => stream,
       state,
@@ -285,16 +282,7 @@ describe("provider prompt state", () => {
     await observedPayloadHook;
     expect(state.lastAttempt).toBeDefined();
 
-    stream.end({
-      role: "assistant",
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
-      stopReason: "stop",
-      timestamp: 1,
-    });
+    endResultStream(stream, "stop");
     await result.result();
     clearProviderPromptState(runId);
   });

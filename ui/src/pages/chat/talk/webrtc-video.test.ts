@@ -45,6 +45,28 @@ class FakePeerConnection extends EventTarget {
   }
 }
 
+function audioFixture() {
+  const track = Object.assign(new EventTarget(), { stop: vi.fn() });
+  const stream = {
+    getAudioTracks: () => [track],
+    getTracks: () => [track],
+  } as unknown as MediaStream;
+  return { track, stream };
+}
+
+function cameraFixture(deviceId?: string) {
+  const track = Object.assign(new EventTarget(), {
+    stop: vi.fn(),
+    readyState: "live",
+    ...(deviceId ? { getSettings: () => ({ deviceId }) } : {}),
+  });
+  const stream = {
+    getVideoTracks: () => [track],
+    getTracks: () => [track],
+  } as unknown as MediaStream;
+  return { track, stream };
+}
+
 function sentRealtimeEvents(): Array<Record<string, unknown>> {
   return (
     FakePeerConnection.instance?.channel.send.mock.calls.map(
@@ -96,11 +118,8 @@ describe("OpenAI Realtime media lifecycle", () => {
   });
 
   it("ends the call visibly when the microphone track ends", async () => {
-    const track = Object.assign(new EventTarget(), { stop: vi.fn() });
-    const getUserMedia = vi.fn(async () => ({
-      getTracks: () => [track],
-      getAudioTracks: () => [track],
-    }));
+    const { track, stream } = audioFixture();
+    const getUserMedia = vi.fn(async () => stream);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
     const onStatus = vi.fn();
     const transport = new WebRtcSdpRealtimeTalkTransport(
@@ -127,23 +146,10 @@ describe("OpenAI Realtime media lifecycle", () => {
   });
 
   it("starts audio-only, toggles local camera, and reports camera-off tool calls", async () => {
-    const audioStop = vi.fn();
-    const videoStop = vi.fn();
-    const audioTrack = Object.assign(new EventTarget(), {
-      stop: audioStop,
-    }) as unknown as MediaStreamTrack;
-    const videoTrack = Object.assign(new EventTarget(), {
-      stop: videoStop,
-      readyState: "live",
-    }) as unknown as MediaStreamTrack;
-    const audio = {
-      getAudioTracks: () => [audioTrack],
-      getTracks: () => [audioTrack],
-    } as unknown as MediaStream;
-    const camera = {
-      getVideoTracks: () => [videoTrack],
-      getTracks: () => [videoTrack],
-    } as unknown as MediaStream;
+    const { track: audioTrack, stream: audio } = audioFixture();
+    const { track: videoTrack, stream: camera } = cameraFixture();
+    const audioStop = audioTrack.stop;
+    const videoStop = videoTrack.stop;
     const getUserMedia = vi.fn().mockResolvedValueOnce(audio).mockResolvedValueOnce(camera);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
 
@@ -263,29 +269,9 @@ describe("OpenAI Realtime media lifecycle", () => {
   });
 
   it("clears ended camera state and reacquires on the next enable", async () => {
-    const audioTrack = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
-    }) as unknown as MediaStreamTrack;
-    const firstVideoTrack = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
-      readyState: "live",
-    }) as unknown as MediaStreamTrack;
-    const secondVideoTrack = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
-      readyState: "live",
-    }) as unknown as MediaStreamTrack;
-    const audio = {
-      getAudioTracks: () => [audioTrack],
-      getTracks: () => [audioTrack],
-    } as unknown as MediaStream;
-    const firstCamera = {
-      getVideoTracks: () => [firstVideoTrack],
-      getTracks: () => [firstVideoTrack],
-    } as unknown as MediaStream;
-    const secondCamera = {
-      getVideoTracks: () => [secondVideoTrack],
-      getTracks: () => [secondVideoTrack],
-    } as unknown as MediaStream;
+    const { stream: audio } = audioFixture();
+    const { track: firstVideoTrack, stream: firstCamera } = cameraFixture();
+    const { stream: secondCamera } = cameraFixture();
     const getUserMedia = vi
       .fn()
       .mockResolvedValueOnce(audio)
@@ -317,14 +303,8 @@ describe("OpenAI Realtime media lifecycle", () => {
   });
 
   it("keeps voice alive when lazy camera acquisition fails", async () => {
-    const audioStop = vi.fn();
-    const audioTrack = Object.assign(new EventTarget(), {
-      stop: audioStop,
-    }) as unknown as MediaStreamTrack;
-    const audio = {
-      getAudioTracks: () => [audioTrack],
-      getTracks: () => [audioTrack],
-    } as unknown as MediaStream;
+    const { track: audioTrack, stream: audio } = audioFixture();
+    const audioStop = audioTrack.stop;
     const getUserMedia = vi
       .fn()
       .mockResolvedValueOnce(audio)
@@ -395,32 +375,10 @@ describe("OpenAI Realtime media lifecycle", () => {
   });
 
   it("switches an active camera and updates the capture stream", async () => {
-    const audioTrack = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
-    }) as unknown as MediaStreamTrack;
-    const frontStop = vi.fn();
-    const frontTrack = Object.assign(new EventTarget(), {
-      stop: frontStop,
-      readyState: "live",
-      getSettings: () => ({ deviceId: "front" }),
-    }) as unknown as MediaStreamTrack;
-    const backTrack = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
-      readyState: "live",
-      getSettings: () => ({ deviceId: "back" }),
-    }) as unknown as MediaStreamTrack;
-    const audio = {
-      getAudioTracks: () => [audioTrack],
-      getTracks: () => [audioTrack],
-    } as unknown as MediaStream;
-    const frontCamera = {
-      getVideoTracks: () => [frontTrack],
-      getTracks: () => [frontTrack],
-    } as unknown as MediaStream;
-    const backCamera = {
-      getVideoTracks: () => [backTrack],
-      getTracks: () => [backTrack],
-    } as unknown as MediaStream;
+    const { stream: audio } = audioFixture();
+    const { track: frontTrack, stream: frontCamera } = cameraFixture("front");
+    const { stream: backCamera } = cameraFixture("back");
+    const frontStop = frontTrack.stop;
     const getUserMedia = vi
       .fn()
       .mockResolvedValueOnce(audio)
@@ -458,31 +416,9 @@ describe("OpenAI Realtime media lifecycle", () => {
   });
 
   it("restores the previous camera when a live switch fails", async () => {
-    const audioTrack = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
-    }) as unknown as MediaStreamTrack;
-    const firstFrontTrack = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
-      readyState: "live",
-      getSettings: () => ({ deviceId: "front" }),
-    }) as unknown as MediaStreamTrack;
-    const restoredFrontTrack = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
-      readyState: "live",
-      getSettings: () => ({ deviceId: "front" }),
-    }) as unknown as MediaStreamTrack;
-    const audio = {
-      getAudioTracks: () => [audioTrack],
-      getTracks: () => [audioTrack],
-    } as unknown as MediaStream;
-    const firstFrontCamera = {
-      getVideoTracks: () => [firstFrontTrack],
-      getTracks: () => [firstFrontTrack],
-    } as unknown as MediaStream;
-    const restoredFrontCamera = {
-      getVideoTracks: () => [restoredFrontTrack],
-      getTracks: () => [restoredFrontTrack],
-    } as unknown as MediaStream;
+    const { stream: audio } = audioFixture();
+    const { stream: firstFrontCamera } = cameraFixture("front");
+    const { stream: restoredFrontCamera } = cameraFixture("front");
     const getUserMedia = vi
       .fn()
       .mockResolvedValueOnce(audio)

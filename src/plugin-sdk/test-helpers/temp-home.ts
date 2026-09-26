@@ -103,9 +103,10 @@ export async function withTempHomeCore<T>(
     throw error;
   } finally {
     if (initialized && !unjoinedWork && !opts.skipSessionCleanup) {
-      await cleanupSessionStateForTest({ stateDir: path.join(base, ".openclaw") }).catch(
-        () => undefined,
-      );
+      await cleanupSessionStateForTest({
+        stateDir: path.join(base, ".openclaw"),
+        rootPath: base,
+      }).catch(() => undefined);
     }
     snapshot.restore();
     // Retention belongs to the body; failed acquisition has no caller-owned home.

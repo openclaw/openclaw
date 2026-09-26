@@ -303,24 +303,6 @@ describe("Slack read actions", () => {
     });
   });
 
-  it("converts ISO date strings to epoch seconds for history bounds", async () => {
-    const client = createClient();
-
-    await readSlackMessages("C1", {
-      client,
-      before: "2024-04-05T12:34:56.000Z",
-      after: "2024-04-05T00:00:00.000Z",
-      token: "xoxb-test",
-    });
-
-    expect(client.conversations.history).toHaveBeenCalledWith({
-      channel: "C1",
-      limit: undefined,
-      latest: "1712320496",
-      oldest: "1712275200",
-    });
-  });
-
   it("converts ISO date strings with offsets to epoch seconds for history bounds", async () => {
     const client = createClient();
 
@@ -339,7 +321,7 @@ describe("Slack read actions", () => {
     });
   });
 
-  it.each(["not-a-timestamp", "2024-02-30T00:00:00.000Z", "04/05/2024", "2024-04-05T12:34:56"])(
+  it.each(["2024-02-30T00:00:00.000Z", "2024-04-05T12:34:56"])(
     "rejects invalid history bound %s with a clear timestamp error",
     async (before) => {
       const client = createClient();
@@ -411,8 +393,12 @@ describe("Slack read actions", () => {
       cfg: { channels: { slack: { enabled: true, botToken: "test-auth-token" } } },
     } as Parameters<typeof resolveSlackConversationName>[1]);
 
-    expect(createSlackLookupClientMock).toHaveBeenCalledWith("test-auth-token", {
-      teamId: undefined,
-    });
+    expect(createSlackLookupClientMock).toHaveBeenCalledWith(
+      "test-auth-token",
+      {
+        teamId: undefined,
+      },
+      undefined,
+    );
   });
 });

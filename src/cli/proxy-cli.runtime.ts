@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { loadPinnedRuntimeConfigAsync } from "../config/runtime-snapshot.js";
 import {
   runProxyValidation,
   type ProxyValidationResult,
@@ -138,25 +138,7 @@ function redactProxyUrl(value: string | undefined): string | undefined {
   }
 }
 
-function redactProxyValidationResult(result: ProxyValidationResult): ProxyValidationResult {
-  return {
-    ...result,
-    config: {
-      ...result.config,
-      proxyUrl: redactProxyUrl(result.config.proxyUrl),
-    },
-  };
-}
-
-type ProxyValidationTextColors = {
-  heading: (value: string) => string;
-  success: (value: string) => string;
-  error: (value: string) => string;
-  muted: (value: string) => string;
-  warn: (value: string) => string;
-};
-
-function getProxyValidationTextColors(): ProxyValidationTextColors {
+function getProxyValidationTextColors() {
   const rich = isRich();
   const apply = (color: (value: string) => string) => (value: string) =>
     colorize(rich, color, value);
@@ -171,7 +153,7 @@ function getProxyValidationTextColors(): ProxyValidationTextColors {
 
 function formatProxyCheckLine(
   check: ProxyValidationResult["checks"][number],
-  colors: ProxyValidationTextColors,
+  colors: ReturnType<typeof getProxyValidationTextColors>,
 ): string {
   const icon = check.ok ? colors.success("✓") : colors.error("✗");
   const paddedKind = colors.muted(check.kind.padEnd(7, " "));
@@ -260,7 +242,11 @@ export async function runProxyValidateCommand(opts: {
   apnsAuthority?: string;
   timeoutMs?: number;
 }) {
-  const config = getRuntimeConfig();
+  const config = await loadPinnedRuntimeConfigAsync(async (assertCurrent) => {
+    const { getRuntimeConfig } = await import("../config/config.js");
+    assertCurrent();
+    return { config: getRuntimeConfig() };
+  });
   const result = await runProxyValidation({
     config: config?.proxy,
     env: process.env,
@@ -272,7 +258,10 @@ export async function runProxyValidateCommand(opts: {
     apnsAuthority: opts.apnsAuthority,
     timeoutMs: opts.timeoutMs,
   });
-  const outputResult = redactProxyValidationResult(result);
+  const outputResult = {
+    ...result,
+    config: { ...result.config, proxyUrl: redactProxyUrl(result.config.proxyUrl) },
+  };
   process.stdout.write(
     opts.json === true
       ? `${JSON.stringify(outputResult, null, 2)}\n`

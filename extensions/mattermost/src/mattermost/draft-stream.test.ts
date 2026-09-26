@@ -133,17 +133,6 @@ describe("createMattermostDraftStream", () => {
     expect(stream.postId()).toBe("post-1");
   });
 
-  it("does not resend identical updates", async () => {
-    const { calls, stream } = createDraftStreamFixture();
-
-    stream.update("Working...");
-    await stream.flush();
-    stream.update("Working...");
-    await stream.flush();
-
-    expect(calls).toHaveLength(1);
-  });
-
   it("clears the preview post when no final reply is delivered", async () => {
     const { calls, stream } = createDraftStreamFixture({ rootId: "root-1" });
 

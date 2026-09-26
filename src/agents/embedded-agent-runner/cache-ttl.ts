@@ -61,10 +61,6 @@ export function isCacheTtlEligibleProvider(
   );
 }
 
-function normalizeCacheTtlKey(value: string | undefined): string | undefined {
-  return normalizeOptionalLowercaseString(value);
-}
-
 function matchesCacheTtlContext(
   data: Partial<CacheTtlEntryData> | undefined,
   context: CacheTtlContext | undefined,
@@ -72,12 +68,12 @@ function matchesCacheTtlContext(
   if (!context) {
     return true;
   }
-  const expectedProvider = normalizeCacheTtlKey(context.provider);
-  if (expectedProvider && normalizeCacheTtlKey(data?.provider) !== expectedProvider) {
+  const expectedProvider = normalizeOptionalLowercaseString(context.provider);
+  if (expectedProvider && normalizeOptionalLowercaseString(data?.provider) !== expectedProvider) {
     return false;
   }
-  const expectedModelId = normalizeCacheTtlKey(context.modelId);
-  if (expectedModelId && normalizeCacheTtlKey(data?.modelId) !== expectedModelId) {
+  const expectedModelId = normalizeOptionalLowercaseString(context.modelId);
+  if (expectedModelId && normalizeOptionalLowercaseString(data?.modelId) !== expectedModelId) {
     return false;
   }
   return true;
@@ -96,7 +92,6 @@ export function readLastCacheTtlTimestamp(
 ): number | null {
   try {
     const entries = readCacheTtlEntries(sessionManager);
-    let last: number | null = null;
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i];
       if (entry?.type !== "custom" || entry?.customType !== CACHE_TTL_CUSTOM_TYPE) {
@@ -108,11 +103,10 @@ export function readLastCacheTtlTimestamp(
       }
       const ts = typeof data?.timestamp === "number" ? data.timestamp : null;
       if (ts && Number.isFinite(ts)) {
-        last = ts;
-        break;
+        return ts;
       }
     }
-    return last;
+    return null;
   } catch {
     return null;
   }

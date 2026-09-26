@@ -145,6 +145,13 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
   backend, or an ACP backend such as `codex (acp/acpx)`. See
   [Agent runtimes](/concepts/agent-runtimes) for the provider/model/runtime
   distinction.
+- The `/status` chat command shows `Endpoint`: the upstream base URL
+  from the same prepared model/auth decision used to select the route. It
+  describes the current selection, not a previous request or billing attribution.
+  The URL is the API base; the transport adds operation paths such as
+  `/responses` when sending requests.
+  Routes without a resolved endpoint display `unknown`. Displayed URLs omit
+  user information, query parameters, and fragments; custom paths are hidden.
 - When the current session snapshot is sparse, the `/status` chat command (see
   [Slash commands](/tools/slash-commands)) can backfill token and cache counters
   from the most recent transcript usage log. Existing nonzero live values still

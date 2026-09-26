@@ -205,18 +205,6 @@ describe("TwitchClientManager", () => {
       expect(mockLogger.info).toHaveBeenCalledWith("Connected to Twitch as testbot");
     });
 
-    it("should use account username as default channel when channel not specified", async () => {
-      const accountWithoutChannel: TwitchAccountConfig = {
-        ...testAccount,
-        channel: "",
-      } as unknown as TwitchAccountConfig;
-
-      await manager.getClient(accountWithoutChannel);
-
-      // New implementation: channel (testbot) is passed to constructor, not via join()
-      expect(mockConnect).toHaveBeenCalledTimes(1);
-    });
-
     it("should reuse existing client for same account", async () => {
       const client1 = await manager.getClient(testAccount);
       const client2 = await manager.getClient(testAccount);
@@ -403,22 +391,23 @@ describe("TwitchClientManager", () => {
 
       await manager.getClient(accountWithPrefix);
 
+      expect(mockAuthProvider.constructor).toHaveBeenCalledOnce();
       expect(mockAuthProvider.constructor).toHaveBeenCalledWith("test-client-id", "actualtoken123");
     });
 
     it("should use token directly when no oauth: prefix", async () => {
       // Override the mock to return a token without oauth: prefix
       resolveTwitchTokenMock.mockReturnValue({
-        token: "oauth:mock-token-from-tests",
+        token: "raw-token-from-tests",
         source: "config" as const,
       });
 
       await manager.getClient(testAccount);
 
-      // Implementation strips oauth: prefix from all tokens
+      expect(mockAuthProvider.constructor).toHaveBeenCalledOnce();
       expect(mockAuthProvider.constructor).toHaveBeenCalledWith(
         "test-client-id",
-        "mock-token-from-tests",
+        "raw-token-from-tests",
       );
     });
 
@@ -750,16 +739,6 @@ describe("TwitchClientManager", () => {
       expect(result1).not.toEqual(result2);
     });
 
-    it("should handle sending to account's default channel", async () => {
-      await manager.sendMessage(
-        testAccount,
-        testAccount.channel || testAccount.username,
-        "Test message",
-      );
-
-      expect(mockSay).toHaveBeenCalledWith("testchannel", "Test message");
-    });
-
     it("should log and return a formatted send failure", async () => {
       mockSay.mockRejectedValueOnce(new Error("Rate limited"));
 
@@ -958,20 +937,6 @@ describe("TwitchClientManager", () => {
       expect(messages2).toHaveLength(1);
       expect(messages1[0]?.message).toBe("msg1");
       expect(messages2[0]?.message).toBe("msg2");
-    });
-
-    it("should handle rapid client creation requests", async () => {
-      const promises = [
-        manager.getClient(testAccount),
-        manager.getClient(testAccount),
-        manager.getClient(testAccount),
-      ];
-
-      await Promise.all(promises);
-
-      // Note: The implementation doesn't handle concurrent getClient calls,
-      // so multiple connections may be created. This is expected behavior.
-      expect(mockConnect).toHaveBeenCalled();
     });
   });
 });

@@ -100,7 +100,11 @@ export function resolveProviderModelMaterializationAuthMode(
 /** Maps runtime/stored credential modes onto the provider route contract. */
 export function resolveProviderModelRouteAuthRequirement(
   mode: string | undefined,
+  authRequirement?: ProviderModelRouteAuthRequirement | null,
 ): ProviderModelRouteAuthRequirement | undefined {
+  if (authRequirement !== undefined) {
+    return authRequirement ?? undefined;
+  }
   switch (mode) {
     case "api-key":
     case "api_key":
@@ -117,8 +121,12 @@ export function resolveProviderModelRouteAuthRequirement(
 export function providerModelRouteAcceptsAuthMode(params: {
   requirement: ProviderModelRouteAuthRequirement;
   mode: string | undefined;
+  authRequirement?: ProviderModelRouteAuthRequirement | null;
 }): boolean {
-  return resolveProviderModelRouteAuthRequirement(params.mode) === params.requirement;
+  return (
+    resolveProviderModelRouteAuthRequirement(params.mode, params.authRequirement) ===
+    params.requirement
+  );
 }
 
 /** Preserves an exact credential mode while normalizing authored api-key syntax. */
@@ -246,8 +254,9 @@ function reject(
 function routeForMode(
   resolution: Extract<ProviderModelRouteResolution, { kind: "routes" }>,
   mode: string | undefined,
+  authRequirement?: ProviderModelRouteAuthRequirement | null,
 ): ProviderModelRouteCandidate | undefined {
-  const requirement = resolveProviderModelRouteAuthRequirement(mode);
+  const requirement = resolveProviderModelRouteAuthRequirement(mode, authRequirement);
   return requirement
     ? resolution.routes.find((candidate) => candidate.authRequirement === requirement)
     : undefined;
@@ -327,7 +336,8 @@ export function selectProviderModelRouteAuth(params: {
       ? buildProviderModelAuthSourcePlan({
           profiles: params.sourcePlan.orderedProfiles.filter(
             (profile) =>
-              resolveProviderModelRouteAuthRequirement(profile.mode) === configuredRequirement,
+              resolveProviderModelRouteAuthRequirement(profile.mode, profile.authRequirement) ===
+              configuredRequirement,
           ),
           explicitOrder: params.sourcePlan.profiles.explicitOrder,
           preserveProfilePriority: params.sourcePlan.preserveProfilePriority,
@@ -366,7 +376,7 @@ export function selectProviderModelRouteAuth(params: {
     attempt.kind === "profile" ? [attempt.source] : [],
   );
   let routeProfileAttempts = logicalProfiles.flatMap((source) => {
-    const route = routeForMode(params.resolution, source.mode);
+    const route = routeForMode(params.resolution, source.mode, source.authRequirement);
     if (!route || (configuredRequirement && route.authRequirement !== configuredRequirement)) {
       return [];
     }
@@ -465,8 +475,14 @@ export function selectProviderModelRouteAuth(params: {
       params.sourcePlan.kind === "automatic" &&
       params.sourcePlan.orderedProfiles.length === 0 &&
       params.sourcePlan.fallback === undefined;
+    // An identity-only login is an explicit provider denial of inference. A
+    // native runtime must not replace that decision with another account.
+    const hostHasDeniedCredential =
+      params.sourcePlan.kind === "automatic" &&
+      params.sourcePlan.orderedProfiles.some((source) => source.authRequirement === null);
     if (
       runtimeAuthOwnerIsCompatible &&
+      !hostHasDeniedCredential &&
       !configuredRoute &&
       (params.resolution.routes.length > 1 || hostHasNoCredentialToHonor)
     ) {

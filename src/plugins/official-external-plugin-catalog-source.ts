@@ -221,9 +221,9 @@ export function filterOfficialExternalPluginCatalogEntriesBySourceRefs(
   let configuredSourceRefs: Set<string> | undefined;
   return entries.filter((entry) => {
     // One synchronous batch owns these configured facts; empty batches stay lazy.
-    configuredSourceRefs ??= new Set(
+    const sourceRefs = (configuredSourceRefs ??= new Set(
       Object.keys(resolveOfficialExternalPluginCatalogProfileConfig(params?.catalogConfig).sources),
-    );
+    ));
     let candidates = getFeedEntryInstallCandidateRecords(entry);
     if (params?.requireManifestInstallSourceRef) {
       const manifestCandidate = getManifestInstallSourceRefCandidate(entry);
@@ -233,13 +233,7 @@ export function filterOfficialExternalPluginCatalogEntriesBySourceRefs(
         candidates = [{}];
       }
     }
-    let valid = true;
-    for (const candidate of candidates) {
-      if (!hasKnownCatalogSourceRef(candidate, configuredSourceRefs)) {
-        valid = false;
-      }
-    }
-    return valid;
+    return candidates.every((candidate) => hasKnownCatalogSourceRef(candidate, sourceRefs));
   });
 }
 

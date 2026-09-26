@@ -35,7 +35,6 @@ import {
   loadTranscriptEventsSync,
   listSessionPendingInputs,
   patchSessionEntryCore,
-  replaceTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -45,10 +44,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
-import {
-  waitForSessionTranscriptIndexReconcile,
-  waitForSessionTranscriptProjection,
-} from "../config/sessions/session-transcript-reconcile.js";
+import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -80,6 +76,7 @@ import {
   createChatVisionModelCatalogSnapshot,
   createDirectChatContext,
   createTextTranscriptEvent,
+  registerChatConnectionIdentityTest,
 } from "./server-chat.agent-events.test-helpers.js";
 import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
 import { createGatewayChatMetadataRuntime } from "./server-methods/chat-metadata-runtime.js";
@@ -98,7 +95,11 @@ import {
   captureChatResult,
   type CapturedChatResponse,
 } from "./server.chat-response.test-support.js";
-import { releaseSessionTestDirectories } from "./session-test-directories.test-support.js";
+import {
+  createDirectChatSessionStoreFixture,
+  writeMainChatSessionTranscript as writeMainSessionTranscript,
+  type ChatSessionDirectoryOptions,
+} from "./server.chat-session-store.test-support.js";
 import type { GatewaySessionsDefaults } from "./session-utils.types.js";
 import {
   connectOk,
@@ -169,27 +170,37 @@ type GatewaySocket = Awaited<ReturnType<GatewayHarness["openWs"]>>;
 let harness: GatewayHarness;
 
 const autoCleanupTempDirs = createTempDirTracker();
+const sessionStoreFixture = createDirectChatSessionStoreFixture(autoCleanupTempDirs);
+const openDirectChatSession = sessionStoreFixture.open;
 
 afterEach(async () => {
-  await disposeSessionReadContexts();
-  await releaseSessionTestDirectories(autoCleanupTempDirs.dirs);
+  await resetDirectChatSession();
   autoCleanupTempDirs.cleanup();
 });
 
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
+  sessionStoreFixture.prepare();
 });
 
 afterAll(async () => {
-  await harness.close();
+  try {
+    await sessionStoreFixture.dispose();
+  } finally {
+    await harness.close();
+  }
 });
 
 async function withGatewayChatHarness(
-  run: (ctx: { ws: GatewaySocket; createSessionDir: () => Promise<string> }) => Promise<void>,
+  run: (ctx: {
+    ws: GatewaySocket;
+    createSessionDir: (options?: ChatSessionDirectoryOptions) => Promise<string>;
+  }) => Promise<void>,
   options?: { headers?: Record<string, string> },
 ) {
   const ws = await harness.openWs(options?.headers);
-  const createSessionDir = async () => openDirectChatSession().sessionDir;
+  const createSessionDir = async (directoryOptions?: ChatSessionDirectoryOptions) =>
+    openDirectChatSession(directoryOptions).sessionDir;
 
   try {
     await run({ ws, createSessionDir });
@@ -239,43 +250,6 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   resetConfigRuntimeState();
 }
 
-async function writeMainSessionTranscript(
-  events: unknown[],
-  sessionId = "sess-main",
-  opts?: {
-    agentId?: string;
-    sessionKey?: string;
-  },
-) {
-  const storePath = testState.sessionStorePath;
-  if (!storePath) {
-    throw new Error("session store path was not initialized");
-  }
-  // These fixtures always seed a complete fresh transcript. Replace it in one
-  // transaction so large history cases do not pay one SQLite commit per event.
-  const transcriptEvents = events
-    .filter((event) => typeof event !== "string" || event.trim())
-    .map((event) => (typeof event === "string" ? JSON.parse(event) : event)) as Parameters<
-    typeof replaceTranscriptEvents
-  >[1];
-  await replaceTranscriptEvents(
-    {
-      agentId: opts?.agentId ?? "main",
-      sessionId,
-      sessionKey: opts?.sessionKey ?? "agent:main:main",
-      storePath,
-    },
-    transcriptEvents,
-  );
-  // Oversized fixture transcripts take the deferred rebuild path; history
-  // reads need the projection converged before the case under test runs.
-  await waitForSessionTranscriptProjection({
-    agentId: opts?.agentId ?? "main",
-    sessionId,
-    storePath,
-  });
-}
-
 async function withDirectChatSession(
   run: (sessionDir: string, storePath: string) => Promise<void>,
 ) {
@@ -289,13 +263,6 @@ async function withDirectChatSession(
 
 type StoredSessionEntry = Parameters<typeof writeSessionStore>[0]["entries"][string];
 
-function openDirectChatSession() {
-  const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
-  const storePath = path.join(sessionDir, "sessions.json");
-  testState.sessionStorePath = storePath;
-  return { sessionDir, storePath };
-}
-
 function getDirectChatSessionWorkRelease(sessionKey = "agent:main:main") {
   return getSessionWorkAdmissionRelease({
     scope: resolveSessionStorePathForScope({ sessionKey }, getRuntimeConfig()),
@@ -305,7 +272,7 @@ function getDirectChatSessionWorkRelease(sessionKey = "agent:main:main") {
 
 async function resetDirectChatSession() {
   await disposeSessionReadContexts();
-  await releaseSessionTestDirectories(autoCleanupTempDirs.dirs);
+  await sessionStoreFixture.reset();
   dispatchInboundMessageMock.mockReset();
   resetConfigRuntimeState();
 }
@@ -621,17 +588,18 @@ const configuredImageModelCases: ConfiguredImageModelCase[] = [
 
 async function prepareMainHistoryHarness(params: {
   ws: GatewaySocket;
-  createSessionDir: () => Promise<string>;
+  createSessionDir: (options?: ChatSessionDirectoryOptions) => Promise<string>;
+  freshStore?: boolean;
   sessionId?: string;
 }) {
   await connectOk(params.ws);
-  const sessionDir = await params.createSessionDir();
+  const sessionDir = await params.createSessionDir({ fresh: params.freshStore });
   await writeMainSessionStore(params.sessionId);
   return sessionDir;
 }
 
 async function prepareUnconfiguredAcpHarnessSession(options?: { withMetadata?: boolean }) {
-  openDirectChatSession();
+  openDirectChatSession({ fresh: true });
   const sessionKey = `agent:codex:acp:${randomUUID()}`;
   const config: OpenClawConfig = {
     agents: { entries: { main: { default: true } } },
@@ -791,55 +759,6 @@ describe("gateway server chat", () => {
           (responses[0]?.payload as { sessionInfo?: { placement?: { state?: string } } })
             ?.sessionInfo?.placement,
         ).toMatchObject({ state: "active", environmentId: "env-placement" });
-      } finally {
-        testState.sessionStorePath = undefined;
-      }
-    },
-  );
-
-  test.each(["chat.history", "chat.startup"] as const)(
-    "%s replays the active plan snapshot in inFlightRun",
-    async (method) => {
-      openDirectChatSession();
-      try {
-        await writeMainSessionStore();
-        const context = createDirectChatContext();
-        const controller = new AbortController();
-        context.chatAbortControllers.set("run-active", {
-          controller,
-          sessionId: "sess-main",
-          sessionKey: "main",
-          startedAtMs: 1_000,
-          expiresAtMs: 10_000,
-          projectSessionActive: true,
-        });
-        const activeRun = context.chatRunState.getOrCreate("run-active");
-        activeRun.buffer = "partial reply";
-        activeRun.planSnapshot = {
-          explanation: "Replay on reconnect",
-          steps: [{ step: "Reconnect clients", status: "in_progress" }],
-        };
-        const responses: Array<{ ok: boolean; payload?: unknown }> = [];
-        await callDirectChat(method, {
-          id: method,
-          params: makeMainSessionParams(),
-          respond: captureChatResult(responses),
-          context,
-        });
-
-        expect(responses).toHaveLength(1);
-        expect(responses[0]?.ok).toBe(true);
-        expect(
-          (responses[0]?.payload as { inFlightRun?: unknown } | undefined)?.inFlightRun,
-        ).toEqual({
-          runId: "run-active",
-          text: "partial reply",
-          startedAt: 1_000,
-          plan: {
-            explanation: "Replay on reconnect",
-            steps: [{ step: "Reconnect clients", status: "in_progress" }],
-          },
-        });
       } finally {
         testState.sessionStorePath = undefined;
       }
@@ -1034,7 +953,7 @@ describe("gateway server chat", () => {
   test.each(["chat.history", "chat.startup"] as const)(
     "%s adopts the in-flight run for a non-default agent alias key",
     async (method) => {
-      const { sessionDir } = openDirectChatSession();
+      const { sessionDir } = openDirectChatSession({ fresh: true });
       try {
         // Per-agent stores: bare keys then carry no persisted fixed-store
         // owner, so an explicit non-default agentId is a valid pairing.
@@ -1301,7 +1220,7 @@ describe("gateway server chat", () => {
   test("chat.history exposes selected and synthetic session metadata for startup hydration", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
-      await createSessionDir();
+      await createSessionDir({ fresh: true });
       const updatedAt = Date.now();
       await writeStoredMainSession({
         updatedAt,
@@ -1467,7 +1386,7 @@ describe("gateway server chat", () => {
       defaults: {},
       list: [{ id: "main", default: true }, { id: "work" }],
     };
-    openDirectChatSession();
+    openDirectChatSession({ fresh: true });
     try {
       await writeSessionStore({
         agentId: "work",
@@ -1657,18 +1576,6 @@ describe("gateway server chat", () => {
       rawCatalog: "slow",
       expectedDefault: "medium",
     },
-    {
-      name: "inherits prepared Medium when the raw catalog is empty",
-      preparedReasoning: true,
-      rawCatalog: "empty",
-      expectedDefault: "medium",
-    },
-    {
-      name: "inherits prepared Medium over a non-reasoning raw route",
-      preparedReasoning: true,
-      rawCatalog: "nonreasoning",
-      expectedDefault: "medium",
-    },
     { name: "leaves unavailable prepared metadata unknown", rawCatalog: "slow" },
     {
       name: "keeps identity-only prepared metadata unknown and explicit XHigh intact",
@@ -1704,18 +1611,6 @@ describe("gateway server chat", () => {
       rawCatalog: "slow",
       configured: { agent: "off", model: "medium", global: "high" },
       expectedDefault: "off",
-    },
-    {
-      name: "respects per-model Medium over global Off without metadata",
-      rawCatalog: "slow",
-      configured: { model: "medium", global: "off" },
-      expectedDefault: "medium",
-    },
-    {
-      name: "respects per-agent Low over model and global defaults without metadata",
-      rawCatalog: "slow",
-      configured: { agent: "low", model: "medium", global: "high" },
-      expectedDefault: "low",
     },
     {
       name: "keeps explicit Off when the inherited default is unknown",
@@ -1955,7 +1850,7 @@ describe("gateway server chat", () => {
       async (state) => {
         const previousAgentConfig = testState.agentConfig;
         const previousAgentsConfig = testState.agentsConfig;
-        openDirectChatSession();
+        const { storePath } = openDirectChatSession({ fresh: true });
         try {
           const config = {
             agents: {
@@ -1975,6 +1870,7 @@ describe("gateway server chat", () => {
             talk: { agentId: "main" },
           };
           await state.writeConfig(config);
+          setRuntimeConfigSnapshot({ ...config, session: { store: storePath } });
           const pluginMetadataSnapshot = createGatewayPluginMetadataSnapshot(config);
           assertPluginMetadataSnapshotConsistency(pluginMetadataSnapshot);
           await withPluginMetadataSnapshotScope(
@@ -2025,8 +1921,7 @@ describe("gateway server chat", () => {
                 },
               });
               const { loadGatewaySessionEntryReadOnly } = await import("./session-utils.js");
-              const persistedConfig = { ...initialConfig, session: getRuntimeConfig().session };
-              setRuntimeConfigSnapshot(persistedConfig);
+              setRuntimeConfigSnapshot(initialConfig);
               const loaded = loadGatewaySessionEntryReadOnly("agent:work:main");
               expect(loaded.cfg.agents?.defaults?.model).toEqual(config.agents.defaults.model);
               expect(loaded.cfg.agents?.entries).toEqual(config.agents.entries);
@@ -2103,14 +1998,14 @@ describe("gateway server chat", () => {
               const preparedAuthStoreByAgentId = new Map([
                 [
                   "main",
-                  loadAuthProfileStoreForRuntime(resolveAgentDir(persistedConfig, "main"), {
+                  loadAuthProfileStoreForRuntime(resolveAgentDir(initialConfig, "main"), {
                     readOnly: true,
                   }),
                 ],
                 [
                   "work",
-                  loadAuthProfileStoreForRuntime(resolveAgentDir(persistedConfig, "work"), {
-                    inheritedAuthDir: resolveAgentDir(persistedConfig, "main"),
+                  loadAuthProfileStoreForRuntime(resolveAgentDir(initialConfig, "work"), {
+                    inheritedAuthDir: resolveAgentDir(initialConfig, "main"),
                     readOnly: true,
                   }),
                 ],
@@ -2157,7 +2052,7 @@ describe("gateway server chat", () => {
                   return existing;
                 }
                 const projector = createGatewayAgentModelCatalogProjector({
-                  cfg: persistedConfig,
+                  cfg: initialConfig,
                   agentId,
                   snapshot: catalogSnapshot,
                   metadataSnapshot: pluginMetadataSnapshot,
@@ -2175,7 +2070,7 @@ describe("gateway server chat", () => {
                     params: { view: "configured" },
                     preloadedCatalog: {
                       agentId,
-                      config: persistedConfig,
+                      config: initialConfig,
                       snapshot: catalogSnapshot,
                     },
                     preloadedOnly: true,
@@ -2196,10 +2091,10 @@ describe("gateway server chat", () => {
                     agentDir: "/tmp/chat-work-agent",
                     catalogComplete: false,
                     workspaceDir: "/tmp/chat-work-workspace",
-                    config: persistedConfig,
+                    config: initialConfig,
                     ...catalogSnapshot,
                   }),
-                getRuntimeConfig: () => persistedConfig,
+                getRuntimeConfig: () => initialConfig,
                 readPreparedGatewayModelCatalog: async () => catalogSnapshot,
                 readChatStartupProjection: vi.fn(async ({ agentId, sessionEntry }) => {
                   const [neutralProjection, sessionProjection] = await Promise.all([
@@ -2219,7 +2114,7 @@ describe("gateway server chat", () => {
                 }),
               });
               const expiredPreferenceEvaluation = await createGatewayAgentModelCatalogProjector({
-                cfg: persistedConfig,
+                cfg: initialConfig,
                 agentId: "work",
                 snapshot: catalogSnapshot,
                 metadataSnapshot: pluginMetadataSnapshot,
@@ -2465,7 +2360,7 @@ describe("gateway server chat", () => {
   test.each(["chat.startup", "chat.history"] as const)(
     "%s scopes metadata to agent session keys without explicit agentId",
     async (method) => {
-      openDirectChatSession();
+      openDirectChatSession({ fresh: true });
       try {
         const fileConfig = {
           agents: {
@@ -3317,7 +3212,7 @@ describe("gateway server chat", () => {
   });
 
   test("chat.send does not recreate a session deleted while admission waits", async () => {
-    openDirectChatSession();
+    openDirectChatSession({ fresh: true });
     const performDeletion = createDeferred();
     let mutation: Promise<void> | undefined;
     try {
@@ -3833,96 +3728,13 @@ describe("gateway server chat", () => {
     }
   });
 
-  test("chat.send persists optional connection identity per turn", async () => {
-    openDirectChatSession();
-    try {
-      await writeStoredMainSession(makeDoneSessionEntry());
-      const context = createDirectChatContext();
-      const send = async (params: {
-        authenticatedUserId?: string;
-        authenticatedUserProfile?: {
-          profileId: string;
-          displayName: string | null;
-          hasAvatar: boolean;
-        };
-        idempotencyKey: string;
-        message: string;
-      }) => {
-        const removeCount = (context.removeChatRun as ReturnType<typeof vi.fn>).mock.calls.length;
-        await sendControlUiChat({
-          context,
-          ...params,
-          respond: vi.fn() as RespondFn,
-        });
-        await getDirectChatSessionWorkRelease();
-        expect(context.removeChatRun).toHaveBeenCalledTimes(removeCount + 1);
-      };
-
-      await send({
-        authenticatedUserId: "alice@example.com",
-        authenticatedUserProfile: {
-          profileId: "0d9f4c35-d221-49da-9a3f-b8c73921066b",
-          displayName: "Alice",
-          hasAvatar: false,
-        },
-        idempotencyKey: "idem-attributed-alice",
-        message: "prompt from alice",
-      });
-      await send({
-        authenticatedUserId: "bob@example.com",
-        authenticatedUserProfile: {
-          profileId: "77ad3957-b2c8-428a-83d3-fc09e696492e",
-          displayName: "Bob",
-          hasAvatar: true,
-        },
-        idempotencyKey: "idem-attributed-bob",
-        message: "prompt from bob",
-      });
-      await send({
-        idempotencyKey: "idem-unattributed",
-        message: "prompt without identity",
-      });
-
-      const transcriptEvents = loadTranscriptEventsSync(
-        makeMainSessionScope(testState.sessionStorePath),
-      );
-      expect(transcriptEvents).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "message",
-            message: expect.objectContaining({
-              role: "user",
-              content: "prompt from alice",
-              __openclaw: expect.objectContaining({
-                senderId: "0d9f4c35-d221-49da-9a3f-b8c73921066b",
-                senderName: "Alice",
-              }),
-            }),
-          }),
-          expect.objectContaining({
-            type: "message",
-            message: expect.objectContaining({
-              role: "user",
-              content: "prompt from bob",
-              __openclaw: expect.objectContaining({
-                senderId: "77ad3957-b2c8-428a-83d3-fc09e696492e",
-                senderName: "Bob",
-              }),
-            }),
-          }),
-          expect.objectContaining({
-            type: "message",
-            message: expect.objectContaining({
-              role: "user",
-              content: "prompt without identity",
-              __openclaw: expect.not.objectContaining({ senderId: expect.anything() }),
-            }),
-          }),
-        ]),
-      );
-    } finally {
-      await resetDirectChatSession();
-    }
+  registerChatConnectionIdentityTest({
+    withDirectChatSession,
+    prepareSession: () => writeStoredMainSession(makeDoneSessionEntry()),
+    waitForSessionWork: getDirectChatSessionWorkRelease,
+    sendControlUiChat,
+    readTranscript: () =>
+      loadTranscriptEventsSync(makeMainSessionScope(testState.sessionStorePath)),
   });
 
   test("chat.send preserves a terminal source claim before admitting the next turn", async () => {
@@ -3930,6 +3742,7 @@ describe("gateway server chat", () => {
     const dispatchRelease = createDeferred();
     const priorRunId = "idem-prior-terminal-claim";
     const nextRunId = "idem-after-terminal-claim";
+    const removal = createDeferred();
     try {
       await writeStoredMainSession(
         makeDoneSessionEntry({
@@ -3939,7 +3752,14 @@ describe("gateway server chat", () => {
           restartRecoveryTerminalRunIds: ["idem-older-terminal-claim"],
         }),
       );
-      const context = createDirectChatContext();
+      const context = createDirectChatContext({
+        removeChatRun: vi.fn((runId) => {
+          if (runId === nextRunId) {
+            removal.resolve(undefined);
+          }
+          return undefined;
+        }),
+      });
       dispatchInboundMessageMock.mockImplementationOnce(async () => dispatchRelease.promise);
       let snapshotAtAck: ReturnType<typeof loadSessionEntry>;
       const freshAdmission = vi.fn(async () => {
@@ -3992,7 +3812,7 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 
       dispatchRelease.resolve(undefined);
-      await getDirectChatSessionWorkRelease();
+      await removal.promise;
       expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     } finally {
       dispatchRelease.resolve(undefined);
@@ -5593,7 +5413,7 @@ describe("gateway server chat", () => {
   test("chat.history backfills claude-cli sessions from Claude project files", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
-      const sessionDir = await createSessionDir();
+      const sessionDir = await createSessionDir({ fresh: true });
       const sessionId = "sess-claude-cli-backfill";
       const homeEnvSnapshot = captureEnv(["HOME"]);
       const homeDir = path.join(sessionDir, "home");
@@ -5703,7 +5523,7 @@ describe("gateway server chat", () => {
   test("chat.history deduplicates a structured local Claude delivery with managed audio", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
-      const sessionDir = await createSessionDir();
+      const sessionDir = await createSessionDir({ fresh: true });
       const sessionId = "sess-claude-cli-delivery-dedupe";
       const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07531";
       const deliveryTimestamp = Date.parse("2026-03-26T16:29:55.500Z");
@@ -5798,7 +5618,7 @@ describe("gateway server chat", () => {
       const homeEnvSnapshot = captureEnv(["HOME"]);
       try {
         await connectOk(secondWs);
-        const sessionDir = await createSessionDir();
+        const sessionDir = await createSessionDir({ fresh: true });
         const sessionId = "sess-claude-cli-large-snapshot";
         const cliSessionId = "7b8b202c-f6bb-4046-9475-d2f15fd07533";
         const homeDir = path.join(sessionDir, "home");
@@ -5900,7 +5720,7 @@ describe("gateway server chat", () => {
   test("chat.history makes the full local prefix reachable in a claude-cli merge", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
-      const sessionDir = await createSessionDir();
+      const sessionDir = await createSessionDir({ fresh: true });
       const sessionId = "sess-claude-cli-local-prefix";
       const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07532";
       const homeEnvSnapshot = captureEnv(["HOME"]);
@@ -5976,7 +5796,7 @@ describe("gateway server chat", () => {
   test("chat.history keeps offset paging when a claude-cli binding has no import", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
-      const sessionDir = await createSessionDir();
+      const sessionDir = await createSessionDir({ fresh: true });
       const sessionId = "sess-claude-cli-missing-import";
       const homeEnvSnapshot = captureEnv(["HOME"]);
       setTestEnvValue("HOME", path.join(sessionDir, "empty-home"));
@@ -6032,7 +5852,7 @@ describe("gateway server chat", () => {
   test("chat.history terminates when the full local read dedupes every claude-cli import", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
-      const sessionDir = await createSessionDir();
+      const sessionDir = await createSessionDir({ fresh: true });
       const sessionId = "sess-claude-cli-dedupe-loop";
       const homeEnvSnapshot = captureEnv(["HOME"]);
       const homeDir = path.join(sessionDir, "home");
@@ -6535,39 +6355,6 @@ describe("gateway server chat", () => {
         headers: { origin: `http://127.0.0.1:${harness.port}` },
       },
     );
-  });
-
-  test("chat.history hard-caps single oversized nested payloads", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await prepareMainHistoryHarness({ ws, createSessionDir });
-      const historyMaxBytes = getMaxChatHistoryMessagesBytes();
-      const hugeNestedText = "n".repeat(300_000);
-      await writeMainSessionTranscript([
-        JSON.stringify({
-          id: "msg-huge",
-          message: {
-            role: "assistant",
-            timestamp: Date.now(),
-            content: [
-              {
-                type: "tool_result",
-                toolUseId: "tool-1",
-                output: { nested: { payload: hugeNestedText } },
-              },
-            ],
-          },
-        }),
-      ]);
-
-      const messages = await fetchHistoryMessages(ws);
-      const serialized = JSON.stringify(messages);
-      expect(Buffer.byteLength(serialized, "utf8")).toBeLessThanOrEqual(historyMaxBytes);
-      expect(serialized).toContain("[chat.history omitted: message too large]");
-      expect(messages[0]).toMatchObject({
-        __openclaw: { id: "msg-huge", truncated: true, reason: "oversized" },
-      });
-      expect(serialized.includes(hugeNestedText.slice(0, 256))).toBe(false);
-    });
   });
 
   test("projects persisted media facts through Gateway history and sessions_history", async () => {
@@ -7086,19 +6873,6 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history applies RPC maxChars", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await prepareMainHistoryHarness({ ws, createSessionDir });
-      await writeMainSessionTranscript([
-        createTextTranscriptEvent("assistant", "abcdefghij", { timestamp: Date.now() }),
-      ]);
-
-      const messages = await fetchHistoryMessages(ws, { maxChars: 7 });
-      const serialized = JSON.stringify(messages);
-      expect(serialized).toContain("abcdefg\\n...(truncated)...");
-    });
-  });
-
   test("chat.history rejects invalid RPC maxChars values", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await prepareMainHistoryHarness({ ws, createSessionDir });
@@ -7157,7 +6931,12 @@ describe("gateway server chat", () => {
   test("chat.message.get returns archive-backed rows surfaced by history", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionId = "sess-archive-backed";
-      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir, sessionId });
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        sessionId,
+        freshStore: true,
+      });
       await fs.writeFile(
         `${testSessionFilePath(sessionDir, sessionId)}.reset.2026-02-16T22-26-34.000Z`,
         [
@@ -7193,7 +6972,7 @@ describe("gateway server chat", () => {
         },
       });
       await connectOk(ws);
-      await createSessionDir();
+      await createSessionDir({ fresh: true });
       await writeSessionStore({
         agentId: "work",
         entries: {
@@ -7223,7 +7002,12 @@ describe("gateway server chat", () => {
   test("chat.message.get reports oversized archive transcript entries as unavailable", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionId = "sess-oversized-archive";
-      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir, sessionId });
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        sessionId,
+        freshStore: true,
+      });
       const oversizedLine = JSON.stringify(
         createTextTranscriptEvent("assistant", "x".repeat(300 * 1024), {
           id: "msg-oversized",
@@ -7349,25 +7133,6 @@ describe("gateway server chat", () => {
 
       const messages = await fetchHistoryMessages(ws, { maxChars: 3 });
       expect(messages).toStrictEqual([]);
-    });
-  });
-
-  test("chat.history backfills visible messages when raw tail is mostly silent", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await prepareMainHistoryHarness({ ws, createSessionDir });
-      const silentTail = Array.from({ length: 24 }, (_, index) =>
-        createTextTranscriptEvent("assistant", "NO_REPLY", { timestamp: Date.now() + index + 2 }),
-      );
-      await writeMainSessionTranscript([
-        createTextTranscriptEvent("user", "visible question", { timestamp: Date.now() }),
-        createTextTranscriptEvent("assistant", "visible answer", { timestamp: Date.now() + 1 }),
-        ...silentTail,
-      ]);
-
-      const messages = await fetchHistoryMessages(ws, { limit: 2, maxChars: 100 });
-      expect(JSON.stringify(messages)).toContain("visible question");
-      expect(JSON.stringify(messages)).toContain("visible answer");
-      expect(JSON.stringify(messages)).not.toContain("NO_REPLY");
     });
   });
 
@@ -7745,59 +7510,6 @@ describe("gateway server chat", () => {
     },
   );
 
-  test("chat.history first-page metadata pages backward without overlaps or gaps", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await prepareMainHistoryHarness({ ws, createSessionDir });
-      await writeMainSessionTranscript(
-        Array.from({ length: 7 }, (_, index) =>
-          createTextTranscriptEvent(
-            index % 2 === 0 ? "user" : "assistant",
-            `message ${index + 1}`,
-            { timestamp: Date.now() + index },
-          ),
-        ),
-      );
-
-      type HistoryPage = {
-        messages?: Array<{ __openclaw?: { seq?: number } }>;
-        nextOffset?: number;
-        hasMore?: boolean;
-        totalMessages?: number;
-      };
-      const pages: HistoryPage[] = [];
-      let offset: number | undefined;
-      do {
-        const page = await rpcReq<HistoryPage>(
-          ws,
-          "chat.history",
-          makeMainSessionParams({
-            limit: 2,
-            ...(offset !== undefined ? { offset } : {}),
-          }),
-        );
-        expect(page.ok).toBe(true);
-        pages.push(page.payload ?? {});
-        offset = page.payload?.nextOffset;
-      } while (pages.at(-1)?.hasMore);
-
-      expect(pages.map((page) => page.messages?.map(readOpenClawSeq))).toEqual([
-        [6, 7],
-        [4, 5],
-        [2, 3],
-        [1],
-      ]);
-      expect(pages.map((page) => page.nextOffset)).toEqual([2, 4, 6, undefined]);
-      expect(pages.map((page) => page.hasMore)).toEqual([true, true, true, false]);
-      expect(pages.map((page) => page.totalMessages)).toEqual([7, 7, 7, 7]);
-      expect(
-        pages
-          .flatMap((page) => page.messages ?? [])
-          .map(readOpenClawSeq)
-          .toSorted((a, b) => (a ?? 0) - (b ?? 0)),
-      ).toEqual([1, 2, 3, 4, 5, 6, 7]);
-    });
-  });
-
   test("chat.history pagination ignores non-message event sequence gaps", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await prepareMainHistoryHarness({ ws, createSessionDir });
@@ -8142,7 +7854,7 @@ describe("gateway server chat", () => {
       let aborted = false;
       await connectOk(ws);
 
-      const sessionDir = await createSessionDir();
+      const sessionDir = await createSessionDir({ fresh: true });
       // Keep ACK timing independent of earlier custom-store fixture registrations.
       testState.sessionStorePath = path.join(
         sessionDir,

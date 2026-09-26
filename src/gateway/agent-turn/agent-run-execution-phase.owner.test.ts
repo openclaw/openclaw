@@ -16,6 +16,7 @@ import { isWebchatClient } from "../../utils/message-channel.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import * as sessionChange from "../server-methods/session-change-event.js";
 import { identifiedClient, runTaskHandler } from "../server-methods/tasks.test-helpers.js";
+import { replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import { startAgentRunExecution } from "./agent-run-execution-phase.js";
 import type { AgentTurnPrincipal } from "./types.js";
@@ -410,17 +411,67 @@ describe("startAgentRunExecution Gateway ownership", () => {
     expect(execution.callerRelease).toHaveBeenCalledOnce();
   });
 
-  it("releases the admitted runtime once when its owner retires before dispatch", async () => {
-    const execution = createExecution({
-      assertContextCurrent: () => {
-        throw new Error("Gateway owner retired");
-      },
-    });
+  it.each([false, true])(
+    "releases the admitted runtime and preserves private failure replay before dispatch (Incognito: %s)",
+    async (incognito) => {
+      const privateMessage = "synthetic-private-pre-dispatch-error";
+      const execution = createVisibleExecution();
+      const fail = () => {
+        throw new Error(privateMessage);
+      };
+      execution.params.assertContextCurrent = fail;
+      execution.params.prepared.userTurn.releaseProcessingAbortObserver = fail;
+      Object.assign(execution.params.prepared.userTurn.recorder ?? {}, {
+        completeProcessing: fail,
+      });
+      execution.params.resolvedSessionKey = "agent:main:dashboard:private-owner";
+      execution.params.sessionEntry = {
+        sessionId: "private-owner",
+        updatedAt: Date.now(),
+        ...(incognito ? { incognito: true } : {}),
+      };
+      execution.params.agentDedupeKeys = [`agent:${execution.params.runId}`];
 
-    await startAgentRunExecution(execution.params);
-    expect(dispatchAgentRunFromGateway).not.toHaveBeenCalled();
-    expect(execution.abortCleanup).toHaveBeenCalledOnce();
-    expect(execution.gatewayRelease).toHaveBeenCalledOnce();
-    expect(execution.runtimeRelease).toHaveBeenCalledOnce();
-  });
+      await startAgentRunExecution(execution.params);
+      expect(dispatchAgentRunFromGateway).not.toHaveBeenCalled();
+      expect(execution.abortCleanup).toHaveBeenCalledOnce();
+      expect(execution.gatewayRelease).toHaveBeenCalledOnce();
+      expect(execution.runtimeRelease).toHaveBeenCalledOnce();
+      const warnings = vi.mocked(execution.params.context.logGateway.warn).mock.calls;
+      expect(warnings).toHaveLength(2);
+      if (incognito) {
+        expect.soft(JSON.stringify(warnings)).not.toContain(privateMessage);
+      } else {
+        expect(JSON.stringify(warnings)).toContain(privateMessage);
+      }
+      const [frame, metadata] = vi.mocked(execution.params.io.emitFinal).mock.calls[0] ?? [];
+      expect(frame?.[2]?.message).toBe(privateMessage);
+      const diagnostics = { errorMessage: frame?.[2]?.message, ...metadata };
+      if (incognito) {
+        expect.soft(JSON.stringify(diagnostics)).not.toContain(privateMessage);
+      } else {
+        expect(diagnostics).toMatchObject({ error: privateMessage, errorMessage: privateMessage });
+      }
+
+      const emitAcceptance = vi.fn();
+      expect(
+        replayAgentTurnIfCached({
+          preflight: {
+            runId: execution.params.runId,
+            agentDedupeKeys: execution.params.agentDedupeKeys,
+          },
+          context: execution.params.context,
+          io: { emitAcceptance, emitFinal: vi.fn() },
+        }),
+      ).toBe(true);
+      const [replayFrame, replayMetadata] = emitAcceptance.mock.calls[0] ?? [];
+      expect(replayFrame).toEqual(frame);
+      const replayDiagnostics = { errorMessage: replayFrame?.[2]?.message, ...replayMetadata };
+      if (incognito) {
+        expect(JSON.stringify(replayDiagnostics)).not.toContain(privateMessage);
+      } else {
+        expect(replayDiagnostics).toMatchObject({ cached: true, errorMessage: privateMessage });
+      }
+    },
+  );
 });

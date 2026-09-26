@@ -38,7 +38,7 @@ type ExternalPricingPolicy = {
   /** Sources whose vendor/model rates this provider charges unchanged, as for gateways. */
   passthroughSources: readonly string[];
 };
-type PricingContext = {
+export type PricingContext = {
   config: OpenClawConfig;
   normalizeKey: (provider: string, model: string) => string;
   catalog: ReadonlyMap<string, PricingValue>;

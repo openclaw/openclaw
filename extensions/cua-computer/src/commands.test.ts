@@ -13,7 +13,7 @@ import {
   CUA_DRIVER_CONTRACT_FIXTURES,
   cuaToolResult,
 } from "./cua-driver-contract.test-fixtures.js";
-import { EscalationReason, type CuaToolResult } from "./driver-client.js";
+import type { CuaToolResult } from "./driver-client.js";
 
 describe("cua-computer provider", () => {
   it("settles the native driver during node preparation without opening a computer execution", async () => {
@@ -363,7 +363,7 @@ describe("cua-computer provider", () => {
   });
 
   it("maps window pixels, app lifecycle, menu, zoom, and escalation tools", async () => {
-    const { session, callTool, escalateScope } = driver();
+    const { session, callTool, getSessionState } = driver();
     const zoomImage = (
       await resizeToJpeg({
         buffer: createSolidPngBuffer(300, 200, { r: 70, g: 125, b: 180 }),
@@ -461,10 +461,7 @@ describe("cua-computer provider", () => {
       { pid: 4242, window_id: 99, path: ["File", "Save"] },
       undefined,
     );
-    expect(escalateScope).toHaveBeenCalledWith(
-      EscalationReason.BackgroundDeliveryFailed,
-      undefined,
-    );
+    expect(getSessionState).toHaveBeenCalledWith(undefined);
   });
 
   it.each([

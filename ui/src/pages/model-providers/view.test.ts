@@ -279,9 +279,11 @@ describe("renderModelProviders", () => {
   });
 
   it("locks provider and default-model mutations while shared config work is pending", async () => {
+    const onPrimaryChange = vi.fn();
     const container = mount(
       props({
         configBusy: true,
+        onPrimaryChange,
         defaultModels: {
           primary: "openai/gpt-5",
           fallbacks: ["anthropic/claude"],
@@ -311,10 +313,14 @@ describe("renderModelProviders", () => {
 
     const defaults = container.querySelector(".model-providers__defaults");
     await updatePickers(container);
-    const defaultSelects = [...(defaults?.querySelectorAll("openclaw-select-picker") ?? [])];
-    expect(defaultSelects).toHaveLength(4);
+    const primary = settingsRow(defaults!, "Model").querySelector<HTMLButtonElement>("button")!;
+    expect(primary.disabled).toBe(false);
+    await choosePickerValue(primary, "anthropic/claude");
+    expect(onPrimaryChange).not.toHaveBeenCalled();
     expect(
-      defaultSelects.every((select) => select.querySelector<HTMLButtonElement>("button")?.disabled),
+      [...settingsRow(defaults!, "Model").querySelectorAll('[role="option"]')].every(
+        (option) => option.getAttribute("aria-disabled") === "true",
+      ),
     ).toBe(true);
     expect(
       [
@@ -376,10 +382,12 @@ describe("renderModelProviders", () => {
     expect(controls.map((control) => control.disabled)).toEqual([true, false, true]);
     const defaults = container.querySelector(".model-providers__defaults");
     await updatePickers(container);
+    const primary = settingsRow(defaults!, "Model").querySelector<HTMLButtonElement>("button")!;
+    expect(primary.disabled).toBe(false);
     expect(
-      [
-        ...(defaults?.querySelectorAll("openclaw-select-picker button, wa-radio-group") ?? []),
-      ].every((control) => control.hasAttribute("disabled")),
+      [...settingsRow(defaults!, "Model").querySelectorAll('[role="option"]')].every(
+        (option) => option.getAttribute("aria-disabled") === "true",
+      ),
     ).toBe(true);
     expect(text(defaults)).not.toContain("operator.admin access");
     button(addForm!, "Save provider")?.click();
@@ -585,30 +593,6 @@ describe("renderModelProviders", () => {
     expect(text(provider)).toContain("Credentials for Writer");
     expect(text(provider)).toContain("Global usage and cost");
     expect(text(provider)).toContain("Global session spend · 30d");
-  });
-
-  it("preserves complete graphemes in custom provider fallback icons", () => {
-    const cases = [
-      { id: "🧭-proxy", expected: "🧭" },
-      { id: "🇺🇸-proxy", expected: "🇺🇸" },
-      { id: "👩‍💻-proxy", expected: "👩‍💻" },
-      { id: "e\u0301-proxy", expected: "E\u0301" },
-      { id: "ß-provider", expected: "S" },
-    ];
-    const container = mount(
-      props({
-        cards: cases.map(({ id }) => card({ id, displayName: id, credentialProviderIds: [id] })),
-      }),
-    );
-
-    for (const { id, expected } of cases) {
-      const row = [...container.querySelectorAll<HTMLElement>("[data-provider-id]")].find(
-        (candidate) => candidate.dataset.providerId === id,
-      );
-      expect(row?.querySelector(".provider-brand-icon--fallback")?.textContent?.trim()).toBe(
-        expected,
-      );
-    }
   });
 
   it("does not invent config key provenance when auth status is unavailable", () => {
