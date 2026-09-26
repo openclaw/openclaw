@@ -207,6 +207,7 @@ describe("worker placement idle suspension", () => {
 
   it.each([
     { reason: "an active worker turn", kind: "worker-claim" },
+    { reason: "an active local turn", kind: "local-claim" },
     { reason: "an admitted turn before its worker claim exists", kind: "admitted-turn" },
     { reason: "a durable pending result after its claim was revoked", kind: "pending-result" },
     { reason: "a durable workspace reconciliation journal", kind: "reconciling-result" },
@@ -224,11 +225,12 @@ describe("worker placement idle suspension", () => {
     if (kind === "provisioning") {
       await harness.placements.seedProvisioning();
     } else {
-      const executionMode = kind === "pending-result" ? "remote-exec" : "worker-turn";
+      const executionMode =
+        kind === "local-claim" || kind === "pending-result" ? "remote-exec" : "worker-turn";
       const active = await harness.service.dispatch({ ...REQUEST, executionMode });
       if (kind === "worker-claim") {
         await claimWorkerTurn();
-      } else if (kind === "pending-result") {
+      } else if (kind === "local-claim" || kind === "pending-result") {
         const claim = await placements.claimTurn({
           ...REQUEST,
           claimId: "busy-local-claim",
@@ -239,10 +241,12 @@ describe("worker placement idle suspension", () => {
             ownerEpoch: active.activeOwnerEpoch,
           },
         });
-        placements.markWorkspaceResultPending(claim);
-        placements.clearLocalTurnClaimsAfterRestart();
-        expect(placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
-        expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+        if (kind === "pending-result") {
+          placements.markWorkspaceResultPending(claim);
+          placements.clearLocalTurnClaimsAfterRestart();
+          expect(placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
+          expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+        }
       } else if (kind === "reconciling-result") {
         const basePack = Buffer.from("idle workspace journal");
         placements.beginWorkspaceReconciliation(
