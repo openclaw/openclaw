@@ -107,7 +107,10 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
         );
       });
       if (entry) {
-        runs.set(runId, entry);
+        // Initialization reads the caller's Map; only patches write new facts.
+        if (changes !== runs) {
+          runs.set(runId, entry);
+        }
         runKeys.set(runId, next);
       } else {
         runs.delete(runId);

@@ -52,6 +52,7 @@ describe("subagent registry query regressions", () => {
     });
     const runs = toRunMap([ungrouped, structuredClone(winner)]);
     const memory = toRunMap([older, winner, ungrouped]);
+    using writes = vi.spyOn(runs, "set");
     const index = buildSubagentRunReadIndexFromRuns({
       runs,
       inMemoryRuns: memory.values(),
@@ -72,6 +73,7 @@ describe("subagent registry query regressions", () => {
     const replay = buildSubagentRunReadIndexFromRuns({ ...index.inputs, now: 200 });
     expect(replay.getDisplaySubagentRun(winner.childSessionKey)).toBe(winner);
     expect(replay.getDisplaySubagentRun(ungrouped.childSessionKey)).toBe(ungrouped);
+    expect(writes).not.toHaveBeenCalled();
   });
 
   it("patches moved memberships and reveals retained generations when a live owner retires", () => {
