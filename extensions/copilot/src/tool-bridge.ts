@@ -24,6 +24,11 @@ import {
 import { createAgentHarnessToolSurfaceRuntime } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { toStringifiedError as toCopilotToolError } from "openclaw/plugin-sdk/error-runtime";
 import { isRawCopilotModelRun } from "./attempt-mode.js";
+import {
+  createSanitizedFailureResult,
+  sanitizeModelVisibleSdkToolResult,
+  sanitizeModelVisibleToolContent,
+} from "./tool-bridge-model-visible-sanitize.js";
 
 type CreateOpenClawCodingTools =
   (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
@@ -517,10 +522,14 @@ function convertOpenClawToolToSdkTool(
     const sanitizedResult = sanitizeToolResult(result);
     const resultIsError = isToolResultError(sanitizedResult);
     // The SDK only marks fulfilled tool results as failures when isError is forwarded.
-    const sdkResult = convertMcpCallToolResult({
-      content: result.content,
-      isError: resultIsError,
-    });
+    // Observers already get sanitizeToolResult (which strips image bytes for storage).
+    // Model-facing SDK content must redact text without dropping image/binary payloads.
+    const sdkResult = sanitizeModelVisibleSdkToolResult(
+      convertMcpCallToolResult({
+        content: sanitizeModelVisibleToolContent(result.content),
+        isError: resultIsError,
+      }),
+    );
     const resultError = resultIsError ? extractToolErrorMessage(sanitizedResult) : undefined;
     const terminal = input.attemptParams.observeToolTerminal?.({
       toolCallId: invocation.toolCallId,
@@ -663,11 +672,9 @@ function toToolStartArgs(args: unknown): Record<string, unknown> {
 function createFailureResult(message: string, error: unknown): ToolResultObject {
   // Copilot's ToolResultObject.error accepts a string (SDK dist/types.d.ts).
   // Serialize the message explicitly; Error.message is not enumerable.
-  return {
-    error: toCopilotToolError(error).message,
-    resultType: "failure",
-    textResultForLlm: message,
-  };
+  // Observers already receive sanitizeToolResult payloads; keep model-visible
+  // failure fields on the same redact policy.
+  return createSanitizedFailureResult(message, toCopilotToolError(error).message);
 }
 
 export function shouldForceCopilotMessageTool(params: CopilotToolAttemptParams): boolean {
