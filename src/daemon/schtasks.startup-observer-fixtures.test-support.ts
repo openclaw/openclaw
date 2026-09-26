@@ -37,34 +37,10 @@ function waitForRelease() {
 waitForLauncherExit();
 `;
 
-// This helper records only the arguments that reached Node; it never runs the original probe.
-export const startupArgvCaptureSource = String.raw`
-const fs = require("node:fs");
-const result = {
-  event: "argv-captured", pid: process.pid, ppid: process.ppid,
-  execPath: process.execPath, argv: process.argv, observedAt: Date.now(), error: null,
-};
-try { result.cwd = process.cwd(); }
-catch (error) { result.error = { code: error.code ?? null, message: String(error.message).slice(0, 512) }; }
-let text = JSON.stringify(result);
-let complete = result.error === null;
-if (Buffer.byteLength(text) > 8 * 1024) {
-  complete = false;
-  text = JSON.stringify({ event: "argv-capture-overflow", pid: process.pid, ppid: process.ppid,
-    argvCount: process.argv.length, evidenceBytes: Buffer.byteLength(text) });
-}
-const resultPath = process.env.OPENCLAW_STARTUP_ARGV_RESULT;
-if (!resultPath) throw new Error("Argv capture result path was not inherited");
-fs.writeFileSync(resultPath + ".tmp", text, { flag: "wx" });
-fs.renameSync(resultPath + ".tmp", resultPath);
-process.exitCode = complete ? 42 : 44;
-`;
-
 const harnessSource = String.raw`
 import cp from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-const launcherStartedAt = Date.now();
 const spec = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const save = (value) => {
   const text = JSON.stringify(value);
@@ -73,7 +49,6 @@ const save = (value) => {
   fs.renameSync(spec.invocationPath + ".tmp", spec.invocationPath);
 };
 const nativeSpawn = cp.spawn;
-let detachedRecord;
 cp.spawn = (command, args, options) => {
   const isControl = spec.mode === "batch" &&
     String(command).toLowerCase() === String(spec.powershellPath).toLowerCase() &&
@@ -82,47 +57,28 @@ cp.spawn = (command, args, options) => {
     typeof args[3] === "string" && options?.env?.OPENCLAW_TASK_SCRIPT === spec.scriptPath &&
     options.env.OPENCLAW_STARTUP_CMD === spec.cmdPath;
   if (options?.detached !== true && !isControl) return nativeSpawn(command, args, options);
-  let effectiveArgs = args;
-  if (spec.preOpenCodePage !== undefined) {
-    if (spec.mode !== "batch" || !/^[0-9]+$/.test(spec.preOpenCodePage) ||
-        !["exit-tag-argv-pre-open-diagnostic", "original-body-pre-open-diagnostic"].includes(spec.variant) ||
-        JSON.stringify(args) !== JSON.stringify(["/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""']) ||
-        options.windowsVerbatimArguments !== true || options.windowsHide !== true || options.stdio !== "ignore") {
-      throw new Error("Pre-open diagnostic does not match the original CMD invocation policy");
-    }
-    effectiveArgs = [...args.slice(0, -1), '"chcp ' + spec.preOpenCodePage + ' >nul & "%OPENCLAW_TASK_SCRIPT%""'];
-  }
   const record = {
-    command, args, effectiveArgs, preOpenCodePage: spec.preOpenCodePage,
+    command, args,
     cwd: options.cwd ?? process.cwd(), detached: options.detached === true,
     transport: isControl ? "powershell-control" : "detached-payload",
     windowsHide: options.windowsHide, windowsVerbatimArguments: options.windowsVerbatimArguments ?? false,
-    originalStdio: options.stdio, variant: spec.variant,
-    effectiveStdio: spec.variant === "file-backed-diagnostic" ? ["ignore", "file", "file"] : options.stdio,
+    originalStdio: options.stdio,
     scriptPath: options.env?.OPENCLAW_TASK_SCRIPT ?? null,
     targetCommand: options.env?.OPENCLAW_STARTUP_CMD ?? null,
     spawnObserved: false, exitObserved: false,
     exitCode: null, exitSignal: null, closeObserved: false, closeCode: null, closeSignal: null,
   };
-  detachedRecord = record;
   save(record);
-  const descriptors = spec.variant === "file-backed-diagnostic"
-    ? [fs.openSync(spec.stdoutPath, "wx"), fs.openSync(spec.stderrPath, "wx")] : [];
-  try {
-    const child = nativeSpawn(command, effectiveArgs, descriptors.length
-      ? { ...options, stdio: ["ignore", ...descriptors] } : options);
-    child.once("spawn", () => { record.pid = child.pid; record.spawnObserved = true; save(record); });
-    child.once("error", (error) => { record.errorCode = error.code ?? null; save(record); });
-    child.once("exit", (code, signal) => {
-      Object.assign(record, { exitObserved: true, exitCode: code, exitSignal: signal }); save(record);
-    });
-    child.once("close", (code, signal) => {
-      Object.assign(record, { closeObserved: true, closeCode: code, closeSignal: signal }); save(record);
-    });
-    return child;
-  } finally {
-    for (const fd of descriptors) fs.closeSync(fd);
-  }
+  const child = nativeSpawn(command, args, options);
+  child.once("spawn", () => { record.pid = child.pid; record.spawnObserved = true; save(record); });
+  child.once("error", (error) => { record.errorCode = error.code ?? null; save(record); });
+  child.once("exit", (code, signal) => {
+    Object.assign(record, { exitObserved: true, exitCode: code, exitSignal: signal }); save(record);
+  });
+  child.once("close", (code, signal) => {
+    Object.assign(record, { closeObserved: true, closeCode: code, closeSignal: signal }); save(record);
+  });
+  return child;
 };
 syncBuiltinESMExports();
 fs.writeFileSync(spec.parentPidPath, String(process.pid));
@@ -132,31 +88,6 @@ const command = spec.mode === "direct" ? {
   workingDirectory: spec.proofRoot,
 } : null;
 await launchFallbackTaskScript(spec.env, command);
-if (spec.variant === "parent-retained-diagnostic" || spec.expectedExitTag !== undefined) {
-  if (!detachedRecord) throw new Error("Parent-retained diagnostic did not observe an owner spawn");
-  detachedRecord.parentRetention = { startedAt: Date.now(), releasedAt: null, reason: null };
-  save(detachedRecord);
-  await new Promise((resolve) => {
-    const release = (reason) => {
-      Object.assign(detachedRecord.parentRetention, { releasedAt: Date.now(), reason });
-      save(detachedRecord);
-      resolve();
-    };
-    function observe() {
-      if (detachedRecord.exitObserved) { release("detached-child-exit"); return; }
-      if (spec.expectedExitTag === undefined && fs.existsSync(spec.markerPath + ".started.json")) {
-        release("probe-start"); return;
-      }
-      if (Date.now() >= launcherStartedAt + spec.timeoutMs) {
-        process.exitCode = 2;
-        release("original-launcher-deadline");
-        return;
-      }
-      setTimeout(observe, 25);
-    }
-    observe();
-  });
-}
 `;
 
 const observerSource = String.raw`
@@ -168,17 +99,6 @@ const read = (file, json = true) => {
     const bytes = fs.readFileSync(file);
     if (bytes.length > spec.outputLimit) throw new Error("Fixture evidence exceeded its bound: " + file);
     return json ? JSON.parse(bytes.toString("utf8")) : bytes.toString("utf8");
-  } catch (error) { if (error.code === "ENOENT") return null; throw error; }
-};
-const readOutput = (file) => {
-  try {
-    const fd = fs.openSync(file, "r");
-    try {
-      const bytes = fs.fstatSync(fd).size;
-      const buffer = Buffer.alloc(Math.min(bytes, spec.outputLimit));
-      const count = fs.readSync(fd, buffer, 0, buffer.length, 0);
-      return { bytes, truncated: bytes > count, base64: buffer.subarray(0, count).toString("base64") };
-    } finally { fs.closeSync(fd); }
   } catch (error) { if (error.code === "ENOENT") return null; throw error; }
 };
 let parentExit;
@@ -199,19 +119,11 @@ for (const name of ["stdout", "stderr"]) {
     }
   });
 }
-function readArgvCapture() {
-  if (!spec.argvCapture) return undefined;
-  try { return { result: read(spec.argvCapture.resultPath), error: null }; }
-  catch (error) { return { result: null,
-    error: { code: error.code ?? null, message: String(error.message).slice(0, 512) } }; }
-}
 function report(event, extra = {}) {
   const record = {
     event, observerPid: process.pid, launcherPid: parent.pid, parentExit, ...output,
     invocation: read(spec.invocationPath), started: read(spec.markerPath + ".started.json"),
     survived: read(spec.markerPath + ".survived.json"),
-    diagnosticStdout: readOutput(spec.stdoutPath), diagnosticStderr: readOutput(spec.stderrPath),
-    ...(spec.argvCapture ? { argvCapture: readArgvCapture() } : {}),
     ...extra,
   };
   process.send(record);
@@ -219,24 +131,9 @@ function report(event, extra = {}) {
 function tick() {
   try {
     if (failure) throw failure;
-    // Observe file bounds while the real detached child can still write.
-    for (const file of [spec.stdoutPath, spec.stderrPath]) {
-      if (fs.existsSync(file) && fs.statSync(file).size > spec.outputLimit) {
-        throw new Error("Detached diagnostic output exceeded its bound");
-      }
-    }
     const marker = read(spec.markerPath, false);
     if (parentExit) {
       if (parentExit.code !== 0) throw new Error("Startup launcher parent did not exit successfully");
-      if (spec.expectedExitTag !== undefined) {
-        const invocation = read(spec.invocationPath);
-        if (invocation?.exitObserved !== true) throw new Error("Exit-tag CMD status was not observed");
-        report("diagnostic-exit", {
-          expectedExitTag: spec.expectedExitTag,
-          exitTagMatched: invocation.exitCode === spec.expectedExitTag,
-        });
-        return;
-      }
       if (marker) {
         const [childPid, launcherPid] = marker.trim().split(":").map(Number);
         const started = read(spec.markerPath + ".started.json");
@@ -262,7 +159,7 @@ function tick() {
   }
 }
 process.once("message", () => {
-  if (spec.expectedExitTag === undefined) fs.writeFileSync(spec.markerPath + ".release", "release");
+  fs.writeFileSync(spec.markerPath + ".release", "release");
   process.disconnect();
 });
 tick();

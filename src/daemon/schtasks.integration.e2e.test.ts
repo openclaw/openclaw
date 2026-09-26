@@ -22,6 +22,7 @@ import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import {
   assertInteractiveLeastPrivilegeTask,
   DIAGNOSTIC_TEXT_LIMIT,
+  readDiagnosticLogTail,
   readRelatedProcessDiagnostics,
   readTaskDefinitionSnapshot,
   readTaskPrincipal,
@@ -244,6 +245,10 @@ async function writeFailureDiagnostics(params: {
         postEnd: params.postEnd,
         postEndError: sanitizeDiagnosticText(params.postEndError, params.replacements),
         serviceOutput: sanitizeDiagnosticText(params.serviceOutput, params.replacements),
+        taskSupervisorLog: await readDiagnosticLogTail(
+          path.join(params.rootDir, "task-supervisor.log"),
+          params.replacements,
+        ),
       },
       null,
       2,
@@ -536,7 +541,10 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
     };
     try {
       await fs.mkdir(stateDir);
-      await fs.writeFile(path.join(stateDir, "openclaw.json"), "{}\n");
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        `${JSON.stringify(releasedBindingPath ? {} : { logging: { file: path.join(rootDir, "task-supervisor.log") } })}\n`,
+      );
       pendingProof = await withEnvAsync(env, async () => {
         if (releasedBindingPath) {
           const defaultTaskBefore = await readTaskDefinitionSnapshot("OpenClaw Gateway");

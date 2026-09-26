@@ -1069,17 +1069,7 @@ jobs:
             ${{ runner.temp }}\openclaw-schtasks-réseau %% ^!-${{ github.run_id }}-${{ github.run_attempt }}\failure-diagnostics.json
             ${{ runner.temp }}\openclaw-schtasks-réseau %% ^!-${{ github.run_id }}-${{ github.run_attempt }}\cleanup-summary.txt
             ${{ runner.temp }}\openclaw-schtasks-réseau %% ^!-${{ github.run_id }}-${{ github.run_attempt }}\startup-fallback-proof\direct-unchanged-stdio-control.observation.json
-            ${{ runner.temp }}\openclaw-schtasks-réseau %% ^!-${{ github.run_id }}-${{ github.run_attempt }}\startup-fallback-proof\direct-file-backed-diagnostic.observation.json
-            ${{ runner.temp }}\openclaw-schtasks-réseau %% ^!-${{ github.run_id }}-${{ github.run_attempt }}\startup-fallback-proof\direct-parent-retained-diagnostic.observation.json
             ${{ runner.temp }}\openclaw-schtasks-réseau %% ^!-${{ github.run_id }}-${{ github.run_attempt }}\startup-fallback-proof\batch-unchanged-stdio-control.observation.json
-            ${{ runner.temp }}\openclaw-schtasks-réseau %% ^!-${{ github.run_id }}-${{ github.run_attempt }}\startup-fallback-proof\batch-file-backed-diagnostic.observation.json
-            ${{ runner.temp }}\openclaw-schtasks-réseau %% ^!-${{ github.run_id }}-${{ github.run_attempt }}\startup-fallback-proof\batch-parent-retained-diagnostic.observation.json
-            ${{ runner.temp }}\openclaw-schtasks-réseau %% ^!-${{ github.run_id }}-${{ github.run_attempt }}\startup-fallback-proof\batch-exit-tag-pathological-diagnostic.observation.json
-            ${{ runner.temp }}\openclaw-schtasks-réseau %% ^!-${{ github.run_id }}-${{ github.run_attempt }}\startup-fallback-proof\batch-exit-tag-code-page-header-diagnostic.observation.json
-            ${{ runner.temp }}\openclaw-schtasks-réseau %% ^!-${{ github.run_id }}-${{ github.run_attempt }}\startup-fallback-proof\batch-exit-tag-argv-capture-diagnostic.observation.json
-            ${{ runner.temp }}\openclaw-schtasks-réseau %% ^!-${{ github.run_id }}-${{ github.run_attempt }}\startup-fallback-proof\batch-exit-tag-argv-pre-open-diagnostic.observation.json
-            ${{ runner.temp }}\openclaw-schtasks-réseau %% ^!-${{ github.run_id }}-${{ github.run_attempt }}\startup-fallback-proof\batch-original-body-pre-open-diagnostic.observation.json
-            ${{ runner.temp }}\openclaw-schtasks-réseau %% ^!-${{ github.run_id }}-${{ github.run_attempt }}\startup-fallback-proof\batch-exit-tag-ascii-path-diagnostic.observation.json
             ${{ runner.temp }}\openclaw-schtasks-legacy-${{ github.run_id }}-${{ github.run_attempt }}\failure-diagnostics.json
           if-no-files-found: warn
           retention-days: 7

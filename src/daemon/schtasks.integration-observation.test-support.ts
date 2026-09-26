@@ -1,5 +1,6 @@
 // Native task/process inspection and sanitized proof rendering.
 import { spawnSync } from "node:child_process";
+import fs from "node:fs/promises";
 import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import { expect } from "vitest";
@@ -242,6 +243,41 @@ export function sanitizeDiagnosticText(
   return sanitized.length <= DIAGNOSTIC_TEXT_LIMIT
     ? sanitized
     : `${sanitized.slice(0, DIAGNOSTIC_TEXT_LIMIT)}\n[truncated]`;
+}
+
+export async function readDiagnosticLogTail(
+  filePath: string,
+  replacements: Array<[string, string]>,
+) {
+  return await fs
+    .open(filePath, "r")
+    .then(async (file) => {
+      try {
+        const { size } = await file.stat();
+        const length = Math.min(size, DIAGNOSTIC_TEXT_LIMIT);
+        const offset = Math.max(0, size - length);
+        const { buffer, bytesRead } = await file.read(Buffer.alloc(length), 0, length, offset);
+        return {
+          bytes: size,
+          truncated: offset > 0,
+          text: sanitizeDiagnosticText(buffer.subarray(0, bytesRead).toString("utf8"), [
+            ...replacements,
+            ...replacements.map(([value, placeholder]): [string, string] => [
+              JSON.stringify(value).slice(1, -1),
+              placeholder,
+            ]),
+          ]),
+        };
+      } finally {
+        await file.close();
+      }
+    })
+    .catch((error: unknown) => ({
+      error: sanitizeDiagnosticText(
+        error instanceof Error ? error.message : String(error),
+        replacements,
+      ),
+    }));
 }
 
 export function sanitizeTaskXml(
