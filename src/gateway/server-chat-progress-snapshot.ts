@@ -31,7 +31,8 @@ function stringifyProgressEvent(event: AgentEventPayload): string {
   return JSON.stringify(event, function (this: object, key: string, input: unknown) {
     let value = input;
     if (types.isNumberObject(value)) {
-      // One-argument Math.max uses JSON's ToNumber, including BigInt rejection.
+      // JSON's ToNumber rejects BigInt from custom coercion; Number() would accept it.
+      // Reflect.apply preserves the boxed input for Math.max's native ToNumber operation.
       value = Reflect.apply(Math.max, undefined, [value]);
     } else if (types.isStringObject(value)) {
       value = String(value);

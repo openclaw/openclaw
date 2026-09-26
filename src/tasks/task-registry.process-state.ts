@@ -202,6 +202,16 @@ export function clearTaskProgressBatches(): void {
   batches.clear();
 }
 
+export function clearTaskActivityOverlays(): void {
+  const activities = getTaskRegistryProcessState().taskActivityByTaskId;
+  for (const activity of activities.values()) {
+    if (activity.flushTimer) {
+      clearTimeout(activity.flushTimer);
+    }
+  }
+  activities.clear();
+}
+
 const indexState = getTaskRegistryProcessState();
 
 export function getTasksByRunId(runId: string): TaskRecord[] {
