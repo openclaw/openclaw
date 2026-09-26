@@ -3,7 +3,10 @@
  * Used by discovery, browsing, visibility, and provider-auth code so renderers
  * and filters agree on stable model metadata.
  */
-import type { ModelCatalogStatus } from "@openclaw/model-catalog-core/model-catalog-types";
+import type {
+  ModelCatalogStatus,
+  ModelInferenceCapabilities,
+} from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ModelApi, ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
 import type { ThinkingLevelMap } from "../llm/types.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
@@ -28,6 +31,8 @@ export type ModelCatalogEntry = {
   providerOrder?: number;
   alias?: string;
   api?: ModelApi;
+  /** Declared task support for the exact physical route; not authorization or readiness. */
+  inference?: ModelInferenceCapabilities;
   /** Private transport provenance for route matching; never project directly to clients. */
   baseUrl?: string;
   contextWindow?: number;

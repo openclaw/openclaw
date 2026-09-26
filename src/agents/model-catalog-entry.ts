@@ -20,6 +20,7 @@ export function modelCatalogRowToEntry(
     provider: row.provider,
     ...(isCatalogModelApi(row.api) ? { api: row.api } : {}),
     ...(row.baseUrl ? { baseUrl: row.baseUrl } : {}),
+    ...(row.inference ? { inference: row.inference } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(row.contextWindows
       ? { contextWindows: row.contextWindows.map((option) => ({ ...option })) }

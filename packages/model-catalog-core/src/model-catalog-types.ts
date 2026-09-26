@@ -1,4 +1,3 @@
-// Shared model catalog data contracts for provider manifests and normalized rows.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   MODEL_DATA_APIS,
@@ -13,6 +12,13 @@ import {
   type ModelRoutingPercentiles,
   type ModelRoutingSortConfig,
 } from "../../llm-core/src/model-data.js";
+// Shared model catalog data contracts for provider manifests and normalized rows.
+import type { ModelInferenceCapabilities } from "./model-inference-capabilities.js";
+
+export type {
+  ModelInferenceCapabilities,
+  ModelDecisionCapabilities,
+} from "./model-inference-capabilities.js";
 
 /** Supported API protocols for model catalog entries. */
 export const MODEL_CATALOG_APIS = [...MODEL_DATA_APIS] as const;
@@ -221,6 +227,8 @@ export const MODEL_CATALOG_MAX_CONTEXT_WINDOWS = 16;
 /** Provider manifest model entry. */
 export type ModelCatalogModel = {
   id: string;
+  /** Task facts for this exact served route, independent of chat wire metadata. */
+  inference?: ModelInferenceCapabilities;
   name?: string;
   api?: ModelCatalogApi;
   baseUrl?: string;
