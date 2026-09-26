@@ -502,6 +502,7 @@ it.each(dispatchCases)(
               sessionPermissionRoot: projection,
               sessionPermissionPolicy: { root: projection, mode: "guarded" },
               sandbox: projectedSandbox,
+              sandboxReport: { mode: "all", sandboxed: true },
               sandboxSessionKey: "global",
               sessionAgentId: agentId,
             })
