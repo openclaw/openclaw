@@ -276,7 +276,6 @@ async function deliverWebReplyInActivityScope(
     }
   };
 
-  // Text-only replies
   if (mediaList.length === 0 && textChunks.length) {
     const totalChunks = textChunks.length;
     for (const [index, chunk] of textChunks.entries()) {
@@ -312,7 +311,6 @@ async function deliverWebReplyInActivityScope(
 
   const remainingText = [...textChunks];
 
-  // Media (with optional caption on first item)
   const leadingCaption = remainingText.shift() || "";
   await sendMediaWithLeadingCaption({
     mediaUrls: mediaList,
@@ -411,7 +409,6 @@ async function deliverWebReplyInActivityScope(
     },
   });
 
-  // Remaining text chunks after media
   for (const chunk of remainingText) {
     rememberSendResult(
       await sendWithRetry(() => transport.reply(chunk, getQuote()), "media:text", "text"),

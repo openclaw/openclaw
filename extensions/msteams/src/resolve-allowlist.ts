@@ -156,8 +156,7 @@ export function parseMSTeamsConversationId(raw: string): string | null {
   if (!/^conversation:/i.test(trimmed)) {
     return null;
   }
-  const id = trimmed.slice("conversation:".length).trim();
-  return id;
+  return trimmed.slice("conversation:".length).trim();
 }
 
 /**
@@ -179,12 +178,6 @@ export function looksLikeMSTeamsConversationId(raw: string): boolean {
   if (/^conversation:/i.test(trimmed)) {
     return true;
   }
-  // Bare Bot Framework / Graph conversation id formats.
-  // Channel / group ids always start with `19:` and include an `@thread.*`
-  // suffix (`@thread.tacv2`, `@thread.v2`, or the legacy `@thread.skype`). Personal chat
-  // ids come in three shapes: `a:1...` (Bot Framework), `8:orgid:...`
-  // (org-scoped Bot Framework), and `19:{userId}_{appId}@unq.gbl.spaces`
-  // (Graph API 1:1 chat thread). Bot Framework user ids use `29:...`.
   if (MSTEAMS_GROUP_CONVERSATION_ID.test(trimmed)) {
     return true;
   }

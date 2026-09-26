@@ -34,20 +34,13 @@ function normalizeIMessageHandle(raw: string, allowContactName = false): string 
     return "";
   }
   const lowered = normalizeLowercaseStringOrEmpty(trimmed);
-  if (lowered.startsWith("imessage:")) {
-    return normalizeIMessageHandle(trimmed.slice("imessage:".length));
-  }
-  if (lowered.startsWith("sms:")) {
-    return normalizeIMessageHandle(trimmed.slice("sms:".length));
-  }
-  if (lowered.startsWith("auto:")) {
-    return normalizeIMessageHandle(trimmed.slice("auto:".length));
-  }
-  if (CHAT_TARGET_PREFIX_RE.test(trimmed)) {
-    const prefix = trimmed.match(CHAT_TARGET_PREFIX_RE)?.[0];
-    if (!prefix) {
-      return "";
+  for (const prefix of SERVICE_PREFIXES) {
+    if (lowered.startsWith(prefix)) {
+      return normalizeIMessageHandle(trimmed.slice(prefix.length));
     }
+  }
+  const prefix = trimmed.match(CHAT_TARGET_PREFIX_RE)?.[0];
+  if (prefix) {
     const value = trimmed.slice(prefix.length).trim();
     return `${normalizeLowercaseStringOrEmpty(prefix)}${value}`;
   }

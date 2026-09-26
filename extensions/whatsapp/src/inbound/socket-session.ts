@@ -1,4 +1,3 @@
-// Whatsapp plugin module owns one attached inbound socket session.
 import type {
   AnyMessageContent,
   ConnectionState,
@@ -13,7 +12,12 @@ import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../au
 import { getWhatsAppConnectionController } from "../connection-controller-runtime-context.js";
 import { identitiesOverlap, type WhatsAppSelfIdentity } from "../identity.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
-import { DEFAULT_RECONNECT_POLICY, computeBackoff, sleepWithAbort } from "../reconnect.js";
+import {
+  DEFAULT_RECONNECT_POLICY,
+  computeBackoff,
+  sleepWithAbort,
+  type ReconnectPolicy,
+} from "../reconnect.js";
 import { formatError, getStatusCode } from "../session.js";
 import {
   createWhatsAppSocketOperationTimeoutAdapter,
@@ -56,13 +60,7 @@ type SocketSessionOptions = {
   selfChatMode?: boolean;
   socketTiming: Required<WhatsAppSocketTimingOptions>;
   shouldRetryDisconnect?: () => boolean;
-  disconnectRetryPolicy?: {
-    initialMs: number;
-    maxMs: number;
-    factor: number;
-    jitter: number;
-    maxAttempts: number;
-  };
+  disconnectRetryPolicy?: ReconnectPolicy;
   disconnectRetryAbortSignal?: AbortSignal;
   recentMessageKeys?: WhatsAppBaileysMessageCache;
   logVerbose: (message: string) => void;
@@ -147,10 +145,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     options.logVerbose(`Failed to send '${presence}' presence on connect: ${String(error)}`);
   }
 
-  const selfIdentity = await readWebSelfIdentityForDecision(
-    options.authDir,
-    sock.user as { id?: string | null; lid?: string | null } | undefined,
-  );
+  const selfIdentity = await readWebSelfIdentityForDecision(options.authDir, sock.user);
   if (selfIdentity.outcome === "unstable") {
     throw new WhatsAppAuthUnstableError(
       "WhatsApp auth state is still stabilizing; retrying inbox attach.",

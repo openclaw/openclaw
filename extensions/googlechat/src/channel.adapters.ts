@@ -114,15 +114,14 @@ export const googlechatSecurityAdapter = {
     resolveAllowFrom: (account: ResolvedGoogleChatAccount) => account.config.allowFrom,
     allowFromPathSuffix: "",
     classifyEntryAuthentication: identityEntryAuthenticationClassifier(googleChatIngressIdentity),
-    normalizeEntry: (raw: string) => formatGoogleChatAllowFromEntry(raw),
+    normalizeEntry: formatGoogleChatAllowFromEntry,
   },
   collectWarnings: collectGoogleChatSecurityWarnings,
 };
 
 export const googlechatThreadingAdapter = {
   scopedAccountReplyToMode: {
-    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
-      resolveGoogleChatAccount({ cfg, accountId }),
+    resolveAccount: adaptScopedAccountAccessor(resolveGoogleChatAccount),
     resolveReplyToMode: (account: ResolvedGoogleChatAccount, _chatType?: string | null) =>
       account.config.replyToMode,
     fallback: "off" as const,
@@ -155,7 +154,7 @@ export const googlechatThreadingAdapter = {
 export const googlechatPairingTextAdapter = {
   idLabel: "googlechatUserId",
   message: PAIRING_APPROVED_MESSAGE,
-  normalizeAllowEntry: (entry: string) => formatGoogleChatAllowFromEntry(entry),
+  normalizeAllowEntry: formatGoogleChatAllowFromEntry,
   notify: async ({
     cfg,
     id,
@@ -186,7 +185,7 @@ export const googlechatPairingTextAdapter = {
 export const googlechatOutboundAdapter = {
   base: {
     deliveryMode: "direct" as const,
-    chunker: (text: string, limit: number) => formatGoogleChatTextChunks(text, limit),
+    chunker: formatGoogleChatTextChunks,
     chunkerMode: "markdown" as const,
     textChunkLimit: GOOGLE_CHAT_FORMAT_PROFILE.chunk.limit,
     sanitizeText: ({ text }: { text: string }) => sanitizeGoogleChatText(text),

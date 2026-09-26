@@ -364,7 +364,6 @@ export async function logoutWeb(params: {
 }
 
 export function readWebSelfId(authDir: string = resolveDefaultWebAuthDir()) {
-  // Read the cached WhatsApp Web identity (jid + E.164) from disk if present.
   try {
     const credsPath = resolveWebCredsPath(resolveUserPath(authDir));
     const raw = readCredsJsonRaw(credsPath);
@@ -433,10 +432,6 @@ export async function readWebSelfIdentityForDecision(
   };
 }
 
-/**
- * Return the age (in milliseconds) of the cached WhatsApp web auth state, or null when missing.
- * Helpful for heartbeats/observability to spot stale credentials.
- */
 export function getWebAuthAgeMs(authDir: string = resolveDefaultWebAuthDir()): number | null {
   const stats = statWebCredsFileSync(resolveWebCredsPath(resolveUserPath(authDir)));
   return stats ? Math.max(0, Date.now() - stats.mtimeMs) : null;
@@ -447,7 +442,6 @@ export function logWebSelfId(
   runtime: RuntimeEnv = defaultRuntime,
   includeChannelPrefix = false,
 ) {
-  // Human-friendly log of the currently linked personal web session.
   const { e164, jid, lid } = readWebSelfId(authDir);
   const parts = [jid ? `jid ${jid}` : null, lid ? `lid ${lid}` : null].filter(
     (value): value is string => Boolean(value),

@@ -5,7 +5,6 @@ import {
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import "./gateway-auth-bypass.js";
 import {
   inspectMattermostAccount,
   isMattermostConfigured,

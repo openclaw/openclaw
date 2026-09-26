@@ -47,11 +47,6 @@ describe("combineIMessagePayloads", () => {
     expect(merged.text).toBe("summarize https://example.com/article");
     expect(merged.guid).toBe("row-1");
     expect(merged.created_at).toBe("2025-01-01T00:00:01.500Z");
-    expect(merged.coalescedMessageGuids).toEqual(["row-1", "row-2"]);
-    expect(merged.coalescedCatchupCursor).toEqual({
-      lastSeenMs: Date.parse("2025-01-01T00:00:01.500Z"),
-      lastSeenRowid: 42,
-    });
   });
 
   it("preserves attachments instead of dropping them on merge", () => {
@@ -88,7 +83,6 @@ describe("combineIMessagePayloads", () => {
     );
 
     expect(merged.text).toBe(expected);
-    expect(merged.coalescedMessageGuids).toEqual(texts.map((_, index) => `row-${index}`));
   });
 
   it.each([
@@ -124,7 +118,6 @@ describe("combineIMessagePayloads", () => {
     );
 
     expect(merged.text).toBe(expected);
-    expect(merged.coalescedMessageGuids).toEqual(guids);
   });
 
   it("keeps the first 20 attachments from the first nine and final entries", () => {
@@ -185,14 +178,7 @@ describe("combineIMessagePayloads", () => {
       reply_to_guid: "first-reply-parent",
       reply_to_text: "first parent quote",
       reply_to_sender: "+15555550199",
-      coalescedCatchupCursor: {
-        lastSeenMs: Date.parse("2025-01-02T01:00:00Z"),
-        lastSeenRowid: 999,
-      },
     });
-    expect(merged.coalescedMessageGuids).toEqual(
-      Array.from({ length: 25 }, (_, i) => `row-${i}`).filter((guid) => guid !== "row-11"),
-    );
   });
 
   it.each([{ reply_to_guid: "reply-parent" }, { thread_originator_guid: "thread-parent" }])(
@@ -238,13 +224,5 @@ describe("combineIMessagePayloads", () => {
       reply_to_text: "actual parent question",
       reply_to_sender: "+15555550199",
     });
-  });
-
-  it("does not set coalescedMessageGuids when no entry carries a GUID", () => {
-    const a = makePayload({ text: "a", guid: null });
-    const b = makePayload({ text: "b", guid: null });
-    const merged = combineIMessagePayloads([a, b]);
-
-    expect(merged.coalescedMessageGuids).toBeUndefined();
   });
 });

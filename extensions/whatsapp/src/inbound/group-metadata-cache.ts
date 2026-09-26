@@ -1,4 +1,3 @@
-// Whatsapp plugin module owns group metadata caching and hydration.
 import type { AnyMessageContent, BaileysEventMap, GroupMetadata, WASocket } from "baileys";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {

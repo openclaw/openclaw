@@ -3,7 +3,6 @@ import "./test-helpers.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installWebAutoReplyUnitTestHooks, makeSessionStore } from "./auto-reply.test-harness.js";
-import { buildMentionConfig } from "./auto-reply/mentions.js";
 import { createWebOnMessageHandler } from "./auto-reply/monitor/on-message.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 
@@ -64,8 +63,6 @@ function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknow
       typeof createWebOnMessageHandler
     >[0]["replyResolver"],
     replyLogger,
-    baseMentionConfig: buildMentionConfig(opts.cfg),
-    account: {},
   });
 
   return { handler, backgroundTasks };

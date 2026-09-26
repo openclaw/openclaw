@@ -1,31 +1,11 @@
-// Imessage plugin module implements the same-sender inbound debounce merge.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { IMessageAttachment, IMessagePayload } from "./types.js";
 
-/**
- * Bounds on the merged output when multiple inbound iMessage payloads are
- * folded into one agent turn. Caps each merge so a sender who
- * rapid-fires DMs inside the debounce window cannot amplify the downstream
- * prompt past a safe ceiling. Every source GUID still surfaces via
- * `coalescedMessageGuids` so a future replay path can recognize duplicates.
- */
+// Bound content per turn; durable ingress owns every source GUID before debounce.
 const MAX_COALESCED_TEXT_CHARS = 4000;
 const MAX_COALESCED_ATTACHMENTS = 20;
 const MAX_COALESCED_ENTRIES = 10;
-
-type CoalescedIMessagePayload = IMessagePayload & {
-  /**
-   * Source GUIDs folded into this merged payload, in arrival order. Includes
-   * GUIDs from entries that were dropped by the entry cap so downstream
-   * dedupe paths can still recognize them.
-   */
-  coalescedMessageGuids?: string[];
-  coalescedCatchupCursor?: {
-    lastSeenMs: number;
-    lastSeenRowid: number;
-  };
-};
 
 /**
  * Combine consecutive same-sender iMessage payloads into a single payload for
@@ -37,7 +17,7 @@ type CoalescedIMessagePayload = IMessagePayload & {
  * (capped), and the latest `created_at` wins so downstream sees the most
  * recent activity timestamp.
  */
-export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedIMessagePayload {
+export function combineIMessagePayloads(payloads: IMessagePayload[]): IMessagePayload {
   if (payloads.length === 0) {
     throw new Error("combineIMessagePayloads: cannot combine empty payloads");
   }
@@ -49,19 +29,14 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedI
   const seenTexts = new Set<string>();
   const textParts: string[] = [];
   const allAttachments: IMessageAttachment[] = [];
-  const seenGuids = new Set<string>();
-  const coalescedMessageGuids: string[] = [];
   let textLength = 0;
   let latestCreatedAt: string | undefined;
-  let maxRowid = -Infinity;
-  let maxDateMs = -Infinity;
   let reply: IMessagePayload | undefined;
   let payloadIndex = 0;
   for (const payload of payloads) {
     const keepContent =
       payloadIndex < MAX_COALESCED_ENTRIES - 1 || payloadIndex === payloads.length - 1;
     payloadIndex += 1;
-    // Preserve lexical timestamp selection independently of the parsed recovery timestamp.
     const createdAt = payload.created_at;
     if (
       typeof createdAt === "string" &&
@@ -69,18 +44,6 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedI
       (latestCreatedAt === undefined || createdAt > latestCreatedAt)
     ) {
       latestCreatedAt = createdAt;
-    }
-    if (typeof payload.id === "number" && Number.isFinite(payload.id)) {
-      maxRowid = Math.max(maxRowid, payload.id);
-    }
-    const dateMs = typeof createdAt === "string" ? Date.parse(createdAt) : Number.NaN;
-    if (Number.isFinite(dateMs)) {
-      maxDateMs = Math.max(maxDateMs, dateMs);
-    }
-    const guid = payload.guid?.trim();
-    if (guid && !seenGuids.has(guid)) {
-      seenGuids.add(guid);
-      coalescedMessageGuids.push(guid);
     }
     if (!reply && (payload.thread_originator_guid != null || payload.reply_to_guid != null)) {
       reply = payload;
@@ -128,10 +91,5 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedI
     reply_to_guid: reply.reply_to_guid ?? null,
     reply_to_text: reply.reply_to_text ?? null,
     reply_to_sender: reply.reply_to_sender ?? null,
-    coalescedMessageGuids: coalescedMessageGuids.length > 0 ? coalescedMessageGuids : undefined,
-    coalescedCatchupCursor:
-      Number.isFinite(maxRowid) && Number.isFinite(maxDateMs)
-        ? { lastSeenMs: maxDateMs, lastSeenRowid: maxRowid }
-        : undefined,
   };
 }

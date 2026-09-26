@@ -1,4 +1,3 @@
-// Signal plugin module implements inbound context behavior.
 import {
   filterChannelInboundQuoteContext,
   resolveInboundSupplementalSenderAllowed,

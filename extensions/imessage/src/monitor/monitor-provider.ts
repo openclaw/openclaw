@@ -620,24 +620,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   function resolveLiveCatchupCursor(
     message: IMessagePayload,
   ): { lastSeenMs: number; lastSeenRowid: number } | null {
-    const coalescedCursor = (
-      message as {
-        coalescedCatchupCursor?: { lastSeenMs?: unknown; lastSeenRowid?: unknown };
-      }
-    ).coalescedCatchupCursor;
-    const rowid =
-      typeof coalescedCursor?.lastSeenRowid === "number" &&
-      Number.isFinite(coalescedCursor.lastSeenRowid)
-        ? coalescedCursor.lastSeenRowid
-        : typeof message.id === "number" && Number.isFinite(message.id)
-          ? message.id
-          : null;
+    const rowid = typeof message.id === "number" && Number.isFinite(message.id) ? message.id : null;
     const dateMs =
-      typeof coalescedCursor?.lastSeenMs === "number" && Number.isFinite(coalescedCursor.lastSeenMs)
-        ? coalescedCursor.lastSeenMs
-        : typeof message.created_at === "string"
-          ? Date.parse(message.created_at)
-          : Number.NaN;
+      typeof message.created_at === "string" ? Date.parse(message.created_at) : Number.NaN;
     if (rowid === null || !Number.isFinite(dateMs)) {
       return null;
     }

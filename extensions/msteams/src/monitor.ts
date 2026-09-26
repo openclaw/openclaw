@@ -92,7 +92,7 @@ export async function monitorMSTeamsProvider(
     publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams credentials are not configured");
     return { app: null, shutdown: async () => {} };
   }
-  const appId = creds.appId; // Extract for use in closures
+  const appId = creds.appId;
 
   const runtime: RuntimeEnv = opts.runtime ?? {
     log: console.log,
@@ -210,7 +210,6 @@ export async function monitorMSTeamsProvider(
 
   log.info(`starting provider (port ${port})`);
 
-  // Dynamic import to avoid loading SDK when provider is disabled
   const express = await import("express");
 
   // Create Express server first, then wrap it with the SDK's ExpressAdapter
@@ -281,7 +280,6 @@ export async function monitorMSTeamsProvider(
     );
   }
 
-  // Build a token provider adapter for Graph API operations
   const tokenProvider = createMSTeamsTokenProvider(app);
 
   const ssoDeps = ssoConnectionName
@@ -340,21 +338,13 @@ export async function monitorMSTeamsProvider(
         const voterId = activity?.from?.aadObjectId ?? activity?.from?.id ?? "unknown";
         try {
           if (!(await isCardActionInvokeAuthorized(adaptedCtx, handlerDeps))) {
-            return {
-              statusCode: 200,
-              type: "application/vnd.microsoft.activity.message",
-              value: "Not authorized.",
-            };
+            return cardActionMessage("Not authorized.");
           }
 
           const existingPoll = await pollStore.getPoll(vote.pollId);
           if (!existingPoll) {
             log.debug?.("poll vote ignored (poll not found)", { pollId: vote.pollId });
-            return {
-              statusCode: 200,
-              type: "application/vnd.microsoft.activity.message",
-              value: "Poll not found.",
-            };
+            return cardActionMessage("Poll not found.");
           }
           const pollConversationId = existingPoll.conversationId
             ? normalizeMSTeamsConversationId(existingPoll.conversationId)
@@ -368,11 +358,7 @@ export async function monitorMSTeamsProvider(
               expectedConversationId: pollConversationId,
               receivedConversationId: activityConversationId || undefined,
             });
-            return {
-              statusCode: 200,
-              type: "application/vnd.microsoft.activity.message",
-              value: "Poll not found.",
-            };
+            return cardActionMessage("Poll not found.");
           }
 
           const poll = await pollStore.recordVote({
@@ -382,18 +368,10 @@ export async function monitorMSTeamsProvider(
           });
           if (poll) {
             log.info("recorded poll vote", { pollId: vote.pollId, voterId });
-            return {
-              statusCode: 200,
-              type: "application/vnd.microsoft.activity.message",
-              value: "Vote recorded.",
-            };
+            return cardActionMessage("Vote recorded.");
           }
           log.debug?.("poll vote ignored (poll not found)", { pollId: vote.pollId });
-          return {
-            statusCode: 200,
-            type: "application/vnd.microsoft.activity.message",
-            value: "Poll not found.",
-          };
+          return cardActionMessage("Poll not found.");
         } catch (err) {
           log.error("failed to record poll vote", {
             pollId: vote.pollId,
@@ -413,11 +391,7 @@ export async function monitorMSTeamsProvider(
       // The SDK has already authenticated this invoke. Acknowledge only after
       // the raw activity is durable; agent work drains independently.
       await ingress.accept(activity, adaptedCtx);
-      return {
-        statusCode: 200,
-        type: "application/vnd.microsoft.activity.message",
-        value: "OK",
-      };
+      return cardActionMessage("OK");
     } catch (err) {
       log.error("msteams card.action failed", { error: formatUnknownError(err) });
       return {
@@ -615,6 +589,10 @@ export async function monitorMSTeamsProvider(
   });
 
   return { app: expressApp, shutdown };
+}
+
+function cardActionMessage(value: string): MSTeamsCardActionResponse {
+  return { statusCode: 200, type: "application/vnd.microsoft.activity.message", value };
 }
 
 /**

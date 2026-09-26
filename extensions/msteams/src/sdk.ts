@@ -21,7 +21,6 @@ type MSTeamsHttpServerAdapter =
  */
 type MSTeamsRoutes = import("@microsoft/teams.apps/dist/routes/index.js").IRoutes;
 
-/** Adaptive-card action response shape, re-exported for typed `card.action` handlers. */
 export type MSTeamsCardActionResponse =
   import("@microsoft/teams.api/dist/models/adaptive-card/adaptive-card-action-response.js").AdaptiveCardActionResponse;
 
@@ -114,9 +113,6 @@ export async function createMSTeamsExpressAdapter(
   return new ExpressAdapter(serverOrApp);
 }
 
-/**
- * Options for creating a Teams SDK App instance.
- */
 type CreateMSTeamsAppOptions = {
   /**
    * HTTP server adapter to use. When an Express app is available (monitor
@@ -277,10 +273,6 @@ function createCertificateApp(
   } as unknown as ConstructorParameters<typeof App>[0]) as unknown as MSTeamsApp;
 }
 
-/**
- * Build a token provider that uses the Teams SDK App's public token provider
- * for token acquisition.
- */
 export function createMSTeamsTokenProvider(
   app: Pick<MSTeamsApp, "tokenProvider" | "credentials" | "cloud">,
 ): MSTeamsAccessTokenProvider {
