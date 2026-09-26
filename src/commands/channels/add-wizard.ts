@@ -14,7 +14,7 @@ import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { readConfigFileSnapshotForWrite, type OpenClawConfig } from "../../config/config.js";
-import { readCurrentConfigForPolicyCheck } from "../../config/io.runtime.js";
+import { readCurrentConfigForPolicyCheckAsync } from "../../config/io.runtime.js";
 import { commitConfigWithPendingPluginInstalls } from "../../plugins/install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
@@ -60,10 +60,11 @@ export async function selectChannelSetupOwner(
   }
   writeSnapshot.writeOptions.assertConfigPathForWrite?.();
   // The roster can change while the prompt waits; retain the original snapshot for the commit fence.
-  const currentConfig = readCurrentConfigForPolicyCheck({
+  const currentConfig = await readCurrentConfigForPolicyCheckAsync({
     configPath: writeSnapshot.snapshot.path,
     env: process.env,
   });
+  writeSnapshot.writeOptions.assertConfigPathForWrite?.();
   const agentId = resolveConfiguredAgentId(currentConfig, selectedAgent.agentId);
   return resolveChannelSetupOwner(currentConfig, agentId);
 }

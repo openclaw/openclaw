@@ -12,6 +12,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../sentinel.js";
+import { writeSecretStoreEntryForConfigRefInDatabase } from "./secret-store-config-ref.kernel.js";
 import {
   captureSecretStoreExpiryCutoffs,
   purgeExpiredSecretStoreEntriesInDatabase,
@@ -94,6 +95,98 @@ describe("secret store", () => {
       ok: true,
       value: "unrelated-value",
     });
+  });
+
+  it("saves a chat secret under a fresh name beside the entry its key name suggests", () => {
+    const database = createDatabaseOptions();
+    writeSecretStoreEntry({
+      scope: team,
+      name: "GATEWAY_REMOTE_TOKEN",
+      value: "owned-elsewhere",
+      kind: "secret",
+      updatedBy: "cli",
+      database,
+    });
+
+    const write = writeSecretStoreEntryForConfigRefInDatabase(
+      { baseName: "GATEWAY_REMOTE_TOKEN", value: "from-chat", writer: "openclaw", now: 1 },
+      database,
+    );
+
+    expect(write.name).toMatch(/^GATEWAY_REMOTE_TOKEN_[0-9A-F]{16}$/);
+    expect(readSecretStoreValue({ scope: team, name: "GATEWAY_REMOTE_TOKEN", database })).toEqual({
+      ok: true,
+      value: "owned-elsewhere",
+    });
+  });
+
+  it("rotates a key into a new entry and leaves its previous entry for other users", () => {
+    const database = createDatabaseOptions();
+    const save = (value: string) =>
+      writeSecretStoreEntryForConfigRefInDatabase(
+        { baseName: "MODELS_PROVIDERS_OPENAI_API_KEY", value, writer: "openclaw", now: 1 },
+        database,
+      ).name;
+
+    const first = save("old-key");
+    const second = save("new-key");
+
+    expect(second).not.toBe(first);
+    expect(readSecretStoreValue({ scope: team, name: first, database })).toEqual({
+      ok: true,
+      value: "old-key",
+    });
+  });
+
+  it("never hands a chat key to a stale reference whose entry was removed and purged", () => {
+    const database = createDatabaseOptions();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    writeSecretStoreEntry({
+      scope: team,
+      name: "GATEWAY_REMOTE_TOKEN",
+      value: "retired",
+      kind: "secret",
+      allowedHosts: ["api.example.com"],
+      updatedBy: "cli",
+      database,
+    });
+    deleteSecretStoreEntry({ scope: team, name: "GATEWAY_REMOTE_TOKEN", database });
+    vi.setSystemTime(new Date("2026-02-01T00:00:00.001Z"));
+    expect(purgeExpiredSecretStoreEntries({ database })).toBe(1);
+
+    const write = writeSecretStoreEntryForConfigRefInDatabase(
+      { baseName: "GATEWAY_REMOTE_TOKEN", value: "from-chat", writer: "openclaw", now: 1 },
+      database,
+    );
+
+    // A config key still holding the old name keeps resolving to nothing.
+    expect(readSecretStoreValue({ scope: team, name: "GATEWAY_REMOTE_TOKEN", database })).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: "SECRET_STORE_NOT_FOUND" }),
+    });
+    expect(readSecretStoreValue({ scope: team, name: write.name, database })).toEqual({
+      ok: true,
+      value: "from-chat",
+    });
+  });
+
+  it("writes nothing when the requester loses authority before commit", () => {
+    const database = createDatabaseOptions();
+
+    expect(() =>
+      writeSecretStoreEntryForConfigRefInDatabase(
+        { baseName: "GATEWAY_REMOTE_TOKEN", value: "from-chat", writer: "openclaw:1", now: 1 },
+        database,
+        (stage) => {
+          if (stage === "commit") {
+            throw new Error("requesting run is no longer active");
+          }
+        },
+      ),
+    ).toThrow("no longer active");
+
+    expect(listSecretStoreEntries({ scope: team, includeDeleted: true, database })).toEqual([]);
   });
 
   it("round-trips env and secret entries without disclosing secret list values", () => {

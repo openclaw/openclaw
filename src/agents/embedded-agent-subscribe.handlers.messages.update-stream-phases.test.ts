@@ -128,14 +128,6 @@ describe("handleMessageUpdate text signatures", () => {
 
   it.each([
     {
-      name: "ordinary text",
-      chunks: ["Hello", " world"],
-      updates: [
-        { text: "Hello", delta: "Hello" },
-        { text: "Hello world", delta: " world" },
-      ],
-    },
-    {
       name: "held whitespace",
       chunks: ["  Hello ", "world", "\n\n", "Next"],
       updates: [

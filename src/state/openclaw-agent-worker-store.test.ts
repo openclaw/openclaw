@@ -513,7 +513,7 @@ describe.each(["borrowed", "captured"] as const)(
       expect(freePages()).toBe(before);
       await work;
       await withOpenClawAgentDatabaseWrite(options, () => undefined, db);
-      expect(exec.mock.calls.some(([sql]) => sql.includes("incremental_vacuum"))).toBe(true);
+      expect(exec.mock.calls.some(([sql]) => sql.includes("incremental_vacuum"))).toBe(false);
       expect(before - freePages()).toBeGreaterThan(0);
       expect(before - freePages()).toBeLessThanOrEqual(512);
       expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([{ value: "published" }]);

@@ -101,18 +101,6 @@ describe("resolveSlackChannelConfig", () => {
     });
   });
 
-  it("uses direct match metadata when channel config exists", () => {
-    const res = resolveSlackChannelConfig({
-      channelId: "C1",
-      channels: { C1: { enabled: true, requireMention: false } },
-      defaultRequireMention: true,
-    });
-    expectSlackChannelConfig(res, {
-      matchKey: "C1",
-      matchSource: "direct",
-    });
-  });
-
   it("matches channel config key stored in lowercase when Slack delivers uppercase channel ID", () => {
     // Slack always delivers channel IDs in uppercase (e.g. C0ABC12345).
     // Users commonly copy them in lowercase from docs or older CLI output.

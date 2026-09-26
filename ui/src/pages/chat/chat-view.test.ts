@@ -414,31 +414,38 @@ function createChatHeaderState(
   const catalog = overrides.models ?? createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG);
   const request = vi.fn(async (method: string, params: Record<string, unknown> = {}) => {
     if (method === "sessions.patch") {
-      const nextModel = (params.model as string | null | undefined) ?? null;
-      if (!nextModel) {
-        currentModel = null;
-        currentModelProvider = null;
-      } else {
-        const normalized = nextModel.trim();
-        const slashIndex = normalized.indexOf("/");
-        if (slashIndex > 0) {
-          currentModelProvider = normalized.slice(0, slashIndex);
-          currentModel = normalized.slice(slashIndex + 1);
+      if (Object.hasOwn(params, "model")) {
+        const nextModel = (params.model as string | null | undefined) ?? null;
+        if (!nextModel) {
+          currentModel = null;
+          currentModelProvider = null;
         } else {
-          currentModel = normalized;
-          const matchingProviders: string[] = [];
-          for (const entry of catalog) {
-            if (entry.id === normalized && entry.provider) {
-              matchingProviders.push(entry.provider);
+          const normalized = nextModel.trim();
+          const slashIndex = normalized.indexOf("/");
+          if (slashIndex > 0) {
+            currentModelProvider = normalized.slice(0, slashIndex);
+            currentModel = normalized.slice(slashIndex + 1);
+          } else {
+            currentModel = normalized;
+            const matchingProviders: string[] = [];
+            for (const entry of catalog) {
+              if (entry.id === normalized && entry.provider) {
+                matchingProviders.push(entry.provider);
+              }
             }
+            currentModelProvider =
+              matchingProviders.length === 1
+                ? expectDefined(matchingProviders[0], "single matching model provider")
+                : currentModelProvider;
           }
-          currentModelProvider =
-            matchingProviders.length === 1
-              ? expectDefined(matchingProviders[0], "single matching model provider")
-              : currentModelProvider;
         }
       }
-      return { ok: true, key: "main" };
+      return {
+        ok: true,
+        path: "",
+        key: "main",
+        entry: { sessionId: "main" },
+      } satisfies SessionPatchResult;
     }
     if (method === "chat.history") {
       return { messages: [], thinkingLevel: null };

@@ -168,20 +168,17 @@ export async function createGatewaySession(
         })
       : params.commitGuard;
   commitGuard?.();
-  // Presentation titles do not claim labels. Bound the snapshot at the shared
-  // creator so every native owner gets the same surrogate-safe storage contract.
   const displayName = truncateUtf16Safe(params.displayName?.trim() ?? "", 500).trimEnd();
+  const label = normalizeOptionalString(params.label);
   const requestedKey = normalizeOptionalString(params.key);
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
   const projectId = normalizeOptionalString(params.projectId);
   const pendingProjectGitUrl = normalizeOptionalString(params.pendingProjectGitUrl);
   const requestedToolOverrides = params.toolOverrides !== undefined;
-  const explicitAgentId = params.agentId;
-  const explicitKeyAgentId = parseAgentSessionKey(requestedKey)?.agentId;
   const selectedAgent = resolveRequestedSessionAgentId(
     params.cfg,
-    requestedKey ?? (explicitAgentId === undefined ? "main" : undefined),
-    explicitAgentId ?? explicitKeyAgentId,
+    requestedKey ?? (params.agentId === undefined ? "main" : undefined),
+    params.agentId ?? parseAgentSessionKey(requestedKey)?.agentId,
   );
   if (!selectedAgent.ok) {
     return selectedAgent;
@@ -276,7 +273,7 @@ export async function createGatewaySession(
       parentSessionKey,
       !parseAgentSessionKey(parentSessionKey) &&
         ["global", "unknown"].includes(parentSessionKey.toLowerCase())
-        ? explicitAgentId
+        ? params.agentId
         : undefined,
     );
     if (!parentRequestedAgent.ok) {
@@ -706,7 +703,7 @@ export async function createGatewaySession(
         sessionKey: target.canonicalKey,
         storePath: target.storePath,
       },
-      async ({ existingEntry, targetEntry, isLabelInUse }) => {
+      async ({ existingEntry, targetEntry, labelInUse }) => {
         // This callback owns generated and explicit keys alike; no existing row
         // is the canonical signal that this request will actually create one.
         if (!existingEntry) {
@@ -810,7 +807,7 @@ export async function createGatewaySession(
         const patched = await projectSessionsPatchEntry({
           cfg: params.cfg,
           existingEntry: targetEntry,
-          isLabelInUse,
+          isLabelInUse: () => labelInUse,
           storeKey: target.canonicalKey,
           agentId: target.agentId,
           preparedSessionRoot: sessionRoot,
@@ -822,7 +819,7 @@ export async function createGatewaySession(
           // reject-invalid branch instead of the model-change clearing branch.
           patch: {
             key: target.canonicalKey,
-            label: normalizeOptionalString(params.label),
+            label,
             category: normalizeOptionalString(params.category),
             ...((catalogModel ?? requestedModel) ? { model: catalogModel ?? requestedModel } : {}),
             ...(params.agentRuntime !== undefined ? { agentRuntime: params.agentRuntime } : {}),
@@ -1131,6 +1128,7 @@ export async function createGatewaySession(
       },
       {
         onPhase,
+        label,
         ...(params.initialEntry
           ? {
               activeSessionKey: target.canonicalKey,

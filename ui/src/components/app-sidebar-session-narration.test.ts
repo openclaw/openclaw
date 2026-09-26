@@ -102,6 +102,61 @@ describe("SidebarSessionNarrationController", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([false, true])("retains a failed hidden release (late acquisition: %s)", async (late) => {
+    const visibility = browserVisibility();
+    const subscribed = createDeferred();
+    const released = createDeferred();
+    const wireKeys = new Set<string>();
+    let releases = 0;
+    const request = vi.fn().mockImplementation(async (method: string, params: { key: string }) => {
+      if (method === "sessions.messages.subscribe") {
+        await subscribed.promise;
+        wireKeys.add(params.key);
+      } else {
+        releases += 1;
+        if (releases === 1) {
+          throw new Error("unsubscribe failed");
+        }
+        await released.promise;
+        wireKeys.delete(params.key);
+      }
+      return { key: params.key };
+    });
+    const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
+    const source = {
+      subscribeMessages: vi.fn<SessionCapability["subscribeMessages"]>((key, options) =>
+        coordinator.acquire(key, options),
+      ),
+      unsubscribeMessages: vi.fn<SessionCapability["unsubscribeMessages"]>((handle) =>
+        coordinator.release(handle),
+      ),
+    };
+    const { controller } = createRunningNarrationController(source);
+    if (late) {
+      visibility("hidden");
+    }
+    subscribed.resolve();
+    const handle = await source.subscribeMessages.mock.results[0]?.value;
+    visibility("hidden");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wireKeys.size).toBe(1);
+
+    visibility("hidden");
+    visibility("hidden");
+    expect(source.unsubscribeMessages.mock.calls).toEqual([[handle], [handle]]);
+    visibility("visible");
+    expect(releases).toBe(2);
+    released.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wireKeys.size).toBe(1);
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(2);
+
+    controller.disconnect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wireKeys.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("releases hidden narration interests while preserving selected-pane and outbox owners", async () => {
     const visibility = browserVisibility();
     const wireKeys = new Set<string>();

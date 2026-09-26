@@ -1317,6 +1317,7 @@ src/state/openclaw-state-schema-compatibility.ts
 src/state/openclaw-state-schema-publication.ts
 src/state/openclaw-state-schema.sql
 src/state/openclaw-state-schema.ts
+src/state/openclaw-state-worker-context.capture.ts
 src/state/openclaw-state-worker-context.ts
 src/state/openclaw-state-worker-error-identity.ts
 src/state/openclaw-state-worker-error.ts

@@ -9592,7 +9592,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
               ) {
                 expect(includeFile).toBeTruthy();
                 const included = JSON.parse(readFileSync(includeFile!, "utf8"));
-                const nodeFiles = ["ui/src/pages/usage/usage-page-details.test.ts"];
+                const nodeFiles = [
+                  "ui/src/pages/chat/chat-thread.test.ts",
+                  "ui/src/pages/usage/usage-page-details.test.ts",
+                ];
                 if (childEnv.OPENCLAW_VITEST_RUNTIME === "node") {
                   expect(included.toSorted()).toEqual(nodeFiles);
                 } else {

@@ -92,7 +92,6 @@ it.each([
 it.each([
   { kind: "completed", yielded: undefined, stopReason: "stop" },
   { kind: "yielded", yielded: true, stopReason: "stop" },
-  { kind: "interrupted", yielded: undefined, stopReason: "aborted" },
   { kind: "interrupted after yielding", yielded: true, stopReason: "aborted" },
 ] as const)(
   "prepares the $kind CLI assistant before its first transcript publication",

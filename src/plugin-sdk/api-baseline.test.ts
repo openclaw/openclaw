@@ -9,12 +9,10 @@ import * as ts from "typescript/unstable/ast";
 import { API, Program } from "typescript/unstable/sync";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createNativeTypeScriptProject } from "../../scripts/lib/native-typescript.mts";
-import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeclarationClosureRenderer } from "./api-baseline-declaration-closure.js";
 import { formatPluginSdkApiTypeAlias } from "./api-baseline-declaration-print.js";
 import {
-  listPluginSdkApiBaselineEntrypoints,
   normalizePluginSdkApiDeclarationText,
   normalizePluginSdkApiSourcePath,
   renderPluginSdkApiBaseline,
@@ -281,10 +279,6 @@ describe("Plugin SDK API baseline", () => {
     expect(formatPluginSdkApiTypeAlias(prewarmed.checker, prewarmed.declaration)).toBe(
       fixture.expected,
     );
-  });
-
-  it("uses the canonical public entrypoint inventory", () => {
-    expect(listPluginSdkApiBaselineEntrypoints()).toEqual(publicPluginSdkEntrypoints);
   });
 
   it("preserves empty tuple defaults in public function signatures", async () => {

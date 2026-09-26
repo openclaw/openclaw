@@ -16,6 +16,7 @@ import {
 import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
 import { writeSandboxRegistry } from "../agents/sandbox/registry-write.worker.js";
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
+import { replaceWorkspaceAttestationInDatabase } from "../agents/workspace-state-store.kernel.js";
 import {
   isWorktreeRegistryReadCommand,
   executeWorktreeRegistryReadCommand,
@@ -102,6 +103,7 @@ import {
   executeProjectRegistryCommand,
   isProjectRegistryCommand,
 } from "../projects/project-registry.worker.js";
+import { writeSecretStoreEntryForConfigRefInDatabase } from "../secrets/store/secret-store-config-ref.kernel.js";
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
 import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
@@ -504,11 +506,24 @@ export function executeSharedStateCommand(
   if (command.type === "sandboxRegistry.insertIfMissing") {
     return importSandboxRegistryRow(command.input, writeOptions);
   }
+  if (command.type === "workspace.replaceAttestation") {
+    return runOpenClawStateWriteTransaction((writer) => {
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      const result = replaceWorkspaceAttestationInDatabase(writer, command.input);
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      return result;
+    }, writeOptions);
+  }
   if (command.type === "sandboxRegistry.write") {
     return writeSandboxRegistry(command.input, writeOptions);
   }
   if (command.type === "secrets.purge") {
     return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);
+  }
+  if (command.type === "secrets.writeForConfigRef") {
+    return writeSecretStoreEntryForConfigRefInDatabase(command.input, writeOptions, (stage) =>
+      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    );
   }
   if (conversationBindings.isWriteCommand(command)) {
     return conversationBindings.executeCommand(command, writeOptions);
