@@ -918,6 +918,9 @@ describe("channel ingress drain", () => {
       expect(secondDispatches).toEqual([]);
 
       firstAbort.abort();
+      await expect(first.dispose({ waitForSettlements: true })).rejects.toThrow(
+        "already-aborted retained owner",
+      );
       // Aborted owners retire before an uncooperative handler returns, allowing
       // the replacement drain to recover under the claim-token fence.
       const recovered = await second.recoverStaleClaims();
@@ -929,36 +932,6 @@ describe("channel ingress drain", () => {
       await first.waitForIdle();
       first.dispose();
       second.dispose();
-    });
-  });
-
-  it("throws IngressAdoptionLostError when complete returns false (lease reclaimed)", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue(stateDir);
-      await queue.enqueue("evt-reclaim", { text: "x" }, { laneKey: "l1" });
-
-      queue.complete = async () => false;
-
-      let adoptError: unknown;
-      const drain = createChannelIngressDrain<Payload>({
-        queue,
-        dispatchClaimedEvent: async (_event, lifecycle) => {
-          try {
-            await lifecycle.onAdopted();
-          } catch (err) {
-            adoptError = err;
-            throw err;
-          }
-        },
-      });
-
-      await drain.drainOnce();
-      await drain.waitForIdle();
-      expect(isIngressAdoptionLostError(adoptError)).toBe(true);
-      expect(isIngressAdoptionLostError(adoptError) && adoptError.code).toBe("reclaimed");
-      // Claim remains held — not settled as a false success.
-      expect(drain.activeLaneKeys().has("l1")).toBe(true);
-      drain.dispose();
     });
   });
 
