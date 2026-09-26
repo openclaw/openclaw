@@ -97,12 +97,15 @@ describe("anthropic-vertex provider plugin", () => {
     expect(result.provider.apiKey).toBe("gcp-vertex-credentials");
     expect(result.provider.baseUrl).toBe("https://us-east5-aiplatform.googleapis.com");
     expect(result.provider.headers).toBeUndefined();
-    expect(result.provider.models).toContainEqual(
-      expect.objectContaining({
-        id: "claude-sonnet-4-6",
-        thinkingLevelMap: { xhigh: null, max: "max" },
-      }),
-    );
+    expect(
+      result.provider.models.map(({ id, thinkingLevelMap }) => [id, thinkingLevelMap]),
+    ).toEqual([
+      ["claude-fable-5", { off: "low", minimal: "low", xhigh: "xhigh", max: "max" }],
+      ["claude-mythos-5", { off: "low", minimal: "low", xhigh: "xhigh", max: "max" }],
+      ["claude-opus-4-8", { xhigh: "xhigh", max: "max" }],
+      ["claude-opus-4-6", { xhigh: null, max: "max" }],
+      ["claude-sonnet-4-6", { xhigh: null, max: "max" }],
+    ]);
   });
 
   it.each([

@@ -3,7 +3,7 @@ import {
   cancelTrackedTextResponse,
   createStreamingResponse,
 } from "../../test-support/streaming-error-response.js";
-import { createExaWebSearchProvider } from "./exa-web-search-provider.js";
+import { createExaWebSearchProvider } from "../web-search-contract-api.js";
 
 type JsonRecord = Record<string, unknown>;
 
