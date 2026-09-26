@@ -70,6 +70,7 @@ import { rebalanceRuntimeTestJobs } from "./ci-runtime-test-placement.mts";
 import { isRuntimePlacementIncludePatterns } from "./ci-test-timings-schema.mts";
 import {
   readCompactGroupTimings,
+  readCompactPullRequestPreparationSeconds,
   readCompleteSplitGenerationSeconds,
   readRuntimePlacementTimings,
   readToolingFileTimings,
@@ -143,6 +144,7 @@ type NodeTestShard = {
   timeoutMinutes?: number;
   planConcurrency?: number;
   predictedSeconds?: number;
+  sharedPreparationSeconds?: number;
 };
 
 type NodeTestPlanOptions = {
@@ -421,11 +423,13 @@ const COMPACT_HYBRID_RUNTIME_JOB_SECONDS = 440;
 // Split groups above this hosted prediction before packing. Hybrid reuses the
 // hosted-derived splits so retries cannot reunite an oversized hosted group.
 const COMPACT_GITHUB_MAX_PREDICTED_SECONDS = 150;
-// Complete PR group measurements leave 150s for setup and prediction error.
+// Shared worker preparation is charged once inside setup, not to its first group.
+const COMPACT_HOSTED_PR_SETUP_SECONDS = 200;
+// Complete PR workload measurements leave 200s for setup and prediction error.
 // CLI process consumers retain smaller stripes around their runtime preparation.
 const COMPACT_HOSTED_PR_GROUP_SECONDS = 340;
 const COMPACT_HOSTED_PR_CLI_GROUP_SECONDS = 120;
-const COMPACT_HOSTED_PR_JOB_SECONDS = 450;
+const COMPACT_HOSTED_PR_JOB_SECONDS = 600 - COMPACT_HOSTED_PR_SETUP_SECONDS;
 // Hosted run 35477045216 timed out after an hour on a 203-file serial stripe;
 // its 196-file sibling took 2867s. Bound admission independently of stale costs.
 const COMPACT_HOSTED_STORAGE_STATE_MAX_FILES = 64;
@@ -4415,6 +4419,11 @@ function createCompactNodeTestShardBundles(
     options.runnerBackend === "github-pr"
       ? COMPACT_HOSTED_PR_NODE_TEST_JOB_CAP
       : COMPACT_NODE_TEST_JOB_CAP;
+  const sharedPreparationSeconds =
+    options.runnerBackend === "github-pr" ? readCompactPullRequestPreparationSeconds() : 0;
+  if (sharedPreparationSeconds > COMPACT_HOSTED_PR_SETUP_SECONDS) {
+    throw new Error("Hosted PR worker preparation exceeds the 200s job setup reserve");
+  }
   const compactNodeJobCap = options.compactNodeJobCap ?? profileJobCap;
   if (!Number.isSafeInteger(compactNodeJobCap) || compactNodeJobCap < 1) {
     throw new Error("compact Node job cap must be a positive integer");
@@ -4838,6 +4847,9 @@ function createCompactNodeTestShardBundles(
         : {}),
       planConcurrency,
       predictedSeconds: Math.ceil(estimateBinSeconds(bin)),
+      ...(options.runnerBackend === "github-pr" && !firstGroup.requiresDist
+        ? { sharedPreparationSeconds }
+        : {}),
     });
   }
 

@@ -231,6 +231,7 @@ async function main() {
           labels: job.labels,
           text,
           completeJob: job.conclusion === "success",
+          jobId: job.id,
         });
         if (source === "tooling" && job.labels.includes("ubuntu-24.04") && !seedTooling) {
           attemptLogs.push({
@@ -238,6 +239,7 @@ async function main() {
             labels: job.labels,
             text,
             completeJob: true,
+            jobId: job.id,
           });
         }
       }

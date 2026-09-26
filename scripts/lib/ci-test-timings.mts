@@ -58,9 +58,21 @@ export function readCompactGroupTimings(
 ): Readonly<Record<string, number>> {
   const timings = readTestTimings()?.compactGroupSeconds;
   if (profile === "github" && options.pullRequest && timings?.githubPullRequest) {
-    return (cachedPullRequestTimings ??= { ...timings.github, ...timings.githubPullRequest });
+    return (cachedPullRequestTimings ??= {
+      ...timings.github,
+      ...Object.fromEntries(
+        Object.entries(timings.githubPullRequest.groups).map(([key, group]) => [
+          key,
+          group.workloadSeconds ?? group.rawSeconds,
+        ]),
+      ),
+    });
   }
   return timings?.[profile] ?? emptyGroupTimings;
+}
+
+export function readCompactPullRequestPreparationSeconds(): number {
+  return readTestTimings()?.compactGroupSeconds.githubPullRequest?.sharedPreparationSeconds ?? 0;
 }
 
 export function readRepoE2eFileTimings(): Readonly<Record<string, number>> {

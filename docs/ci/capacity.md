@@ -532,11 +532,27 @@ and every file estimate includes the measured fork, import, and setup overhead.
 Compact groups have separate Blacksmith and GitHub-hosted measurements, selected
 from jobs API runner labels (`blacksmith-*` versus hosted `ubuntu-24.04`); hybrid
 and large-group stripe adjustments continue to use their existing policies.
-Compact weights use the complete `[shard:x] begin` to `end` span, preserving
-process startup and any contention in the measured run. Ordinary Blacksmith compact jobs may execute two groups concurrently; serial
-jobs retain `planConcurrency: 1`. The refit preserves each complete child span,
-including contention, without subtracting setup or rewriting historical costs. Runner-profile
-calibration remains a separate admission policy.
+Raw compact measurements use the complete `[shard:x] begin` to `end` span,
+preserving process startup and contention. Ordinary Blacksmith compact jobs may
+execute two groups concurrently; serial jobs retain `planConcurrency: 1`.
+Historical raw measurements remain intact.
+
+The hosted PR profile additionally records workload measurements and one shared
+worker-preparation charge per job. The shard runner owns one compiled worker
+generation, prepared lazily by the first group that needs it. That preparation
+belongs to the job, so moving a group must not move its preparation cost into
+another group's workload estimate. The refit attributes only an unprefixed parent
+preparation event wholly contained in one successful serial part. Nested,
+ambiguous, overlapping, or incomplete evidence receives no preparation credit;
+borrower verification and ordinary test setup remain group work. Complete Node
+and Bun portions still contribute to the same group.
+
+Each timing key retains its raw cost and, when measured, a distinct workload cost.
+Raw-only history stays a conservative fallback. Hosted PR bundles carry the
+measured `sharedPreparationSeconds` once within their 200-second setup
+reserve; this does not reduce that reserve or the separate runtime/private-QA
+build allowance. Raw span, preparation, workload, and full job wall remain
+separately reviewable. Native CI must still prove the ten-minute row objective.
 
 For split compact groups, the refit also records the parent cost from a complete
 generation within one run and runner profile. It sums each part's median span,

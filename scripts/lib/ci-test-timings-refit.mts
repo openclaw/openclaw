@@ -23,21 +23,48 @@ export type CiTimingRun = {
         text: string;
         labels: string[];
         completeJob?: boolean;
+        jobId?: number;
       }
   )[];
 };
 
 type Samples = Map<string, number[]>;
 
+type PullRequestTimingObservation = {
+  sharedPreparation?: { at: string; identity: string; seconds: number };
+  spans: {
+    key: string;
+    start: string;
+    end: string;
+    rawSeconds: number;
+    sharedPreparationSeconds: number;
+    workloadSeconds: number;
+  }[];
+};
+
+function pullRequestSeconds(
+  timings: CiTestTimings | undefined,
+  field: "rawSeconds" | "workloadSeconds",
+): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(timings?.compactGroupSeconds.githubPullRequest?.groups ?? {}).flatMap(
+      ([key, group]) => (group[field] === undefined ? [] : [[key, group[field]]]),
+    ),
+  );
+}
+
 type RuntimeTimingGroup = {
   shard_name: string;
   timing_key?: string;
   configs: string[];
-  includePatterns: string[];
+  includePatterns?: string[];
   env?: Record<string, string>;
 };
 
-function readRuntimeTimingGroups(text: string): RuntimeTimingGroup[] {
+function readRuntimeTimingGroups(text: string): {
+  groups: RuntimeTimingGroup[];
+  complete: boolean;
+} {
   const encoded = new Set(
     [
       ...text.matchAll(
@@ -46,13 +73,13 @@ function readRuntimeTimingGroups(text: string): RuntimeTimingGroup[] {
     ].map((match) => match[1]!),
   );
   if (encoded.size !== 1) {
-    return [];
+    return { groups: [], complete: false };
   }
   try {
     const groups = decodeNodeTestGroups([...encoded][0]!);
     const strings = (value: unknown): value is string[] =>
       Array.isArray(value) && value.every((entry) => typeof entry === "string");
-    return groups.filter((group): group is RuntimeTimingGroup => {
+    const valid = (group: unknown): group is RuntimeTimingGroup => {
       if (typeof group !== "object" || group === null) {
         return false;
       }
@@ -63,19 +90,20 @@ function readRuntimeTimingGroups(text: string): RuntimeTimingGroup[] {
         "configs" in group &&
         strings(group.configs) &&
         group.configs.length > 0 &&
-        "includePatterns" in group &&
-        strings(group.includePatterns) &&
-        group.includePatterns.length > 0 &&
+        (!("includePatterns" in group) ||
+          (strings(group.includePatterns) && group.includePatterns.length > 0)) &&
         (!("env" in group) ||
           (typeof group.env === "object" &&
             group.env !== null &&
             !Array.isArray(group.env) &&
             Object.values(group.env).every((value) => typeof value === "string")))
       );
-    });
+    };
+    const admitted = groups.filter(valid);
+    return { groups: admitted, complete: admitted.length === groups.length };
   } catch {
     // Historical/malformed descriptors cannot supply a placement identity.
-    return [];
+    return { groups: [], complete: false };
   }
 }
 const MIN_PRUNE_RUNS = 3;
@@ -140,7 +168,12 @@ function readE2eLog(text: string, samples: Samples, overhead?: number[]) {
 function readCompactLog(
   text: string,
   labels: string[],
-  samples: { blacksmith: Samples; github: Samples; githubPullRequest: Samples },
+  samples: {
+    blacksmith: Samples;
+    github: Samples;
+    githubPullRequest: Samples;
+    githubPullRequestWorkload: Samples;
+  },
   runtimeSamples: { blacksmith: Samples; github: Samples },
   runtimeDescriptors: Map<string, RuntimePlacementTiming>,
   pullRequest = false,
@@ -161,13 +194,17 @@ function readCompactLog(
   );
   const policy = policies.size === 0 ? "node" : policies.size === 1 ? [...policies][0] : undefined;
   if (aggregate && !["node", "bun-compatible", "dual"].includes(policy ?? "")) {
-    return;
+    return undefined;
   }
-  const starts = new Map<string, number>();
-  const descriptors = readRuntimeTimingGroups(text);
+  const starts = new Map<string, { at: string; timestamp: number }>();
+  const { groups: descriptors, complete: completeDescriptors } = readRuntimeTimingGroups(text);
+  const jobObservation: PullRequestTimingObservation = { spans: [] };
   const runtimeModes = new Map<string, "runtime" | "private-qa">();
-  const recordSpan = (key: string, elapsed: number) => {
+  const recordSpan = (key: string, elapsed: number, workloadSeconds = elapsed) => {
     recordSample(samples[profile], key, elapsed);
+    if (aggregate && completeJob) {
+      recordSample(samples.githubPullRequestWorkload, key, workloadSeconds);
+    }
     const matches = descriptors.filter((group) => (group.timing_key ?? group.shard_name) === key);
     if (matches.length !== 1) {
       return;
@@ -177,6 +214,9 @@ function readCompactLog(
       const membershipKey = compactGroupMembershipTimingKey(group);
       if (membershipKey) {
         recordSample(samples[profile], membershipKey, elapsed);
+        if (completeJob) {
+          recordSample(samples.githubPullRequestWorkload, membershipKey, workloadSeconds);
+        }
       }
     }
     const observation = {
@@ -184,7 +224,7 @@ function readCompactLog(
       env: Object.fromEntries(
         Object.entries(group.env ?? {}).toSorted(([a], [b]) => a.localeCompare(b)),
       ),
-      includePatterns: group.includePatterns.toSorted(),
+      includePatterns: group.includePatterns?.toSorted(),
       pretestBuildMode: runtimeModes.get(key),
       seconds: Math.max(1, Math.round(elapsed)),
     };
@@ -198,6 +238,7 @@ function readCompactLog(
   const spans = new Map<string, Map<string, number[]>>();
   const failed = new Set<string>();
   const skippedNode = new Set<string>();
+  let topLevelSpans = true;
   for (const line of text.split("\n")) {
     const skipped =
       /\[shard:node-subset:([^\]]+)\] skipped \(native shard has no Node-only files\)/u.exec(line);
@@ -233,6 +274,7 @@ function readCompactLog(
     }
     const timestamp = Date.parse(event[1]!);
     const key = event[2]!;
+    topLevelSpans &&= /^\d{4}-\d\d-\d\dT[\d:.]+Z\s+\[shard:[^\]]+\] (?:begin|end)/u.test(line);
     const owner = logicalKey(key);
     if (event[3] === "begin") {
       if (aggregate && starts.has(key)) {
@@ -241,13 +283,13 @@ function readCompactLog(
       if (!aggregate) {
         runtimeModes.delete(key);
       }
-      starts.set(key, timestamp);
+      starts.set(key, { at: event[1]!, timestamp });
       continue;
     }
     const started = starts.get(key);
     if (!aggregate) {
       if (event[4] === "0" && started !== undefined) {
-        recordSpan(key, (timestamp - started) / 1000);
+        recordSpan(key, (timestamp - started.timestamp) / 1000);
       }
       starts.delete(key);
       continue;
@@ -257,17 +299,96 @@ function readCompactLog(
     } else {
       const parts = spans.get(owner) ?? new Map<string, number[]>();
       const values = parts.get(key) ?? [];
-      values.push((timestamp - started) / 1000);
+      const rawSeconds = (timestamp - started.timestamp) / 1000;
+      values.push(rawSeconds);
+      jobObservation.spans.push({
+        key,
+        start: started.at,
+        end: event[1]!,
+        rawSeconds,
+        sharedPreparationSeconds: 0,
+        workloadSeconds: rawSeconds,
+      });
       parts.set(key, values);
       spans.set(owner, parts);
     }
     starts.delete(key);
   }
   if (!aggregate) {
-    return;
+    return undefined;
   }
   for (const key of starts.keys()) {
     failed.add(logicalKey(key));
+  }
+  const preparation = [
+    ...text.matchAll(
+      /^\uFEFF?(\d{4}-\d\d-\d\dT[\d:.]+Z)\s+\[vitest-workers\] prepared ([a-f0-9]{12}) in (\d+)ms \(\d+ inputs, \d+ outputs\)\s*$/gmu,
+    ),
+  ];
+  const concurrency = new Set(
+    [
+      ...text.matchAll(
+        /^\d{4}-\d\d-\d\dT[\d:.]+Z\s+OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: (\S+)$/gmu,
+      ),
+    ].map((match) => match[1]),
+  );
+  const admissions = [
+    ...text.matchAll(
+      /^\d{4}-\d\d-\d\dT[\d:.]+Z\s+\[shard:resources\] [^\n]*\badmitted plans=(\S+)\s*$/gmu,
+    ),
+  ];
+  const ordered = jobObservation.spans.toSorted(
+    (a, b) => Date.parse(a.start) - Date.parse(b.start),
+  );
+  const owners = new Set(ordered.map((span) => logicalKey(span.key)));
+  const descriptorKeys = descriptors.map((group) => group.timing_key ?? group.shard_name);
+  const preparationRecords = [
+    ...text.matchAll(/^\uFEFF?\d{4}-\d\d-\d\dT[\d:.]+Z\s+\[vitest-workers\] prepared\b/gmu),
+  ];
+  // Lazy preparation belongs to the serial job owner. Nested preparation,
+  // partial jobs, retries, and overlapping children retain their full envelope.
+  if (
+    completeJob &&
+    preparation.length === 1 &&
+    preparationRecords.length === 1 &&
+    topLevelSpans &&
+    concurrency.size === 1 &&
+    concurrency.has("1") &&
+    admissions.length === 1 &&
+    admissions[0]![1] === "1" &&
+    completeDescriptors &&
+    failed.size === 0 &&
+    descriptorKeys.length === owners.size &&
+    new Set(descriptorKeys).size === descriptorKeys.length &&
+    descriptorKeys.every((key) => owners.has(key)) &&
+    new Set(ordered.map((span) => span.key)).size === ordered.length &&
+    ordered.every(
+      (span, index) =>
+        span.rawSeconds > 0 &&
+        (index === 0 || Date.parse(ordered[index - 1]!.end) <= Date.parse(span.start)),
+    )
+  ) {
+    const event = preparation[0]!;
+    const preparationSeconds = Number(event[3]) / 1000;
+    const end = Date.parse(event[1]!);
+    const containing = ordered.filter(
+      (span) =>
+        Date.parse(span.start) <= end - preparationSeconds * 1000 && end <= Date.parse(span.end),
+    );
+    if (
+      preparationSeconds > 0 &&
+      containing.length === 1 &&
+      preparationSeconds < containing[0]!.rawSeconds
+    ) {
+      const span = containing[0]!;
+      span.sharedPreparationSeconds = preparationSeconds;
+      span.workloadSeconds -= preparationSeconds;
+      jobObservation.sharedPreparation = {
+        at: event[1]!,
+        identity: event[2]!,
+        seconds: preparationSeconds,
+      };
+    }
   }
   for (const [key, parts] of spans) {
     if (failed.has(key)) {
@@ -290,12 +411,16 @@ function readCompactLog(
       continue;
     }
     const elapsed = [...parts.values()].reduce((total, values) => total + median(values), 0);
-    recordSpan(key, elapsed);
+    const preparationSeconds = jobObservation.spans
+      .filter((span) => logicalKey(span.key) === key)
+      .reduce((total, span) => total + span.sharedPreparationSeconds, 0);
+    recordSpan(key, elapsed, elapsed - preparationSeconds);
   }
+  return jobObservation;
 }
 
 function readToolingLog(text: string, samples: Samples) {
-  const descriptors = readRuntimeTimingGroups(text);
+  const { groups: descriptors } = readRuntimeTimingGroups(text);
   const active = new Map<
     string,
     {
@@ -317,7 +442,10 @@ function readToolingLog(text: string, samples: Samples) {
         (group) => (group.timing_key ?? group.shard_name) === event[1],
       );
       const descriptor = matches.length === 1 ? matches[0] : undefined;
-      if (!descriptor || !/^core-tooling-\d+(?:-hosted-\d+)?$/u.test(descriptor.shard_name)) {
+      if (
+        !descriptor?.includePatterns ||
+        !/^core-tooling-\d+(?:-hosted-\d+)?$/u.test(descriptor.shard_name)
+      ) {
         continue;
       }
       const shard = descriptor.shard_name;
@@ -499,6 +627,7 @@ export function refitTestTimings(
     blacksmith: new Map<string, number[]>(),
     github: new Map<string, number[]>(),
     githubPullRequest: new Map<string, number[]>(),
+    githubPullRequestWorkload: new Map<string, number[]>(),
     toolingBlacksmith: new Map<string, number[]>(),
     toolingGithub: new Map<string, number[]>(),
   };
@@ -508,6 +637,7 @@ export function refitTestTimings(
     blacksmith: new Set<number>(),
     github: new Set<number>(),
     githubPullRequest: new Set<number>(),
+    githubPullRequestWorkload: new Set<number>(),
     toolingBlacksmith: new Set<number>(),
     toolingGithub: new Set<number>(),
   };
@@ -516,7 +646,13 @@ export function refitTestTimings(
     blacksmith: new Set<string>(),
     github: new Set<string>(),
     githubPullRequest: new Set<string>(),
+    githubPullRequestWorkload: new Set<string>(),
   };
+  const pullRequestObservations: (PullRequestTimingObservation & {
+    runId: number;
+    logIndex: number;
+    jobId?: number;
+  })[] = [];
   const runtimeSamples = {
     blacksmith: new Map<string, number[]>(),
     github: new Map<string, number[]>(),
@@ -543,6 +679,7 @@ export function refitTestTimings(
       blacksmith: new Map<string, number[]>(),
       github: new Map<string, number[]>(),
       githubPullRequest: new Map<string, number[]>(),
+      githubPullRequestWorkload: new Map<string, number[]>(),
       toolingBlacksmith: new Map<string, number[]>(),
       toolingGithub: new Map<string, number[]>(),
     };
@@ -550,7 +687,7 @@ export function refitTestTimings(
       blacksmith: new Map<string, number[]>(),
       github: new Map<string, number[]>(),
     };
-    for (const log of run.logs) {
+    for (const [logIndex, log] of run.logs.entries()) {
       const text = stripVTControlCharacters(log.text);
       if (log.kind === "tooling") {
         const profile = log.labels.some((label) => label.startsWith("blacksmith-"))
@@ -558,7 +695,7 @@ export function refitTestTimings(
           : "toolingGithub";
         readToolingLog(text, current[profile]);
       } else if (log.kind === "compact" || log.kind === "compactPullRequest") {
-        readCompactLog(
+        const observation = readCompactLog(
           text,
           log.labels,
           current,
@@ -567,6 +704,14 @@ export function refitTestTimings(
           log.kind === "compactPullRequest",
           log.completeJob === true,
         );
+        if (observation) {
+          pullRequestObservations.push({
+            runId: run.id,
+            logIndex,
+            ...(log.jobId === undefined ? {} : { jobId: log.jobId }),
+            ...observation,
+          });
+        }
       } else {
         readE2eLog(text, current[log.kind], log.kind === "uiE2e" ? overhead : undefined);
       }
@@ -578,6 +723,10 @@ export function refitTestTimings(
       }
     }
     recordCompleteParentSamples(current.githubPullRequest, observedParents.githubPullRequest);
+    recordCompleteParentSamples(
+      current.githubPullRequestWorkload,
+      observedParents.githubPullRequestWorkload,
+    );
     // Retries or duplicate reporter lines in one run must not satisfy the two-run minimum.
     for (const profile of [
       "uiE2e",
@@ -585,6 +734,7 @@ export function refitTestTimings(
       "blacksmith",
       "github",
       "githubPullRequest",
+      "githubPullRequestWorkload",
       "toolingBlacksmith",
       "toolingGithub",
     ] as const) {
@@ -622,6 +772,25 @@ export function refitTestTimings(
       Object.assign({}, runtimeDescriptors.get(identity)!, { seconds: measuredSeconds }),
     );
   }
+  const rawPullRequest = refitMap(
+    samples.githubPullRequest,
+    pullRequestSeconds(previous, "rawSeconds"),
+    // Changed-path selection never proves that an unobserved PR key disappeared.
+    0,
+    observedParents.githubPullRequest,
+    options.seedPullRequest ? 1 : 2,
+    false,
+    true,
+  );
+  const workloadPullRequest = refitMap(
+    samples.githubPullRequestWorkload,
+    pullRequestSeconds(previous, "workloadSeconds"),
+    0,
+    observedParents.githubPullRequestWorkload,
+    options.seedPullRequest ? 1 : 2,
+    false,
+    options.seedPullRequest === true,
+  );
   const timings: CiTestTimings = {
     compactGroupSeconds: {
       blacksmith: refitMap(
@@ -640,16 +809,27 @@ export function refitTestTimings(
       ),
       ...(previous?.compactGroupSeconds.githubPullRequest || contributingRuns.githubPullRequest.size
         ? {
-            githubPullRequest: refitMap(
-              samples.githubPullRequest,
-              previous?.compactGroupSeconds.githubPullRequest,
-              // Successful PRs can omit whole families through changed-path selection.
-              0,
-              observedParents.githubPullRequest,
-              options.seedPullRequest ? 1 : 2,
-              false,
-              options.seedPullRequest === true,
-            ),
+            githubPullRequest: {
+              groups: Object.fromEntries(
+                Object.entries(rawPullRequest).map(([key, rawSeconds]) => [
+                  key,
+                  {
+                    // Partial jobs add raw samples without workload samples; their
+                    // independent medians must not invert this conservative estimate.
+                    rawSeconds: Math.max(rawSeconds, workloadPullRequest[key] ?? 0),
+                    ...(workloadPullRequest[key] === undefined
+                      ? {}
+                      : { workloadSeconds: workloadPullRequest[key] }),
+                  },
+                ]),
+              ),
+              sharedPreparationSeconds: Math.ceil(
+                Math.max(
+                  previous?.compactGroupSeconds.githubPullRequest?.sharedPreparationSeconds ?? 0,
+                  ...pullRequestObservations.map((entry) => entry.sharedPreparation?.seconds ?? 0),
+                ),
+              ),
+            },
           }
         : {}),
     },
@@ -720,9 +900,25 @@ export function refitTestTimings(
       previous?.compactGroupSeconds.github,
     ],
     [
+      "compactGroupSeconds.githubPullRequest.rawSeconds",
+      pullRequestSeconds(timings, "rawSeconds"),
+      pullRequestSeconds(previous, "rawSeconds"),
+    ],
+    [
+      "compactGroupSeconds.githubPullRequest.workloadSeconds",
+      pullRequestSeconds(timings, "workloadSeconds"),
+      pullRequestSeconds(previous, "workloadSeconds"),
+    ],
+    [
       "compactGroupSeconds.githubPullRequest",
-      timings.compactGroupSeconds.githubPullRequest ?? {},
-      previous?.compactGroupSeconds.githubPullRequest,
+      {
+        sharedPreparationSeconds:
+          timings.compactGroupSeconds.githubPullRequest?.sharedPreparationSeconds ?? 0,
+      },
+      {
+        sharedPreparationSeconds:
+          previous?.compactGroupSeconds.githubPullRequest?.sharedPreparationSeconds ?? 0,
+      },
     ],
     ["uiE2e.fileSeconds", timings.uiE2e.fileSeconds, previous?.uiE2e.fileSeconds],
     ["repoE2eFileSeconds", timings.repoE2eFileSeconds, previous?.repoE2eFileSeconds],
@@ -759,6 +955,7 @@ export function refitTestTimings(
     timings,
     changes: changes.toSorted((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),
     runIds,
+    pullRequestObservations,
     contributingRunIds: {
       blacksmith: [...contributingRuns.blacksmith].toSorted((a, b) => a - b),
       github: [...contributingRuns.github].toSorted((a, b) => a - b),

@@ -2153,6 +2153,7 @@ jobs:
                 timeout_minutes: shard.timeoutMinutes,
                 plan_concurrency: shard.planConcurrency,
                 predicted_seconds: shard.predictedSeconds,
+                shared_preparation_seconds: shard.sharedPreparationSeconds,
                 targets: shard.targets,
                 requires_go: (shard.groups ?? [shard]).some((plan) => {
                   const patterns = plan.targets ?? plan.includePatterns;
@@ -4476,6 +4477,7 @@ jobs:
         # retain their existing ceilings. Group pins can lower the job budget.
         env:
           PREDICTED_TEST_SECONDS: ${{ matrix.predicted_seconds || '' }}
+          SHARED_PREPARATION_SECONDS: ${{ matrix.shared_preparation_seconds }}
           SHARD_PLAN_CONCURRENCY: ${{ matrix.plan_concurrency || '' }}
           FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
           RUNNER_ENVIRONMENT: ${{ runner.environment }}
@@ -4510,6 +4512,7 @@ jobs:
             workers="$cores"
           fi
           echo "detected cores=$cores plan_concurrency=${SHARD_PLAN_CONCURRENCY:-default} predicted_test_seconds=${PREDICTED_TEST_SECONDS:-unknown} -> workers=$workers"
+          echo "shared_preparation_seconds=${SHARED_PREPARATION_SECONDS:-unprofiled} (included in the job setup reserve)"
           echo "OPENCLAW_VITEST_MAX_WORKERS=$workers" >> "$GITHUB_ENV"
 
       - name: Run Node test shard

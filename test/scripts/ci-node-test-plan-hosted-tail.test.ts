@@ -86,6 +86,9 @@ it("keeps measured hosted PR rows bounded while preserving their complete file o
   expect(jobs.length).toBeLessThanOrEqual(210);
   expect(jobs.every((job) => job.planConcurrency === 1)).toBe(true);
   expect(Math.max(...jobs.map((job) => job.predictedSeconds!))).toBeLessThanOrEqual(525);
+  expect(
+    jobs.filter((job) => job.groups.length > 1).every((job) => job.predictedSeconds! <= 400),
+  ).toBe(true);
   for (const job of jobs.filter((entry) => entry.predictedSeconds! > 450)) {
     expect(
       job.pretestBuildMode !== undefined ||
