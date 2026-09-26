@@ -11,7 +11,10 @@ import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrati
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
 import { readSessionSqliteMigrationManifest } from "../infra/session-sqlite-migration-manifest.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
@@ -58,6 +61,7 @@ describe("retained session receipt recovery", () => {
           { ...scope, sessionKey: "agent:main:kept" },
           { label: "Current metadata" },
         );
+        await closeOpenClawAgentDatabasesAsync(state.root);
         closeOpenClawAgentDatabasesForTest();
         const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, scope).path;
         const replaced = replacement === "index" ? storePath : sqlitePath;
@@ -118,6 +122,7 @@ describe("retained session receipt recovery", () => {
           mode: "import",
         });
         const before = receipt(state.env);
+        await closeOpenClawAgentDatabasesAsync(state.root);
         closeOpenClawAgentDatabasesForTest();
         const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, scope).path;
         fs.copyFileSync(sqlitePath, `${sqlitePath}.replacement`);

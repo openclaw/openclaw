@@ -27,6 +27,7 @@ import {
   releaseOpenClawAgentDatabaseLease,
 } from "../state/openclaw-agent-db-lease.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -35,16 +36,22 @@ import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/op
 import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-participants-migration.js";
 import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
 import { sessionParticipantsSchemaSql } from "../state/openclaw-agent-session-participants-schema.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 async function createStore(layout: "shared" | "custom") {
   const root = fs.realpathSync.native(tempDirs.make("openclaw-doctor-canonical-store-"));
@@ -69,7 +76,9 @@ async function createStore(layout: "shared" | "custom") {
   await upsertSessionEntryCore(scope, { sessionId: "doctor-session", updatedAt: 1 });
   const options = toDatabaseOptions(resolveSqliteReadScope(scope));
   const sqlitePath = resolveOpenClawAgentSqlitePath(options);
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   return { cfg, env, options, scope, sqlitePath, stateDir, storePath };
 }
@@ -101,7 +110,9 @@ async function createHistoricalSharedStore(corruptIndex = false, schemaVersion: 
       operation: goalOperation,
     }),
   ).toEqual(goalReceipt);
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   const source = openNodeSqliteDatabase(store.sqlitePath);
   const retained = [
