@@ -2017,7 +2017,7 @@ jobs:
             changedScopeHasQaImpact &&
             (!frozenTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
           const nodeMatrixLimit = compactPlanMode === "pull-request"
-            ? (nodeRunnerBackend === "github-pr" ? 250 : 130) : 70;
+            ? (nodeRunnerBackend === "github-pr" ? 256 : 130) : 70;
           const rawNodeTestShards = runNodeFull
             ? changedNodeTestShards
               ? changedNodeTestShards

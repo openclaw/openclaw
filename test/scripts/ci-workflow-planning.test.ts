@@ -7629,8 +7629,8 @@ describe("ci workflow guards", () => {
   it.each([
     ["pull_request", "compact", "blacksmith", 130, "blacksmith"],
     ["pull_request", "precise", "github", 130, "github"],
-    ["pull_request", "compact", "hybrid", 250, "github-pr"],
-    ["pull_request", "precise", "github", 250, "github-pr"],
+    ["pull_request", "compact", "hybrid", 256, "github-pr"],
+    ["pull_request", "precise", "github", 256, "github-pr"],
     ["push", "compact", "hybrid", 70, "hybrid"],
     ["workflow_dispatch", "compact", "blacksmith", null, "blacksmith"],
   ] as const)(

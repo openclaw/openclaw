@@ -85,8 +85,8 @@ it("keeps measured hosted PR rows bounded while preserving their complete file o
   const jobs = createNodeTestShardBundles(prOptions);
   expect(jobs.length).toBeLessThanOrEqual(210);
   expect(jobs.every((job) => job.planConcurrency === 1)).toBe(true);
-  expect(Math.max(...jobs.map((job) => job.predictedSeconds!))).toBeLessThanOrEqual(450);
-  for (const job of jobs.filter((entry) => entry.predictedSeconds! > 340)) {
+  expect(Math.max(...jobs.map((job) => job.predictedSeconds!))).toBeLessThanOrEqual(525);
+  for (const job of jobs.filter((entry) => entry.predictedSeconds! > 450)) {
     expect(
       job.pretestBuildMode !== undefined ||
         (job.groups.length === 1 && job.groups[0]!.includePatterns?.length === 1),
@@ -97,6 +97,7 @@ it("keeps measured hosted PR rows bounded while preserving their complete file o
     "agentic-cli",
     "agentic-cli-process",
     "agentic-gateway-methods",
+    "agentic-control-plane-agent-chat",
     "core-runtime-infra-storage-state",
   ]) {
     const owner = owners.find((entry) => entry.shardName === name)!;
@@ -120,6 +121,9 @@ it("keeps measured hosted PR rows bounded while preserving their complete file o
         if (name === "agentic-gateway-methods") {
           expect(group.includePatterns!.length).toBeLessThanOrEqual(26);
         }
+        if (name === "agentic-control-plane-agent-chat") {
+          expect(jobs.find((job) => job.groups.includes(group))!.groups).toHaveLength(1);
+        }
       }
     }
   }
@@ -128,6 +132,21 @@ it("keeps measured hosted PR rows bounded while preserving their complete file o
     .filter((group) =>
       group.includePatterns?.includes("src/cli/gateway-backed-exit-health.process.test.ts"),
     );
+  for (const file of [
+    "src/auto-reply/reply/session.test.ts",
+    "src/agents/main-session-recovery/main-session-restart-recovery.test.ts",
+  ]) {
+    const rows = jobs.filter((job) =>
+      job.groups.some(
+        (group) =>
+          group.shard_name.replace(/-hosted-\d+$/u, "") === "core-runtime-infra-storage-state" &&
+          group.includePatterns?.includes(file),
+      ),
+    );
+    expect(rows, file).toHaveLength(1);
+    expect(rows[0]!.groups, file).toHaveLength(1);
+    expect(rows[0]!.groups[0]!.includePatterns, file).toEqual([file]);
+  }
   expect(health).toHaveLength(1);
   expect(health[0]!.includePatterns).toEqual([
     "src/cli/gateway-backed-exit-health.process.test.ts",

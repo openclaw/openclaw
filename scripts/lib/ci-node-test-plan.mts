@@ -421,15 +421,27 @@ const COMPACT_HYBRID_RUNTIME_JOB_SECONDS = 440;
 // Split groups above this hosted prediction before packing. Hybrid reuses the
 // hosted-derived splits so retries cannot reunite an oversized hosted group.
 const COMPACT_GITHUB_MAX_PREDICTED_SECONDS = 150;
-// PR measurements replace the older hosted hints. Leave over four minutes of the
-// objective for checkout/setup and prediction error; test deadlines stay unchanged.
-const COMPACT_HOSTED_PR_GROUP_SECONDS = 120;
-const COMPACT_HOSTED_PR_JOB_SECONDS = 340;
+// Complete PR group measurements leave 150s for setup and prediction error.
+// CLI process consumers retain smaller stripes around their runtime preparation.
+const COMPACT_HOSTED_PR_GROUP_SECONDS = 340;
+const COMPACT_HOSTED_PR_CLI_GROUP_SECONDS = 120;
+const COMPACT_HOSTED_PR_JOB_SECONDS = 450;
 // Hosted run 35477045216 timed out after an hour on a 203-file serial stripe;
 // its 196-file sibling took 2867s. Bound admission independently of stale costs.
 const COMPACT_HOSTED_STORAGE_STATE_MAX_FILES = 64;
 // Hosted run 36182096172 spent 532s in a 32-file storage group.
 const COMPACT_HOSTED_PR_STORAGE_STATE_MAX_FILES = 16;
+// PR run 36199853523: serial case totals are relative placement weights, not
+// whole-file wall samples. The two long files keep their own indivisible rows.
+const COMPACT_HOSTED_PR_STORAGE_FILE_SECONDS = new Map([
+  ["src/auto-reply/reply/session.test.ts", 410],
+  ["src/agents/embedded-agent-runner/run.shared-integration.test.ts", 170],
+  ["src/auto-reply/reply/get-reply.binding-route-owner.test.ts", 167],
+  ["src/auto-reply/dispatch.block-streaming-recovery.test.ts", 157],
+  ["src/auto-reply/reply/agent-runner.private-final.runreplyagent.test.ts", 97],
+  ["src/agents/main-session-recovery/main-session-restart-recovery.test.ts", 475],
+  ["test/canonical-descendant.integration.test.ts", 127],
+]);
 // Hourly hosted run 35983526919 spent ~25 minutes in each of these owners.
 // Bound the main-tier work independently of stale whole-owner timing estimates.
 const COMPACT_HOSTED_MAIN_MAX_FILES = new Map([
@@ -3138,10 +3150,15 @@ function createStripedBatches<T>(
   batchCount: number,
   weightForValue: (value: T) => number,
   weightForBatch?: (values: T[]) => number,
+  maxBatchItems?: number,
 ): T[][] {
   if (batchCount < 1) {
     throw new Error("striped batch count must be positive");
   }
+  const stripeCount =
+    maxBatchItems === undefined
+      ? batchCount
+      : Math.max(batchCount, Math.ceil(values.length / maxBatchItems));
   const entries = values.map((value, index) => ({
     index,
     value,
@@ -3151,7 +3168,7 @@ function createStripedBatches<T>(
   const batches: Array<{
     totalWeight: number;
     entries: Array<{ index: number; value: T; weight: number }>;
-  }> = Array.from({ length: batchCount }, () => ({ totalWeight: 0, entries: [] }));
+  }> = Array.from({ length: stripeCount }, () => ({ totalWeight: 0, entries: [] }));
   const firstBatch = batches[0];
   if (!firstBatch) {
     throw new Error("striped batch allocation failed");
@@ -3163,7 +3180,13 @@ function createStripedBatches<T>(
         : batch.totalWeight + entry.weight;
     let target = firstBatch;
     for (const batch of batches) {
-      if (nextWeight(batch) < nextWeight(target)) {
+      if (maxBatchItems !== undefined && batch.entries.length >= maxBatchItems) {
+        continue;
+      }
+      if (
+        (maxBatchItems !== undefined && target.entries.length >= maxBatchItems) ||
+        nextWeight(batch) < nextWeight(target)
+      ) {
         target = batch;
       }
     }
@@ -3546,7 +3569,9 @@ function splitOversizedCompactGroup(
   const hostedBackend = runnerBackend === "github-pr" ? "github-pr" : "github";
   const groupSecondsCap =
     runnerBackend === "github-pr"
-      ? COMPACT_HOSTED_PR_GROUP_SECONDS
+      ? isCliProcess
+        ? COMPACT_HOSTED_PR_CLI_GROUP_SECONDS
+        : COMPACT_HOSTED_PR_GROUP_SECONDS
       : COMPACT_GITHUB_MAX_PREDICTED_SECONDS;
   const measuredHostedSeconds = estimateCompactGroupSeconds(group, hostedBackend);
   const splitsHostedCli = runnerBackend === "github-pr" && group.shard_name === "agentic-cli";
@@ -3618,10 +3643,16 @@ function splitOversizedCompactGroup(
   const agentsCoreFiles = isParallelAgentsCoreGroup(group)
     ? new Set(agentsCoreWorkFiles(group))
     : undefined;
+  const hostedPrStorage =
+    runnerBackend === "github-pr" && group.shard_name === "core-runtime-infra-storage-state";
+  const prStorageFileSeconds = (file: string) =>
+    hostedPrStorage ? COMPACT_HOSTED_PR_STORAGE_FILE_SECONDS.get(file) : undefined;
   const weightForFile = isTooling
     ? toolingFileWeight
     : (file: string) =>
-        !agentsCoreFiles || agentsCoreFiles.has(file) ? stripeFileWeight(file) : 0;
+        !agentsCoreFiles || agentsCoreFiles.has(file)
+          ? (prStorageFileSeconds(file) ?? stripeFileWeight(file))
+          : 0;
   const totalWeight =
     includePatterns?.reduce((seconds, file) => seconds + weightForFile(file), 0) ?? 0;
   // A measured whole-config parent can lag newly cataloged files. Its old
@@ -3753,6 +3784,7 @@ function splitOversizedCompactGroup(
         ),
         weightForValue,
         isCliProcess || isTooling ? batchWeight : undefined,
+        hostedPrStorage ? hostedFileLimit : undefined,
       );
     }
     const runtimeFiles = runtimePartition?.runtimeFiles;
@@ -3782,10 +3814,38 @@ function splitOversizedCompactGroup(
               stripeFiles.slice(index * hostedFileLimit, (index + 1) * hostedFileLimit),
             ),
           );
+    // Bound cardinality during placement, then split only the measured cost
+    // tails. Slicing every cost stripe afterward needlessly doubles small rows.
+    const budgeted = hostedPrStorage
+      ? bounded.flatMap((stripeFiles) => {
+          const hasLongFile = stripeFiles.some(
+            (file) => (prStorageFileSeconds(file) ?? 0) >= COMPACT_HOSTED_PR_GROUP_SECONDS,
+          );
+          const estimatedSeconds =
+            (seconds * stripeFiles.reduce((sum, file) => sum + weightForFile(file), 0)) /
+            totalWeight;
+          return !hasLongFile && estimatedSeconds > COMPACT_HOSTED_PR_JOB_SECONDS
+            ? createStripedBatches(
+                stripeFiles,
+                Math.ceil(estimatedSeconds / COMPACT_HOSTED_PR_JOB_SECONDS),
+                weightForFile,
+              )
+            : [stripeFiles];
+        })
+      : bounded;
+    const withSingletons = hostedPrStorage
+      ? budgeted.flatMap((stripeFiles) => {
+          const singletons = stripeFiles.filter(
+            (file) => (prStorageFileSeconds(file) ?? 0) >= COMPACT_HOSTED_PR_GROUP_SECONDS,
+          );
+          const remaining = stripeFiles.filter((file) => !singletons.includes(file));
+          return [...(remaining.length ? [remaining] : []), ...singletons.map((file) => [file])];
+        })
+      : budgeted;
     // The update file alone contributed 827 seconds of serial case time.
     // Preserve the other storage files' existing order, workers and ownership.
     return splitHostedUpdate
-      ? bounded.flatMap((stripeFiles) =>
+      ? withSingletons.flatMap((stripeFiles) =>
           stripeFiles.includes(HOSTED_MAIN_UPDATE_TEST) && stripeFiles.length > 1
             ? [
                 [HOSTED_MAIN_UPDATE_TEST],
@@ -3793,7 +3853,7 @@ function splitOversizedCompactGroup(
               ]
             : [stripeFiles],
         )
-      : bounded;
+      : withSingletons;
   };
   const timingEnv = parallelCommands ? { ...group.env, ...PINNED_COMPACT_GROUP_ENV } : group.env;
   let stripes = createStripes(splitSeconds);
@@ -3965,6 +4025,10 @@ function splitOversizedCompactGroup(
     if (membershipKey && childTimings[membershipKey] !== undefined) {
       return { group: child, seconds: childTimings[membershipKey] };
     }
+    const singletonSeconds = patterns.length === 1 ? prStorageFileSeconds(patterns[0]!) : undefined;
+    if (singletonSeconds !== undefined && singletonSeconds >= COMPACT_HOSTED_PR_GROUP_SECONDS) {
+      return { group: child, seconds: singletonSeconds };
+    }
     if (isTooling) {
       return {
         group: child,
@@ -4010,6 +4074,9 @@ function splitOversizedCompactGroup(
             )
           : 0,
         projectedSeconds,
+        hostedPrStorage
+          ? Math.max(0, ...patterns.map((file) => prStorageFileSeconds(file) ?? 0))
+          : 0,
         previousWorkerTimingKeys[index]
           ? estimateCompactStripeSeconds(
               { ...group, timing_key: previousWorkerTimingKeys[index] },
@@ -4466,7 +4533,7 @@ function createCompactNodeTestShardBundles(
         !isExclusiveCompactGroup(planned.group) &&
         runnerRank(planned.group) >= 0;
       const dedicatedHostedMainGroup =
-        compactMode === "push" &&
+        (compactMode === "push" || options.runnerBackend === "github-pr") &&
         isHostedNodeBackend(options.runnerBackend) &&
         (/^agentic-control-plane-agent-chat(?:-hosted-\d+)?$/u.test(planned.group.shard_name) ||
           (/^agentic-gateway-methods(?:-hosted-\d+)?$/u.test(planned.group.shard_name) &&

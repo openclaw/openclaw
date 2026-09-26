@@ -24,10 +24,12 @@ red. Main, manual qualification, and release routing remain unchanged.
 
 Current PR Node plans use measured hosted costs kept separately from hourly main
 costs. Smaller groups retain the complete inventory, worker limits, and test
-deadlines. Group admission targets 120 seconds and packed compute targets 340
-seconds, reserving the rest of the ten-minute job objective for setup, runtime
-preparation, and measurement variation. Storage groups contain at most 16 files.
-Hosted PRs may emit up to 210 compact rows and 250 total Node rows,
+deadlines. Ordinary group admission targets 340 seconds and packed compute targets
+450 seconds; CLI process groups retain a 120-second target for runtime preparation.
+The remaining job budget covers setup and measurement variation. Storage groups
+balance file cost and the 16-file ceiling together. Measured heavy singleton files
+and Gateway agent-chat groups have dedicated rows.
+Hosted PRs may emit up to 210 compact rows and 256 total Node rows,
 with a 200-row concurrency cap. Other backends retain their existing caps. The
 optional PR hosted admission budget is 300 jobs; main retains 45. These are
 per-run bounds, not a reservation of the organization’s shared hosted pool.
