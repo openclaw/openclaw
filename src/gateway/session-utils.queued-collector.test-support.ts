@@ -199,9 +199,10 @@ export function useQueuedCollectorFixture() {
     labels = ["Collector A", "Collector B"],
     completionOwnerKey?: string,
   ) {
-    const results = await Promise.all(
-      labels.map((label) =>
-        spawnSubagentDirect(
+    const results: Awaited<ReturnType<typeof spawnSubagentDirect>>[] = [];
+    for (const label of labels) {
+      results.push(
+        await spawnSubagentDirect(
           {
             task: "Wait for cancellation",
             label,
@@ -216,8 +217,8 @@ export function useQueuedCollectorFixture() {
             requesterTurnRunId: "parent-turn",
           },
         ),
-      ),
-    );
+      );
+    }
     expect(results.map((result) => result.status)).toEqual(labels.map(() => "accepted"));
     await vi.waitFor(() => expect(launchedRunIds).toEqual([results[0]?.runId]));
     return results;
