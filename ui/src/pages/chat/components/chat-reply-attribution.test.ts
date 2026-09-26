@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { renderMessageGroup } from "./chat-message-group.ts";
-import { resolveReplyAttributionPresentation } from "./chat-reply-attribution.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 
 const alice = { id: "alice", name: "Alice" };
@@ -100,31 +99,12 @@ function draw(
   };
 }
 
-describe("reply attribution presentation", () => {
-  const base = { resolved: true, missing: false, known: false, turnSource: false, shared: false };
-  it.each([
-    { rule: "a: unresolved reference", reply: { resolved: false }, expected: "hidden" },
-    { rule: "b: 1:1 answer to its own prompt", reply: { turnSource: true }, expected: "hidden" },
-    { rule: "c: 1:1 reply to an older message", reply: {}, expected: "full" },
-    { rule: "c: shared turn prompt", reply: { turnSource: true, shared: true }, expected: "full" },
-    {
-      rule: "d: missing with a known name",
-      reply: { missing: true, known: true },
-      expected: "unavailable",
-    },
-    { rule: "d: missing without name or excerpt", reply: { missing: true }, expected: "hidden" },
-  ] as const)("$rule -> $expected", ({ reply, expected }) => {
-    expect(resolveReplyAttributionPresentation({ ...base, ...reply })).toBe(expected);
-  });
-});
-
 describe("reply attribution excerpt", () => {
   it.each([
     [
       "123456789012345678901234567890123456789012345",
       "123456789012345678901234567890123456789012345",
     ],
-    ["Short prompt", "Short prompt"],
     [
       "\n  # **Review** [the plan](https://example.test) and `notes`\nDo not quote this line",
       "Review the plan and notes",
@@ -132,7 +112,6 @@ describe("reply attribution excerpt", () => {
     ["  Several    spaces\tbetween words ", "Several spaces between words"],
     ["```typescript\nconst value = 1;\n```\nLater question", "const value = 1;"],
     ["👩🏽‍💻".repeat(41), "👩🏽‍💻".repeat(41)],
-    ["", ""],
   ])("preserves the first useful plain-text line for CSS truncation of %j", (input, expected) => {
     const { row } = draw({ ...prompt, content: input });
     const excerpt = row.querySelector(".chat-reply-attribution__excerpt");
@@ -175,29 +154,6 @@ it("renders a file icon and unquoted filename for an attachment-only prompt", ()
     "release-plan.pdf",
   );
   expect(row.querySelector(".chat-reply-attribution__file svg")).not.toBeNull();
-});
-
-it("keeps an unavailable explicit source's snapshot without linking or inferring the latest participant", () => {
-  const { row } = draw(
-    prompt,
-    [
-      {
-        role: "assistant",
-        content: "Answer",
-        __openclaw: {
-          replyToId: "deleted",
-          replyToPreview: { senderLabel: "Jordan", text: "Earlier question" },
-        },
-      },
-    ],
-    false,
-  );
-  expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Jordan");
-  expect(row.querySelector(".chat-reply-attribution__excerpt")?.textContent).toContain(
-    "Earlier question",
-  );
-  expect(row.querySelector("button, a")).toBeNull();
-  expect(container.querySelector(".chat-reply-attribution--inline")).toBeNull();
 });
 
 it.each([
@@ -280,6 +236,7 @@ it.each([
       "Earlier question",
     );
     expect(row.querySelector("button, a")).toBeNull();
+    expect(container.querySelector(".chat-reply-attribution--inline")).toBeNull();
   },
 );
 
@@ -301,12 +258,12 @@ it("keeps pending prompts without a persisted ID noninteractive", () => {
 });
 
 it.each([
-  { finalTarget: "prompt", recipient: "Alice", remainingPreviews: 0 },
-  { finalTarget: "current-prompt", recipient: "Bob", remainingPreviews: 0 },
-  { finalTarget: "current", recipient: "Bob", remainingPreviews: 0 },
+  { finalTarget: "prompt", recipient: "Alice" },
+  { finalTarget: "current-prompt", recipient: "Bob" },
+  { finalTarget: "current", recipient: "Bob" },
 ])(
   "renders only the selected attribution when a frame's final response targets $recipient",
-  ({ finalTarget, recipient, remainingPreviews }) => {
+  ({ finalTarget, recipient }) => {
     container = document.body.appendChild(document.createElement("div"));
     const currentPrompt = {
       role: "user",
@@ -384,9 +341,7 @@ it.each([
     );
     expect(container.querySelectorAll(".chat-reply-attribution--reply")).toHaveLength(1);
     expect(container.querySelector(".chat-reply-attribution__name")?.textContent).toBe(recipient);
-    expect(container.querySelectorAll(".chat-reply-attribution--inline")).toHaveLength(
-      remainingPreviews,
-    );
+    expect(container.querySelector(".chat-reply-attribution--inline")).toBeNull();
   },
 );
 

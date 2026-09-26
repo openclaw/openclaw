@@ -34,7 +34,7 @@ export type ReplyAttribution = {
  * unresolved references and a 1:1 turn answering its own prompt stay hidden;
  * a confirmed-missing target keeps only a known name or excerpt.
  */
-export function resolveReplyAttributionPresentation(reply: {
+function resolveReplyAttributionPresentation(reply: {
   /** The origin is known: loaded, fetched, or carried by a snapshot excerpt. */
   resolved: boolean;
   /** A concrete id whose lookup confirmed the origin is inaccessible. */

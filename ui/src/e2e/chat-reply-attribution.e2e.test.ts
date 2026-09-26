@@ -59,52 +59,39 @@ const viewports = [
 ];
 
 suite.define(() => {
-  it.each(viewports)(
-    "navigates grouped and explicit replies at $width px",
-    async ({ width, theme }) => {
-      await suite.withPage(
-        { viewport: { width, height: 900 }, locale: "en-US" },
-        async ({ page }) => {
-          await installMockGateway(page, { sessionKey, historyMessages: history });
-          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-          await page.evaluate((value) => {
-            document.documentElement.dataset.theme = value;
-            document.documentElement.dataset.themeMode = value;
-          }, theme);
-          const thread = page.locator(".chat-thread");
-          const grouped = page.locator('.chat-group:has([data-entry-id="answer-one"])');
-          await grouped.waitFor();
-          expect(await grouped.locator(".chat-bubble").count()).toBe(2);
-          expect(await grouped.locator(".chat-reply-attribution--reply").count()).toBe(1);
-          expect(await grouped.locator(".chat-reply-attribution__name").textContent()).toBe(
-            "Jordan Lee",
-          );
-          const row = page.locator(
+  // Mobile targets and keyboard activation are owned by chat-reply-attribution.browser.
+  it("navigates grouped and explicit agent replies through the pane", async () => {
+    await suite.withPage(
+      { viewport: { width: 1440, height: 900 }, locale: "en-US" },
+      async ({ page }) => {
+        await installMockGateway(page, { sessionKey, historyMessages: history });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const thread = page.locator(".chat-thread");
+        const grouped = page.locator('.chat-group:has([data-entry-id="answer-one"])');
+        await grouped.waitFor();
+        expect(await grouped.locator(".chat-bubble").count()).toBe(2);
+        expect(await grouped.locator(".chat-reply-attribution--reply").count()).toBe(1);
+        expect(await grouped.locator(".chat-reply-attribution__name").textContent()).toBe(
+          "Jordan Lee",
+        );
+        const target = page
+          .locator(
             '.chat-group:has([data-entry-id="explicit-answer"]) .chat-reply-attribution--reply',
-          );
-          await row.waitFor();
-          for (const activation of ["click", "Enter"] as const) {
-            await thread.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
-            const target = row.getByRole("button", { name: "Replying to Jordan Lee", exact: true });
-            await target.scrollIntoViewIfNeeded();
-            const before = await thread.evaluate((element) => element.scrollTop);
-            if (activation === "click") {
-              await target.click();
-            } else {
-              await target.focus();
-              await target.press("Enter");
-            }
-            await expect
-              .poll(() => page.locator('[data-entry-id="peer-reply"]').getAttribute("class"))
-              .toContain("chat-bubble--reply-target");
-            await expect
-              .poll(() => thread.evaluate((element) => element.scrollTop))
-              .toBeLessThan(before);
-          }
-        },
-      );
-    },
-  );
+          )
+          .getByRole("button", { name: "Replying to Jordan Lee", exact: true });
+        await thread.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+        await target.scrollIntoViewIfNeeded();
+        const before = await thread.evaluate((element) => element.scrollTop);
+        await target.click();
+        await expect
+          .poll(() => page.locator('[data-entry-id="peer-reply"]').getAttribute("class"))
+          .toContain("chat-bubble--reply-target");
+        await expect
+          .poll(() => thread.evaluate((element) => element.scrollTop))
+          .toBeLessThan(before);
+      },
+    );
+  });
 
   it.each(viewports)(
     "keeps participant actions owned by their message at $width px",

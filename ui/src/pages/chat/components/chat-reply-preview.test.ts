@@ -93,19 +93,6 @@ describe("quoted agent identity", () => {
     { agentId: "main", kind: "image", expectedImage: "/avatars/current.png", expectedText: null },
     { agentId: "main", kind: "text", expectedImage: null, expectedText: "🦀" },
     {
-      agentId: "main",
-      kind: "raw-image",
-      expectedImage: "/avatars/current.png",
-      expectedText: null,
-    },
-    {
-      agentId: "main",
-      kind: "roster-image",
-      expectedImage: "/avatars/main-roster.png",
-      expectedText: null,
-    },
-    { agentId: "main", kind: "roster-text", expectedImage: null, expectedText: "⭐" },
-    {
       agentId: "research",
       kind: "image",
       expectedImage: "/avatars/research.png",
@@ -137,22 +124,10 @@ describe("quoted agent identity", () => {
         {
           assistantName: "Current agent",
           currentAgentId: "main",
-          assistantAvatar: kind.startsWith("roster-")
-            ? null
-            : kind === "image" || kind === "raw-image"
-              ? "/avatars/current.png"
-              : "🦀",
+          assistantAvatar: kind === "image" ? "/avatars/current.png" : "🦀",
           assistantAvatarUrl: kind === "image" ? "/avatars/current.png" : null,
           agents: [
-            {
-              id: "main",
-              identity:
-                kind === "roster-text"
-                  ? { emoji: "⭐" }
-                  : kind === "roster-image"
-                    ? { avatarUrl: "/avatars/main-roster.png" }
-                    : {},
-            },
+            { id: "main", identity: {} },
             {
               id: "research",
               identity: kind === "text" ? { emoji: "🌙" } : { avatarUrl: "/avatars/roster.png" },

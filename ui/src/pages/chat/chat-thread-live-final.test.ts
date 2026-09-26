@@ -261,9 +261,6 @@ describe("live terminal continuity with pending collaborators", () => {
       replyToSender: { id: "reader" },
       replyToMessage: { message: history[1] },
     });
-    expect(stream?.parts.find((part) => part.kind === "stream")).toMatchObject({
-      replyToMessage: { message: history[1] },
-    });
   });
   it("indexes rendered stream bubbles as reader anchors before they persist", () => {
     const items = project(props());

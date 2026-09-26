@@ -181,7 +181,6 @@ describe("reply attribution grouping", () => {
     },
     { changed: "prompt content", text: "updated prompt", name: "Bob", avatar: undefined },
   ])("$changed refreshes attribution on an unchanged assistant reply", ({ text, name, avatar }) => {
-    resetChatThreadState();
     const alice = userMessage("first", 1, {
       __openclaw: {
         senderId: "alice",
@@ -216,7 +215,6 @@ describe("reply attribution grouping", () => {
     );
     expect(updated).toMatchObject({
       replyToSender: { name, ...(avatar ? { profileAvatarUrl: avatar } : {}) },
-      replyToMessage: { message: replacement },
     });
     expect(updated?.kind === "group" && updated.replyToMessage?.message).toBe(replacement);
     expect(updated?.kind === "group" && updated.replyToMessage?.key).toBe(

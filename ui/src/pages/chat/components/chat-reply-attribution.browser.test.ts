@@ -11,7 +11,6 @@ import "../../../styles/chat/grouped.css";
 import "../../../styles/chat/text.css";
 
 let host: HTMLDivElement;
-const originalTheme = document.documentElement.getAttribute("data-theme-mode");
 
 beforeEach(async () => {
   const typefaces = resolveTypefaces("claw");
@@ -28,11 +27,6 @@ beforeEach(async () => {
 afterEach(async () => {
   render(null, host);
   host.remove();
-  if (originalTheme === null) {
-    document.documentElement.removeAttribute("data-theme-mode");
-  } else {
-    document.documentElement.setAttribute("data-theme-mode", originalTheme);
-  }
   await page.viewport(1280, 720);
 });
 
@@ -115,14 +109,10 @@ function expectSingleLine(row: HTMLElement) {
   }
 }
 
-const cells = ["light", "dark"].flatMap((theme) =>
-  [1440, 390, 360].map((width) => ({ theme, width })),
-);
-
-describe.each(cells)("reply attribution ($theme, $width px)", ({ theme, width }) => {
+// Theme changes colors only; geometry is proven once per width.
+describe.each([1440, 390, 360])("reply attribution (%d px)", (width) => {
   beforeEach(async () => {
     await page.viewport(width, 800);
-    document.documentElement.dataset.themeMode = theme;
     host.style.width = `${width - 32}px`;
   });
 
