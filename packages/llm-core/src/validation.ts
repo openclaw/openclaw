@@ -268,6 +268,12 @@ function coerceWithUnionSchema(
       }
     }
   }
+  // Preserve accepted values before trying a conversion to another union branch.
+  for (const schema of schemas) {
+    if (getSubSchemaValidator(schema, root)?.Check(value)) {
+      return value;
+    }
+  }
   for (const schema of schemas) {
     const types = getSchemaTypes(schema, root);
     // A nullable alternative represents absence, not a fallback for invalid
