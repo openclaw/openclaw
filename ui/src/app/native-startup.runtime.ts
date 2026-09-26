@@ -1,6 +1,7 @@
 import type { ApplicationGateway } from "./gateway.ts";
 import type { NativeDeviceSettingsCapability } from "./native-device-settings.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
+import { nativePanelBridge } from "./native-web-chrome.ts";
 import type { createStartupLifecycle, StartupStep } from "./startup-lifecycle.ts";
 
 type NativeCapabilities = {
@@ -48,7 +49,7 @@ export async function startNativeCapabilities(
       return undefined;
     });
   }
-  if (typeof handlers?.openclawGateways?.postMessage === "function") {
+  if (typeof handlers?.openclawGateways?.postMessage === "function" || nativePanelBridge()) {
     steps.push(async () => {
       const { startNativeGatewayHealthReporting } =
         await import("./native-gateway-health.runtime.ts");

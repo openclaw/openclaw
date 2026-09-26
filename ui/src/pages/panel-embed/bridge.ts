@@ -1,16 +1,13 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
+import { nativePanelBridge } from "../../app/native-web-chrome.ts";
 import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
 import { resolveLinkReaderTarget } from "../../components/link-reader-target.ts";
 import type { SidebarPanelDefinition } from "../chat/components/chat-sidebar-region-types.ts";
 import { sidebarActivePanel, sidebarMainPanel } from "../chat/sidebar-layout-geometry.ts";
 import type { SidebarLayout, SidebarPanel } from "../chat/sidebar-layout-types.ts";
 import type { PanelEmbedTarget } from "./target.ts";
-
-type PanelEmbedWindow = Window & {
-  __OPENCLAW_NATIVE_PANEL__?: { postMessage(message: unknown): void };
-};
 
 /** Only the current embedded session may classify a native transcript link. */
 export function subscribePanelEmbedLinks(
@@ -34,7 +31,7 @@ export function subscribePanelEmbedLinks(
     if (!snapshot) {
       return;
     }
-    (window as PanelEmbedWindow)["__OPENCLAW_NATIVE_PANEL__"]?.postMessage({
+    nativePanelBridge()?.postMessage({
       type: "openclaw-panel-link",
       agentId: target.agentId,
       sessionKey: target.sessionKey,
@@ -91,7 +88,7 @@ export function publishPanelEmbedState(
   };
   const serialized = JSON.stringify(message);
   if (serialized !== previous) {
-    (window as PanelEmbedWindow)["__OPENCLAW_NATIVE_PANEL__"]?.postMessage(message);
+    nativePanelBridge()?.postMessage(message);
   }
   return serialized;
 }

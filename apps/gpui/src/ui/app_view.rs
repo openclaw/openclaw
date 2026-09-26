@@ -610,7 +610,7 @@ impl Render for AppView {
                     }),
             )
             .when(!self.show_connect_form, |el| {
-                el.children(
+                el.children(self.warm_web_elements()).children(
                     self.current_dock()
                         .and_then(|dock| dock.catalog.as_ref())
                         .map(|surface| {

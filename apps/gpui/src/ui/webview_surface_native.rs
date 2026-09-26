@@ -73,11 +73,33 @@ fn build_view(
     if let Some(auth) = &spec.auth {
         builder = builder.with_initialization_script(auth.initialization_script()?);
     }
+    #[cfg(debug_assertions)]
+    {
+        builder = builder.with_initialization_script(include_str!("webview_timing.js"));
+        if let Some(script) = events.measurement(spec) {
+            builder = builder.with_initialization_script(script);
+        }
+    }
     let shortcut_nonce = uuid::Uuid::new_v4().to_string();
     builder = builder.with_initialization_script(SHORTCUT_SCRIPT.replace(
         "__GPUI_SHORTCUT_NONCE__",
         &serde_json::json!(shortcut_nonce).to_string(),
     ));
+    if spec.auth.is_some() {
+        builder = builder.with_initialization_script(format!(
+            r#"(() => {{
+              const publish = () => window.ipc.postMessage(JSON.stringify({{
+                type:'gpui-ready', nonce:{nonce},
+                ready:window.__OPENCLAW_NATIVE_COMMANDS_READY__ === true &&
+                  window.__OPENCLAW_NATIVE_GATEWAY_HEALTH__?.health === 'ok'
+              }}));
+              addEventListener('openclaw:native-commands-state', publish);
+              addEventListener('openclaw:native-gateway-health-changed', publish);
+              publish();
+            }})();"#,
+            nonce = serde_json::json!(shortcut_nonce)
+        ));
+    }
     let auth = spec.auth.clone();
     let navigation_events = events.clone();
     builder = builder.with_navigation_handler(move |url| {
@@ -117,6 +139,11 @@ fn build_view(
     });
     let load_events = events.clone();
     builder = builder.with_on_page_load_handler(move |event, url| {
+        if reading {
+            load_events.set_ready(matches!(event, PageLoadEvent::Finished));
+        } else if matches!(event, PageLoadEvent::Started) {
+            load_events.set_ready(false);
+        }
         if url == "about:blank" {
             return;
         }
@@ -145,6 +172,17 @@ fn build_view(
             return;
         };
         match payload["type"].as_str() {
+            Some("gpui-ready")
+                if trusted_control
+                    && payload["nonce"].as_str() == Some(shortcut_nonce.as_str()) =>
+            {
+                ipc_events.set_ready(payload["ready"].as_bool() == Some(true));
+            }
+            Some("gpui-painted") => {
+                if let Some(id) = payload["id"].as_str() {
+                    ipc_events.painted(id);
+                }
+            }
             Some("gpui-history") if payload["nonce"].as_str() == Some(shortcut_nonce.as_str()) => {
                 ipc_events.history_changed()
             }
@@ -215,7 +253,7 @@ fn build_view(
     Ok(view)
 }
 
-pub(super) fn retire(view: WebView) -> super::WebViewRetirement {
+pub(super) fn retire(view: WebView, visible: bool) -> super::WebViewRetirement {
     #[cfg(target_os = "macos")]
     {
         use wry::WebViewExtMacOS;
@@ -227,13 +265,16 @@ pub(super) fn retire(view: WebView) -> super::WebViewRetirement {
             unsafe {
                 native.stopLoading();
             }
-            let _ = view.focus_parent();
+            if visible {
+                let _ = view.focus_parent();
+            }
             drop(view);
             retired
         })
     }
     #[cfg(target_os = "windows")]
     {
+        let _ = visible;
         drop(view);
         super::WebViewRetirement {}
     }
@@ -257,6 +298,28 @@ pub(super) fn navigate(view: &WebView, spec: &WebViewSpec) -> Result<(), String>
         view.load_url(&spec.url)
             .map_err(|_| "Could not load the page".into())
     }
+}
+
+pub(super) fn navigate_control(view: &WebView, spec: &WebViewSpec) -> Result<(), String> {
+    let auth = spec
+        .auth
+        .as_ref()
+        .ok_or("Control UI authentication is missing")?;
+    let path = crate::model::web_urls::control_page_path(&auth.gateway_url, &spec.url)
+        .ok_or("Embedded panels must stay on their Gateway")?;
+    let destination = url::Url::parse(&spec.url).map_err(|_| "Invalid Control UI route")?;
+    let detail = serde_json::json!({
+        "path":path.split(['?', '#']).next().unwrap_or("/"),
+        "search":destination.query().map(|query| format!("?{query}")).unwrap_or_default(),
+        "hash":destination.fragment().map(|hash| format!("#{hash}")).unwrap_or_default(),
+    });
+    let url = serde_json::json!(spec.url);
+    let origin = serde_json::json!(destination.origin().ascii_serialization());
+    // A handled event preserves the booted document, its Gateway socket and store.
+    // Unknown routes retain the native host contract's ordinary URL navigation.
+    view.evaluate_script(&format!(
+        "if (location.origin === {origin} && location.href !== {url}) {{ const event = new CustomEvent('openclaw:native-navigate', {{cancelable:true, detail:{detail}}}); if (window.dispatchEvent(event)) location.assign({url}); }}"
+    )).map_err(|_| "Could not navigate the Control UI".into())
 }
 
 fn external_scheme(value: &str) -> bool {

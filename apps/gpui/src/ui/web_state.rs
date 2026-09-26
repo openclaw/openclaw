@@ -10,6 +10,7 @@ use crate::{
     model::{
         panels::{DockLayout, PanelDefinition, PanelSlot},
         web_urls::{self, ControlUiTab, WebAuth},
+        webview_pool::{WebViewKind, WebviewPool},
     },
 };
 use gpui_kit::{
@@ -52,6 +53,8 @@ pub(super) struct SessionDock {
 pub(super) struct WebUi {
     pub auth: Option<WebAuth>,
     pub stores: Option<WebViewStores>,
+    pub pool: WebviewPool<WebViewSurface>,
+    warm_pending: Option<u64>,
     profile: Option<(String, String)>,
     pub settings_open: bool,
     pub settings: Option<WebViewSurface>,
@@ -87,6 +90,8 @@ impl WebUi {
         Self {
             auth: None,
             stores: None,
+            pool: WebviewPool::default(),
+            warm_pending: None,
             profile: None,
             settings_open: false,
             settings: None,
@@ -109,6 +114,7 @@ impl WebUi {
     }
 
     pub fn reset(&mut self) {
+        self.retire_spares();
         self.pending_links.clear();
         self.settings = None;
         self.sessions.clear();
@@ -153,7 +159,7 @@ impl WebUi {
     }
 
     pub fn retire_control(&mut self) -> Vec<WebViewRetirement> {
-        let mut retired = Vec::new();
+        let mut retired = self.retire_spares();
         self.auth = None;
         if let Some(surface) = &self.settings {
             retired.extend(surface.retire());
@@ -184,9 +190,41 @@ impl WebUi {
             self.retire_control();
         }
         self.auth = Some(WebAuth::from_config(config, access_session));
+        for surface in self.pool.connect(&config.url) {
+            surface.retire();
+        }
+    }
+
+    fn retire_spares(&mut self) -> Vec<WebViewRetirement> {
+        self.warm_pending = None;
+        self.pool
+            .clear()
+            .into_iter()
+            .filter_map(|surface| surface.retire())
+            .collect()
     }
 
     pub fn surface(
+        &mut self,
+        url: String,
+        background: bool,
+        authenticated: bool,
+    ) -> Result<WebViewSurface, String> {
+        let kind = if authenticated {
+            WebViewKind::Control
+        } else {
+            WebViewKind::Reading
+        };
+        // Metadata catalogs are active owners, not user opens. Leave the spare
+        // for the next visible page instead of consuming it on session selection.
+        if !background && let Some(surface) = self.pool.adopt(kind, WebViewSurface::is_ready) {
+            surface.adopt(&url, background)?;
+            return Ok(surface);
+        }
+        self.create_surface(url, background, authenticated)
+    }
+
+    fn create_surface(
         &mut self,
         url: String,
         background: bool,
@@ -282,6 +320,7 @@ impl AppView {
         if let Err(error) = result {
             self.web.error = Some(error);
         }
+        self.warm_web_surfaces(window, cx);
         if self.web.address_dirty {
             let value = self
                 .current_dock()
@@ -328,6 +367,11 @@ impl AppView {
             }
         }
         let dark = gpui_kit::component::Theme::global(cx).is_dark();
+        for kind in [WebViewKind::Control, WebViewKind::Reading] {
+            if let Some(surface) = self.web.pool.get(kind) {
+                surface.set_dark(dark);
+            }
+        }
         if let Some(surface) = &self.web.settings {
             surface.set_dark(dark);
         }
@@ -340,6 +384,80 @@ impl AppView {
             }
         }
         self.sync_web_overlays(window, cx);
+    }
+
+    fn warm_web_surfaces(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.session.is_none()
+            || self.show_connect_form
+            || self.web.auth.is_none()
+            || self.web.warm_pending.is_some()
+            || ![WebViewKind::Control, WebViewKind::Reading]
+                .iter()
+                .any(|kind| self.web.pool.needs(*kind))
+        {
+            return;
+        }
+        // The connected shell paints first. Creation then uses the same hidden,
+        // unfocused native child path as metadata surfaces; it never activates a window.
+        let generation = self.web.pool.generation();
+        self.web.warm_pending = Some(generation);
+        cx.on_next_frame(window, move |this, _, cx| {
+            if this.web.pool.generation() != generation || this.web.warm_pending != Some(generation)
+            {
+                return;
+            }
+            this.web.warm_pending = None;
+            if this.session.is_none() || this.show_connect_form {
+                return;
+            }
+            for kind in [WebViewKind::Control, WebViewKind::Reading] {
+                if !this.web.pool.needs(kind) {
+                    continue;
+                }
+                let url = match kind {
+                    WebViewKind::Control => this
+                        .web
+                        .auth
+                        .as_ref()
+                        .ok_or_else(|| "Connect to a Gateway first".to_owned())
+                        .and_then(|auth| {
+                            web_urls::control_page_url(&auth.gateway_url, "/settings/appearance")
+                        }),
+                    WebViewKind::Reading => Ok("about:blank".into()),
+                };
+                match url.and_then(|url| {
+                    this.web
+                        .create_surface(url, true, matches!(kind, WebViewKind::Control))
+                }) {
+                    Ok(surface) => {
+                        let _ = this.web.pool.insert(generation, kind, surface);
+                    }
+                    Err(error) => {
+                        log::warn!("Could not pre-warm webview: {error}");
+                        // Do not reattempt on every paint. A new connection resets this fence.
+                        this.web.warm_pending = Some(generation);
+                        break;
+                    }
+                }
+            }
+            cx.notify();
+        });
+    }
+
+    pub(super) fn warm_web_elements(&self) -> Vec<AnyElement> {
+        [WebViewKind::Control, WebViewKind::Reading]
+            .iter()
+            .filter_map(|kind| {
+                self.web.pool.get(*kind).map(|surface| {
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .size_full()
+                        .child(surface.element())
+                        .into_any_element()
+                })
+            })
+            .collect()
     }
 
     fn prepare_web_surfaces(&mut self) -> Result<(), String> {
@@ -434,6 +552,12 @@ impl AppView {
     }
 
     pub(super) fn drain_web_events(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for kind in [WebViewKind::Control, WebViewKind::Reading] {
+            if let Some(surface) = self.web.pool.get(kind) {
+                // Spares cannot issue navigation, shortcut or panel actions.
+                surface.drain_events();
+            }
+        }
         let mut events = Vec::new();
         if let Some(surface) = &self.web.settings {
             events.extend(

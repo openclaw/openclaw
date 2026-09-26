@@ -495,14 +495,31 @@ owns whether it is granted.
 
 ### Webview architecture and platforms
 
-`ui/webview_surface.rs` owns one lazily created direct wry child webview per
-surface, attached to GPUI's window handle. Paint synchronizes its logical bounds
+`ui/web_state.rs` owns a bounded webview pool for each connected window: one
+hidden Control UI spare in that Gateway's existing store and one hidden blank
+spare in the reading store. Warming starts after the connected window paints.
+The Control UI spare loads Appearance with the normal authentication bootstrap;
+its native command listener and Gateway connection must both be ready before
+adoption. Settings, pages and panels navigate the adopted document through the
+Control UI's native router bridge, preserving its connection. Adoption schedules
+a replacement after the next frame. A fast open before readiness uses a normal
+cold surface. Gateway switches, sign-out, profile removal and window closure
+retire both spares and cancel pending replenishment. Warm views never activate
+the app, become visible, or take focus, including in background proof mode.
+
+`ui/webview_surface.rs` owns each direct wry child webview, attached to GPUI's
+window handle. Paint synchronizes its logical bounds
 with pixel alignment at the window's scale factor. Inactive surfaces are hidden
 and retained. GPUI overlays hide intersecting surfaces; component menus, dialogs,
 sheets and notifications conservatively hide all native webviews when their
 precise bounds are unavailable. Callback events use a bounded wake channel into
 GPUI rather than polling. Native appearance updates WebKit/WebView2's preferred
 color scheme without changing the system setting.
+
+Debug builds log `webview_open` request and meaningful-paint timings. The proof
+probe waits for the connected destination, its rendered Settings controls or
+loaded Tasks state, and two display frames. Reading timing covers a fresh blank
+tab; an external site's network and rendering time remains site-dependent.
 
 | Platform | Support and storage |
 | --- | --- |

@@ -157,9 +157,47 @@ struct Events {
     queue: Rc<RefCell<Vec<WebViewEvent>>>,
     history_dirty: Rc<Cell<bool>>,
     wake: Sender<()>,
+    ready: Rc<Cell<bool>>,
+    opening: Rc<RefCell<Option<Opening>>>,
+}
+
+struct Opening {
+    id: String,
+    started: std::time::Instant,
+    warm: bool,
+    surface: &'static str,
 }
 
 impl Events {
+    fn set_ready(&self, ready: bool) {
+        if self.ready.replace(ready) != ready {
+            log::debug!("webview_pool ready={ready}");
+            let _ = self.wake.try_send(());
+        }
+    }
+
+    fn painted(&self, id: &str) {
+        let mut opening = self.opening.borrow_mut();
+        if opening.as_ref().is_some_and(|opening| opening.id == id) {
+            let opening = opening.take().expect("matched opening");
+            log::info!(
+                "webview_open surface={} warm={} meaningful_paint_ms={:.2}",
+                opening.surface,
+                opening.warm,
+                opening.started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    fn measurement(&self, spec: &WebViewSpec) -> Option<String> {
+        self.opening.borrow().as_ref().map(|opening| {
+            let detail =
+                serde_json::json!({"id":opening.id, "url":spec.url, "control":spec.auth.is_some()});
+            format!("window.__OPENCLAW_GPUI_MEASURE__?.({detail});")
+        })
+    }
+
     fn push(&self, event: WebViewEvent) {
         self.queue.borrow_mut().push(event);
         let _ = self.wake.try_send(());
@@ -192,13 +230,16 @@ pub struct WebViewSurface(Rc<RefCell<SurfaceState>>);
 
 impl WebViewSurface {
     pub fn new(spec: WebViewSpec, store: WebViewStore, wake: Sender<()>) -> Self {
-        Self(Rc::new(RefCell::new(SurfaceState {
+        let measure = !spec.background;
+        let surface = Self(Rc::new(RefCell::new(SurfaceState {
             spec,
             store,
             events: Events {
                 queue: Rc::default(),
                 history_dirty: Rc::default(),
                 wake,
+                ready: Rc::default(),
+                opening: Rc::default(),
             },
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             view: None,
@@ -211,7 +252,52 @@ impl WebViewSurface {
             error: None,
             creating: false,
             retired: false,
-        })))
+        })));
+        if measure {
+            surface.begin_open(false);
+        }
+        surface
+    }
+
+    pub fn is_ready(&self) -> bool {
+        let state = self.0.borrow();
+        !state.retired && state.error.is_none() && state.events.ready.get()
+    }
+
+    fn begin_open(&self, warm: bool) {
+        let state = self.0.borrow();
+        let surface = if state.spec.auth.is_none() {
+            "reading"
+        } else if state.spec.url.contains("/apps/panel") {
+            "panel"
+        } else {
+            "settings"
+        };
+        *state.events.opening.borrow_mut() = Some(Opening {
+            id: uuid::Uuid::new_v4().to_string(),
+            started: std::time::Instant::now(),
+            warm,
+            surface,
+        });
+        log::debug!("webview_open surface={surface} warm={warm} requested");
+    }
+
+    pub fn adopt(&self, url: &str, background: bool) -> Result<(), String> {
+        let started = std::time::Instant::now();
+        {
+            let mut state = self.0.borrow_mut();
+            state.events.queue.borrow_mut().clear();
+            state.spec.background = background;
+            state.present = true;
+        }
+        self.navigate(url)?;
+        if !background {
+            self.begin_open(true);
+            if let Some(opening) = self.0.borrow().events.opening.borrow_mut().as_mut() {
+                opening.started = started;
+            }
+        }
+        Ok(())
     }
 
     /// The owner calls this for every retained surface before rendering its active selection.
@@ -292,7 +378,15 @@ impl WebViewSurface {
         state.error = None;
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(view) = &state.view {
-            native::navigate(view, &state.spec)?;
+            if state.spec.auth.is_some() && state.events.ready.get() {
+                native::navigate_control(view, &state.spec)?;
+            } else if url != "about:blank"
+                || !state.events.ready.get()
+                || !view.url().is_ok_and(|current| current == "about:blank")
+            {
+                state.events.set_ready(false);
+                native::navigate(view, &state.spec)?;
+            }
         }
         Ok(())
     }
@@ -342,6 +436,8 @@ impl WebViewSurface {
 
     pub fn retire(&self) -> Option<WebViewRetirement> {
         let mut state = self.0.borrow_mut();
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        let visible = state.visible;
         state.present = false;
         state.retired = true;
         #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -349,7 +445,7 @@ impl WebViewSurface {
         drop(state);
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
-            view.map(native::retire)
+            view.map(|view| native::retire(view, visible))
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
@@ -503,6 +599,10 @@ impl SurfaceState {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(view) = &self.view {
             let _ = view.set_visible(visible);
+            #[cfg(debug_assertions)]
+            if visible && let Some(script) = self.events.measurement(&self.spec) {
+                let _ = view.evaluate_script(&script);
+            }
         }
         self.visible = visible;
     }
