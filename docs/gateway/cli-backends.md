@@ -40,6 +40,34 @@ model-scoped `agentRuntime.id` references its backend.
 
 Utility completions for session digests, progress narration, and tool-call titles use the selected model's runtime too. Claude CLI runs a fresh, tool-free completion with its own authentication. This includes canonical `anthropic/*` refs configured with `agentRuntime.id: "claude-cli"`.
 
+When `agents.defaults.utilityModel` is unset, these completions use a provider-declared small model derived from your primary. That derived model has no entry of its own, so it takes the default HTTP route. If the provider has no usable credential, which is the normal case for a CLI-backed primary, it borrows the primary model's runtime instead of failing with `No API key found for provider`:
+
+| Primary's runtime                      | Provider credential | Derived utility model runs on             |
+| -------------------------------------- | ------------------- | ----------------------------------------- |
+| `claude-cli` pinned on its model entry | none                | `claude-cli`, the primary's runtime       |
+| `claude-cli` pinned on its model entry | configured          | the HTTP route, billed to that credential |
+| default                                | either              | the HTTP route                            |
+
+So the CLI runtime is a fallback for a model that cannot authenticate itself, not a redirect of working HTTP traffic.
+
+The route is decided when a utility completion is prepared. A completion that stayed on its own credential is prepared once and reused for the life of an observer run. A completion that borrowed the primary's runtime is not reused: the session observer re-decides on its next digest, so adding a provider credential partway through a run moves that run back to HTTP at the next digest rather than at the end of the run. Only a borrowed route pays for that recheck, so an installation already on its own credential keeps its single preparation.
+
+To choose the route yourself rather than letting the credential decide, name a runtime on the derived model's own entry. The entry has to name one: a bare entry, or `id: "default"`, still falls back.
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
+        // Always HTTP, even with no provider credential configured.
+        "anthropic/claude-haiku-4-5": { agentRuntime: { id: "openclaw" } },
+      },
+    },
+  },
+}
+```
+
 ## Using it as a fallback
 
 Add the CLI backend to your fallback list so it only runs when primary models fail:

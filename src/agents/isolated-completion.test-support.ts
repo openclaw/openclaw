@@ -76,7 +76,12 @@ vi.mock("./model-auth.js", () => ({
 vi.mock("./prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: isolatedCompletionMocks.acquireAgentRunPreparedModelRuntime,
 }));
-vi.mock("./simple-completion-runtime.js", () => ({
+vi.mock("./simple-completion-runtime.js", async () => ({
+  // Selection stays real so utility completions can be prepared end to end;
+  // only host credential preparation is owned by the test.
+  ...(await vi.importActual<typeof import("./simple-completion-runtime.js")>(
+    "./simple-completion-runtime.js",
+  )),
   prepareSimpleCompletionModel: isolatedCompletionMocks.prepareSimpleCompletionModel,
 }));
 vi.mock("./runtime-plan/prepare-auth.js", async () => {
