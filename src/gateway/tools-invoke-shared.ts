@@ -7,13 +7,13 @@ import {
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
-import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import {
   buildBundleMcpToolsFromCatalog,
   materializeBundleMcpToolsForRun,
   peekSessionMcpRuntime,
   resolveSessionMcpConfigSummary,
 } from "../agents/agent-bundle-mcp-tools.js";
+import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
