@@ -9,7 +9,6 @@ import {
   ResumedListener,
   VoiceStateUpdateListener,
 } from "../internal/discord.js";
-import type { GatewayPlugin } from "../internal/gateway.js";
 import type { DiscordVoiceListenerManager } from "./listener-contract.js";
 
 const logger = createSubsystemLogger("discord/voice");
@@ -62,7 +61,7 @@ export class DiscordVoiceStateUpdateListener extends VoiceStateUpdateListener {
   }
 
   async handle(data: APIVoiceState, client: Client): Promise<void> {
-    const transition = client.getPlugin<GatewayPlugin>("gateway")?.takeVoiceStateTransition(data);
+    const transition = client.getPlugin("gateway")?.takeVoiceStateTransition(data);
     await this.manager.handleVoiceStateUpdate(
       data,
       transition ? (transition.previous ?? null) : undefined,
