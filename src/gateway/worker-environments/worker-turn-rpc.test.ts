@@ -23,7 +23,7 @@ import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
 type WorkerEnvironmentServiceOptions = support.WorkerEnvironmentServiceOptions;
 
 describe("worker environment service", () => {
-  support.setupWorkerEnvironmentServiceSuite({ reuseReadWorkers: true });
+  support.setupWorkerEnvironmentServiceSuite();
 
   it("admits an npm-installed worker from canonical bundle identity without registry access", async () => {
     const environmentId = "worker-npm-admission";

@@ -24,6 +24,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
@@ -127,15 +128,13 @@ export const testState = {} as {
   config: OpenClawConfig;
   nowMs: number;
   providersEnabled: boolean;
-  reuseReadWorkers: boolean;
   releaseTurnOwners: Array<() => void | Promise<void>>;
   prepareInstallation: WorkerEnvironmentServiceOptions["prepareInstallation"];
   bootstrapWorker: WorkerEnvironmentServiceOptions["bootstrapWorker"];
 };
 
-export function setupWorkerEnvironmentServiceSuite(options: { reuseReadWorkers?: boolean } = {}) {
+export function setupWorkerEnvironmentServiceSuite() {
   beforeEach(async () => {
-    testState.reuseReadWorkers = options.reuseReadWorkers === true;
     testState.releaseTurnOwners = [];
     testState.root = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-service-"),
@@ -180,26 +179,16 @@ export function setupWorkerEnvironmentServiceSuite(options: { reuseReadWorkers?:
         await release();
       }
     }
-    await closeWorkerEnvironmentDatabase();
+    // Session stores can live beside the shared state DB under this case's root.
+    await cleanupSessionStateForTest({ stateDir: testState.root });
+    closeOpenClawStateDatabaseForTest();
     await fs.rm(testState.root, { recursive: true, force: true });
   });
 
-  if (options.reuseReadWorkers) {
-    afterAll(async () => {
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-    });
-  }
-}
-
-async function closeWorkerEnvironmentDatabase() {
-  if (testState.reuseReadWorkers) {
-    // Close native handles and admission for this case; retain only the reader worker code.
-    await closeOpenClawStateDatabaseByPathAsync(testState.stateDb.path);
-  } else {
+  afterAll(async () => {
     await closeOpenClawStateDatabaseAsync();
-  }
-  closeOpenClawStateDatabaseForTest();
+    closeOpenClawStateDatabaseForTest();
+  });
 }
 
 export function getDevelopmentProfile() {
@@ -212,7 +201,9 @@ export function getDevelopmentProfile() {
 export async function reopenWorkerEnvironmentStore() {
   await testState.service?.stop();
   testState.service = undefined;
-  await closeWorkerEnvironmentDatabase();
+  // Reopen database admission and handles while retaining only the reader worker code.
+  await closeOpenClawStateDatabaseByPathAsync(testState.stateDb.path);
+  closeOpenClawStateDatabaseForTest();
   testState.stateDb = openOpenClawStateDatabase({
     env: { OPENCLAW_STATE_DIR: testState.root },
   });

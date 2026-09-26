@@ -343,6 +343,15 @@ function expectAllExtensionConfigs(
   expect(configs).toContain("test/vitest/vitest.extension-codex.config.ts");
 }
 
+let committedExtensionFallback: ReturnType<typeof createChangedExtensionFallbackShards> | undefined;
+function getCommittedExtensionFallback() {
+  // Only read-only inventory assertions share this plan; synthetic mutations create fresh plans.
+  committedExtensionFallback ??= createChangedExtensionFallbackShards([
+    "scripts/lib/ci-changed-node-test-plan.mts",
+  ]);
+  return structuredClone(committedExtensionFallback);
+}
+
 describe("CI changed Node test plan", () => {
   it("reuses a complete consumer graph until the tracked inventory changes", () => {
     const cwd = argvTempDirs.make("changed-cached-consumers-");
@@ -2474,15 +2483,11 @@ describe("CI changed Node test plan", () => {
   });
 
   it("covers every extension config when the fallback planner itself changes", () => {
-    expectAllExtensionConfigs(
-      createChangedExtensionFallbackShards(["scripts/lib/ci-changed-node-test-plan.mts"]),
-    );
+    expectAllExtensionConfigs(getCommittedExtensionFallback());
   });
 
   it("keeps fallback config processes serial while filling independent job budgets", () => {
-    const shards = createChangedExtensionFallbackShards([
-      "scripts/lib/ci-changed-node-test-plan.mts",
-    ]);
+    const shards = getCommittedExtensionFallback();
     const groups = fallbackGroups(shards);
     const bundles = shards.filter((shard) => shard.groups);
     expectAllExtensionConfigs(shards);
@@ -2731,9 +2736,7 @@ describe("CI changed Node test plan", () => {
   });
 
   it("partitions every database-worker file exactly once in a broad fallback", () => {
-    const shards = createChangedExtensionFallbackShards([
-      "scripts/lib/ci-changed-node-test-plan.mts",
-    ]);
+    const shards = getCommittedExtensionFallback();
     const groups = fallbackGroups(shards);
     const workerGroups = groups.filter((group) =>
       group.configs.includes("test/vitest/vitest.extension-database-workers.config.ts"),
@@ -2895,9 +2898,7 @@ describe("CI changed Node test plan", () => {
       args.toSorted((left, right) =>
         JSON.stringify(left ?? {}).localeCompare(JSON.stringify(right ?? {})),
       );
-    const shards = createChangedExtensionFallbackShards([
-      "scripts/lib/ci-changed-node-test-plan.mts",
-    ]);
+    const shards = getCommittedExtensionFallback();
     expect(shards).not.toBeNull();
     const groups = fallbackGroups(shards ?? []).filter((group) => group.configs.includes(config));
     expect(groups.length).toBeGreaterThan(1);

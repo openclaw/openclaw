@@ -2271,37 +2271,57 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       includeReleaseOnlyPluginShards: false,
       includeReleaseOnlyRuntimeTests: false,
     };
-    const owner = expectDefined(
-      createNodeTestShards(options).find(
-        (shard) => shard.shardName === "agentic-gateway-server-isolated",
-      ),
-      "reduced Gateway owner",
-    );
-    const stripes = createNodeTestShardBundles(options).filter((shard) =>
-      shard.shardName.startsWith("agentic-gateway-server-isolated-"),
-    );
-    expect(stripes.length).toBeGreaterThan(1);
-    const timingKeys = stripes.map((stripe) =>
-      expectDefined(stripe.timing_key, "reduced Gateway stripe timing"),
-    );
-    expect(new Set(timingKeys).size).toBe(stripes.length);
-    expect(timingKeys).not.toContain(owner.timing_key);
-    expect(stripes.flatMap((stripe) => stripe.includePatterns ?? []).toSorted()).toEqual(
-      owner.includePatterns?.toSorted(),
-    );
-    const timingParts = timingKeys.map((key) =>
-      expectDefined(parseCompactSplitTimingKey(key), "reduced Gateway timing part"),
-    );
-    expect(timingParts.map((part) => part.parentShardName)).toEqual(
-      stripes.map(() => "changed-agentic-gateway-server-isolated"),
-    );
-    expect(new Set(timingParts.map((part) => part.generationKey)).size).toBe(1);
-    expect(timingParts.map((part) => part.expectedParts)).toEqual(
-      stripes.map(() => stripes.length),
-    );
-    expect(timingParts.map((part) => part.part).toSorted((a, b) => a - b)).toEqual(
-      stripes.map((_, index) => index + 1),
-    );
+    const originalShards = fullSuiteVitestShards.slice();
+    const configs = new Set([
+      "test/vitest/vitest.gateway-server-isolated.config.ts",
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+    ]);
+    try {
+      // The following "bundles split shards" case retains full-inventory composition coverage.
+      fullSuiteVitestShards.splice(
+        0,
+        fullSuiteVitestShards.length,
+        ...originalShards
+          .map((shard) => ({
+            ...shard,
+            projects: shard.projects.filter((config) => configs.has(config)),
+          }))
+          .filter((shard) => shard.projects.length > 0),
+      );
+      const owner = expectDefined(
+        createNodeTestShards(options).find(
+          (shard) => shard.shardName === "agentic-gateway-server-isolated",
+        ),
+        "reduced Gateway owner",
+      );
+      const stripes = createNodeTestShardBundles(options).filter((shard) =>
+        shard.shardName.startsWith("agentic-gateway-server-isolated-"),
+      );
+      expect(stripes.length).toBeGreaterThan(1);
+      const timingKeys = stripes.map((stripe) =>
+        expectDefined(stripe.timing_key, "reduced Gateway stripe timing"),
+      );
+      expect(new Set(timingKeys).size).toBe(stripes.length);
+      expect(timingKeys).not.toContain(owner.timing_key);
+      expect(stripes.flatMap((stripe) => stripe.includePatterns ?? []).toSorted()).toEqual(
+        owner.includePatterns?.toSorted(),
+      );
+      const timingParts = timingKeys.map((key) =>
+        expectDefined(parseCompactSplitTimingKey(key), "reduced Gateway timing part"),
+      );
+      expect(timingParts.map((part) => part.parentShardName)).toEqual(
+        stripes.map(() => "changed-agentic-gateway-server-isolated"),
+      );
+      expect(new Set(timingParts.map((part) => part.generationKey)).size).toBe(1);
+      expect(timingParts.map((part) => part.expectedParts)).toEqual(
+        stripes.map(() => stripes.length),
+      );
+      expect(timingParts.map((part) => part.part).toSorted((a, b) => a - b)).toEqual(
+        stripes.map((_, index) => index + 1),
+      );
+    } finally {
+      fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards);
+    }
   });
 
   it("bundles split shards with deterministic unique identities and unchanged coverage", () => {
