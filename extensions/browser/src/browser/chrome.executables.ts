@@ -521,7 +521,15 @@ function findPlaywrightChromiumExecutableCandidatesLinux(): Array<BrowserExecuta
       if (!entry.startsWith("chromium-")) {
         continue;
       }
-      for (const linuxDir of ["chrome-linux64", "chrome-linux"]) {
+      // Playwright's per-arch unpack dir: x64 uses chrome-linux64/chrome-linux,
+      // arm64/arm use chrome-linux-arm64/chrome-linux-arm. Omitting the arm dirs
+      // makes managed Chromium undiscoverable on aarch64 hosts even when installed.
+      for (const linuxDir of [
+        "chrome-linux64",
+        "chrome-linux",
+        "chrome-linux-arm64",
+        "chrome-linux-arm",
+      ]) {
         candidates.push({
           kind: "chromium",
           path: path.join(browserPath, entry, linuxDir, "chrome"),
