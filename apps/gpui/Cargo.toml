@@ -51,3 +51,7 @@ objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std"
 gpui-component = { path = "/Users/steipete/Projects/oss/gpui-kit/crates/component" }
 gpui-base = { path = "/Users/steipete/Projects/oss/gpui-kit/crates/base" }
 gpui-kit-assets = { path = "/Users/steipete/Projects/oss/gpui-kit/crates/assets" }
+gpui-pre-macos = { path = "/Users/steipete/Projects/oss/gpui-pre-macos" }
+accesskit = { path = "/Users/steipete/Projects/oss/accesskit/common" }
+accesskit_consumer = { path = "/Users/steipete/Projects/oss/accesskit/consumer" }
+accesskit_macos = { path = "/Users/steipete/Projects/oss/accesskit/platforms/macos" }
