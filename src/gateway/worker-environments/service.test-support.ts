@@ -15,6 +15,7 @@ import type {
   WorkerDesktopEndpoint,
   WorkerNodeEnrollment,
   WorkerProvider,
+  WorkerProviderV1,
   WorkerSshEndpoint,
 } from "../../plugins/types.js";
 import {
@@ -292,9 +293,10 @@ export function createService(
   return testState.service;
 }
 
-export function createProvider(overrides: Partial<WorkerProvider> = {}): WorkerProvider {
+export function createProvider(overrides: Partial<WorkerProviderV1> = {}): WorkerProviderV1 {
   return {
     id: "fake",
+    liveAuthorityVersion: 1,
     supportedExecutionModes: ["remote-exec"],
     resolveAllocation: async () => ({ leaseId: "lease-1", sharedHost: false }),
     provision: async () => ({ leaseId: "lease-1", ssh: SSH_ENDPOINT }),

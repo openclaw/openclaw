@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import type { WorkerProvider } from "../../plugins/types.js";
+import type { WorkerProviderV1 } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createCoreGatewayMethodDescriptors } from "../methods/core-method-policy.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
@@ -35,7 +35,7 @@ describe("on-demand prepared worker admission", () => {
     });
     await requireGit(projectPath, ["add", "."]);
     await requireGit(projectPath, ["commit", "--quiet", "-m", "base"]);
-    const provision = vi.fn<WorkerProvider["provision"]>(async () => {
+    const provision = vi.fn<WorkerProviderV1["provision"]>(async () => {
       throw new Error("Synthetic provider unavailable");
     });
     const provider = support.createProvider({

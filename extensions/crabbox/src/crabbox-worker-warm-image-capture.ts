@@ -384,6 +384,9 @@ export function createCrabboxWarmImageCapture(dependencies: {
     await attemptCapture();
     const operation =
       key && owner?.projectKey ? (await openStore().lookup(key))?.operation : undefined;
+    // Record capture custody before revalidating; cancellation takes precedence over
+    // an unresolved-capture error without discarding its recovery record.
+    assertCurrent(context);
     // A native create may still be running after a lost response. Enrollment must
     // never introduce node credentials into that source until capture has settled.
     if (operation?.type === "capture" && operation.leaseId === context.id) {
@@ -391,7 +394,6 @@ export function createCrabboxWarmImageCapture(dependencies: {
         `${captureError ? `${captureError}. ` : ""}Crabbox project image capture is unresolved. ${crabboxWarmImageRecoveryHint(operation.id)}`,
       );
     }
-    assertCurrent(context);
     return captured;
   };
 }

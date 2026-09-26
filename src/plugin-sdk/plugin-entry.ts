@@ -143,7 +143,6 @@ export type {
   WorkerLeaseStatus,
   WorkerMachineOption,
   WorkerProfile,
-  WorkerProvider,
   WorkerSshEndpoint,
   WorkerSshIdentity,
   WorkerSshIdentityRequest,
@@ -158,6 +157,7 @@ export type {
   OpenClawPluginGatewayEvents,
 } from "../plugins/gateway-events.js";
 export { WorkerProviderError } from "../plugins/capability-provider.types.js";
+export type { WorkerProvider } from "../plugins/capability-provider.types.js";
 
 export type {
   PluginConversationBinding,

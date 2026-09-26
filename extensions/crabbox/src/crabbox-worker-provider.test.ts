@@ -94,9 +94,7 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-provider-"));
 });
 
-type CrabboxWorkerProviderDependencies = NonNullable<
-  Parameters<typeof createCrabboxWorkerProvider>[0]
->;
+type CrabboxWorkerProviderDependencies = Parameters<typeof createCrabboxWorkerProvider>[0];
 type CrabboxCommandRunner = NonNullable<CrabboxWorkerProviderDependencies["runCommand"]>;
 
 function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
@@ -134,7 +132,7 @@ function providerWithRawRunner(
   runCommand: CrabboxCommandRunner,
   warn?: (message: string) => void,
   sleep: (milliseconds: number) => Promise<void> = async () => {},
-): WorkerProvider {
+) {
   const provider = createCrabboxWorkerProvider({
     state: crabboxState,
     runCommand,
@@ -148,7 +146,11 @@ function providerWithRawRunner(
   providers.add(provider);
   return {
     ...provider,
-    provision: (profile, operationId, options) =>
+    provision: (
+      profile: WorkerProfile,
+      operationId: string,
+      options?: Partial<Parameters<WorkerProvider<1>["provision"]>[2]>,
+    ) =>
       provider.provision(profile, operationId, {
         assertCurrent: () => {},
         nodeRuntimeIdentity: {
@@ -188,12 +190,10 @@ function providerWithRunner(
   );
 }
 
-function failedNodeEnrollment(
-  error: Error,
-): NonNullable<Parameters<WorkerProvider["provision"]>[2]> {
+function failedNodeEnrollment(error: Error) {
   return {
     beginNodeEnrollment: async () => ({
-      mode: "connect",
+      mode: "connect" as const,
       setupCode: "secret-setup-value",
       setupId: "setup-id",
       openclawVersion: "2026.8.1",

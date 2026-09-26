@@ -274,6 +274,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/provider-allocation-cleanup.test.ts",
   "src/gateway/worker-environments/provider-bootstrap.test.ts",
   "src/gateway/worker-environments/provider-crabbox-runtime-preflight.test.ts",
+  "src/gateway/worker-environments/provider-invocation.test.ts",
   "src/gateway/worker-environments/provider-destroy-timeout.test.ts",
   "src/gateway/worker-environments/provider-intent.test.ts",
   "src/gateway/worker-environments/provider-node-teardown.test.ts",

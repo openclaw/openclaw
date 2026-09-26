@@ -159,11 +159,11 @@ export function openWarmImageStore() {
 }
 
 export async function provisionWarmProfile(
-  provider: WorkerProvider,
+  provider: WorkerProvider<1>,
   profile: WorkerProfile = PROFILE,
   operationId = OPERATION_ID,
   machineClass?: string,
-  options?: NonNullable<Parameters<WorkerProvider["provision"]>[2]>,
+  options?: Partial<Parameters<WorkerProvider<1>["provision"]>[2]>,
 ) {
   return provider.provision(profile, operationId, {
     assertCurrent: () => {},
@@ -185,7 +185,7 @@ export async function provisionWarmProfile(
 }
 
 export async function captureWarmImage(
-  provider: WorkerProvider,
+  provider: WorkerProvider<1>,
   profile: WorkerProfile = PROFILE,
   operationId = OPERATION_ID,
   machineClass?: string,
@@ -196,7 +196,7 @@ export async function captureWarmImage(
 
 export const PROJECT_KEY = "a".repeat(64);
 export const BASE_COMMIT = "b".repeat(40);
-type ProvisionOptions = NonNullable<Parameters<WorkerProvider["provision"]>[2]>;
+type ProvisionOptions = Parameters<WorkerProvider<1>["provision"]>[2];
 
 export function createProjectOptions(
   events: string[],
@@ -214,6 +214,8 @@ export function createProjectOptions(
     return undefined;
   };
   const options = {
+    // These cancellation fixtures model the caller's physical Stop as well as its project grant.
+    signal: controller.signal,
     assertCurrent: () => controller.signal.throwIfAborted(),
     nodeRuntimeIdentity: {
       nodeBootstrapSha256: createNodeBootstrapFixture().sha256,

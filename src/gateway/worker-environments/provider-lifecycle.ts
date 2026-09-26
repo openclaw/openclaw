@@ -6,6 +6,7 @@ import {
   type WorkerLease,
   type WorkerNodeRuntimeIdentity,
   type WorkerProvider,
+  type WorkerProviderV1,
 } from "../../plugins/types.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
@@ -230,7 +231,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         const requireProjectOwner = () => {
           cancellation?.assertActive();
           beforeProvision?.();
-          const current = requireCurrentOwner(record);
+          const current = requireCurrentOwner(record, "provision");
           if (
             options.isStopping() ||
             current.destroyRequestedAtMs !== null ||
@@ -257,7 +258,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
           throw closedAttempt;
         }
         beforeProvision?.();
-        const current = requireCurrentOwner(record);
+        const current = requireCurrentOwner(record, "provision");
         if (
           current.preparation?.consumedAtMs === null &&
           current.preparation.expiresAtMs <= now()
@@ -285,9 +286,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
           : {}),
         ...(cancellation ? { signal: cancellation.signal } : {}),
         ...(projectOperation ? { project: projectOperation.project } : {}),
-      } satisfies NonNullable<Parameters<WorkerProvider["provision"]>[2]> & {
-        assertCurrent: () => void;
-      };
+      } satisfies Parameters<WorkerProviderV1["provision"]>[2];
       cancellation?.assertActive();
       const provision = async () => {
         assertCurrent();
