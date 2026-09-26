@@ -2592,7 +2592,7 @@ describe("Crabbox worker provider", () => {
   );
 
   it.each(["standard", undefined])(
-    "overrides configured class %s for one provision operation",
+    "overrides configured class %s with Small for one provision operation",
     async (configuredClass) => {
       const calls: string[][] = [];
       const provider = providerWithRunner(async (argv) => {
@@ -2606,14 +2606,14 @@ describe("Crabbox worker provider", () => {
         { ...CLASSLESS_PROFILE, ...(configuredClass ? { class: configuredClass } : {}) },
         OPERATION_ID,
         {
-          machineClass: "c7a.24xlarge",
+          machineClass: "small",
         },
       );
 
       const warmup = calls.find((argv) => argv[1] === "warmup");
       expect(warmup?.slice(warmup.indexOf("--class"), warmup.indexOf("--class") + 2)).toEqual([
         "--class",
-        "c7a.24xlarge",
+        "small",
       ]);
     },
   );

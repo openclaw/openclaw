@@ -156,3 +156,45 @@ it("moves with the selected OS and limits machine choices to that OS", async () 
     await result;
   }
 });
+
+it.each(["dispatch", "move", "restart"] as const)(
+  "%s submits the preselected Small class without requiring a machine click",
+  async (mode) => {
+    const result = showSessionPlacementTargetDialog({
+      mode,
+      sessionLabel: "Example session",
+      activeRun: false,
+      loadCatalog: async () => ({
+        devices: [],
+        profiles: [
+          {
+            id: "aws",
+            providerId: "crabbox",
+            operatingSystems: [{ id: "linux", label: "Linux", default: true }],
+            machines: [
+              { id: "standard", label: "Standard", cpu: 32, default: true },
+              { id: "small", label: "Small", cpu: 8 },
+            ],
+          },
+        ],
+      }),
+    });
+    const { modal } = await getRenderedModalDialog(document.body);
+    try {
+      modal.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]')!.click();
+      expect(
+        modal.querySelector('[data-value="machine:small"]')?.getAttribute("aria-pressed"),
+      ).toBe("true");
+      modal.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+      await expect(result).resolves.toEqual({
+        kind: "profile",
+        profileId: "aws",
+        os: "linux",
+        machineClass: "small",
+      });
+    } finally {
+      modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+      await result;
+    }
+  },
+);
