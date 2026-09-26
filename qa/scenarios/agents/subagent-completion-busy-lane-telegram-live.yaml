@@ -1,0 +1,318 @@
+title: Telegram subagent completion waits for requester lane release
+
+scenario:
+  id: subagent-completion-busy-lane-telegram-live
+  surface: subagents
+  coverage:
+    primary:
+      - agent-runtime.subagent-turns-delivery
+    secondary:
+      - agent-runtime.subagent-turns-subagents
+      - telegram.conversation-routing-and-delivery
+  gatewayConfigPatch:
+    tools:
+      profile: full
+  objective: Prove a child that finishes while its requester is still running has its completion recorded and delivered through Telegram exactly once, after the requester's own reply, on whichever admission path the delivery owner selects.
+  successCriteria:
+    - A real Telegram inbound turn spawns one native child, then keeps the requester lane occupied in a foreground exec call that outlives the hold.
+    - The child holds its reply behind a readiness barrier until that exec call has actually started, then reaches succeeded while it is still in flight.
+    - The requester's committed final reply is located as an actual visible assistant event, so every later assertion is cut off at that recorded event rather than at the last event whose serialized form happens to quote the marker.
+    - Transcript assertions are captured only after the requester's message-tool result is committed, so a delivery that is already published to Telegram is never read before its result event exists.
+    - After that cutoff the requester records exactly one message-tool send and no further orchestration, whether the completion was steered into the original run or admitted as a separate requester turn.
+    - The child completion reaches Telegram exactly once, after the requester reply.
+    - The observed admission path is reported as evidence, so an authorized run records which of the two production paths was taken instead of pre-judging it.
+  docsRefs:
+    - docs/tools/subagents.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/process/command-queue.ts
+    - src/agents/session-placement-admission.ts
+    - src/agents/subagents/announce/subagent-announce.ts
+    - src/agents/subagents/announce/subagent-announce-active-wake.ts
+    - src/agents/subagents/announce/subagent-announce-direct-delivery.ts
+    - src/agents/subagents/registry/subagent-registry-lifecycle.ts
+  execution:
+    kind: flow
+    # This scenario asserts the completion OUTCOME, not one admission path.
+    # subagent-announce-direct-delivery.ts attempts an active-requester steer
+    # first (steeringMode "all"), and resolveActiveWakeWithRetries strips a
+    # message_tool_only delivery-mode mismatch and retries
+    # (subagent-announce-active-wake.ts), so the lane-serialized agent call in
+    # session-placement-admission.ts is reached only when that wake is refused.
+    # No runtime this suite can select produces that refusal: the openclaw
+    # embedded runner (run/attempt-stream-prepare.ts) and the codex app server
+    # (extensions/codex/src/app-server/run-attempt-active-turn.ts) both register
+    # an active embedded run exposing message injection v2 and
+    # supportsTranscriptCommitWait. Asserting deferred admission would therefore
+    # fail healthy delivery, so the assertions below hold on both paths and the
+    # observed path is reported as evidence.
+    suiteIsolation: isolated
+    isolationReason: Exercises a real Telegram transport and a live child completion while the requester session lane is occupied.
+    channel: telegram
+    retryCount: 0
+    summary: Hold the requester lane with a foreground exec, release a barrier-gated child inside that window, and verify the completion is recorded after the requester's committed reply and delivered to Telegram exactly once.
+    config:
+      requiredProviderMode: live-frontier
+      childLabelPrefix: telegram-busy-lane-child
+      childResultPrefix: TELEGRAM_BUSY_CHILD_RESULT
+      childVisiblePrefix: TELEGRAM_BUSY_CHILD_VISIBLE
+      parentPrefix: TELEGRAM_BUSY_PARENT_DONE
+      holdMs: 60000
+      execYieldMs: 90000
+      barrierTimeoutMs: 45000
+      duplicateWindowMs: 8000
+
+flow:
+  steps:
+    - name: child completion waits for requester lane release
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 120000
+        - call: waitForTransportReady
+          args:
+            - ref: env
+            - 120000
+        - resetTransport: true
+        - set: conversationId
+          value:
+            expr: "`telegram-busy-lane-${randomUUID().slice(0, 8)}`"
+        - set: childLabel
+          value:
+            expr: "`${config.childLabelPrefix}-${randomUUID().slice(0, 8)}`"
+        - set: childResult
+          value:
+            expr: "`${config.childResultPrefix}:${randomUUID()}`"
+        - set: childVisible
+          value:
+            expr: "`${config.childVisiblePrefix}:${randomUUID()}`"
+        - set: parentMarker
+          value:
+            expr: "`${config.parentPrefix}:${randomUUID()}`"
+        - set: proofFile
+          value:
+            expr: "`telegram-busy-lane-${randomUUID()}.json`"
+        - set: proofPath
+          value:
+            expr: path.join(env.gateway.workspaceDir, proofFile)
+        # The hold publishes a marker the instant it starts. That marker, not
+        # relative model latency, is what releases the child, so the overlap the
+        # scenario asserts is established rather than hoped for.
+        - set: readyFile
+          value:
+            expr: "`telegram-busy-lane-hold-started-${randomUUID()}.txt`"
+        - set: holdCommand
+          value:
+            expr: |-
+              `node -e ${JSON.stringify(`const fs=require("node:fs");const startedAt=Date.now();fs.writeFileSync(${JSON.stringify(readyFile)},String(startedAt)+"\\n");setTimeout(()=>{fs.writeFileSync(${JSON.stringify(proofFile)},JSON.stringify({startedAt,finishedAt:Date.now()})+"\\n");process.stdout.write("lane released\\n");},${config.holdMs});`)}`
+        - set: barrierCommand
+          value:
+            expr: |-
+              `node -e ${JSON.stringify(`const fs=require("node:fs");const deadline=Date.now()+${config.barrierTimeoutMs};const wait=()=>{if(fs.existsSync(${JSON.stringify(readyFile)})){process.stdout.write("hold started\\n");return;}if(Date.now()>deadline){process.stderr.write("requester hold never started\\n");process.exit(1);}setTimeout(wait,100);};wait();`)}`
+        - set: attemptStartedAt
+          value:
+            expr: Date.now()
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: |-
+                `Follow these instructions exactly.
+                1. Call sessions_spawn exactly once with runtime subagent, label ${childLabel}, and this task: "Call exec exactly once with yieldMs ${config.barrierTimeoutMs} and this exact command: ${barrierCommand}\nAfter that exec call returns, reply with exactly ${childResult} and nothing else. Do not call any other tool."
+                2. Immediately after sessions_spawn succeeds, call exec exactly once with yieldMs ${config.execYieldMs} and this exact command: ${holdCommand}
+                3. Do not background that exec call and do not poll it with the process tool; let it return on its own.
+                4. After exec finishes, reply with exactly ${parentMarker} and nothing else.
+                5. The child's completion will reach you as an additional instruction, either while step 2 is still running or after step 4. Never act on it before your ${parentMarker} reply. Once that reply is sent, deliver the completion by calling the message tool exactly once with action "send" and message exactly ${childVisible}, and call no other tool after it.`
+        # The requester session key is needed at the moment the requester's own
+        # reply reaches Telegram, so the registry row is resolved first. The row
+        # exists from spawn time; only its terminal fields are awaited later.
+        - call: waitForCondition
+          saveAs: spawnedChild
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const payload = await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }); return (payload.tasks ?? []).find((task) => task.label === childLabel && task.createdAt >= attemptStartedAt && typeof task.requesterSessionKey === 'string' && task.requesterSessionKey.length > 0); })()"
+            - expr: liveTurnTimeoutMs(env, 120000)
+            - 250
+        - call: waitForOutboundMessage
+          saveAs: parentOutbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.accountId === transport.accountId && candidate.conversation.id === conversationId && candidate.conversation.kind === 'direct' && String(candidate.text ?? '').trim() === parentMarker"
+            - expr: liveTurnTimeoutMs(env, 120000)
+            - sinceIndex:
+                ref: outboundStartIndex
+        # Durable-event cutoff for everything below. assistantReplyText selects
+        # the LAST assistant event whose visible text is exactly the marker, and
+        # assistantReplyStartLine is that event's own index. A serialized-substring
+        # probe would instead match any later event that merely quotes the marker
+        # (a reasoning block, or the inbound instruction itself), and an event
+        # index taken from such a match can sit between a tool invocation and its
+        # result, which the summarizer then cannot pair, dropping a delivery that
+        # actually happened. Cutting AT the reply event rather than after it keeps
+        # the invocation even when the model emits the reply text and the
+        # completion's message call in the same assistant message.
+        - call: waitForCondition
+          saveAs: replyAnchor
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const summary = await readSessionTranscriptSummary(env, spawnedChild.requesterSessionKey, { assistantReplyText: parentMarker }); return Number.isInteger(summary.assistantReplyStartLine) ? summary : undefined; })()"
+            - expr: liveTurnTimeoutMs(env, 120000)
+            - 250
+        - call: waitForOutboundMessage
+          saveAs: childOutbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.accountId === transport.accountId && candidate.conversation.id === conversationId && candidate.conversation.kind === 'direct' && String(candidate.text ?? '').trim() === childVisible"
+            - expr: liveTurnTimeoutMs(env, 120000)
+            - sinceIndex:
+                ref: outboundStartIndex
+        - call: waitForCondition
+          saveAs: completedChild
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const payload = await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }); return (payload.tasks ?? []).find((task) => task.label === childLabel && task.createdAt >= attemptStartedAt && typeof task.requesterSessionKey === 'string' && task.requesterSessionKey.length > 0 && typeof task.childSessionKey === 'string' && task.childSessionKey.length > 0 && typeof task.endedAt === 'number' && Number.isFinite(task.endedAt) && task.status === 'succeeded' && task.deliveryStatus === 'delivered'); })()"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 250
+        # Neither preceding wait is a barrier on the requester's message-tool
+        # RESULT. On the steered path the delivery owner reports delivered as
+        # soon as the wake is committed (subagent-announce-direct-delivery.ts,
+        # the wakeOutcome.queued return), which is before the requester has sent
+        # anything; and Telegram publishes the outbound message from the send
+        # itself, independently of the transcript write that records its result.
+        # Every transcript summary below is therefore taken from the read that
+        # first observes that committed result, so a healthy delivery is never
+        # sampled before its result event exists. The barrier only requires at
+        # least one; the assertions still require exactly one.
+        - call: waitForCondition
+          saveAs: parentTranscript
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const summary = await readSessionTranscriptSummary(env, completedChild.requesterSessionKey); return (summary.successfulToolCallCounts?.message ?? 0) >= 1 ? summary : undefined; })()"
+            - expr: liveTurnTimeoutMs(env, 120000)
+            - 250
+        - call: readSessionTranscriptSummary
+          saveAs: childTranscript
+          args:
+            - ref: env
+            - expr: completedChild.childSessionKey
+        # Everything the requester recorded from its committed final reply
+        # onward. Exactly one message-tool send and no further orchestration
+        # holds on both admission paths: a steered completion is injected into
+        # the running turn but still owes its send after the reply, and a
+        # separately admitted completion runs as its own turn. The user-message
+        # count distinguishes the two (1 = separate turn, 0 = steered into the
+        # original run) and is reported as evidence rather than asserted, so a
+        # healthy steered delivery is not failed.
+        - call: readSessionTranscriptSummary
+          saveAs: completionTranscript
+          args:
+            - ref: env
+            - expr: completedChild.requesterSessionKey
+            - expr: "({ afterEventCursor: replyAnchor.assistantReplyStartLine })"
+        - set: admissionPath
+          value:
+            expr: "completionTranscript.userMessageCount >= 1 ? 'separate-requester-turn' : 'steered-active-run'"
+        - assert:
+            expr: "spawnedChild.requesterSessionKey === completedChild.requesterSessionKey"
+            message:
+              expr: "`requester session key changed between spawn and completion; spawned=${spawnedChild.requesterSessionKey} completed=${completedChild.requesterSessionKey}`"
+        - assert:
+            expr: "(completionTranscript.successfulToolCallCounts.message ?? 0) === 1 && (completionTranscript.successfulToolCallCounts.sessions_spawn ?? 0) === 0 && (completionTranscript.successfulToolCallCounts.exec ?? 0) === 0"
+            message:
+              expr: "`completion was not recorded as exactly one message-tool send after the requester's committed reply; admissionPath=${admissionPath} userMessages=${completionTranscript.userMessageCount} tools=${JSON.stringify(completionTranscript.successfulToolCallCounts ?? {})}`"
+        - set: parentToolEvents
+          value:
+            expr: parentTranscript.successfulToolCallEvents ?? []
+        - set: spawnEvent
+          value:
+            expr: "parentToolEvents.find((event) => event.name === 'sessions_spawn')"
+        - set: execEvent
+          value:
+            expr: "parentToolEvents.find((event) => event.name === 'exec')"
+        # A direct-message subagent completion selects message_tool_only delivery
+        # and disables the automatic final, so the completion turn owes exactly one
+        # message send. Without it the direct fallback would deliver the child's own
+        # result marker instead of the requester-authored one awaited above.
+        - set: completionSendEvent
+          value:
+            expr: "parentToolEvents.find((event) => event.name === 'message')"
+        - call: fs.stat
+          saveAs: proofStat
+          args:
+            - ref: proofPath
+        - set: proofContents
+          value:
+            expr: "JSON.parse(await fs.readFile(proofPath, 'utf8'))"
+        - assert:
+            expr: "(parentTranscript.successfulToolCallCounts.sessions_spawn ?? 0) === 1 && (parentTranscript.successfulToolCallCounts.exec ?? 0) === 1 && (parentTranscript.successfulToolCallCounts.message ?? 0) === 1"
+            message:
+              expr: "`requester did not use exactly one sessions_spawn, one exec, and one completion message send; tools=${JSON.stringify(parentTranscript.successfulToolCallCounts ?? {})}`"
+        - assert:
+            expr: "parentToolEvents.length === 3 && spawnEvent?.timestamp >= attemptStartedAt && spawnEvent.timestamp <= execEvent?.timestamp && execEvent.timestamp <= completionSendEvent?.timestamp"
+            message:
+              expr: "`requester tool timeline was incomplete or out of order; events=${JSON.stringify(parentToolEvents.map((event) => ({ name: event.name, timestamp: event.timestamp })))}`"
+        - assert:
+            expr: "proofContents.startedAt <= completedChild.endedAt && completedChild.endedAt <= proofStat.mtimeMs"
+            message:
+              expr: "`child did not finish while exec held the requester lane; execStarted=${String(proofContents.startedAt)} childEnded=${String(completedChild.endedAt)} execFinished=${String(proofStat.mtimeMs)}`"
+        - assert:
+            expr: "proofContents.startedAt <= completedChild.endedAt && completedChild.endedAt <= proofContents.finishedAt"
+            message: exec proof interval did not contain child completion
+        # successfulToolCallEvents carries the tool RESULT timestamp, so an exec
+        # that had backgrounded itself at the default 10s yield would land here
+        # long before the command wrote its proof file.
+        - assert:
+            expr: "proofContents.finishedAt <= execEvent?.timestamp"
+            message:
+              expr: "`exec did not stay in the foreground for the whole hold; execFinished=${String(proofContents.finishedAt)} execToolResult=${String(execEvent?.timestamp)}`"
+        - assert:
+            expr: "completedChild.endedAt <= execEvent?.timestamp"
+            message:
+              expr: "`child completion did not precede the exec tool result; childEnded=${String(completedChild.endedAt)} execToolResult=${String(execEvent?.timestamp)}`"
+        - assert:
+            expr: "String(childTranscript.finalText ?? '').trim() === childResult"
+            message: child did not produce the exact isolated result marker
+        - assert:
+            expr: "(childTranscript.successfulToolCallCounts?.exec ?? 0) === 1 && Object.entries(childTranscript.successfulToolCallCounts ?? {}).every(([name, count]) => name === 'exec' || count === 0)"
+            message:
+              expr: "`child did not run exactly one readiness-barrier exec and no other tool; tools=${JSON.stringify(childTranscript.successfulToolCallCounts ?? {})}`"
+        - set: orderedOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex).filter((message) => message.conversation.id === conversationId)"
+        - set: parentOutboundIndex
+          value:
+            expr: "orderedOutbound.findIndex((message) => String(message.text ?? '').trim() === parentMarker)"
+        - set: childOutboundIndex
+          value:
+            expr: "orderedOutbound.findIndex((message) => String(message.text ?? '').trim() === childVisible)"
+        - assert:
+            expr: "parentOutboundIndex >= 0 && childOutboundIndex > parentOutboundIndex"
+            message:
+              expr: "`deferred completion did not follow requester reply; outbound=${JSON.stringify(orderedOutbound.map((message) => String(message.text ?? '')))}`"
+        - call: sleep
+          args:
+            - expr: config.duplicateWindowMs
+        - set: duplicateMatches
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === conversationId && String(message.text ?? '').trim() === childVisible)"
+        - assert:
+            expr: duplicateMatches.length === 1
+            message:
+              expr: "`expected one deferred child completion during duplicate window, saw ${duplicateMatches.length}`"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'subagent-completion-busy-lane-telegram-live', requesterSessionKey: completedChild.requesterSessionKey, childSessionKey: completedChild.childSessionKey, execStartedAt: proofContents.startedAt, childEndedAt: completedChild.endedAt, execFinishedAt: proofContents.finishedAt, completionSendAt: completionSendEvent?.timestamp, admissionPath, replyEventLine: replyAnchor.assistantReplyStartLine, postReplyUserMessages: completionTranscript.userMessageCount, postReplyTools: completionTranscript.successfulToolCallCounts ?? {}, parentOutboundId: parentOutbound.id, childOutboundId: childOutbound.id, deferredCompletionCount: duplicateMatches.length }, null, 2)"
