@@ -33,7 +33,8 @@ vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
 }));
 
-vi.mock("../../sessions/input-provenance.js", () => ({
+vi.mock("../../sessions/input-provenance.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../sessions/input-provenance.js")>()),
   shouldPreserveUserFacingSessionStateForInputProvenance: () => false,
 }));
 
@@ -179,6 +180,7 @@ describe("accountFollowupTurn", () => {
     if (result.kind !== "settled") {
       throw new Error("expected settled test execution");
     }
+    result.result.payloads = [{ text: "visible reply" }];
     result.result.meta.agentMeta = {
       sessionId: "session-1",
       provider: "openai",
@@ -195,7 +197,22 @@ describe("accountFollowupTurn", () => {
         agentHarnessId: "codex",
         contextTokensUsed: 1_000_000,
         contextTokensSource: "runtime",
+        touchActivity: true,
       }),
+    );
+  });
+
+  it("does not mark a progress-card-only refresh as unread activity", async () => {
+    const params = createParams();
+    params.turn.queued.run.inputProvenance = {
+      kind: "internal_system",
+      sourceTool: "progress_card_refresh",
+    };
+
+    await accountFollowupTurn(params);
+
+    expect(mocks.persistSessionUsageUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ touchActivity: false }),
     );
   });
 
