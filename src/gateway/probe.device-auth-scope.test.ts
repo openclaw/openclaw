@@ -96,6 +96,7 @@ async function captureProbeConnectFrame(params: {
   url: string;
   env: NodeJS.ProcessEnv;
   auth?: { token?: string; password?: string };
+  originScopedDeviceAuth?: boolean;
   suppressStoredDeviceAuth?: boolean;
 }): Promise<ConnectFrame> {
   const created = createDeferred<ProbeWebSocket>();
@@ -103,6 +104,7 @@ async function captureProbeConnectFrame(params: {
   const probePromise = probeGateway({
     url: params.url,
     auth: params.auth,
+    originScopedDeviceAuth: params.originScopedDeviceAuth,
     suppressStoredDeviceAuth: params.suppressStoredDeviceAuth,
     env: params.env,
     timeoutMs: 2_000,
@@ -152,56 +154,79 @@ afterEach(() => {
 });
 
 describe("probeGateway device auth scope", () => {
-  it("does not serialize origin-A legacy or scoped tokens to remote origin B", async () => {
-    await withTempDir("openclaw-probe-origin-scope-", async (stateDir) => {
-      const env = createEnv(stateDir);
-      const identity = loadOrCreateDeviceIdentity({ env });
-      seedDeviceAuthToken({
-        deviceId: identity.deviceId,
-        role: "operator",
-        token: "origin-a-legacy-token",
-        env,
-      });
-      seedOriginDeviceToken({
-        gatewayScope: gatewayOriginScope("wss://origin-a.example/rpc"),
-        deviceId: identity.deviceId,
-        role: "operator",
-        token: "origin-a-scoped-token",
-        env,
-      });
+  it.each([
+    { url: "wss://origin-b.example/rpc", originScopedDeviceAuth: false },
+    { url: "ws://127.0.0.1:18789", originScopedDeviceAuth: true },
+  ])(
+    "does not serialize origin-A legacy or scoped tokens to remote origin $url",
+    async ({ url, originScopedDeviceAuth }) => {
+      await withTempDir("openclaw-probe-origin-scope-", async (stateDir) => {
+        const env = createEnv(stateDir);
+        const identity = loadOrCreateDeviceIdentity({ env });
+        seedDeviceAuthToken({
+          deviceId: identity.deviceId,
+          role: "operator",
+          token: "origin-a-legacy-token",
+          env,
+        });
+        seedOriginDeviceToken({
+          gatewayScope: gatewayOriginScope("wss://origin-a.example/rpc"),
+          deviceId: identity.deviceId,
+          role: "operator",
+          token: "origin-a-scoped-token",
+          env,
+        });
 
-      const connect = await captureProbeConnectFrame({
-        url: "wss://origin-b.example/rpc",
-        env,
-      });
+        const connect = await captureProbeConnectFrame({
+          url,
+          originScopedDeviceAuth,
+          env,
+        });
 
-      expect(connect.params?.auth).toBeUndefined();
-      expect(connect.params?.device).toBeUndefined();
-    });
-  });
-
-  it("keeps legacy stored device auth available to local loopback probes", async () => {
-    await withTempDir("openclaw-probe-local-scope-", async (stateDir) => {
-      const env = createEnv(stateDir);
-      const identity = loadOrCreateDeviceIdentity({ env });
-      seedDeviceAuthToken({
-        deviceId: identity.deviceId,
-        role: "operator",
-        token: "local-device-token",
-        env,
+        expect(connect.params?.auth).toBeUndefined();
+        expect(connect.params?.device).toBeUndefined();
       });
+    },
+  );
 
-      const connect = await captureProbeConnectFrame({
-        url: "ws://127.0.0.1:18789",
-        env,
-      });
+  it.each([
+    { name: "local", localToken: "local-device-token", originToken: undefined },
+    { name: "origin-scoped", localToken: undefined, originToken: "origin-device-token" },
+    {
+      name: "origin-scoped over local",
+      localToken: "local-device-token",
+      originToken: "origin-device-token",
+    },
+  ])(
+    "uses cached $name device auth for local loopback probes",
+    async ({ localToken, originToken }) => {
+      await withTempDir("openclaw-probe-local-scope-", async (stateDir) => {
+        const env = createEnv(stateDir);
+        const identity = loadOrCreateDeviceIdentity({ env });
+        const lookup = { deviceId: identity.deviceId, role: "operator", env };
+        if (localToken) {
+          seedDeviceAuthToken({ ...lookup, token: localToken });
+        }
+        if (originToken) {
+          seedOriginDeviceToken({
+            ...lookup,
+            gatewayScope: "ws://127.0.0.1:18789",
+            token: originToken,
+          });
+        }
 
-      expect(connect.params?.auth).toEqual({
-        deviceToken: "local-device-token",
+        const connect = await captureProbeConnectFrame({
+          url: "ws://127.0.0.1:18789",
+          env,
+        });
+
+        expect(connect.params?.auth).toEqual({
+          deviceToken: originToken ?? localToken,
+        });
+        expect(connect.params?.device?.id).toBe(identity.deviceId);
       });
-      expect(connect.params?.device?.id).toBe(identity.deviceId);
-    });
-  });
+    },
+  );
 
   it("keeps explicit tokens authoritative for remote probes", async () => {
     await withTempDir("openclaw-probe-explicit-scope-", async (stateDir) => {

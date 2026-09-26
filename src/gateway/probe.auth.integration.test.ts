@@ -10,7 +10,7 @@ installGatewayTestHooks({ scope: "suite" });
 
 const { callGateway } = await import("./call.js");
 const { probeGateway } = await import("./probe.js");
-const { seedDeviceAuthToken } = await import("../infra/device-auth-store.test-support.js");
+const { seedOriginDeviceToken } = await import("../infra/device-auth-store.test-support.js");
 const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
   await import("../infra/device-identity.js");
 const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
@@ -75,7 +75,8 @@ async function seedCachedOperatorToken(scopes: string[]): Promise<void> {
   if (!token) {
     throw new Error("expected approved operator token");
   }
-  seedDeviceAuthToken({
+  seedOriginDeviceToken({
+    gatewayScope: `ws://127.0.0.1:${gatewayHarness.port}`,
     deviceId: identity.deviceId,
     role: "operator",
     token,
@@ -117,17 +118,19 @@ describe("probeGateway auth integration", () => {
     expect(fs.existsSync(statePath("identity", "device-auth.json"))).toBe(false);
   });
 
-  it("keeps detail RPCs available for local authenticated probes with cached device auth", async () => {
+  it("keeps detail RPCs available for local probes with cached origin-scoped device auth", async () => {
     const token = requireGatewayToken();
+    const url = `ws://127.0.0.1:${gatewayHarness.port}`;
     await seedCachedOperatorToken(["operator.read"]);
     const result = await probeGateway({
-      url: `ws://127.0.0.1:${gatewayHarness.port}`,
+      url,
       auth: { token },
       timeoutMs: 10_000,
     });
 
-    expect(result.ok).toBe(true);
     expect(result.error).toBeNull();
+    expect(result.ok).toBe(true);
+    expect(result.auth.capability).toBe("read_only");
     expectRecord(result.health, "probe health");
     expectRecord(result.status, "probe status");
     expectRecord(result.configSnapshot, "probe config snapshot");
